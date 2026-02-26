@@ -107,7 +107,7 @@ export default function IntegrationsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {integrations.map((integration) => (
             <IntegrationCard
-              key={integration.id}
+              key={integration.id || integration.name}
               integration={integration}
               onSetupGHL={integration.name === "GoHighLevel" ? handleSetupGHL : undefined}
               onSyncGHL={integration.name === "GoHighLevel" ? handleSyncGHL : undefined}

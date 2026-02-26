@@ -14,9 +14,11 @@ interface Integration {
 
 const INTEGRATION_ICONS: Record<string, string> = {
   GoHighLevel: "📊",
+  "AI Configuration": "🤖",
   "Microsoft 365": "📧",
   "Microsoft Teams": "💬",
   Quo: "📞",
+  "Quo Phone": "📞",
   OneDrive: "📁",
   "Meta Pixel": "📈",
 };
@@ -45,7 +47,7 @@ export function IntegrationCard({
   const [configValues, setConfigValues] = useState(integration.config || {});
   const [saving, setSaving] = useState(false);
 
-  const icon = INTEGRATION_ICONS[integration.name] || "🔌";
+  const icon = (integration as unknown as Record<string, unknown>).icon as string || INTEGRATION_ICONS[integration.name] || "🔌";
   const statusColor = STATUS_COLORS[integration.status] || "#F5A623";
 
   const handleSave = async () => {
@@ -113,7 +115,7 @@ export function IntegrationCard({
         <p className="text-xs text-[rgba(255,255,255,0.3)] italic">
           {integration.name === "Microsoft 365" && "Will connect to submissions@srtagency.com for auto-stage updates"}
           {integration.name === "Microsoft Teams" && "Receives notifications for deal events"}
-          {integration.name === "Quo" && "Will sync call recordings + transcriptions"}
+          {(integration.name === "Quo" || integration.name === "Quo Phone") && "Will sync call recordings + transcriptions"}
           {integration.name === "OneDrive" && "Will auto-organize deal files by stage"}
           {integration.name === "Meta Pixel" && "Tracking on srtagency.com"}
         </p>
