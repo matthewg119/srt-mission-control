@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { PIPELINE_STAGES } from "@/config/pipeline";
+import { NEW_DEALS_PIPELINE, ACTIVE_DEALS_PIPELINE } from "@/config/pipeline";
 import { formatCurrency } from "@/lib/utils";
 
 interface Deal {
@@ -11,6 +11,7 @@ interface Deal {
   contact_name: string;
   business_name: string;
   stage: string;
+  pipeline_name?: string;
   amount: number | null;
   assigned_to: string | null;
   last_activity: string | null;
@@ -21,22 +22,29 @@ interface PipelineBoardProps {
   initialDeals: Deal[];
 }
 
+const PIPELINE_TABS = [
+  { key: "active", label: "Active Deals", pipeline: ACTIVE_DEALS_PIPELINE },
+  { key: "new", label: "New Deals", pipeline: NEW_DEALS_PIPELINE },
+] as const;
+
 export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
   const [deals, setDeals] = useState<Deal[]>(initialDeals);
   const [syncing, setSyncing] = useState(false);
+  const [activeTab, setActiveTab] = useState<"active" | "new">("active");
+
+  const currentPipeline = PIPELINE_TABS.find((t) => t.key === activeTab)!.pipeline;
+
+  // Filter deals by pipeline — use pipeline_name if available, otherwise match by stage names
+  const pipelineDeals = deals.filter((d) => {
+    if (d.pipeline_name) return d.pipeline_name === currentPipeline.name;
+    return currentPipeline.stages.some((s) => s.name === d.stage);
+  });
 
   const handleSync = async () => {
     setSyncing(true);
     try {
       const res = await fetch("/api/ghl/sync", { method: "POST" });
       if (res.ok) {
-        // Refetch pipeline data
-        const dataRes = await fetch("/api/ghl/sync");
-        if (dataRes.ok) {
-          const data = await dataRes.json();
-          if (data.deals) setDeals(data.deals);
-        }
-        // Also just refetch from our cache
         window.location.reload();
       }
     } catch {
@@ -50,6 +58,17 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
     const diff = Date.now() - new Date(lastActivity).getTime();
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
+
+  // Counts for tab badges
+  const newDealsCount = deals.filter((d) => {
+    if (d.pipeline_name) return d.pipeline_name === NEW_DEALS_PIPELINE.name;
+    return NEW_DEALS_PIPELINE.stages.some((s) => s.name === d.stage);
+  }).length;
+
+  const activeDealsCount = deals.filter((d) => {
+    if (d.pipeline_name) return d.pipeline_name === ACTIVE_DEALS_PIPELINE.name;
+    return ACTIVE_DEALS_PIPELINE.stages.some((s) => s.name === d.stage);
+  }).length;
 
   return (
     <div>
@@ -66,10 +85,39 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
         </button>
       </div>
 
+      {/* Pipeline Tabs */}
+      <div className="flex gap-2 mb-6">
+        {PIPELINE_TABS.map((tab) => {
+          const count = tab.key === "active" ? activeDealsCount : newDealsCount;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === tab.key
+                  ? "bg-[#00C9A7] text-[#0B1426]"
+                  : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)]"
+              }`}
+            >
+              {tab.label}
+              {count > 0 && (
+                <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${
+                  activeTab === tab.key
+                    ? "bg-[#0B1426]/20 text-[#0B1426]"
+                    : "bg-[rgba(255,255,255,0.1)] text-[rgba(255,255,255,0.5)]"
+                }`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Kanban Board */}
-      <div className="flex gap-4 overflow-x-auto pb-4" style={{ minHeight: "calc(100vh - 200px)" }}>
-        {PIPELINE_STAGES.map((stage) => {
-          const stageDeals = deals.filter((d) => d.stage === stage.name);
+      <div className="flex gap-4 overflow-x-auto pb-4" style={{ minHeight: "calc(100vh - 280px)" }}>
+        {currentPipeline.stages.map((stage) => {
+          const stageDeals = pipelineDeals.filter((d) => d.stage === stage.name);
           return (
             <div key={stage.name} className="flex-shrink-0 w-[280px]">
               {/* Stage Header */}
@@ -147,7 +195,7 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
       {deals.length === 0 && (
         <div className="text-center py-16 text-[rgba(255,255,255,0.4)]">
           <p className="text-lg mb-2">No pipeline data yet</p>
-          <p className="text-sm">Click &quot;Sync from GHL&quot; to load your pipeline.</p>
+          <p className="text-sm">Click &quot;Sync from GHL&quot; to load your pipelines.</p>
         </div>
       )}
     </div>

@@ -32,7 +32,7 @@ export default function IntegrationsPage() {
   useEffect(() => { fetchIntegrations(); }, []);
 
   const handleSetupGHL = async () => {
-    if (!confirm("This will create the Business Loans pipeline and 26 custom fields in GoHighLevel. Continue?")) return;
+    if (!confirm("This will create 26 custom fields in GoHighLevel. Continue?")) return;
     setSettingUp(true);
     setSetupResult(null);
     try {

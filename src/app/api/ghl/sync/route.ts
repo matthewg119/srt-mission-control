@@ -1,68 +1,71 @@
 import { NextResponse } from "next/server";
 import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
+import { PIPELINES } from "@/config/pipeline";
 
 export async function POST() {
   try {
-    // Fetch pipelines and find "Business Loans"
-    const pipelinesResponse = await ghl.getPipelines();
-    const pipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
-    const businessLoansPipeline = pipelines.find(
-      (p) => p.name === "Business Loans"
-    );
+    let totalSynced = 0;
+    let totalOpps = 0;
 
-    if (!businessLoansPipeline) {
-      return NextResponse.json(
-        { error: "Business Loans pipeline not found in GoHighLevel" },
-        { status: 404 }
-      );
-    }
+    for (const pipeline of PIPELINES) {
+      const pipelineId = pipeline.id;
 
-    const pipelineId = businessLoansPipeline.id as string;
-    const stages = (businessLoansPipeline.stages as Array<Record<string, unknown>>) || [];
+      // Build stage ID → name map from GHL
+      const pipelinesResponse = await ghl.getPipelines();
+      const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
+      const ghlPipeline = allPipelines.find((p) => p.id === pipelineId);
 
-    // Build stage ID to name map
-    const stageMap = new Map<string, string>();
-    for (const stage of stages) {
-      stageMap.set(stage.id as string, stage.name as string);
-    }
-
-    // Fetch opportunities
-    const oppResponse = await ghl.getOpportunities(pipelineId);
-    const opportunities = (oppResponse.opportunities as Array<Record<string, unknown>>) || [];
-    let synced = 0;
-
-    for (const opp of opportunities) {
-      const ghlOpportunityId = opp.id as string;
-      const stageId = opp.pipelineStageId as string;
-      const stageName = stageMap.get(stageId) || "Unknown";
-      const contact = (opp.contact as Record<string, unknown>) || {};
-
-      const contactName = [contact.firstName, contact.lastName]
-        .filter(Boolean)
-        .join(" ") || (contact.name as string) || "";
-
-      const record = {
-        ghl_opportunity_id: ghlOpportunityId,
-        contact_name: contactName,
-        business_name: (contact.companyName as string) || "",
-        stage: stageName,
-        amount: opp.monetaryValue ? Number(opp.monetaryValue) : null,
-        assigned_to: (opp.assignedTo as string) || null,
-        last_activity: (opp.lastActivity as string) || (opp.updatedAt as string) || null,
-        metadata: opp,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabaseAdmin
-        .from("pipeline_cache")
-        .upsert(record, { onConflict: "ghl_opportunity_id" });
-
-      if (!error) {
-        synced++;
-      } else {
-        console.error(`Failed to upsert opportunity ${ghlOpportunityId}:`, error);
+      if (!ghlPipeline) {
+        console.warn(`Pipeline ${pipeline.name} (${pipelineId}) not found in GHL, skipping`);
+        continue;
       }
+
+      const stages = (ghlPipeline.stages as Array<Record<string, unknown>>) || [];
+      const stageMap = new Map<string, string>();
+      for (const stage of stages) {
+        stageMap.set(stage.id as string, stage.name as string);
+      }
+
+      // Fetch opportunities for this pipeline
+      const oppResponse = await ghl.getOpportunities(pipelineId);
+      const opportunities = (oppResponse.opportunities as Array<Record<string, unknown>>) || [];
+
+      for (const opp of opportunities) {
+        const ghlOpportunityId = opp.id as string;
+        const stageId = opp.pipelineStageId as string;
+        const stageName = stageMap.get(stageId) || "Unknown";
+        const contact = (opp.contact as Record<string, unknown>) || {};
+
+        const contactName = [contact.firstName, contact.lastName]
+          .filter(Boolean)
+          .join(" ") || (contact.name as string) || "";
+
+        const record = {
+          ghl_opportunity_id: ghlOpportunityId,
+          contact_name: contactName,
+          business_name: (contact.companyName as string) || "",
+          stage: stageName,
+          pipeline_name: pipeline.name,
+          amount: opp.monetaryValue ? Number(opp.monetaryValue) : null,
+          assigned_to: (opp.assignedTo as string) || null,
+          last_activity: (opp.lastActivity as string) || (opp.updatedAt as string) || null,
+          metadata: opp,
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error } = await supabaseAdmin
+          .from("pipeline_cache")
+          .upsert(record, { onConflict: "ghl_opportunity_id" });
+
+        if (!error) {
+          totalSynced++;
+        } else {
+          console.error(`Failed to upsert opportunity ${ghlOpportunityId}:`, error);
+        }
+      }
+
+      totalOpps += opportunities.length;
     }
 
     // Update integration last_sync
@@ -77,13 +80,13 @@ export async function POST() {
     // Log the sync
     await supabaseAdmin.from("system_logs").insert({
       event_type: "ghl_sync",
-      description: `Pipeline sync completed: ${synced}/${opportunities.length} opportunities synced.`,
-      metadata: { synced, total: opportunities.length, pipelineId },
+      description: `Pipeline sync completed: ${totalSynced}/${totalOpps} opportunities synced across ${PIPELINES.length} pipelines.`,
+      metadata: { synced: totalSynced, total: totalOpps, pipelines: PIPELINES.map((p) => p.name) },
     });
 
     return NextResponse.json({
-      synced,
-      total: opportunities.length,
+      synced: totalSynced,
+      total: totalOpps,
     });
   } catch (error) {
     console.error("GHL sync error:", error);

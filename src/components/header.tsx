@@ -10,11 +10,14 @@ interface HeaderProps {
 
 const titleMap: Record<string, string> = {
   "/dashboard": "Dashboard",
+  "/dashboard/pipeline": "Pipeline",
+  "/dashboard/messaging": "Messaging",
+  "/dashboard/templates": "Templates",
+  "/dashboard/automations": "Automations",
   "/dashboard/assistant": "AI Assistant",
   "/dashboard/knowledge": "Knowledge Base",
-  "/dashboard/pipeline": "Pipeline",
-  "/dashboard/updates": "System Updates",
   "/dashboard/integrations": "Integrations",
+  "/dashboard/updates": "System Updates",
   "/dashboard/settings": "Settings",
 };
 

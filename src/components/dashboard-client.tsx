@@ -28,7 +28,7 @@ export function DashboardClient({ userName, formattedDate, stats, logs }: Dashbo
   const [setupResult, setSetupResult] = useState<Record<string, unknown> | null>(null);
 
   const handleSetupGHL = async () => {
-    if (!confirm("This will create the Business Loans pipeline and 26 custom fields in GoHighLevel. Continue?")) return;
+    if (!confirm("This will create 26 custom fields in GoHighLevel. Continue?")) return;
     setSettingUp(true);
     try {
       const res = await fetch("/api/ghl/setup", { method: "POST" });
@@ -67,7 +67,7 @@ export function DashboardClient({ userName, formattedDate, stats, logs }: Dashbo
         <StatCard label="Pipeline" value={stats.activeDeals} accentColor="#00C9A7" />
         <StatCard label="This Week" value={stats.thisWeek} accentColor="#1B65A7" />
         <StatCard label="Funded" value={stats.funded} accentColor="#4CAF50" />
-        <StatCard label="Pending Docs" value={stats.pendingDocs} accentColor="#F5A623" />
+        <StatCard label="In Underwriting" value={stats.pendingDocs} accentColor="#F5A623" />
       </div>
 
       {/* Quick Actions */}

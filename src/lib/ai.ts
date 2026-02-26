@@ -40,7 +40,9 @@ PRODUCTS (in priority order):
 
 TEAM: Matthew (CEO/Founder), Benjamin (Sales — target 3-7 conversions/day)
 
-PIPELINE: Application Pull → Pre-Approval → Documents Needed → Documents Received → Submitted to Lenders → Contracts Out → Waiting Confirmation → Funded / Declined
+PIPELINES:
+- New Deals (lead intake): New Lead → No Contact → Interested → Not Interested → Converted → DNQ → Take Off List
+- Active Deals (post-approval): Pre-Approval → Underwriting → Submitted → Approved → Contracts Out → Contracts In → Funded → Deal Lost
 
 SYSTEM ARCHITECTURE (Mission Control):
 - Framework: Next.js App Router + TypeScript + Tailwind + shadcn/ui
@@ -85,7 +87,7 @@ export async function streamChatResponse(
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       stream: true,
       system: systemPrompt,

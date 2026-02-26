@@ -5,7 +5,7 @@ import { signOut } from "next-auth/react";
 import { LogOut, X } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
-import { navItems } from "@/config/nav";
+import { navSections } from "@/config/nav";
 import { cn } from "@/lib/utils";
 
 interface SidebarUser {
@@ -64,33 +64,40 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        <ul className="flex flex-col gap-1">
-          {navItems.map((item) => {
-            const isActive =
-              item.href === "/dashboard"
-                ? pathname === "/dashboard"
-                : pathname.startsWith(item.href);
-            const Icon = item.icon;
+        {navSections.map((section, sectionIdx) => (
+          <div key={section.label} className={sectionIdx > 0 ? "mt-5" : ""}>
+            <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-[rgba(255,255,255,0.25)]">
+              {section.label}
+            </p>
+            <ul className="flex flex-col gap-0.5">
+              {section.items.map((item) => {
+                const isActive =
+                  item.href === "/dashboard"
+                    ? pathname === "/dashboard"
+                    : pathname.startsWith(item.href);
+                const Icon = item.icon;
 
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  onClick={onClose}
-                  className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-[rgba(255,255,255,0.05)] text-white border-l-2 border-[#00C9A7]"
-                      : "text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.03)]"
-                  )}
-                >
-                  <Icon className="h-[18px] w-[18px] shrink-0" />
-                  <span>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      onClick={onClose}
+                      className={cn(
+                        "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-[rgba(255,255,255,0.05)] text-white border-l-2 border-[#00C9A7]"
+                          : "text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.03)]"
+                      )}
+                    >
+                      <Icon className="h-[18px] w-[18px] shrink-0" />
+                      <span>{item.label}</span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
       {/* User section */}
