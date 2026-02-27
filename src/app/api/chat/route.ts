@@ -1,7 +1,34 @@
-export const runtime = "edge";
-
 import { NextRequest, NextResponse } from "next/server";
-import { isAIConfigured, buildSystemPrompt, streamChatResponse } from "@/lib/ai";
+import { isAIConfigured, buildSystemPrompt, runConversationWithTools } from "@/lib/ai";
+import { supabaseAdmin } from "@/lib/db";
+
+export async function GET(request: NextRequest) {
+  const action = request.nextUrl.searchParams.get("action");
+
+  if (action === "conversations") {
+    const { data } = await supabaseAdmin
+      .from("chat_conversations")
+      .select("id, title, created_at")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    return NextResponse.json({ conversations: data || [] });
+  }
+
+  if (action === "history") {
+    const conversationId = request.nextUrl.searchParams.get("conversationId");
+    if (!conversationId) {
+      return NextResponse.json({ error: "conversationId required" }, { status: 400 });
+    }
+    const { data } = await supabaseAdmin
+      .from("chat_messages")
+      .select("role, content")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true });
+    return NextResponse.json({ messages: data || [] });
+  }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,7 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { messages } = body;
+    const { messages, conversationId } = body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
@@ -27,70 +54,32 @@ export async function POST(request: NextRequest) {
     }
 
     const systemPrompt = await buildSystemPrompt();
-    const anthropicResponse = await streamChatResponse(messages, systemPrompt);
+    const { response, actions } = await runConversationWithTools(messages, systemPrompt);
 
-    if (!anthropicResponse.ok) {
-      const errorText = await anthropicResponse.text();
-      console.error("Anthropic API error:", errorText);
-      return NextResponse.json(
-        { error: "AI request failed", details: errorText },
-        { status: 502 }
-      );
+    // Save conversation (best-effort — tables may not exist yet)
+    if (conversationId) {
+      try {
+        const userMessage = messages[messages.length - 1];
+        await supabaseAdmin
+          .from("chat_conversations")
+          .upsert({
+            id: conversationId,
+            title: userMessage.content.slice(0, 80),
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "id" });
+        await supabaseAdmin.from("chat_messages").insert([
+          { conversation_id: conversationId, role: "user", content: userMessage.content },
+          { conversation_id: conversationId, role: "assistant", content: response },
+        ]);
+      } catch {
+        // Chat tables may not exist yet — don't fail the response
+        console.warn("Could not save chat history — tables may not exist");
+      }
     }
 
-    const anthropicBody = anthropicResponse.body;
-    if (!anthropicBody) {
-      return NextResponse.json(
-        { error: "No response stream from AI" },
-        { status: 502 }
-      );
-    }
-
-    // Transform the Anthropic SSE stream into a plain text stream
-    const reader = anthropicBody.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    const stream = new ReadableStream({
-      async pull(controller) {
-        try {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            // Process any remaining buffer
-            if (buffer.trim()) {
-              processSSEBuffer(buffer, controller);
-            }
-            controller.close();
-            return;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Process complete SSE lines
-          const lines = buffer.split("\n");
-          // Keep the last incomplete line in the buffer
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            processSSELine(line, controller);
-          }
-        } catch (error) {
-          console.error("Stream processing error:", error);
-          controller.error(error);
-        }
-      },
-      cancel() {
-        reader.cancel();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
+    return NextResponse.json({
+      response,
+      actions,
     });
   } catch (error) {
     console.error("Chat POST error:", error);
@@ -98,41 +87,5 @@ export async function POST(request: NextRequest) {
       { error: error instanceof Error ? error.message : "Chat request failed" },
       { status: 500 }
     );
-  }
-}
-
-function processSSEBuffer(
-  buffer: string,
-  controller: ReadableStreamDefaultController
-) {
-  const lines = buffer.split("\n");
-  for (const line of lines) {
-    processSSELine(line, controller);
-  }
-}
-
-function processSSELine(
-  line: string,
-  controller: ReadableStreamDefaultController
-) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("data: ")) return;
-
-  const jsonStr = trimmed.slice(6);
-  if (jsonStr === "[DONE]") return;
-
-  try {
-    const event = JSON.parse(jsonStr);
-
-    if (
-      event.type === "content_block_delta" &&
-      event.delta?.type === "text_delta" &&
-      event.delta.text
-    ) {
-      const encoder = new TextEncoder();
-      controller.enqueue(encoder.encode(event.delta.text));
-    }
-  } catch {
-    // Non-JSON data line or malformed JSON; skip silently
   }
 }

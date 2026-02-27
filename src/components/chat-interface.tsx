@@ -1,7 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Plus, MessageSquare, AlertTriangle } from "lucide-react";
+import {
+  Send,
+  Plus,
+  MessageSquare,
+  AlertTriangle,
+  Zap,
+  Kanban,
+  Search,
+  Mail,
+  FileText,
+  Activity,
+  ArrowRightLeft,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatRelativeTime } from "@/lib/utils";
@@ -9,6 +21,7 @@ import { formatRelativeTime } from "@/lib/utils";
 interface Message {
   role: "user" | "assistant";
   content: string;
+  actions?: string[];
 }
 
 interface Conversation {
@@ -17,15 +30,33 @@ interface Conversation {
   created_at: string;
 }
 
+// Map tool names to friendly labels and icons
+const TOOL_LABELS: Record<string, { label: string; icon: typeof Zap }> = {
+  get_pipeline_overview: { label: "Checking pipeline", icon: Kanban },
+  get_deals_in_stage: { label: "Looking up deals", icon: Kanban },
+  search_deals: { label: "Searching deals", icon: Search },
+  move_deal: { label: "Moving deal", icon: ArrowRightLeft },
+  send_sms: { label: "Sending SMS", icon: MessageSquare },
+  send_email: { label: "Sending email", icon: Mail },
+  get_templates: { label: "Checking templates", icon: FileText },
+  send_template: { label: "Sending template", icon: FileText },
+  get_recent_activity: { label: "Checking activity", icon: Activity },
+};
+
+function getToolLabel(action: string): { label: string; icon: typeof Zap } {
+  const toolName = action.split("(")[0];
+  return TOOL_LABELS[toolName] || { label: toolName, icon: Zap };
+}
+
 export function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [streaming, setStreaming] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [currentActions, setCurrentActions] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -35,7 +66,7 @@ export function ChatInterface() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, currentActions]);
 
   const fetchConversations = useCallback(async () => {
     try {
@@ -79,7 +110,7 @@ export function ChatInterface() {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setLoading(true);
-    setStreaming(true);
+    setCurrentActions([]);
 
     const conversationId = activeConversation || crypto.randomUUID();
     if (!activeConversation) setActiveConversation(conversationId);
@@ -98,35 +129,23 @@ export function ChatInterface() {
         const data = await res.json();
         if (data.error === "AI_NOT_CONFIGURED") {
           setAiConfigured(false);
-          setMessages((prev) => prev.slice(0, -1)); // Remove the user message
+          setMessages((prev) => prev.slice(0, -1));
           setLoading(false);
-          setStreaming(false);
           return;
         }
       }
 
       if (!res.ok) throw new Error("Failed to send message");
 
-      // Stream response
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        setMessages((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last.role === "assistant") {
-            updated[updated.length - 1] = { ...last, content: last.content + chunk };
-          }
-          return updated;
-        });
-      }
+      const data = await res.json();
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: data.response,
+          actions: data.actions?.length > 0 ? data.actions : undefined,
+        },
+      ]);
 
       fetchConversations();
     } catch {
@@ -137,7 +156,7 @@ export function ChatInterface() {
     }
 
     setLoading(false);
-    setStreaming(false);
+    setCurrentActions([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -154,7 +173,7 @@ export function ChatInterface() {
           <AlertTriangle size={48} className="mx-auto mb-4 text-[#F5A623]" />
           <h2 className="text-xl font-semibold text-white mb-2">AI Assistant Not Configured</h2>
           <p className="text-[rgba(255,255,255,0.5)] mb-4">
-            Add your Anthropic API key in Settings → AI Configuration to enable the AI assistant.
+            Add your Anthropic API key in Settings &rarr; AI Configuration to enable the AI assistant.
           </p>
           <a
             href="/dashboard/settings"
@@ -230,9 +249,29 @@ export function ChatInterface() {
           {messages.length === 0 ? (
             <div className="flex items-center justify-center h-full text-[rgba(255,255,255,0.3)]">
               <div className="text-center">
-                <MessageSquare size={48} className="mx-auto mb-4 opacity-30" />
-                <p className="text-lg font-medium">Ask your AI engineer anything...</p>
-                <p className="text-sm mt-2">Operations, strategy, code changes, or business questions</p>
+                <Zap size={48} className="mx-auto mb-4 opacity-30" />
+                <p className="text-lg font-medium">SRT Office Manager</p>
+                <p className="text-sm mt-2 max-w-md">
+                  I can check your pipeline, move deals, send messages, and manage operations. Ask me anything.
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center mt-4">
+                  {[
+                    "What's the pipeline looking like?",
+                    "Who's in Underwriting?",
+                    "Show me recent activity",
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => {
+                        setInput(suggestion);
+                        textareaRef.current?.focus();
+                      }}
+                      className="px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)] transition-colors"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : (
@@ -242,13 +281,30 @@ export function ChatInterface() {
                 className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[${msg.role === "user" ? "70%" : "80%"}] rounded-xl px-4 py-3 ${
+                  className={`rounded-xl px-4 py-3 ${
                     msg.role === "user"
                       ? "bg-[#00C9A7] text-[#0B1426]"
                       : "bg-[rgba(255,255,255,0.05)] text-white"
                   }`}
-                  style={{ maxWidth: msg.role === "user" ? "70%" : "80%" }}
+                  style={{ maxWidth: msg.role === "user" ? "70%" : "85%" }}
                 >
+                  {/* Show tool actions taken */}
+                  {msg.actions && msg.actions.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2 pb-2 border-b border-[rgba(255,255,255,0.08)]">
+                      {msg.actions.map((action, j) => {
+                        const { label, icon: Icon } = getToolLabel(action);
+                        return (
+                          <span
+                            key={j}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[rgba(0,201,167,0.1)] text-[#00C9A7] text-[10px] font-medium rounded-full"
+                          >
+                            <Icon size={10} />
+                            {label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                   {msg.role === "assistant" ? (
                     <div className="prose prose-invert prose-sm max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -260,13 +316,20 @@ export function ChatInterface() {
               </div>
             ))
           )}
-          {streaming && messages[messages.length - 1]?.role === "assistant" && messages[messages.length - 1]?.content === "" && (
+
+          {/* Loading indicator */}
+          {loading && (
             <div className="flex justify-start">
               <div className="bg-[rgba(255,255,255,0.05)] rounded-xl px-4 py-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[rgba(255,255,255,0.3)] rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <div className="w-2 h-2 bg-[rgba(255,255,255,0.3)] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <div className="w-2 h-2 bg-[rgba(255,255,255,0.3)] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-[#00C9A7] rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <div className="w-2 h-2 bg-[#00C9A7] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <div className="w-2 h-2 bg-[#00C9A7] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </div>
+                  <span className="text-xs text-[rgba(255,255,255,0.4)]">
+                    Thinking...
+                  </span>
                 </div>
               </div>
             </div>
@@ -282,7 +345,7 @@ export function ChatInterface() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask your AI engineer anything..."
+              placeholder="Ask the Office Manager anything..."
               rows={1}
               className="flex-1 bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-xl px-4 py-3 text-sm text-white placeholder-[rgba(255,255,255,0.3)] focus:outline-none focus:border-[#00C9A7] resize-none"
               style={{ minHeight: "44px", maxHeight: "120px" }}
