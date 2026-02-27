@@ -34,6 +34,8 @@ interface IntegrationCardProps {
   integration: Integration;
   onSetupGHL?: () => void;
   onSyncGHL?: () => void;
+  onConnectMicrosoft?: () => void;
+  onDisconnectMicrosoft?: () => void;
   onSaveConfig?: (id: string, config: Record<string, string>) => void;
 }
 
@@ -41,6 +43,8 @@ export function IntegrationCard({
   integration,
   onSetupGHL,
   onSyncGHL,
+  onConnectMicrosoft,
+  onDisconnectMicrosoft,
   onSaveConfig,
 }: IntegrationCardProps) {
   const [showConfig, setShowConfig] = useState(false);
@@ -110,10 +114,47 @@ export function IntegrationCard({
         </div>
       )}
 
+      {/* Microsoft 365 buttons */}
+      {integration.name === "Microsoft 365" && (
+        <div className="mb-3">
+          {integration.status === "connected" ? (
+            <div>
+              <p className="text-xs text-[#00C9A7] mb-2">
+                Connected as {integration.config?.email || integration.config?.display_name || "Outlook"}
+              </p>
+              <div className="flex gap-2">
+                <a
+                  href="/dashboard/mail"
+                  className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
+                >
+                  Open Inbox
+                </a>
+                {onDisconnectMicrosoft && (
+                  <button
+                    onClick={onDisconnectMicrosoft}
+                    className="text-xs px-3 py-1.5 bg-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.5)] rounded-md hover:bg-[rgba(231,76,60,0.2)] hover:text-[#E74C3C] transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            onConnectMicrosoft && (
+              <button
+                onClick={onConnectMicrosoft}
+                className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
+              >
+                Connect Outlook
+              </button>
+            )
+          )}
+        </div>
+      )}
+
       {/* Coming soon message */}
       {integration.status === "coming_soon" && (
         <p className="text-xs text-[rgba(255,255,255,0.3)] italic">
-          {integration.name === "Microsoft 365" && "Will connect to submissions@srtagency.com for auto-stage updates"}
           {integration.name === "Microsoft Teams" && "Receives notifications for deal events"}
           {(integration.name === "Quo" || integration.name === "Quo Phone") && "Will sync call recordings + transcriptions"}
           {integration.name === "OneDrive" && "Will auto-organize deal files by stage"}

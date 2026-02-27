@@ -7,6 +7,7 @@ import {
   Plug,
   Settings,
   Mail,
+  Inbox,
   Zap,
   FileText,
 } from "lucide-react";
@@ -29,6 +30,7 @@ export const navSections: NavSection[] = [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
       { label: "Messaging", href: "/dashboard/messaging", icon: Mail },
+      { label: "Outlook", href: "/dashboard/mail", icon: Inbox },
     ],
   },
   {

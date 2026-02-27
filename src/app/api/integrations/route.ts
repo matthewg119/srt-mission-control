@@ -7,7 +7,7 @@ const DEFAULT_INTEGRATIONS = [
   { name: "AI Configuration", type: "AI", status: "disconnected", config: { additionalContext: "", priorities: "" }, icon: "🤖" },
   { name: "Quo Phone", type: "Phone", status: "coming_soon", config: {}, icon: "📞" },
   { name: "Microsoft Teams", type: "Communication", status: "coming_soon", config: {}, icon: "💬" },
-  { name: "Microsoft 365", type: "Email", status: "coming_soon", config: {}, icon: "📧" },
+  { name: "Microsoft 365", type: "Email", status: "disconnected", config: {}, icon: "📧" },
   { name: "Meta Pixel", type: "Analytics", status: "coming_soon", config: {}, icon: "📈" },
 ];
 
