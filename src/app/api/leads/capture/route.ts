@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
+import { sendEvent } from "@/lib/meta-capi";
 
 // CORS headers — allow srtagency.com to POST leads
 const CORS_HEADERS = {
@@ -18,7 +19,7 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, email, phone, message, source } = body;
+    const { name, email, phone, message, source, _fbc, _fbp, eventId, sourceUrl } = body;
 
     // Validate required fields
     if (!name || (!email && !phone)) {
@@ -159,6 +160,25 @@ export async function POST(request: NextRequest) {
         updated_at: new Date().toISOString(),
       }, { onConflict: "ghl_opportunity_id" });
     }
+
+    // 7. Fire Meta CAPI Lead event (non-blocking)
+    sendEvent({
+      eventName: "Lead",
+      eventId: eventId || undefined,
+      eventSourceUrl: sourceUrl || "https://srtagency.com",
+      actionSource: "website",
+      userData: {
+        email: email || undefined,
+        phone: phone || undefined,
+        firstName,
+        lastName: lastName || undefined,
+        fbc: _fbc || undefined,
+        fbp: _fbp || undefined,
+        clientIpAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined,
+        clientUserAgent: request.headers.get("user-agent") || undefined,
+        externalId: contactId,
+      },
+    }).catch((err) => console.error("[Meta CAPI] Lead event error:", err));
 
     return NextResponse.json(
       {

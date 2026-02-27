@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
+import { sendEvent } from "@/lib/meta-capi";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +23,7 @@ export async function POST(request: NextRequest) {
       incDate, startMonth, startYear, mobilePhone, dob, creditScore, ownership,
       amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
       applicationCompletionPct, applicationStage, source,
+      _fbc, _fbp, eventId, sourceUrl,
     } = body;
 
     let contactId: string | null = (body.contactId as string) || null;
@@ -102,6 +104,25 @@ export async function POST(request: NextRequest) {
         description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})`,
         metadata: { contactId, opportunityId, contactName, email, phone: businessPhone, completionPct },
       });
+
+      // Fire Meta CAPI Lead event at 25% (contact info captured)
+      sendEvent({
+        eventName: "Lead",
+        eventId: eventId || undefined,
+        eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
+        actionSource: "website",
+        userData: {
+          email: email || undefined,
+          phone: mobilePhone || businessPhone || undefined,
+          firstName: firstName || undefined,
+          lastName: lastName || undefined,
+          fbc: _fbc || undefined,
+          fbp: _fbp || undefined,
+          clientIpAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined,
+          clientUserAgent: request.headers.get("user-agent") || undefined,
+          externalId: contactId || undefined,
+        },
+      }).catch((err) => console.error("[Meta CAPI] Application Lead error:", err));
 
       return NextResponse.json(
         { success: true, message: "Lead created", contactId, opportunityId },
@@ -232,6 +253,33 @@ export async function POST(request: NextRequest) {
       description: `Application completed: ${contactName} — ${businessName || "N/A"} — ${amountNeeded || "N/A"}`,
       metadata: { contactId, opportunityId, contactName, businessName, email, amountNeeded, creditScore },
     });
+
+    // Fire Meta CAPI CompleteRegistration at 100%
+    sendEvent({
+      eventName: "CompleteRegistration",
+      eventId: eventId || undefined,
+      eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
+      actionSource: "website",
+      userData: {
+        email: email || undefined,
+        phone: mobilePhone || businessPhone || undefined,
+        firstName: firstName || undefined,
+        lastName: lastName || undefined,
+        city: bizCity || undefined,
+        state: bizState || undefined,
+        zip: bizZip || undefined,
+        fbc: _fbc || undefined,
+        fbp: _fbp || undefined,
+        clientIpAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined,
+        clientUserAgent: request.headers.get("user-agent") || undefined,
+        externalId: contactId || undefined,
+      },
+      customData: {
+        content_name: "Business Funding Application",
+        value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
+        currency: "USD",
+      },
+    }).catch((err) => console.error("[Meta CAPI] CompleteRegistration error:", err));
 
     return NextResponse.json(
       { success: true, message: "Application submitted successfully", contactId, opportunityId },

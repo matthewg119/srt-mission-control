@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { PIPELINES } from "@/config/pipeline";
+import { PIPELINES, ACTIVE_DEALS_PIPELINE } from "@/config/pipeline";
 import { processStageChange } from "@/lib/automation-engine";
+import { sendEvent } from "@/lib/meta-capi";
 
 export async function POST(request: NextRequest) {
   try {
@@ -89,6 +90,37 @@ export async function POST(request: NextRequest) {
             description: `Stage change: ${previousStage || "new"} → ${newStage} | ${result.executed} actions, ${result.errors} errors`,
             metadata: { opportunityId: ghlOpportunityId, previousStage, newStage, pipelineName, ...result },
           });
+
+          // Fire Meta CAPI Purchase event when deal reaches "Funded"
+          if (newStage === "Funded" && pipelineId === ACTIVE_DEALS_PIPELINE.id) {
+            const fundedAmount = opp.monetaryValue ? Number(opp.monetaryValue) : 0;
+            sendEvent({
+              eventName: "Purchase",
+              eventSourceUrl: "https://srtagency.com",
+              actionSource: "system_generated",
+              userData: {
+                email: (contact.email as string) || undefined,
+                phone: (contact.phone as string) || undefined,
+                firstName: (contact.firstName as string) || undefined,
+                lastName: (contact.lastName as string) || undefined,
+                city: (contact.city as string) || undefined,
+                state: (contact.state as string) || undefined,
+                zip: (contact.postalCode as string) || undefined,
+                externalId: (contact.id as string) || (opp.contactId as string) || undefined,
+              },
+              customData: {
+                currency: "USD",
+                value: fundedAmount,
+                content_name: "Business Loan Funded",
+              },
+            }).catch((err) => console.error("[Meta CAPI] Purchase event error:", err));
+
+            await supabaseAdmin.from("system_logs").insert({
+              event_type: "meta_capi_purchase",
+              description: `Meta CAPI Purchase event: ${contactName} — $${fundedAmount}`,
+              metadata: { opportunityId: ghlOpportunityId, contactId: contact.id || opp.contactId, amount: fundedAmount },
+            });
+          }
         }
       }
     }
