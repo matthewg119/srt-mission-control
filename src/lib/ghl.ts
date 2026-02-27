@@ -93,6 +93,39 @@ class GHLClient {
     });
   }
 
+  /**
+   * Create a contact, or return the existing one if duplicate.
+   * GHL returns 400/422 with the existing contact info on duplicates.
+   */
+  async createOrFindContact(data: Record<string, unknown>): Promise<{ contactId: string; isNew: boolean }> {
+    try {
+      const result = await this.createContact(data);
+      const contact = result.contact as Record<string, unknown> | undefined;
+      const id = (contact?.id as string) || (result.id as string);
+      if (id) return { contactId: id, isNew: true };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      // GHL duplicate error often contains the contact ID in the response
+      // Try to extract it from the error message
+      const idMatch = errMsg.match(/"id"\s*:\s*"([a-zA-Z0-9]+)"/);
+      if (idMatch) return { contactId: idMatch[1], isNew: false };
+    }
+
+    // Fallback: search by email or phone
+    const email = data.email as string | undefined;
+    const phone = data.phone as string | undefined;
+    const searchQuery = email || phone;
+    if (searchQuery) {
+      const searchResult = await this.searchContacts(searchQuery);
+      const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
+      if (contacts.length > 0) {
+        return { contactId: contacts[0].id as string, isNew: false };
+      }
+    }
+
+    throw new Error("Failed to create or find contact");
+  }
+
   async updateContact(id: string, data: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.request(`/contacts/${id}`, {
       method: "PUT",
