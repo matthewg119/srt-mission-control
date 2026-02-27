@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const {
       firstName, lastName, email, businessPhone, businessName, legalName,
       dba, industry, bizAddress, bizCity, bizState, bizZip, ein,
-      startMonth, startYear, mobilePhone, dob, creditScore, ownership,
+      incDate, startMonth, startYear, mobilePhone, dob, creditScore, ownership,
       amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
       applicationCompletionPct, applicationStage, source,
     } = body;
@@ -178,7 +178,7 @@ export async function POST(request: NextRequest) {
           { key: "business_address", value: fullAddress },
           { key: "business_phone", value: businessPhone || "" },
           { key: "ein", value: ein || "" },
-          { key: "business_start_date", value: startMonth && startYear ? `${startMonth} ${startYear}` : "" },
+          { key: "business_start_date", value: incDate || (startMonth && startYear ? `${startMonth} ${startYear}` : "") },
           { key: "credit_score_range", value: creditScore || "" },
           { key: "ownership_percentage", value: String(ownership || "") },
           { key: "funding_amount_requested", value: amountNeeded || "" },
@@ -267,7 +267,8 @@ function buildCustomFieldUpdates(body: Record<string, unknown>): Array<{ key: st
   add("business_phone", body.businessPhone);
   add("ein", body.ein);
   if (body.bizAddress) add("business_address", [body.bizAddress, body.bizCity, body.bizState, body.bizZip].filter(Boolean).join(", "));
-  if (body.startMonth && body.startYear) add("business_start_date", `${body.startMonth} ${body.startYear}`);
+  if (body.incDate) add("business_start_date", String(body.incDate));
+  else if (body.startMonth && body.startYear) add("business_start_date", `${body.startMonth} ${body.startYear}`);
   add("credit_score_range", body.creditScore);
   add("ownership_percentage", body.ownership);
   add("funding_amount_requested", body.amountNeeded);

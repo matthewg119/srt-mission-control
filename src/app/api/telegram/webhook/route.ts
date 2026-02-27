@@ -5,8 +5,6 @@ import { supabaseAdmin } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-const ALLOWED_USER_ID = process.env.TELEGRAM_USER_ID || "";
-
 // Telegram Update types (subset we care about)
 interface TelegramUpdate {
   message?: {
@@ -31,8 +29,9 @@ export async function POST(request: NextRequest) {
     const userId = String(message.from.id);
     const userText = message.text;
 
-    // Security: only allow configured user
-    if (ALLOWED_USER_ID && userId !== ALLOWED_USER_ID) {
+    // Security: only allow configured user (read at runtime, not build time)
+    const allowedUserId = process.env.TELEGRAM_USER_ID || "";
+    if (allowedUserId && userId !== allowedUserId) {
       return NextResponse.json({ ok: true });
     }
 
