@@ -1,15 +1,18 @@
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
 // Max Telegram message length
 const MAX_LENGTH = 4096;
+
+function getApi(): string {
+  const token = process.env.TELEGRAM_BOT_TOKEN || "";
+  return `https://api.telegram.org/bot${token}`;
+}
 
 export const telegram = {
   /** Send a text message. Auto-splits if too long. */
   async sendMessage(chatId: number | string, text: string): Promise<void> {
+    const api = getApi();
     const chunks = splitMessage(text);
     for (const chunk of chunks) {
-      await fetch(`${API}/sendMessage`, {
+      await fetch(`${api}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -23,7 +26,7 @@ export const telegram = {
 
   /** Send a "typing..." indicator */
   async sendTyping(chatId: number | string): Promise<void> {
-    await fetch(`${API}/sendChatAction`, {
+    await fetch(`${getApi()}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
@@ -34,7 +37,7 @@ export const telegram = {
   async setWebhook(url: string, secret?: string): Promise<Record<string, unknown>> {
     const body: Record<string, unknown> = { url };
     if (secret) body.secret_token = secret;
-    const res = await fetch(`${API}/setWebhook`, {
+    const res = await fetch(`${getApi()}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -44,19 +47,20 @@ export const telegram = {
 
   /** Remove webhook */
   async deleteWebhook(): Promise<Record<string, unknown>> {
-    const res = await fetch(`${API}/deleteWebhook`, { method: "POST" });
+    const res = await fetch(`${getApi()}/deleteWebhook`, { method: "POST" });
     return res.json();
   },
 
   /** Check bot info */
   async getMe(): Promise<Record<string, unknown>> {
-    const res = await fetch(`${API}/getMe`);
+    const res = await fetch(`${getApi()}/getMe`);
     return res.json();
   },
 
   /** Check if bot token is configured */
   isConfigured(): boolean {
-    return !!BOT_TOKEN && BOT_TOKEN.trim().length > 0;
+    const token = process.env.TELEGRAM_BOT_TOKEN || "";
+    return !!token && token.trim().length > 0;
   },
 };
 
@@ -69,7 +73,6 @@ function splitMessage(text: string): string[] {
       chunks.push(remaining);
       break;
     }
-    // Try to split at a newline
     let splitAt = remaining.lastIndexOf("\n", MAX_LENGTH);
     if (splitAt < MAX_LENGTH * 0.5) splitAt = MAX_LENGTH;
     chunks.push(remaining.slice(0, splitAt));

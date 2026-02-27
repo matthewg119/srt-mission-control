@@ -3,6 +3,8 @@ import { telegram } from "@/lib/telegram";
 import { isAIConfigured, buildSystemPrompt, runConversationWithTools } from "@/lib/ai";
 import { supabaseAdmin } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 const ALLOWED_USER_ID = process.env.TELEGRAM_USER_ID || "";
 
 // Telegram Update types (subset we care about)
