@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Create opportunity — "Application Started"
+      const ghlWarnings: string[] = [];
       try {
         const stageId = await lookupNewLeadStageId();
         if (stageId) {
@@ -80,29 +82,32 @@ export async function POST(request: NextRequest) {
           });
           const opp = oppData.opportunity as Record<string, unknown> | undefined;
           opportunityId = (opp?.id as string) || (oppData.id as string) || null;
+        } else {
+          ghlWarnings.push("GHL stage lookup failed — lead saved locally only");
+          console.error("CRITICAL: Could not resolve 'New Lead' stage ID");
         }
       } catch (error) {
         console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
+        ghlWarnings.push("GHL opportunity creation failed — lead saved locally");
       }
 
-      // Cache in pipeline
-      if (opportunityId) {
-        await supabaseAdmin.from("pipeline_cache").upsert({
-          ghl_opportunity_id: opportunityId,
-          contact_name: contactName,
-          business_name: businessName || null,
-          stage: "New Lead",
-          pipeline_name: "New Deals",
-          amount: 0,
-          ghl_contact_id: contactId,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "ghl_opportunity_id" });
-      }
+      // ALWAYS cache in pipeline — even if GHL failed, dashboard must show this lead
+      const pipelineCacheId = opportunityId || `local_${randomUUID()}`;
+      await supabaseAdmin.from("pipeline_cache").upsert({
+        ghl_opportunity_id: pipelineCacheId,
+        contact_name: contactName,
+        business_name: businessName || null,
+        stage: "New Lead",
+        pipeline_name: "New Deals",
+        amount: 0,
+        ghl_contact_id: contactId,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ghl_opportunity_id" });
 
       await supabaseAdmin.from("system_logs").insert({
         event_type: "lead_capture",
         description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})`,
-        metadata: { contactId, opportunityId, contactName, email, phone: businessPhone, completionPct },
+        metadata: { contactId, opportunityId: opportunityId || pipelineCacheId, contactName, email, phone: businessPhone, completionPct, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
       });
 
       // Fire Meta CAPI Lead event at 25% (contact info captured)
@@ -125,7 +130,7 @@ export async function POST(request: NextRequest) {
       }).catch((err) => console.error("[Meta CAPI] Application Lead error:", err));
 
       return NextResponse.json(
-        { success: true, message: "Lead created", contactId, opportunityId },
+        { success: true, message: ghlWarnings.length > 0 ? "Lead created with warnings" : "Lead created", contactId, opportunityId: opportunityId || pipelineCacheId, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
         { headers: CORS_HEADERS }
       );
     }
@@ -213,6 +218,7 @@ export async function POST(request: NextRequest) {
     } catch { /* non-critical */ }
 
     // Create opportunity if none yet
+    const completionWarnings: string[] = [];
     if (!opportunityId) {
       try {
         const stageId = await lookupNewLeadStageId();
@@ -228,30 +234,33 @@ export async function POST(request: NextRequest) {
           });
           const opp = oppData.opportunity as Record<string, unknown> | undefined;
           opportunityId = (opp?.id as string) || (oppData.id as string) || null;
+        } else {
+          completionWarnings.push("GHL stage lookup failed at 100% — lead saved locally only");
+          console.error("CRITICAL: Could not resolve 'New Lead' stage ID at 100% completion");
         }
       } catch (error) {
         console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
+        completionWarnings.push("GHL opportunity creation failed at 100% — lead saved locally");
       }
     }
 
-    // Update pipeline cache with full data + amount
-    if (opportunityId) {
-      await supabaseAdmin.from("pipeline_cache").upsert({
-        ghl_opportunity_id: opportunityId,
-        contact_name: contactName,
-        business_name: businessName || legalName || null,
-        stage: "New Lead",
-        pipeline_name: "New Deals",
-        amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
-        ghl_contact_id: contactId,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "ghl_opportunity_id" });
-    }
+    // ALWAYS update pipeline cache with full data + amount — even if GHL failed
+    const finalCacheId = opportunityId || `local_${randomUUID()}`;
+    await supabaseAdmin.from("pipeline_cache").upsert({
+      ghl_opportunity_id: finalCacheId,
+      contact_name: contactName,
+      business_name: businessName || legalName || null,
+      stage: "New Lead",
+      pipeline_name: "New Deals",
+      amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
+      ghl_contact_id: contactId,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "ghl_opportunity_id" });
 
     await supabaseAdmin.from("system_logs").insert({
       event_type: "lead_capture",
       description: `Application completed: ${contactName} — ${businessName || "N/A"} — ${amountNeeded || "N/A"}`,
-      metadata: { contactId, opportunityId, contactName, businessName, email, amountNeeded, creditScore },
+      metadata: { contactId, opportunityId: opportunityId || finalCacheId, contactName, businessName, email, amountNeeded, creditScore, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
     });
 
     // Fire Meta CAPI CompleteRegistration at 100%
@@ -282,7 +291,7 @@ export async function POST(request: NextRequest) {
     }).catch((err) => console.error("[Meta CAPI] CompleteRegistration error:", err));
 
     return NextResponse.json(
-      { success: true, message: "Application submitted successfully", contactId, opportunityId },
+      { success: true, message: completionWarnings.length > 0 ? "Application submitted with warnings" : "Application submitted successfully", contactId, opportunityId: opportunityId || finalCacheId, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
       { headers: CORS_HEADERS }
     );
   } catch (error) {
@@ -294,14 +303,26 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// Cache stage ID across requests (same serverless instance)
+let cachedNewLeadStageId: string | null = null;
+
 async function lookupNewLeadStageId(): Promise<string | null> {
-  const pipelinesResponse = await ghl.getPipelines();
-  const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
-  const pipeline = allPipelines.find((p) => (p.id as string) === NEW_DEALS_PIPELINE.id);
-  if (!pipeline) return null;
-  const stages = (pipeline.stages as Array<Record<string, unknown>>) || [];
-  const stage = stages.find((s) => (s.name as string).toLowerCase() === "new lead");
-  return stage ? (stage.id as string) : null;
+  if (cachedNewLeadStageId) return cachedNewLeadStageId;
+  try {
+    const pipelinesResponse = await ghl.getPipelines();
+    const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
+    const pipeline = allPipelines.find((p) => (p.id as string) === NEW_DEALS_PIPELINE.id);
+    if (!pipeline) return null;
+    const stages = (pipeline.stages as Array<Record<string, unknown>>) || [];
+    const stage = stages.find((s) => (s.name as string).toLowerCase() === "new lead");
+    if (stage) {
+      cachedNewLeadStageId = stage.id as string;
+      return cachedNewLeadStageId;
+    }
+  } catch (err) {
+    console.error("Stage lookup failed:", err instanceof Error ? err.message : err);
+  }
+  return null;
 }
 
 function buildCustomFieldUpdates(body: Record<string, unknown>): Array<{ key: string; value: string }> {

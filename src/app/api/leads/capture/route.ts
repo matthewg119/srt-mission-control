@@ -1,8 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
 import { sendEvent } from "@/lib/meta-capi";
+
+// Cache the "New Lead" stage ID across requests (same serverless instance)
+let cachedNewLeadStageId: string | null = null;
+
+async function getNewLeadStageId(): Promise<string | null> {
+  if (cachedNewLeadStageId) return cachedNewLeadStageId;
+  try {
+    const pipelinesResponse = await ghl.getPipelines();
+    const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
+    const pipeline = allPipelines.find((p) => (p.id as string) === NEW_DEALS_PIPELINE.id);
+    if (pipeline) {
+      const stages = (pipeline.stages as Array<Record<string, unknown>>) || [];
+      const stage = stages.find((s) => (s.name as string).toLowerCase() === "new lead");
+      if (stage) {
+        cachedNewLeadStageId = stage.id as string;
+        return cachedNewLeadStageId;
+      }
+    }
+  } catch (err) {
+    console.error("Stage lookup failed:", err instanceof Error ? err.message : err);
+  }
+  return null;
+}
 
 // CORS headers — allow srtagency.com to POST leads
 const CORS_HEADERS = {
@@ -79,25 +103,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 2. Look up "New Lead" stage ID from GHL
-    let stageId: string | null = null;
-    try {
-      const pipelinesResponse = await ghl.getPipelines();
-      const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
-      const newDealsPipeline = allPipelines.find(
-        (p) => (p.id as string) === NEW_DEALS_PIPELINE.id
-      );
-      if (newDealsPipeline) {
-        const stages = (newDealsPipeline.stages as Array<Record<string, unknown>>) || [];
-        const newLeadStage = stages.find(
-          (s) => (s.name as string).toLowerCase() === "new lead"
-        );
-        if (newLeadStage) {
-          stageId = newLeadStage.id as string;
-        }
-      }
-    } catch {
-      console.error("Failed to look up pipeline stages");
+    // 2. Look up "New Lead" stage ID (cached across requests)
+    const stageId = await getNewLeadStageId();
+    const warnings: string[] = [];
+    if (!stageId) {
+      warnings.push("GHL stage lookup failed — lead saved locally only");
+      console.error("CRITICAL: Could not resolve 'New Lead' stage ID for pipeline", NEW_DEALS_PIPELINE.id);
     }
 
     // 3. Create opportunity in New Deals pipeline
@@ -116,6 +127,7 @@ export async function POST(request: NextRequest) {
         opportunityId = (opp?.id as string) || (oppData.id as string) || null;
       } catch (error) {
         console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
+        warnings.push("GHL opportunity creation failed — lead saved locally");
       }
     }
 
@@ -144,22 +156,22 @@ export async function POST(request: NextRequest) {
         phone,
         message,
         source: source || "Website - srtagency.com",
+        warnings: warnings.length > 0 ? warnings : undefined,
       },
     });
 
-    // 6. Also cache in pipeline_cache for instant visibility
-    if (opportunityId) {
-      await supabaseAdmin.from("pipeline_cache").upsert({
-        ghl_opportunity_id: opportunityId,
-        contact_name: `${firstName} ${lastName}`.trim(),
-        business_name: null,
-        stage: "New Lead",
-        pipeline_name: "New Deals",
-        amount: 0,
-        ghl_contact_id: contactId,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "ghl_opportunity_id" });
-    }
+    // 6. ALWAYS cache in pipeline_cache — even if GHL failed, the dashboard must show this lead
+    const pipelineCacheId = opportunityId || `local_${randomUUID()}`;
+    await supabaseAdmin.from("pipeline_cache").upsert({
+      ghl_opportunity_id: pipelineCacheId,
+      contact_name: `${firstName} ${lastName}`.trim(),
+      business_name: null,
+      stage: "New Lead",
+      pipeline_name: "New Deals",
+      amount: 0,
+      ghl_contact_id: contactId,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "ghl_opportunity_id" });
 
     // 7. Fire Meta CAPI Lead event (non-blocking)
     sendEvent({
@@ -183,9 +195,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message: "Lead captured successfully",
+        message: warnings.length > 0 ? "Lead captured with warnings" : "Lead captured successfully",
         contactId,
-        opportunityId,
+        opportunityId: opportunityId || pipelineCacheId,
+        warnings: warnings.length > 0 ? warnings : undefined,
       },
       { headers: CORS_HEADERS }
     );
