@@ -19,6 +19,8 @@ const SCOPES = [
   "Mail.Read",
   "Mail.Send",
   "Mail.ReadWrite",
+  "Files.ReadWrite",
+  "MailboxSettings.ReadWrite",
 ].join(" ");
 
 // ── OAuth Helpers ──
@@ -137,21 +139,32 @@ async function getValidAccessToken(): Promise<string> {
 
 async function graphRequest(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit & { rawResponse?: boolean; skipContentType?: boolean } = {}
 ): Promise<Record<string, unknown>> {
   const token = await getValidAccessToken();
+  const { rawResponse, skipContentType, ...fetchOptions } = options;
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    ...(options.headers as Record<string, string>),
+  };
+  if (!skipContentType) {
+    headers["Content-Type"] = "application/json";
+  }
+
   const res = await fetch(`${GRAPH_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    ...fetchOptions,
+    headers,
   });
 
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`Graph API error ${res.status}: ${err}`);
+  }
+
+  // Some endpoints return 204 No Content
+  if (res.status === 204 || rawResponse) {
+    return { ok: true };
   }
 
   return res.json();
@@ -177,32 +190,43 @@ export const microsoft = {
     return graphRequest(`/me/messages/${id}`);
   },
 
-  /** Send an email */
+  /** Send an email (with optional attachments) */
   async sendMail(params: {
     to: string;
     subject: string;
     body: string;
     isHtml?: boolean;
+    attachments?: Array<{ name: string; contentType: string; contentBytes: string }>;
   }): Promise<void> {
     const token = await getValidAccessToken();
+
+    const message: Record<string, unknown> = {
+      subject: params.subject,
+      body: {
+        contentType: params.isHtml ? "HTML" : "Text",
+        content: params.body,
+      },
+      toRecipients: [
+        { emailAddress: { address: params.to } },
+      ],
+    };
+
+    if (params.attachments && params.attachments.length > 0) {
+      message.attachments = params.attachments.map((a) => ({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        name: a.name,
+        contentType: a.contentType,
+        contentBytes: a.contentBytes,
+      }));
+    }
+
     const res = await fetch(`${GRAPH_URL}/me/sendMail`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        message: {
-          subject: params.subject,
-          body: {
-            contentType: params.isHtml ? "HTML" : "Text",
-            content: params.body,
-          },
-          toRecipients: [
-            { emailAddress: { address: params.to } },
-          ],
-        },
-      }),
+      body: JSON.stringify({ message }),
     });
 
     // sendMail returns 202 with no body on success
@@ -244,5 +268,84 @@ export const microsoft = {
       `/me/mailFolders/inbox?$select=unreadItemCount`
     );
     return (result.unreadItemCount as number) || 0;
+  },
+
+  // ── OneDrive ──
+
+  /** Create a folder in OneDrive. Returns { id, webUrl } */
+  async createDriveFolder(folderName: string, parentPath = ""): Promise<{ id: string; webUrl: string }> {
+    const endpoint = parentPath
+      ? `/me/drive/root:/${encodeURIComponent(parentPath)}:/children`
+      : `/me/drive/root/children`;
+
+    const result = await graphRequest(endpoint, {
+      method: "POST",
+      body: JSON.stringify({
+        name: folderName,
+        folder: {},
+        "@microsoft.graph.conflictBehavior": "useExisting",
+      }),
+    });
+
+    return { id: result.id as string, webUrl: result.webUrl as string };
+  },
+
+  /** Upload a file to OneDrive. For files up to 4MB. Returns { id, webUrl } */
+  async uploadDriveFile(
+    folderPath: string,
+    fileName: string,
+    content: Buffer | Uint8Array,
+    contentType: string
+  ): Promise<{ id: string; webUrl: string }> {
+    const token = await getValidAccessToken();
+    const path = `${folderPath}/${fileName}`.replace(/\/+/g, "/");
+    const res = await fetch(
+      `${GRAPH_URL}/me/drive/root:/${encodeURIComponent(path)}:/content`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": contentType,
+        },
+        body: new Uint8Array(content),
+      }
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`OneDrive upload failed: ${err}`);
+    }
+
+    const result = await res.json();
+    return { id: result.id, webUrl: result.webUrl };
+  },
+
+  // ── Outlook Signature ──
+
+  /** Set the Outlook signature for the connected account */
+  async setSignature(html: string): Promise<void> {
+    const token = await getValidAccessToken();
+    const res = await fetch(`${GRAPH_URL}/me/mailboxSettings`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        signatureSettings: {
+          isEnabled: true,
+          defaultSignatureForNewMessages: "SRT Agency",
+          defaultSignatureForRepliesOrForwards: "SRT Agency",
+          signatures: [
+            { id: "srt-agency", name: "SRT Agency", html },
+          ],
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Set signature failed: ${err}`);
+    }
   },
 };

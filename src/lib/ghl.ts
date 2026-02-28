@@ -154,6 +154,49 @@ class GHLClient {
     });
   }
 
+  // Tags
+  async addContactTag(contactId: string, tag: string): Promise<Record<string, unknown>> {
+    return this.request(`/contacts/${contactId}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ tags: [tag] }),
+    });
+  }
+
+  // Document upload (multipart/form-data)
+  async uploadContactDocument(
+    contactId: string,
+    fileBuffer: Buffer | Uint8Array,
+    fileName: string,
+  ): Promise<Record<string, unknown>> {
+    const formData = new FormData();
+    formData.append("contactId", contactId);
+    formData.append("locationId", this.locationId);
+    const blob = new Blob([new Uint8Array(fileBuffer)]);
+    formData.append("file", blob, fileName);
+
+    const response = await fetch(`${BASE_URL}/contacts/${contactId}/documents`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        Version: "2021-07-28",
+      },
+      body: formData,
+    });
+
+    if (response.status === 429) {
+      const retryAfter = parseInt(response.headers.get("retry-after") || "2", 10);
+      await new Promise((r) => setTimeout(r, retryAfter * 1000));
+      return this.uploadContactDocument(contactId, fileBuffer, fileName);
+    }
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`GHL document upload error ${response.status}: ${error}`);
+    }
+
+    return response.json();
+  }
+
   // Setup helper: creates pipeline + custom fields with delay
   async setupPipelineAndFields(
     stages: { name: string }[],

@@ -4,6 +4,8 @@ import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
 import { sendEvent } from "@/lib/meta-capi";
+import { generateApplicationPDF } from "@/lib/pdf-generator";
+import { microsoft } from "@/lib/microsoft";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -321,6 +323,58 @@ export async function POST(request: NextRequest) {
         currency: "USD",
       },
     }).catch((err) => console.error("[Meta CAPI] CompleteRegistration error:", err));
+
+    // ── Non-blocking: PDF → OneDrive → GHL tag ──
+    (async () => {
+      try {
+        const pdfBuffer = generateApplicationPDF({
+          firstName, lastName, email, businessPhone, mobilePhone,
+          businessName, legalName, dba, industry, ein,
+          bizAddress, bizCity, bizState, bizZip,
+          incDate, dob, creditScore, ownership,
+          amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
+        });
+
+        const safeName = (businessName || legalName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
+
+        // Create OneDrive folder + upload PDF
+        try {
+          await microsoft.createDriveFolder("Working Files");
+          await microsoft.createDriveFolder(safeName, "Working Files");
+          await microsoft.uploadDriveFile(
+            `Working Files/${safeName}`,
+            `Application - ${safeName}.pdf`,
+            pdfBuffer,
+            "application/pdf"
+          );
+          console.log(`[100%] PDF uploaded to OneDrive: Working Files/${safeName}`);
+        } catch (err) {
+          console.error("[100%] OneDrive upload failed:", err instanceof Error ? err.message : err);
+        }
+
+        // Upload PDF to GHL contact documents
+        if (contactId) {
+          try {
+            await ghl.uploadContactDocument(contactId, pdfBuffer, `Application - ${safeName}.pdf`);
+            console.log("[100%] PDF uploaded to GHL contact documents");
+          } catch (err) {
+            console.error("[100%] GHL document upload failed:", err instanceof Error ? err.message : err);
+          }
+        }
+
+        // Add tag to trigger GHL workflow
+        if (contactId) {
+          try {
+            await ghl.addContactTag(contactId, "application-submitted");
+            console.log("[100%] Tag 'application-submitted' added to GHL contact");
+          } catch (err) {
+            console.error("[100%] GHL tag failed:", err instanceof Error ? err.message : err);
+          }
+        }
+      } catch (err) {
+        console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
+      }
+    })();
 
     return NextResponse.json(
       { success: true, message: completionWarnings.length > 0 ? "Application submitted with warnings" : "Application submitted successfully", contactId, opportunityId: opportunityId || finalCacheId, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
