@@ -145,7 +145,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 5. Log to system_logs
-    await supabaseAdmin.from("system_logs").insert({
+    const { error: logError } = await supabaseAdmin.from("system_logs").insert({
       event_type: "lead_capture",
       description: `New lead from website: ${firstName} ${lastName} (${email || phone})`,
       metadata: {
@@ -159,10 +159,11 @@ export async function POST(request: NextRequest) {
         warnings: warnings.length > 0 ? warnings : undefined,
       },
     });
+    if (logError) console.error("system_logs write failed:", logError);
 
     // 6. ALWAYS cache in pipeline_cache — even if GHL failed, the dashboard must show this lead
     const pipelineCacheId = opportunityId || `local_${randomUUID()}`;
-    await supabaseAdmin.from("pipeline_cache").upsert({
+    let { error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
       ghl_opportunity_id: pipelineCacheId,
       contact_name: `${firstName} ${lastName}`.trim(),
       business_name: null,
@@ -172,6 +173,21 @@ export async function POST(request: NextRequest) {
       ghl_contact_id: contactId,
       updated_at: new Date().toISOString(),
     }, { onConflict: "ghl_opportunity_id" });
+
+    // Fallback: retry without optional columns if schema doesn't have them
+    if (cacheError) {
+      console.warn("pipeline_cache upsert failed, retrying without ghl_contact_id:", cacheError.message);
+      ({ error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
+        ghl_opportunity_id: pipelineCacheId,
+        contact_name: `${firstName} ${lastName}`.trim(),
+        business_name: null,
+        stage: "New Lead",
+        pipeline_name: "New Deals",
+        amount: 0,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ghl_opportunity_id" }));
+      if (cacheError) console.error("pipeline_cache write FAILED completely:", cacheError);
+    }
 
     // 7. Fire Meta CAPI Lead event (non-blocking)
     sendEvent({

@@ -49,15 +49,15 @@ export async function POST() {
           stage: stageName,
           pipeline_name: pipeline.name,
           amount: opp.monetaryValue ? Number(opp.monetaryValue) : null,
-          ghl_contact_id: (opp.contactId as string) || (contact.id as string) || null,
           updated_at: new Date().toISOString(),
         };
 
-        // Try with all fields first, fall back to core fields if table schema is limited
+        // Try with all optional fields first
         let { error } = await supabaseAdmin
           .from("pipeline_cache")
           .upsert({
             ...record,
+            ghl_contact_id: (opp.contactId as string) || (contact.id as string) || null,
             assigned_to: (opp.assignedTo as string) || null,
             last_activity: (opp.lastActivity as string) || (opp.updatedAt as string) || null,
           }, { onConflict: "ghl_opportunity_id" });

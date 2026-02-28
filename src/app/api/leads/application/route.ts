@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
 
       // ALWAYS cache in pipeline — even if GHL failed, dashboard must show this lead
       const pipelineCacheId = opportunityId || `local_${randomUUID()}`;
-      await supabaseAdmin.from("pipeline_cache").upsert({
+      let { error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
         ghl_opportunity_id: pipelineCacheId,
         contact_name: contactName,
         business_name: businessName || null,
@@ -104,11 +104,27 @@ export async function POST(request: NextRequest) {
         updated_at: new Date().toISOString(),
       }, { onConflict: "ghl_opportunity_id" });
 
-      await supabaseAdmin.from("system_logs").insert({
+      // Fallback: retry without optional columns if schema doesn't have them
+      if (cacheError) {
+        console.warn("pipeline_cache upsert failed, retrying without ghl_contact_id:", cacheError.message);
+        ({ error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
+          ghl_opportunity_id: pipelineCacheId,
+          contact_name: contactName,
+          business_name: businessName || null,
+          stage: "New Lead",
+          pipeline_name: "New Deals",
+          amount: 0,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "ghl_opportunity_id" }));
+        if (cacheError) console.error("pipeline_cache write FAILED completely:", cacheError);
+      }
+
+      const { error: logError } = await supabaseAdmin.from("system_logs").insert({
         event_type: "lead_capture",
         description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})`,
         metadata: { contactId, opportunityId: opportunityId || pipelineCacheId, contactName, email, phone: businessPhone, completionPct, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
       });
+      if (logError) console.error("system_logs write failed:", logError);
 
       // Fire Meta CAPI Lead event at 25% (contact info captured)
       sendEvent({
@@ -153,11 +169,12 @@ export async function POST(request: NextRequest) {
         if (Object.keys(core).length > 0) await ghl.updateContact(contactId, core);
       } catch { /* non-critical */ }
 
-      await supabaseAdmin.from("system_logs").insert({
+      const { error: progressLogError } = await supabaseAdmin.from("system_logs").insert({
         event_type: "application_progress",
         description: `Application progress: ${contactName} — ${completionPct}% (${applicationStage || "in progress"})`,
         metadata: { contactId, opportunityId, completionPct, applicationStage },
       });
+      if (progressLogError) console.error("system_logs progress write failed:", progressLogError);
 
       return NextResponse.json(
         { success: true, message: `Progress saved: ${completionPct}%`, contactId, opportunityId },
@@ -246,7 +263,7 @@ export async function POST(request: NextRequest) {
 
     // ALWAYS update pipeline cache with full data + amount — even if GHL failed
     const finalCacheId = opportunityId || `local_${randomUUID()}`;
-    await supabaseAdmin.from("pipeline_cache").upsert({
+    let { error: finalCacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
       ghl_opportunity_id: finalCacheId,
       contact_name: contactName,
       business_name: businessName || legalName || null,
@@ -257,11 +274,26 @@ export async function POST(request: NextRequest) {
       updated_at: new Date().toISOString(),
     }, { onConflict: "ghl_opportunity_id" });
 
-    await supabaseAdmin.from("system_logs").insert({
+    if (finalCacheError) {
+      console.warn("pipeline_cache 100% upsert failed, retrying without ghl_contact_id:", finalCacheError.message);
+      ({ error: finalCacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
+        ghl_opportunity_id: finalCacheId,
+        contact_name: contactName,
+        business_name: businessName || legalName || null,
+        stage: "New Lead",
+        pipeline_name: "New Deals",
+        amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ghl_opportunity_id" }));
+      if (finalCacheError) console.error("pipeline_cache 100% write FAILED completely:", finalCacheError);
+    }
+
+    const { error: completionLogError } = await supabaseAdmin.from("system_logs").insert({
       event_type: "lead_capture",
       description: `Application completed: ${contactName} — ${businessName || "N/A"} — ${amountNeeded || "N/A"}`,
       metadata: { contactId, opportunityId: opportunityId || finalCacheId, contactName, businessName, email, amountNeeded, creditScore, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
     });
+    if (completionLogError) console.error("system_logs 100% write failed:", completionLogError);
 
     // Fire Meta CAPI CompleteRegistration at 100%
     sendEvent({
