@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
+import { wrapWithSignature } from "@/config/email-signature";
 
 // GET /api/integrations/microsoft/mail — Read inbox
 export async function GET(request: NextRequest) {
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
     const { action, to, subject, message, messageId, isHtml } = body;
 
     if (action === "reply" && messageId) {
-      await microsoft.replyToMessage(messageId, message);
+      await microsoft.replyToMessage(messageId, wrapWithSignature(message));
       return NextResponse.json({ success: true, message: "Reply sent" });
     }
 
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await microsoft.sendMail({ to, subject, body: message, isHtml });
+    await microsoft.sendMail({ to, subject, body: wrapWithSignature(message, isHtml), isHtml: true });
     return NextResponse.json({ success: true, message: "Email sent" });
   } catch (error) {
     console.error("Microsoft mail POST error:", error);
