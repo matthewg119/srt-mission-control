@@ -7,7 +7,7 @@ export default async function PipelinePage() {
   const { data: deals } = await supabaseAdmin
     .from("pipeline_cache")
     .select("*")
-    .order("synced_at", { ascending: false });
+    .order("updated_at", { ascending: false });
 
   return <PipelineBoard initialDeals={deals || []} />;
 }

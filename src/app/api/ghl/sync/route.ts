@@ -41,22 +41,34 @@ export async function POST() {
           .filter(Boolean)
           .join(" ") || (contact.name as string) || "";
 
-        const record = {
+        // Core fields that definitely exist in the table
+        const record: Record<string, unknown> = {
           ghl_opportunity_id: ghlOpportunityId,
           contact_name: contactName,
           business_name: (contact.companyName as string) || "",
           stage: stageName,
           pipeline_name: pipeline.name,
           amount: opp.monetaryValue ? Number(opp.monetaryValue) : null,
-          assigned_to: (opp.assignedTo as string) || null,
-          last_activity: (opp.lastActivity as string) || (opp.updatedAt as string) || null,
-          metadata: opp,
+          ghl_contact_id: (opp.contactId as string) || (contact.id as string) || null,
           updated_at: new Date().toISOString(),
         };
 
-        const { error } = await supabaseAdmin
+        // Try with all fields first, fall back to core fields if table schema is limited
+        let { error } = await supabaseAdmin
           .from("pipeline_cache")
-          .upsert(record, { onConflict: "ghl_opportunity_id" });
+          .upsert({
+            ...record,
+            assigned_to: (opp.assignedTo as string) || null,
+            last_activity: (opp.lastActivity as string) || (opp.updatedAt as string) || null,
+          }, { onConflict: "ghl_opportunity_id" });
+
+        // If full upsert failed (missing columns), retry with core fields only
+        if (error) {
+          console.warn(`Full upsert failed for ${ghlOpportunityId}, retrying with core fields:`, error.message);
+          ({ error } = await supabaseAdmin
+            .from("pipeline_cache")
+            .upsert(record, { onConflict: "ghl_opportunity_id" }));
+        }
 
         if (!error) {
           totalSynced++;

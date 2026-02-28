@@ -20,14 +20,14 @@ export default async function DashboardPage() {
   const { count: thisWeek } = await supabaseAdmin
     .from("pipeline_cache")
     .select("*", { count: "exact", head: true })
-    .gte("synced_at", weekAgo);
+    .gte("updated_at", weekAgo);
 
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
   const { count: funded } = await supabaseAdmin
     .from("pipeline_cache")
     .select("*", { count: "exact", head: true })
     .eq("stage", "Funded")
-    .gte("synced_at", monthStart);
+    .gte("updated_at", monthStart);
 
   // "In Underwriting" count — maps to Underwriting + Submitted stages
   const { count: pendingDocs } = await supabaseAdmin

@@ -15,7 +15,7 @@ interface Deal {
   amount: number | null;
   assigned_to: string | null;
   last_activity: string | null;
-  synced_at: string;
+  updated_at: string;
 }
 
 interface PipelineBoardProps {
