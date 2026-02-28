@@ -73,15 +73,18 @@ export default function IntegrationsPage() {
 
   const handleDisconnectMicrosoft = async () => {
     if (!confirm("Disconnect Microsoft 365? You can reconnect anytime.")) return;
-    const ms = integrations.find((i) => i.name === "Microsoft 365");
-    if (ms?.id) {
-      await fetch("/api/integrations", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: ms.id, status: "disconnected", config: {} }),
-      });
-      fetchIntegrations();
+    try {
+      const res = await fetch("/api/integrations/microsoft/disconnect", { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error("Disconnect failed:", data.error || res.statusText);
+        alert("Failed to disconnect Microsoft 365. Please try again.");
+      }
+    } catch (err) {
+      console.error("Disconnect error:", err);
+      alert("Failed to disconnect Microsoft 365. Please try again.");
     }
+    fetchIntegrations();
   };
 
   const handleSaveConfig = async (id: string, config: Record<string, string>) => {
