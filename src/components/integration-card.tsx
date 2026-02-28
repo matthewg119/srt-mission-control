@@ -52,7 +52,14 @@ export function IntegrationCard({
   const [saving, setSaving] = useState(false);
 
   const icon = (integration as unknown as Record<string, unknown>).icon as string || INTEGRATION_ICONS[integration.name] || "🔌";
-  const statusColor = STATUS_COLORS[integration.status] || "#F5A623";
+
+  // Microsoft 365 should show "Disconnected" instead of "Coming Soon" since it's a real integration
+  const effectiveStatus =
+    integration.name === "Microsoft 365" && integration.status === "coming_soon"
+      ? "disconnected"
+      : integration.status;
+
+  const statusColor = STATUS_COLORS[effectiveStatus] || "#F5A623";
 
   const handleSave = async () => {
     if (!onSaveConfig) return;
@@ -63,9 +70,9 @@ export function IntegrationCard({
   };
 
   const statusLabel =
-    integration.status === "coming_soon"
+    effectiveStatus === "coming_soon"
       ? "Coming Soon"
-      : integration.status.charAt(0).toUpperCase() + integration.status.slice(1);
+      : effectiveStatus.charAt(0).toUpperCase() + effectiveStatus.slice(1);
 
   return (
     <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-xl p-5 card-hover">
@@ -152,8 +159,8 @@ export function IntegrationCard({
         </div>
       )}
 
-      {/* Coming soon message */}
-      {integration.status === "coming_soon" && (
+      {/* Coming soon message — skip for Microsoft 365 which has its own button block */}
+      {integration.status === "coming_soon" && integration.name !== "Microsoft 365" && (
         <p className="text-xs text-[rgba(255,255,255,0.3)] italic">
           {integration.name === "Microsoft Teams" && "Receives notifications for deal events"}
           {(integration.name === "Quo" || integration.name === "Quo Phone") && "Will sync call recordings + transcriptions"}
@@ -163,7 +170,7 @@ export function IntegrationCard({
       )}
 
       {/* Configure button */}
-      {integration.status !== "coming_soon" && (
+      {effectiveStatus !== "coming_soon" && (
         <button
           onClick={() => setShowConfig(!showConfig)}
           className="text-xs text-[rgba(255,255,255,0.5)] hover:text-white transition-colors"
