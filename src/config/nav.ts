@@ -10,6 +10,7 @@ import {
   Inbox,
   Zap,
   FileText,
+  ClipboardCheck,
 } from "lucide-react";
 
 export interface NavSection {
@@ -51,6 +52,7 @@ export const navSections: NavSection[] = [
     label: "System",
     items: [
       { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
+      { label: "QA Checklist", href: "/dashboard/checklist", icon: ClipboardCheck },
       { label: "Updates", href: "/dashboard/updates", icon: Rocket },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],
