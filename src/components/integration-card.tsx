@@ -36,6 +36,7 @@ interface IntegrationCardProps {
   onSyncGHL?: () => void;
   onConnectMicrosoft?: () => void;
   onDisconnectMicrosoft?: () => void;
+  onSetSignature?: () => void;
   onSaveConfig?: (id: string, config: Record<string, string>) => void;
 }
 
@@ -45,6 +46,7 @@ export function IntegrationCard({
   onSyncGHL,
   onConnectMicrosoft,
   onDisconnectMicrosoft,
+  onSetSignature,
   onSaveConfig,
 }: IntegrationCardProps) {
   const [showConfig, setShowConfig] = useState(false);
@@ -129,13 +131,21 @@ export function IntegrationCard({
               <p className="text-xs text-[#00C9A7] mb-2">
                 Connected as {integration.config?.email || integration.config?.display_name || "Outlook"}
               </p>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <a
                   href="/dashboard/mail"
                   className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
                 >
                   Open Inbox
                 </a>
+                {onSetSignature && (
+                  <button
+                    onClick={onSetSignature}
+                    className="text-xs px-3 py-1.5 bg-[rgba(255,255,255,0.08)] text-white rounded-md hover:bg-[rgba(255,255,255,0.12)] transition-colors"
+                  >
+                    Set Signature
+                  </button>
+                )}
                 {onDisconnectMicrosoft && (
                   <button
                     onClick={onDisconnectMicrosoft}

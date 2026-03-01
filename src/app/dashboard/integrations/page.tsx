@@ -71,6 +71,21 @@ export default function IntegrationsPage() {
     window.location.href = "/api/integrations/microsoft/auth";
   };
 
+  const handleSetSignature = async () => {
+    setMsStatus("Setting email signature...");
+    try {
+      const res = await fetch("/api/integrations/microsoft/signature", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setMsStatus("Email signature set successfully! Check your Outlook settings.");
+      } else {
+        setMsStatus(`Signature error: ${data.error || "Unknown error"}`);
+      }
+    } catch {
+      setMsStatus("Failed to set email signature. Please try again.");
+    }
+  };
+
   const handleDisconnectMicrosoft = async () => {
     if (!confirm("Disconnect Microsoft 365? You can reconnect anytime.")) return;
     try {
@@ -153,6 +168,7 @@ export default function IntegrationsPage() {
               onSyncGHL={integration.name === "GoHighLevel" ? handleSyncGHL : undefined}
               onConnectMicrosoft={integration.name === "Microsoft 365" ? handleConnectMicrosoft : undefined}
               onDisconnectMicrosoft={integration.name === "Microsoft 365" ? handleDisconnectMicrosoft : undefined}
+              onSetSignature={integration.name === "Microsoft 365" && integration.status === "connected" ? handleSetSignature : undefined}
               onSaveConfig={handleSaveConfig}
             />
           ))}

@@ -11,6 +11,7 @@ import {
   Zap,
   FileText,
   ClipboardCheck,
+  ListChecks,
 } from "lucide-react";
 
 export interface NavSection {
@@ -51,6 +52,7 @@ export const navSections: NavSection[] = [
   {
     label: "System",
     items: [
+      { label: "Onboarding", href: "/dashboard/onboarding", icon: ListChecks },
       { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
       { label: "QA Checklist", href: "/dashboard/checklist", icon: ClipboardCheck },
       { label: "Updates", href: "/dashboard/updates", icon: Rocket },

@@ -322,30 +322,83 @@ export const microsoft = {
 
   // ── Outlook Signature ──
 
-  /** Set the Outlook signature for the connected account */
+  /**
+   * Set the Outlook signature for the connected account.
+   * Uses the beta Graph API (signatures aren't available in v1.0).
+   * Step 1: Create or update the "SRT Agency" signature
+   * Step 2: Set it as default for new messages and replies
+   */
   async setSignature(html: string): Promise<void> {
     const token = await getValidAccessToken();
-    const res = await fetch(`${GRAPH_URL}/me/mailboxSettings`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        signatureSettings: {
-          isEnabled: true,
-          defaultSignatureForNewMessages: "SRT Agency",
-          defaultSignatureForRepliesOrForwards: "SRT Agency",
-          signatures: [
-            { id: "srt-agency", name: "SRT Agency", html },
-          ],
-        },
-      }),
-    });
+    const BETA = "https://graph.microsoft.com/beta";
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Set signature failed: ${err}`);
+    // Step 1: Check if "SRT Agency" signature already exists
+    let signatureId: string | null = null;
+
+    try {
+      const listRes = await fetch(`${BETA}/me/mailboxSettings/signatures`, { headers });
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        const existing = (listData.value as Array<{ id: string; displayName: string }> | undefined)?.find(
+          (s) => s.displayName === "SRT Agency"
+        );
+        if (existing) signatureId = existing.id;
+      }
+    } catch {
+      // Listing failed — we'll create a new one
+    }
+
+    // Step 2: Create or update the signature
+    if (signatureId) {
+      // Update existing
+      const updateRes = await fetch(`${BETA}/me/mailboxSettings/signatures/${signatureId}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ html }),
+      });
+      if (!updateRes.ok) {
+        const err = await updateRes.text();
+        throw new Error(`Update signature failed: ${err}`);
+      }
+    } else {
+      // Create new
+      const createRes = await fetch(`${BETA}/me/mailboxSettings/signatures`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          displayName: "SRT Agency",
+          html,
+        }),
+      });
+      if (!createRes.ok) {
+        const err = await createRes.text();
+        throw new Error(`Create signature failed: ${err}`);
+      }
+      const created = await createRes.json();
+      signatureId = created.id;
+    }
+
+    // Step 3: Set as default for new messages and replies
+    if (signatureId) {
+      const settingsRes = await fetch(`${BETA}/me/mailboxSettings`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          signatureSettings: {
+            isEnabled: true,
+            useForNewMessages: signatureId,
+            useForRepliesOrForwards: signatureId,
+          },
+        }),
+      });
+      if (!settingsRes.ok) {
+        const err = await settingsRes.text();
+        console.warn("Set default signature failed (signature was still created):", err);
+      }
     }
   },
 };
