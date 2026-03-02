@@ -12,6 +12,7 @@ import {
   FileText,
   ClipboardCheck,
   ListChecks,
+  Phone,
 } from "lucide-react";
 
 export interface NavSection {
@@ -33,6 +34,7 @@ export const navSections: NavSection[] = [
       { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
       { label: "Messaging", href: "/dashboard/messaging", icon: Mail },
       { label: "Outlook", href: "/dashboard/mail", icon: Inbox },
+      { label: "Call Recap", href: "/dashboard/call-recap", icon: Phone },
     ],
   },
   {
