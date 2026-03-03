@@ -14,8 +14,8 @@ export const DEFAULT_ONBOARDING_STEPS: OnboardingStep[] = [
     id: "step-1",
     title: "Email Signature Generator",
     description: "Generate your professional SRT Agency email signature using AI. Click below to open the signature builder.",
-    link: "https://claude.ai/new",
-    linkLabel: "Open Claude AI",
+    link: "/dashboard/marketing/signature",
+    linkLabel: "Open Signature Generator",
   },
   {
     id: "step-2",
