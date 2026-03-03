@@ -9,6 +9,7 @@ import {
   Building2,
   LayoutGrid,
   Inbox,
+  Mails,
 } from "lucide-react";
 
 export interface NavSection {
@@ -37,6 +38,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: "Messaging", href: "/dashboard/messaging", icon: Inbox },
       { label: "Templates", href: "/dashboard/templates", icon: FileText },
+      { label: "Sequences", href: "/dashboard/sequences", icon: Mails },
       { label: "Systems", href: "/dashboard/systems", icon: LayoutGrid },
     ],
   },
