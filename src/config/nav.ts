@@ -1,19 +1,14 @@
 import {
   LayoutDashboard,
   MessageSquare,
-  BookOpen,
   Kanban,
-  Rocket,
-  Plug,
   Settings,
   Mail,
-  Inbox,
-  Zap,
   FileText,
   ClipboardCheck,
-  ListChecks,
-  Phone,
-  Megaphone,
+  Building2,
+  LayoutGrid,
+  Inbox,
 } from "lucide-react";
 
 export interface NavSection {
@@ -33,38 +28,23 @@ export const navSections: NavSection[] = [
     items: [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
-      { label: "Messaging", href: "/dashboard/messaging", icon: Mail },
-      { label: "Outlook", href: "/dashboard/mail", icon: Inbox },
-      { label: "Call Recap", href: "/dashboard/call-recap", icon: Phone },
-    ],
-  },
-  {
-    label: "Automation",
-    items: [
-      { label: "Templates", href: "/dashboard/templates", icon: FileText },
-      { label: "Automations", href: "/dashboard/automations", icon: Zap },
-    ],
-  },
-  {
-    label: "Marketing",
-    items: [
-      { label: "Marketing", href: "/dashboard/marketing", icon: Megaphone },
-    ],
-  },
-  {
-    label: "Tools",
-    items: [
       { label: "AI Assistant", href: "/dashboard/assistant", icon: MessageSquare },
-      { label: "Knowledge Base", href: "/dashboard/knowledge", icon: BookOpen },
+      { label: "Email Agents", href: "/dashboard/email-agents", icon: Mail },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { label: "Messaging", href: "/dashboard/messaging", icon: Inbox },
+      { label: "Templates", href: "/dashboard/templates", icon: FileText },
+      { label: "Systems", href: "/dashboard/systems", icon: LayoutGrid },
     ],
   },
   {
     label: "System",
     items: [
-      { label: "Onboarding", href: "/dashboard/onboarding", icon: ListChecks },
-      { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
-      { label: "QA Checklist", href: "/dashboard/checklist", icon: ClipboardCheck },
-      { label: "Updates", href: "/dashboard/updates", icon: Rocket },
+      { label: "Lenders", href: "/dashboard/lenders", icon: Building2 },
+      { label: "Checklist", href: "/dashboard/checklist", icon: ClipboardCheck },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],
   },

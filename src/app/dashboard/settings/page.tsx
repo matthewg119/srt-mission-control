@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { User, Users, Bot, AlertTriangle, Trash2 } from "lucide-react";
+import { User, Users, Bot, AlertTriangle, Trash2, Bell } from "lucide-react";
 
 export default function SettingsPage() {
   const { data: session } = useSession();
@@ -13,11 +13,12 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6 border-b border-[rgba(255,255,255,0.06)] pb-3">
+      <div className="flex gap-2 mb-6 border-b border-[rgba(255,255,255,0.06)] pb-3 flex-wrap">
         {[
           { id: "account", label: "Account", icon: User },
           { id: "team", label: "Team", icon: Users },
           { id: "ai", label: "AI Configuration", icon: Bot },
+          { id: "notifications", label: "Notifications", icon: Bell },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -37,6 +38,7 @@ export default function SettingsPage() {
       {activeTab === "account" && <AccountTab />}
       {activeTab === "team" && <TeamTab isAdmin={(session?.user as unknown as Record<string, unknown>)?.role === "admin"} currentUserId={(session?.user as unknown as Record<string, unknown>)?.id as string} />}
       {activeTab === "ai" && <AIConfigTab />}
+      {activeTab === "notifications" && <NotificationsTab />}
     </div>
   );
 }
@@ -272,6 +274,112 @@ function TeamTab({ isAdmin, currentUserId }: { isAdmin: boolean; currentUserId: 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function NotificationsTab() {
+  const NOTIFICATION_EVENTS = [
+    { key: "new_deal_intake", label: "New deal intake", description: "When Underwriting Bot processes a new deal" },
+    { key: "funder_response", label: "Funder response received", description: "When a funder approves, declines, or counters" },
+    { key: "deal_stale_4h", label: "Deal stale (4+ hours)", description: "When a deal has no activity for over 4 hours" },
+    { key: "all_funders_declined", label: "All funders declined", description: "Critical alert when every submitted funder declines" },
+    { key: "contract_unsigned_4h", label: "Contract unsigned (4+ hours)", description: "When a contract sent to a merchant isn't signed" },
+    { key: "manual_routing_needed", label: "Manual email routing needed", description: "When File Router can't confidently match an email to a deal" },
+    { key: "daily_pipeline_summary", label: "Daily pipeline summary", description: "Scheduled overview of all active deals" },
+  ];
+
+  const [settings, setSettings] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/integrations")
+      .then((r) => r.json())
+      .then((data) => {
+        const notifConfig = (data.integrations || []).find(
+          (i: Record<string, unknown>) => i.name === "Notification Settings"
+        );
+        if (notifConfig?.config) {
+          setSettings(notifConfig.config as Record<string, boolean>);
+        } else {
+          // Default all on
+          const defaults: Record<string, boolean> = {};
+          for (const e of NOTIFICATION_EVENTS) defaults[e.key] = true;
+          setSettings(defaults);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const toggle = (key: string) => {
+    setSettings((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/integrations");
+      const data = await res.json();
+      const existing = (data.integrations || []).find(
+        (i: Record<string, unknown>) => i.name === "Notification Settings"
+      );
+      if (existing) {
+        await fetch("/api/integrations", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: existing.id, config: settings }),
+        });
+      }
+      setMessage("Notification settings saved");
+    } catch {
+      setMessage("Failed to save");
+    }
+    setSaving(false);
+    setTimeout(() => setMessage(""), 3000);
+  };
+
+  if (loading) return <div className="space-y-3">{[1,2,3].map((i) => <div key={i} className="h-14 bg-[rgba(255,255,255,0.03)] rounded-lg animate-pulse" />)}</div>;
+
+  return (
+    <div className="max-w-lg">
+      <p className="text-sm text-[rgba(255,255,255,0.5)] mb-6">
+        Configure which events trigger notifications. These will be sent via Microsoft Teams when the AI agents are active.
+      </p>
+
+      {message && (
+        <div className="text-sm px-4 py-2 rounded-lg bg-[#00C9A7]/10 text-[#00C9A7] mb-4">{message}</div>
+      )}
+
+      <div className="space-y-2 mb-6">
+        {NOTIFICATION_EVENTS.map((event) => (
+          <div
+            key={event.key}
+            className="flex items-center justify-between bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg px-4 py-3"
+          >
+            <div>
+              <p className="text-sm font-medium text-white">{event.label}</p>
+              <p className="text-xs text-[rgba(255,255,255,0.4)] mt-0.5">{event.description}</p>
+            </div>
+            <button
+              onClick={() => toggle(event.key)}
+              className={`w-10 h-5 rounded-full transition-colors shrink-0 ml-4 ${settings[event.key] ? "bg-[#00C9A7]" : "bg-[rgba(255,255,255,0.1)]"}`}
+            >
+              <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5 ${settings[event.key] ? "translate-x-5" : "translate-x-0"}`} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
+      >
+        {saving ? "Saving..." : "Save Notifications"}
+      </button>
     </div>
   );
 }
