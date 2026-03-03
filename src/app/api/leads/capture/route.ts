@@ -4,6 +4,8 @@ import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
 import { sendEvent } from "@/lib/meta-capi";
+import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
+import { enrollContact } from "@/lib/sequence-engine";
 
 // Cache the "New Lead" stage ID across requests (same serverless instance)
 let cachedNewLeadStageId: string | null = null;
@@ -28,28 +30,50 @@ async function getNewLeadStageId(): Promise<string | null> {
   return null;
 }
 
-// CORS headers — allow srtagency.com to POST leads
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
 // Preflight
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
 }
 
 export async function POST(request: NextRequest) {
+  const corsHeaders = getCorsHeaders(request);
+  const clientIp = getClientIp(request);
+  const clientUserAgent = request.headers.get("user-agent") || undefined;
+
   try {
+    // Rate limit check
+    if (!checkRateLimit(clientIp)) {
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: corsHeaders }
+      );
+    }
+
     const body = await request.json();
-    const { name, email, phone, message, source, _fbc, _fbp, eventId, sourceUrl } = body;
+    const { name, email, phone, message, source, website, _fbc, _fbp, eventId, sourceUrl } = body;
+
+    // Bot protection
+    const validation = validateLeadSubmission({ name, email, phone, website });
+    if (!validation.valid) {
+      console.warn(`[Bot Protection] Rejected lead: ${validation.reason} | IP: ${clientIp}`);
+      // Silent reject — return fake success to fool the bot
+      if (validation.silentReject) {
+        return NextResponse.json(
+          { success: true, message: "Lead captured successfully" },
+          { headers: corsHeaders }
+        );
+      }
+      return NextResponse.json(
+        { error: "Invalid submission" },
+        { status: 400, headers: corsHeaders }
+      );
+    }
 
     // Validate required fields
     if (!name || (!email && !phone)) {
       return NextResponse.json(
         { error: "Name and either email or phone are required" },
-        { status: 400, headers: CORS_HEADERS }
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -75,15 +99,12 @@ export async function POST(request: NextRequest) {
 
       // GHL returns existing contact if duplicate — that's fine
       if (!contactId && contactData.meta) {
-        // Duplicate contact — GHL returns the existing one
         contactId = ((contactData.meta as Record<string, unknown>).id as string) || "";
       }
     } catch (error) {
-      // If contact already exists, GHL throws a 422 with the existing contact ID
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error("Contact creation error:", errMsg);
 
-      // Try to search for existing contact
       if (email) {
         const searchResult = await ghl.searchContacts(email);
         const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
@@ -92,13 +113,13 @@ export async function POST(request: NextRequest) {
         } else {
           return NextResponse.json(
             { error: "Failed to create contact", details: errMsg },
-            { status: 500, headers: CORS_HEADERS }
+            { status: 500, headers: corsHeaders }
           );
         }
       } else {
         return NextResponse.json(
           { error: "Failed to create contact", details: errMsg },
-          { status: 500, headers: CORS_HEADERS }
+          { status: 500, headers: corsHeaders }
         );
       }
     }
@@ -144,7 +165,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 5. Log to system_logs
+    // 5. Log to system_logs (now includes IP + User-Agent)
     const { error: logError } = await supabaseAdmin.from("system_logs").insert({
       event_type: "lead_capture",
       description: `New lead from website: ${firstName} ${lastName} (${email || phone})`,
@@ -156,6 +177,8 @@ export async function POST(request: NextRequest) {
         phone,
         message,
         source: source || "Website - srtagency.com",
+        clientIp,
+        clientUserAgent,
         warnings: warnings.length > 0 ? warnings : undefined,
       },
     });
@@ -174,7 +197,6 @@ export async function POST(request: NextRequest) {
       updated_at: new Date().toISOString(),
     }, { onConflict: "ghl_opportunity_id" });
 
-    // Fallback: retry without optional columns if schema doesn't have them
     if (cacheError) {
       console.warn("pipeline_cache upsert failed, retrying without ghl_contact_id:", cacheError.message);
       ({ error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
@@ -202,11 +224,19 @@ export async function POST(request: NextRequest) {
         lastName: lastName || undefined,
         fbc: _fbc || undefined,
         fbp: _fbp || undefined,
-        clientIpAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined,
-        clientUserAgent: request.headers.get("user-agent") || undefined,
+        clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+        clientUserAgent,
         externalId: contactId,
       },
     }).catch((err) => console.error("[Meta CAPI] Lead event error:", err));
+
+    // 8. Enroll in email sequences (non-blocking)
+    if (email && contactId) {
+      enrollContact("website-lead-nurture", contactId, email, `${firstName} ${lastName}`.trim())
+        .catch((err) => console.error("[Sequence] website-lead-nurture enrollment error:", err));
+      enrollContact("website-lead-to-application", contactId, email, `${firstName} ${lastName}`.trim())
+        .catch((err) => console.error("[Sequence] website-lead-to-application enrollment error:", err));
+    }
 
     return NextResponse.json(
       {
@@ -216,13 +246,13 @@ export async function POST(request: NextRequest) {
         opportunityId: opportunityId || pipelineCacheId,
         warnings: warnings.length > 0 ? warnings : undefined,
       },
-      { headers: CORS_HEADERS }
+      { headers: corsHeaders }
     );
   } catch (error) {
     console.error("Lead capture error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Lead capture failed" },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: corsHeaders }
     );
   }
 }

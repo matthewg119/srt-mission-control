@@ -1,0 +1,167 @@
+<!--
+  ═══════════════════════════════════════════════════════
+  SRT Agency — Digital Signature Pad Snippet
+  ═══════════════════════════════════════════════════════
+
+  Add this HTML to your srtagency.com/apply consent page,
+  right above the submit button.
+
+  It captures a drawn signature (or typed name as fallback)
+  and sends it as `signature` (base64 PNG) and `signatureName`
+  fields in the form submission payload.
+  ═══════════════════════════════════════════════════════
+-->
+
+<!-- Signature Section -->
+<div id="signature-section" style="margin: 24px 0; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc;">
+  <label style="display: block; font-weight: 600; font-size: 14px; color: #0B1426; margin-bottom: 8px;">
+    Applicant Signature <span style="color: #ef4444;">*</span>
+  </label>
+  <p style="font-size: 12px; color: #64748b; margin: 0 0 12px 0;">
+    By signing below, you authorize SRT Agency LLC to process your application as described above.
+  </p>
+
+  <!-- Canvas for drawing -->
+  <div style="position: relative; border: 2px solid #cbd5e1; border-radius: 8px; background: white; overflow: hidden;">
+    <canvas id="sig-canvas" width="560" height="150" style="display: block; width: 100%; cursor: crosshair; touch-action: none;"></canvas>
+    <div id="sig-placeholder" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #94a3b8; font-size: 14px; pointer-events: none;">
+      Draw your signature here
+    </div>
+  </div>
+
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+    <button type="button" id="sig-clear" style="background: none; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 12px; font-size: 12px; color: #64748b; cursor: pointer;">
+      Clear
+    </button>
+    <span style="font-size: 11px; color: #94a3b8;">or type your name below</span>
+  </div>
+
+  <!-- Typed name fallback -->
+  <input
+    type="text"
+    id="sig-name"
+    placeholder="Type your full name as signature"
+    style="width: 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; font-family: 'Brush Script MT', 'Segoe Script', cursive; box-sizing: border-box;"
+  />
+
+  <!-- Hidden fields that get sent with the form -->
+  <input type="hidden" id="sig-data" name="signature" value="" />
+  <input type="hidden" id="sig-name-data" name="signatureName" value="" />
+</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('sig-canvas');
+  const ctx = canvas.getContext('2d');
+  const placeholder = document.getElementById('sig-placeholder');
+  const clearBtn = document.getElementById('sig-clear');
+  const nameInput = document.getElementById('sig-name');
+  const sigDataField = document.getElementById('sig-data');
+  const sigNameField = document.getElementById('sig-name-data');
+
+  let isDrawing = false;
+  let hasDrawn = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  // High-DPI canvas scaling
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+
+  // Drawing style
+  ctx.strokeStyle = '#0B1426';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  function getPos(e) {
+    const r = canvas.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    return {
+      x: touch.clientX - r.left,
+      y: touch.clientY - r.top
+    };
+  }
+
+  function startDraw(e) {
+    e.preventDefault();
+    isDrawing = true;
+    const pos = getPos(e);
+    lastX = pos.x;
+    lastY = pos.y;
+    placeholder.style.display = 'none';
+    hasDrawn = true;
+  }
+
+  function draw(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    lastX = pos.x;
+    lastY = pos.y;
+    updateSignatureData();
+  }
+
+  function stopDraw(e) {
+    if (e) e.preventDefault();
+    isDrawing = false;
+  }
+
+  // Mouse events
+  canvas.addEventListener('mousedown', startDraw);
+  canvas.addEventListener('mousemove', draw);
+  canvas.addEventListener('mouseup', stopDraw);
+  canvas.addEventListener('mouseleave', stopDraw);
+
+  // Touch events
+  canvas.addEventListener('touchstart', startDraw, { passive: false });
+  canvas.addEventListener('touchmove', draw, { passive: false });
+  canvas.addEventListener('touchend', stopDraw, { passive: false });
+
+  // Clear button
+  clearBtn.addEventListener('click', function() {
+    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+    placeholder.style.display = 'block';
+    hasDrawn = false;
+    sigDataField.value = '';
+  });
+
+  // Name input → update hidden fields
+  nameInput.addEventListener('input', function() {
+    sigNameField.value = nameInput.value;
+    // If no drawn signature, generate one from the typed name
+    if (!hasDrawn && nameInput.value.trim()) {
+      updateSignatureData();
+    }
+  });
+
+  function updateSignatureData() {
+    if (hasDrawn) {
+      // Export drawn signature as base64 PNG
+      sigDataField.value = canvas.toDataURL('image/png');
+    }
+    sigNameField.value = nameInput.value || '';
+  }
+
+  // ─── Integration with your form submission ───
+  // When your form submits, include these in your POST body:
+  //   signature: document.getElementById('sig-data').value,
+  //   signatureName: document.getElementById('sig-name-data').value,
+  //
+  // Example (modify your existing submit function):
+  //   const payload = {
+  //     ...existingFields,
+  //     signature: document.getElementById('sig-data').value || undefined,
+  //     signatureName: document.getElementById('sig-name-data').value || undefined,
+  //   };
+})();
+</script>

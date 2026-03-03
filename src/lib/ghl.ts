@@ -162,6 +162,53 @@ class GHLClient {
     });
   }
 
+  // Email sending via GHL Conversations API
+  async sendEmail(
+    contactId: string,
+    subject: string,
+    htmlBody: string,
+  ): Promise<Record<string, unknown>> {
+    // Step 1: Create or find a conversation for this contact
+    let conversationId: string | null = null;
+
+    try {
+      const searchResult = await this.request(
+        `/conversations/search?locationId=${this.locationId}&contactId=${contactId}`
+      );
+      const conversations = (searchResult.conversations as Array<Record<string, unknown>>) || [];
+      if (conversations.length > 0) {
+        conversationId = conversations[0].id as string;
+      }
+    } catch {
+      // No existing conversation — will create one
+    }
+
+    if (!conversationId) {
+      const newConv = await this.request(`/conversations/`, {
+        method: "POST",
+        body: JSON.stringify({
+          locationId: this.locationId,
+          contactId,
+        }),
+      });
+      conversationId = (newConv.conversation as Record<string, unknown>)?.id as string
+        || newConv.id as string;
+    }
+
+    // Step 2: Send the email message
+    return this.request(`/conversations/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        type: "Email",
+        contactId,
+        conversationId,
+        subject,
+        html: htmlBody,
+        emailFrom: `SRT Agency <info@srtagency.com>`,
+      }),
+    });
+  }
+
   // Document upload (multipart/form-data)
   async uploadContactDocument(
     contactId: string,

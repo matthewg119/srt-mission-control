@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/ad-intelligence",
       "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/cron/process-sequences",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

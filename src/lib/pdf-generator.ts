@@ -25,6 +25,10 @@ interface ApplicationData {
   monthlyDeposits?: string;
   existingLoans?: string;
   notes?: string;
+  /** Base64 PNG of the drawn signature from canvas */
+  signature?: string;
+  /** Printed/typed name for the signature line */
+  signatureName?: string;
 }
 
 /**
@@ -155,6 +159,31 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   doc.text(authLines, m + 2, y);
   y += authLines.length * 3.2 + 6;
 
+  // Signature section
+  if (data.signature) {
+    // Embed the drawn signature image above the line
+    try {
+      doc.addImage(data.signature, "PNG", m, y - 2, 70, 18);
+      y += 18;
+    } catch {
+      // If image fails, fall back to typed name
+      if (data.signatureName) {
+        doc.setFontSize(14);
+        doc.setTextColor(midnight[0], midnight[1], midnight[2]);
+        doc.setFont("helvetica", "italic");
+        doc.text(data.signatureName, m + 2, y + 10);
+        y += 14;
+      }
+    }
+  } else if (data.signatureName) {
+    // No drawn signature — render typed name in italic as signature
+    doc.setFontSize(14);
+    doc.setTextColor(midnight[0], midnight[1], midnight[2]);
+    doc.setFont("helvetica", "italic");
+    doc.text(data.signatureName, m + 2, y + 10);
+    y += 14;
+  }
+
   // Signature lines
   doc.setDrawColor(midnight[0], midnight[1], midnight[2]);
   doc.setLineWidth(0.4);
@@ -163,8 +192,9 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   y += 4;
   doc.setFontSize(7);
   doc.setTextColor(130, 130, 130);
-  doc.text("Applicant Signature", m, y);
-  doc.text("Date", m + 100, y);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.signatureName ? `Signed by: ${data.signatureName}` : "Applicant Signature", m, y);
+  doc.text(new Date().toLocaleDateString(), m + 100, y);
   y += 10;
 
   // Footer

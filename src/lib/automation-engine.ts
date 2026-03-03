@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/db";
+import { ghl } from "@/lib/ghl";
 import { DEFAULT_AUTOMATIONS, type AutomationAction, type AutomationRule } from "@/config/automations";
 import { renderTemplate, type TemplateContext } from "@/lib/template-renderer";
 
@@ -69,42 +70,68 @@ async function executeAction(
           ? renderTemplate(template.subject, context)
           : undefined;
 
-        // Log the message (actual sending via GHL will be added when messaging is built)
         console.log(
           `[Automation] ${action.type.toUpperCase()}: ${renderedSubject || ""} → ${renderedBody.slice(0, 100)}...`
         );
 
-        // For now, log the action — actual GHL message sending comes in Step 5
+        // Send via GHL if it's an email and we have a contactId
+        let sendStatus = "queued";
+        let sendError: string | undefined;
+
+        if (action.type === "send_email" && contactId) {
+          try {
+            await ghl.sendEmail(contactId, renderedSubject || "SRT Agency", renderedBody);
+            sendStatus = "sent";
+          } catch (err) {
+            sendError = err instanceof Error ? err.message : String(err);
+            sendStatus = "send_failed";
+            console.error(`[Automation] GHL email send failed:`, sendError);
+          }
+        }
+
         await supabaseAdmin.from("automation_logs").insert({
           opportunity_id: opportunityId,
           contact_id: contactId,
           action_type: action.type,
           template_slug: action.templateSlug,
-          status: "success",
+          status: sendError ? "error" : "success",
           metadata: {
             rendered_body: renderedBody,
             rendered_subject: renderedSubject,
-            note: "Message queued — GHL messaging integration pending",
+            send_status: sendStatus,
+            send_error: sendError,
           },
         });
 
-        return { success: true };
+        return { success: !sendError, error: sendError };
       }
 
       case "add_tag":
       case "remove_tag": {
-        // Tag operations will use GHL API when fully connected
         console.log(`[Automation] ${action.type}: ${action.tag} for contact ${contactId}`);
+
+        let tagError: string | undefined;
+        if (action.tag && contactId) {
+          try {
+            if (action.type === "add_tag") {
+              await ghl.addContactTag(contactId, action.tag);
+            }
+            // GHL doesn't have a simple remove tag endpoint — skip for now
+          } catch (err) {
+            tagError = err instanceof Error ? err.message : String(err);
+            console.error(`[Automation] Tag operation failed:`, tagError);
+          }
+        }
 
         await supabaseAdmin.from("automation_logs").insert({
           opportunity_id: opportunityId,
           contact_id: contactId,
           action_type: action.type,
-          status: "success",
-          metadata: { tag: action.tag },
+          status: tagError ? "error" : "success",
+          metadata: { tag: action.tag, error: tagError },
         });
 
-        return { success: true };
+        return { success: !tagError, error: tagError };
       }
 
       case "notify_team": {

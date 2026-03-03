@@ -6,19 +6,27 @@ import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
 import { sendEvent } from "@/lib/meta-capi";
 import { generateApplicationPDF } from "@/lib/pdf-generator";
 import { microsoft } from "@/lib/microsoft";
+import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
+import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
 }
 
 export async function POST(request: NextRequest) {
+  const corsHeaders = getCorsHeaders(request);
+  const clientIp = getClientIp(request);
+  const clientUserAgent = request.headers.get("user-agent") || undefined;
+
   try {
+    // Rate limit check
+    if (!checkRateLimit(clientIp)) {
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: corsHeaders }
+      );
+    }
+
     const body = await request.json();
     const {
       firstName, lastName, email, businessPhone, businessName, legalName,
@@ -27,7 +35,32 @@ export async function POST(request: NextRequest) {
       amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
       applicationCompletionPct, applicationStage, source,
       _fbc, _fbp, eventId, sourceUrl,
+      signature, signatureName, website,
     } = body;
+
+    // Bot protection (at 25%+ when we have name/email)
+    if (firstName || lastName || email) {
+      const validation = validateLeadSubmission({
+        firstName,
+        lastName,
+        email,
+        phone: mobilePhone || businessPhone,
+        website,
+      });
+      if (!validation.valid) {
+        console.warn(`[Bot Protection] Rejected application: ${validation.reason} | IP: ${clientIp}`);
+        if (validation.silentReject) {
+          return NextResponse.json(
+            { success: true, message: "Progress saved" },
+            { headers: corsHeaders }
+          );
+        }
+        return NextResponse.json(
+          { error: "Invalid submission" },
+          { status: 400, headers: corsHeaders }
+        );
+      }
+    }
 
     let contactId: string | null = (body.contactId as string) || null;
     let opportunityId: string | null = (body.opportunityId as string) || null;
@@ -40,11 +73,11 @@ export async function POST(request: NextRequest) {
       await supabaseAdmin.from("system_logs").insert({
         event_type: "application_progress",
         description: `Application started: ${completionPct}% (${applicationStage || "qualifying"})`,
-        metadata: { completionPct },
+        metadata: { completionPct, clientIp, clientUserAgent },
       });
       return NextResponse.json(
         { success: true, message: `Progress saved: ${completionPct}%` },
-        { headers: CORS_HEADERS }
+        { headers: corsHeaders }
       );
     }
 
@@ -58,14 +91,14 @@ export async function POST(request: NextRequest) {
           phone: mobilePhone || businessPhone || undefined,
           companyName: businessName || undefined,
           source: source || "Website - Application Form",
-          tags: ["application", "website-lead"],
+          tags: ["application-started"],
         });
         contactId = result.contactId;
       } catch (error) {
         console.error("Contact creation failed:", error instanceof Error ? error.message : error);
         return NextResponse.json(
           { error: "Failed to create contact", details: error instanceof Error ? error.message : "Unknown error" },
-          { status: 500, headers: CORS_HEADERS }
+          { status: 500, headers: corsHeaders }
         );
       }
 
@@ -106,7 +139,6 @@ export async function POST(request: NextRequest) {
         updated_at: new Date().toISOString(),
       }, { onConflict: "ghl_opportunity_id" });
 
-      // Fallback: retry without optional columns if schema doesn't have them
       if (cacheError) {
         console.warn("pipeline_cache upsert failed, retrying without ghl_contact_id:", cacheError.message);
         ({ error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
@@ -124,7 +156,7 @@ export async function POST(request: NextRequest) {
       const { error: logError } = await supabaseAdmin.from("system_logs").insert({
         event_type: "lead_capture",
         description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})`,
-        metadata: { contactId, opportunityId: opportunityId || pipelineCacheId, contactName, email, phone: businessPhone, completionPct, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
+        metadata: { contactId, opportunityId: opportunityId || pipelineCacheId, contactName, email, phone: businessPhone, completionPct, clientIp, clientUserAgent, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
       });
       if (logError) console.error("system_logs write failed:", logError);
 
@@ -141,15 +173,21 @@ export async function POST(request: NextRequest) {
           lastName: lastName || undefined,
           fbc: _fbc || undefined,
           fbp: _fbp || undefined,
-          clientIpAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined,
-          clientUserAgent: request.headers.get("user-agent") || undefined,
+          clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+          clientUserAgent,
           externalId: contactId || undefined,
         },
       }).catch((err) => console.error("[Meta CAPI] Application Lead error:", err));
 
+      // Enroll in application-abandoned sequence (3-min first email)
+      if (email && contactId) {
+        enrollContact("application-abandoned", contactId, email, contactName, { businessName })
+          .catch((err) => console.error("[Sequence] application-abandoned enrollment error:", err));
+      }
+
       return NextResponse.json(
         { success: true, message: ghlWarnings.length > 0 ? "Lead created with warnings" : "Lead created", contactId, opportunityId: opportunityId || pipelineCacheId, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
-        { headers: CORS_HEADERS }
+        { headers: corsHeaders }
       );
     }
 
@@ -174,13 +212,13 @@ export async function POST(request: NextRequest) {
       const { error: progressLogError } = await supabaseAdmin.from("system_logs").insert({
         event_type: "application_progress",
         description: `Application progress: ${contactName} — ${completionPct}% (${applicationStage || "in progress"})`,
-        metadata: { contactId, opportunityId, completionPct, applicationStage },
+        metadata: { contactId, opportunityId, completionPct, applicationStage, clientIp },
       });
       if (progressLogError) console.error("system_logs progress write failed:", progressLogError);
 
       return NextResponse.json(
         { success: true, message: `Progress saved: ${completionPct}%`, contactId, opportunityId },
-        { headers: CORS_HEADERS }
+        { headers: corsHeaders }
       );
     }
 
@@ -192,13 +230,13 @@ export async function POST(request: NextRequest) {
           email: email || undefined, phone: mobilePhone || businessPhone || undefined,
           companyName: legalName || businessName || undefined,
           source: source || "Website - Application Form",
-          tags: ["application", "website-lead"],
+          tags: ["application-started"],
         });
         contactId = result.contactId;
       } catch {
         return NextResponse.json(
           { error: "Failed to create contact" },
-          { status: 500, headers: CORS_HEADERS }
+          { status: 500, headers: corsHeaders }
         );
       }
     }
@@ -293,7 +331,7 @@ export async function POST(request: NextRequest) {
     const { error: completionLogError } = await supabaseAdmin.from("system_logs").insert({
       event_type: "lead_capture",
       description: `Application completed: ${contactName} — ${businessName || "N/A"} — ${amountNeeded || "N/A"}`,
-      metadata: { contactId, opportunityId: opportunityId || finalCacheId, contactName, businessName, email, amountNeeded, creditScore, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
+      metadata: { contactId, opportunityId: opportunityId || finalCacheId, contactName, businessName, email, amountNeeded, creditScore, clientIp, clientUserAgent, hasSignature: !!signature, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
     });
     if (completionLogError) console.error("system_logs 100% write failed:", completionLogError);
 
@@ -313,8 +351,8 @@ export async function POST(request: NextRequest) {
         zip: bizZip || undefined,
         fbc: _fbc || undefined,
         fbp: _fbp || undefined,
-        clientIpAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined,
-        clientUserAgent: request.headers.get("user-agent") || undefined,
+        clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+        clientUserAgent,
         externalId: contactId || undefined,
       },
       customData: {
@@ -324,7 +362,27 @@ export async function POST(request: NextRequest) {
       },
     }).catch((err) => console.error("[Meta CAPI] CompleteRegistration error:", err));
 
-    // ── Non-blocking: PDF → OneDrive → GHL tag ──
+    // ── Tag "application" at 100% + cancel abandonment sequences ──
+    if (contactId) {
+      try {
+        await ghl.addContactTag(contactId, "application-completed");
+        console.log("[100%] Tag 'application-completed' added to GHL contact");
+      } catch (err) {
+        console.error("[100%] GHL tag 'application' failed:", err instanceof Error ? err.message : err);
+      }
+
+      // Cancel the abandonment sequence now that they completed
+      cancelByTag(contactId, "application-completed")
+        .catch((err) => console.error("[Sequence] Cancel by tag error:", err));
+
+      // Enroll in the completed application nurture sequence
+      if (email) {
+        enrollContact("application-completed-nurture", contactId, email, contactName, { businessName, amountNeeded })
+          .catch((err) => console.error("[Sequence] application-completed-nurture enrollment error:", err));
+      }
+    }
+
+    // ── Non-blocking: PDF (with signature) → OneDrive → GHL tag ──
     (async () => {
       try {
         const pdfBuffer = generateApplicationPDF({
@@ -333,6 +391,8 @@ export async function POST(request: NextRequest) {
           bizAddress, bizCity, bizState, bizZip,
           incDate, dob, creditScore, ownership,
           amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
+          signature: signature || undefined,
+          signatureName: signatureName || contactName,
         });
 
         const safeName = (businessName || legalName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
@@ -361,16 +421,6 @@ export async function POST(request: NextRequest) {
             console.error("[100%] GHL document upload failed:", err instanceof Error ? err.message : err);
           }
         }
-
-        // Add tag to trigger GHL workflow
-        if (contactId) {
-          try {
-            await ghl.addContactTag(contactId, "application-submitted");
-            console.log("[100%] Tag 'application-submitted' added to GHL contact");
-          } catch (err) {
-            console.error("[100%] GHL tag failed:", err instanceof Error ? err.message : err);
-          }
-        }
       } catch (err) {
         console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
       }
@@ -378,13 +428,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       { success: true, message: completionWarnings.length > 0 ? "Application submitted with warnings" : "Application submitted successfully", contactId, opportunityId: opportunityId || finalCacheId, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
-      { headers: CORS_HEADERS }
+      { headers: corsHeaders }
     );
   } catch (error) {
     console.error("Application capture error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Application capture failed" },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: corsHeaders }
     );
   }
 }
