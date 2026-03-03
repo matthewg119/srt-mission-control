@@ -5,6 +5,10 @@ import { supabaseAdmin } from "@/lib/db";
  * Seeds all 4 email sequences with their steps.
  * Safe to call multiple times — uses upsert on slug.
  */
+export async function GET() {
+  return POST();
+}
+
 export async function POST() {
   try {
     const results: Record<string, unknown>[] = [];

@@ -3,6 +3,10 @@ import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
 import { PIPELINES } from "@/config/pipeline";
 
+export async function GET() {
+  return POST();
+}
+
 export async function POST() {
   try {
     let totalSynced = 0;
