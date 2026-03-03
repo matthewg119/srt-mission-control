@@ -80,13 +80,33 @@ const SUGGESTION_CHIPS = [
   { label: "Enroll in sequence", prompt: "Enroll contact in sequence: ", category: "Actions" },
 ];
 
+interface ActivityEntry {
+  event_type: string;
+  description: string;
+  relativeTime: string;
+}
+
+const EVENT_DOT_COLORS: Record<string, string> = {
+  lead_capture: "#00C9A7",
+  lead_captured: "#00C9A7",
+  application_submitted: "#8b5cf6",
+  application_started: "#8b5cf6",
+  sms_sent: "#0ea5e9",
+  email_sent: "#0ea5e9",
+  stage_changed: "#f59e0b",
+  cron_sequences: "#64748b",
+  ai_action: "#1B65A7",
+  error: "#ef4444",
+};
+
 interface ChatInterfaceProps {
   userName?: string;
   apiEndpoint?: string;
   agentId?: string;
+  recentActivity?: ActivityEntry[];
 }
 
-export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId }: ChatInterfaceProps) {
+export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, recentActivity }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -307,39 +327,74 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId }: 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center max-w-2xl w-full px-4">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[rgba(0,201,167,0.1)] border border-[rgba(0,201,167,0.2)] mb-5">
-                  <Zap size={28} className="text-[#00C9A7]" />
-                </div>
-                <h2 className="text-2xl font-semibold text-white mb-1">
-                  {userName ? `Hey ${userName.split(" ")[0]}` : "SRT Office Manager"}
-                </h2>
-                <p className="text-[rgba(255,255,255,0.4)] text-sm mb-8">
-                  I can check your pipeline, look up contacts, send messages, and manage operations.
-                </p>
+            <div className="flex h-full items-start justify-center pt-8 px-4">
+              <div className={`w-full max-w-5xl ${recentActivity && recentActivity.length > 0 ? "grid grid-cols-[1fr_320px] gap-6" : "max-w-2xl"}`}>
+                {/* Left: greeting + chips */}
+                <div>
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-[rgba(0,201,167,0.1)] border border-[rgba(0,201,167,0.2)]">
+                      <Zap size={22} className="text-[#00C9A7]" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-white">
+                        {userName ? `Hey ${userName.split(" ")[0]}` : "SRT Office Manager"}
+                      </h2>
+                      <p className="text-[rgba(255,255,255,0.4)] text-xs mt-0.5">
+                        Check your pipeline, look up contacts, send messages, manage operations.
+                      </p>
+                    </div>
+                  </div>
 
-                <div className="space-y-3">
-                  {["Pipeline", "Contacts", "Lenders", "Actions"].map((cat) => {
-                    const chips = SUGGESTION_CHIPS.filter((c) => c.category === cat);
-                    return (
-                      <div key={cat}>
-                        <p className="text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.25)] mb-1.5 text-left">{cat}</p>
-                        <div className="flex flex-wrap gap-2">
-                          {chips.map((chip) => (
-                            <button
-                              key={chip.label}
-                              onClick={() => handleSuggestion(chip.prompt)}
-                              className="px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.15)] transition-all"
-                            >
-                              {chip.label}
-                            </button>
-                          ))}
+                  <div className="space-y-3">
+                    {["Pipeline", "Contacts", "Lenders", "Actions"].map((cat) => {
+                      const chips = SUGGESTION_CHIPS.filter((c) => c.category === cat);
+                      return (
+                        <div key={cat}>
+                          <p className="text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.25)] mb-1.5">{cat}</p>
+                          <div className="flex flex-wrap gap-2">
+                            {chips.map((chip) => (
+                              <button
+                                key={chip.label}
+                                onClick={() => handleSuggestion(chip.prompt)}
+                                className="px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.15)] transition-all"
+                              >
+                                {chip.label}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
+
+                {/* Right: Recent Activity */}
+                {recentActivity && recentActivity.length > 0 && (
+                  <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.03)] overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-2">
+                      <Activity size={12} className="text-[rgba(255,255,255,0.4)]" />
+                      <span className="text-xs font-semibold text-[rgba(255,255,255,0.4)] uppercase tracking-wider">
+                        Recent Activity
+                      </span>
+                    </div>
+                    <div className="divide-y divide-[rgba(255,255,255,0.04)]">
+                      {recentActivity.map((item, i) => (
+                        <div key={i} className="flex gap-3 px-4 py-2.5 items-start">
+                          <span
+                            className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+                            style={{ background: EVENT_DOT_COLORS[item.event_type] || "#64748b" }}
+                          />
+                          <p className="text-xs text-[rgba(255,255,255,0.6)] leading-relaxed flex-1 min-w-0">
+                            {item.description}
+                          </p>
+                          <span className="text-[10px] text-[rgba(255,255,255,0.25)] shrink-0 mt-0.5">
+                            {item.relativeTime}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

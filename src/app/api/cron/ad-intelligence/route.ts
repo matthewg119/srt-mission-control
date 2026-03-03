@@ -4,6 +4,8 @@ import { telegram } from "@/lib/telegram";
 import { ALL_VERTICALS, AWARENESS_LEVELS } from "@/config/ads-verticals";
 import { AD_GENERATION_PROMPT } from "@/config/meta-ads-system-prompt";
 
+export const dynamic = "force-dynamic";
+
 // Runs nightly at 11pm UTC (~6-7pm EST) via Vercel Cron
 // Generates 100 ad ideas across verticals × awareness layers
 export async function GET() {
