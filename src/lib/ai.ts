@@ -1,5 +1,11 @@
 import { supabaseAdmin } from "./db";
-import { AI_TOOLS, executeTool } from "./ai-tools";
+import { AI_TOOLS, executeTool, type ToolExecutionResult } from "./ai-tools";
+
+export interface ToolResult {
+  tool: string;
+  data: unknown;
+  input: Record<string, unknown>;
+}
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -105,7 +111,7 @@ interface AnthropicResponse {
 export async function runConversationWithTools(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
   systemPrompt: string
-): Promise<{ response: string; actions: string[] }> {
+): Promise<{ response: string; actions: string[]; toolResults: ToolResult[] }> {
   if (!isAIConfigured()) {
     throw new Error("AI_NOT_CONFIGURED");
   }
@@ -116,7 +122,8 @@ export async function runConversationWithTools(
   }));
 
   const actions: string[] = [];
-  let maxIterations = 5; // Safety limit for tool loops
+  const uiToolResults: ToolResult[] = []; // structured results for UI card rendering
+  let maxIterations = 5;
 
   while (maxIterations > 0) {
     maxIterations--;
@@ -144,63 +151,55 @@ export async function runConversationWithTools(
 
     const data: AnthropicResponse = await response.json();
 
-    // If the AI just returned text (no tool use), we're done
     if (data.stop_reason === "end_turn" || data.stop_reason === "max_tokens") {
       const textContent = data.content
         .filter((c) => c.type === "text")
         .map((c) => c.text)
         .join("");
-      return { response: textContent, actions };
+      return { response: textContent, actions, toolResults: uiToolResults };
     }
 
-    // If the AI wants to use tools, execute them
     if (data.stop_reason === "tool_use") {
-      // Add the assistant's response (with tool_use blocks) to the conversation
       conversationMessages.push({
         role: "assistant",
         content: data.content.map((c) => {
           if (c.type === "text") return { type: "text" as const, text: c.text };
-          return {
-            type: "tool_use" as const,
-            id: c.id!,
-            name: c.name!,
-            input: c.input!,
-          };
+          return { type: "tool_use" as const, id: c.id!, name: c.name!, input: c.input! };
         }),
       });
 
-      // Execute each tool and collect results
-      const toolResults: Array<{
-        type: "tool_result";
-        tool_use_id: string;
-        content: string;
-      }> = [];
+      const claudeToolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string }> = [];
 
       for (const block of data.content) {
         if (block.type === "tool_use" && block.name && block.id) {
-          const actionLabel = `${block.name}(${JSON.stringify(block.input).slice(0, 100)})`;
-          actions.push(actionLabel);
+          const inputPayload = block.input || {};
+          actions.push(`${block.name}(${JSON.stringify(inputPayload).slice(0, 100)})`);
 
-          const result = await executeTool(block.name, block.input || {});
-          toolResults.push({
+          const execution: ToolExecutionResult = await executeTool(block.name, inputPayload);
+
+          claudeToolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: result,
+            content: execution.content, // JSON string goes to Claude
+          });
+
+          // Collect structured data for UI rendering
+          uiToolResults.push({
+            tool: block.name,
+            data: execution.structuredData,
+            input: inputPayload,
           });
         }
       }
 
-      // Add tool results to the conversation
-      conversationMessages.push({
-        role: "user",
-        content: toolResults,
-      });
+      conversationMessages.push({ role: "user", content: claudeToolResults });
     }
   }
 
   return {
     response: "I hit the maximum number of tool calls. Please try a simpler request.",
     actions,
+    toolResults: uiToolResults,
   };
 }
 

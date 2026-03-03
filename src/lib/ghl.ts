@@ -244,6 +244,33 @@ class GHLClient {
     return response.json();
   }
 
+  // Get a single contact by ID
+  async getContact(contactId: string): Promise<Record<string, unknown>> {
+    return this.request(`/contacts/${contactId}`);
+  }
+
+  // Add a note to a contact
+  async addNote(contactId: string, body: string): Promise<Record<string, unknown>> {
+    return this.request(`/contacts/${contactId}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ body, userId: "system" }),
+    });
+  }
+
+  // Get notes for a contact
+  async getNotes(contactId: string): Promise<Record<string, unknown>> {
+    return this.request(`/contacts/${contactId}/notes`);
+  }
+
+  // Get documents for a contact (returns empty list if GHL endpoint unavailable)
+  async getContactDocuments(contactId: string): Promise<Record<string, unknown>> {
+    try {
+      return await this.request(`/contacts/${contactId}/documents`);
+    } catch {
+      return { documents: [] };
+    }
+  }
+
   // Setup helper: creates pipeline + custom fields with delay
   async setupPipelineAndFields(
     stages: { name: string }[],

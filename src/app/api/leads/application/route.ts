@@ -8,6 +8,7 @@ import { generateApplicationPDF } from "@/lib/pdf-generator";
 import { microsoft } from "@/lib/microsoft";
 import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
+import { systemAlert } from "@/lib/notify";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -96,6 +97,11 @@ export async function POST(request: NextRequest) {
         contactId = result.contactId;
       } catch (error) {
         console.error("Contact creation failed:", error instanceof Error ? error.message : error);
+        await systemAlert(
+          "GHL Contact Creation Failed",
+          `Application contact could not be created in GHL: ${error instanceof Error ? error.message : "Unknown error"}`,
+          "leads/application"
+        );
         return NextResponse.json(
           { error: "Failed to create contact", details: error instanceof Error ? error.message : "Unknown error" },
           { status: 500, headers: corsHeaders }

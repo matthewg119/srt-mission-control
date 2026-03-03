@@ -4,6 +4,12 @@ import { ghlMessaging } from "./ghl-messaging";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { PIPELINES } from "@/config/pipeline";
 
+// Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
+export interface ToolExecutionResult {
+  content: string;        // JSON string sent to Claude (unchanged behavior)
+  structuredData: unknown; // Parsed data for rendering rich cards in the chat UI
+}
+
 // Tool definitions for the Anthropic API
 export const AI_TOOLS = [
   {
@@ -170,48 +176,128 @@ export const AI_TOOLS = [
       required: [] as string[],
     },
   },
+  {
+    name: "get_contact_profile",
+    description:
+      "Get a complete contact dossier: contact details, open deals, active email sequences, and recent notes. Use when asked to 'show me [name]', 'pull up [business]', or 'what's the file on [contact]'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Name, business name, email, or phone to search",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "add_deal_note",
+    description:
+      "Add a note to a deal or contact. Use when asked to 'make a note', 'log that [client] said...', or 'add a note to [deal]'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_id: { type: "string", description: "GHL contact ID" },
+        note: { type: "string", description: "The note content to add" },
+        opportunity_id: { type: "string", description: "Optional: GHL opportunity ID to associate with" },
+      },
+      required: ["contact_id", "note"],
+    },
+  },
+  {
+    name: "get_deal_notes",
+    description:
+      "Get notes for a contact or deal. Use when asked 'what notes do we have on [contact]' or 'show me the history for [deal]'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_id: { type: "string", description: "GHL contact ID" },
+        opportunity_id: { type: "string", description: "Optional: filter to a specific deal" },
+      },
+      required: ["contact_id"],
+    },
+  },
+  {
+    name: "get_lenders",
+    description:
+      "Look up lenders in the database. Use when asked about lenders, 'who funds equipment deals', 'find a lender for [situation]', or 'what lenders do we have'. Can filter by product type or keyword.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        filter: {
+          type: "string",
+          description: "Optional: product type, minimum credit score, or keyword to filter lenders",
+        },
+      },
+      required: [] as string[],
+    },
+  },
+  {
+    name: "enroll_in_sequence",
+    description:
+      "Enroll a contact in an email drip sequence. Use when asked to 'start the follow-up for [contact]' or 'enroll [name] in a sequence'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_id: { type: "string" },
+        contact_email: { type: "string" },
+        contact_name: { type: "string" },
+        sequence_slug: {
+          type: "string",
+          description: "Sequence slug: 'website-lead-nurture', 'application-completed-nurture', 'application-abandoned', or 'website-lead-to-application'",
+        },
+      },
+      required: ["contact_id", "contact_email", "contact_name", "sequence_slug"],
+    },
+  },
 ];
 
 // Tool execution functions
 export async function executeTool(
   toolName: string,
   input: Record<string, unknown>
-): Promise<string> {
+): Promise<ToolExecutionResult> {
   try {
+    let content: string;
     switch (toolName) {
       case "get_pipeline_overview":
-        return await getPipelineOverview();
+        content = await getPipelineOverview(); break;
       case "get_deals_in_stage":
-        return await getDealsInStage(input.stage as string, input.pipeline as string | undefined);
+        content = await getDealsInStage(input.stage as string, input.pipeline as string | undefined); break;
       case "search_deals":
-        return await searchDeals(input.query as string);
+        content = await searchDeals(input.query as string); break;
       case "move_deal":
-        return await moveDeal(input.opportunity_id as string, input.new_stage as string);
+        content = await moveDeal(input.opportunity_id as string, input.new_stage as string); break;
       case "send_sms":
-        return await sendSms(input.contact_id as string, input.message as string);
+        content = await sendSms(input.contact_id as string, input.message as string); break;
       case "send_email":
-        return await sendEmail(
-          input.contact_id as string,
-          input.subject as string,
-          input.message as string
-        );
+        content = await sendEmail(input.contact_id as string, input.subject as string, input.message as string); break;
       case "get_templates":
-        return await getTemplates(input.type as string | undefined, input.category as string | undefined);
+        content = await getTemplates(input.type as string | undefined, input.category as string | undefined); break;
       case "send_template":
-        return await sendTemplate(
-          input.contact_id as string,
-          input.template_slug as string,
-          (input.variables as Record<string, string>) || {}
-        );
+        content = await sendTemplate(input.contact_id as string, input.template_slug as string, (input.variables as Record<string, string>) || {}); break;
       case "get_recent_activity":
-        return await getRecentActivity((input.limit as number) || 20);
+        content = await getRecentActivity((input.limit as number) || 20); break;
+      case "get_contact_profile":
+        content = await getContactProfile(input.query as string); break;
+      case "add_deal_note":
+        content = await addDealNote(input.contact_id as string, input.note as string, input.opportunity_id as string | undefined); break;
+      case "get_deal_notes":
+        content = await getDealNotes(input.contact_id as string, input.opportunity_id as string | undefined); break;
+      case "get_lenders":
+        content = await getLenders(input.filter as string | undefined); break;
+      case "enroll_in_sequence":
+        content = await enrollInSequence(input.contact_id as string, input.contact_email as string, input.contact_name as string, input.sequence_slug as string); break;
       default:
-        return JSON.stringify({ error: `Unknown tool: ${toolName}` });
+        content = JSON.stringify({ error: `Unknown tool: ${toolName}` });
     }
+    let structuredData: unknown = null;
+    try { structuredData = JSON.parse(content); } catch { structuredData = null; }
+    return { content, structuredData };
   } catch (error) {
-    return JSON.stringify({
-      error: error instanceof Error ? error.message : "Tool execution failed",
-    });
+    const content = JSON.stringify({ error: error instanceof Error ? error.message : "Tool execution failed" });
+    return { content, structuredData: null };
   }
 }
 
@@ -451,4 +537,133 @@ async function getRecentActivity(limit: number): Promise<string> {
     .limit(limit);
 
   return JSON.stringify({ activity: logs || [] });
+}
+
+// ── New tools ──────────────────────────────────────────────────────────────
+
+async function getContactProfile(query: string): Promise<string> {
+  let contact: Record<string, unknown> | null = null;
+  try {
+    const searchResult = await ghl.searchContacts(query);
+    const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
+    if (contacts.length > 0) contact = contacts[0];
+  } catch { /* fall through */ }
+
+  if (!contact) {
+    return JSON.stringify({ error: `No contact found for "${query}"` });
+  }
+
+  const contactId = contact.id as string;
+  const contactName = (contact.contactName || `${contact.firstName || ""} ${contact.lastName || ""}`.trim() || "Unknown") as string;
+  const businessName = (contact.companyName || "") as string;
+
+  const searchTerm = businessName || contactName;
+  const { data: deals } = await supabaseAdmin
+    .from("pipeline_cache")
+    .select("ghl_opportunity_id, stage, pipeline_name, amount, updated_at, business_name, contact_name")
+    .or(`contact_name.ilike.%${searchTerm}%,business_name.ilike.%${searchTerm}%`)
+    .limit(10);
+
+  let enrollments: unknown[] = [];
+  try {
+    const { data } = await supabaseAdmin
+      .from("sequence_enrollments")
+      .select("status, current_step, next_send_at, email_sequences(name, slug)")
+      .eq("contact_id", contactId)
+      .in("status", ["active"]);
+    enrollments = data || [];
+  } catch { /* table may not exist yet */ }
+
+  let notes: unknown[] = [];
+  try {
+    const { data } = await supabaseAdmin
+      .from("deal_notes")
+      .select("body, author, created_at")
+      .eq("contact_id", contactId)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    notes = data || [];
+  } catch { /* table may not exist yet */ }
+
+  return JSON.stringify({
+    contact: {
+      id: contactId,
+      name: contactName,
+      email: contact.email,
+      phone: contact.phone,
+      tags: contact.tags || [],
+      businessName,
+    },
+    deals: deals || [],
+    sequences: enrollments,
+    notes,
+  });
+}
+
+async function addDealNote(contactId: string, note: string, opportunityId?: string): Promise<string> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("deal_notes")
+      .insert({ contact_id: contactId, opportunity_id: opportunityId || null, body: note, author: "AI Office Manager" })
+      .select()
+      .single();
+    return JSON.stringify({ success: true, note_id: data?.id, stored: "supabase" });
+  } catch {
+    try {
+      const result = await ghl.addNote(contactId, note);
+      return JSON.stringify({ success: true, note_id: (result as Record<string, unknown>).id, stored: "ghl" });
+    } catch (err) {
+      return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to add note" });
+    }
+  }
+}
+
+async function getDealNotes(contactId: string, opportunityId?: string): Promise<string> {
+  try {
+    let query = supabaseAdmin
+      .from("deal_notes")
+      .select("id, body, author, created_at")
+      .eq("contact_id", contactId)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (opportunityId) query = query.eq("opportunity_id", opportunityId);
+    const { data: notes } = await query;
+    return JSON.stringify({ notes: notes || [], count: (notes || []).length });
+  } catch {
+    try {
+      const result = await ghl.getNotes(contactId);
+      return JSON.stringify({ notes: (result as Record<string, unknown>).notes || [], source: "ghl" });
+    } catch (err) {
+      return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to get notes" });
+    }
+  }
+}
+
+async function getLenders(filter?: string): Promise<string> {
+  const { data, error } = await supabaseAdmin.from("lenders").select("*").order("name");
+  if (error) return JSON.stringify({ error: "Failed to query lenders database" });
+
+  let lenders = data || [];
+  if (filter) {
+    const lf = filter.toLowerCase();
+    lenders = lenders.filter((l: Record<string, unknown>) => {
+      const text = [
+        l.name, l.notes,
+        ...(Array.isArray(l.products) ? l.products : []),
+        ...(Array.isArray(l.product_types) ? l.product_types : []),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return text.includes(lf);
+    });
+  }
+  return JSON.stringify({ lenders, count: lenders.length });
+}
+
+async function enrollInSequence(contactId: string, contactEmail: string, contactName: string, sequenceSlug: string): Promise<string> {
+  try {
+    const { enrollContact } = await import("./sequence-engine");
+    const result = await enrollContact(sequenceSlug, contactId, contactEmail, contactName);
+    return JSON.stringify(result);
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to enroll in sequence" });
+  }
 }

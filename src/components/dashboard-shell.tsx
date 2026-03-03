@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/sidebar";
 import { Header } from "@/components/header";
 
@@ -18,6 +19,7 @@ interface DashboardShellProps {
 
 export function DashboardShell({ user, children }: DashboardShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const pathname = usePathname();
 
   const handleMenuClick = useCallback(() => {
     setSidebarOpen(true);
@@ -34,7 +36,7 @@ export function DashboardShell({ user, children }: DashboardShellProps) {
       <main className="flex flex-1 flex-col overflow-hidden">
         <Header user={user} onMenuClick={handleMenuClick} />
 
-        <div className="flex-1 overflow-y-auto p-6">{children}</div>
+        <div className={`flex-1 overflow-hidden ${pathname === "/dashboard" ? "" : "overflow-y-auto p-6"}`}>{children}</div>
       </main>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Send,
   Plus,
@@ -13,15 +14,26 @@ import {
   FileText,
   Activity,
   ArrowRightLeft,
+  User,
+  Building2,
+  ListChecks,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatRelativeTime } from "@/lib/utils";
+import { ToolCard } from "@/components/tool-cards/tool-card";
+
+interface ToolResult {
+  tool: string;
+  data: unknown;
+  input: Record<string, unknown>;
+}
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   actions?: string[];
+  toolResults?: ToolResult[];
 }
 
 interface Conversation {
@@ -41,6 +53,11 @@ const TOOL_LABELS: Record<string, { label: string; icon: typeof Zap }> = {
   get_templates: { label: "Checking templates", icon: FileText },
   send_template: { label: "Sending template", icon: FileText },
   get_recent_activity: { label: "Checking activity", icon: Activity },
+  get_contact_profile: { label: "Looking up contact", icon: User },
+  add_deal_note: { label: "Adding note", icon: FileText },
+  get_deal_notes: { label: "Fetching notes", icon: FileText },
+  get_lenders: { label: "Checking lenders", icon: Building2 },
+  enroll_in_sequence: { label: "Enrolling in sequence", icon: ListChecks },
 };
 
 function getToolLabel(action: string): { label: string; icon: typeof Zap } {
@@ -48,7 +65,28 @@ function getToolLabel(action: string): { label: string; icon: typeof Zap } {
   return TOOL_LABELS[toolName] || { label: toolName, icon: Zap };
 }
 
-export function ChatInterface() {
+const SUGGESTION_CHIPS = [
+  { label: "Pipeline overview", prompt: "Give me a full pipeline overview", category: "Pipeline" },
+  { label: "Who's in Underwriting?", prompt: "Who's currently in Underwriting?", category: "Pipeline" },
+  { label: "Stale deals", prompt: "Which deals have been stale for more than 3 days?", category: "Pipeline" },
+  { label: "New leads today", prompt: "Show me new leads from the last 24 hours", category: "Pipeline" },
+  { label: "Recent activity", prompt: "Show me recent activity", category: "Activity" },
+  { label: "Find a contact", prompt: "Look up contact: ", category: "Contacts" },
+  { label: "View lenders", prompt: "Show me all lenders", category: "Lenders" },
+  { label: "MCA lenders", prompt: "What lenders do we have for MCA / Working Capital?", category: "Lenders" },
+  { label: "Send SMS", prompt: "Send an SMS to ", category: "Actions" },
+  { label: "Move a deal", prompt: "Move deal for ", category: "Actions" },
+  { label: "Add a note", prompt: "Add a note to the deal for ", category: "Actions" },
+  { label: "Enroll in sequence", prompt: "Enroll contact in sequence: ", category: "Actions" },
+];
+
+interface ChatInterfaceProps {
+  userName?: string;
+  apiEndpoint?: string;
+  agentId?: string;
+}
+
+export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -56,9 +94,10 @@ export function ChatInterface() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [currentActions, setCurrentActions] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const searchParams = useSearchParams();
+  const autoSentRef = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -66,11 +105,11 @@ export function ChatInterface() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, currentActions]);
+  }, [messages]);
 
   const fetchConversations = useCallback(async () => {
     try {
-      const res = await fetch("/api/chat?action=conversations");
+      const res = await fetch(`${apiEndpoint}?action=conversations${agentId ? `&agentId=${agentId}` : ""}`);
       if (res.ok) {
         const data = await res.json();
         setConversations(data.conversations || []);
@@ -78,15 +117,28 @@ export function ChatInterface() {
     } catch {
       // Silent fail
     }
-  }, []);
+  }, [apiEndpoint, agentId]);
 
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
 
+  // Auto-send from ?q= query param
+  useEffect(() => {
+    const q = searchParams?.get("q");
+    if (q && !autoSentRef.current) {
+      autoSentRef.current = true;
+      setInput(q);
+      setTimeout(() => {
+        handleSendMessage(q);
+      }, 300);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const loadConversation = async (conversationId: string) => {
     try {
-      const res = await fetch(`/api/chat?action=history&conversationId=${conversationId}`);
+      const res = await fetch(`${apiEndpoint}?action=history&conversationId=${conversationId}`);
       if (res.ok) {
         const data = await res.json();
         setMessages(data.messages || []);
@@ -103,25 +155,25 @@ export function ChatInterface() {
     setInput("");
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || loading) return;
+  const handleSendMessage = async (messageText: string) => {
+    if (!messageText.trim() || loading) return;
 
-    const userMessage = input.trim();
+    const userMessage = messageText.trim();
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setLoading(true);
-    setCurrentActions([]);
 
     const conversationId = activeConversation || crypto.randomUUID();
     if (!activeConversation) setActiveConversation(conversationId);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(apiEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: [...messages, { role: "user", content: userMessage }],
           conversationId,
+          agentId,
         }),
       });
 
@@ -144,6 +196,7 @@ export function ChatInterface() {
           role: "assistant",
           content: data.response,
           actions: data.actions?.length > 0 ? data.actions : undefined,
+          toolResults: data.toolResults?.length > 0 ? data.toolResults : undefined,
         },
       ]);
 
@@ -156,8 +209,9 @@ export function ChatInterface() {
     }
 
     setLoading(false);
-    setCurrentActions([]);
   };
+
+  const handleSend = () => handleSendMessage(input);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -166,14 +220,29 @@ export function ChatInterface() {
     }
   };
 
+  const handleSuggestion = (prompt: string) => {
+    // If prompt ends with space/colon, just fill the input
+    if (prompt.endsWith(" ") || prompt.endsWith(": ")) {
+      setInput(prompt);
+      textareaRef.current?.focus();
+    } else {
+      handleSendMessage(prompt);
+    }
+  };
+
+  const handleToolAction = (prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  };
+
   if (!aiConfigured) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center max-w-md">
           <AlertTriangle size={48} className="mx-auto mb-4 text-[#F5A623]" />
-          <h2 className="text-xl font-semibold text-white mb-2">AI Assistant Not Configured</h2>
+          <h2 className="text-xl font-semibold text-white mb-2">AI Not Configured</h2>
           <p className="text-[rgba(255,255,255,0.5)] mb-4">
-            Add your Anthropic API key in Settings &rarr; AI Configuration to enable the AI assistant.
+            Add your Anthropic API key in Settings → AI Configuration.
           </p>
           <a
             href="/dashboard/settings"
@@ -191,20 +260,21 @@ export function ChatInterface() {
       {/* Conversation Sidebar */}
       <div
         className={`${
-          sidebarOpen ? "w-[280px]" : "w-0"
+          sidebarOpen ? "w-[240px]" : "w-0"
         } flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] overflow-hidden transition-all duration-200 hidden md:block`}
       >
         <div className="p-4 h-full flex flex-col">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-[rgba(255,255,255,0.5)]">Conversations</h3>
+            <h3 className="text-xs font-semibold text-[rgba(255,255,255,0.4)] uppercase tracking-wider">History</h3>
             <button
               onClick={startNewChat}
               className="p-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md hover:opacity-90"
+              title="New chat"
             >
               <Plus size={14} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto space-y-1">
+          <div className="flex-1 overflow-y-auto space-y-0.5">
             {conversations.length === 0 ? (
               <p className="text-xs text-[rgba(255,255,255,0.3)] text-center py-4">No conversations yet</p>
             ) : (
@@ -219,10 +289,10 @@ export function ChatInterface() {
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <MessageSquare size={12} />
-                    <span className="truncate">{conv.title}</span>
+                    <MessageSquare size={11} className="shrink-0" />
+                    <span className="truncate text-xs">{conv.title}</span>
                   </div>
-                  <p className="text-[10px] text-[rgba(255,255,255,0.3)] mt-0.5 ml-5">
+                  <p className="text-[10px] text-[rgba(255,255,255,0.3)] mt-0.5 ml-[19px]">
                     {formatRelativeTime(conv.created_at)}
                   </p>
                 </button>
@@ -233,44 +303,42 @@ export function ChatInterface() {
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Toggle sidebar on mobile */}
-        <div className="md:hidden p-2 border-b border-[rgba(255,255,255,0.06)]">
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-xs text-[rgba(255,255,255,0.5)]"
-          >
-            {sidebarOpen ? "Hide" : "Show"} conversations
-          </button>
-        </div>
-
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-[rgba(255,255,255,0.3)]">
-              <div className="text-center">
-                <Zap size={48} className="mx-auto mb-4 opacity-30" />
-                <p className="text-lg font-medium">SRT Office Manager</p>
-                <p className="text-sm mt-2 max-w-md">
-                  I can check your pipeline, move deals, send messages, and manage operations. Ask me anything.
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center max-w-2xl w-full px-4">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[rgba(0,201,167,0.1)] border border-[rgba(0,201,167,0.2)] mb-5">
+                  <Zap size={28} className="text-[#00C9A7]" />
+                </div>
+                <h2 className="text-2xl font-semibold text-white mb-1">
+                  {userName ? `Hey ${userName.split(" ")[0]}` : "SRT Office Manager"}
+                </h2>
+                <p className="text-[rgba(255,255,255,0.4)] text-sm mb-8">
+                  I can check your pipeline, look up contacts, send messages, and manage operations.
                 </p>
-                <div className="flex flex-wrap gap-2 justify-center mt-4">
-                  {[
-                    "What's the pipeline looking like?",
-                    "Who's in Underwriting?",
-                    "Show me recent activity",
-                  ].map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      onClick={() => {
-                        setInput(suggestion);
-                        textareaRef.current?.focus();
-                      }}
-                      className="px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)] transition-colors"
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
+
+                <div className="space-y-3">
+                  {["Pipeline", "Contacts", "Lenders", "Actions"].map((cat) => {
+                    const chips = SUGGESTION_CHIPS.filter((c) => c.category === cat);
+                    return (
+                      <div key={cat}>
+                        <p className="text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.25)] mb-1.5 text-left">{cat}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {chips.map((chip) => (
+                            <button
+                              key={chip.label}
+                              onClick={() => handleSuggestion(chip.prompt)}
+                              className="px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.15)] transition-all"
+                            >
+                              {chip.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -286,9 +354,9 @@ export function ChatInterface() {
                       ? "bg-[#00C9A7] text-[#0B1426]"
                       : "bg-[rgba(255,255,255,0.05)] text-white"
                   }`}
-                  style={{ maxWidth: msg.role === "user" ? "70%" : "85%" }}
+                  style={{ maxWidth: msg.role === "user" ? "70%" : "88%" }}
                 >
-                  {/* Show tool actions taken */}
+                  {/* Tool action pills */}
                   {msg.actions && msg.actions.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2 pb-2 border-b border-[rgba(255,255,255,0.08)]">
                       {msg.actions.map((action, j) => {
@@ -305,6 +373,17 @@ export function ChatInterface() {
                       })}
                     </div>
                   )}
+
+                  {/* Rich tool result cards */}
+                  {msg.toolResults && msg.toolResults.length > 0 && (
+                    <div className="mb-3 space-y-2">
+                      {msg.toolResults.map((tr, j) => (
+                        <ToolCard key={j} toolResult={tr} onAction={handleToolAction} />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Message text */}
                   {msg.role === "assistant" ? (
                     <div className="prose prose-invert prose-sm max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -327,9 +406,7 @@ export function ChatInterface() {
                     <div className="w-2 h-2 bg-[#00C9A7] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                     <div className="w-2 h-2 bg-[#00C9A7] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
                   </div>
-                  <span className="text-xs text-[rgba(255,255,255,0.4)]">
-                    Thinking...
-                  </span>
+                  <span className="text-xs text-[rgba(255,255,255,0.4)]">Thinking...</span>
                 </div>
               </div>
             </div>

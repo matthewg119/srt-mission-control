@@ -1,6 +1,5 @@
 import {
   LayoutDashboard,
-  MessageSquare,
   Kanban,
   Settings,
   Mail,
@@ -8,8 +7,9 @@ import {
   ClipboardCheck,
   Building2,
   LayoutGrid,
-  Inbox,
   Mails,
+  Brain,
+  GitFork,
 } from "lucide-react";
 
 export interface NavSection {
@@ -27,18 +27,18 @@ export const navSections: NavSection[] = [
   {
     label: "Main",
     items: [
-      { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      { label: "Command Center", href: "/dashboard", icon: LayoutDashboard },
       { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
-      { label: "AI Assistant", href: "/dashboard/assistant", icon: MessageSquare },
+      { label: "Brain Trust", href: "/dashboard/brain-trust", icon: Brain },
       { label: "Email Agents", href: "/dashboard/email-agents", icon: Mail },
     ],
   },
   {
     label: "Operations",
     items: [
-      { label: "Messaging", href: "/dashboard/messaging", icon: Inbox },
       { label: "Templates", href: "/dashboard/templates", icon: FileText },
       { label: "Sequences", href: "/dashboard/sequences", icon: Mails },
+      { label: "Workflows", href: "/dashboard/workflows", icon: GitFork },
       { label: "Systems", href: "/dashboard/systems", icon: LayoutGrid },
     ],
   },

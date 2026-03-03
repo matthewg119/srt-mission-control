@@ -6,6 +6,7 @@ import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
 import { sendEvent } from "@/lib/meta-capi";
 import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact } from "@/lib/sequence-engine";
+import { systemAlert } from "@/lib/notify";
 
 // Cache the "New Lead" stage ID across requests (same serverless instance)
 let cachedNewLeadStageId: string | null = null;
@@ -117,6 +118,11 @@ export async function POST(request: NextRequest) {
           );
         }
       } else {
+        await systemAlert(
+          "GHL Contact Creation Failed",
+          `Lead from ${name} (${email || phone}) could not be created in GHL: ${errMsg}`,
+          "leads/capture"
+        );
         return NextResponse.json(
           { error: "Failed to create contact", details: errMsg },
           { status: 500, headers: corsHeaders }

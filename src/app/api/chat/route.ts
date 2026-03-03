@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     const systemPrompt = await buildSystemPrompt();
-    const { response, actions } = await runConversationWithTools(messages, systemPrompt);
+    const { response, actions, toolResults } = await runConversationWithTools(messages, systemPrompt);
 
     // Save conversation (best-effort — tables may not exist yet)
     if (conversationId) {
@@ -80,6 +80,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       response,
       actions,
+      toolResults,
     });
   } catch (error) {
     console.error("Chat POST error:", error);
