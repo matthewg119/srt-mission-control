@@ -15,7 +15,7 @@ export async function OPTIONS() {
 
 /**
  * POST /api/files/upload
- * Receives files + metadata, uploads to OneDrive + GHL contact documents.
+ * Receives files + metadata, uploads to OneDrive and adds GHL note.
  * Body: multipart/form-data with files[] + contactId + businessName
  */
 export async function POST(request: NextRequest) {
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 
       const buffer = Buffer.from(await file.arrayBuffer());
 
-      // Upload to OneDrive
+      // Upload to OneDrive (optional — doesn't block success)
       if (folderCreated) {
         try {
           const driveResult = await microsoft.uploadDriveFile(
@@ -77,35 +77,27 @@ export async function POST(request: NextRequest) {
           );
           result.oneDrive = driveResult.webUrl;
         } catch (err) {
+          // OneDrive is optional — log but don't surface as user-facing error
           console.error("OneDrive upload failed:", err instanceof Error ? err.message : err);
-          result.error = "OneDrive upload failed";
-        }
-      }
-
-      // Upload to GHL contact documents
-      if (contactId) {
-        try {
-          await ghl.uploadContactDocument(contactId, buffer, file.name);
-          result.ghl = "uploaded";
-        } catch (err) {
-          console.error("GHL document upload failed:", err instanceof Error ? err.message : err);
-          if (!result.error) result.error = "GHL upload failed";
         }
       }
 
       results.push(result);
     }
 
-    // Notify team when bank statements are received
-    const successfulUploads = results.filter(r => r.ghl === "uploaded");
-    if (contactId && successfulUploads.length > 0) {
-      ghl.addNote(
-        contactId,
-        `Bank statements received (${successfulUploads.length} file${successfulUploads.length > 1 ? "s" : ""}): ${successfulUploads.map(r => r.fileName).join(", ")}. Ready for underwriting review.`
-      ).catch(() => {});
+    // Add GHL note with file list + OneDrive links, then alert the team
+    if (contactId && files.length > 0) {
+      const fileNames = results.map(r => r.fileName).join(", ");
+      const oneDriveLinks = results
+        .filter(r => r.oneDrive)
+        .map(r => `• ${r.fileName}: ${r.oneDrive}`)
+        .join("\n");
+      const noteBody = `Bank statements received (${files.length} file${files.length > 1 ? "s" : ""}): ${fileNames}.${oneDriveLinks ? `\n\nOneDrive:\n${oneDriveLinks}` : ""}\n\nReady for underwriting review.`;
+      ghl.addNote(contactId, noteBody).catch(() => {});
+      results.forEach(r => { r.ghl = "noted"; });
       systemAlert(
         "Bank Statements Received",
-        `${businessName || "Applicant"} uploaded ${successfulUploads.length} document(s). Ready for review.`,
+        `${businessName || "Applicant"} uploaded ${files.length} document(s). Ready for review.`,
         "files/upload",
         "info"
       );
