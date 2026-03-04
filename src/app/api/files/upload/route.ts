@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
 import { ghl } from "@/lib/ghl";
+import { systemAlert } from "@/lib/notify";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -93,6 +94,21 @@ export async function POST(request: NextRequest) {
       }
 
       results.push(result);
+    }
+
+    // Notify team when bank statements are received
+    const successfulUploads = results.filter(r => r.ghl === "uploaded");
+    if (contactId && successfulUploads.length > 0) {
+      ghl.addNote(
+        contactId,
+        `Bank statements received (${successfulUploads.length} file${successfulUploads.length > 1 ? "s" : ""}): ${successfulUploads.map(r => r.fileName).join(", ")}. Ready for underwriting review.`
+      ).catch(() => {});
+      systemAlert(
+        "Bank Statements Received",
+        `${businessName || "Applicant"} uploaded ${successfulUploads.length} document(s). Ready for review.`,
+        "files/upload",
+        "info"
+      );
     }
 
     return NextResponse.json(

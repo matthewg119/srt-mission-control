@@ -7,6 +7,7 @@ import { sendEvent } from "@/lib/meta-capi";
 import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
+import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
 
 // Cache the "New Lead" stage ID across requests (same serverless instance)
 let cachedNewLeadStageId: string | null = null;
@@ -52,6 +53,10 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { name, email, phone, message, source, website, _fbc, _fbp, eventId, sourceUrl } = body;
+
+    // Lead quality score + ad attribution
+    const leadScore = calculateLeadScore({ email, phone, fbc: _fbc });
+    const adSource = resolveAdSource(_fbc, source);
 
     // Bot protection
     const validation = validateLeadSubmission({ name, email, phone, website });
@@ -200,6 +205,10 @@ export async function POST(request: NextRequest) {
       pipeline_name: "New Deals",
       amount: 0,
       ghl_contact_id: contactId,
+      fbc: _fbc || null,
+      fbp: _fbp || null,
+      ad_source: adSource,
+      lead_score: leadScore,
       updated_at: new Date().toISOString(),
     }, { onConflict: "ghl_opportunity_id" });
 

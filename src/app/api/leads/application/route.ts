@@ -39,6 +39,17 @@ export async function POST(request: NextRequest) {
       signature, signatureName, website,
     } = body;
 
+    // Map product type to a specific lead tag
+    const PRODUCT_TAG_MAP: Record<string, string> = {
+      mca: "website-lead-mca",
+      loc: "website-lead-loc",
+      equipment: "website-lead-equipment",
+      "working-capital": "website-lead-working-capital",
+      sba: "website-lead-sba",
+      factoring: "website-lead-factoring",
+    };
+    const productTag = PRODUCT_TAG_MAP[body.productType as string] || "website-lead";
+
     // Bot protection (at 25%+ when we have name/email)
     if (firstName || lastName || email) {
       const validation = validateLeadSubmission({
@@ -92,7 +103,7 @@ export async function POST(request: NextRequest) {
           phone: mobilePhone || businessPhone || undefined,
           companyName: businessName || undefined,
           source: source || "Website - Application Form",
-          tags: ["application-started"],
+          tags: ["application-started", productTag],
         });
         contactId = result.contactId;
       } catch (error) {
@@ -236,7 +247,7 @@ export async function POST(request: NextRequest) {
           email: email || undefined, phone: mobilePhone || businessPhone || undefined,
           companyName: legalName || businessName || undefined,
           source: source || "Website - Application Form",
-          tags: ["application-started"],
+          tags: ["application-started", productTag],
         });
         contactId = result.contactId;
       } catch {
@@ -372,7 +383,8 @@ export async function POST(request: NextRequest) {
     if (contactId) {
       try {
         await ghl.addContactTag(contactId, "application-completed");
-        console.log("[100%] Tag 'application-completed' added to GHL contact");
+        await ghl.addContactTag(contactId, productTag + "-completed").catch(() => {});
+        console.log("[100%] Tag 'application-completed' + '" + productTag + "-completed' added to GHL contact");
       } catch (err) {
         console.error("[100%] GHL tag 'application' failed:", err instanceof Error ? err.message : err);
       }
