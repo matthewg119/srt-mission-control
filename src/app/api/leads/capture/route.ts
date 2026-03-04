@@ -52,7 +52,8 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, email, phone, message, source, website, _fbc, _fbp, eventId, sourceUrl } = body;
+    const { name, email, phone, message, source, website, _fbc, _fbp, eventId, sourceUrl,
+            utmCampaign, utmContent, utmMedium, utmSource, adId } = body;
 
     // Lead quality score + ad attribution
     const leadScore = calculateLeadScore({ email, phone, fbc: _fbc });
@@ -209,6 +210,10 @@ export async function POST(request: NextRequest) {
       fbp: _fbp || null,
       ad_source: adSource,
       lead_score: leadScore,
+      utm_campaign: utmCampaign || null,
+      utm_content: utmContent || null,
+      utm_medium: utmMedium || null,
+      ad_id: adId || utmContent || null,
       updated_at: new Date().toISOString(),
     }, { onConflict: "ghl_opportunity_id" });
 

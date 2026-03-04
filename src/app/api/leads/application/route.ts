@@ -37,6 +37,7 @@ export async function POST(request: NextRequest) {
       applicationCompletionPct, applicationStage, source,
       _fbc, _fbp, eventId, sourceUrl,
       signature, signatureName, website,
+      utmCampaign, utmContent, utmMedium, adId,
     } = body;
 
     // Map product type to a specific lead tag
@@ -153,6 +154,12 @@ export async function POST(request: NextRequest) {
         pipeline_name: "New Deals",
         amount: 0,
         ghl_contact_id: contactId,
+        fbc: _fbc || null,
+        fbp: _fbp || null,
+        utm_campaign: utmCampaign || null,
+        utm_content: utmContent || null,
+        utm_medium: utmMedium || null,
+        ad_id: adId || utmContent || null,
         updated_at: new Date().toISOString(),
       }, { onConflict: "ghl_opportunity_id" });
 
@@ -328,6 +335,12 @@ export async function POST(request: NextRequest) {
       pipeline_name: "New Deals",
       amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
       ghl_contact_id: contactId,
+      fbc: _fbc || null,
+      fbp: _fbp || null,
+      utm_campaign: utmCampaign || null,
+      utm_content: utmContent || null,
+      utm_medium: utmMedium || null,
+      ad_id: adId || utmContent || null,
       updated_at: new Date().toISOString(),
     }, { onConflict: "ghl_opportunity_id" });
 
