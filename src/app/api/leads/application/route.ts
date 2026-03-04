@@ -40,17 +40,6 @@ export async function POST(request: NextRequest) {
       utmCampaign, utmContent, utmMedium, adId,
     } = body;
 
-    // Map product type to a specific lead tag
-    const PRODUCT_TAG_MAP: Record<string, string> = {
-      mca: "website-lead-mca",
-      loc: "website-lead-loc",
-      equipment: "website-lead-equipment",
-      "working-capital": "website-lead-working-capital",
-      sba: "website-lead-sba",
-      factoring: "website-lead-factoring",
-    };
-    const productTag = PRODUCT_TAG_MAP[body.productType as string] || "website-lead";
-
     // Bot protection (at 25%+ when we have name/email)
     if (firstName || lastName || email) {
       const validation = validateLeadSubmission({
@@ -104,7 +93,7 @@ export async function POST(request: NextRequest) {
           phone: mobilePhone || businessPhone || undefined,
           companyName: businessName || undefined,
           source: source || "Website - Application Form",
-          tags: ["application-started", productTag],
+          tags: ["application-started"],
         });
         contactId = result.contactId;
       } catch (error) {
@@ -254,7 +243,7 @@ export async function POST(request: NextRequest) {
           email: email || undefined, phone: mobilePhone || businessPhone || undefined,
           companyName: legalName || businessName || undefined,
           source: source || "Website - Application Form",
-          tags: ["application-started", productTag],
+          tags: ["application-started"],
         });
         contactId = result.contactId;
       } catch {
@@ -396,10 +385,9 @@ export async function POST(request: NextRequest) {
     if (contactId) {
       try {
         await ghl.addContactTag(contactId, "application-completed");
-        await ghl.addContactTag(contactId, productTag + "-completed").catch(() => {});
-        console.log("[100%] Tag 'application-completed' + '" + productTag + "-completed' added to GHL contact");
+        console.log("[100%] Tag 'application-completed' added to GHL contact");
       } catch (err) {
-        console.error("[100%] GHL tag 'application' failed:", err instanceof Error ? err.message : err);
+        console.error("[100%] GHL tag failed:", err instanceof Error ? err.message : err);
       }
 
       // Cancel the abandonment sequence now that they completed
@@ -443,14 +431,23 @@ export async function POST(request: NextRequest) {
           console.error("[100%] OneDrive upload failed:", err instanceof Error ? err.message : err);
         }
 
-        // Upload PDF to GHL contact documents
+        // Add GHL note with OneDrive link (GHL v2 REST API doesn't support document uploads)
         if (contactId) {
-          try {
-            await ghl.uploadContactDocument(contactId, pdfBuffer, `Application - ${safeName}.pdf`);
-            console.log("[100%] PDF uploaded to GHL contact documents");
-          } catch (err) {
-            console.error("[100%] GHL document upload failed:", err instanceof Error ? err.message : err);
-          }
+          ghl.addNote(contactId, `Application PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`).catch(() => {});
+        }
+
+        // Send applicant confirmation email with application summary + bank statement request
+        if (contactId && email) {
+          const summaryHtml = buildApplicationSummaryEmail({
+            firstName, lastName, businessName, legalName, dba, industry,
+            bizAddress, bizCity, bizState, bizZip, ein, creditScore,
+            amountNeeded, useOfFunds, monthlyDeposits, ownership,
+          });
+          ghl.sendEmail(
+            contactId,
+            "Your SRT Agency Application — Received",
+            summaryHtml
+          ).catch(err => console.error("[100%] Confirmation email failed:", err));
         }
       } catch (err) {
         console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
@@ -512,4 +509,58 @@ function buildCustomFieldUpdates(body: Record<string, unknown>): Array<{ key: st
   add("avg_monthly_bank_balance", body.monthlyDeposits);
   if (body.existingLoans) add("existing_loans", String(body.existingLoans).includes("Yes") ? "Yes" : "No");
   return fields;
+}
+
+function buildApplicationSummaryEmail(data: {
+  firstName?: string; lastName?: string; businessName?: string; legalName?: string;
+  dba?: string; industry?: string; bizAddress?: string; bizCity?: string;
+  bizState?: string; bizZip?: string; ein?: string; creditScore?: string;
+  amountNeeded?: string; useOfFunds?: string; monthlyDeposits?: string; ownership?: string;
+}): string {
+  const name = [data.firstName, data.lastName].filter(Boolean).join(" ") || "Applicant";
+  const rows: Array<[string, string]> = [];
+  const add = (label: string, val?: string) => { if (val?.trim()) rows.push([label, val.trim()]); };
+
+  add("Business Name", data.businessName || data.legalName);
+  add("DBA", data.dba);
+  add("Industry", data.industry);
+  add("Address", [data.bizAddress, data.bizCity, data.bizState, data.bizZip].filter(Boolean).join(", "));
+  add("EIN", data.ein);
+  add("Credit Score Range", data.creditScore);
+  add("Amount Requested", data.amountNeeded);
+  add("Use of Funds", data.useOfFunds);
+  add("Avg. Monthly Deposits", data.monthlyDeposits);
+  add("Ownership %", data.ownership);
+
+  const tableRows = rows.map(([label, val]) =>
+    `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#666;font-weight:600">${label}</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${val}</td></tr>`
+  ).join("");
+
+  return `
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
+  <div style="background:#1a1a2e;padding:24px;text-align:center">
+    <h1 style="color:#fff;margin:0;font-size:22px">SRT Agency</h1>
+    <p style="color:#a0a0c0;margin:4px 0 0">Business Funding Solutions</p>
+  </div>
+  <div style="padding:24px">
+    <p>Hi ${data.firstName || "there"},</p>
+    <p>Thank you for completing your application! We've received everything and our team is reviewing it now.</p>
+    <h2 style="font-size:16px;border-bottom:2px solid #1a1a2e;padding-bottom:8px">Your Application Summary</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">${tableRows}</table>
+    <div style="background:#f8f9fa;border-left:4px solid #e67e22;padding:16px;margin:24px 0;border-radius:4px">
+      <h3 style="margin:0 0 8px;font-size:15px;color:#e67e22">Next Step: Bank Statements Needed</h3>
+      <p style="margin:0;font-size:14px">To move forward with your funding, please send us your <strong>last 3 months of business bank statements</strong>. You can:</p>
+      <ul style="font-size:14px;padding-left:20px">
+        <li>Reply to this email with your statements attached</li>
+        <li>Upload them at <a href="https://srtagency.com/apply" style="color:#1a1a2e">srtagency.com/apply</a></li>
+      </ul>
+    </div>
+    <p style="font-size:14px;color:#666">If you have any questions, reply to this email or call us directly. We're here to help you get funded.</p>
+    <p>Best regards,<br><strong>The SRT Agency Team</strong></p>
+  </div>
+  <div style="background:#f5f5f5;padding:16px;text-align:center;font-size:12px;color:#999">
+    <p style="margin:0">SRT Agency | Business Funding Solutions</p>
+    <p style="margin:4px 0 0"><a href="https://srtagency.com" style="color:#666">srtagency.com</a></p>
+  </div>
+</div>`.trim();
 }
