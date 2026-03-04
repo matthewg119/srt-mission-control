@@ -14,7 +14,7 @@
     },
     {
       "path": "/api/cron/process-sequences",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 14 * * *"
     }
   ]
 }
