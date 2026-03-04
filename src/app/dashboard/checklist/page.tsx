@@ -365,7 +365,7 @@ export default function ChecklistPage() {
                         {secExpanded && (
                           <div className="pb-1">
                             {visibleItems.map((item) => {
-                              const isCustom = "isCustom" in item && Boolean(item.isCustom);
+                              const isCustom = !!(item as { isCustom?: boolean }).isCustom;
                               const isEditing = editingId === item.id;
 
                               return (
