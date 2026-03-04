@@ -10,6 +10,7 @@ import {
   Mails,
   Brain,
   GitFork,
+  Plug,
 } from "lucide-react";
 
 export interface NavSection {
@@ -47,6 +48,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: "Lenders", href: "/dashboard/lenders", icon: Building2 },
       { label: "Checklist", href: "/dashboard/checklist", icon: ClipboardCheck },
+      { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],
   },

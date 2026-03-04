@@ -385,9 +385,16 @@ export async function POST(request: NextRequest) {
     if (contactId) {
       try {
         await ghl.addContactTag(contactId, "application-completed");
-        console.log("[100%] Tag 'application-completed' added to GHL contact");
+        console.log("[100%] Tag 'application-completed' added via addContactTag");
       } catch (err) {
-        console.error("[100%] GHL tag failed:", err instanceof Error ? err.message : err);
+        console.error("[100%] addContactTag failed, trying updateContact:", err instanceof Error ? err.message : err);
+        // Fallback: use updateContact to set tags directly
+        try {
+          await ghl.updateContact(contactId, { tags: ["application-started", "application-completed"] });
+          console.log("[100%] Tag 'application-completed' added via updateContact fallback");
+        } catch (err2) {
+          console.error("[100%] updateContact tag fallback also failed:", err2 instanceof Error ? err2.message : err2);
+        }
       }
 
       // Cancel the abandonment sequence now that they completed

@@ -275,7 +275,7 @@ export const microsoft = {
   /** Create a folder in OneDrive. Returns { id, webUrl } */
   async createDriveFolder(folderName: string, parentPath = ""): Promise<{ id: string; webUrl: string }> {
     const endpoint = parentPath
-      ? `/me/drive/root:/${encodeURIComponent(parentPath)}:/children`
+      ? `/me/drive/root:/${parentPath.split("/").map(encodeURIComponent).join("/")}:/children`
       : `/me/drive/root/children`;
 
     const result = await graphRequest(endpoint, {
@@ -299,8 +299,9 @@ export const microsoft = {
   ): Promise<{ id: string; webUrl: string }> {
     const token = await getValidAccessToken();
     const path = `${folderPath}/${fileName}`.replace(/\/+/g, "/");
+    const encodedPath = path.split("/").map(encodeURIComponent).join("/");
     const res = await fetch(
-      `${GRAPH_URL}/me/drive/root:/${encodeURIComponent(path)}:/content`,
+      `${GRAPH_URL}/me/drive/root:/${encodedPath}:/content`,
       {
         method: "PUT",
         headers: {
