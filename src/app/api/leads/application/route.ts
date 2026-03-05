@@ -20,13 +20,7 @@ export async function POST(request: NextRequest) {
   const clientUserAgent = request.headers.get("user-agent") || undefined;
 
   try {
-    // Rate limit check
-    if (!checkRateLimit(clientIp)) {
-      return NextResponse.json(
-        { error: "Too many requests. Please try again later." },
-        { status: 429, headers: corsHeaders }
-      );
-    }
+    // Rate limit disabled — progressive form sends 6+ requests per application
 
     const body = await request.json();
     const {
