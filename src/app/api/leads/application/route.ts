@@ -172,15 +172,19 @@ export async function POST(request: NextRequest) {
       }
 
       // Enroll in application-abandoned sequence (3-min first email)
-      if (email && contactId) {
+      if (email && contactId && completionPct < 100) {
         enrollContact("application-abandoned", contactId, email, contactName, { businessName })
           .catch((err) => console.error("[Sequence] application-abandoned enrollment error:", err));
       }
 
-      return NextResponse.json(
-        { success: true, message: ghlWarnings.length > 0 ? "Lead created with warnings" : "Lead created", contactId, opportunityId: opportunityId || pipelineCacheId, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
-        { headers: corsHeaders }
-      );
+      // For sub-100% requests, return now. For 100%, fall through to final submission block.
+      if (completionPct < 100) {
+        return NextResponse.json(
+          { success: true, message: ghlWarnings.length > 0 ? "Lead created with warnings" : "Lead created", contactId, opportunityId: opportunityId || pipelineCacheId, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
+          { headers: corsHeaders }
+        );
+      }
+      // 100% continues below — PDF/OneDrive/email must run even if GHL failed
     }
 
     // ── 25-99% with existing contactId — enrich contact ──
@@ -215,6 +219,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 100% — Final submission ──
+    const completionWarnings: string[] = [];
     if (!contactId) {
       try {
         const result = await ghl.createOrFindContact({
@@ -225,18 +230,23 @@ export async function POST(request: NextRequest) {
           tags: ["application-started"],
         });
         contactId = result.contactId;
-      } catch {
-        return NextResponse.json(
-          { error: "Failed to create contact" },
-          { status: 500, headers: corsHeaders }
-        );
+      } catch (error) {
+        // Non-blocking — PDF/OneDrive/email don't need a GHL contact
+        console.error("[100%] GHL contact creation failed:", error instanceof Error ? error.message : error);
+        completionWarnings.push("GHL contact creation failed at 100%");
+        systemAlert(
+          "GHL Contact Creation Failed at 100%",
+          `Could not create GHL contact for ${contactName} (${email}): ${error instanceof Error ? error.message : "Unknown error"}. PDF/email will still be generated.`,
+          "leads/application",
+          "error"
+        ).catch(() => {});
       }
     }
 
     const fullAddress = [bizAddress, bizCity, bizState, bizZip].filter(Boolean).join(", ");
 
-    // Update contact with ALL fields
-    try {
+    // Update contact with ALL fields (skip if no GHL contact)
+    if (contactId) try {
       await ghl.updateContact(contactId, {
         firstName: firstName || undefined,
         lastName: lastName || undefined,
@@ -270,8 +280,7 @@ export async function POST(request: NextRequest) {
     } catch { /* non-critical */ }
 
     // Create opportunity if none yet
-    const completionWarnings: string[] = [];
-    if (!opportunityId) {
+    if (!opportunityId && contactId) {
       try {
         const stageId = await lookupNewLeadStageId();
         if (stageId) {
@@ -428,6 +437,12 @@ export async function POST(request: NextRequest) {
           description: `[100%] OneDrive upload failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown"}`,
           metadata: { contactId, error: err instanceof Error ? err.message : String(err) },
         });
+        systemAlert(
+          "OneDrive Upload Failed",
+          `PDF upload failed for ${contactName} (${businessName}): ${err instanceof Error ? err.message : "Unknown error"}`,
+          "leads/application",
+          "error"
+        ).catch(() => {});
       }
 
       // Add GHL note with OneDrive link
@@ -478,6 +493,12 @@ export async function POST(request: NextRequest) {
         description: `[100%] Post-processing failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown"}`,
         metadata: { contactId, error: err instanceof Error ? err.message : String(err) },
       });
+      systemAlert(
+        "Application Post-Processing Failed",
+        `PDF/OneDrive/Email failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown error"}`,
+        "leads/application",
+        "error"
+      ).catch(() => {});
     }
 
     return NextResponse.json(

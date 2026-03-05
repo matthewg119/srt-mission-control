@@ -98,32 +98,39 @@ class GHLClient {
    * GHL returns 400/422 with the existing contact info on duplicates.
    */
   async createOrFindContact(data: Record<string, unknown>): Promise<{ contactId: string; isNew: boolean }> {
+    // Step 1: Try direct creation
     try {
       const result = await this.createContact(data);
       const contact = result.contact as Record<string, unknown> | undefined;
       const id = (contact?.id as string) || (result.id as string);
       if (id) return { contactId: id, isNew: true };
+      console.warn("[GHL] createContact returned success but no ID:", JSON.stringify(result).slice(0, 300));
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn("[GHL] createContact failed:", errMsg.slice(0, 500));
       // GHL duplicate error often contains the contact ID in the response
-      // Try to extract it from the error message
       const idMatch = errMsg.match(/"id"\s*:\s*"([a-zA-Z0-9]+)"/);
       if (idMatch) return { contactId: idMatch[1], isNew: false };
     }
 
-    // Fallback: search by email or phone
+    // Step 2: Fallback — search by email or phone
     const email = data.email as string | undefined;
     const phone = data.phone as string | undefined;
     const searchQuery = email || phone;
     if (searchQuery) {
-      const searchResult = await this.searchContacts(searchQuery);
-      const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
-      if (contacts.length > 0) {
-        return { contactId: contacts[0].id as string, isNew: false };
+      try {
+        const searchResult = await this.searchContacts(searchQuery);
+        const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
+        if (contacts.length > 0) {
+          return { contactId: contacts[0].id as string, isNew: false };
+        }
+        console.warn("[GHL] Search returned 0 contacts for:", searchQuery);
+      } catch (searchErr) {
+        console.error("[GHL] Search fallback also failed:", searchErr instanceof Error ? searchErr.message : searchErr);
       }
     }
 
-    throw new Error("Failed to create or find contact");
+    throw new Error(`Failed to create or find contact (email: ${email}, phone: ${phone})`);
   }
 
   async updateContact(id: string, data: Record<string, unknown>): Promise<Record<string, unknown>> {
