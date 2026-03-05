@@ -465,6 +465,12 @@ export async function POST(request: NextRequest) {
         }
       } catch (err) {
         console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
+        systemAlert(
+          "Application Post-Processing Failed",
+          `PDF/OneDrive/Email failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown error"}`,
+          "leads/application",
+          "error"
+        ).catch(() => {});
       }
     })();
 
