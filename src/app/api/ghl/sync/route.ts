@@ -11,6 +11,7 @@ export async function POST() {
   try {
     let totalSynced = 0;
     let totalOpps = 0;
+    const errors: string[] = [];
 
     for (const pipeline of PIPELINES) {
       const pipelineId = pipeline.id;
@@ -22,6 +23,7 @@ export async function POST() {
 
       if (!ghlPipeline) {
         console.warn(`Pipeline ${pipeline.name} (${pipelineId}) not found in GHL, skipping`);
+        errors.push(`Pipeline ${pipeline.name} not found in GHL`);
         continue;
       }
 
@@ -36,15 +38,22 @@ export async function POST() {
       const opportunities = (oppResponse.opportunities as Array<Record<string, unknown>>) || [];
 
       // Batch-fetch existing UTM data so we don't lose it during sync
-      const oppIds = opportunities.map((o) => o.id as string);
-      const { data: existingRows } = await supabaseAdmin
-        .from("pipeline_cache")
-        .select("ghl_opportunity_id, utm_campaign, utm_content, utm_medium, ad_id, ad_source, fbc, fbp, lead_score")
-        .in("ghl_opportunity_id", oppIds);
+      // Only query columns that definitely exist (skip ad_source, fbc, fbp, lead_score which may not be created yet)
+      let utmMap = new Map<string, Record<string, unknown>>();
+      if (opportunities.length > 0) {
+        try {
+          const oppIds = opportunities.map((o) => o.id as string);
+          const { data: existingRows } = await supabaseAdmin
+            .from("pipeline_cache")
+            .select("ghl_opportunity_id, utm_campaign, utm_content, utm_medium, ad_id")
+            .in("ghl_opportunity_id", oppIds);
 
-      const utmMap = new Map<string, Record<string, unknown>>();
-      for (const row of existingRows || []) {
-        utmMap.set(row.ghl_opportunity_id, row);
+          for (const row of existingRows || []) {
+            utmMap.set(row.ghl_opportunity_id, row);
+          }
+        } catch (e) {
+          console.warn("UTM batch-fetch failed (columns may not exist yet):", e);
+        }
       }
 
       for (const opp of opportunities) {
@@ -75,10 +84,6 @@ export async function POST() {
           if (existing.utm_content) record.utm_content = existing.utm_content;
           if (existing.utm_medium) record.utm_medium = existing.utm_medium;
           if (existing.ad_id) record.ad_id = existing.ad_id;
-          if (existing.ad_source) record.ad_source = existing.ad_source;
-          if (existing.fbc) record.fbc = existing.fbc;
-          if (existing.fbp) record.fbp = existing.fbp;
-          if (existing.lead_score) record.lead_score = existing.lead_score;
         }
 
         // Try with all optional fields first
@@ -93,7 +98,7 @@ export async function POST() {
 
         // If full upsert failed (missing columns), retry with core fields only
         if (error) {
-          console.warn(`Full upsert failed for ${ghlOpportunityId}, retrying with core fields:`, error.message);
+          console.warn(`Full upsert failed for ${ghlOpportunityId}:`, error.message);
           ({ error } = await supabaseAdmin
             .from("pipeline_cache")
             .upsert(record, { onConflict: "ghl_opportunity_id" }));
@@ -102,7 +107,9 @@ export async function POST() {
         if (!error) {
           totalSynced++;
         } else {
-          console.error(`Failed to upsert opportunity ${ghlOpportunityId}:`, error);
+          const msg = `${contactName || ghlOpportunityId}: ${error.message}`;
+          console.error(`Upsert failed:`, msg);
+          if (errors.length < 5) errors.push(msg);
         }
       }
 
@@ -118,16 +125,21 @@ export async function POST() {
       })
       .eq("name", "GoHighLevel");
 
-    // Log the sync
+    // Log the sync with error details
+    const description = errors.length > 0
+      ? `Pipeline sync: ${totalSynced}/${totalOpps} synced. Errors: ${errors.join(" | ")}`
+      : `Pipeline sync completed: ${totalSynced}/${totalOpps} opportunities synced across ${PIPELINES.length} pipelines.`;
+
     await supabaseAdmin.from("system_logs").insert({
       event_type: "ghl_sync",
-      description: `Pipeline sync completed: ${totalSynced}/${totalOpps} opportunities synced across ${PIPELINES.length} pipelines.`,
-      metadata: { synced: totalSynced, total: totalOpps, pipelines: PIPELINES.map((p) => p.name) },
+      description,
+      metadata: { synced: totalSynced, total: totalOpps, pipelines: PIPELINES.map((p) => p.name), errors },
     });
 
     return NextResponse.json({
       synced: totalSynced,
       total: totalOpps,
+      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
     console.error("GHL sync error:", error);
