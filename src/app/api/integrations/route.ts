@@ -27,7 +27,7 @@ export async function GET() {
     const merged = [
       ...(dbIntegrations || []),
       ...DEFAULT_INTEGRATIONS.filter((d) => !dbNames.has(d.name)),
-    ];
+    ].filter((i) => i.name !== "OneDrive"); // OneDrive is part of Microsoft 365
 
     return NextResponse.json({ integrations: merged });
   } catch (error) {

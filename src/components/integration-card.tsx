@@ -128,8 +128,11 @@ export function IntegrationCard({
         <div className="mb-3">
           {integration.status === "connected" ? (
             <div>
-              <p className="text-xs text-[#00C9A7] mb-2">
+              <p className="text-xs text-[#00C9A7] mb-1">
                 Connected as {integration.config?.email || integration.config?.display_name || "Outlook"}
+              </p>
+              <p className="text-xs text-[rgba(255,255,255,0.4)] mb-2">
+                📁 OneDrive: Active — files auto-organized by deal
               </p>
               <div className="flex gap-2 flex-wrap">
                 <a

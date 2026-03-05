@@ -35,6 +35,18 @@ export async function POST() {
       const oppResponse = await ghl.getOpportunities(pipelineId);
       const opportunities = (oppResponse.opportunities as Array<Record<string, unknown>>) || [];
 
+      // Batch-fetch existing UTM data so we don't lose it during sync
+      const oppIds = opportunities.map((o) => o.id as string);
+      const { data: existingRows } = await supabaseAdmin
+        .from("pipeline_cache")
+        .select("ghl_opportunity_id, utm_campaign, utm_content, utm_medium, ad_id, ad_source, fbc, fbp, lead_score")
+        .in("ghl_opportunity_id", oppIds);
+
+      const utmMap = new Map<string, Record<string, unknown>>();
+      for (const row of existingRows || []) {
+        utmMap.set(row.ghl_opportunity_id, row);
+      }
+
       for (const opp of opportunities) {
         const ghlOpportunityId = opp.id as string;
         const stageId = opp.pipelineStageId as string;
@@ -55,6 +67,19 @@ export async function POST() {
           amount: opp.monetaryValue ? Number(opp.monetaryValue) : null,
           updated_at: new Date().toISOString(),
         };
+
+        // Preserve existing UTM/attribution fields (not available from GHL)
+        const existing = utmMap.get(ghlOpportunityId);
+        if (existing) {
+          if (existing.utm_campaign) record.utm_campaign = existing.utm_campaign;
+          if (existing.utm_content) record.utm_content = existing.utm_content;
+          if (existing.utm_medium) record.utm_medium = existing.utm_medium;
+          if (existing.ad_id) record.ad_id = existing.ad_id;
+          if (existing.ad_source) record.ad_source = existing.ad_source;
+          if (existing.fbc) record.fbc = existing.fbc;
+          if (existing.fbp) record.fbp = existing.fbp;
+          if (existing.lead_score) record.lead_score = existing.lead_score;
+        }
 
         // Try with all optional fields first
         let { error } = await supabaseAdmin
