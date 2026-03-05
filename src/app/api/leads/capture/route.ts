@@ -59,23 +59,6 @@ export async function POST(request: NextRequest) {
     const leadScore = calculateLeadScore({ email, phone, fbc: _fbc });
     const adSource = resolveAdSource(_fbc, source);
 
-    // Bot protection
-    const validation = validateLeadSubmission({ name, email, phone, website });
-    if (!validation.valid) {
-      console.warn(`[Bot Protection] Rejected lead: ${validation.reason} | IP: ${clientIp}`);
-      // Silent reject — return fake success to fool the bot
-      if (validation.silentReject) {
-        return NextResponse.json(
-          { success: true, message: "Lead captured successfully" },
-          { headers: corsHeaders }
-        );
-      }
-      return NextResponse.json(
-        { error: "Invalid submission" },
-        { status: 400, headers: corsHeaders }
-      );
-    }
-
     // Validate required fields
     if (!name || (!email && !phone)) {
       return NextResponse.json(

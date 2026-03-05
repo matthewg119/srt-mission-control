@@ -40,30 +40,6 @@ export async function POST(request: NextRequest) {
       utmCampaign, utmContent, utmMedium, adId,
     } = body;
 
-    // Bot protection (at 25%+ when we have name/email)
-    if (firstName || lastName || email) {
-      const validation = validateLeadSubmission({
-        firstName,
-        lastName,
-        email,
-        phone: mobilePhone || businessPhone,
-        website,
-      });
-      if (!validation.valid) {
-        console.warn(`[Bot Protection] Rejected application: ${validation.reason} | IP: ${clientIp}`);
-        if (validation.silentReject) {
-          return NextResponse.json(
-            { success: true, message: "Progress saved" },
-            { headers: corsHeaders }
-          );
-        }
-        return NextResponse.json(
-          { error: "Invalid submission" },
-          { status: 400, headers: corsHeaders }
-        );
-      }
-    }
-
     let contactId: string | null = (body.contactId as string) || null;
     let opportunityId: string | null = (body.opportunityId as string) || null;
 
