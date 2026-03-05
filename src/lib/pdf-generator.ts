@@ -148,16 +148,49 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   }
   y += 4;
 
+  // Check if authorization section needs a new page (needs ~70mm for legal text + signature)
+  if (y > 210) {
+    doc.addPage();
+    y = 15;
+  }
+
   // AUTHORIZATION
   secHeader("AUTHORIZATION & CONSENT");
+  y += 2; // spacing below blue header bar
+
   doc.setFontSize(7);
   doc.setTextColor(slate[0], slate[1], slate[2]);
   doc.setFont("helvetica", "normal");
-  const auth =
+  const authIntro =
     "By submitting this application, I authorize SRT Agency LLC to collect and process the information provided herein to evaluate my business for funding. I understand that SRT Agency LLC uses AI-powered technology and data analysis to make funding decisions. No hard credit inquiry will be performed as part of this application.";
-  const authLines = doc.splitTextToSize(auth, cw - 4);
-  doc.text(authLines, m + 2, y);
-  y += authLines.length * 3.2 + 6;
+  const authIntroLines = doc.splitTextToSize(authIntro, cw - 4);
+  doc.text(authIntroLines, m + 2, y);
+  y += authIntroLines.length * 3.2 + 3;
+
+  // Full legal fine print
+  doc.setFontSize(5.5);
+  doc.setTextColor(130, 130, 130);
+  const legalText =
+    "I certify that my answers are true and complete to the best of my knowledge. " +
+    "The Business, Merchant, Owner(s) and/or Officer(s) identified above (each, individually, an \"Applicant\") each represents, warrants, acknowledges and " +
+    "agrees that all information and documents, including this application, provided to SRT Agency LLC or Recipients in connection with this Possible " +
+    "Transaction, including bank and credit card processor statements, are accurate, true, and complete, that Recipients may rely upon the accuracy and " +
+    "completeness of such information and documents, and that Applicant is authorized to sign this application agreement. Applicant will immediately notify " +
+    "SRT Agency LLC of any change in Applicant information or financial condition. Applicant authorizes SRT Agency LLC and SRT Agency LLC " +
+    "agents, employees, independent contractors, funding sources and other representatives (\"Funding Sources\") to disclose to other persons, entities and " +
+    "funding sources (each, an \"Assignee\") all Applicant information and documents that SRT Agency LLC, Representatives, and Assignee (collectively, " +
+    "\"Recipient\") may obtain, including, Applicant's express authorization of Recipient to request, receive and use any credit reports, investigative reports, " +
+    "statements from creditors or financial institutions, verification of information, or any other information that a Recipient deems necessary and each " +
+    "Recipient is further authorized to use such information and share such information with other Recipients in connection " +
+    "with the placement of commercial loans, including, without limitation, loans having daily repayment features, purchases of future receivables and/or " +
+    "Merchant Cash Advance transactions or other commercial loans (collectively, a \"Possible Transaction\"). Applicant unconditionally waives and releases all " +
+    "claims against Recipients in connection with a Possible Transaction, arising from any act or omission, except in the case of gross or willfully negligent " +
+    "conduct, including, but not limited to, relating to the requesting, receiving or release of an Applicant's information and documents in connection with a " +
+    "Possible Transaction. This agreement shall be governed by the Laws of New York, without giving effect to conflicts of law principals, and a copy of this " +
+    "agreement may be accepted as an original.";
+  const legalLines = doc.splitTextToSize(legalText, cw - 4);
+  doc.text(legalLines, m + 2, y);
+  y += legalLines.length * 2.4 + 6;
 
   // Signature section
   if (data.signature) {
