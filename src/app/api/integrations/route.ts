@@ -29,6 +29,19 @@ export async function GET() {
       ...DEFAULT_INTEGRATIONS.filter((d) => !dbNames.has(d.name)),
     ].filter((i) => i.name !== "OneDrive"); // OneDrive is part of Microsoft 365
 
+    // Inject masked env var values for GHL so the UI shows it's configured
+    const ghlApiKey = process.env.GHL_API_KEY || "";
+    const ghlLocationId = process.env.GHL_LOCATION_ID || "";
+    for (const integration of merged) {
+      if (integration.name === "GoHighLevel" && ghlApiKey) {
+        const cfg = (integration.config as Record<string, string>) || {};
+        if (!cfg.apiKey) cfg.apiKey = "••••••••" + ghlApiKey.slice(-4);
+        if (!cfg.locationId) cfg.locationId = ghlLocationId;
+        integration.config = cfg;
+        if (integration.status !== "connected") integration.status = "connected";
+      }
+    }
+
     return NextResponse.json({ integrations: merged });
   } catch (error) {
     console.error("Integrations GET error:", error);

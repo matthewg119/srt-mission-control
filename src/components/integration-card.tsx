@@ -103,23 +103,30 @@ export function IntegrationCard({
 
       {/* GHL-specific buttons */}
       {integration.name === "GoHighLevel" && (
-        <div className="flex gap-2 mb-3">
-          {integration.status !== "connected" && onSetupGHL && (
-            <button
-              onClick={onSetupGHL}
-              className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
-            >
-              Setup Pipeline
-            </button>
+        <div className="mb-3">
+          {integration.status === "connected" && integration.config?.apiKey && (
+            <p className="text-xs text-[#00C9A7] mb-2">
+              Configured via environment variables
+            </p>
           )}
-          {onSyncGHL && (
-            <button
-              onClick={onSyncGHL}
-              className="text-xs px-3 py-1.5 bg-[rgba(255,255,255,0.08)] text-white rounded-md hover:bg-[rgba(255,255,255,0.12)] transition-colors"
-            >
-              Sync Now
-            </button>
-          )}
+          <div className="flex gap-2">
+            {integration.status !== "connected" && onSetupGHL && (
+              <button
+                onClick={onSetupGHL}
+                className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
+              >
+                Setup Pipeline
+              </button>
+            )}
+            {onSyncGHL && (
+              <button
+                onClick={onSyncGHL}
+                className="text-xs px-3 py-1.5 bg-[rgba(255,255,255,0.08)] text-white rounded-md hover:bg-[rgba(255,255,255,0.12)] transition-colors"
+              >
+                Sync Now
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -197,7 +204,7 @@ export function IntegrationCard({
         <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)] space-y-3">
           {integration.name === "GoHighLevel" && (
             <>
-              <ConfigField label="API Key" field="apiKey" values={configValues} onChange={setConfigValues} />
+              <ConfigField label="API Key" field="apiKey" values={configValues} onChange={setConfigValues} sensitive />
               <ConfigField label="Location ID" field="locationId" values={configValues} onChange={setConfigValues} />
             </>
           )}
@@ -228,22 +235,31 @@ function ConfigField({
   field,
   values,
   onChange,
+  sensitive,
 }: {
   label: string;
   field: string;
   values: Record<string, string>;
   onChange: (v: Record<string, string>) => void;
+  sensitive?: boolean;
 }) {
+  const currentValue = values[field] || "";
+  const isMasked = currentValue.startsWith("••••");
+
   return (
     <div>
       <label className="text-xs text-[rgba(255,255,255,0.5)] block mb-1">{label}</label>
       <input
-        type="text"
-        value={values[field] || ""}
+        type={sensitive ? "password" : "text"}
+        value={currentValue}
         onChange={(e) => onChange({ ...values, [field]: e.target.value })}
         className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-1.5 text-sm text-white placeholder-[rgba(255,255,255,0.3)] focus:outline-none focus:border-[#00C9A7]"
         placeholder={`Enter ${label.toLowerCase()}`}
+        readOnly={isMasked}
       />
+      {isMasked && (
+        <p className="text-[10px] text-[rgba(255,255,255,0.3)] mt-1">Set via environment variable — clear to change</p>
+      )}
     </div>
   );
 }

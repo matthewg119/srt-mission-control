@@ -96,8 +96,57 @@ const EVENT_DOT_COLORS: Record<string, string> = {
   stage_changed: "#f59e0b",
   cron_sequences: "#64748b",
   ai_action: "#1B65A7",
+  application_progress: "#8b5cf6",
+  application_pdf: "#00C9A7",
+  application_error: "#ef4444",
   error: "#ef4444",
 };
+
+const ACTIVITY_COLLAPSED_COUNT = 8;
+
+function ActivityFeed({ items }: { items: ActivityEntry[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? items : items.slice(0, ACTIVITY_COLLAPSED_COUNT);
+  const hasMore = items.length > ACTIVITY_COLLAPSED_COUNT;
+
+  return (
+    <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.03)] overflow-hidden flex flex-col" style={{ maxHeight: expanded ? "80vh" : undefined }}>
+      <div className="px-4 py-2.5 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-2 shrink-0">
+        <Activity size={12} className="text-[rgba(255,255,255,0.4)]" />
+        <span className="text-xs font-semibold text-[rgba(255,255,255,0.4)] uppercase tracking-wider">
+          Recent Activity
+        </span>
+        {expanded && (
+          <span className="text-[10px] text-[rgba(255,255,255,0.25)] ml-auto">{items.length} events</span>
+        )}
+      </div>
+      <div className={`divide-y divide-[rgba(255,255,255,0.04)] ${expanded ? "overflow-y-auto" : ""}`}>
+        {visible.map((item, i) => (
+          <div key={i} className="flex gap-3 px-4 py-2.5 items-start">
+            <span
+              className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+              style={{ background: EVENT_DOT_COLORS[item.event_type] || "#64748b" }}
+            />
+            <p className="text-xs text-[rgba(255,255,255,0.6)] leading-relaxed flex-1 min-w-0">
+              {item.description}
+            </p>
+            <span className="text-[10px] text-[rgba(255,255,255,0.25)] shrink-0 mt-0.5">
+              {item.relativeTime}
+            </span>
+          </div>
+        ))}
+      </div>
+      {hasMore && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="px-4 py-2 text-[10px] font-medium text-[#00C9A7] hover:text-white border-t border-[rgba(255,255,255,0.06)] transition-colors shrink-0"
+        >
+          {expanded ? "Show Less" : `View All (${items.length})`}
+        </button>
+      )}
+    </div>
+  );
+}
 
 interface ChatInterfaceProps {
   userName?: string;
@@ -370,30 +419,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
 
                 {/* Right: Recent Activity */}
                 {recentActivity && recentActivity.length > 0 && (
-                  <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.03)] overflow-hidden">
-                    <div className="px-4 py-2.5 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-2">
-                      <Activity size={12} className="text-[rgba(255,255,255,0.4)]" />
-                      <span className="text-xs font-semibold text-[rgba(255,255,255,0.4)] uppercase tracking-wider">
-                        Recent Activity
-                      </span>
-                    </div>
-                    <div className="divide-y divide-[rgba(255,255,255,0.04)]">
-                      {recentActivity.map((item, i) => (
-                        <div key={i} className="flex gap-3 px-4 py-2.5 items-start">
-                          <span
-                            className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
-                            style={{ background: EVENT_DOT_COLORS[item.event_type] || "#64748b" }}
-                          />
-                          <p className="text-xs text-[rgba(255,255,255,0.6)] leading-relaxed flex-1 min-w-0">
-                            {item.description}
-                          </p>
-                          <span className="text-[10px] text-[rgba(255,255,255,0.25)] shrink-0 mt-0.5">
-                            {item.relativeTime}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <ActivityFeed items={recentActivity} />
                 )}
               </div>
             </div>

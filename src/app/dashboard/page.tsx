@@ -13,7 +13,7 @@ export default async function DashboardPage() {
     .from("system_logs")
     .select("event_type, description, created_at")
     .order("created_at", { ascending: false })
-    .limit(8);
+    .limit(50);
 
   const recentActivity = (logs || []).map((l) => ({
     event_type: l.event_type as string,
