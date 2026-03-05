@@ -589,13 +589,11 @@ function buildApplicationSummaryEmail(data: {
     <p style="font-size:14px;line-height:1.6"><strong>A copy of your application is attached to this email as a PDF.</strong></p>
     <div style="background:#f8f9fa;border-left:4px solid #e8792b;padding:16px;margin:24px 0;border-radius:4px">
       <h3 style="margin:0 0 8px;font-size:15px;color:#e8792b">Next Step: Bank Statements Needed</h3>
-      <p style="margin:0;font-size:14px;line-height:1.6">To move forward with your funding, please send us your <strong>last 3 months of business bank statements</strong>. You can:</p>
-      <ul style="font-size:14px;padding-left:20px;line-height:1.8">
-        <li>Reply to this email with your statements attached</li>
-        <li><a href="https://api.whatsapp.com/send/?phone=7862822937" style="color:#25D366;font-weight:600">Send via WhatsApp</a></li>
-      </ul>
+      <p style="margin:0;font-size:14px;line-height:1.6">Please submit last 3 months of business bank statements to this email.</p>
+      <p style="margin:8px 0 0;font-size:14px;line-height:1.6">Or <a href="https://api.whatsapp.com/send/?phone=7862822937" style="color:#25D366;font-weight:600">Send via WhatsApp</a></p>
     </div>
-    <p style="font-size:14px;color:#666;line-height:1.6">Questions? Reply to this email or call us directly. We're here to help you get funded.</p>
+    <p style="font-size:14px;line-height:1.6">Let me know if you have any other questions!</p>
+    <p style="font-size:14px;line-height:1.6;margin:0">Kind regards,</p>
   </div>
   <div style="padding:0 24px 24px">
     <table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#333333">
