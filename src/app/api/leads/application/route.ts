@@ -9,6 +9,7 @@ import { microsoft } from "@/lib/microsoft";
 import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
+import { notifySlack, formatApplicationComplete } from "@/lib/slack";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -344,6 +345,15 @@ export async function POST(request: NextRequest) {
     });
     if (completionLogError) console.error("system_logs 100% write failed:", completionLogError);
 
+    // Slack notification (non-blocking)
+    notifySlack(formatApplicationComplete({
+      name: contactName,
+      businessName: businessName || legalName,
+      amountNeeded,
+      email,
+      phone: mobilePhone || businessPhone,
+    })).catch(() => {});
+
     // Fire Meta CAPI CompleteRegistration at 100%
     sendEvent({
       eventName: "CompleteRegistration",
@@ -453,11 +463,7 @@ export async function POST(request: NextRequest) {
       // Send applicant confirmation email with PDF copy attached
       if (email) {
         try {
-          const summaryHtml = buildApplicationSummaryEmail({
-            firstName, lastName, businessName, legalName, dba, industry,
-            bizAddress, bizCity, bizState, bizZip, ein, creditScore,
-            amountNeeded, useOfFunds, monthlyDeposits, ownership,
-          });
+          const summaryHtml = buildApplicationSummaryEmail({ firstName });
           await microsoft.sendMail({
             to: email,
             subject: "Your SRT Agency Application — Received",
@@ -471,17 +477,20 @@ export async function POST(request: NextRequest) {
           });
           console.log("[100%] Confirmation email with PDF sent to", email);
         } catch (err) {
-          console.error("[100%] Microsoft email failed, falling back to GHL:", err instanceof Error ? err.message : err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error("[100%] Microsoft email failed, falling back to GHL:", errMsg);
+          systemAlert(
+            "Email Delivery Failed",
+            `Microsoft 365 could not send confirmation email to ${email}: ${errMsg.slice(0, 200)}`,
+            "leads/application",
+            "warning"
+          ).catch(() => {});
           // Fallback to GHL email (no attachment)
           if (contactId) {
             await ghl.sendEmail(
               contactId,
               "Your SRT Agency Application — Received",
-              buildApplicationSummaryEmail({
-                firstName, lastName, businessName, legalName, dba, industry,
-                bizAddress, bizCity, bizState, bizZip, ein, creditScore,
-                amountNeeded, useOfFunds, monthlyDeposits, ownership,
-              })
+              buildApplicationSummaryEmail({ firstName })
             ).catch(err2 => console.error("[100%] GHL email fallback also failed:", err2));
           }
         }
@@ -559,30 +568,8 @@ function buildCustomFieldUpdates(body: Record<string, unknown>): Array<{ key: st
 }
 
 function buildApplicationSummaryEmail(data: {
-  firstName?: string; lastName?: string; businessName?: string; legalName?: string;
-  dba?: string; industry?: string; bizAddress?: string; bizCity?: string;
-  bizState?: string; bizZip?: string; ein?: string; creditScore?: string;
-  amountNeeded?: string; useOfFunds?: string; monthlyDeposits?: string; ownership?: string;
+  firstName?: string;
 }): string {
-  const name = [data.firstName, data.lastName].filter(Boolean).join(" ") || "Applicant";
-  const rows: Array<[string, string]> = [];
-  const add = (label: string, val?: string) => { if (val?.trim()) rows.push([label, val.trim()]); };
-
-  add("Business Name", data.businessName || data.legalName);
-  add("DBA", data.dba);
-  add("Industry", data.industry);
-  add("Address", [data.bizAddress, data.bizCity, data.bizState, data.bizZip].filter(Boolean).join(", "));
-  add("EIN", data.ein);
-  add("Credit Score Range", data.creditScore);
-  add("Amount Requested", data.amountNeeded);
-  add("Use of Funds", data.useOfFunds);
-  add("Avg. Monthly Deposits", data.monthlyDeposits);
-  add("Ownership %", data.ownership);
-
-  const tableRows = rows.map(([label, val]) =>
-    `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#666;font-weight:600">${label}</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${val}</td></tr>`
-  ).join("");
-
   return `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
   <div style="background:#0d1b2a;padding:28px 24px;text-align:center">
@@ -591,7 +578,7 @@ function buildApplicationSummaryEmail(data: {
         <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:14px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
         <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:20px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
         <td style="vertical-align:bottom;padding-right:8px"><div style="width:5px;height:26px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
-        <td style="vertical-align:bottom"><span style="font-size:20px;font-weight:700;color:#ffffff;line-height:1">SRT Agency</span></td>
+        <td style="vertical-align:bottom"><span style="font-size:20px;font-weight:700;color:#ffffff;line-height:1">Scaling Revenue Together</span></td>
       </tr>
     </table>
     <p style="color:#a0c0b0;margin:6px 0 0;font-size:13px">Business Funding Solutions</p>
@@ -600,8 +587,6 @@ function buildApplicationSummaryEmail(data: {
     <p style="font-size:15px">Hi ${data.firstName || "there"},</p>
     <p style="font-size:14px;line-height:1.6">Thank you for completing your application! We've received everything and your dedicated underwriter is already reviewing it.</p>
     <p style="font-size:14px;line-height:1.6"><strong>A copy of your application is attached to this email as a PDF.</strong></p>
-    <h2 style="font-size:16px;border-bottom:2px solid #0d1b2a;padding-bottom:8px;margin-top:24px">Your Application Summary</h2>
-    <table style="width:100%;border-collapse:collapse;font-size:14px">${tableRows}</table>
     <div style="background:#f8f9fa;border-left:4px solid #e8792b;padding:16px;margin:24px 0;border-radius:4px">
       <h3 style="margin:0 0 8px;font-size:15px;color:#e8792b">Next Step: Bank Statements Needed</h3>
       <p style="margin:0;font-size:14px;line-height:1.6">To move forward with your funding, please send us your <strong>last 3 months of business bank statements</strong>. You can:</p>
@@ -622,7 +607,7 @@ function buildApplicationSummaryEmail(data: {
           <td style="vertical-align:bottom"><span style="font-size:16px;font-weight:700;color:#0d1b2a;line-height:1">SRT Agency</span></td>
         </tr></table>
       </td></tr>
-      <tr><td style="padding-bottom:2px"><span style="font-size:16px;font-weight:700;color:#e8792b">Matthew Gabriel</span></td></tr>
+      <tr><td style="padding-bottom:2px"><span style="font-size:16px;font-weight:700;color:#e8792b">Matthew Garcia</span></td></tr>
       <tr><td style="padding-bottom:8px"><span style="font-size:12px;color:#666666">Senior Capital Specialist</span></td></tr>
       <tr><td style="padding-bottom:4px">
         <span style="font-size:12px;color:#666666">T: </span><a href="tel:+17862822937" style="font-size:12px;color:#333333;text-decoration:none">(786) 282-2937</a>

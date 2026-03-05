@@ -8,6 +8,7 @@ import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } f
 import { enrollContact } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
+import { notifySlack, formatLeadCapture } from "@/lib/slack";
 
 // Cache the "New Lead" stage ID across requests (same serverless instance)
 let cachedNewLeadStageId: string | null = null;
@@ -233,7 +234,10 @@ export async function POST(request: NextRequest) {
       },
     }).catch((err) => console.error("[Meta CAPI] Lead event error:", err));
 
-    // 8. Enroll in email sequences (non-blocking)
+    // 8. Slack notification (non-blocking)
+    notifySlack(formatLeadCapture({ name, email, phone, message })).catch(() => {});
+
+    // 9. Enroll in email sequences (non-blocking)
     if (email && contactId) {
       enrollContact("website-lead-nurture", contactId, email, `${firstName} ${lastName}`.trim())
         .catch((err) => console.error("[Sequence] website-lead-nurture enrollment error:", err));
