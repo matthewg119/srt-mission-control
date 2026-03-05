@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
       dba, industry, bizAddress, bizCity, bizState, bizZip, ein,
       incDate, startMonth, startYear, mobilePhone, dob, creditScore, ownership,
       amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
+      ssn4, homeAddress,
       applicationCompletionPct, applicationStage, source,
       _fbc, _fbp, eventId, sourceUrl,
       signature, signatureName, website,
@@ -259,6 +260,9 @@ export async function POST(request: NextRequest) {
           { key: "use_of_funds", value: useOfFunds || "" },
           { key: "avg_monthly_bank_balance", value: monthlyDeposits || "" },
           { key: "existing_loans", value: existingLoans?.includes("Yes") ? "Yes" : "No" },
+          { key: "owner_ssn_last4", value: ssn4 || "" },
+          { key: "owner_dob", value: dob || "" },
+          { key: "owner_home_address", value: homeAddress || "" },
           { key: "application_source", value: source || "Website - Application Form" },
           { key: "submission_date", value: new Date().toISOString().split("T")[0] },
         ].filter((f) => f.value),
@@ -385,64 +389,78 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── Non-blocking: PDF (with signature) → OneDrive → GHL tag ──
-    (async () => {
+    // ── PDF → OneDrive → GHL note → Confirmation email ──
+    // Must run BEFORE returning response — Vercel kills serverless functions after response
+    const safeName = (businessName || legalName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
+    try {
+      const pdfBuffer = generateApplicationPDF({
+        firstName, lastName, email, businessPhone, mobilePhone,
+        businessName, legalName, dba, industry, ein,
+        bizAddress, bizCity, bizState, bizZip,
+        incDate, dob, creditScore, ownership,
+        amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
+        signature: signature || undefined,
+        signatureName: signatureName || contactName,
+      });
+
+      // Create OneDrive folder + upload PDF
       try {
-        const pdfBuffer = generateApplicationPDF({
-          firstName, lastName, email, businessPhone, mobilePhone,
-          businessName, legalName, dba, industry, ein,
-          bizAddress, bizCity, bizState, bizZip,
-          incDate, dob, creditScore, ownership,
-          amountNeeded, useOfFunds, monthlyDeposits, existingLoans, notes,
-          signature: signature || undefined,
-          signatureName: signatureName || contactName,
+        await microsoft.createDriveFolder("Working Files");
+        await microsoft.createDriveFolder(safeName, "Working Files");
+        await microsoft.uploadDriveFile(
+          `Working Files/${safeName}`,
+          `Application - ${safeName}.pdf`,
+          pdfBuffer,
+          "application/pdf"
+        );
+        console.log(`[100%] PDF uploaded to OneDrive: Working Files/${safeName}`);
+
+        // Log success to system_logs (system_alerts has schema cache issues)
+        await supabaseAdmin.from("system_logs").insert({
+          event_type: "application_pdf",
+          description: `PDF uploaded: Working Files/${safeName}/Application - ${safeName}.pdf`,
+          metadata: { contactId, businessName: safeName },
         });
+      } catch (err) {
+        console.error("[100%] OneDrive upload failed:", err instanceof Error ? err.message : err);
+        await supabaseAdmin.from("system_logs").insert({
+          event_type: "application_error",
+          description: `[100%] OneDrive upload failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown"}`,
+          metadata: { contactId, error: err instanceof Error ? err.message : String(err) },
+        });
+      }
 
-        const safeName = (businessName || legalName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
+      // Add GHL note with OneDrive link
+      if (contactId) {
+        await ghl.addNote(contactId, `Application PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`).catch(() => {});
+      }
 
-        // Create OneDrive folder + upload PDF
+      // Send applicant confirmation email
+      if (contactId && email) {
         try {
-          await microsoft.createDriveFolder("Working Files");
-          await microsoft.createDriveFolder(safeName, "Working Files");
-          await microsoft.uploadDriveFile(
-            `Working Files/${safeName}`,
-            `Application - ${safeName}.pdf`,
-            pdfBuffer,
-            "application/pdf"
-          );
-          console.log(`[100%] PDF uploaded to OneDrive: Working Files/${safeName}`);
-        } catch (err) {
-          console.error("[100%] OneDrive upload failed:", err instanceof Error ? err.message : err);
-        }
-
-        // Add GHL note with OneDrive link (GHL v2 REST API doesn't support document uploads)
-        if (contactId) {
-          ghl.addNote(contactId, `Application PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`).catch(() => {});
-        }
-
-        // Send applicant confirmation email with application summary + bank statement request
-        if (contactId && email) {
           const summaryHtml = buildApplicationSummaryEmail({
             firstName, lastName, businessName, legalName, dba, industry,
             bizAddress, bizCity, bizState, bizZip, ein, creditScore,
             amountNeeded, useOfFunds, monthlyDeposits, ownership,
           });
-          ghl.sendEmail(
+          await ghl.sendEmail(
             contactId,
             "Your SRT Agency Application — Received",
             summaryHtml
-          ).catch(err => console.error("[100%] Confirmation email failed:", err));
+          );
+          console.log("[100%] Confirmation email sent to", email);
+        } catch (err) {
+          console.error("[100%] Confirmation email failed:", err instanceof Error ? err.message : err);
         }
-      } catch (err) {
-        console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
-        systemAlert(
-          "Application Post-Processing Failed",
-          `PDF/OneDrive/Email failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown error"}`,
-          "leads/application",
-          "error"
-        ).catch(() => {});
       }
-    })();
+    } catch (err) {
+      console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
+      await supabaseAdmin.from("system_logs").insert({
+        event_type: "application_error",
+        description: `[100%] Post-processing failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown"}`,
+        metadata: { contactId, error: err instanceof Error ? err.message : String(err) },
+      });
+    }
 
     return NextResponse.json(
       { success: true, message: completionWarnings.length > 0 ? "Application submitted with warnings" : "Application submitted successfully", contactId, opportunityId: opportunityId || finalCacheId, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
