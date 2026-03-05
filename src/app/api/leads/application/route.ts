@@ -162,9 +162,9 @@ export async function POST(request: NextRequest) {
         },
       }).catch((err) => console.error("[Meta CAPI] Application Lead error:", err));
 
-      // Pre-create OneDrive folder so bank statement uploads land in the right place
-      if (businessName || contactName) {
-        const safeName = (businessName || contactName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
+      // Pre-create OneDrive folder — only when business name is provided
+      if (businessName) {
+        const safeName = businessName.replace(/[<>:"/\\|?*]/g, "_");
         microsoft.createDriveFolder("Working Files")
           .then(() => microsoft.createDriveFolder(safeName, "Working Files"))
           .then(() => console.log(`[25%] OneDrive folder created: Working Files/${safeName}`))
@@ -563,30 +563,61 @@ function buildApplicationSummaryEmail(data: {
   ).join("");
 
   return `
-<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
-  <div style="background:#1a1a2e;padding:24px;text-align:center">
-    <h1 style="color:#fff;margin:0;font-size:22px">SRT Agency</h1>
-    <p style="color:#a0a0c0;margin:4px 0 0">Business Funding Solutions</p>
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
+  <div style="background:#0d1b2a;padding:28px 24px;text-align:center">
+    <table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto">
+      <tr>
+        <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:14px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
+        <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:20px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
+        <td style="vertical-align:bottom;padding-right:8px"><div style="width:5px;height:26px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
+        <td style="vertical-align:bottom"><span style="font-size:20px;font-weight:700;color:#ffffff;line-height:1">SRT Agency</span></td>
+      </tr>
+    </table>
+    <p style="color:#a0c0b0;margin:6px 0 0;font-size:13px">Business Funding Solutions</p>
   </div>
-  <div style="padding:24px">
-    <p>Hi ${data.firstName || "there"},</p>
-    <p>Thank you for completing your application! We've received everything and our team is reviewing it now.</p>
-    <h2 style="font-size:16px;border-bottom:2px solid #1a1a2e;padding-bottom:8px">Your Application Summary</h2>
+  <div style="padding:28px 24px">
+    <p style="font-size:15px">Hi ${data.firstName || "there"},</p>
+    <p style="font-size:14px;line-height:1.6">Thank you for completing your application! We've received everything and your dedicated underwriter is already reviewing it.</p>
+    <p style="font-size:14px;line-height:1.6"><strong>A copy of your application is attached to this email as a PDF.</strong></p>
+    <h2 style="font-size:16px;border-bottom:2px solid #0d1b2a;padding-bottom:8px;margin-top:24px">Your Application Summary</h2>
     <table style="width:100%;border-collapse:collapse;font-size:14px">${tableRows}</table>
-    <div style="background:#f8f9fa;border-left:4px solid #e67e22;padding:16px;margin:24px 0;border-radius:4px">
-      <h3 style="margin:0 0 8px;font-size:15px;color:#e67e22">Next Step: Bank Statements Needed</h3>
-      <p style="margin:0;font-size:14px">To move forward with your funding, please send us your <strong>last 3 months of business bank statements</strong>. You can:</p>
-      <ul style="font-size:14px;padding-left:20px">
+    <div style="background:#f8f9fa;border-left:4px solid #e8792b;padding:16px;margin:24px 0;border-radius:4px">
+      <h3 style="margin:0 0 8px;font-size:15px;color:#e8792b">Next Step: Bank Statements Needed</h3>
+      <p style="margin:0;font-size:14px;line-height:1.6">To move forward with your funding, please send us your <strong>last 3 months of business bank statements</strong>. You can:</p>
+      <ul style="font-size:14px;padding-left:20px;line-height:1.8">
         <li>Reply to this email with your statements attached</li>
-        <li>Upload them at <a href="https://srtagency.com/apply" style="color:#1a1a2e">srtagency.com/apply</a></li>
+        <li><a href="https://api.whatsapp.com/send/?phone=7862822937" style="color:#25D366;font-weight:600">Send via WhatsApp</a></li>
       </ul>
     </div>
-    <p style="font-size:14px;color:#666">If you have any questions, reply to this email or call us directly. We're here to help you get funded.</p>
-    <p>Best regards,<br><strong>The SRT Agency Team</strong></p>
+    <p style="font-size:14px;color:#666;line-height:1.6">Questions? Reply to this email or call us directly. We're here to help you get funded.</p>
   </div>
-  <div style="background:#f5f5f5;padding:16px;text-align:center;font-size:12px;color:#999">
-    <p style="margin:0">SRT Agency | Business Funding Solutions</p>
-    <p style="margin:4px 0 0"><a href="https://srtagency.com" style="color:#666">srtagency.com</a></p>
+  <div style="padding:0 24px 24px">
+    <table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#333333">
+      <tr><td style="padding-bottom:10px">
+        <table cellpadding="0" cellspacing="0" border="0"><tr>
+          <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:14px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
+          <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:20px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
+          <td style="vertical-align:bottom;padding-right:8px"><div style="width:5px;height:26px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
+          <td style="vertical-align:bottom"><span style="font-size:16px;font-weight:700;color:#0d1b2a;line-height:1">SRT Agency</span></td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="padding-bottom:2px"><span style="font-size:16px;font-weight:700;color:#e8792b">Matthew Gabriel</span></td></tr>
+      <tr><td style="padding-bottom:8px"><span style="font-size:12px;color:#666666">Senior Capital Specialist</span></td></tr>
+      <tr><td style="padding-bottom:4px">
+        <span style="font-size:12px;color:#666666">T: </span><a href="tel:+17862822937" style="font-size:12px;color:#333333;text-decoration:none">(786) 282-2937</a>
+        <span style="font-size:12px;color:#cccccc"> | </span>
+        <span style="font-size:12px;color:#666666">F: </span><span style="font-size:12px;color:#333333">(252) 556-1444</span>
+      </td></tr>
+      <tr><td style="padding-top:10px;padding-bottom:12px"><span style="font-size:11px;font-weight:700;color:#0d1b2a;text-transform:uppercase;letter-spacing:2px">Scaling Revenue Together</span></td></tr>
+      <tr><td style="padding-bottom:14px">
+        <table cellpadding="0" cellspacing="0" border="0"><tr><td style="background:#2ee6a8;border-radius:5px;padding:10px 24px">
+          <a href="https://srtagency.com/apply" style="color:#0d1b2a;text-decoration:none;font-size:13px;font-weight:700;letter-spacing:1px">Apply Now &#8594;</a>
+        </td></tr></table>
+      </td></tr>
+    </table>
+  </div>
+  <div style="padding:16px 24px;border-top:1px solid #eee">
+    <p style="font-size:8px;color:#aaaaaa;line-height:1.4;margin:0;max-width:500px"><span style="font-weight:700;color:#888888">CONFIDENTIALITY NOTICE:</span> This e-mail and any files or previous e-mail messages attached to it, may contain proprietary and confidential information. If you are not an intended recipient, you are hereby notified that any disclosure or use of this information obtained is STRICTLY PROHIBITED. If you have received this email in error, please notify us by replying to the sender of the e-mail and destroy the original transmission and its attachments without reading them or saving them. Thank you.</p>
   </div>
 </div>`.trim();
 }
