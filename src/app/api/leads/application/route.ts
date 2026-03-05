@@ -435,22 +435,40 @@ export async function POST(request: NextRequest) {
         await ghl.addNote(contactId, `Application PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`).catch(() => {});
       }
 
-      // Send applicant confirmation email
-      if (contactId && email) {
+      // Send applicant confirmation email with PDF copy attached
+      if (email) {
         try {
           const summaryHtml = buildApplicationSummaryEmail({
             firstName, lastName, businessName, legalName, dba, industry,
             bizAddress, bizCity, bizState, bizZip, ein, creditScore,
             amountNeeded, useOfFunds, monthlyDeposits, ownership,
           });
-          await ghl.sendEmail(
-            contactId,
-            "Your SRT Agency Application — Received",
-            summaryHtml
-          );
-          console.log("[100%] Confirmation email sent to", email);
+          await microsoft.sendMail({
+            to: email,
+            subject: "Your SRT Agency Application — Received",
+            body: summaryHtml,
+            isHtml: true,
+            attachments: [{
+              name: `Application - ${safeName}.pdf`,
+              contentType: "application/pdf",
+              contentBytes: pdfBuffer.toString("base64"),
+            }],
+          });
+          console.log("[100%] Confirmation email with PDF sent to", email);
         } catch (err) {
-          console.error("[100%] Confirmation email failed:", err instanceof Error ? err.message : err);
+          console.error("[100%] Microsoft email failed, falling back to GHL:", err instanceof Error ? err.message : err);
+          // Fallback to GHL email (no attachment)
+          if (contactId) {
+            await ghl.sendEmail(
+              contactId,
+              "Your SRT Agency Application — Received",
+              buildApplicationSummaryEmail({
+                firstName, lastName, businessName, legalName, dba, industry,
+                bizAddress, bizCity, bizState, bizZip, ein, creditScore,
+                amountNeeded, useOfFunds, monthlyDeposits, ownership,
+              })
+            ).catch(err2 => console.error("[100%] GHL email fallback also failed:", err2));
+          }
         }
       }
     } catch (err) {

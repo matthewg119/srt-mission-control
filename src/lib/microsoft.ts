@@ -283,7 +283,7 @@ export const microsoft = {
       body: JSON.stringify({
         name: folderName,
         folder: {},
-        "@microsoft.graph.conflictBehavior": "useExisting",
+        "@microsoft.graph.conflictBehavior": "replace",
       }),
     });
 
