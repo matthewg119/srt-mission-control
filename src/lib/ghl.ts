@@ -108,8 +108,17 @@ class GHLClient {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.warn("[GHL] createContact failed:", errMsg.slice(0, 500));
-      // GHL duplicate error often contains the contact ID in the response
-      const idMatch = errMsg.match(/"id"\s*:\s*"([a-zA-Z0-9]+)"/);
+      // Parse GHL duplicate error: extract meta.contactId from JSON body
+      // GHL returns: {"statusCode":400,"message":"...duplicated contacts.","meta":{"contactId":"xxx"}}
+      const jsonStart = errMsg.indexOf("{");
+      if (jsonStart !== -1) {
+        try {
+          const body = JSON.parse(errMsg.slice(jsonStart));
+          if (body?.meta?.contactId) return { contactId: body.meta.contactId, isNew: false };
+        } catch { /* fall through to regex */ }
+      }
+      // Legacy regex fallback
+      const idMatch = errMsg.match(/"(?:contact)?[Ii]d"\s*:\s*"([a-zA-Z0-9]+)"/);
       if (idMatch) return { contactId: idMatch[1], isNew: false };
     }
 

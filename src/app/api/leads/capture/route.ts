@@ -73,10 +73,10 @@ export async function POST(request: NextRequest) {
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(" ") || "";
 
-    // 1. Create or find contact in GHL
+    // 1. Create or find contact in GHL (handles duplicates automatically)
     let contactId: string;
     try {
-      const contactData = await ghl.createContact({
+      const { contactId: id } = await ghl.createOrFindContact({
         firstName,
         lastName,
         email: email || undefined,
@@ -84,40 +84,19 @@ export async function POST(request: NextRequest) {
         source: source || "Website - srtagency.com",
         tags: ["website-lead"],
       });
-
-      const contact = contactData.contact as Record<string, unknown> | undefined;
-      contactId = (contact?.id as string) || (contactData.id as string);
-
-      // GHL returns existing contact if duplicate — that's fine
-      if (!contactId && contactData.meta) {
-        contactId = ((contactData.meta as Record<string, unknown>).id as string) || "";
-      }
+      contactId = id;
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error("Contact creation error:", errMsg);
-
-      if (email) {
-        const searchResult = await ghl.searchContacts(email);
-        const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
-        if (contacts.length > 0) {
-          contactId = contacts[0].id as string;
-        } else {
-          return NextResponse.json(
-            { error: "Failed to create contact", details: errMsg },
-            { status: 500, headers: corsHeaders }
-          );
-        }
-      } else {
-        await systemAlert(
-          "GHL Contact Creation Failed",
-          `Lead from ${name} (${email || phone}) could not be created in GHL: ${errMsg}`,
-          "leads/capture"
-        );
-        return NextResponse.json(
-          { error: "Failed to create contact", details: errMsg },
-          { status: 500, headers: corsHeaders }
-        );
-      }
+      await systemAlert(
+        "GHL Contact Creation Failed",
+        `Lead from ${name} (${email || phone}) could not be created in GHL: ${errMsg}`,
+        "leads/capture"
+      );
+      return NextResponse.json(
+        { error: "Failed to create contact", details: errMsg },
+        { status: 500, headers: corsHeaders }
+      );
     }
 
     // 2. Look up "New Lead" stage ID (cached across requests)
