@@ -6,6 +6,9 @@ import { PipelineOverviewCard } from "./pipeline-overview-card";
 import { MessageSentCard } from "./message-sent-card";
 import { LenderListCard } from "./lender-list-card";
 import { ActivityFeedCard } from "./activity-feed-card";
+import { SOSCard } from "./sos-card";
+import { LenderMatchCard } from "./lender-match-card";
+import { SubmissionCard } from "./submission-card";
 
 interface ToolResult {
   tool: string;
@@ -50,6 +53,15 @@ export function ToolCard({ toolResult, onAction }: Props) {
 
     case "get_lenders":
       return <LenderListCard data={data as Record<string, unknown>} />;
+
+    case "underwrite_deal":
+      return <SOSCard data={data as Record<string, unknown>} />;
+
+    case "match_lenders":
+      return <LenderMatchCard data={data as Record<string, unknown>} onAction={onAction} />;
+
+    case "submit_to_lender":
+      return <SubmissionCard data={data as Record<string, unknown>} />;
 
     default:
       return null;
