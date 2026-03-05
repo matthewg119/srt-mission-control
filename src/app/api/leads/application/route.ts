@@ -98,39 +98,39 @@ export async function POST(request: NextRequest) {
         contactId = result.contactId;
       } catch (error) {
         console.error("Contact creation failed:", error instanceof Error ? error.message : error);
-        await systemAlert(
+        systemAlert(
           "GHL Contact Creation Failed",
-          `Application contact could not be created in GHL: ${error instanceof Error ? error.message : "Unknown error"}`,
+          `Application contact could not be created in GHL: ${error instanceof Error ? error.message : "Unknown error"}. Lead data saved locally.`,
           "leads/application"
-        );
-        return NextResponse.json(
-          { error: "Failed to create contact", details: error instanceof Error ? error.message : "Unknown error" },
-          { status: 500, headers: corsHeaders }
-        );
+        ).catch(() => {});
+        // Don't return 500 — save the lead locally instead of losing it completely
       }
 
       // Create opportunity — "Application Started"
       const ghlWarnings: string[] = [];
-      try {
-        const stageId = await lookupNewLeadStageId();
-        if (stageId) {
-          const oppData = await ghl.createOpportunity({
-            pipelineId: NEW_DEALS_PIPELINE.id,
-            pipelineStageId: stageId,
-            contactId,
-            name: `${contactName} - Application Started`.trim(),
-            status: "open",
-            source: source || "Website - Application",
-          });
-          const opp = oppData.opportunity as Record<string, unknown> | undefined;
-          opportunityId = (opp?.id as string) || (oppData.id as string) || null;
-        } else {
-          ghlWarnings.push("GHL stage lookup failed — lead saved locally only");
-          console.error("CRITICAL: Could not resolve 'New Lead' stage ID");
+      if (!contactId) ghlWarnings.push("GHL contact creation failed — lead saved locally only");
+      if (contactId) {
+        try {
+          const stageId = await lookupNewLeadStageId();
+          if (stageId) {
+            const oppData = await ghl.createOpportunity({
+              pipelineId: NEW_DEALS_PIPELINE.id,
+              pipelineStageId: stageId,
+              contactId,
+              name: `${contactName} - Application Started`.trim(),
+              status: "open",
+              source: source || "Website - Application",
+            });
+            const opp = oppData.opportunity as Record<string, unknown> | undefined;
+            opportunityId = (opp?.id as string) || (oppData.id as string) || null;
+          } else {
+            ghlWarnings.push("GHL stage lookup failed — lead saved locally only");
+            console.error("CRITICAL: Could not resolve 'New Lead' stage ID");
+          }
+        } catch (error) {
+          console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
+          ghlWarnings.push("GHL opportunity creation failed — lead saved locally");
         }
-      } catch (error) {
-        console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
-        ghlWarnings.push("GHL opportunity creation failed — lead saved locally");
       }
 
       // ALWAYS cache in pipeline — even if GHL failed, dashboard must show this lead
@@ -153,7 +153,7 @@ export async function POST(request: NextRequest) {
       }, { onConflict: "ghl_opportunity_id" });
 
       if (cacheError) {
-        console.warn("pipeline_cache upsert failed, retrying without ghl_contact_id:", cacheError.message);
+        console.warn("pipeline_cache upsert failed, retrying with core fields only:", cacheError.message);
         ({ error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
           ghl_opportunity_id: pipelineCacheId,
           contact_name: contactName,
@@ -161,14 +161,13 @@ export async function POST(request: NextRequest) {
           stage: "New Lead",
           pipeline_name: "New Deals",
           amount: 0,
-          updated_at: new Date().toISOString(),
         }, { onConflict: "ghl_opportunity_id" }));
-        if (cacheError) console.error("pipeline_cache write FAILED completely:", cacheError);
+        if (cacheError) console.error("pipeline_cache write FAILED completely:", cacheError.message);
       }
 
       const { error: logError } = await supabaseAdmin.from("system_logs").insert({
         event_type: "lead_capture",
-        description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})`,
+        description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})${ghlWarnings.length > 0 ? ` [${ghlWarnings.join(", ")}]` : ""}`,
         metadata: { contactId, opportunityId: opportunityId || pipelineCacheId, contactName, email, phone: businessPhone, completionPct, clientIp, clientUserAgent, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
       });
       if (logError) console.error("system_logs write failed:", logError);
@@ -191,6 +190,15 @@ export async function POST(request: NextRequest) {
           externalId: contactId || undefined,
         },
       }).catch((err) => console.error("[Meta CAPI] Application Lead error:", err));
+
+      // Pre-create OneDrive folder so bank statement uploads land in the right place
+      if (businessName || contactName) {
+        const safeName = (businessName || contactName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
+        microsoft.createDriveFolder("Working Files")
+          .then(() => microsoft.createDriveFolder(safeName, "Working Files"))
+          .then(() => console.log(`[25%] OneDrive folder created: Working Files/${safeName}`))
+          .catch((err) => console.warn("[25%] OneDrive folder pre-creation failed (non-blocking):", err instanceof Error ? err.message : err));
+      }
 
       // Enroll in application-abandoned sequence (3-min first email)
       if (email && contactId) {
@@ -334,7 +342,7 @@ export async function POST(request: NextRequest) {
     }, { onConflict: "ghl_opportunity_id" });
 
     if (finalCacheError) {
-      console.warn("pipeline_cache 100% upsert failed, retrying without ghl_contact_id:", finalCacheError.message);
+      console.warn("pipeline_cache 100% upsert failed, retrying with core fields only:", finalCacheError.message);
       ({ error: finalCacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
         ghl_opportunity_id: finalCacheId,
         contact_name: contactName,
@@ -342,9 +350,8 @@ export async function POST(request: NextRequest) {
         stage: "New Lead",
         pipeline_name: "New Deals",
         amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
-        updated_at: new Date().toISOString(),
       }, { onConflict: "ghl_opportunity_id" }));
-      if (finalCacheError) console.error("pipeline_cache 100% write FAILED completely:", finalCacheError);
+      if (finalCacheError) console.error("pipeline_cache 100% write FAILED completely:", finalCacheError.message);
     }
 
     const { error: completionLogError } = await supabaseAdmin.from("system_logs").insert({
