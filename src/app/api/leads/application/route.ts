@@ -95,6 +95,13 @@ export async function POST(request: NextRequest) {
             });
             const opp = oppData.opportunity as Record<string, unknown> | undefined;
             opportunityId = (opp?.id as string) || (oppData.id as string) || null;
+            if (opportunityId) {
+              await supabaseAdmin.from("system_logs").insert({
+                event_type: "pipeline_deal_created",
+                description: `New deal: ${contactName} → New Deals / New Lead`,
+                metadata: { contactId, opportunityId, pipeline: "New Deals", stage: "New Lead", source: "application-25%" },
+              });
+            }
           } else {
             ghlWarnings.push("GHL stage lookup failed — lead saved locally only");
             console.error("CRITICAL: Could not resolve 'New Lead' stage ID");
@@ -296,6 +303,13 @@ export async function POST(request: NextRequest) {
           });
           const opp = oppData.opportunity as Record<string, unknown> | undefined;
           opportunityId = (opp?.id as string) || (oppData.id as string) || null;
+          if (opportunityId) {
+            await supabaseAdmin.from("system_logs").insert({
+              event_type: "pipeline_deal_created",
+              description: `New deal: ${contactName} → New Deals / New Lead (100% application)`,
+              metadata: { contactId, opportunityId, pipeline: "New Deals", stage: "New Lead", source: "application-100%" },
+            });
+          }
         } else {
           completionWarnings.push("GHL stage lookup failed at 100% — lead saved locally only");
           console.error("CRITICAL: Could not resolve 'New Lead' stage ID at 100% completion");

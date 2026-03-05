@@ -121,6 +121,14 @@ export async function POST(request: NextRequest) {
         });
         const opp = oppData.opportunity as Record<string, unknown> | undefined;
         opportunityId = (opp?.id as string) || (oppData.id as string) || null;
+        // Log deal creation to activity feed
+        if (opportunityId) {
+          await supabaseAdmin.from("system_logs").insert({
+            event_type: "pipeline_deal_created",
+            description: `New deal: ${firstName} ${lastName} → New Deals / New Lead`,
+            metadata: { contactId, opportunityId, pipeline: "New Deals", stage: "New Lead" },
+          });
+        }
       } catch (error) {
         console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
         warnings.push("GHL opportunity creation failed — lead saved locally");

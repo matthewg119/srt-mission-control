@@ -67,6 +67,15 @@ export async function POST(request: NextRequest) {
           { onConflict: "ghl_opportunity_id" }
         );
 
+        // Log stage movement to activity feed
+        if (stageChanged && newStage) {
+          await supabaseAdmin.from("system_logs").insert({
+            event_type: "pipeline_stage_moved",
+            description: `Deal moved: ${contactName || "Unknown"} → ${pipelineName || "Pipeline"} / ${newStage}${previousStage ? ` (from ${previousStage})` : ""}`,
+            metadata: { opportunityId: ghlOpportunityId, fromStage: previousStage, toStage: newStage, pipelineName, contactName },
+          });
+        }
+
         // Fire automations on stage change
         if (stageChanged && pipelineName && newStage) {
           const contactId = (contact.id as string) || (opp.contactId as string) || "";
