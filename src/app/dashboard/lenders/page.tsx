@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import {
-  Building2, Plus, Pencil, Trash2, ExternalLink, Search, X, Check, Mail, Globe, Zap,
+  Building2, Plus, Pencil, Trash2, ExternalLink, Search, X, Check, Mail, Globe, Zap, Upload, ImageIcon,
 } from "lucide-react";
 
 interface Lender {
@@ -73,6 +73,8 @@ export default function LendersPage() {
   const [form, setForm] = useState<Omit<Lender, "id">>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanned, setScanned] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -87,7 +89,45 @@ export default function LendersPage() {
   const openAdd = () => {
     setEditLender(null);
     setForm(EMPTY_FORM);
+    setScanned(false);
     setShowModal(true);
+  };
+
+  const handleScan = async (file: File) => {
+    setScanning(true);
+    setScanned(false);
+    try {
+      const fd = new FormData();
+      fd.append("image", file);
+      const res = await fetch("/api/lenders/scan", { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.success && data.lender) {
+        const l = data.lender;
+        setForm((prev) => ({
+          ...prev,
+          name: l.name || prev.name,
+          min_credit_score: l.min_credit_score ?? prev.min_credit_score,
+          min_monthly_revenue: l.min_monthly_revenue ?? prev.min_monthly_revenue,
+          max_amount: l.max_amount ?? prev.max_amount,
+          min_time_in_business_months: l.min_time_in_business_months ?? prev.min_time_in_business_months,
+          max_negative_days: l.max_negative_days ?? prev.max_negative_days,
+          products: Array.isArray(l.products) && l.products.length > 0 ? l.products.filter((p: string) => PRODUCT_OPTIONS.includes(p)) : prev.products,
+          submission_email: l.submission_email || prev.submission_email,
+          portal_url: l.portal_url || prev.portal_url,
+          notes: l.notes || prev.notes,
+          tier: [1, 2, 3].includes(l.tier) ? l.tier : prev.tier,
+          response_time_days: l.response_time_days ?? prev.response_time_days,
+          submission_method: l.portal_url && l.submission_email ? "both" : l.portal_url ? "portal" : l.submission_email ? "email" : prev.submission_method,
+        }));
+        setScanned(true);
+      } else {
+        alert(data.error || "Failed to scan image");
+      }
+    } catch {
+      alert("Failed to scan rate sheet. Please try again.");
+    } finally {
+      setScanning(false);
+    }
   };
 
   const openEdit = (l: Lender) => {
@@ -365,6 +405,53 @@ export default function LendersPage() {
             </div>
 
             <div className="p-6 space-y-4">
+              {/* AI Rate Sheet Scanner */}
+              {!editLender && (
+                <div className={`rounded-lg border border-dashed p-4 transition-colors ${scanned ? "border-[rgba(0,201,167,0.4)] bg-[rgba(0,201,167,0.05)]" : "border-[rgba(255,255,255,0.15)] bg-[rgba(255,255,255,0.02)]"}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {scanning ? (
+                        <div className="h-9 w-9 rounded-lg bg-[rgba(139,92,246,0.15)] flex items-center justify-center">
+                          <div className="h-4 w-4 border-2 border-[#8b5cf6] border-t-transparent rounded-full animate-spin" />
+                        </div>
+                      ) : scanned ? (
+                        <div className="h-9 w-9 rounded-lg bg-[rgba(0,201,167,0.15)] flex items-center justify-center">
+                          <Check size={16} className="text-[#00C9A7]" />
+                        </div>
+                      ) : (
+                        <div className="h-9 w-9 rounded-lg bg-[rgba(139,92,246,0.15)] flex items-center justify-center">
+                          <ImageIcon size={16} className="text-[#8b5cf6]" />
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-sm font-medium text-white">
+                          {scanning ? "Scanning rate sheet..." : scanned ? "Scanned from image" : "Scan Rate Sheet"}
+                        </p>
+                        <p className="text-[11px] text-[rgba(255,255,255,0.4)]">
+                          {scanning ? "AI is extracting lender specs" : scanned ? "Fields populated — review and adjust below" : "Upload a lender spec sheet to auto-fill fields"}
+                        </p>
+                      </div>
+                    </div>
+                    {!scanning && (
+                      <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[rgba(139,92,246,0.15)] text-[#8b5cf6] text-xs font-medium cursor-pointer hover:bg-[rgba(139,92,246,0.25)] transition-colors">
+                        <Upload size={13} />
+                        {scanned ? "Re-scan" : "Upload Image"}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleScan(file);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Name */}
               <div>
                 <label className="text-xs text-[rgba(255,255,255,0.5)] block mb-1">Lender Name *</label>
