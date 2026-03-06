@@ -1,16 +1,11 @@
 import {
-  LayoutDashboard,
-  Kanban,
-  Settings,
-  Mail,
-  FileText,
-  ClipboardCheck,
-  Building2,
-  LayoutGrid,
-  Mails,
   Brain,
-  GitFork,
-  Plug,
+  Kanban,
+  CheckSquare,
+  Send,
+  Building2,
+  Zap,
+  Settings,
 } from "lucide-react";
 
 export interface NavSection {
@@ -21,34 +16,24 @@ export interface NavSection {
 export interface NavItem {
   label: string;
   href: string;
-  icon: typeof LayoutDashboard;
+  icon: typeof Brain;
 }
 
 export const navSections: NavSection[] = [
   {
     label: "Main",
     items: [
-      { label: "Command Center", href: "/dashboard", icon: LayoutDashboard },
+      { label: "BrainHeart", href: "/dashboard", icon: Brain },
       { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
-      { label: "Brain Trust", href: "/dashboard/brain-trust", icon: Brain },
-      { label: "Email Agents", href: "/dashboard/email-agents", icon: Mail },
-    ],
-  },
-  {
-    label: "Operations",
-    items: [
-      { label: "Templates", href: "/dashboard/templates", icon: FileText },
-      { label: "Sequences", href: "/dashboard/sequences", icon: Mails },
-      { label: "Workflows", href: "/dashboard/workflows", icon: GitFork },
-      { label: "Systems", href: "/dashboard/systems", icon: LayoutGrid },
+      { label: "Tasks", href: "/dashboard/tasks", icon: CheckSquare },
+      { label: "Submissions", href: "/dashboard/email-agents", icon: Send },
     ],
   },
   {
     label: "System",
     items: [
       { label: "Lenders", href: "/dashboard/lenders", icon: Building2 },
-      { label: "Checklist", href: "/dashboard/checklist", icon: ClipboardCheck },
-      { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
+      { label: "Automations", href: "/dashboard/automations", icon: Zap },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],
   },

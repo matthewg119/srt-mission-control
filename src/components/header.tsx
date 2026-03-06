@@ -21,17 +21,12 @@ interface SystemAlert {
 }
 
 const titleMap: Record<string, string> = {
-  "/dashboard": "Command Center",
+  "/dashboard": "BrainHeart",
   "/dashboard/pipeline": "Pipeline",
-  "/dashboard/brain-trust": "Brain Trust",
-  "/dashboard/email-agents": "Email Agents",
-  "/dashboard/templates": "Templates",
-  "/dashboard/sequences": "Sequences",
-  "/dashboard/workflows": "Workflows",
-  "/dashboard/systems": "Systems",
+  "/dashboard/tasks": "Tasks",
+  "/dashboard/email-agents": "Submissions",
   "/dashboard/lenders": "Lenders",
-  "/dashboard/checklist": "Checklist",
-  "/dashboard/integrations": "Integrations",
+  "/dashboard/automations": "Automations",
   "/dashboard/settings": "Settings",
 };
 

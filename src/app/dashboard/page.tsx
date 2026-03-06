@@ -1,9 +1,9 @@
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { formatRelativeTime } from "@/lib/utils";
-import { CommandCenter } from "@/components/command-center";
+import { BrainHeartCommandCenter } from "@/components/brainheart-command-center";
 
-export const metadata = { title: "Command Center | SRT Mission Control" };
+export const metadata = { title: "BrainHeart | SRT Mission Control" };
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -21,5 +21,5 @@ export default async function DashboardPage() {
     relativeTime: formatRelativeTime(l.created_at as string),
   }));
 
-  return <CommandCenter userName={userName} recentActivity={recentActivity} />;
+  return <BrainHeartCommandCenter userName={userName} recentActivity={recentActivity} />;
 }

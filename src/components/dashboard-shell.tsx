@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/sidebar";
 import { Header } from "@/components/header";
+import { ChatPopup } from "@/components/chat-popup";
 
 interface DashboardShellUser {
   name?: string | null;
@@ -38,6 +39,9 @@ export function DashboardShell({ user, children }: DashboardShellProps) {
 
         <div className={`flex-1 overflow-hidden ${pathname === "/dashboard" ? "" : "overflow-y-auto p-6"}`}>{children}</div>
       </main>
+
+      {/* BrainHeart chat popup on all pages */}
+      {pathname !== "/dashboard" && <ChatPopup />}
     </div>
   );
 }
