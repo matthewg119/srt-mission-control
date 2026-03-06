@@ -5,6 +5,10 @@ import { runConversationWithTools, buildSystemPrompt, isAIConfigured } from "@/l
 
 export const dynamic = "force-dynamic";
 
+// Dedup guard: prevent processing same event twice (Slack retries)
+const processedEvents = new Set<string>();
+const MAX_PROCESSED = 1000;
+
 // Agent system prompts by channel
 const AGENT_PROMPTS: Record<string, string> = {
   brainheart: `You are BrainHeart — the CEO's AI partner at SRT Agency. You have full context of all operations. You create tasks, monitor deals, send reports, and give strategic advice. Be direct, proactive, and action-oriented. When asked about status, always check real data with your tools.`,
@@ -55,8 +59,14 @@ export async function POST(request: NextRequest) {
     if (payload.type === "event_callback") {
       const event = payload.event;
 
-      // Ignore bot messages to prevent loops
-      if (event.bot_id || event.subtype === "bot_message") {
+      // Ignore bot messages to prevent loops (multiple checks for safety)
+      if (event.bot_id || event.subtype === "bot_message" || event.subtype === "message_changed" || event.subtype === "message_deleted") {
+        return NextResponse.json({ ok: true });
+      }
+
+      // Ignore messages from our own bot user
+      const botUserId = process.env.SLACK_BOT_USER_ID || "";
+      if (botUserId && event.user === botUserId) {
         return NextResponse.json({ ok: true });
       }
 
@@ -65,9 +75,18 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      // Dedup: skip if we already processed this event
+      const eventId = event.client_msg_id || event.ts || "";
+      if (eventId && processedEvents.has(eventId)) {
+        return NextResponse.json({ ok: true });
+      }
+      if (eventId) {
+        processedEvents.add(eventId);
+        if (processedEvents.size > MAX_PROCESSED) processedEvents.clear();
+      }
+
       const channel = event.channel as string;
       const userText = event.text as string;
-      const threadTs = event.thread_ts || event.ts;
 
       if (!userText || userText.trim().length === 0) {
         return NextResponse.json({ ok: true });
@@ -75,13 +94,13 @@ export async function POST(request: NextRequest) {
 
       // Check AI configured
       if (!isAIConfigured()) {
-        await slack.postThreadReply(channel, threadTs, "AI is not configured. Please set ANTHROPIC_API_KEY.");
+        await slack.postMessage(channel, "AI is not configured. Please set ANTHROPIC_API_KEY.");
         return NextResponse.json({ ok: true });
       }
 
       // Determine which agent to use
       const agentType = getAgentType(channel);
-      const conversationId = `slack-${channel}-${threadTs}`;
+      const conversationId = `slack-${channel}`;
 
       // Load conversation history
       let history: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -119,8 +138,8 @@ export async function POST(request: NextRequest) {
         reply = `_[${toolSummary}]_\n\n${response}`;
       }
 
-      // Send reply in thread
-      await slack.postThreadReply(channel, threadTs, reply);
+      // Send reply directly in channel
+      await slack.postMessage(channel, reply);
 
       // Save conversation (best-effort)
       try {
