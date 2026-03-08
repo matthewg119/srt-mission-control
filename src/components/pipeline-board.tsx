@@ -7,11 +7,10 @@ import { formatCurrency } from "@/lib/utils";
 
 interface Deal {
   id: string;
-  ghl_opportunity_id: string;
   contact_name: string;
   business_name: string;
   stage: string;
-  pipeline_name?: string;
+  pipeline?: string;
   amount: number | null;
   assigned_to: string | null;
   last_activity: string | null;
@@ -28,29 +27,19 @@ const PIPELINE_TABS = [
 ] as const;
 
 export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
-  const [deals, setDeals] = useState<Deal[]>(initialDeals);
-  const [syncing, setSyncing] = useState(false);
+  const [deals] = useState<Deal[]>(initialDeals);
   const [activeTab, setActiveTab] = useState<"active" | "new">("active");
 
   const currentPipeline = PIPELINE_TABS.find((t) => t.key === activeTab)!.pipeline;
 
-  // Filter deals by pipeline — use pipeline_name if available, otherwise match by stage names
+  // Filter deals by pipeline
   const pipelineDeals = deals.filter((d) => {
-    if (d.pipeline_name) return d.pipeline_name === currentPipeline.name;
+    if (d.pipeline) return d.pipeline === currentPipeline.name;
     return currentPipeline.stages.some((s) => s.name === d.stage);
   });
 
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const res = await fetch("/api/ghl/sync", { method: "POST" });
-      if (res.ok) {
-        window.location.reload();
-      }
-    } catch {
-      // Error handling
-    }
-    setSyncing(false);
+  const handleRefresh = () => {
+    window.location.reload();
   };
 
   const getDaysInStage = (lastActivity: string | null): number => {
@@ -61,12 +50,12 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
 
   // Counts for tab badges
   const newDealsCount = deals.filter((d) => {
-    if (d.pipeline_name) return d.pipeline_name === NEW_DEALS_PIPELINE.name;
+    if (d.pipeline) return d.pipeline === NEW_DEALS_PIPELINE.name;
     return NEW_DEALS_PIPELINE.stages.some((s) => s.name === d.stage);
   }).length;
 
   const activeDealsCount = deals.filter((d) => {
-    if (d.pipeline_name) return d.pipeline_name === ACTIVE_DEALS_PIPELINE.name;
+    if (d.pipeline) return d.pipeline === ACTIVE_DEALS_PIPELINE.name;
     return ACTIVE_DEALS_PIPELINE.stages.some((s) => s.name === d.stage);
   }).length;
 
@@ -76,12 +65,11 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-white">Pipeline</h1>
         <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="flex items-center gap-2 px-4 py-2 bg-[rgba(255,255,255,0.08)] text-white rounded-lg text-sm hover:bg-[rgba(255,255,255,0.12)] disabled:opacity-50 transition-colors"
+          onClick={handleRefresh}
+          className="flex items-center gap-2 px-4 py-2 bg-[rgba(255,255,255,0.08)] text-white rounded-lg text-sm hover:bg-[rgba(255,255,255,0.12)] transition-colors"
         >
-          <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
-          {syncing ? "Syncing..." : "Sync from GHL"}
+          <RefreshCw size={14} />
+          Refresh
         </button>
       </div>
 
@@ -194,8 +182,8 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
       {/* Empty state */}
       {deals.length === 0 && (
         <div className="text-center py-16 text-[rgba(255,255,255,0.4)]">
-          <p className="text-lg mb-2">No pipeline data yet</p>
-          <p className="text-sm">Click &quot;Sync from GHL&quot; to load your pipelines.</p>
+          <p className="text-lg mb-2">No deals yet</p>
+          <p className="text-sm">Deals will appear here when leads come in from your website forms.</p>
         </div>
       )}
     </div>

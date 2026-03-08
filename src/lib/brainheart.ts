@@ -28,23 +28,23 @@ async function gatherSystemState(): Promise<SystemState> {
   const [pipelineResult, newLeadsResult, staleResult, tasksResult, logsResult, draftsResult] = await Promise.all([
     // Active deals by stage
     supabaseAdmin
-      .from("pipeline_cache")
-      .select("stage, contact_name, business_name")
-      .eq("pipeline_id", "Jhkxtrseqgm1qwMJGe7A"),
+      .from("deals")
+      .select("stage, pipeline, contact_id, contacts(first_name, last_name, business_name)")
+      .eq("pipeline", "Active Deals"),
 
     // New leads in last 24h
     supabaseAdmin
-      .from("pipeline_cache")
+      .from("deals")
       .select("id")
-      .eq("pipeline_id", "eNMzDiNKRgmvkZUc8Nid")
+      .eq("pipeline", "New Deals")
       .eq("stage", "New Lead")
       .gte("created_at", yesterday),
 
     // Stale deals (no update in 3 days)
     supabaseAdmin
-      .from("pipeline_cache")
-      .select("contact_name, business_name, stage, updated_at")
-      .eq("pipeline_id", "Jhkxtrseqgm1qwMJGe7A")
+      .from("deals")
+      .select("stage, updated_at, contact_id, contacts(first_name, last_name, business_name)")
+      .eq("pipeline", "Active Deals")
       .lt("updated_at", threeDaysAgo)
       .not("stage", "in", '("Funded","Deal Lost")'),
 
@@ -75,11 +75,22 @@ async function gatherSystemState(): Promise<SystemState> {
     activeDealsByStage[stage] = (activeDealsByStage[stage] || 0) + 1;
   }
 
+  // Map stale deals to expected shape
+  const staleDeals = (staleResult.data || []).map((d: Record<string, unknown>) => {
+    const c = d.contacts as { first_name?: string; last_name?: string; business_name?: string } | null;
+    return {
+      contact_name: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
+      business_name: c?.business_name || "",
+      stage: d.stage as string,
+      updated_at: d.updated_at as string,
+    };
+  });
+
   return {
     activeDealsByStage,
     totalActiveDeals: pipelineResult.data?.length || 0,
     newLeads24h: newLeadsResult.data?.length || 0,
-    staleDeals: (staleResult.data || []) as SystemState["staleDeals"],
+    staleDeals,
     pendingTasks: tasksResult.count || 0,
     recentLogs: (logsResult.data || []) as SystemState["recentLogs"],
     pendingDrafts: draftsResult.count || 0,

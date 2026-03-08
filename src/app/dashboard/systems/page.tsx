@@ -14,7 +14,7 @@ interface SystemTile {
 
 const STATIC_TILES: SystemTile[] = [
   // CRM
-  { name: "GoHighLevel", description: "CRM, pipeline, contacts, automations", url: "https://app.gohighlevel.com", category: "CRM", emoji: "🎯" },
+  { name: "Mission Control CRM", description: "Internal CRM — contacts, deals, pipeline", url: "https://mission.srtagency.com/dashboard/pipeline", category: "CRM", emoji: "🎯" },
   // Email & Files
   { name: "Outlook", description: "Email inbox and calendar", url: "https://outlook.office365.com", category: "Email & Files", emoji: "📧" },
   { name: "OneDrive", description: "Deal documents and file storage", url: "https://onedrive.live.com", category: "Email & Files", emoji: "🗂️" },

@@ -1,6 +1,5 @@
 import { supabaseAdmin } from "./db";
-import { ghl } from "./ghl";
-import { ghlMessaging } from "./ghl-messaging";
+import { microsoft } from "./microsoft";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { PIPELINES } from "@/config/pipeline";
 
@@ -60,32 +59,32 @@ export const AI_TOOLS = [
   {
     name: "move_deal",
     description:
-      "Move a deal to a different stage in GHL. Use when asked to update a deal's stage, like 'move John to Approved' or 'advance Smith Construction to Contracts Out'. ALWAYS confirm with the user before executing this.",
+      "Move a deal to a different stage. Use when asked to update a deal's stage, like 'move John to Approved' or 'advance Smith Construction to Contracts Out'. ALWAYS confirm with the user before executing this.",
     input_schema: {
       type: "object" as const,
       properties: {
-        opportunity_id: {
+        deal_id: {
           type: "string",
-          description: "The GHL opportunity ID of the deal to move",
+          description: "The deal ID to move",
         },
         new_stage: {
           type: "string",
           description: "The target stage name",
         },
       },
-      required: ["opportunity_id", "new_stage"],
+      required: ["deal_id", "new_stage"],
     },
   },
   {
     name: "send_sms",
     description:
-      "Send an SMS message to a contact via GHL. Use when asked to text/message a client. Can use a template or custom message.",
+      "Send an SMS message to a contact. Currently unavailable — Twilio integration coming soon.",
     input_schema: {
       type: "object" as const,
       properties: {
         contact_id: {
           type: "string",
-          description: "The GHL contact ID to send to",
+          description: "The contact ID to send to",
         },
         message: {
           type: "string",
@@ -98,13 +97,13 @@ export const AI_TOOLS = [
   {
     name: "send_email",
     description:
-      "Send an email to a contact via GHL. Use when asked to email a client.",
+      "Send an email to a contact via Microsoft 365. Use when asked to email a client.",
     input_schema: {
       type: "object" as const,
       properties: {
         contact_id: {
           type: "string",
-          description: "The GHL contact ID to send to",
+          description: "The contact ID to send to",
         },
         subject: {
           type: "string",
@@ -112,7 +111,7 @@ export const AI_TOOLS = [
         },
         message: {
           type: "string",
-          description: "Email body content",
+          description: "Email body content (HTML supported)",
         },
       },
       required: ["contact_id", "subject", "message"],
@@ -140,13 +139,13 @@ export const AI_TOOLS = [
   {
     name: "send_template",
     description:
-      "Send a pre-built template message to a contact. Automatically renders variables. Use when asked to send a specific template like 'send the welcome SMS to John'.",
+      "Send a pre-built template message to a contact. Automatically renders variables. Use when asked to send a specific template like 'send the welcome email to John'.",
     input_schema: {
       type: "object" as const,
       properties: {
         contact_id: {
           type: "string",
-          description: "The GHL contact ID",
+          description: "The contact ID",
         },
         template_slug: {
           type: "string",
@@ -198,9 +197,9 @@ export const AI_TOOLS = [
     input_schema: {
       type: "object" as const,
       properties: {
-        contact_id: { type: "string", description: "GHL contact ID" },
+        contact_id: { type: "string", description: "Contact ID" },
         note: { type: "string", description: "The note content to add" },
-        opportunity_id: { type: "string", description: "Optional: GHL opportunity ID to associate with" },
+        deal_id: { type: "string", description: "Optional: deal ID to associate with" },
       },
       required: ["contact_id", "note"],
     },
@@ -212,8 +211,8 @@ export const AI_TOOLS = [
     input_schema: {
       type: "object" as const,
       properties: {
-        contact_id: { type: "string", description: "GHL contact ID" },
-        opportunity_id: { type: "string", description: "Optional: filter to a specific deal" },
+        contact_id: { type: "string", description: "Contact ID" },
+        deal_id: { type: "string", description: "Optional: filter to a specific deal" },
       },
       required: ["contact_id"],
     },
@@ -244,20 +243,20 @@ export const AI_TOOLS = [
   {
     name: "underwrite_deal",
     description:
-      "Analyze a deal's profile and generate an SOS (Statement of Scenario) document. Pulls deal data from pipeline + GHL contact fields, assesses viability, and stores the SOS. Use when asked to 'underwrite [deal]', 'analyze [business]', 'create SOS for [contact]', or 'run underwriting on [deal]'.",
+      "Analyze a deal's profile and generate an SOS (Statement of Scenario) document. Pulls deal data and contact fields, assesses viability, and stores the SOS. Use when asked to 'underwrite [deal]', 'analyze [business]', 'create SOS for [contact]', or 'run underwriting on [deal]'.",
     input_schema: {
       type: "object" as const,
       properties: {
-        opportunity_id: {
+        deal_id: {
           type: "string",
-          description: "The GHL opportunity ID of the deal to underwrite",
+          description: "The deal ID to underwrite",
         },
         additional_context: {
           type: "string",
           description: "Optional: extra info like bank statement summary, credit details, or notes to include",
         },
       },
-      required: ["opportunity_id"],
+      required: ["deal_id"],
     },
   },
   {
@@ -267,16 +266,16 @@ export const AI_TOOLS = [
     input_schema: {
       type: "object" as const,
       properties: {
-        opportunity_id: {
+        deal_id: {
           type: "string",
-          description: "The GHL opportunity ID to match lenders against",
+          description: "The deal ID to match lenders against",
         },
         product_type: {
           type: "string",
           description: "Optional: specific product type to match (e.g. 'Working Capital', 'Line of Credit')",
         },
       },
-      required: ["opportunity_id"],
+      required: ["deal_id"],
     },
   },
   {
@@ -286,9 +285,9 @@ export const AI_TOOLS = [
     input_schema: {
       type: "object" as const,
       properties: {
-        opportunity_id: {
+        deal_id: {
           type: "string",
-          description: "The GHL opportunity ID",
+          description: "The deal ID",
         },
         lender_id: {
           type: "string",
@@ -299,7 +298,7 @@ export const AI_TOOLS = [
           description: "Optional: additional notes for the submission email",
         },
       },
-      required: ["opportunity_id", "lender_id"],
+      required: ["deal_id", "lender_id"],
     },
   },
   {
@@ -329,6 +328,8 @@ export async function executeTool(
 ): Promise<ToolExecutionResult> {
   try {
     let content: string;
+    // Support both old opportunity_id and new deal_id parameter names
+    const dealId = (input.deal_id || input.opportunity_id) as string | undefined;
     switch (toolName) {
       case "get_pipeline_overview":
         content = await getPipelineOverview(); break;
@@ -337,7 +338,7 @@ export async function executeTool(
       case "search_deals":
         content = await searchDeals(input.query as string); break;
       case "move_deal":
-        content = await moveDeal(input.opportunity_id as string, input.new_stage as string); break;
+        content = await moveDeal(dealId as string, input.new_stage as string); break;
       case "send_sms":
         content = await sendSms(input.contact_id as string, input.message as string); break;
       case "send_email":
@@ -351,17 +352,17 @@ export async function executeTool(
       case "get_contact_profile":
         content = await getContactProfile(input.query as string); break;
       case "add_deal_note":
-        content = await addDealNote(input.contact_id as string, input.note as string, input.opportunity_id as string | undefined); break;
+        content = await addDealNote(input.contact_id as string, input.note as string, (input.deal_id || input.opportunity_id) as string | undefined); break;
       case "get_deal_notes":
-        content = await getDealNotes(input.contact_id as string, input.opportunity_id as string | undefined); break;
+        content = await getDealNotes(input.contact_id as string, (input.deal_id || input.opportunity_id) as string | undefined); break;
       case "get_lenders":
         content = await getLenders(input.filter as string | undefined, input.tier as number | undefined, input.submission_method as string | undefined); break;
       case "underwrite_deal":
-        content = await underwriteDeal(input.opportunity_id as string, input.additional_context as string | undefined); break;
+        content = await underwriteDeal(dealId as string, input.additional_context as string | undefined); break;
       case "match_lenders":
-        content = await matchLenders(input.opportunity_id as string, input.product_type as string | undefined); break;
+        content = await matchLenders(dealId as string, input.product_type as string | undefined); break;
       case "submit_to_lender":
-        content = await submitToLender(input.opportunity_id as string, input.lender_id as string, input.custom_notes as string | undefined); break;
+        content = await submitToLender(dealId as string, input.lender_id as string, input.custom_notes as string | undefined); break;
       case "enroll_in_sequence":
         content = await enrollInSequence(input.contact_id as string, input.contact_email as string, input.contact_name as string, input.sequence_slug as string); break;
       default:
@@ -378,12 +379,13 @@ export async function executeTool(
 
 async function getPipelineOverview(): Promise<string> {
   const { data: deals } = await supabaseAdmin
-    .from("pipeline_cache")
-    .select("stage, pipeline_name, amount, updated_at, contact_name, business_name");
+    .from("deals")
+    .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
+    .order("updated_at", { ascending: false });
 
   if (!deals || deals.length === 0) {
     return JSON.stringify({
-      message: "No deals in the pipeline yet. Sync from GHL to load deals.",
+      message: "No deals in the pipeline yet.",
       total: 0,
     });
   }
@@ -392,7 +394,7 @@ async function getPipelineOverview(): Promise<string> {
   const stageGroups: Record<string, { count: number; totalAmount: number; staleCount: number }> = {};
 
   for (const deal of deals) {
-    const key = `${deal.pipeline_name || "Unknown"} → ${deal.stage}`;
+    const key = `${deal.pipeline || "Unknown"} → ${deal.stage}`;
     if (!stageGroups[key]) {
       stageGroups[key] = { count: 0, totalAmount: 0, staleCount: 0 };
     }
@@ -407,19 +409,19 @@ async function getPipelineOverview(): Promise<string> {
     total_deals: deals.length,
     stages: stageGroups,
     pipelines: {
-      "New Deals": deals.filter((d) => d.pipeline_name === "New Deals").length,
-      "Active Deals": deals.filter((d) => d.pipeline_name === "Active Deals").length,
+      "New Deals": deals.filter((d) => d.pipeline === "New Deals").length,
+      "Active Deals": deals.filter((d) => d.pipeline === "Active Deals").length,
     },
   });
 }
 
 async function getDealsInStage(stage: string, pipeline?: string): Promise<string> {
   let query = supabaseAdmin
-    .from("pipeline_cache")
-    .select("*")
+    .from("deals")
+    .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
     .eq("stage", stage);
 
-  if (pipeline) query = query.eq("pipeline_name", pipeline);
+  if (pipeline) query = query.eq("pipeline", pipeline);
 
   const { data: deals } = await query;
 
@@ -431,114 +433,150 @@ async function getDealsInStage(stage: string, pipeline?: string): Promise<string
   return JSON.stringify({
     stage,
     count: deals.length,
-    deals: deals.map((d) => ({
-      id: d.ghl_opportunity_id,
-      contact: d.contact_name,
-      business: d.business_name,
-      amount: d.amount,
-      pipeline: d.pipeline_name,
-      days_in_stage: Math.floor((now - new Date(d.updated_at).getTime()) / (1000 * 60 * 60 * 24)),
-    })),
+    deals: deals.map((d) => {
+      const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
+      return {
+        id: d.id,
+        contact: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
+        business: c?.business_name || "",
+        amount: d.amount,
+        pipeline: d.pipeline,
+        days_in_stage: Math.floor((now - new Date(d.updated_at).getTime()) / (1000 * 60 * 60 * 24)),
+      };
+    }),
   });
 }
 
 async function searchDeals(query: string): Promise<string> {
+  // Search deals by joining contacts and matching on name or business
   const { data: deals } = await supabaseAdmin
-    .from("pipeline_cache")
-    .select("*")
-    .or(`contact_name.ilike.%${query}%,business_name.ilike.%${query}%`);
+    .from("deals")
+    .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
+    .order("updated_at", { ascending: false })
+    .limit(50);
 
   if (!deals || deals.length === 0) {
     return JSON.stringify({ message: `No deals found matching "${query}".`, deals: [] });
   }
 
+  // Filter client-side since Supabase doesn't support ilike on joined tables easily
+  const lowerQuery = query.toLowerCase();
+  const filtered = deals.filter((d) => {
+    const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
+    if (!c) return false;
+    const fullName = `${c.first_name || ""} ${c.last_name || ""}`.toLowerCase();
+    const biz = (c.business_name || "").toLowerCase();
+    return fullName.includes(lowerQuery) || biz.includes(lowerQuery);
+  });
+
+  if (filtered.length === 0) {
+    return JSON.stringify({ message: `No deals found matching "${query}".`, deals: [] });
+  }
+
   return JSON.stringify({
     query,
-    count: deals.length,
-    deals: deals.map((d) => ({
-      id: d.ghl_opportunity_id,
-      contact: d.contact_name,
-      business: d.business_name,
-      amount: d.amount,
-      stage: d.stage,
-      pipeline: d.pipeline_name,
-    })),
+    count: filtered.length,
+    deals: filtered.map((d) => {
+      const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
+      return {
+        id: d.id,
+        contact: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
+        business: c?.business_name || "",
+        amount: d.amount,
+        stage: d.stage,
+        pipeline: d.pipeline,
+      };
+    }),
   });
 }
 
-async function moveDeal(opportunityId: string, newStage: string): Promise<string> {
-  // Find the stage ID in GHL
-  const pipelinesResponse = await ghl.getPipelines();
-  const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
+async function moveDeal(dealId: string, newStage: string): Promise<string> {
+  // Validate stage exists in our pipeline config
+  const allStages = PIPELINES.flatMap((p) => p.stages.map((s) => ({ pipeline: p.name, stage: s.name })));
+  const target = allStages.find((s) => s.stage.toLowerCase() === newStage.toLowerCase());
 
-  let targetStageId: string | null = null;
-  let targetPipelineName: string | null = null;
-
-  for (const pipeline of allPipelines) {
-    const stages = (pipeline.stages as Array<Record<string, unknown>>) || [];
-    const matchingStage = stages.find(
-      (s) => (s.name as string).toLowerCase() === newStage.toLowerCase()
-    );
-    if (matchingStage) {
-      targetStageId = matchingStage.id as string;
-      targetPipelineName = pipeline.name as string;
-      break;
-    }
-  }
-
-  if (!targetStageId) {
-    return JSON.stringify({ error: `Stage "${newStage}" not found in any pipeline.` });
+  if (!target) {
+    return JSON.stringify({ error: `Stage "${newStage}" not found in any pipeline. Valid stages: ${allStages.map(s => s.stage).join(", ")}` });
   }
 
   try {
-    await ghl.updateOpportunityStage(opportunityId, targetStageId);
+    // Get current deal to log the change
+    const { data: currentDeal } = await supabaseAdmin
+      .from("deals")
+      .select("stage, pipeline")
+      .eq("id", dealId)
+      .single();
 
-    // Update local cache
+    if (!currentDeal) {
+      return JSON.stringify({ error: `Deal ${dealId} not found.` });
+    }
+
+    const oldStage = currentDeal.stage;
+
+    // Update the deal
     await supabaseAdmin
-      .from("pipeline_cache")
-      .update({ stage: newStage, pipeline_name: targetPipelineName, updated_at: new Date().toISOString() })
-      .eq("ghl_opportunity_id", opportunityId);
+      .from("deals")
+      .update({
+        stage: target.stage,
+        pipeline: target.pipeline,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", dealId);
 
-    // Log it
-    await supabaseAdmin.from("system_logs").insert({
-      event_type: "ai_action",
-      description: `AI moved deal ${opportunityId} to "${newStage}" in ${targetPipelineName}`,
-      metadata: { opportunityId, newStage, pipeline: targetPipelineName },
+    // Log the stage change as a deal event
+    await supabaseAdmin.from("deal_events").insert({
+      deal_id: dealId,
+      event_type: "stage_change",
+      description: `Moved from "${oldStage}" to "${target.stage}" (${target.pipeline})`,
+      metadata: { old_stage: oldStage, new_stage: target.stage, pipeline: target.pipeline, moved_by: "AI" },
     });
 
-    return JSON.stringify({ success: true, message: `Deal moved to "${newStage}" in ${targetPipelineName}.` });
+    // System log
+    await supabaseAdmin.from("system_logs").insert({
+      event_type: "ai_action",
+      description: `AI moved deal ${dealId} from "${oldStage}" to "${target.stage}" in ${target.pipeline}`,
+      metadata: { dealId, oldStage, newStage: target.stage, pipeline: target.pipeline },
+    });
+
+    return JSON.stringify({ success: true, message: `Deal moved from "${oldStage}" to "${target.stage}" in ${target.pipeline}.` });
   } catch (error) {
     return JSON.stringify({ error: error instanceof Error ? error.message : "Failed to move deal" });
   }
 }
 
-async function sendSms(contactId: string, message: string): Promise<string> {
-  try {
-    await ghlMessaging.sendMessage({ contactId, type: "SMS", message });
-
-    await supabaseAdmin.from("system_logs").insert({
-      event_type: "ai_action",
-      description: `AI sent SMS to contact ${contactId}: "${message.slice(0, 50)}..."`,
-      metadata: { contactId, type: "SMS", message },
-    });
-
-    return JSON.stringify({ success: true, message: "SMS sent successfully." });
-  } catch (error) {
-    return JSON.stringify({ error: error instanceof Error ? error.message : "Failed to send SMS" });
-  }
+async function sendSms(_contactId: string, _message: string): Promise<string> {
+  return JSON.stringify({
+    error: "SMS is not available yet. Twilio integration coming soon. Use send_email instead to reach this contact.",
+  });
 }
 
 async function sendEmail(contactId: string, subject: string, message: string): Promise<string> {
   try {
-    await ghlMessaging.sendMessage({ contactId, type: "Email", subject, message });
+    // Look up contact email
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("email, first_name, last_name")
+      .eq("id", contactId)
+      .single();
+
+    if (!contact || !contact.email) {
+      return JSON.stringify({ error: `Contact ${contactId} not found or has no email address.` });
+    }
+
+    await microsoft.sendMail({
+      to: contact.email,
+      subject,
+      body: message,
+      isHtml: true,
+    });
 
     await supabaseAdmin.from("system_logs").insert({
       event_type: "ai_action",
-      description: `AI sent email to contact ${contactId}: "${subject}"`,
-      metadata: { contactId, type: "Email", subject },
+      description: `AI sent email to ${contact.first_name || ""} ${contact.last_name || ""} (${contact.email}): "${subject}"`,
+      metadata: { contactId, type: "Email", subject, to: contact.email },
     });
 
-    return JSON.stringify({ success: true, message: "Email sent successfully." });
+    return JSON.stringify({ success: true, message: `Email sent to ${contact.email}.` });
   } catch (error) {
     return JSON.stringify({ error: error instanceof Error ? error.message : "Failed to send email" });
   }
@@ -569,11 +607,24 @@ async function sendTemplate(
     return JSON.stringify({ error: `Template "${templateSlug}" not found or inactive.` });
   }
 
+  // Look up contact
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select("email, first_name, last_name, phone")
+    .eq("id", contactId)
+    .single();
+
+  if (!contact) {
+    return JSON.stringify({ error: `Contact ${contactId} not found.` });
+  }
+
   const context: TemplateContext = {
     agent_name: "Benjamin",
     agent_phone: "(786) 282-2937",
     agent_email: "matthew@srtagency.com",
     company_name: "SRT Agency",
+    first_name: contact.first_name || "",
+    contact_name: `${contact.first_name || ""} ${contact.last_name || ""}`.trim(),
     ...variables,
   };
 
@@ -581,22 +632,31 @@ async function sendTemplate(
   const renderedSubject = template.subject ? renderTemplate(template.subject, context) : undefined;
 
   try {
-    await ghlMessaging.sendMessage({
-      contactId,
-      type: template.type as "SMS" | "Email",
-      message: renderedBody,
-      subject: renderedSubject,
+    if (template.type === "SMS") {
+      return JSON.stringify({ error: "SMS is not available yet. Twilio integration coming soon." });
+    }
+
+    // Email via Microsoft Graph
+    if (!contact.email) {
+      return JSON.stringify({ error: `Contact has no email address on file.` });
+    }
+
+    await microsoft.sendMail({
+      to: contact.email,
+      subject: renderedSubject || templateSlug,
+      body: renderedBody,
+      isHtml: true,
     });
 
     await supabaseAdmin.from("system_logs").insert({
       event_type: "ai_action",
-      description: `AI sent template "${templateSlug}" (${template.type}) to contact ${contactId}`,
-      metadata: { contactId, templateSlug, type: template.type },
+      description: `AI sent template "${templateSlug}" (Email) to ${contact.email}`,
+      metadata: { contactId, templateSlug, type: "Email", to: contact.email },
     });
 
     return JSON.stringify({
       success: true,
-      message: `${template.type} template "${template.name}" sent successfully.`,
+      message: `Email template "${template.name}" sent to ${contact.email}.`,
       rendered_body: renderedBody,
     });
   } catch (error) {
@@ -614,41 +674,45 @@ async function getRecentActivity(limit: number): Promise<string> {
   return JSON.stringify({ activity: logs || [] });
 }
 
-// ── New tools ──────────────────────────────────────────────────────────────
+// ── Contact & Deal Tools ──────────────────────────────────────────────────────
 
 async function getContactProfile(query: string): Promise<string> {
-  let contact: Record<string, unknown> | null = null;
-  try {
-    const searchResult = await ghl.searchContacts(query);
-    const contacts = (searchResult.contacts as Array<Record<string, unknown>>) || [];
-    if (contacts.length > 0) contact = contacts[0];
-  } catch { /* fall through */ }
+  // Search contacts table by name, email, phone, or business
+  const lowerQuery = query.toLowerCase();
+  const { data: contacts } = await supabaseAdmin
+    .from("contacts")
+    .select("*")
+    .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%,email.ilike.%${query}%,phone.ilike.%${query}%,business_name.ilike.%${query}%`)
+    .limit(5);
 
-  if (!contact) {
+  if (!contacts || contacts.length === 0) {
     return JSON.stringify({ error: `No contact found for "${query}"` });
   }
 
-  const contactId = contact.id as string;
-  const contactName = (contact.contactName || `${contact.firstName || ""} ${contact.lastName || ""}`.trim() || "Unknown") as string;
-  const businessName = (contact.companyName || "") as string;
+  const contact = contacts[0];
+  const contactId = contact.id;
+  const contactName = `${contact.first_name || ""} ${contact.last_name || ""}`.trim() || "Unknown";
 
-  const searchTerm = businessName || contactName;
+  // Get deals for this contact
   const { data: deals } = await supabaseAdmin
-    .from("pipeline_cache")
-    .select("ghl_opportunity_id, stage, pipeline_name, amount, updated_at, business_name, contact_name")
-    .or(`contact_name.ilike.%${searchTerm}%,business_name.ilike.%${searchTerm}%`)
+    .from("deals")
+    .select("id, stage, pipeline, amount, updated_at, source, created_at")
+    .eq("contact_id", contactId)
+    .order("created_at", { ascending: false })
     .limit(10);
 
+  // Get active sequences
   let enrollments: unknown[] = [];
   try {
     const { data } = await supabaseAdmin
       .from("sequence_enrollments")
       .select("status, current_step, next_send_at, email_sequences(name, slug)")
       .eq("contact_id", contactId)
-      .in("status", ["active"]);
+      .eq("status", "active");
     enrollments = data || [];
   } catch { /* table may not exist yet */ }
 
+  // Get recent notes
   let notes: unknown[] = [];
   try {
     const { data } = await supabaseAdmin
@@ -667,33 +731,39 @@ async function getContactProfile(query: string): Promise<string> {
       email: contact.email,
       phone: contact.phone,
       tags: contact.tags || [],
-      businessName,
+      businessName: contact.business_name || "",
+      industry: contact.industry || "",
+      credit_score_range: contact.credit_score_range || "",
+      source: contact.source || "",
+      lead_score: contact.lead_score || 0,
     },
-    deals: deals || [],
+    deals: (deals || []).map((d) => ({
+      id: d.id,
+      stage: d.stage,
+      pipeline: d.pipeline,
+      amount: d.amount,
+      source: d.source,
+      days_in_pipeline: Math.floor((Date.now() - new Date(d.created_at).getTime()) / (1000 * 60 * 60 * 24)),
+    })),
     sequences: enrollments,
     notes,
   });
 }
 
-async function addDealNote(contactId: string, note: string, opportunityId?: string): Promise<string> {
+async function addDealNote(contactId: string, note: string, dealId?: string): Promise<string> {
   try {
     const { data } = await supabaseAdmin
       .from("deal_notes")
-      .insert({ contact_id: contactId, opportunity_id: opportunityId || null, body: note, author: "AI Office Manager" })
+      .insert({ contact_id: contactId, opportunity_id: dealId || null, body: note, author: "AI Office Manager" })
       .select()
       .single();
-    return JSON.stringify({ success: true, note_id: data?.id, stored: "supabase" });
-  } catch {
-    try {
-      const result = await ghl.addNote(contactId, note);
-      return JSON.stringify({ success: true, note_id: (result as Record<string, unknown>).id, stored: "ghl" });
-    } catch (err) {
-      return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to add note" });
-    }
+    return JSON.stringify({ success: true, note_id: data?.id });
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to add note" });
   }
 }
 
-async function getDealNotes(contactId: string, opportunityId?: string): Promise<string> {
+async function getDealNotes(contactId: string, dealId?: string): Promise<string> {
   try {
     let query = supabaseAdmin
       .from("deal_notes")
@@ -701,16 +771,11 @@ async function getDealNotes(contactId: string, opportunityId?: string): Promise<
       .eq("contact_id", contactId)
       .order("created_at", { ascending: false })
       .limit(20);
-    if (opportunityId) query = query.eq("opportunity_id", opportunityId);
+    if (dealId) query = query.eq("opportunity_id", dealId);
     const { data: notes } = await query;
     return JSON.stringify({ notes: notes || [], count: (notes || []).length });
-  } catch {
-    try {
-      const result = await ghl.getNotes(contactId);
-      return JSON.stringify({ notes: (result as Record<string, unknown>).notes || [], source: "ghl" });
-    } catch (err) {
-      return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to get notes" });
-    }
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to get notes" });
   }
 }
 
@@ -751,31 +816,17 @@ async function getLenders(filter?: string, tier?: number, submissionMethod?: str
 
 // ── Underwriting & Submissions ────────────────────────────────────────────
 
-async function getDealProfile(opportunityId: string) {
-  // Get deal from pipeline cache
+async function getDealProfile(dealId: string) {
+  // Get deal with contact info
   const { data: deal } = await supabaseAdmin
-    .from("pipeline_cache")
-    .select("*")
-    .eq("ghl_opportunity_id", opportunityId)
+    .from("deals")
+    .select("*, contacts(*)")
+    .eq("id", dealId)
     .single();
 
   if (!deal) return null;
 
-  // Try to get GHL contact details for custom fields
-  let contactFields: Record<string, unknown> = {};
-  try {
-    if (deal.ghl_contact_id) {
-      const contact = await ghl.getContact(deal.ghl_contact_id);
-      const raw = contact as Record<string, unknown>;
-      contactFields = (raw.customFields || raw.customField || {}) as Record<string, unknown>;
-      // Also grab top-level fields
-      contactFields._email = raw.email;
-      contactFields._phone = raw.phone;
-      contactFields._firstName = raw.firstName;
-      contactFields._lastName = raw.lastName;
-      contactFields._companyName = raw.companyName;
-    }
-  } catch { /* GHL may fail, continue with cached data */ }
+  const contact = (deal.contacts || {}) as Record<string, unknown>;
 
   // Get notes
   let notes: string[] = [];
@@ -783,55 +834,54 @@ async function getDealProfile(opportunityId: string) {
     const { data: noteData } = await supabaseAdmin
       .from("deal_notes")
       .select("body, author, created_at")
-      .eq("contact_id", deal.ghl_contact_id)
+      .eq("contact_id", deal.contact_id)
       .order("created_at", { ascending: false })
       .limit(5);
     notes = (noteData || []).map((n: Record<string, unknown>) => `[${n.author}] ${n.body}`);
   } catch { /* ok */ }
 
-  return { deal, contactFields, notes };
+  return { deal, contact, notes };
 }
 
-async function underwriteDeal(opportunityId: string, additionalContext?: string): Promise<string> {
-  const profile = await getDealProfile(opportunityId);
-  if (!profile) return JSON.stringify({ error: `Deal ${opportunityId} not found in pipeline cache. Make sure to sync deals first.` });
+async function underwriteDeal(dealId: string, additionalContext?: string): Promise<string> {
+  const profile = await getDealProfile(dealId);
+  if (!profile) return JSON.stringify({ error: `Deal ${dealId} not found.` });
 
-  const { deal, contactFields, notes } = profile;
-  const cf = contactFields as Record<string, unknown>;
+  const { deal, contact, notes } = profile;
 
-  // Build SOS document
+  // Build SOS document using contacts table columns directly
   const sos = {
     business_profile: {
-      business_name: deal.business_name || cf.business_name || cf._companyName || "Unknown",
-      industry: cf.industry || "Not specified",
-      entity_type: cf.entity_type || "Not specified",
-      time_in_business: cf.time_in_business || "Not specified",
-      annual_revenue: cf.annual_revenue || "Not specified",
-      ein: cf.ein ? "On file" : "Not provided",
+      business_name: contact.business_name || contact.legal_name || "Unknown",
+      dba: contact.dba || "",
+      industry: contact.industry || "Not specified",
+      ein: contact.ein ? "On file" : "Not provided",
+      incorporation_date: contact.incorporation_date || "Not specified",
     },
     owner_profile: {
-      name: deal.contact_name || `${cf._firstName || ""} ${cf._lastName || ""}`.trim() || "Unknown",
-      email: cf._email || "Not provided",
-      phone: cf._phone || "Not provided",
-      credit_score_range: cf.credit_score_range || "Not specified",
-      ownership_percentage: cf.ownership_percentage || "Not specified",
-      ssn_last4: cf.owner_ssn_last4 ? "On file" : "Not provided",
-      dob: cf.owner_dob ? "On file" : "Not provided",
+      name: `${contact.first_name || ""} ${contact.last_name || ""}`.trim() || "Unknown",
+      email: contact.email || "Not provided",
+      phone: contact.phone || "Not provided",
+      credit_score_range: contact.credit_score_range || "Not specified",
+      ownership_percentage: contact.ownership_pct || "Not specified",
+      ssn_last4: contact.ssn_last4 ? "On file" : "Not provided",
+      dob: contact.dob ? "On file" : "Not provided",
+      home_address: contact.home_address || "Not provided",
     },
     funding_request: {
-      amount_requested: deal.amount || cf.funding_amount_requested || "Not specified",
-      use_of_funds: cf.use_of_funds || "Not specified",
-      financing_type: cf.financing_type || "Working Capital",
+      amount_requested: deal.amount || contact.funding_amount_requested || "Not specified",
+      use_of_funds: contact.use_of_funds || "Not specified",
+      financing_type: deal.product_type || "Working Capital",
     },
     financial_summary: {
-      avg_monthly_balance: cf.avg_monthly_bank_balance || "Not provided",
-      existing_loans: cf.existing_loans || "Unknown",
+      monthly_deposits: contact.monthly_deposits || "Not provided",
+      existing_loans: contact.existing_loans || "Unknown",
     },
     additional_context: additionalContext || null,
     notes: notes.length > 0 ? notes : ["No notes on file"],
     pipeline_info: {
       stage: deal.stage,
-      pipeline: deal.pipeline_name,
+      pipeline: deal.pipeline,
       days_in_pipeline: Math.floor((Date.now() - new Date(deal.created_at).getTime()) / (1000 * 60 * 60 * 24)),
     },
   };
@@ -842,10 +892,9 @@ async function underwriteDeal(opportunityId: string, additionalContext?: string)
     ``,
     `BUSINESS PROFILE`,
     `Business: ${sos.business_profile.business_name}`,
+    sos.business_profile.dba ? `DBA: ${sos.business_profile.dba}` : "",
     `Industry: ${sos.business_profile.industry}`,
-    `Entity: ${sos.business_profile.entity_type}`,
-    `Time in Business: ${sos.business_profile.time_in_business}`,
-    `Annual Revenue: ${sos.business_profile.annual_revenue}`,
+    `Incorporation: ${sos.business_profile.incorporation_date}`,
     ``,
     `OWNER PROFILE`,
     `Name: ${sos.owner_profile.name}`,
@@ -858,7 +907,7 @@ async function underwriteDeal(opportunityId: string, additionalContext?: string)
     `Product: ${sos.funding_request.financing_type}`,
     ``,
     `FINANCIAL SUMMARY`,
-    `Avg Monthly Balance: ${sos.financial_summary.avg_monthly_balance}`,
+    `Monthly Deposits: ${sos.financial_summary.monthly_deposits}`,
     `Existing Loans: ${sos.financial_summary.existing_loans}`,
     additionalContext ? `\nADDITIONAL CONTEXT\n${additionalContext}` : "",
     ``,
@@ -868,8 +917,8 @@ async function underwriteDeal(opportunityId: string, additionalContext?: string)
   // Store in deal_sos table
   try {
     await supabaseAdmin.from("deal_sos").insert({
-      opportunity_id: opportunityId,
-      contact_id: deal.ghl_contact_id,
+      opportunity_id: dealId,
+      contact_id: deal.contact_id,
       business_name: sos.business_profile.business_name,
       sos_content: sos,
       sos_text: sosText,
@@ -880,8 +929,8 @@ async function underwriteDeal(opportunityId: string, additionalContext?: string)
   // Log it
   await supabaseAdmin.from("system_logs").insert({
     event_type: "ai_action",
-    description: `AI generated SOS for ${sos.business_profile.business_name} (${opportunityId})`,
-    metadata: { opportunityId, businessName: sos.business_profile.business_name },
+    description: `AI generated SOS for ${sos.business_profile.business_name} (${dealId})`,
+    metadata: { dealId, businessName: sos.business_profile.business_name },
   });
 
   return JSON.stringify({
@@ -892,23 +941,29 @@ async function underwriteDeal(opportunityId: string, additionalContext?: string)
   });
 }
 
-async function matchLenders(opportunityId: string, productType?: string): Promise<string> {
-  const profile = await getDealProfile(opportunityId);
-  if (!profile) return JSON.stringify({ error: `Deal ${opportunityId} not found in pipeline cache.` });
+async function matchLenders(dealId: string, productType?: string): Promise<string> {
+  const profile = await getDealProfile(dealId);
+  if (!profile) return JSON.stringify({ error: `Deal ${dealId} not found.` });
 
-  const { deal, contactFields } = profile;
-  const cf = contactFields as Record<string, unknown>;
+  const { deal, contact } = profile;
 
-  // Parse deal criteria
-  const creditRange = (cf.credit_score_range as string) || "";
+  // Parse deal criteria from contact columns
+  const creditRange = (contact.credit_score_range as string) || "";
   const creditMin = creditRange ? parseInt(creditRange.split("-")[0]) || 0 : 0;
-  const revenue = (cf.annual_revenue as string) || "";
-  const monthlyRev = revenue.includes("1M") ? 100000 : revenue.includes("500K") ? 50000 : revenue.includes("250K") ? 25000 : revenue.includes("120K") ? 10000 : 5000;
-  const tib = (cf.time_in_business as string) || "";
-  const tibMonths = tib.includes("5+") ? 60 : tib.includes("2-5") ? 24 : tib.includes("1-2") ? 12 : tib.includes("6-12") ? 6 : 3;
-  const industry = ((cf.industry as string) || "").toLowerCase();
+  const monthlyDeposits = (contact.monthly_deposits as string) || "";
+  const monthlyRev = monthlyDeposits.includes("1M") ? 100000 : monthlyDeposits.includes("500K") ? 50000 : monthlyDeposits.includes("250K") ? 25000 : monthlyDeposits.includes("120K") ? 10000 : 5000;
+  const incDate = (contact.incorporation_date as string) || "";
+  // Estimate TIB from incorporation date
+  let tibMonths = 6;
+  if (incDate) {
+    const inc = new Date(incDate);
+    if (!isNaN(inc.getTime())) {
+      tibMonths = Math.floor((Date.now() - inc.getTime()) / (1000 * 60 * 60 * 24 * 30));
+    }
+  }
+  const industry = ((contact.industry as string) || "").toLowerCase();
   const amount = deal.amount || 0;
-  const product = productType || (cf.financing_type as string) || "Working Capital";
+  const product = productType || deal.product_type || "Working Capital";
 
   // Get all active lenders
   const { data: allLenders } = await supabaseAdmin
@@ -933,13 +988,11 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
   for (const lender of allLenders) {
     const reasons: string[] = [];
     const warnings: string[] = [];
-    let score = 50; // base score
+    let score = 50;
 
-    // Tier bonus
     if (lender.tier === 1) score += 30;
     else if (lender.tier === 2) score += 15;
 
-    // Credit score check
     if (lender.min_credit_score && creditMin > 0) {
       if (creditMin >= lender.min_credit_score) {
         reasons.push(`Credit ${creditMin}+ meets min ${lender.min_credit_score}`);
@@ -950,7 +1003,6 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
       }
     }
 
-    // Revenue check
     if (lender.min_monthly_revenue) {
       if (monthlyRev >= lender.min_monthly_revenue) {
         reasons.push(`Revenue $${(monthlyRev/1000).toFixed(0)}K/mo meets min $${(lender.min_monthly_revenue/1000).toFixed(0)}K`);
@@ -961,7 +1013,6 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
       }
     }
 
-    // Amount check
     if (lender.max_amount && amount > 0) {
       if (amount <= lender.max_amount) {
         reasons.push(`Amount $${(amount/1000).toFixed(0)}K within max $${(lender.max_amount/1000).toFixed(0)}K`);
@@ -972,7 +1023,6 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
       }
     }
 
-    // TIB check
     if (lender.min_time_in_business_months) {
       if (tibMonths >= lender.min_time_in_business_months) {
         reasons.push(`TIB ${tibMonths}mo meets min ${lender.min_time_in_business_months}mo`);
@@ -983,7 +1033,6 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
       }
     }
 
-    // Product match
     const products = (lender.products as string[]) || [];
     if (products.length > 0 && product) {
       if (products.some((p: string) => p.toLowerCase().includes(product.toLowerCase()) || product.toLowerCase().includes(p.toLowerCase()))) {
@@ -992,26 +1041,22 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
       }
     }
 
-    // Industry block check
     const blocked = (lender.blocked_industries as string[]) || [];
     if (industry && blocked.some((b: string) => industry.includes(b.toLowerCase()))) {
       warnings.push(`Industry "${industry}" is blocked`);
       score -= 50;
     }
 
-    // Response time bonus
     if (lender.response_time_days && lender.response_time_days <= 2) {
       reasons.push(`Fast response: ${lender.response_time_days}d`);
       score += 5;
     }
 
-    // Only include if score > 20 (basic viability)
     if (score > 20) {
       matches.push({ lender, score, reasons, warnings });
     }
   }
 
-  // Sort by score descending
   matches.sort((a, b) => b.score - a.score);
 
   const TIER_LABELS: Record<number, string> = { 1: "A Paper", 2: "B Paper", 3: "High Risk" };
@@ -1019,7 +1064,7 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
   return JSON.stringify({
     tool: "match_lenders",
     deal_summary: {
-      business: deal.business_name || "Unknown",
+      business: contact.business_name || "Unknown",
       amount: deal.amount,
       credit: creditRange || "Unknown",
       product,
@@ -1037,12 +1082,11 @@ async function matchLenders(opportunityId: string, productType?: string): Promis
       products: m.lender.products,
     })),
     total_matches: matches.length,
-    message: `Found ${matches.length} matching lenders for ${deal.business_name || "this deal"}. Top matches shown ranked by fit score.`,
+    message: `Found ${matches.length} matching lenders for ${contact.business_name || "this deal"}. Top matches shown ranked by fit score.`,
   });
 }
 
-async function submitToLender(opportunityId: string, lenderId: string, customNotes?: string): Promise<string> {
-  // Get lender
+async function submitToLender(dealId: string, lenderId: string, customNotes?: string): Promise<string> {
   const { data: lender } = await supabaseAdmin
     .from("lenders")
     .select("*")
@@ -1058,13 +1102,13 @@ async function submitToLender(opportunityId: string, lenderId: string, customNot
   const { data: sos } = await supabaseAdmin
     .from("deal_sos")
     .select("*")
-    .eq("opportunity_id", opportunityId)
+    .eq("opportunity_id", dealId)
     .order("created_at", { ascending: false })
     .limit(1)
     .single();
 
   if (!sos) {
-    return JSON.stringify({ error: `No SOS found for deal ${opportunityId}. Run underwrite_deal first to generate the SOS document.` });
+    return JSON.stringify({ error: `No SOS found for deal ${dealId}. Run underwrite_deal first to generate the SOS document.` });
   }
 
   const businessName = sos.business_name || "Unknown Business";
@@ -1081,7 +1125,7 @@ async function submitToLender(opportunityId: string, lenderId: string, customNot
     .from("email_drafts")
     .insert({
       agent: "submissions",
-      opportunity_id: opportunityId,
+      opportunity_id: dealId,
       contact_id: sos.contact_id,
       to_email: lender.submission_email || "",
       subject,
@@ -1098,7 +1142,7 @@ async function submitToLender(opportunityId: string, lenderId: string, customNot
   // Create submission task
   try {
     await supabaseAdmin.from("submission_tasks").insert({
-      opportunity_id: opportunityId,
+      opportunity_id: dealId,
       contact_id: sos.contact_id,
       lender_id: lenderId,
       lender_name: lender.name,
@@ -1112,7 +1156,7 @@ async function submitToLender(opportunityId: string, lenderId: string, customNot
   await supabaseAdmin.from("system_logs").insert({
     event_type: "ai_action",
     description: `AI created submission draft: ${businessName} → ${lender.name}`,
-    metadata: { opportunityId, lenderId, lenderName: lender.name, draftId: draft?.id },
+    metadata: { dealId, lenderId, lenderName: lender.name, draftId: draft?.id },
   });
 
   return JSON.stringify({

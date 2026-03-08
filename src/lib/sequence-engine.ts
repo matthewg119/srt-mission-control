@@ -7,10 +7,11 @@
  *   sequence_enrollments   → per-contact progress tracking
  *
  * A cron job calls processScheduledEmails() every 5 minutes.
+ * Emails sent via Microsoft Graph (Microsoft 365).
  */
 
 import { supabaseAdmin } from "@/lib/db";
-import { ghl } from "@/lib/ghl";
+import { microsoft } from "@/lib/microsoft";
 import { renderTemplate, type TemplateContext } from "@/lib/template-renderer";
 
 // ── Types ──
@@ -48,10 +49,6 @@ interface Sequence {
 
 // ── Enrollment ──
 
-/**
- * Enroll a contact in an email sequence.
- * If already enrolled (active), skips silently.
- */
 export async function enrollContact(
   sequenceSlug: string,
   contactId: string,
@@ -59,7 +56,6 @@ export async function enrollContact(
   contactName: string,
   metadata?: Record<string, unknown>,
 ): Promise<{ enrolled: boolean; reason?: string }> {
-  // Find the sequence
   const { data: sequence, error: seqError } = await supabaseAdmin
     .from("email_sequences")
     .select("*")
@@ -72,7 +68,6 @@ export async function enrollContact(
     return { enrolled: false, reason: "Sequence not found or inactive" };
   }
 
-  // Check if already enrolled and active
   const { data: existing } = await supabaseAdmin
     .from("sequence_enrollments")
     .select("id, status")
@@ -85,7 +80,6 @@ export async function enrollContact(
     return { enrolled: false, reason: "Already enrolled" };
   }
 
-  // Get step 1 to calculate first send time
   const { data: firstStep } = await supabaseAdmin
     .from("email_sequence_steps")
     .select("delay_minutes")
@@ -121,15 +115,10 @@ export async function enrollContact(
 
 // ── Cancellation ──
 
-/**
- * Cancel all active enrollments for a contact in sequences that have this cancel_tag.
- * Called when a contact receives a tag (e.g., "application" cancels abandonment sequences).
- */
 export async function cancelByTag(
   contactId: string,
   tag: string,
 ): Promise<number> {
-  // Find sequences where cancel_tag matches
   const { data: sequences } = await supabaseAdmin
     .from("email_sequences")
     .select("id")
@@ -164,10 +153,6 @@ export async function cancelByTag(
 
 // ── Processing (called by cron) ──
 
-/**
- * Process all scheduled emails that are due.
- * This is the main function called by the cron job.
- */
 export async function processScheduledEmails(): Promise<{
   processed: number;
   sent: number;
@@ -177,14 +162,13 @@ export async function processScheduledEmails(): Promise<{
   const now = new Date().toISOString();
   const stats = { processed: 0, sent: 0, errors: 0, cancelled: 0 };
 
-  // Find enrollments that are due
   const { data: dueEnrollments, error: fetchError } = await supabaseAdmin
     .from("sequence_enrollments")
     .select("*")
     .eq("status", "active")
     .lte("next_send_at", now)
     .order("next_send_at", { ascending: true })
-    .limit(50); // Process max 50 per run to avoid timeouts
+    .limit(50);
 
   if (fetchError || !dueEnrollments || dueEnrollments.length === 0) {
     return stats;
@@ -193,7 +177,6 @@ export async function processScheduledEmails(): Promise<{
   for (const enrollment of dueEnrollments as Enrollment[]) {
     stats.processed++;
 
-    // Load the sequence to check cancel_tag
     const { data: sequence } = await supabaseAdmin
       .from("email_sequences")
       .select("*")
@@ -201,7 +184,6 @@ export async function processScheduledEmails(): Promise<{
       .single();
 
     if (!sequence || !sequence.is_active) {
-      // Sequence was deactivated — cancel enrollment
       await supabaseAdmin
         .from("sequence_enrollments")
         .update({ status: "cancelled", cancelled_at: now })
@@ -212,25 +194,25 @@ export async function processScheduledEmails(): Promise<{
 
     const seq = sequence as Sequence;
 
-    // Check if contact has the cancel tag (query GHL or check recent tags)
+    // Check if contact has the cancel tag (query contacts table directly)
     if (seq.cancel_tag) {
       try {
-        const contactData = await ghl.searchContacts(enrollment.contact_email);
-        const contacts = (contactData.contacts as Array<Record<string, unknown>>) || [];
-        if (contacts.length > 0) {
-          const tags = (contacts[0].tags as string[]) || [];
-          if (tags.includes(seq.cancel_tag)) {
-            await supabaseAdmin
-              .from("sequence_enrollments")
-              .update({ status: "cancelled", cancelled_at: now })
-              .eq("id", enrollment.id);
-            stats.cancelled++;
-            console.log(`[Sequence] Cancelled for ${enrollment.contact_name} — has tag "${seq.cancel_tag}"`);
-            continue;
-          }
+        const { data: contact } = await supabaseAdmin
+          .from("contacts")
+          .select("tags")
+          .eq("id", enrollment.contact_id)
+          .single();
+        if (contact?.tags && (contact.tags as string[]).includes(seq.cancel_tag)) {
+          await supabaseAdmin
+            .from("sequence_enrollments")
+            .update({ status: "cancelled", cancelled_at: now })
+            .eq("id", enrollment.id);
+          stats.cancelled++;
+          console.log(`[Sequence] Cancelled for ${enrollment.contact_name} — has tag "${seq.cancel_tag}"`);
+          continue;
         }
       } catch {
-        // Can't check tags — proceed with sending anyway
+        // Can't check tags — proceed with sending
       }
     }
 
@@ -244,7 +226,6 @@ export async function processScheduledEmails(): Promise<{
       .single();
 
     if (!step) {
-      // No more steps — mark as completed
       await supabaseAdmin
         .from("sequence_enrollments")
         .update({ status: "completed" })
@@ -263,7 +244,7 @@ export async function processScheduledEmails(): Promise<{
       approved_amount: "",
       approved_lender: "",
       agent_name: "Benjamin",
-      agent_phone: "(555) 123-4567",
+      agent_phone: "(786) 282-2937",
       agent_email: "benjamin@srtagency.com",
       company_name: "SRT Agency",
       stage_name: "",
@@ -273,16 +254,20 @@ export async function processScheduledEmails(): Promise<{
     const renderedSubject = renderTemplate(emailStep.subject, context);
     const renderedBody = renderTemplate(emailStep.body, context);
 
-    // Send via GHL
+    // Send via Microsoft Graph
     try {
-      await ghl.sendEmail(enrollment.contact_id, renderedSubject, renderedBody);
+      await microsoft.sendMail({
+        to: enrollment.contact_email,
+        subject: renderedSubject,
+        body: renderedBody,
+        isHtml: true,
+      });
       stats.sent++;
       console.log(`[Sequence] Sent step ${nextStepNumber} to ${enrollment.contact_name} (${seq.name})`);
     } catch (err) {
       stats.errors++;
       console.error(`[Sequence] Failed to send to ${enrollment.contact_name}:`, err instanceof Error ? err.message : err);
 
-      // Log the error but don't cancel — will retry next cron run
       await supabaseAdmin.from("system_logs").insert({
         event_type: "sequence_error",
         description: `Failed to send step ${nextStepNumber} of "${seq.name}" to ${enrollment.contact_name}`,
@@ -300,7 +285,6 @@ export async function processScheduledEmails(): Promise<{
       .maybeSingle();
 
     if (nextNextStep) {
-      // Calculate next send time relative to enrollment (not from now)
       const nextSendAt = new Date(
         Date.now() + (nextNextStep.delay_minutes - emailStep.delay_minutes) * 60 * 1000
       ).toISOString();
@@ -313,7 +297,6 @@ export async function processScheduledEmails(): Promise<{
         })
         .eq("id", enrollment.id);
     } else {
-      // This was the last step — mark completed
       await supabaseAdmin
         .from("sequence_enrollments")
         .update({

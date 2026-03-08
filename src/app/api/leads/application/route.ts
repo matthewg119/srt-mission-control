@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "crypto";
-import { ghl } from "@/lib/ghl";
 import { supabaseAdmin } from "@/lib/db";
-import { NEW_DEALS_PIPELINE } from "@/config/pipeline";
 import { sendEvent } from "@/lib/meta-capi";
 import { generateApplicationPDF } from "@/lib/pdf-generator";
 import { microsoft } from "@/lib/microsoft";
-import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } from "@/lib/lead-validation";
+import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
-import { notifySlack, formatApplicationComplete } from "@/lib/slack";
+import { slack } from "@/lib/slack-bot";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -21,8 +18,6 @@ export async function POST(request: NextRequest) {
   const clientUserAgent = request.headers.get("user-agent") || undefined;
 
   try {
-    // Rate limit disabled — progressive form sends 6+ requests per application
-
     const body = await request.json();
     const {
       firstName, lastName, email, businessPhone, businessName, legalName,
@@ -37,7 +32,7 @@ export async function POST(request: NextRequest) {
     } = body;
 
     let contactId: string | null = (body.contactId as string) || null;
-    let opportunityId: string | null = (body.opportunityId as string) || null;
+    let dealId: string | null = (body.opportunityId as string) || null;
 
     const completionPct = applicationCompletionPct || 0;
     const contactName = [firstName, lastName].filter(Boolean).join(" ") || businessName || "Unknown";
@@ -58,100 +53,88 @@ export async function POST(request: NextRequest) {
     // ── 25%+ and no contactId — create the lead ──
     if (!contactId && (email || businessPhone)) {
       try {
-        const result = await ghl.createOrFindContact({
-          firstName: firstName || "",
-          lastName: lastName || "",
-          email: email || undefined,
-          phone: mobilePhone || businessPhone || undefined,
-          companyName: businessName || undefined,
-          source: source || "Website - Application Form",
-          tags: ["application-started"],
-        });
-        contactId = result.contactId;
+        // Check for existing contact by email or phone
+        let existing = null;
+        if (email) {
+          const { data } = await supabaseAdmin.from("contacts").select("id").eq("email", email).maybeSingle();
+          existing = data;
+        }
+        if (!existing && (mobilePhone || businessPhone)) {
+          const { data } = await supabaseAdmin.from("contacts").select("id").eq("phone", mobilePhone || businessPhone).maybeSingle();
+          existing = data;
+        }
+
+        if (existing) {
+          contactId = existing.id;
+        } else {
+          const { data: newContact, error: insertErr } = await supabaseAdmin
+            .from("contacts")
+            .insert({
+              first_name: firstName || "",
+              last_name: lastName || "",
+              email: email || null,
+              phone: mobilePhone || businessPhone || null,
+              business_name: businessName || null,
+              source: source || "Website - Application Form",
+              tags: ["application-started"],
+              fbc: _fbc || null,
+              fbp: _fbp || null,
+              utm_campaign: utmCampaign || null,
+              utm_content: utmContent || null,
+              utm_medium: utmMedium || null,
+              ad_id: adId || utmContent || null,
+            })
+            .select("id")
+            .single();
+          if (insertErr || !newContact) throw new Error(insertErr?.message || "Contact insert failed");
+          contactId = newContact.id;
+        }
       } catch (error) {
         console.error("Contact creation failed:", error instanceof Error ? error.message : error);
-        systemAlert(
-          "GHL Contact Creation Failed",
-          `Application contact could not be created in GHL: ${error instanceof Error ? error.message : "Unknown error"}. Lead data saved locally.`,
-          "leads/application"
-        ).catch(() => {});
-        // Don't return 500 — save the lead locally instead of losing it completely
+        systemAlert("Contact Creation Failed", `Application contact could not be created: ${error instanceof Error ? error.message : "Unknown error"}. Lead data saved locally.`, "leads/application").catch(() => {});
       }
 
-      // Create opportunity — "Application Started"
-      const ghlWarnings: string[] = [];
-      if (!contactId) ghlWarnings.push("GHL contact creation failed — lead saved locally only");
-      if (contactId) {
+      // Create deal
+      if (contactId && !dealId) {
         try {
-          const stageId = await lookupNewLeadStageId();
-          if (stageId) {
-            const oppData = await ghl.createOpportunity({
-              pipelineId: NEW_DEALS_PIPELINE.id,
-              pipelineStageId: stageId,
-              contactId,
-              name: `${contactName} - Application Started`.trim(),
-              status: "open",
+          const { data: deal, error: dealErr } = await supabaseAdmin
+            .from("deals")
+            .insert({
+              contact_id: contactId,
+              pipeline: "New Deals",
+              stage: "New Lead",
+              amount: 0,
               source: source || "Website - Application",
-            });
-            const opp = oppData.opportunity as Record<string, unknown> | undefined;
-            opportunityId = (opp?.id as string) || (oppData.id as string) || null;
-            if (opportunityId) {
-              await supabaseAdmin.from("system_logs").insert({
-                event_type: "pipeline_deal_created",
-                description: `New deal: ${contactName} → New Deals / New Lead`,
-                metadata: { contactId, opportunityId, pipeline: "New Deals", stage: "New Lead", source: "application-25%" },
-              });
-            }
-          } else {
-            ghlWarnings.push("GHL stage lookup failed — lead saved locally only");
-            console.error("CRITICAL: Could not resolve 'New Lead' stage ID");
-          }
+            })
+            .select("id")
+            .single();
+          if (dealErr) throw new Error(dealErr.message);
+          dealId = deal!.id;
+
+          await supabaseAdmin.from("deal_events").insert({
+            deal_id: dealId,
+            event_type: "created",
+            description: `Application started (${completionPct}%)`,
+          });
+
+          await supabaseAdmin.from("system_logs").insert({
+            event_type: "pipeline_deal_created",
+            description: `New deal: ${contactName} → New Deals / New Lead`,
+            metadata: { contactId, dealId, pipeline: "New Deals", stage: "New Lead", source: `application-${completionPct}%` },
+          });
         } catch (error) {
-          console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
-          ghlWarnings.push("GHL opportunity creation failed — lead saved locally");
+          console.error("Deal creation error:", error instanceof Error ? error.message : error);
         }
       }
 
-      // ALWAYS cache in pipeline — even if GHL failed, dashboard must show this lead
-      const pipelineCacheId = opportunityId || `local_${randomUUID()}`;
-      let { error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
-        ghl_opportunity_id: pipelineCacheId,
-        contact_name: contactName,
-        business_name: businessName || null,
-        stage: "New Lead",
-        pipeline_name: "New Deals",
-        amount: 0,
-        ghl_contact_id: contactId,
-        fbc: _fbc || null,
-        fbp: _fbp || null,
-        utm_campaign: utmCampaign || null,
-        utm_content: utmContent || null,
-        utm_medium: utmMedium || null,
-        ad_id: adId || utmContent || null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "ghl_opportunity_id" });
-
-      if (cacheError) {
-        console.warn("pipeline_cache upsert failed, retrying with core fields only:", cacheError.message);
-        ({ error: cacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
-          ghl_opportunity_id: pipelineCacheId,
-          contact_name: contactName,
-          business_name: businessName || null,
-          stage: "New Lead",
-          pipeline_name: "New Deals",
-          amount: 0,
-        }, { onConflict: "ghl_opportunity_id" }));
-        if (cacheError) console.error("pipeline_cache write FAILED completely:", cacheError.message);
-      }
-
-      const { error: logError } = await supabaseAdmin.from("system_logs").insert({
+      // Log
+      await supabaseAdmin.from("system_logs").insert({
         event_type: "lead_capture",
-        description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})${ghlWarnings.length > 0 ? ` [${ghlWarnings.join(", ")}]` : ""}`,
-        metadata: { contactId, opportunityId: opportunityId || pipelineCacheId, contactName, email, phone: businessPhone, completionPct, clientIp, clientUserAgent, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
+        description: `Application started (${completionPct}%): ${contactName} (${email || businessPhone})`,
+        metadata: { contactId, dealId, contactName, email, phone: businessPhone, completionPct, clientIp, clientUserAgent },
       });
-      if (logError) console.error("system_logs write failed:", logError);
 
-      // Fire Meta CAPI Lead event at 25% (contact info captured)
+      // Fire Meta CAPI Lead event at 25%
       sendEvent({
         eventName: "Lead",
         eventId: eventId || undefined,
@@ -170,203 +153,191 @@ export async function POST(request: NextRequest) {
         },
       }).catch((err) => console.error("[Meta CAPI] Application Lead error:", err));
 
-      // Pre-create OneDrive folder — only when business name is provided
+      // Pre-create OneDrive folder
       if (businessName) {
         const safeName = businessName.replace(/[<>:"/\\|?*]/g, "_");
         microsoft.createDriveFolder("Working Files")
           .then(() => microsoft.createDriveFolder(safeName, "Working Files"))
           .then(() => console.log(`[25%] OneDrive folder created: Working Files/${safeName}`))
-          .catch((err) => console.warn("[25%] OneDrive folder pre-creation failed (non-blocking):", err instanceof Error ? err.message : err));
+          .catch((err) => console.warn("[25%] OneDrive folder pre-creation failed:", err instanceof Error ? err.message : err));
       }
 
-      // Enroll in application-abandoned sequence (3-min first email)
+      // Enroll in application-abandoned sequence
       if (email && contactId && completionPct < 100) {
         enrollContact("application-abandoned", contactId, email, contactName, { businessName })
           .catch((err) => console.error("[Sequence] application-abandoned enrollment error:", err));
       }
 
-      // For sub-100% requests, return now. For 100%, fall through to final submission block.
       if (completionPct < 100) {
         return NextResponse.json(
-          { success: true, message: ghlWarnings.length > 0 ? "Lead created with warnings" : "Lead created", contactId, opportunityId: opportunityId || pipelineCacheId, warnings: ghlWarnings.length > 0 ? ghlWarnings : undefined },
+          { success: true, message: "Lead created", contactId, opportunityId: dealId },
           { headers: corsHeaders }
         );
       }
-      // 100% continues below — PDF/OneDrive/email must run even if GHL failed
     }
 
     // ── 25-99% with existing contactId — enrich contact ──
     if (contactId && completionPct < 100) {
-      const updates = buildCustomFieldUpdates(body);
-      if (updates.length > 0) {
-        try { await ghl.updateContact(contactId, { customFields: updates }); } catch { /* non-critical */ }
-      }
-      // Update core contact fields
-      try {
-        const core: Record<string, unknown> = {};
-        if (mobilePhone) core.phone = mobilePhone;
-        if (legalName || businessName) core.companyName = legalName || businessName;
-        if (bizAddress) core.address1 = bizAddress;
-        if (bizCity) core.city = bizCity;
-        if (bizState) core.state = bizState;
-        if (bizZip) core.postalCode = bizZip;
-        if (Object.keys(core).length > 0) await ghl.updateContact(contactId, core);
-      } catch { /* non-critical */ }
+      const updates: Record<string, unknown> = {};
+      if (businessName) updates.business_name = businessName;
+      if (legalName) updates.legal_name = legalName;
+      if (dba) updates.dba = dba;
+      if (industry) updates.industry = industry;
+      if (ein) updates.ein = ein;
+      if (bizAddress) updates.address_street = bizAddress;
+      if (bizCity) updates.address_city = bizCity;
+      if (bizState) updates.address_state = bizState;
+      if (bizZip) updates.address_zip = bizZip;
+      if (mobilePhone) updates.mobile_phone = mobilePhone;
+      if (incDate) updates.incorporation_date = incDate;
+      else if (startMonth && startYear) updates.incorporation_date = `${startMonth} ${startYear}`;
+      if (dob) updates.dob = dob;
+      if (creditScore) updates.credit_score_range = creditScore;
+      if (ownership) updates.ownership_pct = String(ownership);
+      if (amountNeeded) updates.funding_amount_requested = amountNeeded;
+      if (useOfFunds) updates.use_of_funds = useOfFunds;
+      if (monthlyDeposits) updates.monthly_deposits = monthlyDeposits;
+      if (existingLoans) updates.existing_loans = String(existingLoans).includes("Yes") ? "Yes" : "No";
+      if (homeAddress) updates.home_address = homeAddress;
+      if (ssn4) updates.ssn_last4 = ssn4;
 
-      const { error: progressLogError } = await supabaseAdmin.from("system_logs").insert({
+      if (Object.keys(updates).length > 0) {
+        updates.updated_at = new Date().toISOString();
+        await supabaseAdmin.from("contacts").update(updates).eq("id", contactId).then(() => {});
+      }
+
+      await supabaseAdmin.from("system_logs").insert({
         event_type: "application_progress",
         description: `Application progress: ${contactName} — ${completionPct}% (${applicationStage || "in progress"})`,
-        metadata: { contactId, opportunityId, completionPct, applicationStage, clientIp },
+        metadata: { contactId, dealId, completionPct, applicationStage, clientIp },
       });
-      if (progressLogError) console.error("system_logs progress write failed:", progressLogError);
 
       return NextResponse.json(
-        { success: true, message: `Progress saved: ${completionPct}%`, contactId, opportunityId },
+        { success: true, message: `Progress saved: ${completionPct}%`, contactId, opportunityId: dealId },
         { headers: corsHeaders }
       );
     }
 
     // ── 100% — Final submission ──
-    const completionWarnings: string[] = [];
+    // Create contact if none yet (edge case: jumped to 100%)
     if (!contactId) {
       try {
-        const result = await ghl.createOrFindContact({
-          firstName: firstName || "", lastName: lastName || "",
-          email: email || undefined, phone: mobilePhone || businessPhone || undefined,
-          companyName: legalName || businessName || undefined,
-          source: source || "Website - Application Form",
-          tags: ["application-started"],
-        });
-        contactId = result.contactId;
+        let existing = null;
+        if (email) {
+          const { data } = await supabaseAdmin.from("contacts").select("id").eq("email", email).maybeSingle();
+          existing = data;
+        }
+        if (existing) {
+          contactId = existing.id;
+        } else {
+          const { data: newContact } = await supabaseAdmin
+            .from("contacts")
+            .insert({
+              first_name: firstName || "", last_name: lastName || "",
+              email: email || null, phone: mobilePhone || businessPhone || null,
+              business_name: businessName || legalName || null,
+              source: source || "Website - Application Form",
+              tags: ["application-started"],
+            })
+            .select("id")
+            .single();
+          contactId = newContact?.id || null;
+        }
       } catch (error) {
-        // Non-blocking — PDF/OneDrive/email don't need a GHL contact
-        console.error("[100%] GHL contact creation failed:", error instanceof Error ? error.message : error);
-        completionWarnings.push("GHL contact creation failed at 100%");
-        systemAlert(
-          "GHL Contact Creation Failed at 100%",
-          `Could not create GHL contact for ${contactName} (${email}): ${error instanceof Error ? error.message : "Unknown error"}. PDF/email will still be generated.`,
-          "leads/application",
-          "error"
-        ).catch(() => {});
+        console.error("[100%] Contact creation failed:", error instanceof Error ? error.message : error);
+        systemAlert("Contact Creation Failed at 100%", `Could not create contact for ${contactName} (${email})`, "leads/application", "error").catch(() => {});
       }
     }
 
     const fullAddress = [bizAddress, bizCity, bizState, bizZip].filter(Boolean).join(", ");
 
-    // Update contact with ALL fields (skip if no GHL contact)
-    if (contactId) try {
-      await ghl.updateContact(contactId, {
-        firstName: firstName || undefined,
-        lastName: lastName || undefined,
+    // Update contact with ALL fields
+    if (contactId) {
+      await supabaseAdmin.from("contacts").update({
+        first_name: firstName || undefined,
+        last_name: lastName || undefined,
         phone: mobilePhone || businessPhone || undefined,
-        companyName: legalName || businessName || undefined,
-        address1: bizAddress || undefined,
-        city: bizCity || undefined,
-        state: bizState || undefined,
-        postalCode: bizZip || undefined,
-        customFields: [
-          { key: "business_name", value: businessName || legalName || "" },
-          { key: "dba", value: dba || "" },
-          { key: "industry", value: industry || "" },
-          { key: "business_address", value: fullAddress },
-          { key: "business_phone", value: businessPhone || "" },
-          { key: "ein", value: ein || "" },
-          { key: "business_start_date", value: incDate || (startMonth && startYear ? `${startMonth} ${startYear}` : "") },
-          { key: "credit_score_range", value: creditScore || "" },
-          { key: "ownership_percentage", value: String(ownership || "") },
-          { key: "funding_amount_requested", value: amountNeeded || "" },
-          { key: "use_of_funds", value: useOfFunds || "" },
-          { key: "avg_monthly_bank_balance", value: monthlyDeposits || "" },
-          { key: "existing_loans", value: existingLoans?.includes("Yes") ? "Yes" : "No" },
-          { key: "owner_ssn_last4", value: ssn4 || "" },
-          { key: "owner_dob", value: dob || "" },
-          { key: "owner_home_address", value: homeAddress || "" },
-          { key: "application_source", value: source || "Website - Application Form" },
-          { key: "submission_date", value: new Date().toISOString().split("T")[0] },
-        ].filter((f) => f.value),
-      });
-    } catch { /* non-critical */ }
+        mobile_phone: mobilePhone || undefined,
+        business_name: businessName || legalName || undefined,
+        legal_name: legalName || undefined,
+        dba: dba || undefined,
+        industry: industry || undefined,
+        ein: ein || undefined,
+        incorporation_date: incDate || (startMonth && startYear ? `${startMonth} ${startYear}` : undefined),
+        address_street: bizAddress || undefined,
+        address_city: bizCity || undefined,
+        address_state: bizState || undefined,
+        address_zip: bizZip || undefined,
+        credit_score_range: creditScore || undefined,
+        ownership_pct: ownership ? String(ownership) : undefined,
+        funding_amount_requested: amountNeeded || undefined,
+        use_of_funds: useOfFunds || undefined,
+        monthly_deposits: monthlyDeposits || undefined,
+        existing_loans: existingLoans ? (String(existingLoans).includes("Yes") ? "Yes" : "No") : undefined,
+        ssn_last4: ssn4 || undefined,
+        dob: dob || undefined,
+        home_address: homeAddress || undefined,
+        signature_name: signatureName || undefined,
+        updated_at: new Date().toISOString(),
+      }).eq("id", contactId).then(() => {});
+    }
 
-    // Create opportunity if none yet
-    if (!opportunityId && contactId) {
+    // Create deal if none yet
+    if (!dealId && contactId) {
       try {
-        const stageId = await lookupNewLeadStageId();
-        if (stageId) {
-          const oppData = await ghl.createOpportunity({
-            pipelineId: NEW_DEALS_PIPELINE.id,
-            pipelineStageId: stageId,
-            contactId,
-            name: `${contactName} - Application Started`.trim(),
-            status: "open",
+        const { data: deal } = await supabaseAdmin
+          .from("deals")
+          .insert({
+            contact_id: contactId,
+            pipeline: "New Deals",
+            stage: "New Lead",
+            amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
             source: source || "Website - Application",
-            monetaryValue: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
+          })
+          .select("id")
+          .single();
+        dealId = deal?.id || null;
+        if (dealId) {
+          await supabaseAdmin.from("deal_events").insert({
+            deal_id: dealId,
+            event_type: "created",
+            description: `Application completed (100%)`,
           });
-          const opp = oppData.opportunity as Record<string, unknown> | undefined;
-          opportunityId = (opp?.id as string) || (oppData.id as string) || null;
-          if (opportunityId) {
-            await supabaseAdmin.from("system_logs").insert({
-              event_type: "pipeline_deal_created",
-              description: `New deal: ${contactName} → New Deals / New Lead (100% application)`,
-              metadata: { contactId, opportunityId, pipeline: "New Deals", stage: "New Lead", source: "application-100%" },
-            });
-          }
-        } else {
-          completionWarnings.push("GHL stage lookup failed at 100% — lead saved locally only");
-          console.error("CRITICAL: Could not resolve 'New Lead' stage ID at 100% completion");
+          await supabaseAdmin.from("system_logs").insert({
+            event_type: "pipeline_deal_created",
+            description: `New deal: ${contactName} → New Deals / New Lead (100% application)`,
+            metadata: { contactId, dealId, pipeline: "New Deals", stage: "New Lead", source: "application-100%" },
+          });
         }
       } catch (error) {
-        console.error("Opportunity creation error:", error instanceof Error ? error.message : error);
-        completionWarnings.push("GHL opportunity creation failed at 100% — lead saved locally");
+        console.error("Deal creation error at 100%:", error instanceof Error ? error.message : error);
       }
-    }
-
-    // ALWAYS update pipeline cache with full data + amount — even if GHL failed
-    const finalCacheId = opportunityId || `local_${randomUUID()}`;
-    let { error: finalCacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
-      ghl_opportunity_id: finalCacheId,
-      contact_name: contactName,
-      business_name: businessName || legalName || null,
-      stage: "New Lead",
-      pipeline_name: "New Deals",
-      amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
-      ghl_contact_id: contactId,
-      fbc: _fbc || null,
-      fbp: _fbp || null,
-      utm_campaign: utmCampaign || null,
-      utm_content: utmContent || null,
-      utm_medium: utmMedium || null,
-      ad_id: adId || utmContent || null,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "ghl_opportunity_id" });
-
-    if (finalCacheError) {
-      console.warn("pipeline_cache 100% upsert failed, retrying with core fields only:", finalCacheError.message);
-      ({ error: finalCacheError } = await supabaseAdmin.from("pipeline_cache").upsert({
-        ghl_opportunity_id: finalCacheId,
-        contact_name: contactName,
-        business_name: businessName || legalName || null,
-        stage: "New Lead",
-        pipeline_name: "New Deals",
+    } else if (dealId) {
+      // Update deal amount
+      await supabaseAdmin.from("deals").update({
         amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
-      }, { onConflict: "ghl_opportunity_id" }));
-      if (finalCacheError) console.error("pipeline_cache 100% write FAILED completely:", finalCacheError.message);
+        updated_at: new Date().toISOString(),
+      }).eq("id", dealId);
     }
 
-    const { error: completionLogError } = await supabaseAdmin.from("system_logs").insert({
+    // Log completion
+    await supabaseAdmin.from("system_logs").insert({
       event_type: "lead_capture",
       description: `Application completed: ${contactName} — ${businessName || "N/A"} — ${amountNeeded || "N/A"}`,
-      metadata: { contactId, opportunityId: opportunityId || finalCacheId, contactName, businessName, email, amountNeeded, creditScore, clientIp, clientUserAgent, hasSignature: !!signature, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
+      metadata: { contactId, dealId, contactName, businessName, email, amountNeeded, creditScore, clientIp, clientUserAgent, hasSignature: !!signature },
     });
-    if (completionLogError) console.error("system_logs 100% write failed:", completionLogError);
 
-    // Slack notification (non-blocking)
-    notifySlack(formatApplicationComplete({
-      name: contactName,
-      businessName: businessName || legalName,
-      amountNeeded,
-      email,
-      phone: mobilePhone || businessPhone,
-    })).catch(() => {});
+    // Slack notification to #hot-leads
+    const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+    if (hotLeadsChannel) {
+      const lines = [`🟢 *Application Completed: ${contactName}*`];
+      if (businessName) lines.push(`Business: ${businessName}`);
+      if (amountNeeded) lines.push(`Amount: ${amountNeeded}`);
+      if (email) lines.push(`Email: ${email}`);
+      if (mobilePhone || businessPhone) lines.push(`Phone: ${mobilePhone || businessPhone}`);
+      lines.push("Source: Application (100%)");
+      slack.postMessage(hotLeadsChannel, lines.join("\n")).catch(() => {});
+    }
 
     // Fire Meta CAPI CompleteRegistration at 100%
     sendEvent({
@@ -395,35 +366,34 @@ export async function POST(request: NextRequest) {
       },
     }).catch((err) => console.error("[Meta CAPI] CompleteRegistration error:", err));
 
-    // ── Tag "application" at 100% + cancel abandonment sequences ──
+    // Tag "application-completed" + cancel abandonment sequences
     if (contactId) {
+      // Add tag directly in contacts table
       try {
-        await ghl.addContactTag(contactId, "application-completed");
-        console.log("[100%] Tag 'application-completed' added via addContactTag");
-      } catch (err) {
-        console.error("[100%] addContactTag failed, trying updateContact:", err instanceof Error ? err.message : err);
-        // Fallback: use updateContact to set tags directly
-        try {
-          await ghl.updateContact(contactId, { tags: ["application-started", "application-completed"] });
-          console.log("[100%] Tag 'application-completed' added via updateContact fallback");
-        } catch (err2) {
-          console.error("[100%] updateContact tag fallback also failed:", err2 instanceof Error ? err2.message : err2);
+        const { data: existing } = await supabaseAdmin
+          .from("contacts")
+          .select("tags")
+          .eq("id", contactId!)
+          .single();
+        const currentTags = (existing?.tags as string[]) || [];
+        if (!currentTags.includes("application-completed")) {
+          await supabaseAdmin
+            .from("contacts")
+            .update({ tags: [...currentTags, "application-completed"] })
+            .eq("id", contactId!);
         }
-      }
+      } catch { /* ignore tag errors */ }
 
-      // Cancel the abandonment sequence now that they completed
       cancelByTag(contactId, "application-completed")
         .catch((err) => console.error("[Sequence] Cancel by tag error:", err));
 
-      // Enroll in the completed application nurture sequence
       if (email) {
         enrollContact("application-completed-nurture", contactId, email, contactName, { businessName, amountNeeded })
           .catch((err) => console.error("[Sequence] application-completed-nurture enrollment error:", err));
       }
     }
 
-    // ── PDF → OneDrive → GHL note → Confirmation email ──
-    // Must run BEFORE returning response — Vercel kills serverless functions after response
+    // ── PDF → OneDrive → Note → Confirmation email ──
     const safeName = (businessName || legalName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
     try {
       const pdfBuffer = generateApplicationPDF({
@@ -436,7 +406,7 @@ export async function POST(request: NextRequest) {
         signatureName: signatureName || contactName,
       });
 
-      // Create OneDrive folder + upload PDF
+      // Upload to OneDrive
       try {
         await microsoft.createDriveFolder("Working Files");
         await microsoft.createDriveFolder(safeName, "Working Files");
@@ -448,7 +418,6 @@ export async function POST(request: NextRequest) {
         );
         console.log(`[100%] PDF uploaded to OneDrive: Working Files/${safeName}`);
 
-        // Log success to system_logs (system_alerts has schema cache issues)
         await supabaseAdmin.from("system_logs").insert({
           event_type: "application_pdf",
           description: `PDF uploaded: Working Files/${safeName}/Application - ${safeName}.pdf`,
@@ -456,25 +425,22 @@ export async function POST(request: NextRequest) {
         });
       } catch (err) {
         console.error("[100%] OneDrive upload failed:", err instanceof Error ? err.message : err);
-        await supabaseAdmin.from("system_logs").insert({
-          event_type: "application_error",
-          description: `[100%] OneDrive upload failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown"}`,
-          metadata: { contactId, error: err instanceof Error ? err.message : String(err) },
-        });
-        systemAlert(
-          "OneDrive Upload Failed",
-          `PDF upload failed for ${contactName} (${businessName}): ${err instanceof Error ? err.message : "Unknown error"}`,
-          "leads/application",
-          "error"
-        ).catch(() => {});
+        systemAlert("OneDrive Upload Failed", `PDF upload failed for ${contactName} (${businessName}): ${err instanceof Error ? err.message : "Unknown error"}`, "leads/application", "error").catch(() => {});
       }
 
-      // Add GHL note with OneDrive link
+      // Add note
       if (contactId) {
-        await ghl.addNote(contactId, `Application PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`).catch(() => {});
+        try {
+          await supabaseAdmin.from("deal_notes").insert({
+            contact_id: contactId,
+            opportunity_id: dealId,
+            body: `Application PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`,
+            author: "System",
+          });
+        } catch { /* ignore */ }
       }
 
-      // Send applicant confirmation email with PDF copy attached
+      // Send confirmation email with PDF
       if (email) {
         try {
           const summaryHtml = buildApplicationSummaryEmail({ firstName });
@@ -492,40 +458,17 @@ export async function POST(request: NextRequest) {
           console.log("[100%] Confirmation email with PDF sent to", email);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          console.error("[100%] Microsoft email failed, falling back to GHL:", errMsg);
-          systemAlert(
-            "Email Delivery Failed",
-            `Microsoft 365 could not send confirmation email to ${email}: ${errMsg.slice(0, 200)}`,
-            "leads/application",
-            "warning"
-          ).catch(() => {});
-          // Fallback to GHL email (no attachment)
-          if (contactId) {
-            await ghl.sendEmail(
-              contactId,
-              "Your SRT Agency Application — Received",
-              buildApplicationSummaryEmail({ firstName })
-            ).catch(err2 => console.error("[100%] GHL email fallback also failed:", err2));
-          }
+          console.error("[100%] Microsoft email failed:", errMsg);
+          systemAlert("Email Delivery Failed", `Microsoft 365 could not send confirmation email to ${email}: ${errMsg.slice(0, 200)}`, "leads/application", "warning").catch(() => {});
         }
       }
     } catch (err) {
       console.error("[100%] Post-submission tasks failed:", err instanceof Error ? err.message : err);
-      await supabaseAdmin.from("system_logs").insert({
-        event_type: "application_error",
-        description: `[100%] Post-processing failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown"}`,
-        metadata: { contactId, error: err instanceof Error ? err.message : String(err) },
-      });
-      systemAlert(
-        "Application Post-Processing Failed",
-        `PDF/OneDrive/Email failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown error"}`,
-        "leads/application",
-        "error"
-      ).catch(() => {});
+      systemAlert("Application Post-Processing Failed", `PDF/OneDrive/Email failed for ${contactName}: ${err instanceof Error ? err.message : "Unknown error"}`, "leads/application", "error").catch(() => {});
     }
 
     return NextResponse.json(
-      { success: true, message: completionWarnings.length > 0 ? "Application submitted with warnings" : "Application submitted successfully", contactId, opportunityId: opportunityId || finalCacheId, warnings: completionWarnings.length > 0 ? completionWarnings : undefined },
+      { success: true, message: "Application submitted successfully", contactId, opportunityId: dealId },
       { headers: corsHeaders }
     );
   } catch (error) {
@@ -537,53 +480,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Cache stage ID across requests (same serverless instance)
-let cachedNewLeadStageId: string | null = null;
-
-async function lookupNewLeadStageId(): Promise<string | null> {
-  if (cachedNewLeadStageId) return cachedNewLeadStageId;
-  try {
-    const pipelinesResponse = await ghl.getPipelines();
-    const allPipelines = (pipelinesResponse.pipelines as Array<Record<string, unknown>>) || [];
-    const pipeline = allPipelines.find((p) => (p.id as string) === NEW_DEALS_PIPELINE.id);
-    if (!pipeline) return null;
-    const stages = (pipeline.stages as Array<Record<string, unknown>>) || [];
-    const stage = stages.find((s) => (s.name as string).toLowerCase() === "new lead");
-    if (stage) {
-      cachedNewLeadStageId = stage.id as string;
-      return cachedNewLeadStageId;
-    }
-  } catch (err) {
-    console.error("Stage lookup failed:", err instanceof Error ? err.message : err);
-  }
-  return null;
-}
-
-function buildCustomFieldUpdates(body: Record<string, unknown>): Array<{ key: string; value: string }> {
-  const fields: Array<{ key: string; value: string }> = [];
-  const add = (key: string, val: unknown) => {
-    if (val && String(val).trim()) fields.push({ key, value: String(val) });
-  };
-  add("business_name", body.businessName || body.legalName);
-  add("dba", body.dba);
-  add("industry", body.industry);
-  add("business_phone", body.businessPhone);
-  add("ein", body.ein);
-  if (body.bizAddress) add("business_address", [body.bizAddress, body.bizCity, body.bizState, body.bizZip].filter(Boolean).join(", "));
-  if (body.incDate) add("business_start_date", String(body.incDate));
-  else if (body.startMonth && body.startYear) add("business_start_date", `${body.startMonth} ${body.startYear}`);
-  add("credit_score_range", body.creditScore);
-  add("ownership_percentage", body.ownership);
-  add("funding_amount_requested", body.amountNeeded);
-  add("use_of_funds", body.useOfFunds);
-  add("avg_monthly_bank_balance", body.monthlyDeposits);
-  if (body.existingLoans) add("existing_loans", String(body.existingLoans).includes("Yes") ? "Yes" : "No");
-  return fields;
-}
-
-function buildApplicationSummaryEmail(data: {
-  firstName?: string;
-}): string {
+function buildApplicationSummaryEmail(data: { firstName?: string }): string {
   return `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
   <div style="background:#0d1b2a;padding:28px 24px;text-align:center">

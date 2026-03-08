@@ -144,15 +144,7 @@ export default function PlannerPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/ghl/sync")
-      .then(() =>
-        fetch("/api/integrations")
-          .then((r) => r.json())
-          .catch(() => ({ integrations: [] }))
-      )
-      .catch(() => {});
-
-    // Load deals from pipeline_cache via a lightweight endpoint
+    // Load deals via a lightweight endpoint
     async function loadDeals() {
       try {
         const res = await fetch("/api/pipeline/deals");
@@ -292,7 +284,7 @@ export default function PlannerPage() {
             <div className="mt-1 max-h-48 overflow-y-auto space-y-1">
               {deals.length === 0 && (
                 <p className="text-xs text-[rgba(255,255,255,0.3)] p-2">
-                  No deals in pipeline. Sync GHL or add leads first.
+                  No deals in pipeline yet. Leads will appear here from your website.
                 </p>
               )}
               {deals.map((d) => (

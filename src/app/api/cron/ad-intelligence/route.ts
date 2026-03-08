@@ -11,11 +11,16 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     // 1. Fetch recent pipeline data for context
-    const { data: pipelineData } = await supabaseAdmin
-      .from("pipeline_cache")
-      .select("business_name, stage, amount")
+    const { data: rawPipelineData } = await supabaseAdmin
+      .from("deals")
+      .select("stage, amount, contacts(business_name)")
       .order("updated_at", { ascending: false })
       .limit(20);
+
+    const pipelineData = (rawPipelineData || []).map((d) => {
+      const c = d.contacts as unknown as { business_name: string } | null;
+      return { business_name: c?.business_name || "Unknown", stage: d.stage, amount: d.amount };
+    });
 
     const { data: recentLogs } = await supabaseAdmin
       .from("system_logs")

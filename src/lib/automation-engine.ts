@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/lib/db";
-import { ghl } from "@/lib/ghl";
+import { microsoft } from "@/lib/microsoft";
 import { DEFAULT_AUTOMATIONS, type AutomationAction, type AutomationRule } from "@/config/automations";
 import { renderTemplate, type TemplateContext } from "@/lib/template-renderer";
 
@@ -42,7 +42,7 @@ function buildTemplateContext(opp: OpportunityContext): TemplateContext {
 async function executeAction(
   action: AutomationAction,
   context: TemplateContext,
-  opportunityId: string,
+  dealId: string,
   contactId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -53,7 +53,6 @@ async function executeAction(
           return { success: false, error: "No template slug specified" };
         }
 
-        // Fetch the template
         const { data: template } = await supabaseAdmin
           .from("message_templates")
           .select("*")
@@ -74,23 +73,44 @@ async function executeAction(
           `[Automation] ${action.type.toUpperCase()}: ${renderedSubject || ""} → ${renderedBody.slice(0, 100)}...`
         );
 
-        // Send via GHL if it's an email and we have a contactId
         let sendStatus = "queued";
         let sendError: string | undefined;
 
         if (action.type === "send_email" && contactId) {
           try {
-            await ghl.sendEmail(contactId, renderedSubject || "SRT Agency", renderedBody);
-            sendStatus = "sent";
+            // Look up contact email
+            const { data: contact } = await supabaseAdmin
+              .from("contacts")
+              .select("email")
+              .eq("id", contactId)
+              .single();
+
+            if (contact?.email) {
+              await microsoft.sendMail({
+                to: contact.email,
+                subject: renderedSubject || "SRT Agency",
+                body: renderedBody,
+                isHtml: true,
+              });
+              sendStatus = "sent";
+            } else {
+              sendStatus = "send_failed";
+              sendError = "Contact has no email address";
+            }
           } catch (err) {
             sendError = err instanceof Error ? err.message : String(err);
             sendStatus = "send_failed";
-            console.error(`[Automation] GHL email send failed:`, sendError);
+            console.error(`[Automation] Email send failed:`, sendError);
           }
         }
 
+        if (action.type === "send_sms") {
+          sendStatus = "skipped";
+          sendError = "SMS not available — Twilio integration coming soon";
+        }
+
         await supabaseAdmin.from("automation_logs").insert({
-          opportunity_id: opportunityId,
+          opportunity_id: dealId,
           contact_id: contactId,
           action_type: action.type,
           template_slug: action.templateSlug,
@@ -114,9 +134,35 @@ async function executeAction(
         if (action.tag && contactId) {
           try {
             if (action.type === "add_tag") {
-              await ghl.addContactTag(contactId, action.tag);
+              // Update contacts table directly
+              const { data: contact } = await supabaseAdmin
+                .from("contacts")
+                .select("tags")
+                .eq("id", contactId)
+                .single();
+
+              const currentTags = (contact?.tags as string[]) || [];
+              if (!currentTags.includes(action.tag)) {
+                await supabaseAdmin
+                  .from("contacts")
+                  .update({ tags: [...currentTags, action.tag] })
+                  .eq("id", contactId);
+              }
+            } else {
+              // remove_tag
+              const { data: contact } = await supabaseAdmin
+                .from("contacts")
+                .select("tags")
+                .eq("id", contactId)
+                .single();
+
+              const currentTags = (contact?.tags as string[]) || [];
+              const newTags = currentTags.filter((t) => t !== action.tag);
+              await supabaseAdmin
+                .from("contacts")
+                .update({ tags: newTags })
+                .eq("id", contactId);
             }
-            // GHL doesn't have a simple remove tag endpoint — skip for now
           } catch (err) {
             tagError = err instanceof Error ? err.message : String(err);
             console.error(`[Automation] Tag operation failed:`, tagError);
@@ -124,7 +170,7 @@ async function executeAction(
         }
 
         await supabaseAdmin.from("automation_logs").insert({
-          opportunity_id: opportunityId,
+          opportunity_id: dealId,
           contact_id: contactId,
           action_type: action.type,
           status: tagError ? "error" : "success",
@@ -140,11 +186,11 @@ async function executeAction(
         await supabaseAdmin.from("system_logs").insert({
           event_type: "automation_notify",
           description: `[Auto] ${action.message} — ${context.business_name || "Unknown"} (${context.contact_name || "Unknown"})`,
-          metadata: { opportunityId, contactId, message: action.message },
+          metadata: { dealId, contactId, message: action.message },
         });
 
         await supabaseAdmin.from("automation_logs").insert({
-          opportunity_id: opportunityId,
+          opportunity_id: dealId,
           contact_id: contactId,
           action_type: "notify_team",
           status: "success",
@@ -190,7 +236,6 @@ export async function processStageChange(
       pipelineName,
     });
 
-    // Log the stage change
     await supabaseAdmin.from("automation_logs").insert({
       opportunity_id: opportunityData.opportunityId || "",
       contact_id: opportunityData.contactId || "",
@@ -202,10 +247,8 @@ export async function processStageChange(
     });
 
     for (const action of rule.actions) {
-      // Apply delay if specified (for now just log it)
       if (action.delayMinutes && action.delayMinutes > 0) {
         console.log(`[Automation] Delayed action: ${action.type} in ${action.delayMinutes}min`);
-        // TODO: implement actual delay queue
       }
 
       const result = await executeAction(
@@ -242,37 +285,40 @@ export async function processStaleDeals(): Promise<{ checked: number; actioned: 
     const cutoff = new Date(Date.now() - (rule.staleDays! * 24 * 60 * 60 * 1000)).toISOString();
 
     const { data: staleDeals } = await supabaseAdmin
-      .from("pipeline_cache")
-      .select("*")
+      .from("deals")
+      .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
       .eq("stage", rule.stage)
-      .eq("pipeline_name", rule.pipeline)
+      .eq("pipeline", rule.pipeline)
       .lt("updated_at", cutoff);
 
     checked += staleDeals?.length || 0;
 
     for (const deal of staleDeals || []) {
+      const c = deal.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
+      const contactName = c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown";
+
       // Check if we already fired this stale rule for this deal recently (last 24h)
       const { count } = await supabaseAdmin
         .from("automation_logs")
         .select("*", { count: "exact", head: true })
-        .eq("opportunity_id", deal.ghl_opportunity_id)
+        .eq("opportunity_id", deal.id)
         .eq("action_type", "stale_check")
         .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
 
-      if (count && count > 0) continue; // Already notified today
+      if (count && count > 0) continue;
 
       const context = buildTemplateContext({
-        opportunityId: deal.ghl_opportunity_id,
-        contactName: deal.contact_name,
-        firstName: deal.contact_name?.split(" ")[0],
-        businessName: deal.business_name,
+        opportunityId: deal.id,
+        contactId: deal.contact_id,
+        contactName,
+        firstName: contactName.split(" ")[0],
+        businessName: c?.business_name || "",
         stageName: deal.stage,
-        pipelineName: deal.pipeline_name,
+        pipelineName: deal.pipeline,
       });
 
-      // Log the stale check
       await supabaseAdmin.from("automation_logs").insert({
-        opportunity_id: deal.ghl_opportunity_id,
+        opportunity_id: deal.id,
         action_type: "stale_check",
         to_stage: rule.stage,
         status: "success",
@@ -280,12 +326,7 @@ export async function processStaleDeals(): Promise<{ checked: number; actioned: 
       });
 
       for (const action of rule.actions) {
-        await executeAction(
-          action,
-          context,
-          deal.ghl_opportunity_id,
-          ""
-        );
+        await executeAction(action, context, deal.id, deal.contact_id || "");
       }
 
       actioned++;

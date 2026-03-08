@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
-import { ghl } from "@/lib/ghl";
+import { supabaseAdmin } from "@/lib/db";
 import { systemAlert } from "@/lib/notify";
 
 const CORS_HEADERS = {
@@ -13,11 +13,6 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
-/**
- * POST /api/files/upload
- * Receives files + metadata, uploads to OneDrive and adds GHL note.
- * Body: multipart/form-data with files[] + contactId + businessName
- */
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -31,7 +26,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get all files from form data
     const files: File[] = [];
     for (const [key, value] of formData.entries()) {
       if (value instanceof File && key === "files") {
@@ -47,9 +41,8 @@ export async function POST(request: NextRequest) {
     }
 
     const folderName = (businessName || "Unknown Business").replace(/[<>:"/\\|?*]/g, "_");
-    const results: Array<{ fileName: string; oneDrive?: string; ghl?: string; error?: string }> = [];
+    const results: Array<{ fileName: string; oneDrive?: string; error?: string }> = [];
 
-    // Create OneDrive folder (non-blocking failure)
     let folderCreated = false;
     try {
       await microsoft.createDriveFolder("Working Files");
@@ -60,13 +53,12 @@ export async function POST(request: NextRequest) {
     }
 
     for (const file of files) {
-      const result: { fileName: string; oneDrive?: string; ghl?: string; error?: string } = {
+      const result: { fileName: string; oneDrive?: string; error?: string } = {
         fileName: file.name,
       };
 
       const buffer = Buffer.from(await file.arrayBuffer());
 
-      // Upload to OneDrive (optional — doesn't block success)
       if (folderCreated) {
         try {
           const driveResult = await microsoft.uploadDriveFile(
@@ -77,7 +69,6 @@ export async function POST(request: NextRequest) {
           );
           result.oneDrive = driveResult.webUrl;
         } catch (err) {
-          // OneDrive is optional — log but don't surface as user-facing error
           console.error("OneDrive upload failed:", err instanceof Error ? err.message : err);
         }
       }
@@ -85,7 +76,7 @@ export async function POST(request: NextRequest) {
       results.push(result);
     }
 
-    // Add GHL note with file list + OneDrive links, then alert the team
+    // Add note to deal_notes instead of GHL
     if (contactId && files.length > 0) {
       const fileNames = results.map(r => r.fileName).join(", ");
       const oneDriveLinks = results
@@ -93,8 +84,15 @@ export async function POST(request: NextRequest) {
         .map(r => `• ${r.fileName}: ${r.oneDrive}`)
         .join("\n");
       const noteBody = `Bank statements received (${files.length} file${files.length > 1 ? "s" : ""}): ${fileNames}.${oneDriveLinks ? `\n\nOneDrive:\n${oneDriveLinks}` : ""}\n\nReady for underwriting review.`;
-      ghl.addNote(contactId, noteBody).catch(() => {});
-      results.forEach(r => { r.ghl = "noted"; });
+
+      try {
+        await supabaseAdmin.from("deal_notes").insert({
+          contact_id: contactId,
+          body: noteBody,
+          author: "System",
+        });
+      } catch { /* ignore */ }
+
       systemAlert(
         "Bank Statements Received",
         `${businessName || "Applicant"} uploaded ${files.length} document(s). Ready for review.`,

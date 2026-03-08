@@ -5,14 +5,26 @@ import { supabaseAdmin } from "@/lib/db";
 export async function GET() {
   try {
     const { data, error } = await supabaseAdmin
-      .from("pipeline_cache")
-      .select("id, contact_name, business_name, stage, amount, assigned_to")
+      .from("deals")
+      .select("id, stage, pipeline, amount, assigned_to, contact_id, contacts(first_name, last_name, business_name)")
       .order("updated_at", { ascending: false })
       .limit(100);
 
     if (error) throw error;
 
-    return NextResponse.json({ deals: data || [] });
+    const deals = (data || []).map((d) => {
+      const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
+      return {
+        id: d.id,
+        contact_name: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
+        business_name: c?.business_name || "",
+        stage: d.stage,
+        amount: d.amount,
+        assigned_to: d.assigned_to,
+      };
+    });
+
+    return NextResponse.json({ deals });
   } catch (error) {
     console.error("Pipeline deals error:", error);
     return NextResponse.json({ deals: [] }, { status: 500 });
