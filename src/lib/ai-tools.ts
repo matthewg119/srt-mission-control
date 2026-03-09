@@ -31,7 +31,7 @@ export const AI_TOOLS = [
         stage: {
           type: "string",
           description:
-            "The stage name, e.g. 'Open - Not Contacted', 'Working - Contacted', 'Working - Application Out', 'Converted', 'Contract In', 'Pending Stips', 'Funding Call', 'In Funding', 'Funded', 'Deal Lost'",
+            "The stage name, e.g. 'Open - Not Contacted', 'Working - Contacted', 'Converted', 'Underwriting', 'Shopping', 'Pre-Approved', 'Approved', 'VC / DL', 'Contracts Out', 'Contracts In', 'Pending Stips', 'Funding Call', 'In Funding', 'Closed', 'Deal Lost'",
         },
         pipeline: {
           type: "string",

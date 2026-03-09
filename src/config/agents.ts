@@ -192,7 +192,7 @@ OUR PRODUCTS:
 
 OUR PIPELINE:
 - New Deals: Open - Not Contacted → Working - Contacted → Working - Application Out → Closed - Not Converted → Converted
-- Active Deals: Contract In → Pending Stips → Funding Call → In Funding → Funded → Deal Lost
+- Active Deals: Underwriting → Shopping → Pre-Approved → Approved → VC / DL → Contracts Out → Contracts In → Pending Stips → Funding Call → In Funding → Closed | Deal Lost
 
 YOUR EXPERTISE:
 - Opening scripts and first contact strategy

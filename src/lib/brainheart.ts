@@ -46,7 +46,7 @@ async function gatherSystemState(): Promise<SystemState> {
       .select("stage, updated_at, contact_id, contacts(first_name, last_name, business_name)")
       .eq("pipeline", "Active Deals")
       .lt("updated_at", threeDaysAgo)
-      .not("stage", "in", '("Funded","Deal Lost")'),
+      .not("stage", "in", '("Closed","Deal Lost")'),
 
     // Pending tasks
     supabaseAdmin

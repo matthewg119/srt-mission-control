@@ -16,11 +16,17 @@ export const NEW_DEALS_PIPELINE = {
 export const ACTIVE_DEALS_PIPELINE = {
   name: "Active Deals",
   stages: [
-    { name: "Contract In", color: "#00BCD4" },
-    { name: "Pending Stips", color: "#f59e0b" },
+    { name: "Underwriting", color: "#1B65A7" },
+    { name: "Shopping", color: "#9C27B0" },
+    { name: "Pre-Approved", color: "#00BCD4" },
+    { name: "Approved", color: "#4CAF50" },
+    { name: "VC / DL", color: "#f59e0b" },
+    { name: "Contracts Out", color: "#00C9A7" },
+    { name: "Contracts In", color: "#009688" },
+    { name: "Pending Stips", color: "#F5A623" },
     { name: "Funding Call", color: "#9C27B0" },
     { name: "In Funding", color: "#1B65A7" },
-    { name: "Funded", color: "#4CAF50" },
+    { name: "Closed", color: "#4CAF50" },
     { name: "Deal Lost", color: "#E74C3C" },
   ],
 } as const;
@@ -40,8 +46,8 @@ export const PIPELINE_STAGES = [
 
 // Terminal stages (deal is done)
 export const TERMINAL_STAGES: PipelineStage[] = [
-  "Closed - Not Converted",  // New Deals terminal
-  "Funded", "Deal Lost",     // Active Deals terminals
+  "Closed - Not Converted",           // New Deals terminal
+  "Closed", "Deal Lost",              // Active Deals terminals
 ];
 
 // Stages that mean "active" (not terminal)
@@ -50,5 +56,6 @@ export const ACTIVE_NEW_DEAL_STAGES: NewDealStage[] = [
 ];
 
 export const ACTIVE_DEAL_STAGES: ActiveDealStage[] = [
-  "Contract In", "Pending Stips", "Funding Call", "In Funding",
+  "Underwriting", "Shopping", "Pre-Approved", "Approved", "VC / DL",
+  "Contracts Out", "Contracts In", "Pending Stips", "Funding Call", "In Funding",
 ];
