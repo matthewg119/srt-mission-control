@@ -219,7 +219,7 @@ interface CsvRow {
   stage: string;
 }
 
-function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: (deals: Deal[]) => void }) {
+function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<CsvRow[]>([]);
   const [importing, setImporting] = useState(false);
@@ -264,65 +264,46 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
     reader.readAsText(file);
   };
 
+  const BATCH_SIZE = 500;
+
   const handleImport = async () => {
     if (!rows.length) return;
     setImporting(true);
     setProgress(0);
-    const created: Deal[] = [];
+    let totalCreated = 0;
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+    // Send in batches of 500
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE).map((r) => ({
+        first_name: r.first_name || "Unknown",
+        last_name: r.last_name || undefined,
+        business_name: r.business_name || undefined,
+        email: r.email || undefined,
+        phone: r.phone || undefined,
+        amount: r.amount ? parseFloat(r.amount.replace(/[$,]/g, "")) : 0,
+        pipeline: r.pipeline || "New Deals",
+        stage: r.stage || "Open - Not Contacted",
+      }));
+
       try {
-        const contactRes = await fetch("/api/contacts", {
+        const res = await fetch("/api/contacts/bulk", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            first_name: row.first_name || "Unknown",
-            last_name: row.last_name || null,
-            email: row.email || null,
-            phone: row.phone || null,
-            business_name: row.business_name || null,
-            source: "Import",
-          }),
+          body: JSON.stringify({ rows: batch }),
         });
-        const contactData = await contactRes.json();
-        if (!contactRes.ok) continue;
-
-        const dealRes = await fetch("/api/deals", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contact_id: contactData.contact.id,
-            pipeline: row.pipeline || "New Deals",
-            stage: row.stage || "Open - Not Contacted",
-            amount: row.amount ? parseFloat(row.amount.replace(/[$,]/g, "")) : 0,
-            source: "Import",
-          }),
-        });
-        const dealData = await dealRes.json();
-        if (!dealRes.ok) continue;
-
-        const c = contactData.contact;
-        created.push({
-          id: dealData.deal.id,
-          contact_name: `${c.first_name || ""} ${c.last_name || ""}`.trim(),
-          business_name: c.business_name || "",
-          stage: dealData.deal.stage,
-          pipeline: dealData.deal.pipeline,
-          amount: dealData.deal.amount,
-          assigned_to: dealData.deal.assigned_to,
-          last_activity: dealData.deal.updated_at,
-          updated_at: dealData.deal.updated_at,
-        });
+        const data = await res.json();
+        if (res.ok) totalCreated += data.created || 0;
       } catch {
-        // skip failed rows
+        // continue with next batch
       }
-      setProgress(i + 1);
+
+      setProgress(Math.min(i + BATCH_SIZE, rows.length));
     }
 
     setImporting(false);
     setDone(true);
-    onImported(created);
+    // Reload the page to show the new leads
+    setTimeout(() => window.location.reload(), 1500);
   };
 
   return (
@@ -396,7 +377,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
 
           {done && (
             <p className="text-center text-[#00C9A7] text-sm font-semibold">
-              Import complete! {progress} leads created.
+              Import complete! Reloading pipeline...
             </p>
           )}
 
@@ -793,7 +774,7 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
       {showImportModal && (
         <ImportModal
           onClose={() => setShowImportModal(false)}
-          onImported={(newDeals) => setDeals((prev) => [...newDeals, ...prev])}
+          onImported={() => window.location.reload()}
         />
       )}
     </div>
