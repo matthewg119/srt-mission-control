@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
+import Link from "next/link";
 import { NEW_DEALS_PIPELINE, ACTIVE_DEALS_PIPELINE } from "@/config/pipeline";
 import { formatCurrency } from "@/lib/utils";
 
@@ -134,9 +135,10 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
                   stageDeals.map((deal) => {
                     const days = getDaysInStage(deal.last_activity);
                     return (
-                      <div
+                      <Link
                         key={deal.id}
-                        className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg p-3 card-hover"
+                        href={`/dashboard/deals/${deal.id}`}
+                        className="block bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg p-3 card-hover hover:border-[rgba(255,255,255,0.15)] transition-colors"
                       >
                         <p className="font-semibold text-white text-sm mb-1">
                           {deal.business_name || "Unknown Business"}
@@ -169,7 +171,7 @@ export function PipelineBoard({ initialDeals }: PipelineBoardProps) {
                             )}
                           </div>
                         </div>
-                      </div>
+                      </Link>
                     );
                   })
                 )}

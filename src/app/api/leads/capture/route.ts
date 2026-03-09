@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
         .insert({
           contact_id: contactId,
           pipeline: "New Deals",
-          stage: "New Lead",
+          stage: "Open - Not Contacted",
           amount: 0,
           source: source || "Website - Contact Form",
         })

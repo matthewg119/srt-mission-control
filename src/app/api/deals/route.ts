@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       .insert({
         contact_id,
         pipeline: pipeline || "New Deals",
-        stage: stage || "New Lead",
+        stage: stage || "Open - Not Contacted",
         amount: amount || 0,
         product_type: product_type || null,
         source: source || "Manual",

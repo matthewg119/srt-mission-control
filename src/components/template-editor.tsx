@@ -23,9 +23,10 @@ interface TemplateEditorProps {
 }
 
 const CATEGORIES = [
-  "New Lead", "No Contact", "Interested", "Converted", "DNQ",
-  "Pre-Approval", "Underwriting", "Submitted", "Approved",
-  "Contracts Out", "Contracts In", "Funded", "Deal Lost",
+  "Open - Not Contacted", "Working - Contacted", "Working - Application Out",
+  "Closed - Not Converted", "Converted",
+  "Contract In", "Pending Stips", "Funding Call", "In Funding",
+  "Funded", "Deal Lost",
   "Re-engagement", "General",
 ];
 
@@ -33,7 +34,7 @@ export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProp
   const [name, setName] = useState(template?.name || "");
   const [slug, setSlug] = useState(template?.slug || "");
   const [type, setType] = useState<"SMS" | "Email">(template?.type || "SMS");
-  const [category, setCategory] = useState(template?.category || "New Lead");
+  const [category, setCategory] = useState(template?.category || "Open - Not Contacted");
   const [subject, setSubject] = useState(template?.subject || "");
   const [body, setBody] = useState(template?.body || "");
   const [showPreview, setShowPreview] = useState(false);

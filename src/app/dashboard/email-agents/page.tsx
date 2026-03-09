@@ -127,7 +127,7 @@ export default function EmailAgentsPage() {
               : "No emails yet."}
           </p>
           <p className="text-xs text-[rgba(255,255,255,0.25)] mt-2">
-            Drafts are created automatically when the Underwriting or Submissions bot processes a deal.
+            Drafts are created automatically when deals are processed through the pipeline.
           </p>
         </div>
       ) : (
@@ -151,7 +151,7 @@ export default function EmailAgentsPage() {
                         ? "bg-[rgba(0,201,167,0.1)] text-[#00C9A7] border-[rgba(0,201,167,0.2)]"
                         : "bg-[rgba(27,101,167,0.1)] text-[#1B65A7] border-[rgba(27,101,167,0.2)]"
                     }`}>
-                      {draft.agent === "underwriting" ? "Underwriting" : "Submissions"}
+                      {draft.agent === "underwriting" ? "Deal Processing" : "Submissions"}
                     </span>
                   </div>
 
@@ -241,7 +241,7 @@ export default function EmailAgentsPage() {
           <div>
             <p className="text-sm font-medium text-white">AI Agents Coming Soon</p>
             <p className="text-xs text-[rgba(255,255,255,0.4)] mt-1">
-              The Underwriting Bot and Submissions Bot will automatically create email drafts here when deals are processed. You review and approve before anything is sent.
+              The Deal Processing Bot and Submissions Bot will automatically create email drafts here when deals are processed. You review and approve before anything is sent.
             </p>
             <p className="text-xs text-[rgba(255,255,255,0.3)] mt-2">
               Requires: underwriting@srtagency.com + submissions@srtagency.com mailboxes and Azure app registration with application permissions.

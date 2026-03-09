@@ -24,14 +24,14 @@ export const AI_TOOLS = [
   {
     name: "get_deals_in_stage",
     description:
-      "Get all deals in a specific pipeline stage. Returns deal details including contact name, business name, amount, and days in stage. Use when asked about specific stage status like 'who is in Underwriting?' or 'show me Approved deals'.",
+      "Get all deals in a specific pipeline stage. Returns deal details including contact name, business name, amount, and days in stage. Use when asked about specific stage status like 'who has Pending Stips?' or 'show me In Funding deals'.",
     input_schema: {
       type: "object" as const,
       properties: {
         stage: {
           type: "string",
           description:
-            "The stage name, e.g. 'New Lead', 'Interested', 'Pre-Approval', 'Underwriting', 'Submitted', 'Approved', 'Contracts Out', 'Contracts In', 'Funded', 'Deal Lost'",
+            "The stage name, e.g. 'Open - Not Contacted', 'Working - Contacted', 'Working - Application Out', 'Converted', 'Contract In', 'Pending Stips', 'Funding Call', 'In Funding', 'Funded', 'Deal Lost'",
         },
         pipeline: {
           type: "string",
@@ -814,7 +814,7 @@ async function getLenders(filter?: string, tier?: number, submissionMethod?: str
   });
 }
 
-// ── Underwriting & Submissions ────────────────────────────────────────────
+// ── Deal Processing & Submissions ────────────────────────────────────────────
 
 async function getDealProfile(dealId: string) {
   // Get deal with contact info

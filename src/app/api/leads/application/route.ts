@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
             .insert({
               contact_id: contactId,
               pipeline: "New Deals",
-              stage: "New Lead",
+              stage: "Open - Not Contacted",
               amount: 0,
               source: source || "Website - Application",
             })
@@ -119,8 +119,8 @@ export async function POST(request: NextRequest) {
 
           await supabaseAdmin.from("system_logs").insert({
             event_type: "pipeline_deal_created",
-            description: `New deal: ${contactName} → New Deals / New Lead`,
-            metadata: { contactId, dealId, pipeline: "New Deals", stage: "New Lead", source: `application-${completionPct}%` },
+            description: `New deal: ${contactName} → New Deals / Open - Not Contacted`,
+            metadata: { contactId, dealId, pipeline: "New Deals", stage: "Open - Not Contacted", source: `application-${completionPct}%` },
           });
         } catch (error) {
           console.error("Deal creation error:", error instanceof Error ? error.message : error);
@@ -290,7 +290,7 @@ export async function POST(request: NextRequest) {
           .insert({
             contact_id: contactId,
             pipeline: "New Deals",
-            stage: "New Lead",
+            stage: "Open - Not Contacted",
             amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
             source: source || "Website - Application",
           })
@@ -305,8 +305,8 @@ export async function POST(request: NextRequest) {
           });
           await supabaseAdmin.from("system_logs").insert({
             event_type: "pipeline_deal_created",
-            description: `New deal: ${contactName} → New Deals / New Lead (100% application)`,
-            metadata: { contactId, dealId, pipeline: "New Deals", stage: "New Lead", source: "application-100%" },
+            description: `New deal: ${contactName} → New Deals / Open - Not Contacted (100% application)`,
+            metadata: { contactId, dealId, pipeline: "New Deals", stage: "Open - Not Contacted", source: "application-100%" },
           });
         }
       } catch (error) {

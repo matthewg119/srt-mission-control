@@ -280,7 +280,7 @@ function TeamTab({ isAdmin, currentUserId }: { isAdmin: boolean; currentUserId: 
 
 function NotificationsTab() {
   const NOTIFICATION_EVENTS = [
-    { key: "new_deal_intake", label: "New deal intake", description: "When Underwriting Bot processes a new deal" },
+    { key: "new_deal_intake", label: "New deal intake", description: "When a new deal is processed" },
     { key: "funder_response", label: "Funder response received", description: "When a funder approves, declines, or counters" },
     { key: "deal_stale_4h", label: "Deal stale (4+ hours)", description: "When a deal has no activity for over 4 hours" },
     { key: "all_funders_declined", label: "All funders declined", description: "Critical alert when every submitted funder declines" },

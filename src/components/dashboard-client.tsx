@@ -48,7 +48,7 @@ export function DashboardClient({ userName, formattedDate, stats, staleDeals, ne
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard label="Active Deals" value={stats.activeDeals} accentColor="#00C9A7" />
         <StatCard label="Pending Review" value={stats.pendingDrafts} accentColor="#F5A623" />
-        <StatCard label="In Underwriting" value={stats.inUnderwriting} accentColor="#1B65A7" />
+        <StatCard label="Pending Stips" value={stats.inUnderwriting} accentColor="#f59e0b" />
         <StatCard label="Funded This Month" value={stats.funded} accentColor="#4CAF50" />
       </div>
 

@@ -7,7 +7,7 @@ const SEED_TEMPLATES = [
     name: "New Lead Welcome SMS",
     slug: "new-lead-welcome-sms",
     type: "SMS",
-    category: "New Lead",
+    category: "Open - Not Contacted",
     subject: null,
     body: `Hi {{first_name}}, thanks for reaching out to SRT Agency! We specialize in helping businesses like {{business_name}} get the funding they need. One of our specialists will be reaching out shortly. Reply STOP to opt out.`,
     variables: ["first_name", "business_name"],
@@ -16,7 +16,7 @@ const SEED_TEMPLATES = [
     name: "New Lead Welcome Email",
     slug: "new-lead-welcome-email",
     type: "Email",
-    category: "New Lead",
+    category: "Open - Not Contacted",
     subject: "Welcome to SRT Agency — Your Funding Journey Starts Here",
     body: `Hi {{first_name}},
 
@@ -38,27 +38,30 @@ SRT Agency
     variables: ["first_name", "business_name", "agent_name", "agent_phone"],
   },
   {
-    name: "No Contact Follow-Up SMS",
-    slug: "no-contact-followup-sms",
+    name: "Contacted Follow-Up SMS",
+    slug: "contacted-followup-sms",
     type: "SMS",
-    category: "No Contact",
+    category: "Working - Contacted",
     subject: null,
-    body: `Hi {{first_name}}, this is {{agent_name}} from SRT Agency. We tried reaching you about your funding request for {{business_name}}. When's a good time to connect? Call or text me back at {{agent_phone}}.`,
+    body: `Hi {{first_name}}, this is {{agent_name}} from SRT Agency. Great speaking with you about funding for {{business_name}}. As discussed, here are the next steps. Call or text me at {{agent_phone}} if you have questions.`,
     variables: ["first_name", "agent_name", "business_name", "agent_phone"],
   },
   {
-    name: "No Contact Follow-Up Email",
-    slug: "no-contact-followup-email",
+    name: "Contacted Follow-Up Email",
+    slug: "contacted-followup-email",
     type: "Email",
-    category: "No Contact",
-    subject: "We Tried Reaching You — SRT Agency",
+    category: "Working - Contacted",
+    subject: "Next Steps for {{business_name}} — SRT Agency",
     body: `Hi {{first_name}},
 
-We've been trying to reach you regarding your business funding inquiry for {{business_name}}.
+Great connecting with you about business funding for {{business_name}}.
 
-We'd love to help you explore your options. Please let us know a convenient time to connect, or simply reply to this email.
+As discussed, here are the next steps to move forward:
+1. Complete the application if you haven't already
+2. Gather your most recent 3 months of bank statements
+3. We'll review everything and match you with the best options
 
-If you're no longer interested, no worries — just let us know.
+If you have any questions, don't hesitate to reach out.
 
 Best,
 {{agent_name}}
@@ -67,12 +70,12 @@ SRT Agency
     variables: ["first_name", "business_name", "agent_name", "agent_phone"],
   },
   {
-    name: "Interested — Next Steps SMS",
-    slug: "interested-next-steps-sms",
+    name: "Application Sent SMS",
+    slug: "application-sent-sms",
     type: "SMS",
-    category: "Interested",
+    category: "Working - Application Out",
     subject: null,
-    body: `Great news {{first_name}}! To move forward with funding for {{business_name}}, we'll need a few documents. Check your email for the full list. Any questions, text me here. — {{agent_name}}, SRT Agency`,
+    body: `Hi {{first_name}}, we've sent the application for {{business_name}} to your email. Please complete it at your earliest convenience so we can get the ball rolling! — {{agent_name}}, SRT Agency`,
     variables: ["first_name", "business_name", "agent_name"],
   },
   {
@@ -81,14 +84,14 @@ SRT Agency
     type: "SMS",
     category: "Converted",
     subject: null,
-    body: `{{first_name}}, your application for {{business_name}} has been moved to our active pipeline! Our underwriting team is reviewing your file. We'll keep you updated on every step. — {{agent_name}}, SRT Agency`,
+    body: `{{first_name}}, your application for {{business_name}} has been moved to our active pipeline! Our team is reviewing your file. We'll keep you updated on every step. — {{agent_name}}, SRT Agency`,
     variables: ["first_name", "business_name", "agent_name"],
   },
   {
-    name: "DNQ Notification Email",
-    slug: "dnq-notification-email",
+    name: "Not Converted Email",
+    slug: "not-converted-email",
     type: "Email",
-    category: "DNQ",
+    category: "Closed - Not Converted",
     subject: "Update on Your Funding Application — SRT Agency",
     body: `Hi {{first_name}},
 
@@ -112,66 +115,30 @@ SRT Agency`,
 
   // === ACTIVE DEALS PIPELINE ===
   {
-    name: "Pre-Approval Congrats SMS",
-    slug: "pre-approval-congrats-sms",
+    name: "Contract In SMS",
+    slug: "contract-in-sms",
     type: "SMS",
-    category: "Pre-Approval",
+    category: "Contract In",
     subject: null,
-    body: `Exciting news {{first_name}}! {{business_name}} has been pre-approved for funding. We're preparing your file for underwriting. I'll be in touch with next steps. — {{agent_name}}, SRT Agency`,
+    body: `{{first_name}}, we've received your contracts for {{business_name}}! Our team is reviewing everything now. We'll reach out if we need any additional documentation. — {{agent_name}}, SRT Agency`,
     variables: ["first_name", "business_name", "agent_name"],
   },
   {
-    name: "Pre-Approval Email",
-    slug: "pre-approval-email",
+    name: "Contract In Email",
+    slug: "contract-in-email",
     type: "Email",
-    category: "Pre-Approval",
-    subject: "Pre-Approval Confirmation — {{business_name}}",
+    category: "Contract In",
+    subject: "Contracts Received — {{business_name}}",
     body: `Hi {{first_name}},
 
-Great news — {{business_name}} has been pre-approved for business funding!
+We've received the contracts for {{business_name}}. Our team is now reviewing everything to make sure it's all in order.
 
-Your file is now being prepared for our underwriting team. Here's what to expect:
+Here's what happens next:
+1. We'll verify all documentation is complete
+2. If any stipulations are needed, we'll reach out right away
+3. Once everything is satisfied, we'll schedule your funding call
 
-1. **Underwriting Review** — Our team will review your complete application
-2. **Lender Matching** — We'll match you with the best lender options
-3. **Approval & Terms** — You'll receive specific approval amounts and terms
-
-To keep things moving quickly, please ensure all requested documents have been submitted. If anything is missing, we'll reach out right away.
-
-Thank you for choosing SRT Agency!
-
-Best,
-{{agent_name}}
-{{agent_phone}}`,
-    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
-  },
-  {
-    name: "Submitted to Lenders SMS",
-    slug: "submitted-lenders-sms",
-    type: "SMS",
-    category: "Submitted",
-    subject: null,
-    body: `Update on {{business_name}}: Your application has been submitted to our lending partners! We typically hear back within 24-48 hours. I'll reach out as soon as we have a decision. — {{agent_name}}, SRT Agency`,
-    variables: ["business_name", "agent_name"],
-  },
-  {
-    name: "Submitted to Lenders Email",
-    slug: "submitted-lenders-email",
-    type: "Email",
-    category: "Submitted",
-    subject: "Your Application Has Been Submitted — {{business_name}}",
-    body: `Hi {{first_name}},
-
-Your funding application for {{business_name}} has been submitted to our lending partners.
-
-**What happens now:**
-- Lenders will review your application (typically 24-48 hours)
-- You may receive verification calls — please answer unfamiliar numbers
-- We'll notify you immediately once we have a decision
-
-**Important:** Please avoid applying for additional credit during this time, as it can impact your approval.
-
-We're working hard to get you the best possible terms. Hang tight!
+Thank you for your patience. We're working to get you funded as quickly as possible.
 
 Best,
 {{agent_name}}
@@ -180,69 +147,80 @@ SRT Agency
     variables: ["first_name", "business_name", "agent_name", "agent_phone"],
   },
   {
-    name: "Approved SMS",
-    slug: "approved-sms",
+    name: "Pending Stips SMS",
+    slug: "pending-stips-sms",
     type: "SMS",
-    category: "Approved",
+    category: "Pending Stips",
     subject: null,
-    body: `🎉 {{first_name}}, {{business_name}} has been APPROVED for {{approved_amount}} with {{approved_lender}}! Check your email for the full details and next steps. — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "approved_amount", "approved_lender", "agent_name"],
+    body: `{{first_name}}, we need a few more documents for {{business_name}} before we can move forward. Check your email for the details. The sooner we get these, the faster we can fund! — {{agent_name}}, SRT Agency`,
+    variables: ["first_name", "business_name", "agent_name"],
   },
   {
-    name: "Approved Email",
-    slug: "approved-email",
+    name: "Pending Stips Email",
+    slug: "pending-stips-email",
     type: "Email",
-    category: "Approved",
-    subject: "APPROVED — {{business_name}} Funding Approval",
+    category: "Pending Stips",
+    subject: "Documents Needed — {{business_name}}",
     body: `Hi {{first_name}},
 
-Congratulations! {{business_name}} has been approved for business funding!
+We're almost there! To continue processing the funding for {{business_name}}, we need the following stipulations satisfied:
 
-**Approval Details:**
-- **Amount:** {{approved_amount}}
-- **Lender:** {{approved_lender}}
+Please gather and send these documents as soon as possible. The faster we receive them, the sooner we can get you funded.
 
-**Next Steps:**
-1. Review the approval terms carefully
-2. We'll send over the contracts for your signature
-3. Once signed, funding is typically disbursed within 24-48 hours
-
-If you have any questions about the terms, don't hesitate to reach out. We're here to make sure you're comfortable with everything.
-
-Congratulations again!
+You can reply to this email with the documents attached, or call us if you have any questions.
 
 Best,
 {{agent_name}}
 SRT Agency
 {{agent_phone}}`,
-    variables: ["first_name", "business_name", "approved_amount", "approved_lender", "agent_name", "agent_phone"],
+    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
   },
   {
-    name: "Contracts Out SMS",
-    slug: "contracts-out-sms",
+    name: "Stips Reminder SMS",
+    slug: "stips-reminder-sms",
     type: "SMS",
-    category: "Contracts Out",
+    category: "Pending Stips",
     subject: null,
-    body: `{{first_name}}, the contracts for {{business_name}} are ready for signature! Check your email for signing instructions. Please complete ASAP to avoid delays. Questions? Call me at {{agent_phone}}. — {{agent_name}}`,
-    variables: ["first_name", "business_name", "agent_phone", "agent_name"],
-  },
-  {
-    name: "Contracts Reminder SMS",
-    slug: "contracts-reminder-sms",
-    type: "SMS",
-    category: "Contracts Out",
-    subject: null,
-    body: `Friendly reminder {{first_name}} — your funding contracts for {{business_name}} are still waiting for your signature. Let's get this wrapped up so we can get you funded! Need help? Call {{agent_phone}}.`,
+    body: `Friendly reminder {{first_name}} — we're still waiting on documents for {{business_name}}. Let's get these wrapped up so we can move to funding! Need help? Call {{agent_phone}}.`,
     variables: ["first_name", "business_name", "agent_phone"],
   },
   {
-    name: "Contracts In — Funding Soon SMS",
-    slug: "contracts-in-sms",
+    name: "Funding Call SMS",
+    slug: "funding-call-sms",
     type: "SMS",
-    category: "Contracts In",
+    category: "Funding Call",
     subject: null,
-    body: `{{first_name}}, we've received your signed contracts for {{business_name}}! Funding is being processed and typically takes 24-48 hours. We'll notify you the moment it hits your account. — {{agent_name}}, SRT Agency`,
+    body: `{{first_name}}, your funding call for {{business_name}} is being scheduled! You'll receive a call from the lender to verify your information. Please answer all unfamiliar numbers. — {{agent_name}}, SRT Agency`,
     variables: ["first_name", "business_name", "agent_name"],
+  },
+  {
+    name: "In Funding SMS",
+    slug: "in-funding-sms",
+    type: "SMS",
+    category: "In Funding",
+    subject: null,
+    body: `Great news {{first_name}}! {{business_name}} is now in the funding process. Funds typically arrive within 24-48 hours. We'll notify you the moment it lands. — {{agent_name}}, SRT Agency`,
+    variables: ["first_name", "business_name", "agent_name"],
+  },
+  {
+    name: "In Funding Email",
+    slug: "in-funding-email",
+    type: "Email",
+    category: "In Funding",
+    subject: "Funding in Progress — {{business_name}}",
+    body: `Hi {{first_name}},
+
+Exciting news — the funding for {{business_name}} is now being processed!
+
+Funds are typically disbursed within 24-48 business hours. You'll receive a notification when the funds hit your account.
+
+If you have any questions during this time, don't hesitate to reach out.
+
+Best,
+{{agent_name}}
+SRT Agency
+{{agent_phone}}`,
+    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
   },
   {
     name: "Funded Congratulations SMS",
@@ -270,7 +248,7 @@ Congratulations! The funding for {{business_name}} has been completed and the fu
 
 It's been a pleasure working with you. We wish {{business_name}} continued success!
 
-If you know any other business owners who could benefit from funding, we'd love a referral. 😊
+If you know any other business owners who could benefit from funding, we'd love a referral.
 
 Best regards,
 {{agent_name}}

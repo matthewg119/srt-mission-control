@@ -37,7 +37,7 @@ async function gatherSystemState(): Promise<SystemState> {
       .from("deals")
       .select("id")
       .eq("pipeline", "New Deals")
-      .eq("stage", "New Lead")
+      .eq("stage", "Open - Not Contacted")
       .gte("created_at", yesterday),
 
     // Stale deals (no update in 3 days)

@@ -12,7 +12,7 @@ export const TEMPLATE_VARIABLES = [
   { key: "agent_phone", label: "Agent Phone", example: "(555) 123-4567" },
   { key: "agent_email", label: "Agent Email", example: "benjamin@srtagency.com" },
   { key: "company_name", label: "Company Name", example: "SRT Agency" },
-  { key: "stage_name", label: "Current Stage", example: "Pre-Approval" },
+  { key: "stage_name", label: "Current Stage", example: "Contract In" },
   { key: "pipeline_name", label: "Pipeline", example: "Active Deals" },
 ] as const;
 

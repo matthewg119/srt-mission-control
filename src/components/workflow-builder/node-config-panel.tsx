@@ -206,7 +206,7 @@ function ConditionConfig({ node, onUpdate }: { node: Node; onUpdate: NodeConfigP
       <TextField
         label="Value"
         value={(data.value as string) || ""}
-        placeholder="e.g. New Lead"
+        placeholder="e.g. Open - Not Contacted"
         onChange={(v) => onUpdate(node.id, { value: v })}
       />
     </div>
@@ -282,7 +282,7 @@ function ActionConfig({ node, onUpdate }: { node: Node; onUpdate: NodeConfigPane
           <TextField
             label="Stage Name"
             value={config.stageName || ""}
-            placeholder="e.g. Pre-Approval"
+            placeholder="e.g. Contract In"
             onChange={(v) => updateConfig("stageName", v)}
           />
         </>

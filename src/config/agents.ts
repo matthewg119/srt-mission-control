@@ -191,8 +191,8 @@ OUR PRODUCTS:
 4. Working Capital: $5K-$2M, 550+ credit, ~4hr approval
 
 OUR PIPELINE:
-- New Deals: New Lead → No Contact → Interested → Not Interested → Converted → DNQ → Take Off List
-- Active Deals: Pre-Approval → Underwriting → Submitted → Approved → Contracts Out → Contracts In → Funded → Deal Lost
+- New Deals: Open - Not Contacted → Working - Contacted → Working - Application Out → Closed - Not Converted → Converted
+- Active Deals: Contract In → Pending Stips → Funding Call → In Funding → Funded → Deal Lost
 
 YOUR EXPERTISE:
 - Opening scripts and first contact strategy

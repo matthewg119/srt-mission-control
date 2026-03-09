@@ -67,7 +67,7 @@ function getToolLabel(action: string): { label: string; icon: typeof Zap } {
 
 const SUGGESTION_CHIPS = [
   { label: "Pipeline overview", prompt: "Give me a full pipeline overview", category: "Pipeline" },
-  { label: "Who's in Underwriting?", prompt: "Who's currently in Underwriting?", category: "Pipeline" },
+  { label: "Who has Pending Stips?", prompt: "Who currently has Pending Stips?", category: "Pipeline" },
   { label: "Stale deals", prompt: "Which deals have been stale for more than 3 days?", category: "Pipeline" },
   { label: "New leads today", prompt: "Show me new leads from the last 24 hours", category: "Pipeline" },
   { label: "Recent activity", prompt: "Show me recent activity", category: "Activity" },

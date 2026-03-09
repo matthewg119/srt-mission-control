@@ -23,20 +23,17 @@ interface DealListResult {
 }
 
 const STAGE_COLORS: Record<string, string> = {
-  "New Lead": "#1B65A7",
-  "No Contact": "#64748b",
-  "Interested": "#0ea5e9",
-  "Not Interested": "#ef4444",
+  "Open - Not Contacted": "#1B65A7",
+  "Working - Contacted": "#9C27B0",
+  "Working - Application Out": "#00BCD4",
+  "Closed - Not Converted": "#E74C3C",
   "Converted": "#00C9A7",
-  "DNQ": "#f59e0b",
-  "Pre-Approval": "#8b5cf6",
-  "Underwriting": "#f59e0b",
-  "Submitted": "#0ea5e9",
-  "Approved": "#00C9A7",
-  "Contracts Out": "#10b981",
-  "Contracts In": "#059669",
-  "Funded": "#00C9A7",
-  "Deal Lost": "#ef4444",
+  "Contract In": "#00BCD4",
+  "Pending Stips": "#f59e0b",
+  "Funding Call": "#9C27B0",
+  "In Funding": "#1B65A7",
+  "Funded": "#4CAF50",
+  "Deal Lost": "#E74C3C",
 };
 
 export function DealListCard({ data }: { data: DealListResult }) {

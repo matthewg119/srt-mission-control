@@ -45,7 +45,7 @@ const NODE_STYLES = {
 
 const EVENT_LABELS: Record<string, string> = {
   stage_change: "Stage Change",
-  new_lead: "New Lead",
+  new_lead: "New Lead Captured",
   application_complete: "Application Complete",
   tag_added: "Tag Added",
   schedule: "On Schedule",
