@@ -7,6 +7,7 @@ import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
+import { ghlUpsertContact, ghlCreateOpportunity, ghlGetNewLeadStageId } from "@/lib/ghl";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -88,6 +89,26 @@ export async function POST(request: NextRequest) {
             .single();
           if (insertErr || !newContact) throw new Error(insertErr?.message || "Contact insert failed");
           contactId = newContact.id;
+        }
+        // ── Sync to GHL ──
+        const ghlContactId = await ghlUpsertContact({
+          firstName, lastName, email,
+          phone: mobilePhone || businessPhone,
+          businessName, source,
+          tags: ["application-started"],
+        });
+        if (ghlContactId) {
+          const stageId = await ghlGetNewLeadStageId();
+          if (stageId) {
+            const ghlOppId = await ghlCreateOpportunity({
+              ghlContactId,
+              name: `${contactName} — ${amountNeeded || "Amount TBD"}`,
+              stageId,
+              amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
+              source: source || "Website - Application Form",
+            });
+            console.log("[GHL] Opportunity created:", ghlOppId);
+          }
         }
       } catch (error) {
         console.error("Contact creation failed:", error instanceof Error ? error.message : error);
