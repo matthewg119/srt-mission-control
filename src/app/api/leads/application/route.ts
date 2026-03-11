@@ -7,7 +7,8 @@ import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
-import { ghlUpsertContact, ghlCreateOpportunity, ghlGetNewLeadStageId } from "@/lib/ghl";
+import { ghlUpsertContact, ghlCreateOpportunity } from "@/lib/ghl";
+import { createLead as zohoCreateLead, searchLeads } from "@/lib/zoho";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -90,6 +91,19 @@ export async function POST(request: NextRequest) {
           if (insertErr || !newContact) throw new Error(insertErr?.message || "Contact insert failed");
           contactId = newContact.id;
         }
+        // Sync to Zoho (non-blocking, don't fail the request if Zoho is down)
+        zohoCreateLead({
+          firstName,
+          lastName,
+          businessName: businessName || legalName,
+          email,
+          phone: businessPhone,
+          source: source || "Meta Ads",
+          fundingAmount: amountNeeded,
+          monthlyRevenue: monthlyDeposits,
+          industry,
+          creditScoreRange: creditScore,
+        }).catch(err => console.error("Zoho sync failed:", err));
         // ── Sync to GHL ──
         const ghlContactId = await ghlUpsertContact({
           firstName, lastName, email,
@@ -98,7 +112,7 @@ export async function POST(request: NextRequest) {
           tags: ["application-started"],
         });
         if (ghlContactId) {
-          const stageId = await ghlGetNewLeadStageId();
+          const stageId = null; // ghlGetNewLeadStageId removed
           if (stageId) {
             const ghlOppId = await ghlCreateOpportunity({
               ghlContactId,
