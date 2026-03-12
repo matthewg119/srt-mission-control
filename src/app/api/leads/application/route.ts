@@ -104,6 +104,22 @@ export async function POST(request: NextRequest) {
           industry,
           creditScoreRange: creditScore,
         }).catch(err => console.error("Zoho sync failed:", err));
+
+  // — Slack notification: new lead application —
+  slack.postMessage(
+    process.env.SLACK_HOT_LEADS_CHANNEL || "",
+    [
+      "🚨 *New Lead Application*",
+      "",
+      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+      `*Business:* ${businessName || legalName || "—"}`,
+      `*Industry:* ${industry || "—"}`,
+      `*Funding Requested:* $${amountNeeded || "—"}`,
+      `*Phone:* ${businessPhone || "—"}`,
+      `*Email:* ${email || "—"}`,
+      `*Source:* ${source || "Meta Ads"}`,
+    ].join("\n")
+  ).catch(() => {});
         // ── Sync to GHL ──
         const ghlContactId = await ghlUpsertContact({
           firstName, lastName, email,
