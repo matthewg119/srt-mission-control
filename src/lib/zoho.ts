@@ -29,6 +29,7 @@ interface ZohoLeadData {
   timeInBusiness?: string;
   industry?: string;
   creditScoreRange?: string;
+  Lead_Status?: string;
 }
 
 interface ZohoApiRecord {

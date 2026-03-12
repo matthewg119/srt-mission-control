@@ -8,7 +8,7 @@ import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
 import { ghlUpsertContact, ghlCreateOpportunity } from "@/lib/ghl";
-import { createLead as zohoCreateLead, searchLeads } from "@/lib/zoho";
+import { createLead as zohoCreateLead, updateLead as zohoUpdateLead, searchLeads } from "@/lib/zoho";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -46,6 +46,31 @@ export async function POST(request: NextRequest) {
         description: `Application started: ${completionPct}% (${applicationStage || "qualifying"})`,
         metadata: { completionPct, clientIp, clientUserAgent },
       });
+    // -- Sync to Zoho at 25% (non-blocking) --
+    zohoCreateLead({
+      firstName,
+      lastName,
+      email,
+      phone: mobilePhone || businessPhone,
+      source: source || "Meta Ads",
+      Lead_Status: "New",
+    }).catch((err) => console.error("[Zoho 25%] sync failed:", err));
+
+    // -- Slack notification: lead captured at 25% --
+    slack
+      .postMessage(
+        process.env.SLACK_HOT_LEADS_CHANNEL || "",
+        [
+          "📥 *New Lead Captured (25%)*",
+          "",
+          `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+          `*Email:* ${email || "—"}`,
+          `*Phone:* ${mobilePhone || businessPhone || "—"}`,
+          `*Source:* ${source || "Meta Ads"}`,
+        ].join("\n")
+      )
+      .catch(() => {});
+
       return NextResponse.json(
         { success: true, message: `Progress saved: ${completionPct}%` },
         { headers: corsHeaders }
@@ -91,19 +116,46 @@ export async function POST(request: NextRequest) {
           if (insertErr || !newContact) throw new Error(insertErr?.message || "Contact insert failed");
           contactId = newContact.id;
         }
-        // Sync to Zoho (non-blocking, don't fail the request if Zoho is down)
-        zohoCreateLead({
-          firstName,
-          lastName,
-          businessName: businessName || legalName,
-          email,
-          phone: businessPhone,
-          source: source || "Meta Ads",
-          fundingAmount: amountNeeded,
-          monthlyRevenue: monthlyDeposits,
-          industry,
-          creditScoreRange: creditScore,
-        }).catch(err => console.error("Zoho sync failed:", err));
+      // Sync to Zoho: search first, update if found, create if not (non-blocking)
+      (async () => {
+        try {
+          const existing = email
+            ? (await searchLeads({ email })).find((l: { Email?: string }) => l.Email === email)
+            : null;
+          if (existing) {
+            await zohoUpdateLead(existing.id as string, {
+              First_Name: firstName,
+              Last_Name: lastName,
+              Company: businessName || legalName,
+              Phone: businessPhone,
+              source: source || "Meta Ads",
+              Annual_Revenue: monthlyDeposits,
+              Industry: industry,
+              Rating: creditScore,
+              Amount: amountNeeded,
+              Lead_Status: "Application Complete",
+            });
+            console.log("[Zoho 100%] Lead updated:", existing.id);
+          } else {
+            await zohoCreateLead({
+              firstName,
+              lastName,
+              businessName: businessName || legalName,
+              email,
+              phone: businessPhone,
+              source: source || "Meta Ads",
+              fundingAmount: amountNeeded,
+              monthlyRevenue: monthlyDeposits,
+              industry,
+              creditScoreRange: creditScore,
+              Lead_Status: "Application Complete",
+            });
+            console.log("[Zoho 100%] Lead created");
+          }
+        } catch (err) {
+          console.error("[Zoho 100%] sync failed:", err);
+        }
+      })();
 
   // — Slack notification: new lead application —
   slack.postMessage(
