@@ -6,8 +6,8 @@ let _supabaseAdmin: SupabaseClient | null = null;
 export function getSupabaseAdmin(): SupabaseClient {
   if (!_supabaseAdmin) {
     _supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      process.env.NEXT_PUBLIC_SUPABASE_URL || "http://localhost:54321",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || "placeholder-service-key",
       {
         auth: {
           persistSession: false,
@@ -23,8 +23,8 @@ export function getSupabaseAdmin(): SupabaseClient {
 // Keep the named export for backward compatibility (used everywhere server-side)
 export const supabaseAdmin = typeof window === "undefined"
   ? createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      process.env.NEXT_PUBLIC_SUPABASE_URL || "http://localhost:54321",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || "placeholder-service-key",
       {
         auth: {
           persistSession: false,
@@ -37,6 +37,6 @@ export const supabaseAdmin = typeof window === "undefined"
 
 // Client-side Supabase client (uses public anon key)
 export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "http://localhost:54321",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key"
 );
