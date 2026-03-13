@@ -13,7 +13,7 @@ import { createLead as zohoCreateLead, updateLead as zohoUpdateLead, searchLeads
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
 }
-h
+
 export async function POST(request: NextRequest) {
   const corsHeaders = getCorsHeaders(request);
   const clientIp = getClientIp(request);
