@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
                     ownership, amountNeeded, useOfFunds, monthlyDeposits, existingLoans,
                     notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
                     source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
-                    website, utmCampaign, utmContent, utmMedium, adId,
+                    utmCampaign, utmContent, utmMedium, adId,
           } = body;
 
         let contactId: string | null = (body.contactId as string) || null;
@@ -561,7 +561,7 @@ export async function POST(request: NextRequest) {
         const safeName = (businessName || legalName || "Unknown").replace(/[<>:"/\\|?*]/g, "_");
 
         try {
-                  let pdfBuffer: Buffer;
+                  let pdfBuffer: Buffer | undefined;
 
             try {
                         pdfBuffer = generateApplicationPDF({
@@ -644,7 +644,7 @@ export async function POST(request: NextRequest) {
                                                       attachments: [{
                                                                         name: `Application - ${safeName}.pdf`,
                                                                         contentType: "application/pdf",
-                                                                        contentBytes: pdfBuffer.toString("base64"),
+                                                                        contentBytes: pdfBuffer!.toString("base64"),
                                                       }],
                                       });
                                       console.log("[100%] Confirmation email with PDF sent to", email);
