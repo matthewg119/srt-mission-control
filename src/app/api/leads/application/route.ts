@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
       phone: mobilePhone || businessPhone,
       source: source || "Meta Ads",
       Lead_Status: "New",
-    }).catch((err) => console.error("[Zoho 25%] sync failed:", err));
+    }).catch(err => console.error("ZOHO ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
 
     // -- Slack notification: lead captured at 25% --
     slack
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
           `*Source:* ${source || "Meta Ads"}`,
         ].join("\n")
       )
-      .catch(() => {});
+      .catch(err => console.error("SLACK ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
 
       return NextResponse.json(
         { success: true, message: `Progress saved: ${completionPct}%` },
@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
       `*Email:* ${email || "—"}`,
       `*Source:* ${source || "Meta Ads"}`,
     ].join("\n")
-  ).catch(() => {});
+  ).catch(err => console.error("SLACK ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
         // ── Sync to GHL ──
         const ghlContactId = await ghlUpsertContact({
           firstName, lastName, email,
@@ -439,7 +439,7 @@ export async function POST(request: NextRequest) {
       if (email) lines.push(`Email: ${email}`);
       if (mobilePhone || businessPhone) lines.push(`Phone: ${mobilePhone || businessPhone}`);
       lines.push("Source: Application (100%)");
-      slack.postMessage(hotLeadsChannel, lines.join("\n")).catch(() => {});
+      slack.postMessage(hotLeadsChannel, lines.join("\n")).catch(err => console.error("SLACK ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
     }
 
     // Fire Meta CAPI CompleteRegistration at 100%
