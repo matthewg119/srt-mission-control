@@ -13,7 +13,7 @@ import { createLead as zohoCreateLead, updateLead as zohoUpdateLead, searchLeads
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
 }
-
+h
 export async function POST(request: NextRequest) {
   const corsHeaders = getCorsHeaders(request);
   const clientIp = getClientIp(request);
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
           contactId = newContact.id;
         }
 
-        // -- Sync to Zoho at 25%+ (non-blocking) --
+        // -- Sync to Zoho at 25%+ (non-blocking) --          console.log("ZOHO ABOUT TO FIRE:", JSON.stringify({firstName, lastName, email, phone: mobilePhone || businessPhone}));
         zohoCreateLead({
           firstName,
           lastName,
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
           phone: mobilePhone || businessPhone,
           source: source || "Meta Ads",
           Lead_Status: "New",
-        }).catch(err => console.error("ZOHO ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
+        }).then(res => console.log("ZOHO RESPONSE:", res)).catch(err => console.error("ZOHO ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
 
         // -- Slack notification: new lead captured at 25%+ --
         slack
