@@ -2,133 +2,163 @@ import crypto from "crypto";
 
 const SLACK_API = "https://slack.com/api";
 
+// DIAGNOSTIC: list ALL Slack-related env vars referenced in this file:
+// - SLACK_BOT_TOKEN        (used for all API calls via getToken())
+// - SLACK_CEO_CHANNEL      (channel getter)
+// - SLACK_UW_CHANNEL       (channel getter)
+// - SLACK_SUB_CHANNEL      (channel getter)
+// NOTE: SLACK_HOT_LEADS_CHANNEL is referenced in route.ts and passed as arg,
+// NOT used directly in this file. The bot token is always SLACK_BOT_TOKEN.
+
 function getToken(): string {
-  return process.env.SLACK_BOT_TOKEN || "";
+    return process.env.SLACK_BOT_TOKEN || "";
 }
 
 export interface SlackBlock {
-  type: string;
-  text?: { type: string; text: string; emoji?: boolean };
-  elements?: Array<{ type: string; text: string; emoji?: boolean }>;
-  fields?: Array<{ type: string; text: string }>;
-  accessory?: Record<string, unknown>;
+    type: string;
+    text?: { type: string; text: string; emoji?: boolean };
+    elements?: Array<{ type: string; text: string; emoji?: boolean }>;
+    fields?: Array<{ type: string; text: string }>;
+    accessory?: Record<string, unknown>;
 }
 
 async function slackFetch(method: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const token = getToken();
+    // DIAGNOSTIC: warn if token is missing so it's visible in logs
+  if (!token) {
+        console.error("SLACK ERROR: SLACK_BOT_TOKEN is not set or empty");
+  }
+
   const res = await fetch(`${SLACK_API}/${method}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${getToken()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
+        method: "POST",
+        headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
   });
-  return res.json();
+
+  const json = await res.json() as Record<string, unknown>;
+
+  // FIX: Slack API always returns HTTP 200; real errors are in json.ok === false
+  // Previously this was silently swallowed - now we log it clearly
+  if (!json.ok) {
+        console.error("SLACK API ERROR:", JSON.stringify(json));
+  }
+
+  return json;
 }
 
 export const slack = {
-  /** Send a message to a channel or DM */
-  async postMessage(channel: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
-    const body: Record<string, unknown> = { channel, text };
-    if (blocks) body.blocks = blocks;
-    return slackFetch("chat.postMessage", body);
-  },
+    /** Send a message to a channel or DM */
+    async postMessage(channel: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
+          // DIAGNOSTIC: log what channel and token status before firing
+      console.log("SLACK ABOUT TO FIRE:", process.env.SLACK_HOT_LEADS_CHANNEL);
+          console.log("SLACK postMessage channel arg:", channel, "| token present:", !!getToken());
 
-  /** Reply in a thread */
-  async postThreadReply(channel: string, threadTs: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
-    const body: Record<string, unknown> = { channel, text, thread_ts: threadTs };
-    if (blocks) body.blocks = blocks;
-    return slackFetch("chat.postMessage", body);
-  },
+      const body: Record<string, unknown> = { channel, text };
+          if (blocks) body.blocks = blocks;
+          const res = await slackFetch("chat.postMessage", body);
+          console.log("SLACK RESPONSE:", JSON.stringify(res));
+          return res;
+    },
 
-  /** Update an existing message */
-  async updateMessage(channel: string, ts: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
-    const body: Record<string, unknown> = { channel, ts, text };
-    if (blocks) body.blocks = blocks;
-    return slackFetch("chat.update", body);
-  },
+    /** Reply in a thread */
+    async postThreadReply(channel: string, threadTs: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
+          const body: Record<string, unknown> = { channel, text, thread_ts: threadTs };
+          if (blocks) body.blocks = blocks;
+          return slackFetch("chat.postMessage", body);
+    },
 
-  /** Check if Slack is configured */
-  isConfigured(): boolean {
-    const token = getToken();
-    return !!token && token.trim().length > 0;
-  },
+    /** Update an existing message */
+    async updateMessage(channel: string, ts: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
+          const body: Record<string, unknown> = { channel, ts, text };
+          if (blocks) body.blocks = blocks;
+          return slackFetch("chat.update", body);
+    },
 
-  /** Get channel IDs from env */
-  channels: {
-    get ceo() { return process.env.SLACK_CEO_CHANNEL || ""; },
-    get uw() { return process.env.SLACK_UW_CHANNEL || ""; },
-    get sub() { return process.env.SLACK_SUB_CHANNEL || ""; },
-  },
+    /** Check if Slack is configured */
+    isConfigured(): boolean {
+          const token = getToken();
+          return !!token && token.trim().length > 0;
+    },
 
-  /** Verify Slack request signature */
-  verifySignature(signingSecret: string, timestamp: string, body: string, signature: string): boolean {
-    const basestring = `v0:${timestamp}:${body}`;
-    const hmac = crypto.createHmac("sha256", signingSecret).update(basestring).digest("hex");
-    const computed = `v0=${hmac}`;
-    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
-  },
+    /** Get channel IDs from env */
+    channels: {
+          get ceo() { return process.env.SLACK_CEO_CHANNEL || ""; },
+          get uw() { return process.env.SLACK_UW_CHANNEL || ""; },
+          get sub() { return process.env.SLACK_SUB_CHANNEL || ""; },
+    },
 
-  // --- Block Kit formatters ---
+    /** Verify Slack request signature */
+    verifySignature(signingSecret: string, timestamp: string, body: string, signature: string): boolean {
+          const basestring = `v0:${timestamp}:${body}`;
+          const hmac = crypto.createHmac("sha256", signingSecret).update(basestring).digest("hex");
+          const computed = `v0=${hmac}`;
+          return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
+    },
 
-  /** Format a pulse report for Slack */
-  formatPulseReport(pulse: {
-    summary: string;
-    metrics?: Record<string, number>;
-    tasks?: Array<{ title: string; priority: string }>;
-  }): SlackBlock[] {
-    const blocks: SlackBlock[] = [
-      {
-        type: "header",
-        text: { type: "plain_text", text: "🧠 BrainHeart Pulse", emoji: true },
-      },
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: pulse.summary },
-      },
-    ];
+    // --- Block Kit formatters ---
 
-    if (pulse.metrics && Object.keys(pulse.metrics).length > 0) {
-      blocks.push({
-        type: "section",
-        fields: Object.entries(pulse.metrics).map(([key, val]) => ({
-          type: "mrkdwn",
-          text: `*${key}:* ${val}`,
-        })),
-      });
-    }
+    /** Format a pulse report for Slack */
+    formatPulseReport(pulse: {
+          summary: string;
+          metrics?: Record<string, number>;
+          tasks?: Array<{ title: string; priority: string }>;
+    }): SlackBlock[] {
+          const blocks: SlackBlock[] = [
+            {
+                      type: "header",
+                      text: { type: "plain_text", text: "🧠 BrainHeart Pulse", emoji: true },
+            },
+            {
+                      type: "section",
+                      text: { type: "mrkdwn", text: pulse.summary },
+            },
+                ];
 
-    if (pulse.tasks && pulse.tasks.length > 0) {
-      const taskList = pulse.tasks
-        .map((t) => {
-          const icon = t.priority === "urgent" ? "🔴" : t.priority === "high" ? "🟠" : "⚪";
-          return `${icon} ${t.title}`;
-        })
-        .join("\n");
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: `*New Tasks:*\n${taskList}` },
-      });
-    }
+      if (pulse.metrics && Object.keys(pulse.metrics).length > 0) {
+              blocks.push({
+                        type: "section",
+                        fields: Object.entries(pulse.metrics).map(([key, val]) => ({
+                                    type: "mrkdwn",
+                                    text: `*${key}:* ${val}`,
+                        })),
+              });
+      }
 
-    return blocks;
-  },
+      if (pulse.tasks && pulse.tasks.length > 0) {
+              const taskList = pulse.tasks
+                .map((t) => {
+                            const icon = t.priority === "urgent" ? "🔴" : t.priority === "high" ? "🟠" : "⚪";
+                            return `${icon} ${t.title}`;
+                })
+                .join("\n");
 
-  /** Format a deal alert */
-  formatDealAlert(deal: {
-    businessName: string;
-    stage: string;
-    amount?: number;
-    action: string;
-  }): SlackBlock[] {
-    return [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*${deal.action}*\n📋 *${deal.businessName}*\nStage: ${deal.stage}${deal.amount ? ` | Amount: $${deal.amount.toLocaleString()}` : ""}`,
-        },
-      },
-    ];
-  },
+            blocks.push({
+                      type: "section",
+                      text: { type: "mrkdwn", text: `*New Tasks:*\n${taskList}` },
+            });
+      }
+
+      return blocks;
+    },
+
+    /** Format a deal alert */
+    formatDealAlert(deal: {
+          businessName: string;
+          stage: string;
+          amount?: number;
+          action: string;
+    }): SlackBlock[] {
+          return [
+            {
+                      type: "section",
+                      text: {
+                                  type: "mrkdwn",
+                                  text: `*${deal.action}*\n📋 *${deal.businessName}*\nStage: ${deal.stage}${deal.amount ? ` | Amount: $${deal.amount.toLocaleString()}` : ""}`,
+                      },
+            },
+                ];
+    },
 };
