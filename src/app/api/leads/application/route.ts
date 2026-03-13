@@ -46,32 +46,7 @@ export async function POST(request: NextRequest) {
         description: `Application started: ${completionPct}% (${applicationStage || "qualifying"})`,
         metadata: { completionPct, clientIp, clientUserAgent },
       });
-    // -- Sync to Zoho at 25% (non-blocking) --
-    zohoCreateLead({
-      firstName,
-      lastName,
-      email,
-      phone: mobilePhone || businessPhone,
-      source: source || "Meta Ads",
-      Lead_Status: "New",
-    }).catch(err => console.error("ZOHO ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
-
-    // -- Slack notification: lead captured at 25% --
-    slack
-      .postMessage(
-        process.env.SLACK_HOT_LEADS_CHANNEL || "",
-        [
-          "📥 *New Lead Captured (25%)*",
-          "",
-          `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-          `*Email:* ${email || "—"}`,
-          `*Phone:* ${mobilePhone || businessPhone || "—"}`,
-          `*Source:* ${source || "Meta Ads"}`,
-        ].join("\n")
-      )
-      .catch(err => console.error("SLACK ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
-
-      return NextResponse.json(
+    return NextResponse.json(
         { success: true, message: `Progress saved: ${completionPct}%` },
         { headers: corsHeaders }
       );
@@ -116,6 +91,31 @@ export async function POST(request: NextRequest) {
           if (insertErr || !newContact) throw new Error(insertErr?.message || "Contact insert failed");
           contactId = newContact.id;
         }
+
+        // -- Sync to Zoho at 25%+ (non-blocking) --
+        zohoCreateLead({
+          firstName,
+          lastName,
+          email,
+          phone: mobilePhone || businessPhone,
+          source: source || "Meta Ads",
+          Lead_Status: "New",
+        }).catch(err => console.error("ZOHO ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
+
+        // -- Slack notification: new lead captured at 25%+ --
+        slack
+          .postMessage(
+            process.env.SLACK_HOT_LEADS_CHANNEL || "",
+            [
+              "📥 *New Lead Captured (25%+)*",
+              "",
+              `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+              `*Email:* ${email || "—"}`,
+              `*Phone:* ${mobilePhone || businessPhone || "—"}`,
+              `*Source:* ${source || "Meta Ads"}`,
+            ].join("\n")
+          )
+          .catch(err => console.error("SLACK ERROR:", JSON.stringify(err, Object.getOwnPropertyNames(err))));
       // Sync to Zoho: search first, update if found, create if not (non-blocking)
       (async () => {
         try {
