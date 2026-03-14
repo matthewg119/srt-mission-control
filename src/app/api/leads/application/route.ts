@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
-                              .or(`email.eq.${email},business_phone.eq.${businessPhone}`)
+                              .or(`email.eq.${email},phone.eq.${businessPhone}`)
                               .maybeSingle();
 
                         if (existingContact) {
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
                                                               first_name: firstName,
                                                               last_name: lastName,
                                                               email,
-                                                              business_phone: businessPhone,
+                                                              phone: businessPhone,
                                                               mobile_phone: mobilePhone,
                                                               business_name: businessName || legalName,
                                                               legal_name: legalName,
@@ -250,7 +250,7 @@ export async function POST(request: NextRequest) {
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
-                              .or(`email.eq.${email},business_phone.eq.${businessPhone}`)
+                              .or(`email.eq.${email},phone.eq.${businessPhone}`)
                               .maybeSingle();
                             contactId = existingContact?.id || null;
               } catch { /* ignore */ }
@@ -285,7 +285,6 @@ export async function POST(request: NextRequest) {
                                                               home_address: homeAddress,
                                                               signature: signature || null,
                                                               signature_name: signatureName || null,
-                                                              application_stage: applicationStage || null,
                                                               updated_at: new Date().toISOString(),
                                             }).eq("id", contactId);
                             } catch (err) {
