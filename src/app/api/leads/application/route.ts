@@ -130,37 +130,23 @@ export async function POST(request: NextRequest) {
                                                           creditScoreRange: creditScore,
                                                           ownership: ownership ? String(ownership) : undefined,
                                         }).catch(err => console.error("[Zoho 25%] create failed:", err instanceof Error ? err.message : err));
+                                                  // -- Slack: new lead captured (new contacts only) --
+          if (applicationCompletionPct >= 25 && applicationCompletionPct <= 35) {
+            const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+            slack.postMessage(
+                        hotLeadsChannel,
+                        [
+                                        "📥 *New Lead Captured*",
+                                        "",
+                                        `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+                                        `*Business:* ${businessName || legalName || "–"}`,
+                                        `*Industry:* ${industry || "–"}`,
+                                        `*Phone:* ${mobilePhone || businessPhone || "–"}`,
+                                        `*Email:* ${email || "–"}`,
+                        ].join("\n")
+            ).catch(err => console.error("[Slack new lead] postMessage failed:", err instanceof Error ? err.message : err));
+          }
                         }
-
-                        // -- Slack: new lead captured at 25%+ --
-                        const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-                            slack.postMessage(
-                                            hotLeadsChannel,
-                                            [
-                                                              "📥 *New Lead Captured (25%+)*",
-                                                              "",
-                                                              `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                                              `*Email:* ${email || "—"}`,
-                                                              `*Phone:* ${mobilePhone || businessPhone || "—"}`,
-                                                              `*Source:* ${source || "Meta Ads"}`,
-                                                            ].join("\n")
-                                          ).catch(err => console.error("[Slack 25%] postMessage failed:", err instanceof Error ? err.message : err));
-
-                        // -- Slack: new lead application details (second message) --
-                        slack.postMessage(
-                                        hotLeadsChannel,
-                                        [
-                                                          "🚨 *New Lead Application*",
-                                                          "",
-                                                          `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                                          `*Business:* ${businessName || legalName || "—"}`,
-                                                          `*Industry:* ${industry || "—"}`,
-                                                          `*Funding Requested:* $${amountNeeded || "—"}`,
-                                                          `*Phone:* ${businessPhone || "—"}`,
-                                                          `*Email:* ${email || "—"}`,
-                                                          `*Source:* ${source || "Meta Ads"}`,
-                                                        ].join("\n")
-                                      ).catch(err => console.error("[Slack 25% app] postMessage failed:", err instanceof Error ? err.message : err));
 
                         // ── Sync to GHL ──
                         const ghlContactId = await ghlUpsertContact({
@@ -440,11 +426,8 @@ export async function POST(request: NextRequest) {
                                                     `*Industry:* ${industry || "—"}`,
                                                     `*Funding Requested:* ${amountNeeded ? `$${amountNeeded}` : "—"}`,
                                                     `*Monthly Revenue / Deposits:* ${monthlyDeposits || "—"}`,
-                                                    `*Credit Score Range:* ${creditScore || "—"}`,
                                                     `*Email:* ${email || "—"}`,
                                                     `*Phone:* ${mobilePhone || businessPhone || "—"}`,
-                                                    `*Source:* ${source || "Meta Ads"}`,
-                                                    `*Signature:* ${signatureName ? `✍️ ${signatureName}` : "—"}`,
                                                   ];
                                     slack.postMessage(hotLeadsChannel, completedLines.join("\n"))
                                       .catch(err => console.error("[Slack 100%] postMessage failed:", err instanceof Error ? err.message : err));
@@ -545,7 +528,7 @@ export async function POST(request: NextRequest) {
                               });
                             } catch (odErr) {
                                             const odMsg = odErr instanceof Error ? odErr.message : String(odErr);
-                                            console.error("[100%] OneDrive upload failed:", odMsg);
+                                                            console.error("[OneDrive] error:", odMsg);
                                             systemAlert("OneDrive Upload Failed", `PDF upload failed for ${contactName} (${businessName}): ${odMsg}`, "leads/application", "error").catch(() => {});
                                             // Don't throw — continue to Zoho attachment and email
                             }
