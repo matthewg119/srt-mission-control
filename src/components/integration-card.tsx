@@ -32,7 +32,6 @@ const STATUS_COLORS: Record<string, string> = {
 
 interface IntegrationCardProps {
   integration: Integration;
-  onConnectMicrosoft?: () => void;
   onDisconnectMicrosoft?: () => void;
   onSetSignature?: () => void;
   onSaveConfig?: (id: string, config: Record<string, string>) => void;
@@ -40,7 +39,6 @@ interface IntegrationCardProps {
 
 export function IntegrationCard({
   integration,
-  onConnectMicrosoft,
   onDisconnectMicrosoft,
   onSetSignature,
   onSaveConfig,
@@ -134,14 +132,12 @@ export function IntegrationCard({
               </div>
             </div>
           ) : (
-            onConnectMicrosoft && (
-              <button
-                onClick={onConnectMicrosoft}
-                className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
-              >
-                Connect Outlook
-              </button>
-            )
+            <a
+              href="/api/integrations/microsoft/auth"
+              className="inline-block text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
+            >
+              Connect Outlook
+            </a>
           )}
         </div>
       )}

@@ -41,10 +41,6 @@ export default function IntegrationsPage() {
     }
   }, []);
 
-  const handleConnectMicrosoft = () => {
-    window.location.href = "/api/integrations/microsoft/auth";
-  };
-
   const handleSetSignature = async () => {
     setMsStatus("Setting email signature...");
     try {
@@ -116,7 +112,6 @@ export default function IntegrationsPage() {
             <IntegrationCard
               key={integration.id || integration.name}
               integration={integration}
-              onConnectMicrosoft={integration.name === "Microsoft 365" ? handleConnectMicrosoft : undefined}
               onDisconnectMicrosoft={integration.name === "Microsoft 365" ? handleDisconnectMicrosoft : undefined}
               onSetSignature={integration.name === "Microsoft 365" && integration.status === "connected" ? handleSetSignature : undefined}
               onSaveConfig={handleSaveConfig}
