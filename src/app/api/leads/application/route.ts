@@ -454,6 +454,7 @@ export async function POST(request: NextRequest) {
 
               // ── Slack: Application Completed — with dedup ──
               const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+              let slackTs: string | undefined;
               if (hotLeadsChannel) {
                 const { data: recentComplete } = await supabaseAdmin
                   .from("system_logs").select("id")
@@ -473,6 +474,7 @@ export async function POST(request: NextRequest) {
                     `*Phone:* ${mobilePhone || businessPhone || "—"}`,
                   ];
                   slack.postMessage(hotLeadsChannel, completedLines.join("\n"))
+                    .then(res => { slackTs = (res as { ts?: string }).ts; })
                     .catch(err => console.error("[Slack 100%] postMessage failed:", err instanceof Error ? err.message : err));
 
                   try {
@@ -604,6 +606,12 @@ export async function POST(request: NextRequest) {
                                             } catch { /* ignore */ }
                                             systemAlert("OneDrive Upload Failed", `PDF upload failed for ${contactName} (${businessName}): ${odMsg}`, "leads/application", "error").catch(() => {});
                             }
+
+                        // Upload PDF to Slack as thread reply on the notification message
+                        if (hotLeadsChannel && pdfBuffer) {
+                                        slack.uploadFilePDF(hotLeadsChannel, `Application - ${safeName}.pdf`, pdfBuffer, slackTs)
+                                          .catch(err => console.error("[Slack 100%] PDF upload failed:", err instanceof Error ? err.message : err));
+                        }
 
                         // Add note
                         if (contactId) {
