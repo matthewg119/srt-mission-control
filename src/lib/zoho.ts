@@ -164,7 +164,14 @@ async function zohoRequest(
                 throw new Error(`Zoho API error ${response.status}: ${errorText}`);
   }
 
-  return response.json();
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    console.error("[Zoho] Failed to parse response:", text.slice(0, 200));
+    return {};
+  }
 }
 
 /**
@@ -319,9 +326,15 @@ export async function attachPDFToLead(
                 throw new Error(`Zoho attachment upload failed: ${response.status}: ${errorText}`);
   }
 
-  const result = await response.json() as {
-                data?: Array<{ code: string; message: string; status: string }>;
-  };
+  const text = await response.text();
+  if (!text) return; // Upload succeeded with no body
+  let result: { data?: Array<{ code: string; message: string; status: string }> };
+  try {
+    result = JSON.parse(text);
+  } catch {
+    console.warn("[Zoho] Attachment response not JSON:", text.slice(0, 200));
+    return; // Assume success if HTTP was 200
+  }
             const item = result.data?.[0];
             if (item && item.status !== "success") {
                           throw new Error(`Zoho attachment non-success: code=${item.code} message=${item.message}`);
