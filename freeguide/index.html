@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Free Guide: The Doctor's Guide to Business Funding | SRT Agency</title>
+<meta name="description" content="Free download: How medical practice owners are getting $50K-$2M in business funding in 48 hours without bank loans or credit checks.">
+<link rel="canonical" href="https://srtagency.com/freeguide/">
+
+<!-- Meta Pixel -->
+<script>
+!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+document,'script','https://connect.facebook.net/en_US/fbevents.js');
+fbq('init','2319215808600729');
+fbq('track','PageView');
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ink: #0B1426;
+  --ink-light: #111D33;
+  --ocean: #1B65A7;
+  --reef: #00C9A7;
+  --slate: #4A5568;
+  --mist: #F7FAFC;
+  --white: #FFFFFF;
+  --gold: #F6AD55;
+}
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--ink);
+  color: var(--white);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* —— HERO —— */
+.hero {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -20%;
+  right: -10%;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(0,201,167,0.12) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  bottom: -15%;
+  left: -5%;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(27,101,167,0.1) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.hero-content {
+  padding: 4rem 3.5rem 4rem 5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
+}
+
+.hero-form-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  position: relative;
+  z-index: 2;
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 3rem;
+  text-decoration: none;
+}
+
+.logo-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 24px;
+}
+
+.logo-bars span {
+  display: block;
+  width: 5px;
+  border-radius: 2px;
+}
+
+.logo-bars span:nth-child(1) { height: 40%; background: var(--ocean); }
+.logo-bars span:nth-child(2) { height: 65%; background: var(--ocean); }
+.logo-bars span:nth-child(3) { height: 90%; background: var(--reef); }
+
+.logo-text {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(255,255,255,0.6);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(0,201,167,0.1);
+  border: 1px solid rgba(0,201,167,0.2);
+  padding: 0.5rem 1rem;
+  border-radius: 100px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--reef);
+  margin-bottom: 1.75rem;
+  width: fit-content;
+  animation: fadeUp 0.6s ease forwards;
+  opacity: 0;
+}
+
+/* Headline */
+.hero h1 {
+  font-family: 'Instrument Serif', serif;
+  font-size: clamp(2.4rem, 4.5vw, 3.8rem);
+  font-weight: 400;
+  line-height: 1.15;
+  color: var(--white);
+  margin-bottom: 1.5rem;
+  animation: fadeUp 0.6s ease 0.1s forwards;
+  opacity: 0;
+}
+
+.hero h1 em {
+  font-style: italic;
+  color: var(--reef);
+}
+
+.hero h1 .gold {
+  color: var(--gold);
+}
+
+/* Subhead */
+.hero-sub {
+  font-size: 1.1rem;
+  color: rgba(255,255,255,0.65);
+  max-width: 520px;
+  margin-bottom: 2.5rem;
+  font-weight: 400;
+  animation: fadeUp 0.6s ease 0.2s forwards;
+  opacity: 0;
+}
+
+.hero-sub strong {
+  color: var(--white);
+  font-weight: 600;
+}
+
+/* Bullet points */
+.pain-list {
+  list-style: none;
+  margin-bottom: 2.5rem;
+  animation: fadeUp 0.6s ease 0.3s forwards;
+  opacity: 0;
+}
+
+.pain-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  font-size: 1rem;
+  color: rgba(255,255,255,0.8);
+}
+
+.pain-list li::before {
+  content: '✓';
+  color: var(--reef);
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* —— FORM CARD —— */
+.form-card {
+  background: var(--white);
+  border-radius: 20px;
+  padding: 2.75rem 2.5rem;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+  animation: floatUp 0.8s ease 0.3s forwards;
+  opacity: 0;
+  transform: translateY(30px);
+}
+
+.form-card h2 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.6rem;
+  font-weight: 400;
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+  text-align: center;
+}
+
+.form-card .form-sub {
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--slate);
+  margin-bottom: 2rem;
+}
+
+.form-field {
+  margin-bottom: 1.25rem;
+}
+
+.form-field label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--slate);
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.form-field input,
+.form-field select {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 2px solid #E2E8F0;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.2s;
+  background: var(--white);
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  border-color: var(--ocean);
+}
+
+.form-field input::placeholder {
+  color: #A0AEC0;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.submit-btn {
+  width: 100%;
+  padding: 1rem;
+  background: var(--reef);
+  color: var(--ink);
+  border: none;
+  border-radius: 12px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.2s;
+  margin-top: 0.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.submit-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,201,167,0.3);
+}
+
+.submit-btn:active {
+  transform: translateY(0);
+}
+
+.form-trust {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  font-size: 0.78rem;
+  color: #A0AEC0;
+}
+
+/* —— MIDDLE SECTION —— */
+.middle {
+  padding: 6rem 5rem;
+  background: var(--white);
+  color: var(--ink);
+  position: relative;
+}
+
+.middle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--ocean), var(--reef));
+}
+
+.middle-inner {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.middle h2 {
+  font-family: 'Instrument Serif', serif;
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  font-weight: 400;
+  line-height: 1.25;
+  margin-bottom: 2.5rem;
+  color: var(--ink);
+}
+
+.middle h2 em {
+  color: var(--ocean);
+  font-style: italic;
+}
+
+.what-inside {
+  list-style: none;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.what-inside li {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--mist);
+  border-radius: 14px;
+  border-left: 4px solid var(--reef);
+  font-size: 1rem;
+  color: var(--ink);
+  transition: transform 0.2s;
+}
+
+.what-inside li:hover {
+  transform: translateX(4px);
+}
+
+.what-inside li .icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.what-inside li strong {
+  color: var(--ocean);
+}
+
+/* —— BOTTOM CTA —— */
+.bottom-cta {
+  padding: 5rem 2rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.bottom-cta::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(27,101,167,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 50%, rgba(0,201,167,0.08) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.bottom-inner {
+  max-width: 800px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* Author card */
+.author-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2.5rem;
+  align-items: start;
+  background: var(--ink-light);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 20px;
+  padding: 2.5rem 3rem;
+  margin-bottom: 3rem;
+}
+
+.author-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--ocean), var(--reef));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--white);
+  flex-shrink: 0;
+}
+
+.author-text h3 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin-bottom: 1rem;
+  line-height: 1.3;
+}
+
+.author-text p {
+  color: rgba(255,255,255,0.6);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin-bottom: 1rem;
+}
+
+.author-text p:last-child {
+  margin-bottom: 0;
+}
+
+.author-name {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.author-name strong {
+  color: var(--white);
+  font-size: 0.95rem;
+}
+
+.author-name span {
+  color: rgba(255,255,255,0.4);
+  font-size: 0.82rem;
+}
+
+/* Stats row */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-bottom: 3rem;
+}
+
+.stat-card {
+  text-align: center;
+  padding: 1.75rem 1rem;
+  background: var(--ink-light);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px;
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(0,201,167,0.2);
+}
+
+.stat-number {
+  font-family: 'Instrument Serif', serif;
+  font-size: 2.2rem;
+  font-weight: 400;
+  color: var(--reef);
+  line-height: 1;
+  margin-bottom: 0.5rem;
+}
+
+.stat-label {
+  font-size: 0.82rem;
+  color: rgba(255,255,255,0.5);
+  font-weight: 500;
+}
+
+/* Final CTA */
+.final-cta {
+  text-align: center;
+  padding: 2.5rem;
+  background: linear-gradient(135deg, rgba(0,201,167,0.06), rgba(27,101,167,0.06));
+  border: 1px solid rgba(0,201,167,0.12);
+  border-radius: 20px;
+}
+
+.final-cta h3 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.4rem;
+  font-weight: 400;
+  margin-bottom: 0.75rem;
+}
+
+.final-cta p {
+  color: rgba(255,255,255,0.55);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+  max-width: 450px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.final-cta .submit-btn {
+  width: auto;
+  padding: 1rem 3rem;
+  display: inline-flex;
+  font-size: 1.05rem;
+}
+
+/* Footer */
+.footer {
+  padding: 2rem 5rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.3);
+}
+
+/* —— ANIMATIONS —— */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes floatUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* —— RESPONSIVE —— */
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+  .hero-content {
+    padding: 3rem 1.5rem 1rem;
+  }
+  .hero-form-side {
+    padding: 1rem 1.5rem 3rem;
+  }
+  .middle {
+    padding: 4rem 1.5rem;
+  }
+  .bottom-cta {
+    padding: 3rem 1.5rem;
+  }
+  .author-card {
+    grid-template-columns: 1fr;
+    padding: 2rem 1.5rem;
+    gap: 1.5rem;
+  }
+  .author-avatar {
+    margin: 0 auto;
+  }
+  .stats-row {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .footer {
+    padding: 2rem 1.5rem;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════ HERO ═══════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-content">
+    <a href="/" class="logo">
+      <div class="logo-bars"><span></span><span></span><span></span></div>
+      <span class="logo-text">SRT Agency</span>
+    </a>
+
+    <div class="badge">📘 Free Download — 2026 Guide</div>
+
+    <h1>The Doctor's Guide to <em>Business Funding</em> Without a <span class="gold">Bank</span></h1>
+
+    <p class="hero-sub">
+      <strong>Free blueprint</strong> for medical practice owners who need capital but are tired of banks saying no, waiting weeks, and jumping through hoops.
+    </p>
+
+    <ul class="pain-list">
+      <li>You need $50K–$2M to expand, buy equipment, or cover payroll</li>
+      <li>Banks want 6 months of paperwork and perfect credit</li>
+      <li>You don't have time to wait — patients are booked and revenue is real</li>
+      <li>You've heard about "alternative funding" but don't know who to trust</li>
+    </ul>
+  </div>
+
+  <div class="hero-form-side">
+    <div class="form-card">
+      <h2>Get the Free Guide</h2>
+      <p class="form-sub">Enter your info below for instant access</p>
+
+      <form id="leadForm" onsubmit="return handleSubmit(event)">
+        <div class="form-row">
+          <div class="form-field">
+            <label>First Name *</label>
+            <input type="text" id="firstName" placeholder="John" required>
+          </div>
+          <div class="form-field">
+            <label>Last Name *</label>
+            <input type="text" id="lastName" placeholder="Smith" required>
+          </div>
+        </div>
+
+        <div class="form-field">
+          <label>Email *</label>
+          <input type="email" id="email" placeholder="john@practice.com" required>
+        </div>
+
+        <div class="form-field">
+          <label>Phone *</label>
+          <input type="tel" id="phone" placeholder="(555) 123-4567" required>
+        </div>
+
+        <div class="form-field">
+          <label>How much funding do you need?</label>
+          <select id="fundingAmount">
+            <option value="">Select range...</option>
+            <option value="$25,000 - $50,000">$25K – $50K</option>
+            <option value="$50,000 - $100,000">$50K – $100K</option>
+            <option value="$100,000 - $250,000">$100K – $250K</option>
+            <option value="$250,000 - $500,000">$250K – $500K</option>
+            <option value="$500,000 - $1,000,000">$500K – $1M</option>
+            <option value="Over $1,000,000">Over $1M</option>
+          </select>
+        </div>
+
+        <button type="submit" class="submit-btn" id="submitBtn">
+          Download the Free Guide →
+        </button>
+
+        <div class="form-trust">
+          🔒 No spam. No credit check. Unsubscribe anytime.
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════ MIDDLE ═══════════════════════════════════ -->
+<section class="middle">
+  <div class="middle-inner">
+    <h2>Most practice owners think they have a <em>"bank problem."</em><br>What we keep seeing is something different.</h2>
+
+    <ul class="what-inside">
+      <li>
+        <span class="icon">🔍</span>
+        <div><strong>The real reason banks say no</strong> — and what alternative funders actually look at instead (hint: it's not your credit score)</div>
+      </li>
+      <li>
+        <span class="icon">⚡</span>
+        <div><strong>The 48-hour funding path</strong> — how medical practices are getting $50K–$2M deposited in days, not months</div>
+      </li>
+      <li>
+        <span class="icon">🛡️</span>
+        <div><strong>The 5 red flags to avoid</strong> — how to tell a legitimate funder from a predatory one (most owners miss #3)</div>
+      </li>
+      <li>
+        <span class="icon">📋</span>
+        <div><strong>The exact documents you need</strong> — the complete checklist so you're not scrambling when it's time to apply</div>
+      </li>
+      <li>
+        <span class="icon">💰</span>
+        <div><strong>Revenue-based vs. fixed payments</strong> — which structure protects your cashflow during slow months</div>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════ BOTTOM CTA ═══════════════════════════════════ -->
+<section class="bottom-cta">
+  <div class="bottom-inner">
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-number">$47M+</div>
+        <div class="stat-label">Funded for businesses</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">48hrs</div>
+        <div class="stat-label">Average time to funding</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">500+</div>
+        <div class="stat-label">Business owners helped</div>
+      </div>
+    </div>
+
+    <!-- Author message -->
+    <div class="author-card">
+      <div class="author-avatar">M</div>
+      <div class="author-text">
+        <h3>I wrote this guide because I was tired of seeing practice owners get bad advice.</h3>
+        <p>I spent 7 weeks pulling together what's actually working right now — not theory, not generic AI content — real strategies from funding hundreds of businesses.</p>
+        <p>You get the complete blueprint. No fluff, no upsell wall, no bait-and-switch. And you can unsubscribe from the list at any time.</p>
+        <p style="color:rgba(255,255,255,0.8)">If that sounds like a fair trade, drop your info above and I'll send it right over.</p>
+        <div class="author-name">
+          <strong>Matthew Garcia</strong>
+          <span>CEO, SRT Agency</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Final CTA -->
+    <div class="final-cta">
+      <h3>Ready to stop guessing?</h3>
+      <p>Get the free guide and see exactly how medical practices are getting funded in 2026 — without banks, without perfect credit, without the wait.</p>
+      <button class="submit-btn" onclick="document.getElementById('firstName').focus(); window.scrollTo({top:0,behavior:'smooth'})">
+        Get the Free Guide →
+      </button>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════ FOOTER ═══════════════════════════════════ -->
+<footer class="footer">
+  <p>SRT Agency LLC · info@srtagency.com · srtagency.com</p>
+  <p style="margin-top:0.5rem">This website is not endorsed by Facebook or Google. Individual results may vary.</p>
+</footer>
+
+<script>
+// —— UTM + Attribution ——
+const params = new URLSearchParams(window.location.search);
+const utm = {
+  source: params.get('utm_source') || '',
+  campaign: params.get('utm_campaign') || '',
+  content: params.get('utm_content') || '',
+  medium: params.get('utm_medium') || '',
+  adId: params.get('ad_id') || '',
+  fbclid: params.get('fbclid') || '',
+};
+
+function getCookies() {
+  const c = {};
+  document.cookie.split(';').forEach(function(s) { const p = s.trim().split('='); c[p[0]] = p.slice(1).join('='); });
+  return { _fbc: c._fbc || null, _fbp: c._fbp || null };
+}
+
+// —— Form Submit ——
+async function handleSubmit(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  const mc = getCookies();
+  const eventId = 'evt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+  const data = {
+    firstName: document.getElementById('firstName').value.trim(),
+    lastName: document.getElementById('lastName').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    businessPhone: document.getElementById('phone').value.trim(),
+    amountNeeded: document.getElementById('fundingAmount').value,
+    fundingAmount: document.getElementById('fundingAmount').value,
+    applicationCompletionPct: 25,
+    applicationStage: 'Contact Info',
+    source: 'guide-landing-page',
+    _fbc: mc._fbc,
+    _fbp: mc._fbp,
+    eventId: eventId,
+    sourceUrl: window.location.href,
+    utmCampaign: utm.campaign,
+    utmContent: utm.content,
+    utmMedium: utm.medium,
+    adId: utm.adId,
+  };
+
+  try {
+    await fetch('https://mission.srtagency.com/api/leads/application', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  } catch (err) {
+    console.error('Submit error:', err);
+  }
+
+  // Fire Meta Lead pixel
+  if (typeof fbq !== 'undefined') {
+    fbq('track', 'Lead', {}, { eventID: eventId });
+  }
+
+  // Redirect to full application with pre-filled data
+  const applyUrl = new URL('https://www.srtagency.com/apply/');
+  applyUrl.searchParams.set('fn', data.firstName);
+  applyUrl.searchParams.set('ln', data.lastName);
+  applyUrl.searchParams.set('em', data.email);
+  applyUrl.searchParams.set('ph', data.businessPhone);
+  applyUrl.searchParams.set('amt', data.amountNeeded);
+  applyUrl.searchParams.set('src', 'guide-lp');
+  window.location.href = applyUrl.toString();
+}
+</script>
+</body>
+</html>
