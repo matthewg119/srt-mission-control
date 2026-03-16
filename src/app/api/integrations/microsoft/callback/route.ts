@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/db";
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
   const error = request.nextUrl.searchParams.get("error");
+  console.log("[Microsoft OAuth] Callback received, code:", code ? "present" : "missing", "error:", error || "none");
 
   const dashboardUrl =
     (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000") +
