@@ -102,7 +102,7 @@ const EVENT_DOT_COLORS: Record<string, string> = {
   error: "#ef4444",
   pipeline_deal_created: "#00C9A7",
   pipeline_stage_moved: "#1B65A7",
-  ghl_sync: "#64748b",
+  zoho_sync: "#64748b",
 };
 
 const ACTIVITY_COLLAPSED_COUNT = 8;

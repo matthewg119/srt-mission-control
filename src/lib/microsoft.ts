@@ -116,7 +116,17 @@ async function getValidAccessToken(): Promise<string> {
   }
 
   // Refresh the token
-  const tokens = await refreshAccessToken(data.config.refresh_token);
+  let tokens;
+  try {
+    tokens = await refreshAccessToken(data.config.refresh_token);
+  } catch (refreshErr) {
+    console.error("[Microsoft] Token refresh failed:", refreshErr instanceof Error ? refreshErr.message : refreshErr);
+    await supabaseAdmin
+      .from("integrations")
+      .update({ status: "error", updated_at: new Date().toISOString() })
+      .eq("name", "Microsoft 365");
+    throw new Error(`Microsoft 365 token expired and refresh failed. Please reconnect at /dashboard/integrations.`);
+  }
 
   // Save new tokens
   await supabaseAdmin
@@ -128,6 +138,7 @@ async function getValidAccessToken(): Promise<string> {
         refresh_token: tokens.refresh_token,
         expires_at: String(now + tokens.expires_in),
       },
+      status: "connected",
       updated_at: new Date().toISOString(),
     })
     .eq("name", "Microsoft 365");

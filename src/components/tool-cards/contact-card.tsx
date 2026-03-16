@@ -1,6 +1,6 @@
 "use client";
 
-import { Phone, Mail, Building2, Tag, ExternalLink } from "lucide-react";
+import { Phone, Mail, Building2, Tag } from "lucide-react";
 
 interface ContactData {
   id: string;
@@ -68,14 +68,6 @@ export function ContactCard({
             </p>
           )}
         </div>
-        <a
-          href={`https://app.gohighlevel.com/contacts/${contact.id}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 text-xs text-[rgba(255,255,255,0.3)] hover:text-[#00C9A7] transition-colors shrink-0"
-        >
-          GHL <ExternalLink className="h-3 w-3" />
-        </a>
       </div>
 
       <div className="px-4 py-3 space-y-3">

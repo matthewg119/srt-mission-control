@@ -45,6 +45,10 @@ export interface ZohoLeadData {
   creditScoreRange?: string;
             ownership?: string;
             dob?: string;
+            ssn4?: string;
+            homeAddress?: string;
+            signatureName?: string;
+            incDate?: string;
 }
 
 export interface ZohoApiRecord {
@@ -65,7 +69,21 @@ export interface ZohoApiRecord {
   EIN?: string;
             DBA?: string;
             Time_in_Business?: string;
-            // Free-form description for financial + owner details
+            // Custom fields
+  Funding_Amount_Requested?: string | number;
+            Monthly_Deposits?: string | number;
+            Monthly_Revenue?: string | number;
+            Credit_Score_Range?: string;
+            Use_of_Funds?: string;
+            Existing_Loans?: string;
+            Ownership_Percentage?: string | number;
+            SSN_Last_4?: string;
+            Date_of_Birth?: string;
+            Home_Address?: string;
+            Legal_Name?: string;
+            Incorporation_Date?: string;
+            Signature_Name?: string;
+            // Free-form description as backup summary
   Description?: string;
             [key: string]: unknown;
 }
@@ -188,9 +206,24 @@ function buildRecord(leadData: ZohoLeadData): ZohoApiRecord {
             if (leadData.bizZip) record.Zip_Code = leadData.bizZip;
             if (leadData.timeInBusiness) record.Time_in_Business = leadData.timeInBusiness;
 
-  // Financial + owner details go in Description
+  // Custom fields — direct mapping
+  if (leadData.fundingAmount) record.Funding_Amount_Requested = leadData.fundingAmount;
+  if (leadData.monthlyDeposits) record.Monthly_Deposits = leadData.monthlyDeposits;
+  if (leadData.monthlyRevenue) record.Monthly_Revenue = leadData.monthlyRevenue;
+  if (leadData.creditScoreRange) record.Credit_Score_Range = leadData.creditScoreRange;
+  if (leadData.useOfFunds) record.Use_of_Funds = leadData.useOfFunds;
+  if (leadData.existingLoans) record.Existing_Loans = leadData.existingLoans;
+  if (leadData.ownership) record.Ownership_Percentage = leadData.ownership;
+  if (leadData.dob) record.Date_of_Birth = leadData.dob;
+  if (leadData.ssn4) record.SSN_Last_4 = leadData.ssn4;
+  if (leadData.homeAddress) record.Home_Address = leadData.homeAddress;
+  if (leadData.legalName) record.Legal_Name = leadData.legalName;
+  if (leadData.incDate) record.Incorporation_Date = leadData.incDate;
+  if (leadData.signatureName) record.Signature_Name = leadData.signatureName;
+
+  // Keep Description as backup summary
   const desc = buildDescription(leadData);
-            if (desc) record.Description = desc;
+  if (desc) record.Description = desc;
 
   return record;
 }

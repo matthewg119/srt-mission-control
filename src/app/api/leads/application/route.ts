@@ -7,7 +7,7 @@ import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
-import { ghlUpsertContact, ghlCreateOpportunity } from "@/lib/ghl";
+
 import {
         createLead as zohoCreateLead,
         updateLead as zohoUpdateLead,
@@ -105,69 +105,62 @@ export async function POST(request: NextRequest) {
                                           .single();
 
                               if (insertErr || !newContact) throw new Error(insertErr?.message || "Contact insert failed");
-                                        contactId = newContact.id;
+                              contactId = newContact.id;
 
-                              // -- Sync NEW contact to Zoho (non-blocking) --
-                              // Only fires for genuinely new contacts to avoid duplicates
+                              // Log new lead to system_logs so it shows in Recent Activity
+                              await supabaseAdmin.from("system_logs").insert({
+                                event_type: "lead_capture",
+                                description: `New lead captured: ${contactName} — ${businessName || "N/A"} — ${email || "N/A"}`,
+                                metadata: { contactId, contactName, businessName, email, source: source || "Meta Ads", applicationStage: "25%" },
+                              });
+                              // fire-and-forget, don't block on system_log insert
+
+                              // Sync NEW contact to Zoho (non-blocking)
                               const timeInBiz = (startMonth && startYear) ? `${startMonth} ${startYear}` : undefined;
-                                        zohoCreateLead({
-                                                          firstName,
-                                                          lastName,
-                                                          businessName: businessName || legalName,
-                                                          legalName,
-                                                          dba,
-                                                          email,
-                                                          phone: mobilePhone || businessPhone,
-                                                          source: source || "Meta Ads",
-                                                          Lead_Status: "New",
-                                                          industry,
-                                                          ein,
-                                                          bizAddress,
-                                                          bizCity,
-                                                          bizState,
-                                                          bizZip,
-                                                          timeInBusiness: timeInBiz,
-                                                          creditScoreRange: creditScore,
-                                                          ownership: ownership ? String(ownership) : undefined,
-                                        }).catch(err => console.error("[Zoho 25%] create failed:", err instanceof Error ? err.message : err));
-                                                  // -- Slack: new lead captured (new contacts only) --
-          if (applicationCompletionPct >= 25 && applicationCompletionPct <= 35) {
-            const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-            slack.postMessage(
-                        hotLeadsChannel,
-                        [
-                                        "📥 *New Lead Captured*",
-                                        "",
-                                        `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                        `*Business:* ${businessName || legalName || "–"}`,
-                                        `*Industry:* ${industry || "–"}`,
-                                        `*Phone:* ${mobilePhone || businessPhone || "–"}`,
-                                        `*Email:* ${email || "–"}`,
-                        ].join("\n")
-            ).catch(err => console.error("[Slack new lead] postMessage failed:", err instanceof Error ? err.message : err));
-          }
+                              zohoCreateLead({
+                                firstName, lastName,
+                                businessName: businessName || legalName, legalName, dba,
+                                email, phone: mobilePhone || businessPhone,
+                                source: source || "Meta Ads", Lead_Status: "New",
+                                industry, ein, bizAddress, bizCity, bizState, bizZip,
+                                timeInBusiness: timeInBiz, creditScoreRange: creditScore,
+                                ownership: ownership ? String(ownership) : undefined,
+                              }).catch(err => console.error("[Zoho 25%] create failed:", err instanceof Error ? err.message : err));
+
+                              // Slack: new lead captured — with dedup check
+                              if (applicationCompletionPct >= 25 && applicationCompletionPct <= 35) {
+                                const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+                                if (hotLeadsChannel) {
+                                  const { data: recentSlack } = await supabaseAdmin
+                                    .from("system_logs").select("id")
+                                    .eq("event_type", "slack_new_lead")
+                                    .like("description", `%${email}%`)
+                                    .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+                                    .limit(1);
+
+                                  if (!recentSlack || recentSlack.length === 0) {
+                                    slack.postMessage(hotLeadsChannel, [
+                                      "📥 *New Lead Captured*", "",
+                                      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+                                      `*Business:* ${businessName || legalName || "–"}`,
+                                      `*Industry:* ${industry || "–"}`,
+                                      `*Phone:* ${mobilePhone || businessPhone || "–"}`,
+                                      `*Email:* ${email || "–"}`,
+                                      `*Source:* ${source || "Meta Ads"}`,
+                                    ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
+
+                                    try {
+                                      await supabaseAdmin.from("system_logs").insert({
+                                        event_type: "slack_new_lead",
+                                        description: `Slack notification sent for new lead: ${contactName} (${email})`,
+                                        metadata: { email, contactId },
+                                      });
+                                    } catch { /* ignore */ }
+                                  }
+                                }
+                              }
                         }
 
-                        // ── Sync to GHL ──
-                        const ghlContactId = await ghlUpsertContact({
-                                        firstName, lastName, email,
-                                        phone: mobilePhone || businessPhone,
-                                        businessName, source,
-                                        tags: ["application-started"],
-                        });
-                            if (ghlContactId) {
-                                            const stageId = null;
-                                            if (stageId) {
-                                                              const ghlOppId = await ghlCreateOpportunity({
-                                                                                  ghlContactId,
-                                                                                  name: `${contactName} — ${amountNeeded || "Amount TBD"}`,
-                                                                                  stageId,
-                                                                                  amount: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0,
-                                                                                  source: source || "Website - Application Form",
-                                                              });
-                                                              console.log("[GHL] Opportunity created:", ghlOppId);
-                                            }
-                            }
               } catch (error) {
                             console.error("[25%] Contact creation failed:", error instanceof Error ? error.message : error);
                             systemAlert("Contact Creation Failed", `Application contact could not be created: ${error instanceof Error ? error.message : "Unknown error"}. Lead data saved locally.`, "leads/application").catch(() => {});
@@ -187,7 +180,16 @@ export async function POST(request: NextRequest) {
                                               })
                                               .select("id")
                                               .maybeSingle();
-                                            if (!dealErr && deal) dealId = deal.id;
+                                            if (!dealErr && deal) {
+                                              dealId = deal.id;
+                                              try {
+                                                await supabaseAdmin.from("system_logs").insert({
+                                                  event_type: "pipeline_deal_created",
+                                                  description: `New deal: ${contactName} → New Deals / Open - Not Contacted`,
+                                                  metadata: { contactId, dealId, pipeline: "New Deals", stage: "Open - Not Contacted", source: "application-25%" },
+                                                });
+                                              } catch { /* ignore */ }
+                                            }
                             } catch { /* ignore deal creation errors */ }
               }
 
@@ -372,6 +374,11 @@ export async function POST(request: NextRequest) {
                             monthlyDeposits,
                             useOfFunds,
                             existingLoans: existingLoans ? (String(existingLoans).includes("Yes") ? "Yes" : "No") : undefined,
+                            dob,
+                            ssn4,
+                            homeAddress,
+                            signatureName: signatureName || undefined,
+                            incDate: incDate || undefined,
               };
 
               // Store zoho lead ID so we can attach PDF later
@@ -384,7 +391,7 @@ export async function POST(request: NextRequest) {
                                             const existingZohoLead = existingLeads.find((l: { Email?: string }) => l.Email === email);
 
                               if (existingZohoLead && existingZohoLead.id) {
-                                                // Update existing Zoho lead — use Description for financial fields
+                                                // Update existing Zoho lead with all fields including custom
                                               await zohoUpdateLead(existingZohoLead.id as string, {
                                                                   First_Name: firstName,
                                                                   Last_Name: lastName || businessName || legalName,
@@ -401,6 +408,18 @@ export async function POST(request: NextRequest) {
                                                                   State: bizState,
                                                                   Zip_Code: bizZip,
                                                                   Time_in_Business: timeInBiz100,
+                                                                  Legal_Name: legalName,
+                                                                  Funding_Amount_Requested: amountNeeded,
+                                                                  Monthly_Deposits: monthlyDeposits,
+                                                                  Credit_Score_Range: creditScore,
+                                                                  Use_of_Funds: useOfFunds,
+                                                                  Existing_Loans: existingLoans ? (String(existingLoans).includes("Yes") ? "Yes" : "No") : undefined,
+                                                                  Ownership_Percentage: ownership,
+                                                                  Date_of_Birth: dob,
+                                                                  SSN_Last_4: ssn4,
+                                                                  Home_Address: homeAddress,
+                                                                  Incorporation_Date: timeInBiz100,
+                                                                  Signature_Name: signatureName,
                                                                   Description: zohoDescription,
                                               });
                                                 zohoLeadId = existingZohoLead.id as string;
@@ -416,22 +435,38 @@ export async function POST(request: NextRequest) {
                             }
               })();
 
-              // ── Slack: #hot-leads — Application Completed message (distinct from 25% messages) ──
+              // ── Slack: Application Completed — with dedup ──
               const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-                      if (hotLeadsChannel) {
-                                    const completedLines = [
-                                                    `✅ *Application Completed: ${contactName}*`,
-                                                    "",
-                                                    `*Business:* ${businessName || legalName || "—"}`,
-                                                    `*Industry:* ${industry || "—"}`,
-                                                    `*Funding Requested:* ${amountNeeded ? `$${amountNeeded}` : "—"}`,
-                                                    `*Monthly Revenue / Deposits:* ${monthlyDeposits || "—"}`,
-                                                    `*Email:* ${email || "—"}`,
-                                                    `*Phone:* ${mobilePhone || businessPhone || "—"}`,
-                                                  ];
-                                    slack.postMessage(hotLeadsChannel, completedLines.join("\n"))
-                                      .catch(err => console.error("[Slack 100%] postMessage failed:", err instanceof Error ? err.message : err));
-                      }
+              if (hotLeadsChannel) {
+                const { data: recentComplete } = await supabaseAdmin
+                  .from("system_logs").select("id")
+                  .eq("event_type", "slack_app_complete")
+                  .like("description", `%${email}%`)
+                  .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+                  .limit(1);
+
+                if (!recentComplete || recentComplete.length === 0) {
+                  const completedLines = [
+                    `✅ *Application Completed: ${contactName}*`, "",
+                    `*Business:* ${businessName || legalName || "—"}`,
+                    `*Industry:* ${industry || "—"}`,
+                    `*Funding Requested:* ${amountNeeded ? `$${amountNeeded}` : "—"}`,
+                    `*Monthly Revenue / Deposits:* ${monthlyDeposits || "—"}`,
+                    `*Email:* ${email || "—"}`,
+                    `*Phone:* ${mobilePhone || businessPhone || "—"}`,
+                  ];
+                  slack.postMessage(hotLeadsChannel, completedLines.join("\n"))
+                    .catch(err => console.error("[Slack 100%] postMessage failed:", err instanceof Error ? err.message : err));
+
+                  try {
+                    await supabaseAdmin.from("system_logs").insert({
+                      event_type: "slack_app_complete",
+                      description: `Slack notification sent for completed application: ${contactName} (${email})`,
+                      metadata: { email, contactId },
+                    });
+                  } catch { /* ignore */ }
+                }
+              }
 
               // Fire Meta CAPI CompleteRegistration at 100%
               sendEvent({
@@ -528,9 +563,15 @@ export async function POST(request: NextRequest) {
                               });
                             } catch (odErr) {
                                             const odMsg = odErr instanceof Error ? odErr.message : String(odErr);
-                                                            console.error("[OneDrive] error:", odMsg);
+                                            console.error("[OneDrive] error:", odMsg);
+                                            try {
+                                              await supabaseAdmin.from("system_logs").insert({
+                                                event_type: "onedrive_error",
+                                                description: `OneDrive upload failed for ${contactName}: ${odMsg.slice(0, 300)}`,
+                                                metadata: { contactId, businessName: safeName, error: odMsg },
+                                              });
+                                            } catch { /* ignore */ }
                                             systemAlert("OneDrive Upload Failed", `PDF upload failed for ${contactName} (${businessName}): ${odMsg}`, "leads/application", "error").catch(() => {});
-                                            // Don't throw — continue to Zoho attachment and email
                             }
 
                         // Add note
@@ -579,6 +620,13 @@ export async function POST(request: NextRequest) {
                                         } catch (emailErr) {
                                                           const errMsg = emailErr instanceof Error ? emailErr.message : String(emailErr);
                                                           console.error("[100%] Microsoft email failed:", errMsg);
+                                                          try {
+                                                            await supabaseAdmin.from("system_logs").insert({
+                                                              event_type: "email_send_error",
+                                                              description: `Confirmation email to ${email} failed: ${errMsg.slice(0, 200)}`,
+                                                              metadata: { contactId, email, error: errMsg },
+                                                            });
+                                                          } catch { /* ignore */ }
                                                           systemAlert("Email Delivery Failed", `Microsoft 365 could not send confirmation email to ${email}: ${errMsg.slice(0, 200)}`, "leads/application", "warning").catch(() => {});
                                         }
                         }

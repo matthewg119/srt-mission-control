@@ -150,12 +150,11 @@ export default function SequencesPage() {
         <Info className="h-5 w-5 text-[#1B65A7] shrink-0 mt-0.5" />
         <div>
           <p className="text-sm text-[rgba(255,255,255,0.8)] font-medium mb-1">
-            These are Mission Control sequences — not GHL Automations
+            These are Mission Control email sequences
           </p>
           <p className="text-xs text-[rgba(255,255,255,0.45)] leading-relaxed">
-            Emails are sent directly via GHL&apos;s Conversations API and will appear in each contact&apos;s GHL conversation history.
-            They are <strong className="text-[rgba(255,255,255,0.65)]">not</strong> visible in GHL&apos;s Workflows/Automations panel —
-            those are separate tools. Sequences run on a 5-minute cron on Vercel (requires Pro plan).
+            Emails are sent directly via Microsoft 365 and will appear in your Outlook Sent Items.
+            Sequences run on a scheduled cron on Vercel.
           </p>
         </div>
       </div>
@@ -350,19 +349,17 @@ export default function SequencesPage() {
         </div>
       )}
 
-      {/* How emails appear in GHL */}
+      {/* Where to see sent emails */}
       {isSeeded && (
         <div className="mt-6 p-4 rounded-xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)]">
           <p className="text-xs font-semibold text-[rgba(255,255,255,0.5)] uppercase tracking-wider mb-2">
-            Where to see sent emails in GHL
+            Where to see sent emails
           </p>
           <p className="text-sm text-[rgba(255,255,255,0.5)] leading-relaxed">
-            Go to <strong className="text-white">GHL → Contacts → [contact name] → Conversations tab</strong>.
-            Each email sent by these sequences will appear there. They will <em>not</em> appear in GHL Automations/Workflows —
-            those are a separate GHL feature. To use GHL Workflows instead, you would add GHL automations triggered by the
-            tags we set (<code className="text-[#00C9A7]">website-lead</code>,{" "}
+            Emails are sent via Microsoft 365. Check your <strong className="text-white">Outlook Sent Items</strong> folder
+            to verify delivery. Contact tags (<code className="text-[#00C9A7]">website-lead</code>,{" "}
             <code className="text-[#00C9A7]">application-started</code>,{" "}
-            <code className="text-[#00C9A7]">application-completed</code>).
+            <code className="text-[#00C9A7]">application-completed</code>) are used to trigger the right sequence.
           </p>
         </div>
       )}

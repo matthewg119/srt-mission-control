@@ -15,10 +15,6 @@
     {
       "path": "/api/cron/process-sequences",
       "schedule": "0 14 * * *"
-    },
-    {
-      "path": "/api/ghl/sync",
-      "schedule": "0 12 * * *"
     }
   ]
 }

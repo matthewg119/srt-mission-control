@@ -13,28 +13,30 @@ Internal operations portal for SRT Agency (business financing brokerage). AI-fir
 - Next.js 14 (App Router) + TypeScript + Tailwind CSS v3
 - Supabase PostgreSQL (hosted)
 - Anthropic Claude API (claude-sonnet-4-6) with tool use
-- GoHighLevel (GHL) API v2 for CRM
+- Zoho CRM v5 (OAuth refresh token flow)
+- Microsoft 365 (email via Graph API, OneDrive for file storage)
 - Vercel deployment
 
 ## Architecture
 
 ### AI Office Manager (the core)
 - `src/lib/ai.ts` — `runConversationWithTools()` handles Claude tool loop (up to 5 iterations)
-- `src/lib/ai-tools.ts` — 9 tools: pipeline queries, deal management, SMS/email, templates, activity
+- `src/lib/ai-tools.ts` — 16 tools: pipeline queries, deal management, email, templates, activity
 - `src/app/api/chat/route.ts` — Web chat endpoint (used by dashboard)
 - `src/app/api/telegram/webhook/route.ts` — Telegram endpoint (same AI, same tools)
 - `src/lib/telegram.ts` — Telegram Bot API client
 
 ### CRM Integration
-- `src/lib/ghl.ts` — GHL API client (contacts, opportunities, pipelines, custom fields)
-- `src/config/pipeline.ts` — Two pipelines: New Deals + Active Deals (with GHL IDs)
+- `src/lib/zoho.ts` — Zoho CRM v5 API client (leads CRUD, PDF attachment, search)
+- `src/lib/microsoft.ts` — Microsoft Graph API (email, OneDrive, OAuth)
+- `src/config/pipeline.ts` — Two pipelines: New Deals + Active Deals
 
 ### Lead Capture (from srtagency.com)
-- `src/app/api/leads/capture/route.ts` — Contact form → GHL contact + opportunity
-- `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create, 100% enrich)
+- `src/app/api/leads/capture/route.ts` — Contact form → Supabase contact + deal
+- `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create + Zoho + Slack, 100% enrich + PDF + OneDrive + Zoho)
 
 ### Dashboard Pages
-- `/dashboard` — Overview with pipeline stats
+- `/dashboard` — BrainHeart overview with recent activity
 - `/dashboard/pipeline` — Kanban board
 - `/dashboard/chat` — AI Office Manager chat interface
 - `/dashboard/templates` — SMS/Email templates
@@ -44,27 +46,33 @@ Internal operations portal for SRT Agency (business financing brokerage). AI-fir
 ## Database Tables (Supabase)
 | Table | Purpose |
 |-------|---------|
-| pipeline_cache | Cached GHL opportunities for fast dashboard queries |
+| contacts | Source of truth for all contacts |
+| deals | Pipeline deals with stage, pipeline, amount |
+| deal_events | Event timeline (stage changes, etc.) |
+| deal_notes | Notes per contact/deal |
 | message_templates | SMS/Email templates per pipeline stage |
 | automation_logs | Log of automated actions (SMS, email, stage moves) |
-| system_logs | General event log (lead captures, errors, actions) |
+| system_logs | General event log (lead captures, errors, Slack notifications) |
 | chat_conversations | Chat session metadata |
 | chat_messages | Individual chat messages (web + Telegram) |
-| integrations | API configs (AI priorities, GHL settings) |
+| integrations | API configs (AI priorities, Microsoft 365 tokens) |
 | knowledge_entries | AI knowledge base (custom context for the Office Manager) |
-
-## GHL Pipeline IDs
-- **New Deals:** `eNMzDiNKRgmvkZUc8Nid`
-- **Active Deals:** `Jhkxtrseqgm1qwMJGe7A`
 
 ## Environment Variables
 ```
 ANTHROPIC_API_KEY=         # Claude API
-GHL_API_KEY=               # GHL Private Integration Token
-GHL_LOCATION_ID=           # GHL Location
+ZOHO_CLIENT_ID=            # Zoho OAuth Client ID
+ZOHO_CLIENT_SECRET=        # Zoho OAuth Client Secret
+ZOHO_REFRESH_TOKEN=        # Zoho OAuth Refresh Token
+MICROSOFT_CLIENT_ID=       # Azure AD App Client ID
+MICROSOFT_CLIENT_SECRET=   # Azure AD App Client Secret
+MICROSOFT_TENANT_ID=       # Azure AD Tenant ID
 NEXT_PUBLIC_SUPABASE_URL=  # Supabase project URL
 SUPABASE_SERVICE_ROLE_KEY= # Supabase service role key
 NEXT_PUBLIC_SUPABASE_ANON_KEY= # Supabase anon key
+SLACK_BOT_TOKEN=           # Slack Bot token
+SLACK_HOT_LEADS_CHANNEL=   # Slack channel ID for lead notifications
+SLACK_CEO_CHANNEL=         # Slack channel ID for CEO pulse reports
 TELEGRAM_BOT_TOKEN=        # Telegram bot (from @BotFather)
 TELEGRAM_USER_ID=          # Allowed Telegram user ID
 NEXT_PUBLIC_APP_URL=       # https://mission.srtagency.com
@@ -74,3 +82,4 @@ NEXT_PUBLIC_APP_URL=       # https://mission.srtagency.com
 - **Web dashboard** — mission.srtagency.com/dashboard/chat
 - **Telegram bot** — same AI, same tools, via /api/telegram/webhook
 - **Website forms** — srtagency.com contact + apply forms → /api/leads/*
+- **Slack** — #hot-leads for new lead + application complete notifications

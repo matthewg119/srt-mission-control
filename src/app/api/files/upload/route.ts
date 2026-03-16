@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
       results.push(result);
     }
 
-    // Add note to deal_notes instead of GHL
+    // Add note to deal_notes
     if (contactId && files.length > 0) {
       const fileNames = results.map(r => r.fileName).join(", ");
       const oneDriveLinks = results

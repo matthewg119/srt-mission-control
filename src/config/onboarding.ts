@@ -38,8 +38,8 @@ export const DEFAULT_ONBOARDING_STEPS: OnboardingStep[] = [
   },
   {
     id: "step-5",
-    title: "Connect GoHighLevel",
-    description: "Link your GHL account to sync contacts, pipelines, and messaging.",
+    title: "Connect Zoho CRM",
+    description: "Link your Zoho CRM account to sync leads and contacts.",
   },
   {
     id: "step-6",

@@ -42,7 +42,7 @@ export interface MetaUserData {
   fbp?: string; // _fbp cookie — NOT hashed
   clientIpAddress?: string;
   clientUserAgent?: string;
-  externalId?: string; // GHL contactId
+  externalId?: string; // contact ID
 }
 
 export interface MetaEvent {

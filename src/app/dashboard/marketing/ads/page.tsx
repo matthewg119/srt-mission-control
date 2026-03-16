@@ -634,7 +634,7 @@ export default function AdsPage() {
               Extract Insights
             </button>
             <div className="bg-[rgba(245,166,35,0.06)] border border-[rgba(245,166,35,0.15)] rounded-lg p-3 text-[10px] text-[rgba(255,255,255,0.35)]">
-              <strong className="text-[#F5A623]">Phase 2:</strong> GHL webhooks will auto-pull call transcripts and text threads directly from your CRM.
+              <strong className="text-[#F5A623]">Phase 2:</strong> Webhooks will auto-pull call transcripts and text threads directly from your CRM.
             </div>
           </div>
           <div className="w-full lg:w-1/2">

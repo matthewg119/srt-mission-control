@@ -157,7 +157,7 @@ export default function AutomationsPage() {
               <Zap size={40} className="mx-auto text-[rgba(255,255,255,0.2)] mb-4" />
               <p className="text-lg text-[rgba(255,255,255,0.4)] mb-2">No automation history yet</p>
               <p className="text-sm text-[rgba(255,255,255,0.3)]">
-                Automations will fire when deals move stages in GHL
+                Automations will fire when deals move stages in your pipeline
               </p>
             </div>
           ) : (

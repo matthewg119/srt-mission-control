@@ -13,7 +13,7 @@ interface Integration {
 }
 
 const INTEGRATION_ICONS: Record<string, string> = {
-  GoHighLevel: "📊",
+  "Zoho CRM": "📊",
   "AI Configuration": "🤖",
   "Microsoft 365": "📧",
   "Microsoft Teams": "💬",
@@ -32,8 +32,6 @@ const STATUS_COLORS: Record<string, string> = {
 
 interface IntegrationCardProps {
   integration: Integration;
-  onSetupGHL?: () => void;
-  onSyncGHL?: () => void;
   onConnectMicrosoft?: () => void;
   onDisconnectMicrosoft?: () => void;
   onSetSignature?: () => void;
@@ -42,8 +40,6 @@ interface IntegrationCardProps {
 
 export function IntegrationCard({
   integration,
-  onSetupGHL,
-  onSyncGHL,
   onConnectMicrosoft,
   onDisconnectMicrosoft,
   onSetSignature,
@@ -100,35 +96,6 @@ export function IntegrationCard({
           ? `Last synced ${formatRelativeTime(integration.last_sync)}`
           : "Never synced"}
       </p>
-
-      {/* GHL-specific buttons */}
-      {integration.name === "GoHighLevel" && (
-        <div className="mb-3">
-          {integration.status === "connected" && integration.config?.apiKey && (
-            <p className="text-xs text-[#00C9A7] mb-2">
-              Configured via environment variables
-            </p>
-          )}
-          <div className="flex gap-2">
-            {integration.status !== "connected" && onSetupGHL && (
-              <button
-                onClick={onSetupGHL}
-                className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
-              >
-                Setup Pipeline
-              </button>
-            )}
-            {onSyncGHL && (
-              <button
-                onClick={onSyncGHL}
-                className="text-xs px-3 py-1.5 bg-[rgba(255,255,255,0.08)] text-white rounded-md hover:bg-[rgba(255,255,255,0.12)] transition-colors"
-              >
-                Sync Now
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Microsoft 365 buttons */}
       {integration.name === "Microsoft 365" && (
@@ -202,10 +169,10 @@ export function IntegrationCard({
       {/* Config panel */}
       {showConfig && (
         <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)] space-y-3">
-          {integration.name === "GoHighLevel" && (
+          {integration.name === "Zoho CRM" && (
             <>
-              <ConfigField label="API Key" field="apiKey" values={configValues} onChange={setConfigValues} sensitive />
-              <ConfigField label="Location ID" field="locationId" values={configValues} onChange={setConfigValues} />
+              <ConfigField label="Client ID" field="clientId" values={configValues} onChange={setConfigValues} />
+              <ConfigField label="Refresh Token" field="refreshToken" values={configValues} onChange={setConfigValues} sensitive />
             </>
           )}
           {integration.name === "Microsoft Teams" && (

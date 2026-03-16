@@ -15,8 +15,6 @@ interface Integration {
 export default function IntegrationsPage() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
-  const [setupResult, setSetupResult] = useState<Record<string, unknown> | null>(null);
-  const [settingUp, setSettingUp] = useState(false);
   const [msStatus, setMsStatus] = useState<string | null>(null);
 
   const fetchIntegrations = async () => {
@@ -42,30 +40,6 @@ export default function IntegrationsPage() {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
-
-  const handleSetupGHL = async () => {
-    if (!confirm("This will create 26 custom fields in GoHighLevel. Continue?")) return;
-    setSettingUp(true);
-    setSetupResult(null);
-    try {
-      const res = await fetch("/api/ghl/setup", { method: "POST" });
-      const data = await res.json();
-      setSetupResult(data);
-      fetchIntegrations();
-    } catch (e) {
-      setSetupResult({ error: "Setup failed" });
-    }
-    setSettingUp(false);
-  };
-
-  const handleSyncGHL = async () => {
-    try {
-      await fetch("/api/ghl/sync", { method: "POST" });
-      fetchIntegrations();
-    } catch {
-      // Error
-    }
-  };
 
   const handleConnectMicrosoft = () => {
     window.location.href = "/api/integrations/microsoft/auth";
@@ -130,28 +104,6 @@ export default function IntegrationsPage() {
         </div>
       )}
 
-      {/* Setup result banner */}
-      {setupResult && (
-        <div className="mb-4 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-white mb-2">GHL Setup Results</h3>
-          {(setupResult as Record<string, Record<string, unknown>>).summary && (
-            <div className="flex gap-4 text-xs">
-              <span className="text-[#00C9A7]">✓ Created: {((setupResult as Record<string, Record<string, number>>).summary).created}</span>
-              <span className="text-[#F5A623]">⟳ Skipped: {((setupResult as Record<string, Record<string, number>>).summary).skipped}</span>
-              <span className="text-[#E74C3C]">✗ Errors: {((setupResult as Record<string, Record<string, number>>).summary).errors}</span>
-            </div>
-          )}
-          <button onClick={() => setSetupResult(null)} className="text-xs text-[rgba(255,255,255,0.4)] mt-2 hover:text-white">Dismiss</button>
-        </div>
-      )}
-
-      {settingUp && (
-        <div className="mb-4 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-xl p-4 text-center">
-          <div className="animate-spin w-6 h-6 border-2 border-[#00C9A7] border-t-transparent rounded-full mx-auto mb-2" />
-          <p className="text-sm text-[rgba(255,255,255,0.5)]">Setting up GHL pipeline and custom fields... This may take a minute.</p>
-        </div>
-      )}
-
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -164,8 +116,6 @@ export default function IntegrationsPage() {
             <IntegrationCard
               key={integration.id || integration.name}
               integration={integration}
-              onSetupGHL={integration.name === "GoHighLevel" ? handleSetupGHL : undefined}
-              onSyncGHL={integration.name === "GoHighLevel" ? handleSyncGHL : undefined}
               onConnectMicrosoft={integration.name === "Microsoft 365" ? handleConnectMicrosoft : undefined}
               onDisconnectMicrosoft={integration.name === "Microsoft 365" ? handleDisconnectMicrosoft : undefined}
               onSetSignature={integration.name === "Microsoft 365" && integration.status === "connected" ? handleSetSignature : undefined}
