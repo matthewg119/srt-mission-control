@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
@@ -27,6 +28,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { name, email, phone, message, source, website, _fbc, _fbp, eventId, sourceUrl,
             utmCampaign, utmContent, utmMedium, utmSource, adId } = body;
+    const serverEventId = eventId || randomUUID();
 
     const leadScore = calculateLeadScore({ email, phone, fbc: _fbc });
     const adSource = resolveAdSource(_fbc, source);
@@ -143,30 +145,48 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Log to system_logs
-    await supabaseAdmin.from("system_logs").insert({
-      event_type: "lead_capture",
-      description: `New lead from website: ${firstName} ${lastName} (${email || phone})`,
-      metadata: { contactId, dealId, name, email, phone, message, source: source || "Website - Contact Form", clientIp, clientUserAgent },
-    }).then(({ error }) => { if (error) console.error("system_logs write failed:", error); });
+    try {
+      await supabaseAdmin.from("system_logs").insert({
+        event_type: "lead_capture",
+        description: `New lead from website: ${firstName} ${lastName} (${email || phone})`,
+        metadata: { contactId, dealId, name, email, phone, message, source: source || "Website - Contact Form", clientIp, clientUserAgent },
+      });
+    } catch (logErr) {
+      console.error("system_logs write failed:", logErr);
+    }
 
     // 4. Fire Meta CAPI Lead event
-    sendEvent({
-      eventName: "Lead",
-      eventId: eventId || undefined,
-      eventSourceUrl: sourceUrl || "https://srtagency.com",
-      actionSource: "website",
-      userData: {
-        email: email || undefined,
-        phone: phone || undefined,
-        firstName,
-        lastName: lastName || undefined,
-        fbc: _fbc || undefined,
-        fbp: _fbp || undefined,
-        clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
-        clientUserAgent,
-        externalId: contactId,
-      },
-    }).catch((err) => console.error("[Meta CAPI] Lead event error:", err));
+    try {
+      const capiResult = await sendEvent({
+        eventName: "Lead",
+        eventId: serverEventId,
+        eventSourceUrl: sourceUrl || "https://srtagency.com",
+        actionSource: "website",
+        userData: {
+          email: email || undefined,
+          phone: phone || undefined,
+          firstName,
+          lastName: lastName || undefined,
+          fbc: _fbc || undefined,
+          fbp: _fbp || undefined,
+          clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+          clientUserAgent,
+          externalId: contactId,
+        },
+      });
+      if (!capiResult.success) {
+        console.error("[Meta CAPI] Lead event failed:", capiResult.error);
+        try {
+          await supabaseAdmin.from("system_logs").insert({
+            event_type: "meta_capi_error",
+            description: `Meta CAPI Lead event failed: ${capiResult.error}`,
+            metadata: { email, eventName: "Lead" },
+          });
+        } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.error("[Meta CAPI] Lead event error:", err);
+    }
 
     // 5. Slack notification to #hot-leads
     const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";

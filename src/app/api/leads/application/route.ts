@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
@@ -35,6 +36,8 @@ export async function POST(request: NextRequest) {
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
             } = body;
+
+          const serverEventId = eventId || randomUUID();
 
           // ── 25%+ block: contact upsert, Zoho new-lead, Slack new-lead ──
           if (applicationCompletionPct >= 25) {
@@ -194,31 +197,45 @@ export async function POST(request: NextRequest) {
               }
 
               // Send lead capture event to Meta CAPI
-              sendEvent({
-                            eventName: "Lead",
-                            eventId: eventId || undefined,
-                            eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
-                            actionSource: "website",
-                            userData: {
-                                            email: email || undefined,
-                                            phone: mobilePhone || businessPhone || undefined,
-                                            firstName: firstName || undefined,
-                                            lastName: lastName || undefined,
-                                            city: bizCity || undefined,
-                                            state: bizState || undefined,
-                                            zip: bizZip || undefined,
-                                            fbc: _fbc || undefined,
-                                            fbp: _fbp || undefined,
-                                            clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
-                                            clientUserAgent,
-                                            externalId: contactId || undefined,
-                            },
-                            customData: {
-                                            content_name: "Business Funding Application",
-                                            value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
-                                            currency: "USD",
-                            },
-              }).catch((err) => console.error("[Meta CAPI] Lead event error:", err));
+              try {
+                const capiResult = await sendEvent({
+                  eventName: "Lead",
+                  eventId: serverEventId,
+                  eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
+                  actionSource: "website",
+                  userData: {
+                    email: email || undefined,
+                    phone: mobilePhone || businessPhone || undefined,
+                    firstName: firstName || undefined,
+                    lastName: lastName || undefined,
+                    city: bizCity || undefined,
+                    state: bizState || undefined,
+                    zip: bizZip || undefined,
+                    fbc: _fbc || undefined,
+                    fbp: _fbp || undefined,
+                    clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+                    clientUserAgent,
+                    externalId: contactId || undefined,
+                  },
+                  customData: {
+                    content_name: "Business Funding Application",
+                    value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
+                    currency: "USD",
+                  },
+                });
+                if (!capiResult.success) {
+                  console.error("[Meta CAPI] Lead event failed:", capiResult.error);
+                  try {
+                    await supabaseAdmin.from("system_logs").insert({
+                      event_type: "meta_capi_error",
+                      description: `Meta CAPI Lead event failed: ${capiResult.error}`,
+                      metadata: { email, eventName: "Lead" },
+                    });
+                  } catch { /* ignore */ }
+                }
+              } catch (err) {
+                console.error("[Meta CAPI] Lead event error:", err);
+              }
 
               return NextResponse.json(
                     { success: true, message: "Lead captured", contactId },
@@ -469,31 +486,45 @@ export async function POST(request: NextRequest) {
               }
 
               // Fire Meta CAPI CompleteRegistration at 100%
-              sendEvent({
-                            eventName: "CompleteRegistration",
-                            eventId: eventId || undefined,
-                            eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
-                            actionSource: "website",
-                            userData: {
-                                            email: email || undefined,
-                                            phone: mobilePhone || businessPhone || undefined,
-                                            firstName: firstName || undefined,
-                                            lastName: lastName || undefined,
-                                            city: bizCity || undefined,
-                                            state: bizState || undefined,
-                                            zip: bizZip || undefined,
-                                            fbc: _fbc || undefined,
-                                            fbp: _fbp || undefined,
-                                            clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
-                                            clientUserAgent,
-                                            externalId: contactId || undefined,
-                            },
-                            customData: {
-                                            content_name: "Business Funding Application",
-                                            value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
-                                            currency: "USD",
-                            },
-              }).catch((err) => console.error("[Meta CAPI] CompleteRegistration error:", err));
+              try {
+                const capiResult = await sendEvent({
+                  eventName: "CompleteRegistration",
+                  eventId: serverEventId,
+                  eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
+                  actionSource: "website",
+                  userData: {
+                    email: email || undefined,
+                    phone: mobilePhone || businessPhone || undefined,
+                    firstName: firstName || undefined,
+                    lastName: lastName || undefined,
+                    city: bizCity || undefined,
+                    state: bizState || undefined,
+                    zip: bizZip || undefined,
+                    fbc: _fbc || undefined,
+                    fbp: _fbp || undefined,
+                    clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+                    clientUserAgent,
+                    externalId: contactId || undefined,
+                  },
+                  customData: {
+                    content_name: "Business Funding Application",
+                    value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
+                    currency: "USD",
+                  },
+                });
+                if (!capiResult.success) {
+                  console.error("[Meta CAPI] CompleteRegistration failed:", capiResult.error);
+                  try {
+                    await supabaseAdmin.from("system_logs").insert({
+                      event_type: "meta_capi_error",
+                      description: `Meta CAPI CompleteRegistration failed: ${capiResult.error}`,
+                      metadata: { email, eventName: "CompleteRegistration" },
+                    });
+                  } catch { /* ignore */ }
+                }
+              } catch (err) {
+                console.error("[Meta CAPI] CompleteRegistration error:", err);
+              }
 
               // Tag "application-completed" + cancel abandonment sequences
               if (contactId) {

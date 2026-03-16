@@ -108,10 +108,10 @@ export async function sendEvent(
   };
 
   try {
-    const res = await fetch(`${endpoint}?access_token=${accessToken}`, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, access_token: accessToken }),
     });
     const data = await res.json();
 
