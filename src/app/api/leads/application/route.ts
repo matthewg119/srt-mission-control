@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
           const serverEventId = eventId || randomUUID();
 
           // ── 25%+ block: contact upsert, Zoho new-lead, Slack new-lead ──
-          if (applicationCompletionPct >= 25) {
+          if (applicationCompletionPct >= 25 && applicationCompletionPct < 100) {
                       let contactId: string | null = null;
                       let dealId: string | null = null;
 
