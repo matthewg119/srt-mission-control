@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     };
 
     if (existing) {
-      await supabaseAdmin
+      const { error: updateError } = await supabaseAdmin
         .from("integrations")
         .update({
           status: "connected",
@@ -55,14 +55,18 @@ export async function GET(request: NextRequest) {
           updated_at: new Date().toISOString(),
         })
         .eq("id", existing.id);
+      if (updateError) console.error("[Microsoft OAuth] Update failed:", updateError.message, updateError.code);
+      else console.log("[Microsoft OAuth] Updated existing integration row:", existing.id);
     } else {
-      await supabaseAdmin.from("integrations").insert({
+      const { error: insertError } = await supabaseAdmin.from("integrations").insert({
         name: "Microsoft 365",
         type: "Email",
         status: "connected",
         config,
         last_sync: new Date().toISOString(),
       });
+      if (insertError) console.error("[Microsoft OAuth] Insert failed:", insertError.message, insertError.code);
+      else console.log("[Microsoft OAuth] Inserted new integration row");
     }
 
     // Log the connection

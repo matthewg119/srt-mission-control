@@ -34,6 +34,8 @@ export default function IntegrationsPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("ms_connected")) {
       setMsStatus("Microsoft 365 connected successfully!");
+      // Re-fetch integrations to pick up the new "connected" status
+      setTimeout(() => fetchIntegrations(), 500);
       window.history.replaceState({}, "", window.location.pathname);
     } else if (params.get("ms_error")) {
       setMsStatus(`Microsoft 365 error: ${params.get("ms_error")}`);

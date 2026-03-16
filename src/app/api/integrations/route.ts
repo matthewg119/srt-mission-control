@@ -19,8 +19,11 @@ export async function GET() {
       .order("created_at", { ascending: true });
 
     if (error) {
+      console.error("[Integrations] DB query failed:", error.message, error.code, error.details);
       return NextResponse.json({ integrations: DEFAULT_INTEGRATIONS }, { status: 200 });
     }
+
+    console.log("[Integrations] DB returned:", dbIntegrations?.length, "records");
 
     // Merge DB records with defaults — DB takes priority
     const dbNames = new Set((dbIntegrations || []).map((i: Record<string, string>) => i.name));

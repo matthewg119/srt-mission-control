@@ -97,11 +97,15 @@ async function refreshAccessToken(refreshToken: string): Promise<{
 
 async function getValidAccessToken(): Promise<string> {
   // Read tokens from integrations table
-  const { data } = await supabaseAdmin
+  const { data, error: dbError } = await supabaseAdmin
     .from("integrations")
     .select("config")
     .eq("name", "Microsoft 365")
     .single();
+
+  if (dbError) {
+    console.error("[Microsoft] DB query for tokens failed:", dbError.message, dbError.code, dbError.details);
+  }
 
   if (!data?.config?.access_token || !data?.config?.refresh_token) {
     throw new Error("Microsoft 365 not connected — no tokens found");
