@@ -705,30 +705,27 @@ export async function POST(request: NextRequest) {
 
 
 function buildApplicationSummaryEmail(data: { firstName?: string }): string {
-        return `
-            <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
-                    <div style="background:#0d1b2a;padding:28px 24px;text-align:center">
-                                  <table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto">
-                                                        <tr>
-                                                                                        <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:14px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
-                                                                                                                        <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:20px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
-                                                                                                                                                        <td style="vertical-align:bottom;padding-right:3px"><div style="width:5px;height:10px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
-                                                                                                                                                                                        <td style="vertical-align:bottom;padding-right:10px"><div style="width:5px;height:16px;background:#2ee6a8;border-radius:1px;display:inline-block"></div></td>
-                                                                                                                                                                                                                        <td style="vertical-align:bottom"><span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:0.5px">SRT Agency</span></td>
-                                                                                                                                                                                                                                              </tr>
-                                                                                                                                                                                                                                                            </table>
-                                                                                                                                                                                                                                                                    </div>
-                                                                                                                                                                                                                                                                            <div style="padding:32px 24px">
-                                                                                                                                                                                                                                                                                          <h2 style="color:#0d1b2a;margin:0 0 16px">Application Received</h2>
-                                                                                                                                                                                                                                                                                                        <p style="margin:0 0 16px">Hi ${data.firstName || "there"},</p>
-                                                                                                                                                                                                                                                                                                                      <p style="margin:0 0 16px">Thank you for submitting your business funding application with SRT Agency. We have received your information and our team will review it shortly.</p>
-                                                                                                                                                                                                                                                                                                                                    <p style="margin:0 0 16px">A copy of your completed application is attached to this email for your records.</p>
-                                                                                                                                                                                                                                                                                                                                                  <p style="margin:0 0 16px">If you have any questions, feel free to reply to this email or contact us directly.</p>
-                                                                                                                                                                                                                                                                                                                                                                <p style="margin:0">Best regards,<br><strong>The SRT Agency Team</strong></p>
-                                                                                                                                                                                                                                                                                                                                                                        </div>
-                                                                                                                                                                                                                                                                                                                                                                                <div style="background:#f5f5f5;padding:16px 24px;text-align:center;font-size:12px;color:#888888">
-                                                                                                                                                                                                                                                                                                                                                                                              <p style="margin:0">SRT Agency — Business Funding Solutions</p>
-                                                                                                                                                                                                                                                                                                                                                                                                      </div>
-                                                                                                                                                                                                                                                                                                                                                                                                          </div>
-                                                                                                                                                                                                                                                                                                                                                                                                            `;
+  return `
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
+  <div style="background:#0d1b2a;padding:28px 24px;text-align:center">
+    <img src="https://srtagency.com/srt-logo.png" alt="SRT Agency" style="height:48px;width:auto" onerror="this.style.display='none';this.nextElementSibling.style.display='inline'" />
+    <span style="display:none;font-size:22px;font-weight:700;color:#ffffff;letter-spacing:0.5px">SRT Agency</span>
+  </div>
+  <div style="padding:32px 24px">
+    <h2 style="color:#0d1b2a;margin:0 0 16px">Application Received</h2>
+    <p style="margin:0 0 16px">Hi ${data.firstName || "there"},</p>
+    <p style="margin:0 0 16px">Thank you for submitting your business funding application with SRT Agency. We have received your information and our team will review it shortly.</p>
+    <p style="margin:0 0 16px">A copy of your completed application is attached to this email for your records.</p>
+    <div style="background:#f0faf7;border-left:4px solid #2ee6a8;padding:16px 20px;margin:0 0 16px;border-radius:4px">
+      <p style="margin:0 0 8px;font-weight:600;color:#0d1b2a">Next Step</p>
+      <p style="margin:0">To begin working on your funding application, please reply to this email with your <strong>last 3 months of business bank statements</strong> (PDF format preferred).</p>
+    </div>
+    <p style="margin:0 0 16px">If you have any questions, feel free to reply to this email or contact us directly.</p>
+    <p style="margin:0">Best regards,<br><strong>The SRT Agency Team</strong></p>
+  </div>
+  <div style="background:#f5f5f5;padding:16px 24px;text-align:center;font-size:12px;color:#888888">
+    <p style="margin:0">SRT Agency &mdash; Business Funding Solutions</p>
+  </div>
+</div>
+  `;
 }

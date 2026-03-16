@@ -6,6 +6,9 @@ import {
   Building2,
   Zap,
   Settings,
+  Mail,
+  FileText,
+  LayoutList,
 } from "lucide-react";
 
 export interface NavSection {
@@ -30,10 +33,18 @@ export const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Operations",
+    items: [
+      { label: "Templates", href: "/dashboard/templates", icon: FileText },
+      { label: "Sequences", href: "/dashboard/sequences", icon: Mail },
+      { label: "Automations", href: "/dashboard/automations", icon: Zap },
+    ],
+  },
+  {
     label: "System",
     items: [
       { label: "Lenders", href: "/dashboard/lenders", icon: Building2 },
-      { label: "Automations", href: "/dashboard/automations", icon: Zap },
+      { label: "Integrations", href: "/dashboard/integrations", icon: LayoutList },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],
   },
