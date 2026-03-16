@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
 
                                   if (!recentSlack || recentSlack.length === 0) {
                                     slack.postMessage(hotLeadsChannel, [
-                                      "📥 *New Lead Captured*", "",
+                                      ":inbox_tray: *New Lead Captured*", "",
                                       `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
                                       `*Business:* ${businessName || legalName || "–"}`,
                                       `*Industry:* ${industry || "–"}`,
@@ -464,7 +464,7 @@ export async function POST(request: NextRequest) {
 
                 if (!recentComplete || recentComplete.length === 0) {
                   const completedLines = [
-                    `✅ *Application Completed: ${contactName}*`, "",
+                    `:white_check_mark: *Application Completed: ${contactName}*`, "",
                     `*Business:* ${businessName || legalName || "—"}`,
                     `*Industry:* ${industry || "—"}`,
                     `*Funding Requested:* ${amountNeeded ? `$${amountNeeded}` : "—"}`,
@@ -625,7 +625,15 @@ export async function POST(request: NextRequest) {
                                                                               await zohoAttachPDF(zohoLeadId, `Application - ${safeName}.pdf`, pdfBuffer);
                                                                               console.log(`[100%] PDF attached to Zoho lead ${zohoLeadId}`);
                                                           } catch (attachErr) {
-                                                                              console.error("[100%] Zoho PDF attachment failed:", attachErr instanceof Error ? attachErr.message : attachErr);
+                                                                              const attachMsg = attachErr instanceof Error ? attachErr.message : String(attachErr);
+                                                                              console.error("[100%] Zoho PDF attachment failed:", attachMsg);
+                                                                              try {
+                                                                                await supabaseAdmin.from("system_logs").insert({
+                                                                                  event_type: "zoho_attachment_error",
+                                                                                  description: `Zoho PDF attachment failed for ${contactName}: ${attachMsg.slice(0, 300)}`,
+                                                                                  metadata: { contactId, zohoLeadId, error: attachMsg },
+                                                                                });
+                                                                              } catch { /* ignore */ }
                                                           }
                                         } else {
                                                           console.warn("[100%] zohoLeadId not available — skipping Zoho PDF attachment");

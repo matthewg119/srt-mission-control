@@ -191,7 +191,7 @@ export async function POST(request: NextRequest) {
     // 5. Slack notification to #hot-leads
     const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
     if (hotLeadsChannel) {
-      const lines = [`🟢 *New Lead: ${firstName} ${lastName}*`];
+      const lines = [`:large_green_circle: *New Lead: ${firstName} ${lastName}*`];
       if (email) lines.push(`Email: ${email}`);
       if (phone) lines.push(`Phone: ${phone}`);
       if (message) lines.push(`Message: ${message.slice(0, 200)}`);
