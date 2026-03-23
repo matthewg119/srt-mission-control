@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
 
                         if (existingContact) {
                                         contactId = existingContact.id;
-                                        // Update contact fields
+                                        // Update contact fields (merge in any qualifying data if present)
                               await supabaseAdmin.from("contacts").update({
                                                 first_name: firstName,
                                                 last_name: lastName,
@@ -65,6 +65,9 @@ export async function POST(request: NextRequest) {
                                                 industry,
                                                 amount_needed: amountNeeded,
                                                 source: source || "Meta Ads",
+                                                ...(monthlyRevenue ? { monthly_revenue: monthlyRevenue } : {}),
+                                                ...(checkingAccount ? { checking_account: checkingAccount } : {}),
+                                                ...(useOfFunds ? { use_of_funds: useOfFunds } : {}),
                                                 updated_at: new Date().toISOString(),
                               }).eq("id", contactId!);
                         } else {
@@ -127,7 +130,7 @@ export async function POST(request: NextRequest) {
                                 firstName, lastName,
                                 businessName: businessName || legalName, legalName, dba,
                                 email, phone: mobilePhone || businessPhone,
-                                source: source || "Meta Ads", Lead_Status: "New",
+                                source: source || "Meta Ads", Lead_Status: "New Lead",
                                 industry, ein, bizAddress, bizCity, bizState, bizZip,
                                 timeInBusiness: timeInBiz, creditScoreRange: creditScore,
                                 ownership: ownership ? String(ownership) : undefined,
@@ -564,9 +567,7 @@ export async function POST(request: NextRequest) {
 
               try {
                             let pdfBuffer: Buffer | undefined;
-
-                        try {
-                                        pdfBuffer = generateApplicationPDF({
+                            const pdfData = {
                                                           firstName, lastName, email, businessPhone, mobilePhone,
                                                           businessName, legalName, dba, industry, ein,
                                                           bizAddress, bizCity, bizState, bizZip, incDate, dob,
@@ -575,7 +576,10 @@ export async function POST(request: NextRequest) {
                                                           ssn4,
                                                           signature: signature || undefined,
                                                           signatureName: signatureName || contactName,
-                                        });
+                            };
+
+                        try {
+                                        pdfBuffer = generateApplicationPDF(pdfData);
                                         console.log("[100%] PDF generated, size:", pdfBuffer.length, "bytes");
                         } catch (pdfErr) {
                                         throw new Error(`PDF generation failed: ${pdfErr instanceof Error ? pdfErr.message : String(pdfErr)}`);
@@ -657,6 +661,9 @@ export async function POST(request: NextRequest) {
                         // Send confirmation email with PDF
                         if (email) {
                                         try {
+                                                          // Generate lender copy (no phone number)
+                                                          const lenderPdfBuffer = generateApplicationPDF({ ...pdfData, hidePhone: true });
+
                                                           const summaryHtml = buildApplicationSummaryEmail({ firstName });
                                                           await microsoft.sendMail({
                                                                               to: email,
@@ -668,6 +675,26 @@ export async function POST(request: NextRequest) {
                                                                                                     contentType: "application/pdf",
                                                                                                     contentBytes: pdfBuffer!.toString("base64"),
                                                                               }],
+                                                          });
+
+                                                          // Internal copy to submissions with both PDFs (full + lender-safe)
+                                                          await microsoft.sendMail({
+                                                                              to: "submissions@srtagency.com",
+                                                                              subject: `New Application — ${safeName}`,
+                                                                              body: summaryHtml,
+                                                                              isHtml: true,
+                                                                              attachments: [
+                                                                                {
+                                                                                  name: `Application - ${safeName}.pdf`,
+                                                                                  contentType: "application/pdf",
+                                                                                  contentBytes: pdfBuffer!.toString("base64"),
+                                                                                },
+                                                                                {
+                                                                                  name: `Application - ${safeName} (Lender Copy).pdf`,
+                                                                                  contentType: "application/pdf",
+                                                                                  contentBytes: lenderPdfBuffer.toString("base64"),
+                                                                                },
+                                                                              ],
                                                           });
                                                           console.log("[100%] Confirmation email with PDF sent to", email);
                                         } catch (emailErr) {

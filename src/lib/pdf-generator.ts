@@ -29,6 +29,8 @@ interface ApplicationData {
   signature?: string;
   /** Printed/typed name for the signature line */
   signatureName?: string;
+  /** When true, omits mobile phone from the PDF (lender copy) */
+  hidePhone?: boolean;
 }
 
 /**
@@ -66,7 +68,7 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   doc.setTextColor(180, 195, 215);
   doc.text("Scaling Revenue Together", m, 17);
   doc.setFontSize(7.5);
-  doc.text("info@srtagency.com  |  srtagency.com", m, 22);
+  doc.text("submissions@srtagency.com  |  srtagency.com", m, 22);
 
   doc.setFontSize(12);
   doc.setTextColor(reef[0], reef[1], reef[2]);
@@ -129,7 +131,9 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   // SECTION 2: OWNER / GUARANTOR INFORMATION
   secHeader("SECTION 2: OWNER / GUARANTOR INFORMATION");
   cellRow([["First Name", data.firstName], ["Last Name", data.lastName]]);
-  cellRow([["Mobile Phone", data.mobilePhone], ["Email", data.email]]);
+  cellRow(data.hidePhone
+    ? [["Email", data.email]]
+    : [["Mobile Phone", data.mobilePhone], ["Email", data.email]]);
   cellRow([
     ["Date of Birth", data.dob],
     ["Est. Credit Score", data.creditScore],
@@ -141,7 +145,7 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   // SECTION 3: FUNDING DETAILS
   secHeader("SECTION 3: FUNDING DETAILS");
   cellRow([["Amount Requested", data.amountNeeded], ["Use of Funds", data.useOfFunds]]);
-  cellRow([["Avg Monthly Deposits", data.monthlyDeposits], ["Existing Business Loans", data.existingLoans]]);
+  cellRow([["Avg Monthly Revenue", data.monthlyDeposits], ["Existing Business Loans", data.existingLoans]]);
   if (data.notes) {
     cell("Additional Notes", data.notes, m, cw, 14);
     y += 14;
@@ -237,7 +241,7 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
   y += 4;
   doc.setFontSize(6.5);
   doc.setTextColor(160, 160, 160);
-  doc.text("SRT Agency LLC \u2022 info@srtagency.com \u2022 srtagency.com", pw / 2, y, { align: "center" });
+  doc.text("SRT Agency LLC \u2022 submissions@srtagency.com \u2022 srtagency.com", pw / 2, y, { align: "center" });
 
   // Return as Buffer
   const arrayBuffer = doc.output("arraybuffer");
