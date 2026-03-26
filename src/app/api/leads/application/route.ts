@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
                         dba, industry, bizAddress, bizCity, bizState, bizZip, ein,
                         incDate, startMonth, startYear, mobilePhone, dob, creditScore,
                         ownership, amountNeeded, useOfFunds, monthlyDeposits, existingLoans,
-                        monthlyRevenue, checkingAccount,
+                        monthlyRevenue, checkingAccount, hasBusinessChecking,
                         notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
-                              .or(`email.eq.${email},phone.eq.${businessPhone}`)
+                              .or(`email.ilike.${email},phone.eq.${businessPhone}`)
                               .maybeSingle();
 
                         if (existingContact) {
@@ -68,6 +68,9 @@ export async function POST(request: NextRequest) {
                                                 ...(monthlyRevenue ? { monthly_revenue: monthlyRevenue } : {}),
                                                 ...(checkingAccount ? { checking_account: checkingAccount } : {}),
                                                 ...(useOfFunds ? { use_of_funds: useOfFunds } : {}),
+                                                ...(creditScore ? { credit_score: creditScore, portal_credit_score: creditScore } : {}),
+                                                ...(mobilePhone ? { phone: mobilePhone, mobile_phone: mobilePhone } : {}),
+                                                ...(hasBusinessChecking !== undefined ? { has_business_checking: hasBusinessChecking, portal_has_checking: hasBusinessChecking } : {}),
                                                 updated_at: new Date().toISOString(),
                               }).eq("id", contactId!);
                         } else {
@@ -100,6 +103,8 @@ export async function POST(request: NextRequest) {
                                                               monthly_deposits: monthlyDeposits,
                                                               monthly_revenue: monthlyRevenue || null,
                                                               checking_account: checkingAccount || null,
+                                                              has_business_checking: hasBusinessChecking !== undefined ? hasBusinessChecking : null,
+                                                              portal_has_checking: hasBusinessChecking !== undefined ? hasBusinessChecking : null,
                                                               existing_loans: existingLoans,
                                                               notes,
                                                               ssn4,
@@ -261,7 +266,7 @@ export async function POST(request: NextRequest) {
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
-                              .or(`email.eq.${email},phone.eq.${businessPhone}`)
+                              .or(`email.ilike.${email},phone.eq.${businessPhone}`)
                               .maybeSingle();
                             contactId = existingContact?.id || null;
               } catch { /* ignore */ }
