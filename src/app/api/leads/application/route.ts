@@ -40,24 +40,28 @@ export async function POST(request: NextRequest) {
 
           const serverEventId = eventId || randomUUID();
 
+          // Normalize email for consistent lookups
+          const normalizedEmail = email ? email.trim().toLowerCase() : email;
+
           // ── 10% block: create minimal contact on email capture ──
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
-            const normalizedEmail = email.trim().toLowerCase();
             try {
-              const { data: upserted } = await supabaseAdmin
+              // Try insert first — won't overwrite existing data
+              const { data: inserted, error: insertErr10 } = await supabaseAdmin
                 .from("contacts")
-                .upsert(
-                  {
-                    email: normalizedEmail,
-                    ...(businessName ? { business_name: businessName } : {}),
-                    ...(source ? { source } : {}),
-                    application_stage: applicationStage || "Email Captured",
-                    application_completion_pct: applicationCompletionPct,
-                  },
-                  { onConflict: "email" }
-                )
+                .insert({
+                  email: normalizedEmail,
+                  ...(businessName ? { business_name: businessName } : {}),
+                  ...(source ? { source } : {}),
+                  application_stage: applicationStage || "Email Captured",
+                  application_completion_pct: applicationCompletionPct,
+                })
                 .select("id")
                 .maybeSingle();
+              const upserted = inserted || (insertErr10 ? (
+                // Email exists — just fetch the existing contact
+                await supabaseAdmin.from("contacts").select("id").ilike("email", normalizedEmail).limit(1).maybeSingle()
+              ).data : null);
               if (upserted) {
                 return NextResponse.json(
                   { success: true, contactId: upserted.id, message: "Contact captured" },
@@ -81,8 +85,8 @@ export async function POST(request: NextRequest) {
               try {
                             const lookupPhone = businessPhone || mobilePhone;
                             const orFilter = lookupPhone
-                              ? `email.ilike.${email},phone.eq.${lookupPhone},mobile_phone.eq.${lookupPhone}`
-                              : `email.ilike.${email}`;
+                              ? `email.ilike.${normalizedEmail},phone.eq.${lookupPhone},mobile_phone.eq.${lookupPhone}`
+                              : `email.ilike.${normalizedEmail}`;
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
@@ -116,8 +120,8 @@ export async function POST(request: NextRequest) {
                                           .insert({
                                                               first_name: firstName,
                                                               last_name: lastName,
-                                                              email,
-                                                              phone: businessPhone,
+                                                              email: normalizedEmail,
+                                                              phone: businessPhone || mobilePhone,
                                                               mobile_phone: mobilePhone,
                                                               business_name: businessName || legalName,
                                                               legal_name: legalName,
@@ -301,8 +305,8 @@ export async function POST(request: NextRequest) {
               try {
                             const lp100 = businessPhone || mobilePhone;
                             const of100 = lp100
-                              ? `email.ilike.${email},phone.eq.${lp100},mobile_phone.eq.${lp100}`
-                              : `email.ilike.${email}`;
+                              ? `email.ilike.${normalizedEmail},phone.eq.${lp100},mobile_phone.eq.${lp100}`
+                              : `email.ilike.${normalizedEmail}`;
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
