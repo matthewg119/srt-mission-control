@@ -77,12 +77,18 @@ export async function POST(request: NextRequest) {
 
               const contactName = [firstName, lastName].filter(Boolean).join(" ") || businessName || email || "Unknown";
 
-              // Look up existing contact by email or phone
+              // Look up existing contact by email (primary) or phone (fallback)
               try {
+                            const lookupPhone = businessPhone || mobilePhone;
+                            const orFilter = lookupPhone
+                              ? `email.ilike.${email},phone.eq.${lookupPhone},mobile_phone.eq.${lookupPhone}`
+                              : `email.ilike.${email}`;
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
-                              .or(`email.ilike.${email},phone.eq.${businessPhone}`)
+                              .or(orFilter)
+                              .order("created_at", { ascending: false })
+                              .limit(1)
                               .maybeSingle();
 
                         if (existingContact) {
@@ -293,10 +299,16 @@ export async function POST(request: NextRequest) {
                       let dealId: string | null = null;
 
               try {
+                            const lp100 = businessPhone || mobilePhone;
+                            const of100 = lp100
+                              ? `email.ilike.${email},phone.eq.${lp100},mobile_phone.eq.${lp100}`
+                              : `email.ilike.${email}`;
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
                               .select("id")
-                              .or(`email.ilike.${email},phone.eq.${businessPhone}`)
+                              .or(of100)
+                              .order("created_at", { ascending: false })
+                              .limit(1)
                               .maybeSingle();
                             contactId = existingContact?.id || null;
               } catch { /* ignore */ }
