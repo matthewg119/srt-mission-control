@@ -40,6 +40,36 @@ export async function POST(request: NextRequest) {
 
           const serverEventId = eventId || randomUUID();
 
+          // ── 10% block: create minimal contact on email capture ──
+          if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
+            const normalizedEmail = email.trim().toLowerCase();
+            try {
+              const { data: upserted } = await supabaseAdmin
+                .from("contacts")
+                .upsert(
+                  {
+                    email: normalizedEmail,
+                    ...(businessName ? { business_name: businessName } : {}),
+                    ...(source ? { source } : {}),
+                    application_stage: applicationStage || "Email Captured",
+                    application_completion_pct: applicationCompletionPct,
+                  },
+                  { onConflict: "email" }
+                )
+                .select("id")
+                .maybeSingle();
+              if (upserted) {
+                return NextResponse.json(
+                  { success: true, contactId: upserted.id, message: "Contact captured" },
+                  { headers: corsHeaders }
+                );
+              }
+            } catch (e) {
+              console.warn("[Application] 10% upsert error:", e instanceof Error ? e.message : e);
+            }
+            return NextResponse.json({ success: true, message: "Progress saved" }, { headers: corsHeaders });
+          }
+
           // ── 25%+ block: contact upsert, Zoho new-lead, Slack new-lead ──
           if (applicationCompletionPct >= 25 && applicationCompletionPct < 100) {
                       let contactId: string | null = null;
