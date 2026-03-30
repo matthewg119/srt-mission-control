@@ -114,8 +114,51 @@ export async function POST(request: NextRequest) {
                                                 ...(creditScore ? { credit_score: creditScore, portal_credit_score: creditScore } : {}),
                                                 ...(mobilePhone ? { phone: mobilePhone, mobile_phone: mobilePhone } : {}),
                                                 ...(hasBusinessChecking !== undefined ? { has_business_checking: hasBusinessChecking, portal_has_checking: hasBusinessChecking } : {}),
+                                                ...(incDate ? { inc_date: incDate } : {}),
+                                                ...(startMonth ? { start_month: startMonth } : {}),
+                                                ...(startYear ? { start_year: startYear } : {}),
                                                 updated_at: new Date().toISOString(),
                               }).eq("id", contactId!);
+
+                              // Check if Zoho lead exists for this contact — create if missing
+                              if (mobilePhone && applicationCompletionPct >= 25) {
+                                const { data: fullContact } = await supabaseAdmin.from("contacts").select("zoho_lead_id").eq("id", contactId!).single();
+                                if (!fullContact?.zoho_lead_id) {
+                                  const timeInBiz = incDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
+                                  zohoCreateLead({
+                                    firstName, lastName,
+                                    businessName: businessName || legalName, legalName, dba,
+                                    email, phone: mobilePhone || businessPhone,
+                                    source: source || "lead magnet", Lead_Status: "New Lead",
+                                    industry, ein, bizAddress, bizCity, bizState, bizZip,
+                                    timeInBusiness: timeInBiz, creditScoreRange: creditScore,
+                                    fundingAmount: amountNeeded,
+                                    monthlyRevenue,
+                                    ownership: ownership ? String(ownership) : undefined,
+                                  }).then(async (zohoId) => {
+                                    if (zohoId) {
+                                      await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", contactId!);
+                                      console.log("[Zoho] Lead created for existing contact:", zohoId, email);
+                                    }
+                                  }).catch(err => console.error("[Zoho] create for existing failed:", err instanceof Error ? err.message : err));
+
+                                  // Slack notification
+                                  const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+                                  if (hotLeadsChannel) {
+                                    slack.postMessage(hotLeadsChannel, [
+                                      ":inbox_tray: *New Lead Captured*", "",
+                                      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+                                      `*Business:* ${businessName || legalName || "–"}`,
+                                      `*Phone:* ${mobilePhone || businessPhone || "–"}`,
+                                      `*Email:* ${email || "–"}`,
+                                      `*Credit:* ${creditScore || "–"}`,
+                                      `*Funding:* ${amountNeeded || "–"}`,
+                                      `*Revenue:* ${monthlyRevenue || "–"}`,
+                                      `*Source:* ${source || "lead magnet"}`,
+                                    ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
+                                  }
+                                }
+                              }
                         } else {
                                         // Insert new contact
                               const { data: newContact, error: insertErr } = await supabaseAdmin
@@ -185,7 +228,7 @@ export async function POST(request: NextRequest) {
                               }).catch(err => console.error("[Zoho 25%] create failed:", err instanceof Error ? err.message : err));
 
                               // Slack: new lead captured — with dedup check
-                              if (applicationCompletionPct >= 25 && applicationCompletionPct <= 35) {
+                              if (applicationCompletionPct >= 25 && applicationCompletionPct <= 65) {
                                 const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
                                 if (hotLeadsChannel) {
                                   const { data: recentSlack } = await supabaseAdmin
