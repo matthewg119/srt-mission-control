@@ -30,13 +30,16 @@ export async function POST(request: NextRequest) {
             const {
                         firstName, lastName, email, businessPhone, businessName, legalName,
                         dba, industry, bizAddress, bizCity, bizState, bizZip, ein,
-                        incDate, startMonth, startYear, mobilePhone, dob, creditScore,
+                        incDate: incDateRaw, incorporatedDate, startMonth, startYear, mobilePhone, dob, creditScore,
                         ownership, amountNeeded, useOfFunds, monthlyDeposits, existingLoans,
                         monthlyRevenue, checkingAccount, hasBusinessChecking,
                         notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
             } = body;
+
+          // Accept both incDate and incorporatedDate (freeguide sends incorporatedDate)
+          const incDate = incDateRaw || incorporatedDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
 
           const serverEventId = eventId || randomUUID();
 
