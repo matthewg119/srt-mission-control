@@ -112,11 +112,11 @@ export async function POST(request: NextRequest) {
                 }
 
                 // Log to system_logs for dedup and activity feed
-                supabaseAdmin.from("system_logs").insert({
+                await supabaseAdmin.from("system_logs").insert({
                   event_type: "lead_capture",
                   description: `New visitor captured: ${normalizedEmail} — ${businessName || "N/A"}`,
                   metadata: { contactId: upserted.id, email: normalizedEmail, businessName, source: source || "lead magnet", applicationStage: "10%" },
-                }).catch(() => {});
+                });
 
                 return NextResponse.json(
                   { success: true, contactId: upserted.id, message: "Contact captured" },
@@ -206,9 +206,9 @@ export async function POST(request: NextRequest) {
                                   // Zoho lead missing — search by email first to avoid duplicates
                                   let existingZohoId: string | null = null;
                                   try {
-                                    const searchResults = await zohoSearchLeads(normalizedEmail);
+                                    const searchResults = await zohoSearchLeads({ email: normalizedEmail });
                                     if (searchResults && searchResults.length > 0) {
-                                      existingZohoId = searchResults[0].id;
+                                      existingZohoId = searchResults[0].id as string;
                                       console.log("[Zoho 25%] Found existing lead by email search:", existingZohoId, email);
                                     }
                                   } catch { /* search failed, will create */ }
@@ -262,11 +262,13 @@ export async function POST(request: NextRequest) {
                                       `*Source:* ${source || "lead magnet"}`,
                                     ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
 
-                                    supabaseAdmin.from("system_logs").insert({
-                                      event_type: "slack_new_lead",
-                                      description: `Slack notification sent for existing lead: ${[firstName, lastName].filter(Boolean).join(" ")} (${normalizedEmail})`,
-                                      metadata: { email: normalizedEmail, contactId },
-                                    }).catch(() => {});
+                                    try {
+                                      await supabaseAdmin.from("system_logs").insert({
+                                        event_type: "slack_new_lead",
+                                        description: `Slack notification sent for existing lead: ${[firstName, lastName].filter(Boolean).join(" ")} (${normalizedEmail})`,
+                                        metadata: { email: normalizedEmail, contactId },
+                                      });
+                                    } catch { /* ignore */ }
                                   }
                                 }
                               }
