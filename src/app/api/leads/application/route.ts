@@ -36,10 +36,14 @@ export async function POST(request: NextRequest) {
                         notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
+                        businessStartDate, hasCheckingAccount,
             } = body;
 
-          // Accept both incDate and incorporatedDate (freeguide sends incorporatedDate)
-          const incDate = incDateRaw || incorporatedDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
+          // Accept incDate, incorporatedDate, or businessStartDate (v6 sends businessStartDate as "YYYY-MM")
+          const incDate = incDateRaw || incorporatedDate || businessStartDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
+
+          // Accept hasCheckingAccount (v6 sends "Yes"/"No") as alias for hasBusinessChecking
+          const hasBusinessCheckingResolved = hasBusinessChecking !== undefined ? hasBusinessChecking : hasCheckingAccount;
 
           const serverEventId = eventId || randomUUID();
 
@@ -50,11 +54,13 @@ export async function POST(request: NextRequest) {
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
             try {
               // Try insert first — won't overwrite existing data
+              const lookupPhone10 = mobilePhone || businessPhone;
               const { data: inserted, error: insertErr10 } = await supabaseAdmin
                 .from("contacts")
                 .insert({
                   email: normalizedEmail,
                   ...(businessName ? { business_name: businessName } : {}),
+                  ...(lookupPhone10 ? { phone: lookupPhone10, mobile_phone: lookupPhone10 } : {}),
                   ...(source ? { source } : {}),
                   application_stage: applicationStage || "Email Captured",
                   application_completion_pct: applicationCompletionPct,
@@ -63,21 +69,36 @@ export async function POST(request: NextRequest) {
                 .maybeSingle();
               const upserted = inserted || (insertErr10 ? (
                 // Email exists — just fetch the existing contact
-                await supabaseAdmin.from("contacts").select("id").ilike("email", normalizedEmail).limit(1).maybeSingle()
+                await supabaseAdmin.from("contacts").select("id, zoho_lead_id").ilike("email", normalizedEmail).limit(1).maybeSingle()
               ).data : null);
               if (upserted) {
-                // Zoho: create lead with minimal data (fire-and-forget)
-                zohoCreateLead({
-                  email: normalizedEmail,
-                  businessName: businessName || undefined,
-                  source: source || "lead magnet",
-                  Lead_Status: "New Lead",
-                }).then(async (zohoId) => {
-                  if (zohoId) {
-                    await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", upserted.id);
-                    console.log("[Zoho 10%] Lead created:", zohoId, normalizedEmail);
+                // If contact already existed and had phone missing, update it
+                if (!inserted && lookupPhone10) {
+                  await supabaseAdmin.from("contacts").update({
+                    phone: lookupPhone10, mobile_phone: lookupPhone10,
+                    ...(businessName ? { business_name: businessName } : {}),
+                  }).eq("id", upserted.id);
+                }
+
+                // Zoho: create lead — AWAIT so zoho_lead_id is saved before Step 2 can run
+                const existingZohoId = (upserted as any).zoho_lead_id;
+                if (!existingZohoId) {
+                  try {
+                    const zohoId = await zohoCreateLead({
+                      email: normalizedEmail,
+                      businessName: businessName || undefined,
+                      phone: lookupPhone10 || undefined,
+                      source: source || "lead magnet",
+                      Lead_Status: "New Lead",
+                    });
+                    if (zohoId) {
+                      await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", upserted.id);
+                      console.log("[Zoho 10%] Lead created:", zohoId, normalizedEmail);
+                    }
+                  } catch (err) {
+                    console.error("[Zoho 10%] create failed:", err instanceof Error ? err.message : err);
                   }
-                }).catch(err => console.error("[Zoho 10%] create failed:", err instanceof Error ? err.message : err));
+                }
 
                 // Slack: New Visitor Alert (fire-and-forget)
                 const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
@@ -85,9 +106,17 @@ export async function POST(request: NextRequest) {
                   slack.postMessage(hotLeadsChannel, [
                     ":bell: *New Visitor Alert*", "",
                     `${normalizedEmail} — ${businessName || "Unknown Business"}`,
+                    `*Phone:* ${lookupPhone10 || "–"}`,
                     `*Source:* ${source || "lead magnet"}`,
                   ].join("\n")).catch(err => console.error("[Slack 10%] postMessage failed:", err instanceof Error ? err.message : err));
                 }
+
+                // Log to system_logs for dedup and activity feed
+                supabaseAdmin.from("system_logs").insert({
+                  event_type: "lead_capture",
+                  description: `New visitor captured: ${normalizedEmail} — ${businessName || "N/A"}`,
+                  metadata: { contactId: upserted.id, email: normalizedEmail, businessName, source: source || "lead magnet", applicationStage: "10%" },
+                }).catch(() => {});
 
                 return NextResponse.json(
                   { success: true, contactId: upserted.id, message: "Contact captured" },
@@ -136,21 +165,19 @@ export async function POST(request: NextRequest) {
                                                 ...(useOfFunds ? { use_of_funds: useOfFunds } : {}),
                                                 ...(creditScore ? { credit_score: creditScore, portal_credit_score: creditScore } : {}),
                                                 ...(mobilePhone ? { phone: mobilePhone, mobile_phone: mobilePhone } : {}),
-                                                ...(hasBusinessChecking !== undefined ? { has_business_checking: hasBusinessChecking, portal_has_checking: hasBusinessChecking } : {}),
+                                                ...(hasBusinessCheckingResolved !== undefined ? { has_business_checking: hasBusinessCheckingResolved, portal_has_checking: hasBusinessCheckingResolved } : {}),
                                                 ...(incDate ? { inc_date: incDate } : {}),
                                                 ...(startMonth ? { start_month: startMonth } : {}),
                                                 ...(startYear ? { start_year: startYear } : {}),
                                                 updated_at: new Date().toISOString(),
                               }).eq("id", contactId!);
 
-                              // Zoho: update existing lead or create if missing (fallback)
+                              // Zoho: update existing lead or search-then-create (no duplicates)
                               if (applicationCompletionPct >= 25) {
                                 const { data: fullContact } = await supabaseAdmin.from("contacts").select("zoho_lead_id").eq("id", contactId!).single();
                                 const timeInBiz = incDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
 
-                                if (fullContact?.zoho_lead_id) {
-                                  // Zoho lead exists (created at 10%) — update with enriched data
-                                  zohoUpdateLead(fullContact.zoho_lead_id, {
+                                const zohoUpdateData = {
                                     First_Name: firstName,
                                     Last_Name: lastName || businessName || legalName,
                                     Company: businessName || legalName,
@@ -168,42 +195,79 @@ export async function POST(request: NextRequest) {
                                     Funding_Amount_Requested: amountNeeded,
                                     Monthly_Revenue: monthlyRevenue,
                                     Ownership_Percentage: ownership,
-                                  }).catch(err => console.error("[Zoho] update for existing failed:", err instanceof Error ? err.message : err));
+                                };
+
+                                if (fullContact?.zoho_lead_id) {
+                                  // Zoho lead exists (created at 10%) — update with enriched data
+                                  zohoUpdateLead(fullContact.zoho_lead_id, zohoUpdateData)
+                                    .catch(err => console.error("[Zoho] update for existing failed:", err instanceof Error ? err.message : err));
                                   console.log("[Zoho 25%] Updating existing lead:", fullContact.zoho_lead_id, email);
                                 } else {
-                                  // Zoho lead missing (10% create failed?) — create now
-                                  zohoCreateLead({
-                                    firstName, lastName,
-                                    businessName: businessName || legalName, legalName, dba,
-                                    email, phone: mobilePhone || businessPhone,
-                                    source: source || "lead magnet", Lead_Status: "New Lead",
-                                    industry, ein, bizAddress, bizCity, bizState, bizZip,
-                                    timeInBusiness: timeInBiz, creditScoreRange: creditScore,
-                                    fundingAmount: amountNeeded,
-                                    monthlyRevenue,
-                                    ownership: ownership ? String(ownership) : undefined,
-                                  }).then(async (zohoId) => {
-                                    if (zohoId) {
-                                      await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", contactId!);
-                                      console.log("[Zoho] Lead created for existing contact (fallback):", zohoId, email);
+                                  // Zoho lead missing — search by email first to avoid duplicates
+                                  let existingZohoId: string | null = null;
+                                  try {
+                                    const searchResults = await zohoSearchLeads(normalizedEmail);
+                                    if (searchResults && searchResults.length > 0) {
+                                      existingZohoId = searchResults[0].id;
+                                      console.log("[Zoho 25%] Found existing lead by email search:", existingZohoId, email);
                                     }
-                                  }).catch(err => console.error("[Zoho] create for existing failed:", err instanceof Error ? err.message : err));
+                                  } catch { /* search failed, will create */ }
+
+                                  if (existingZohoId) {
+                                    // Found existing — update it and save the ID
+                                    zohoUpdateLead(existingZohoId, zohoUpdateData)
+                                      .catch(err => console.error("[Zoho] update found-by-search failed:", err instanceof Error ? err.message : err));
+                                    await supabaseAdmin.from("contacts").update({ zoho_lead_id: existingZohoId }).eq("id", contactId!);
+                                  } else {
+                                    // Truly missing — create now
+                                    zohoCreateLead({
+                                      firstName, lastName,
+                                      businessName: businessName || legalName, legalName, dba,
+                                      email, phone: mobilePhone || businessPhone,
+                                      source: source || "lead magnet", Lead_Status: "New Lead",
+                                      industry, ein, bizAddress, bizCity, bizState, bizZip,
+                                      timeInBusiness: timeInBiz, creditScoreRange: creditScore,
+                                      fundingAmount: amountNeeded,
+                                      monthlyRevenue,
+                                      ownership: ownership ? String(ownership) : undefined,
+                                    }).then(async (zohoId) => {
+                                      if (zohoId) {
+                                        await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", contactId!);
+                                        console.log("[Zoho] Lead created for existing contact (fallback):", zohoId, email);
+                                      }
+                                    }).catch(err => console.error("[Zoho] create for existing failed:", err instanceof Error ? err.message : err));
+                                  }
                                 }
 
-                                // Slack: Visitor Converted
+                                // Slack: Visitor Converted — with dedup (skip if already notified within 5 min)
                                 const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
                                 if (hotLeadsChannel) {
-                                  slack.postMessage(hotLeadsChannel, [
-                                    ":fire: *New Lead — Visitor Converted!*", "",
-                                    `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                    `*Business:* ${businessName || legalName || "–"}`,
-                                    `*Phone:* ${mobilePhone || businessPhone || "–"}`,
-                                    `*Email:* ${email || "–"}`,
-                                    `*Credit:* ${creditScore || "–"}`,
-                                    `*Funding:* ${amountNeeded || "–"}`,
-                                    `*Revenue:* ${monthlyRevenue || "–"}`,
-                                    `*Source:* ${source || "lead magnet"}`,
-                                  ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
+                                  const { data: recentSlackExisting } = await supabaseAdmin
+                                    .from("system_logs").select("id")
+                                    .eq("event_type", "slack_new_lead")
+                                    .like("description", `%${normalizedEmail}%`)
+                                    .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+                                    .limit(1);
+
+                                  if (!recentSlackExisting || recentSlackExisting.length === 0) {
+                                    slack.postMessage(hotLeadsChannel, [
+                                      ":fire: *New Lead — Visitor Converted!*", "",
+                                      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+                                      `*Business:* ${businessName || legalName || "–"}`,
+                                      `*Phone:* ${mobilePhone || businessPhone || "–"}`,
+                                      `*Email:* ${email || "–"}`,
+                                      `*Credit:* ${creditScore || "–"}`,
+                                      `*Funding:* ${amountNeeded || "–"}`,
+                                      `*Revenue:* ${monthlyRevenue || "–"}`,
+                                      `*Source:* ${source || "lead magnet"}`,
+                                    ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
+
+                                    supabaseAdmin.from("system_logs").insert({
+                                      event_type: "slack_new_lead",
+                                      description: `Slack notification sent for existing lead: ${[firstName, lastName].filter(Boolean).join(" ")} (${normalizedEmail})`,
+                                      metadata: { email: normalizedEmail, contactId },
+                                    }).catch(() => {});
+                                  }
                                 }
                               }
                         } else {
@@ -236,8 +300,8 @@ export async function POST(request: NextRequest) {
                                                               monthly_deposits: monthlyDeposits,
                                                               monthly_revenue: monthlyRevenue || null,
                                                               checking_account: checkingAccount || null,
-                                                              has_business_checking: hasBusinessChecking !== undefined ? hasBusinessChecking : null,
-                                                              portal_has_checking: hasBusinessChecking !== undefined ? hasBusinessChecking : null,
+                                                              has_business_checking: hasBusinessCheckingResolved !== undefined ? hasBusinessCheckingResolved : null,
+                                                              portal_has_checking: hasBusinessCheckingResolved !== undefined ? hasBusinessCheckingResolved : null,
                                                               existing_loans: existingLoans,
                                                               notes,
                                                               ssn4,
