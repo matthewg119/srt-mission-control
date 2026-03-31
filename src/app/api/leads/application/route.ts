@@ -66,6 +66,29 @@ export async function POST(request: NextRequest) {
                 await supabaseAdmin.from("contacts").select("id").ilike("email", normalizedEmail).limit(1).maybeSingle()
               ).data : null);
               if (upserted) {
+                // Zoho: create lead with minimal data (fire-and-forget)
+                zohoCreateLead({
+                  email: normalizedEmail,
+                  businessName: businessName || undefined,
+                  source: source || "lead magnet",
+                  Lead_Status: "New Lead",
+                }).then(async (zohoId) => {
+                  if (zohoId) {
+                    await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", upserted.id);
+                    console.log("[Zoho 10%] Lead created:", zohoId, normalizedEmail);
+                  }
+                }).catch(err => console.error("[Zoho 10%] create failed:", err instanceof Error ? err.message : err));
+
+                // Slack: New Visitor Alert (fire-and-forget)
+                const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+                if (hotLeadsChannel) {
+                  slack.postMessage(hotLeadsChannel, [
+                    ":bell: *New Visitor Alert*", "",
+                    `${normalizedEmail} — ${businessName || "Unknown Business"}`,
+                    `*Source:* ${source || "lead magnet"}`,
+                  ].join("\n")).catch(err => console.error("[Slack 10%] postMessage failed:", err instanceof Error ? err.message : err));
+                }
+
                 return NextResponse.json(
                   { success: true, contactId: upserted.id, message: "Contact captured" },
                   { headers: corsHeaders }
@@ -120,11 +143,35 @@ export async function POST(request: NextRequest) {
                                                 updated_at: new Date().toISOString(),
                               }).eq("id", contactId!);
 
-                              // Check if Zoho lead exists for this contact — create if missing
-                              if (mobilePhone && applicationCompletionPct >= 25) {
+                              // Zoho: update existing lead or create if missing (fallback)
+                              if (applicationCompletionPct >= 25) {
                                 const { data: fullContact } = await supabaseAdmin.from("contacts").select("zoho_lead_id").eq("id", contactId!).single();
-                                if (!fullContact?.zoho_lead_id) {
-                                  const timeInBiz = incDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
+                                const timeInBiz = incDate || ((startMonth && startYear) ? `${startMonth} ${startYear}` : undefined);
+
+                                if (fullContact?.zoho_lead_id) {
+                                  // Zoho lead exists (created at 10%) — update with enriched data
+                                  zohoUpdateLead(fullContact.zoho_lead_id, {
+                                    First_Name: firstName,
+                                    Last_Name: lastName || businessName || legalName,
+                                    Company: businessName || legalName,
+                                    Phone: mobilePhone || businessPhone,
+                                    Lead_Status: "New Lead",
+                                    Industry: industry,
+                                    EIN: ein,
+                                    DBA: dba,
+                                    Street: bizAddress,
+                                    City: bizCity,
+                                    State: bizState,
+                                    Zip_Code: bizZip,
+                                    Time_in_Business: timeInBiz,
+                                    Credit_Score_Range: creditScore,
+                                    Funding_Amount_Requested: amountNeeded,
+                                    Monthly_Revenue: monthlyRevenue,
+                                    Ownership_Percentage: ownership,
+                                  }).catch(err => console.error("[Zoho] update for existing failed:", err instanceof Error ? err.message : err));
+                                  console.log("[Zoho 25%] Updating existing lead:", fullContact.zoho_lead_id, email);
+                                } else {
+                                  // Zoho lead missing (10% create failed?) — create now
                                   zohoCreateLead({
                                     firstName, lastName,
                                     businessName: businessName || legalName, legalName, dba,
@@ -138,25 +185,25 @@ export async function POST(request: NextRequest) {
                                   }).then(async (zohoId) => {
                                     if (zohoId) {
                                       await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", contactId!);
-                                      console.log("[Zoho] Lead created for existing contact:", zohoId, email);
+                                      console.log("[Zoho] Lead created for existing contact (fallback):", zohoId, email);
                                     }
                                   }).catch(err => console.error("[Zoho] create for existing failed:", err instanceof Error ? err.message : err));
+                                }
 
-                                  // Slack notification
-                                  const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-                                  if (hotLeadsChannel) {
-                                    slack.postMessage(hotLeadsChannel, [
-                                      ":inbox_tray: *New Lead Captured*", "",
-                                      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                      `*Business:* ${businessName || legalName || "–"}`,
-                                      `*Phone:* ${mobilePhone || businessPhone || "–"}`,
-                                      `*Email:* ${email || "–"}`,
-                                      `*Credit:* ${creditScore || "–"}`,
-                                      `*Funding:* ${amountNeeded || "–"}`,
-                                      `*Revenue:* ${monthlyRevenue || "–"}`,
-                                      `*Source:* ${source || "lead magnet"}`,
-                                    ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
-                                  }
+                                // Slack: Visitor Converted
+                                const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+                                if (hotLeadsChannel) {
+                                  slack.postMessage(hotLeadsChannel, [
+                                    ":fire: *New Lead — Visitor Converted!*", "",
+                                    `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
+                                    `*Business:* ${businessName || legalName || "–"}`,
+                                    `*Phone:* ${mobilePhone || businessPhone || "–"}`,
+                                    `*Email:* ${email || "–"}`,
+                                    `*Credit:* ${creditScore || "–"}`,
+                                    `*Funding:* ${amountNeeded || "–"}`,
+                                    `*Revenue:* ${monthlyRevenue || "–"}`,
+                                    `*Source:* ${source || "lead magnet"}`,
+                                  ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
                                 }
                               }
                         } else {
@@ -240,12 +287,14 @@ export async function POST(request: NextRequest) {
 
                                   if (!recentSlack || recentSlack.length === 0) {
                                     slack.postMessage(hotLeadsChannel, [
-                                      ":inbox_tray: *New Lead Captured*", "",
+                                      ":fire: *New Lead — Visitor Converted!*", "",
                                       `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
                                       `*Business:* ${businessName || legalName || "–"}`,
-                                      `*Industry:* ${industry || "–"}`,
                                       `*Phone:* ${mobilePhone || businessPhone || "–"}`,
                                       `*Email:* ${email || "–"}`,
+                                      `*Credit:* ${creditScore || "–"}`,
+                                      `*Funding:* ${amountNeeded || "–"}`,
+                                      `*Revenue:* ${monthlyRevenue || "–"}`,
                                       `*Source:* ${source || "Meta Ads"}`,
                                     ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
 
