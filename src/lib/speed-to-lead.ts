@@ -26,10 +26,6 @@ function isBusinessHours(): boolean {
   const et = new Date(etString);
 
   const hour = et.getHours();
-  const day = et.getDay(); // 0=Sun, 6=Sat
-
-  // Skip weekends
-  if (day === 0 || day === 6) return false;
 
   const startHour = parseInt(process.env.SPEED_TO_LEAD_START_HOUR || "9", 10);
   const endHour = parseInt(process.env.SPEED_TO_LEAD_END_HOUR || "20", 10);
