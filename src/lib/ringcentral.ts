@@ -117,20 +117,14 @@ export async function initiateRingOut(
     return { success: false, error: `Invalid phone number(s): ${missing}` };
   }
 
-  // Use extension number to bypass IVR, fall back to phone number
-  let fromField: { phoneNumber?: string; extensionNumber?: string };
-  if (agentExtension) {
-    fromField = { extensionNumber: agentExtension };
-    console.log(`[RingCentral] RingOut: from=ext:${agentExtension}, to=${formattedLead}, callerId=${formattedCallerId}`);
-  } else {
-    const formattedAgent = formatPhone(agentPhone);
-    if (!formattedAgent) {
-      console.error("[RingCentral] Invalid agentPhone and no extension set");
-      return { success: false, error: "Invalid agentPhone and no extension set" };
-    }
-    fromField = { phoneNumber: formattedAgent };
-    console.log(`[RingCentral] RingOut: from=${formattedAgent}, to=${formattedLead}, callerId=${formattedCallerId}`);
+  // Format agent phone — append *ext to bypass IVR and ring extension directly
+  const formattedAgent = formatPhone(agentPhone);
+  if (!formattedAgent) {
+    console.error("[RingCentral] Invalid agentPhone");
+    return { success: false, error: "Invalid agentPhone" };
   }
+  const agentDialString = agentExtension ? `${formattedAgent}*${agentExtension}` : formattedAgent;
+  console.log(`[RingCentral] RingOut: from=${agentDialString}, to=${formattedLead}, callerId=${formattedCallerId}`);
 
   try {
     const res = await fetch(
@@ -142,7 +136,7 @@ export async function initiateRingOut(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: fromField,
+          from: { phoneNumber: agentDialString },
           to: { phoneNumber: formattedLead },
           callerId: { phoneNumber: formattedCallerId },
           playPrompt: true,
