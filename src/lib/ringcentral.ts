@@ -157,7 +157,7 @@ export async function initiateRingOut(
 
     if (!res.ok) {
       const errMsg = data.message || data.error || `HTTP ${res.status}`;
-      console.error("[RingCentral] RingOut initiation failed:", errMsg);
+      console.error("[RingCentral] RingOut initiation failed:", errMsg, "Full response:", JSON.stringify(data));
       return { success: false, error: errMsg };
     }
 
