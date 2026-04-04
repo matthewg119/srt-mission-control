@@ -103,6 +103,23 @@ export async function initiateRingOut(
 
   const { serverUrl, businessNumber } = getConfig();
 
+  // Format all phone numbers to E.164 (RingCentral requires it)
+  const formattedAgent = formatPhone(agentPhone);
+  const formattedLead = formatPhone(leadPhone);
+  const formattedCallerId = formatPhone(businessNumber);
+
+  if (!formattedAgent || !formattedLead || !formattedCallerId) {
+    const missing = [
+      !formattedAgent && "agentPhone",
+      !formattedLead && "leadPhone",
+      !formattedCallerId && "businessNumber",
+    ].filter(Boolean).join(", ");
+    console.error(`[RingCentral] Invalid phone number(s): ${missing}`);
+    return { success: false, error: `Invalid phone number(s): ${missing}` };
+  }
+
+  console.log(`[RingCentral] RingOut: from=${formattedAgent}, to=${formattedLead}, callerId=${formattedCallerId}`);
+
   try {
     const res = await fetch(
       `${serverUrl}/restapi/v1.0/account/~/extension/~/ring-out`,
@@ -113,9 +130,9 @@ export async function initiateRingOut(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: { phoneNumber: agentPhone },
-          to: { phoneNumber: leadPhone },
-          callerId: { phoneNumber: businessNumber },
+          from: { phoneNumber: formattedAgent },
+          to: { phoneNumber: formattedLead },
+          callerId: { phoneNumber: formattedCallerId },
           playPrompt: true,
         }),
       }
