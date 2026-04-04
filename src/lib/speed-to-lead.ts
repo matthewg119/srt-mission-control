@@ -181,10 +181,11 @@ export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<voi
     }
 
     // Insert call_log row
+    const isUuid = leadId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leadId);
     const { data: logRow, error: logErr } = await supabaseAdmin
       .from("call_log")
       .insert({
-        lead_id: leadId || null,
+        lead_id: isUuid ? leadId : null,
         lead_phone: formattedPhone,
         agent_phone: agentPhone,
         call_type: "speed_to_lead",
