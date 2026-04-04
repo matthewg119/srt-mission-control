@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
+import { fireSpeedToLead } from "@/lib/speed-to-lead";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -92,6 +93,15 @@ export async function POST(request: NextRequest) {
       if (channel) {
         slack.postMessage(channel, lines.join("\n"))
           .catch(err => console.error("[FB Lead] Slack postMessage failed:", err instanceof Error ? err.message : err));
+      }
+
+      // Speed to Lead instant callback
+      if (phone) {
+        fireSpeedToLead({
+          leadPhone: phone,
+          leadName: name,
+          leadSource: "meta_ads",
+        });
       }
 
       // Audit log (fire and forget)

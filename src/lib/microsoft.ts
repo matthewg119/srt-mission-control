@@ -208,6 +208,7 @@ export const microsoft = {
   /** Send an email (with optional attachments) */
   async sendMail(params: {
     to: string;
+    bcc?: string;
     subject: string;
     body: string;
     isHtml?: boolean;
@@ -225,6 +226,10 @@ export const microsoft = {
         { emailAddress: { address: params.to } },
       ],
     };
+
+    if (params.bcc) {
+      message.bccRecipients = [{ emailAddress: { address: params.bcc } }];
+    }
 
     if (params.attachments && params.attachments.length > 0) {
       message.attachments = params.attachments.map((a) => ({

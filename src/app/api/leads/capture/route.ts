@@ -7,6 +7,7 @@ import { enrollContact } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
 import { slack } from "@/lib/slack-bot";
+import { fireSpeedToLead } from "@/lib/speed-to-lead";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -199,7 +200,17 @@ export async function POST(request: NextRequest) {
       slack.postMessage(hotLeadsChannel, lines.join("\n")).catch(() => {});
     }
 
-    // 6. Enroll in email sequences
+    // 6. Speed to Lead instant callback
+    if (phone) {
+      fireSpeedToLead({
+        leadId: contactId,
+        leadPhone: phone,
+        leadName: `${firstName} ${lastName}`.trim(),
+        leadSource: "website",
+      });
+    }
+
+    // 7. Enroll in email sequences
     if (email && contactId) {
       enrollContact("website-lead-nurture", contactId, email, `${firstName} ${lastName}`.trim())
         .catch((err) => console.error("[Sequence] website-lead-nurture enrollment error:", err));
