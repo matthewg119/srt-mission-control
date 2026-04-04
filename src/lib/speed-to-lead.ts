@@ -76,6 +76,16 @@ async function notifySlack(status: string, leadName: string, leadPhone: string, 
   let message: string;
 
   switch (status) {
+    case "agent_ringing":
+      message = [
+        `:bell: *Speed to Lead — Calling Now!*`,
+        `*Lead:* ${leadName}`,
+        `*Phone:* ${leadPhone}`,
+        `*Source:* ${leadSource}`,
+        `Ringing agent — pick up and press 1 to connect.`,
+      ].join("\n");
+      break;
+
     case "connected":
       message = [
         `:telephone_receiver: *Speed to Lead — Connected!*`,
@@ -164,8 +174,9 @@ export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<voi
 
     // All gates passed — initiate call
     const agentPhone = process.env.RC_AGENT_NUMBER || "";
-    if (!agentPhone) {
-      console.error("[Speed to Lead] RC_AGENT_NUMBER not set");
+    const agentExtension = process.env.RC_AGENT_EXTENSION || "";
+    if (!agentPhone && !agentExtension) {
+      console.error("[Speed to Lead] RC_AGENT_NUMBER and RC_AGENT_EXTENSION not set");
       return;
     }
 
@@ -191,8 +202,8 @@ export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<voi
 
     const callLogId = logRow.id;
 
-    // Initiate RingOut
-    const ringout = await initiateRingOut(agentPhone, formattedPhone);
+    // Initiate RingOut (use extension to bypass IVR if available)
+    const ringout = await initiateRingOut(agentPhone, formattedPhone, agentExtension || undefined);
 
     if (!ringout.success || !ringout.data) {
       await supabaseAdmin.from("call_log").update({
@@ -213,6 +224,9 @@ export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<voi
       status: "agent_ringing",
       updated_at: new Date().toISOString(),
     }).eq("id", callLogId);
+
+    // Send Slack notification immediately (before polling loop which may timeout)
+    await notifySlack("agent_ringing", leadName, formattedPhone, leadSource);
 
     // Poll for status (every 3s, up to 60s = 20 iterations)
     let finalStatus = "agent_ringing";
@@ -241,8 +255,10 @@ export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<voi
       updated_at: new Date().toISOString(),
     }).eq("id", callLogId);
 
-    // Notify Slack
-    await notifySlack(finalStatus, leadName, formattedPhone, leadSource);
+    // Send final status to Slack (if different from initial ringing)
+    if (finalStatus !== "agent_ringing") {
+      await notifySlack(finalStatus, leadName, formattedPhone, leadSource);
+    }
 
     console.log(`[Speed to Lead] Call completed — status: ${finalStatus}, lead: ${leadName}`);
   } catch (err) {

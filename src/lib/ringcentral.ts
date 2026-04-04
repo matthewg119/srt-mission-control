@@ -96,21 +96,20 @@ export interface RingOutStatus {
 
 export async function initiateRingOut(
   agentPhone: string,
-  leadPhone: string
+  leadPhone: string,
+  agentExtension?: string
 ): Promise<{ success: boolean; data?: RingOutStatus; error?: string }> {
   const token = await getAccessToken();
   if (!token) return { success: false, error: "No access token" };
 
   const { serverUrl, businessNumber } = getConfig();
 
-  // Format all phone numbers to E.164 (RingCentral requires it)
-  const formattedAgent = formatPhone(agentPhone);
+  // Format lead phone and caller ID to E.164 (RingCentral requires it)
   const formattedLead = formatPhone(leadPhone);
   const formattedCallerId = formatPhone(businessNumber);
 
-  if (!formattedAgent || !formattedLead || !formattedCallerId) {
+  if (!formattedLead || !formattedCallerId) {
     const missing = [
-      !formattedAgent && "agentPhone",
       !formattedLead && "leadPhone",
       !formattedCallerId && "businessNumber",
     ].filter(Boolean).join(", ");
@@ -118,7 +117,20 @@ export async function initiateRingOut(
     return { success: false, error: `Invalid phone number(s): ${missing}` };
   }
 
-  console.log(`[RingCentral] RingOut: from=${formattedAgent}, to=${formattedLead}, callerId=${formattedCallerId}`);
+  // Use extension number to bypass IVR, fall back to phone number
+  let fromField: { phoneNumber?: string; extensionNumber?: string };
+  if (agentExtension) {
+    fromField = { extensionNumber: agentExtension };
+    console.log(`[RingCentral] RingOut: from=ext:${agentExtension}, to=${formattedLead}, callerId=${formattedCallerId}`);
+  } else {
+    const formattedAgent = formatPhone(agentPhone);
+    if (!formattedAgent) {
+      console.error("[RingCentral] Invalid agentPhone and no extension set");
+      return { success: false, error: "Invalid agentPhone and no extension set" };
+    }
+    fromField = { phoneNumber: formattedAgent };
+    console.log(`[RingCentral] RingOut: from=${formattedAgent}, to=${formattedLead}, callerId=${formattedCallerId}`);
+  }
 
   try {
     const res = await fetch(
@@ -130,7 +142,7 @@ export async function initiateRingOut(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: { phoneNumber: formattedAgent },
+          from: fromField,
           to: { phoneNumber: formattedLead },
           callerId: { phoneNumber: formattedCallerId },
           playPrompt: true,
