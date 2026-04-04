@@ -8,6 +8,7 @@ import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
+import { fireSpeedToLead } from "@/lib/speed-to-lead";
 
 import {
         createLead as zohoCreateLead,
@@ -59,6 +60,8 @@ export async function POST(request: NextRequest) {
                 .from("contacts")
                 .insert({
                   email: normalizedEmail,
+                  ...(firstName ? { first_name: firstName } : {}),
+                  ...(lastName ? { last_name: lastName } : {}),
                   ...(businessName ? { business_name: businessName } : {}),
                   ...(lookupPhone10 ? { phone: lookupPhone10, mobile_phone: lookupPhone10 } : {}),
                   ...(source ? { source } : {}),
@@ -76,6 +79,8 @@ export async function POST(request: NextRequest) {
                 if (!inserted && lookupPhone10) {
                   await supabaseAdmin.from("contacts").update({
                     phone: lookupPhone10, mobile_phone: lookupPhone10,
+                    ...(firstName ? { first_name: firstName } : {}),
+                    ...(lastName ? { last_name: lastName } : {}),
                     ...(businessName ? { business_name: businessName } : {}),
                   }).eq("id", upserted.id);
                 }
@@ -86,6 +91,8 @@ export async function POST(request: NextRequest) {
                   try {
                     const zohoId = await zohoCreateLead({
                       email: normalizedEmail,
+                      firstName: firstName || undefined,
+                      lastName: lastName || undefined,
                       businessName: businessName || undefined,
                       phone: lookupPhone10 || undefined,
                       source: source || "lead magnet",
@@ -105,7 +112,8 @@ export async function POST(request: NextRequest) {
                 if (hotLeadsChannel) {
                   slack.postMessage(hotLeadsChannel, [
                     ":bell: *New Visitor Alert*", "",
-                    `${normalizedEmail} — ${businessName || "Unknown Business"}`,
+                    `${[firstName, lastName].filter(Boolean).join(" ") || "Unknown"} — ${businessName || "Unknown Business"}`,
+                    `*Email:* ${normalizedEmail}`,
                     `*Phone:* ${lookupPhone10 || "–"}`,
                     `*Source:* ${source || "lead magnet"}`,
                   ].join("\n")).catch(err => console.error("[Slack 10%] postMessage failed:", err instanceof Error ? err.message : err));
@@ -271,6 +279,17 @@ export async function POST(request: NextRequest) {
                                     } catch { /* ignore */ }
                                   }
                                 }
+
+                                // Speed to Lead instant callback (existing contact, 25%+)
+                                const stlPhone25Existing = mobilePhone || businessPhone;
+                                if (stlPhone25Existing && contactId) {
+                                  fireSpeedToLead({
+                                    leadId: contactId,
+                                    leadPhone: stlPhone25Existing,
+                                    leadName: [firstName, lastName].filter(Boolean).join(" "),
+                                    leadSource: "application-25%",
+                                  });
+                                }
                               }
                         } else {
                                         // Insert new contact
@@ -373,6 +392,17 @@ export async function POST(request: NextRequest) {
                                     } catch { /* ignore */ }
                                   }
                                 }
+                              }
+
+                              // Speed to Lead instant callback (new contact, 25%+)
+                              const stlPhone25New = mobilePhone || businessPhone;
+                              if (stlPhone25New && contactId) {
+                                fireSpeedToLead({
+                                  leadId: contactId,
+                                  leadPhone: stlPhone25New,
+                                  leadName: contactName,
+                                  leadSource: "application-25%",
+                                });
                               }
                         }
 
@@ -705,6 +735,17 @@ export async function POST(request: NextRequest) {
                     });
                   } catch { /* ignore */ }
                 }
+              }
+
+              // Speed to Lead instant callback (100% complete)
+              const stlPhone100 = mobilePhone || businessPhone;
+              if (stlPhone100 && contactId) {
+                fireSpeedToLead({
+                  leadId: contactId,
+                  leadPhone: stlPhone100,
+                  leadName: contactName,
+                  leadSource: "application-100%",
+                });
               }
 
               // Fire Meta CAPI CompleteRegistration at 100%
