@@ -6,7 +6,6 @@ import { generateApplicationPDF } from "@/lib/pdf-generator";
 import { microsoft } from "@/lib/microsoft";
 import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
-import { resolveAdSource } from "@/lib/lead-score";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
@@ -37,7 +36,7 @@ export async function POST(request: NextRequest) {
                         monthlyRevenue, checkingAccount, hasBusinessChecking,
                         notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
-                        utmCampaign, utmContent, utmMedium, utmSource, adId, fbclid,
+                        utmCampaign, utmContent, utmMedium, adId,
                         businessStartDate, hasCheckingAccount,
             } = body;
 
@@ -51,9 +50,6 @@ export async function POST(request: NextRequest) {
 
           // Normalize email for consistent lookups
           const normalizedEmail = email ? email.trim().toLowerCase() : email;
-
-          // Resolve ad source for attribution
-          const adSource = resolveAdSource(_fbc, source);
 
           // ── 10% block: create minimal contact on email capture ──
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
@@ -71,13 +67,6 @@ export async function POST(request: NextRequest) {
                   ...(source ? { source } : {}),
                   application_stage: applicationStage || "Email Captured",
                   application_completion_pct: applicationCompletionPct,
-                  fbc: _fbc || null,
-                  fbp: _fbp || null,
-                  utm_campaign: utmCampaign || null,
-                  utm_content: utmContent || null,
-                  utm_medium: utmMedium || null,
-                  ad_id: adId || utmContent || null,
-                  ad_source: adSource,
                 })
                 .select("id")
                 .maybeSingle();
@@ -87,19 +76,12 @@ export async function POST(request: NextRequest) {
               ).data : null);
               if (upserted) {
                 // If contact already existed and had phone missing, update it
-                if (!inserted) {
+                if (!inserted && lookupPhone10) {
                   await supabaseAdmin.from("contacts").update({
-                    ...(lookupPhone10 ? { phone: lookupPhone10, mobile_phone: lookupPhone10 } : {}),
+                    phone: lookupPhone10, mobile_phone: lookupPhone10,
                     ...(firstName ? { first_name: firstName } : {}),
                     ...(lastName ? { last_name: lastName } : {}),
                     ...(businessName ? { business_name: businessName } : {}),
-                    ...(_fbc ? { fbc: _fbc } : {}),
-                    ...(_fbp ? { fbp: _fbp } : {}),
-                    ...(utmCampaign ? { utm_campaign: utmCampaign } : {}),
-                    ...(utmContent ? { utm_content: utmContent } : {}),
-                    ...(utmMedium ? { utm_medium: utmMedium } : {}),
-                    ...(adId || utmContent ? { ad_id: adId || utmContent } : {}),
-                    ad_source: adSource,
                   }).eq("id", upserted.id);
                 }
 
