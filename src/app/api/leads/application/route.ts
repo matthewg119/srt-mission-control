@@ -6,6 +6,7 @@ import { generateApplicationPDF } from "@/lib/pdf-generator";
 import { microsoft } from "@/lib/microsoft";
 import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
+import { resolveAdSource } from "@/lib/lead-score";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
                         monthlyRevenue, checkingAccount, hasBusinessChecking,
                         notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
-                        utmCampaign, utmContent, utmMedium, adId,
+                        utmCampaign, utmContent, utmMedium, utmSource, adId, fbclid,
                         businessStartDate, hasCheckingAccount,
             } = body;
 
@@ -50,6 +51,9 @@ export async function POST(request: NextRequest) {
 
           // Normalize email for consistent lookups
           const normalizedEmail = email ? email.trim().toLowerCase() : email;
+
+          // Resolve ad source for attribution
+          const adSource = resolveAdSource(_fbc, source);
 
           // ── 10% block: create minimal contact on email capture ──
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
@@ -67,6 +71,13 @@ export async function POST(request: NextRequest) {
                   ...(source ? { source } : {}),
                   application_stage: applicationStage || "Email Captured",
                   application_completion_pct: applicationCompletionPct,
+                  fbc: _fbc || null,
+                  fbp: _fbp || null,
+                  utm_campaign: utmCampaign || null,
+                  utm_content: utmContent || null,
+                  utm_medium: utmMedium || null,
+                  ad_id: adId || utmContent || null,
+                  ad_source: adSource,
                 })
                 .select("id")
                 .maybeSingle();
@@ -76,12 +87,19 @@ export async function POST(request: NextRequest) {
               ).data : null);
               if (upserted) {
                 // If contact already existed and had phone missing, update it
-                if (!inserted && lookupPhone10) {
+                if (!inserted) {
                   await supabaseAdmin.from("contacts").update({
-                    phone: lookupPhone10, mobile_phone: lookupPhone10,
+                    ...(lookupPhone10 ? { phone: lookupPhone10, mobile_phone: lookupPhone10 } : {}),
                     ...(firstName ? { first_name: firstName } : {}),
                     ...(lastName ? { last_name: lastName } : {}),
                     ...(businessName ? { business_name: businessName } : {}),
+                    ...(_fbc ? { fbc: _fbc } : {}),
+                    ...(_fbp ? { fbp: _fbp } : {}),
+                    ...(utmCampaign ? { utm_campaign: utmCampaign } : {}),
+                    ...(utmContent ? { utm_content: utmContent } : {}),
+                    ...(utmMedium ? { utm_medium: utmMedium } : {}),
+                    ...(adId || utmContent ? { ad_id: adId || utmContent } : {}),
+                    ad_source: adSource,
                   }).eq("id", upserted.id);
                 }
 
@@ -125,6 +143,43 @@ export async function POST(request: NextRequest) {
                   description: `New visitor captured: ${normalizedEmail} — ${businessName || "N/A"}`,
                   metadata: { contactId: upserted.id, email: normalizedEmail, businessName, source: source || "lead magnet", applicationStage: "10%" },
                 });
+
+                // Meta CAPI: fire Lead event so server matches client-side fbq('track','Lead')
+                try {
+                  const capiResult = await sendEvent({
+                    eventName: "Lead",
+                    eventId: serverEventId,
+                    eventSourceUrl: sourceUrl || "https://srtagency.com/freeguide-general",
+                    actionSource: "website",
+                    userData: {
+                      email: normalizedEmail || undefined,
+                      phone: lookupPhone10 || undefined,
+                      firstName: firstName || undefined,
+                      lastName: lastName || undefined,
+                      fbc: _fbc || undefined,
+                      fbp: _fbp || undefined,
+                      clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+                      clientUserAgent,
+                      externalId: upserted.id || undefined,
+                    },
+                    customData: {
+                      content_name: "Free Business Funding Guide",
+                      currency: "USD",
+                    },
+                  });
+                  if (!capiResult.success) {
+                    console.error("[Meta CAPI 10%] Lead event failed:", capiResult.error);
+                    try {
+                      await supabaseAdmin.from("system_logs").insert({
+                        event_type: "meta_capi_error",
+                        description: `Meta CAPI Lead event failed (10%): ${capiResult.error}`,
+                        metadata: { email: normalizedEmail, eventName: "Lead", stage: "10%" },
+                      });
+                    } catch { /* ignore */ }
+                  }
+                } catch (err) {
+                  console.error("[Meta CAPI 10%] Lead event error:", err);
+                }
 
                 return NextResponse.json(
                   { success: true, contactId: upserted.id, message: "Contact captured" },
