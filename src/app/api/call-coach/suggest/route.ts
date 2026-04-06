@@ -60,41 +60,61 @@ export async function POST(request: NextRequest) {
           .join("\n")
       : "";
 
-    // Build playbook string
-    const playbookStr = Array.isArray(playbook) && playbook.length > 0
-      ? JSON.stringify(playbook.slice(0, 30), null, 0)
-      : "No playbook loaded yet.";
+    // Filter playbook to relevant entries to reduce tokens
+    const relevantPlaybook = filterRelevantPlaybook(
+      Array.isArray(playbook) ? playbook : [],
+      merchantUtterance
+    );
+    const playbookStr =
+      relevantPlaybook.length > 0
+        ? JSON.stringify(relevantPlaybook, null, 0)
+        : "No matching playbook entries.";
 
-    const systemPrompt = `You are an expert MCA (Merchant Cash Advance) sales coach for SRT Agency.
-You are listening to a live sales call between an SRT Agency rep and a business owner (merchant).
-Your job: suggest what the rep should say next.
+    const systemPrompt = `You are a real-time sales coach for SRT Agency. You are listening to a live call between an SRT rep and a business owner (merchant).
+
+YOUR JOB: Suggest what the REP should say next. Every suggestion must be words the REP speaks out loud TO the merchant.
+
+CRITICAL — DO NOT VIOLATE:
+- NEVER generate dialogue from the merchant's perspective
+- NEVER simulate what the merchant might say or example merchant answers
+- NEVER role-play as the merchant or create sample merchant responses
+- ONLY output what the SRT Agency sales rep should say
+- If unsure, default to a qualifying question the REP asks the merchant
 
 ABOUT SRT AGENCY:
-- AI-powered business financing brokerage (NOT a direct lender — we match businesses with funders)
-- Bilingual (English/Spanish), fast funding (24-48hrs)
-- Products: Revolving Line of Credit, Hybrid Line of Credit, Equipment Financing, Working Capital
-- Amounts: $1K to $2M depending on product
-- We focus on healthcare, restaurants, contractors, retail
+- Business financing brokerage — we match businesses with funders (NOT a direct lender)
+- Products: MCA, Revolving LOC, Hybrid LOC, Equipment Financing, Working Capital, SBA loans, Term loans
+- Amounts: $1K to $2M | Funding: 24-48hrs | Bilingual (English/Spanish)
 
-PLAYBOOK (objection/rebuttal knowledge base):
+PRE-QUALIFICATION CHECKLIST (what the rep needs to gather):
+- Credit score (650+ = conventional/SBA eligible, below = bridge funding)
+- Time in business (2+ years preferred)
+- Monthly revenue
+- Existing funding positions
+- Tax returns filed & profitable (required for SBA/conventional)
+- Purpose of capital
+
+CALL TRACKING — Analyze the conversation context to:
+- Identify what qualifying info has already been gathered vs still missing
+- Detect the call phase: OPENING → QUALIFYING → OBJECTION HANDLING → CLOSING
+- Guide suggestions toward gathering the NEXT missing qualification piece
+
+PLAYBOOK (proven rep responses — adapt these when the merchant's words match a trigger):
 ${playbookStr}
 
-RULES FOR YOUR SUGGESTIONS:
-- Return EXACTLY 3 suggestions, each 1-3 sentences max
-- Suggestion 1 (rebuttal): Direct answer — handle the objection head-on
-- Suggestion 2 (empathy): Acknowledge their concern, then pivot to value
-- Suggestion 3 (question): Ask a question to dig deeper behind the stated objection
-- Use natural spoken language, not scripted-sounding
+RULES:
+- Return EXACTLY 3 suggestions, each 1-3 sentences
+- Natural spoken language — conversational, confident, not pushy
+- When a playbook trigger matches, adapt those proven responses to fit the conversation
+- When no match, use ACQ: Acknowledge what they said → Compliment their business/thinking → Ask a qualifying Question
 - Never start with "I understand" (overused)
-- Be confident but not pushy
-- If the merchant sounds ready to close, suggest closing language instead
-- Reference specific financing details when relevant`;
+- Categorize each suggestion as: acknowledge, compliment, question, rebuttal, or empathy — pick whichever fits best`;
 
     const userMessage = contextStr
-      ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe merchant just said: "${merchantUtterance}"\n\nReturn ONLY valid JSON: { "suggestions": [{ "text": "...", "category": "rebuttal" }, { "text": "...", "category": "empathy" }, { "text": "...", "category": "question" }] }`
-      : `The merchant just said: "${merchantUtterance}"\n\nReturn ONLY valid JSON: { "suggestions": [{ "text": "...", "category": "rebuttal" }, { "text": "...", "category": "empathy" }, { "text": "...", "category": "question" }] }`;
+      ? `CONVERSATION SO FAR:\n${contextStr}\n\nMerchant just said: "${merchantUtterance}"\n\nWhat should the REP say next? Return ONLY valid JSON: { "suggestions": [{ "text": "...", "category": "..." }, { "text": "...", "category": "..." }, { "text": "...", "category": "..." }] }`
+      : `Merchant just said: "${merchantUtterance}"\n\nWhat should the REP say next? Return ONLY valid JSON: { "suggestions": [{ "text": "...", "category": "..." }, { "text": "...", "category": "..." }, { "text": "...", "category": "..." }] }`;
 
-    // Call Claude API directly (matching existing Mission Control pattern)
+    // Call Claude API — Haiku 4.5 for speed + cost (≈10x cheaper than Sonnet)
     const claudeResponse = await fetch(
       "https://api.anthropic.com/v1/messages",
       {
@@ -105,8 +125,8 @@ RULES FOR YOUR SUGGESTIONS:
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 512,
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 300,
           system: systemPrompt,
           messages: [{ role: "user", content: userMessage }],
         }),
@@ -169,18 +189,75 @@ RULES FOR YOUR SUGGESTIONS:
   }
 }
 
+/**
+ * Filter playbook to entries most relevant to the merchant's utterance.
+ * Reduces token count by only sending matching entries instead of all 30.
+ */
+function filterRelevantPlaybook(
+  playbook: Array<{
+    trigger: string;
+    category: string;
+    suggestions: string[];
+    context: string;
+    source: string;
+  }>,
+  utterance: string
+) {
+  if (playbook.length === 0) return [];
+
+  const lower = utterance.toLowerCase();
+  const words = new Set(lower.split(/\s+/).filter((w) => w.length > 2));
+
+  const scored = playbook.map((entry) => {
+    const trigger = entry.trigger.toLowerCase();
+    const triggerWords = trigger.split(/\s+/);
+
+    // Direct trigger match — highest priority
+    if (lower.includes(trigger)) return { entry, score: 10 };
+
+    // Word overlap scoring
+    const matchCount = triggerWords.filter(
+      (tw) => words.has(tw) || lower.includes(tw)
+    ).length;
+    const score = triggerWords.length > 0 ? matchCount / triggerWords.length : 0;
+
+    return { entry, score };
+  });
+
+  // Return top 10 matches with minimum relevance threshold
+  const relevant = scored
+    .filter((s) => s.score >= 0.3)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
+    .map((s) => s.entry);
+
+  // If no good matches, send a few general-purpose entries
+  if (relevant.length === 0) {
+    const generalCategories = [
+      "pattern_interrupt",
+      "objection_discovery",
+      "sales_psychology",
+    ];
+    return playbook
+      .filter((e) => generalCategories.includes(e.category))
+      .slice(0, 5);
+  }
+
+  return relevant;
+}
+
 function getFallbackSuggestions() {
   return [
     {
-      text: "That's a great point — let me ask you this: what would getting fast access to working capital mean for your business right now?",
-      category: "rebuttal",
+      text: "That's a really good point, and I appreciate you being upfront about that. It tells me you're someone who does their homework before making decisions. Let me ask you — what's your monthly revenue looking like right now?",
+      category: "acknowledge",
     },
     {
-      text: "I hear you. A lot of our clients felt the same way before they saw how quick and easy the process is.",
-      category: "empathy",
+      text: "You know, the fact that you're even exploring options shows you're serious about growing your business — a lot of owners don't even take that step. How long have you been running things?",
+      category: "compliment",
     },
     {
-      text: "Just curious — what's your biggest challenge with cash flow right now?",
+      text: "What would fast access to working capital mean for your business right now — is there a specific project or opportunity you're trying to jump on?",
       category: "question",
     },
   ];
