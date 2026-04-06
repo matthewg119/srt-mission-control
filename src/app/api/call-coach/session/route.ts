@@ -46,9 +46,13 @@ export async function POST(request: NextRequest) {
       if (error) throw error;
 
       // Increment total calls for the user
-      await supabaseAdmin.rpc("increment_call_coach_calls", {
-        user_uuid: user.id,
-      }).catch(() => {});
+      try {
+        await supabaseAdmin.rpc("increment_call_coach_calls", {
+          user_uuid: user.id,
+        });
+      } catch {
+        // Non-critical analytics — don't fail the request
+      }
 
       return NextResponse.json({ sessionId: data.id });
     }

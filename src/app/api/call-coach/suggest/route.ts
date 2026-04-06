@@ -138,11 +138,13 @@ RULES FOR YOUR SUGGESTIONS:
           parsed.suggestions.length >= 3
         ) {
           // Increment suggestion count for the user
-          await supabaseAdmin.rpc("increment_call_coach_suggestions", {
-            user_uuid: user.id,
-          }).catch(() => {
-            // Non-critical — don't fail the request if analytics fail
-          });
+          try {
+            await supabaseAdmin.rpc("increment_call_coach_suggestions", {
+              user_uuid: user.id,
+            });
+          } catch {
+            // Non-critical — don't fail the request
+          }
 
           return NextResponse.json({
             suggestions: parsed.suggestions.slice(0, 3),
