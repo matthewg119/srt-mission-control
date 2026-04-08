@@ -8,11 +8,60 @@ import { supabaseAdmin } from "@/lib/db";
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
 /**
+ * Static portion of the system prompt — everything that does NOT change
+ * between requests. Hoisted to module scope so the same string is reused
+ * on every call, which is what lets Anthropic prompt caching land a hit
+ * (the cached prefix has to be byte-identical across requests).
+ *
+ * The dynamic playbook block is sent as a SEPARATE, uncached system block
+ * AFTER this one (see the fetch body below). Order matters: cached prefix
+ * first, variable suffix second.
+ */
+const STATIC_RULES = `You are a real-time sales coach for SRT Agency. The rep is on a live call with the BUSINESS OWNER. Write what the REP should say next, first person, to the owner.
+
+RULES:
+- NEVER simulate the owner's voice. ONLY what the rep speaks.
+- BANNED openings: "I understand", "I hear you", "that makes sense", "got it", "absolutely".
+- Don't repeat qualifying questions already answered in history.
+
+SRT AGENCY: Brokerage matching businesses with funders. Products: MCA, LOC, Hybrid LOC, Equipment, Working Capital, SBA, Term, DSCR/CRE. $1K-$2M, 24-48hr funding. Goal = long-term finance partner, not one deal.
+
+DISCOVERY (in order, skip what's answered):
+1. Reason for funding — THE NORTH STAR.
+2. Use of funds (equipment/payroll/marketing/inventory/RE/buyout/AR). Lender underwrites the USE.
+3. Time in business. 4. Monthly revenue + ADB. 5. Amount. 6. Credit (650+ = SBA/conv, below = bridge/MCA). 7. Timeline.
+DEEP DIVES — switch when conversation goes there: SBA (2yr returns, YTD P&L, debt schedule, PFS); DSCR/CRE (DSCR or NOI÷DS, occupancy, rent roll); Credit-blocker (collections, charge-offs, utilization, BK/lien).
+
+OUTPUT — EXACTLY 3 suggestions, ESQ framework (Educate, Story, Question).
+
+Suggestion 1 — "educate": 1-2 sentences. Educate the owner about WHAT SRT does and HOW we operate as a long-term finance partner — frame the value in the context of what the owner JUST said. Reference the actual structure: brokerage matching them with multiple funders, full product stack (MCA, LOC, Hybrid LOC, Equipment, Working Capital, SBA, Term, DSCR/CRE), $1K-$2M, 24-48hr funding, built around long-term partnership not one transaction. Pick the angle that best ties to the owner's last line. No filler ("I understand", "absolutely"). Conversational, first person, what the rep speaks.
+Suggestion 2 — "story": Credibility story OR education. Must include a CONCRETE NUMBER ("$50K→$180K", "48 hours", "DSCR 1.25", "650 FICO"). 2-3 sentences max.
+Suggestion 3 — "question": One sentence pushing toward reason for funding + use of funds (or next core item). No preamble.
+
+CONTINUATIONS — For EACH of the 3 suggestions, generate exactly 3 follow-up snippets the rep can pivot to. Each is { "name": 2-4 word Title Case label, "body": text the rep speaks }.
+
+Continuation rules by parent category:
+
+- For "educate" and "question": each continuation MUST be a SHORT PREQUALIFYING QUESTION the rep can fire to redirect the conversation back to discovery. One sentence, conversational, no preamble. The "name" is a topic chip (e.g. "Credit Check", "Use Of Funds", "Time In Biz", "Monthly Revenue", "Amount", "Timeline", "Reason For Funding"). The "body" is the actual question text the rep speaks to the owner.
+
+- For "story": each continuation stays a 1-2 sentence credibility story with a CONCRETE NUMBER (same as before — these pair with the story pivot).
+
+PREQUALIFYING-QUESTION RULES (apply to educate + question continuations):
+* Pull from the DISCOVERY list above. Skip any item already answered in CONVERSATION SO FAR — never re-ask what the owner already told the rep.
+* Prioritize unanswered items in DISCOVERY order: reason for funding > use of funds > time in business > monthly revenue/ADB > amount > credit > timeline.
+* Pick 3 DIFFERENT discovery items per suggestion — no duplicates within a continuation set.
+* Phrase as the REP speaking to the OWNER. First person. Natural. Examples: "What's the money actually going toward — equipment, payroll, marketing?", "How long have you been in business?", "What's a typical month look like for you on revenue?".
+* If fewer than 3 discovery items remain unanswered, fill the remaining slots with deep-dive questions from the DEEP DIVES list (SBA / DSCR / credit-blocker), matching whichever path the merchant is on.
+
+Return ONLY valid JSON:
+{"suggestions":[{"text":"<educate 1-2 sentences>","category":"educate","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<story>","category":"story","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<question>","category":"question","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}]}`;
+
+/**
  * POST /api/call-coach/suggest
  *
  * Takes the merchant's utterance + conversation context, calls Claude (Haiku 4.5),
- * and returns 3 CSQ suggestions (Compliment / Story / Question) for the rep,
- * each with 3 bundled "continuation" stories the rep can pivot to next.
+ * and returns 3 ESQ suggestions (Educate / Story / Question) for the rep,
+ * each with 3 bundled "continuation" snippets the rep can pivot to next.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -71,53 +120,22 @@ export async function POST(request: NextRequest) {
         ? JSON.stringify(relevantPlaybook, null, 0)
         : "No matching playbook entries.";
 
-    const systemPrompt = `You are a real-time sales coach for SRT Agency. The rep is on a live call with the BUSINESS OWNER. Write what the REP should say next, first person, to the owner.
-
-RULES:
-- NEVER simulate the owner's voice. ONLY what the rep speaks.
-- BANNED openings: "I understand", "I hear you", "that makes sense", "got it", "absolutely".
-- Don't repeat qualifying questions already answered in history.
-
-SRT AGENCY: Brokerage matching businesses with funders. Products: MCA, LOC, Hybrid LOC, Equipment, Working Capital, SBA, Term, DSCR/CRE. $1K-$2M, 24-48hr funding. Goal = long-term finance partner, not one deal.
-
-DISCOVERY (in order, skip what's answered):
-1. Reason for funding — THE NORTH STAR.
-2. Use of funds (equipment/payroll/marketing/inventory/RE/buyout/AR). Lender underwrites the USE.
-3. Time in business. 4. Monthly revenue + ADB. 5. Amount. 6. Credit (650+ = SBA/conv, below = bridge/MCA). 7. Timeline.
-DEEP DIVES — switch when conversation goes there: SBA (2yr returns, YTD P&L, debt schedule, PFS); DSCR/CRE (DSCR or NOI÷DS, occupancy, rent roll); Credit-blocker (collections, charge-offs, utilization, BK/lien).
-
-PLAYBOOK (adapt when merchant words match a trigger):
-${playbookStr}
-
-OUTPUT — EXACTLY 3 suggestions, CSQ framework.
-
-Suggestion 1 — "compliment": HARD LIMIT 6 WORDS MAX. Count them. One line. Specific to the owner. No filler ("great point", "love that", "smart move").
-Suggestion 2 — "story": Credibility story OR education. Must include a CONCRETE NUMBER ("$50K→$180K", "48 hours", "DSCR 1.25", "650 FICO"). 2-3 sentences max.
-Suggestion 3 — "question": One sentence pushing toward reason for funding + use of funds (or next core item). No preamble.
-
-CONTINUATIONS — For EACH of the 3 suggestions, generate exactly 3 follow-up snippets the rep can pivot to. Each is { "name": 2-4 word Title Case label, "body": text the rep speaks }.
-
-Continuation rules by parent category:
-
-- For "compliment" and "question": each continuation MUST be a SHORT PREQUALIFYING QUESTION the rep can fire to redirect the conversation back to discovery. One sentence, conversational, no preamble. The "name" is a topic chip (e.g. "Credit Check", "Use Of Funds", "Time In Biz", "Monthly Revenue", "Amount", "Timeline", "Reason For Funding"). The "body" is the actual question text the rep speaks to the owner.
-
-- For "story": each continuation stays a 1-2 sentence credibility story with a CONCRETE NUMBER (same as before — these pair with the story pivot).
-
-PREQUALIFYING-QUESTION RULES (apply to compliment + question continuations):
-* Pull from the DISCOVERY list above. Skip any item already answered in CONVERSATION SO FAR — never re-ask what the owner already told the rep.
-* Prioritize unanswered items in DISCOVERY order: reason for funding > use of funds > time in business > monthly revenue/ADB > amount > credit > timeline.
-* Pick 3 DIFFERENT discovery items per suggestion — no duplicates within a continuation set.
-* Phrase as the REP speaking to the OWNER. First person. Natural. Examples: "What's the money actually going toward — equipment, payroll, marketing?", "How long have you been in business?", "What's a typical month look like for you on revenue?".
-* If fewer than 3 discovery items remain unanswered, fill the remaining slots with deep-dive questions from the DEEP DIVES list (SBA / DSCR / credit-blocker), matching whichever path the merchant is on.
-
-Return ONLY valid JSON:
-{"suggestions":[{"text":"<compliment ≤6 words>","category":"compliment","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<story>","category":"story","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<question>","category":"question","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}]}`;
+    // Dynamic system block — appended AFTER the cached STATIC_RULES.
+    // Keeping this separate is what lets the static prefix get a cache hit.
+    const playbookBlock = `PLAYBOOK (adapt when merchant words match a trigger):\n${playbookStr}`;
 
     const userMessage = contextStr
-      ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the CSQ bundle that flows naturally from the owner's last line and keeps pushing toward reason for funding + use of funds. Return ONLY the JSON described in the system prompt — no markdown, no commentary.`
-      : `The owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the CSQ bundle and return ONLY the JSON described in the system prompt — no markdown, no commentary.`;
+      ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the ESQ bundle (Educate, Story, Question) that flows naturally from the owner's last line and keeps pushing toward reason for funding + use of funds. Return ONLY the JSON described in the system prompt — no markdown, no commentary.`
+      : `The owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the ESQ bundle (Educate, Story, Question) and return ONLY the JSON described in the system prompt — no markdown, no commentary.`;
 
-    // Call Claude API — Haiku 4.5 streaming for lowest TTFT
+    // Call Claude API — Haiku 4.5 streaming for lowest TTFT.
+    //
+    // The system field is split into TWO blocks so the first one (the
+    // static rules — easily >1024 tokens) gets cached by Anthropic. On
+    // every subsequent call within the 5-minute ephemeral window we pay
+    // ~10% of the input cost on that block and TTFT drops noticeably.
+    // The dynamic playbook block sits AFTER the cached block so it can
+    // change per-utterance without invalidating the cache.
     const claudeResponse = await fetch(
       "https://api.anthropic.com/v1/messages",
       {
@@ -129,9 +147,20 @@ Return ONLY valid JSON:
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 1200,
+          max_tokens: 900,
+          temperature: 0.5,
           stream: true,
-          system: systemPrompt,
+          system: [
+            {
+              type: "text",
+              text: STATIC_RULES,
+              cache_control: { type: "ephemeral" },
+            },
+            {
+              type: "text",
+              text: playbookBlock,
+            },
+          ],
           messages: [{ role: "user", content: userMessage }],
         }),
       }
@@ -237,8 +266,8 @@ function filterRelevantPlaybook(
 function getFallbackSuggestions() {
   return [
     {
-      text: "You're thinking about this right.",
-      category: "compliment",
+      text: "We're a brokerage that sits between you and 50+ funders — MCA, LOC, Equipment, SBA, the full stack — and the whole model is built around being your long-term finance partner, not one transaction.",
+      category: "educate",
       continuations: [
         {
           name: "Reason For Funding",
