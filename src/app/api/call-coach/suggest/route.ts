@@ -71,98 +71,53 @@ export async function POST(request: NextRequest) {
         ? JSON.stringify(relevantPlaybook, null, 0)
         : "No matching playbook entries.";
 
-    const systemPrompt = `You are a real-time sales coach for SRT Agency. The rep is on a live call with the BUSINESS OWNER ("the president") who is on the other end of the line. Write what the REP should say next, in first person, addressed directly to the owner.
+    const systemPrompt = `You are a real-time sales coach for SRT Agency. The rep is on a live call with the BUSINESS OWNER. Write what the REP should say next, first person, to the owner.
 
-CRITICAL — DO NOT VIOLATE:
-- NEVER generate dialogue from the merchant's perspective. NEVER simulate what the owner might say.
-- ONLY output what the SRT rep should speak out loud.
-- DO NOT use empty acknowledgment phrases as a standalone move ("I hear you", "I understand", "that makes sense", "I get it", "got it", "absolutely"). They waste pacing. The compliment slot exists instead — make it specific.
-- NEVER start with "I understand" (overused, banned).
-- DO NOT ask the same qualifying question twice — check the conversation history first.
+RULES:
+- NEVER simulate the owner's voice. ONLY what the rep speaks.
+- BANNED openings: "I understand", "I hear you", "that makes sense", "got it", "absolutely".
+- Don't repeat qualifying questions already answered in history.
 
-ABOUT SRT AGENCY:
-- Business financing brokerage — we match businesses with funders (NOT a direct lender).
-- Products: MCA, Revolving LOC, Hybrid LOC, Equipment Financing, Working Capital, SBA loans, Term loans, DSCR / commercial real estate.
-- Amounts: $1K to $2M | Funding: 24-48hrs | Bilingual (English/Spanish).
-- The rep's goal is to become the owner's long-term BUSINESS FINANCE PARTNER — not just close one deal.
+SRT AGENCY: Brokerage matching businesses with funders. Products: MCA, LOC, Hybrid LOC, Equipment, Working Capital, SBA, Term, DSCR/CRE. $1K-$2M, 24-48hr funding. Goal = long-term finance partner, not one deal.
 
-DISCOVERY PRIORITIES — CORE QUALIFYING (gather in this order, skip what's already answered):
-1. Reason for funding — THE #1 NORTH STAR. Why do they need capital?
-2. Use of funds — what specifically will the money go toward? (equipment / payroll / marketing / inventory / real estate / partner buyout / bridging AR). The lender underwrites the use, not just the amount.
-3. Time in business
-4. Monthly revenue + ADB (average daily balance)
-5. Confirm funding amount
-6. Credit score range (650+ = conventional/SBA, below = bridge/MCA)
-7. Timeline — how soon do they need it
+DISCOVERY (in order, skip what's answered):
+1. Reason for funding — THE NORTH STAR.
+2. Use of funds (equipment/payroll/marketing/inventory/RE/buyout/AR). Lender underwrites the USE.
+3. Time in business. 4. Monthly revenue + ADB. 5. Amount. 6. Credit (650+ = SBA/conv, below = bridge/MCA). 7. Timeline.
+DEEP DIVES — switch when conversation goes there: SBA (2yr returns, YTD P&L, debt schedule, PFS); DSCR/CRE (DSCR or NOI÷DS, occupancy, rent roll); Credit-blocker (collections, charge-offs, utilization, BK/lien).
 
-CONDITIONAL DEEP DIVES — switch the question slot when conversation goes here:
-- SBA / Term Loan track: 2yr business tax returns, YTD P&L + balance sheet, debt schedule, collateral, personal financial statement.
-- DSCR / commercial real estate: DSCR score (or NOI ÷ debt service), property type/occupancy, existing debt service, purchase vs refi, rent roll.
-- Credit-as-blocker: what's pulling the score down (collections, charge-offs, late pays, utilization, recent inquiries), items in dispute, recent BK/tax lien, score trend.
-
-PLAYBOOK (proven rep responses — adapt when the merchant's words match a trigger):
+PLAYBOOK (adapt when merchant words match a trigger):
 ${playbookStr}
 
-OUTPUT — Return EXACTLY 3 suggestions using the CSQ framework.
+OUTPUT — EXACTLY 3 suggestions, CSQ framework.
 
-Suggestion 1 — category: "compliment"
-- EXACTLY ONE LINE. Max ~15 words. NO bullet points. NO line breaks.
-- Specific to the owner's business, thinking, or numbers — never generic.
-- BANNED: "That's a great point", "great question", "love that", "smart move", any filler.
+Suggestion 1 — "compliment": HARD LIMIT 6 WORDS MAX. Count them. One line. Specific to the owner. No filler ("great point", "love that", "smart move").
+Suggestion 2 — "story": Credibility story OR education. Must include a CONCRETE NUMBER ("$50K→$180K", "48 hours", "DSCR 1.25", "650 FICO"). 2-3 sentences max.
+Suggestion 3 — "question": One sentence pushing toward reason for funding + use of funds (or next core item). No preamble.
 
-Suggestion 2 — category: "story"
-- EITHER a credibility story (a past client outcome) OR a piece of EDUCATION (how this product actually works, what underwriting looks like, what most owners get wrong).
-- Must include at least one CONCRETE NUMBER or timeframe ("$50K → $180K", "48 hours", "DSCR of 1.25", "2 years in business", "650 FICO").
-- 2-3 sentences max. Natural spoken language.
+CONTINUATIONS — For EACH of the 3 suggestions, generate exactly 3 follow-up snippets the rep can pivot to. Each is { "name": 2-4 word Title Case label, "body": text the rep speaks }.
 
-Suggestion 3 — category: "question"
-- Lead toward REASON FOR FUNDING and USE OF FUNDS unless those are already nailed down. If they are, switch to the next CORE qualifying item or a CONDITIONAL deep-dive question if the conversation went there.
-- One sentence. No preamble.
+Continuation rules by parent category:
 
-CONTINUATIONS — For EACH of the 3 suggestions above, also generate exactly 3 follow-up "continuations" the rep can pivot to next. Each continuation is a tight 1-2 sentence story or education snippet with a CONCRETE NUMBER. Each continuation has:
-- name: a 2-4 word label, Title Case, like "Restaurant 60-day" or "AR Bridge" or "Equipment Refi" or "DSCR 1.25 Deal".
-- body: the 1-2 sentence story body the rep would actually speak out loud.
+- For "compliment" and "question": each continuation MUST be a SHORT PREQUALIFYING QUESTION the rep can fire to redirect the conversation back to discovery. One sentence, conversational, no preamble. The "name" is a topic chip (e.g. "Credit Check", "Use Of Funds", "Time In Biz", "Monthly Revenue", "Amount", "Timeline", "Reason For Funding"). The "body" is the actual question text the rep speaks to the owner.
 
-Continuations should give the rep options to keep pushing toward reason-for-funding and use-of-funds.
+- For "story": each continuation stays a 1-2 sentence credibility story with a CONCRETE NUMBER (same as before — these pair with the story pivot).
 
-Return ONLY valid JSON in this exact shape:
-{
-  "suggestions": [
-    {
-      "text": "<compliment line>",
-      "category": "compliment",
-      "continuations": [
-        { "name": "...", "body": "..." },
-        { "name": "...", "body": "..." },
-        { "name": "...", "body": "..." }
-      ]
-    },
-    {
-      "text": "<story or education>",
-      "category": "story",
-      "continuations": [
-        { "name": "...", "body": "..." },
-        { "name": "...", "body": "..." },
-        { "name": "...", "body": "..." }
-      ]
-    },
-    {
-      "text": "<question>",
-      "category": "question",
-      "continuations": [
-        { "name": "...", "body": "..." },
-        { "name": "...", "body": "..." },
-        { "name": "...", "body": "..." }
-      ]
-    }
-  ]
-}`;
+PREQUALIFYING-QUESTION RULES (apply to compliment + question continuations):
+* Pull from the DISCOVERY list above. Skip any item already answered in CONVERSATION SO FAR — never re-ask what the owner already told the rep.
+* Prioritize unanswered items in DISCOVERY order: reason for funding > use of funds > time in business > monthly revenue/ADB > amount > credit > timeline.
+* Pick 3 DIFFERENT discovery items per suggestion — no duplicates within a continuation set.
+* Phrase as the REP speaking to the OWNER. First person. Natural. Examples: "What's the money actually going toward — equipment, payroll, marketing?", "How long have you been in business?", "What's a typical month look like for you on revenue?".
+* If fewer than 3 discovery items remain unanswered, fill the remaining slots with deep-dive questions from the DEEP DIVES list (SBA / DSCR / credit-blocker), matching whichever path the merchant is on.
+
+Return ONLY valid JSON:
+{"suggestions":[{"text":"<compliment ≤6 words>","category":"compliment","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<story>","category":"story","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<question>","category":"question","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}]}`;
 
     const userMessage = contextStr
       ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the CSQ bundle that flows naturally from the owner's last line and keeps pushing toward reason for funding + use of funds. Return ONLY the JSON described in the system prompt — no markdown, no commentary.`
       : `The owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the CSQ bundle and return ONLY the JSON described in the system prompt — no markdown, no commentary.`;
 
-    // Call Claude API — Haiku 4.5 for speed + cost (~10x cheaper than Sonnet)
+    // Call Claude API — Haiku 4.5 streaming for lowest TTFT
     const claudeResponse = await fetch(
       "https://api.anthropic.com/v1/messages",
       {
@@ -174,15 +129,16 @@ Return ONLY valid JSON in this exact shape:
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 2000,
+          max_tokens: 1200,
+          stream: true,
           system: systemPrompt,
           messages: [{ role: "user", content: userMessage }],
         }),
       }
     );
 
-    if (!claudeResponse.ok) {
-      const errText = await claudeResponse.text();
+    if (!claudeResponse.ok || !claudeResponse.body) {
+      const errText = await claudeResponse.text().catch(() => "");
       console.error("Claude API error:", claudeResponse.status, errText);
       return NextResponse.json({
         suggestions: getFallbackSuggestions(),
@@ -190,65 +146,27 @@ Return ONLY valid JSON in this exact shape:
       });
     }
 
-    const claudeData = await claudeResponse.json();
-    const responseText = claudeData.content?.[0]?.text || "";
-
-    // Parse JSON from Claude's response
-    try {
-      // Extract JSON from response (Claude sometimes wraps in markdown)
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (
-          parsed.suggestions &&
-          Array.isArray(parsed.suggestions) &&
-          parsed.suggestions.length >= 3
-        ) {
-          // Increment suggestion count for the user
-          try {
-            await supabaseAdmin.rpc("increment_call_coach_suggestions", {
-              user_uuid: user.id,
-            });
-          } catch {
-            // Non-critical — don't fail the request
-          }
-
-          // Sanitize: keep only the first 3 suggestions, ensure each has a
-          // valid continuations array (max 3 entries, all with name + body).
-          const cleanSuggestions = parsed.suggestions
-            .slice(0, 3)
-            .map((s: { text: string; category: string; continuations?: Array<{ name: string; body: string }> }) => ({
-              text: typeof s.text === "string" ? s.text : "",
-              category: typeof s.category === "string" ? s.category : "question",
-              continuations: Array.isArray(s.continuations)
-                ? s.continuations
-                    .filter(
-                      (c) =>
-                        c &&
-                        typeof c.name === "string" &&
-                        typeof c.body === "string"
-                    )
-                    .slice(0, 3)
-                : [],
-            }));
-
-          return NextResponse.json({
-            suggestions: cleanSuggestions,
-          });
-        }
+    // Increment usage counter optimistically (fire and forget)
+    void (async () => {
+      try {
+        await supabaseAdmin.rpc("increment_call_coach_suggestions", {
+          user_uuid: user.id,
+        });
+      } catch {
+        // Non-critical
       }
-    } catch (parseError) {
-      console.error(
-        "Failed to parse Claude response:",
-        parseError,
-        responseText
-      );
-    }
+    })();
 
-    // If parsing failed, return fallback
-    return NextResponse.json({
-      suggestions: getFallbackSuggestions(),
-      fallback: true,
+    // Proxy the SSE stream straight through to the extension.
+    // The extension parses Anthropic SSE events incrementally and
+    // renders complete suggestions as they arrive.
+    return new Response(claudeResponse.body, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
     });
   } catch (error) {
     console.error("Suggest error:", error);
@@ -319,20 +237,20 @@ function filterRelevantPlaybook(
 function getFallbackSuggestions() {
   return [
     {
-      text: "You're already further along than most owners I talk to in your space.",
+      text: "You're thinking about this right.",
       category: "compliment",
       continuations: [
         {
-          name: "Restaurant 60-day",
-          body: "I had a restaurant owner last month — same situation, $50K bridge in 60 days, ended up restructuring into a $180K LOC once revenue caught up.",
+          name: "Reason For Funding",
+          body: "What's pushing you to look at capital right now?",
         },
         {
-          name: "Equipment Refi",
-          body: "A trucking client refinanced his $90K equipment note into a 36-month working capital line — saved him $2.4K a month in cash flow.",
+          name: "Use Of Funds",
+          body: "Where would the money actually go — equipment, payroll, inventory?",
         },
         {
-          name: "AR Bridge",
-          body: "An HVAC contractor was waiting on $120K in AR — we bridged him in 48 hours so he could meet payroll without touching his line.",
+          name: "Time In Biz",
+          body: "How long have you been running the business?",
         },
       ],
     },
@@ -359,16 +277,16 @@ function getFallbackSuggestions() {
       category: "question",
       continuations: [
         {
-          name: "Use Drilldown",
-          body: "Is that for equipment, payroll, inventory, or something time-sensitive like a vendor opportunity?",
+          name: "Monthly Revenue",
+          body: "What does a typical month look like on the top line?",
         },
         {
-          name: "Timeline Tie",
-          body: "And how soon does that need to happen — are we talking this week, this month, or sometime in the next quarter?",
+          name: "Amount",
+          body: "And ballpark — how much capital are we talking about?",
         },
         {
-          name: "ROI Frame",
-          body: "Once that dollar's working for you, what's the return you're expecting on it — and over what timeline?",
+          name: "Credit Check",
+          body: "What's your credit sitting at right now, roughly?",
         },
       ],
     },
