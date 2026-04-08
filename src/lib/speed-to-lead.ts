@@ -27,8 +27,8 @@ function isBusinessHours(): boolean {
 
   const hour = et.getHours();
 
-  const startHour = parseInt(process.env.SPEED_TO_LEAD_START_HOUR || "9", 10);
-  const endHour = parseInt(process.env.SPEED_TO_LEAD_END_HOUR || "20", 10);
+  const startHour = parseInt(process.env.SPEED_TO_LEAD_START_HOUR || "0", 10);
+  const endHour = parseInt(process.env.SPEED_TO_LEAD_END_HOUR || "24", 10);
 
   return hour >= startHour && hour < endHour;
 }
