@@ -9,13 +9,41 @@ import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
+import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 
 import {
         createLead as zohoCreateLead,
         updateLead as zohoUpdateLead,
         searchLeads as zohoSearchLeads,
         attachPDFToLead as zohoAttachPDF,
+        addNoteToLead as zohoAddNote,
 } from "@/lib/zoho";
+
+// Build a human-readable summary of the lead-magnet data we capture at the
+// 25% step. We dump this into a Zoho Note because the corresponding structured
+// fields (Funding_Amount_Requested, Credit_Score_Range, Monthly_Revenue) may
+// reject string ranges like "$100K - $250K" or "750+" depending on field type.
+function buildLeadMagnetNote(data: {
+  creditScore?: string;
+  amountNeeded?: string;
+  monthlyRevenue?: string;
+  monthlyDeposits?: string;
+  useOfFunds?: string;
+  existingLoans?: string;
+  industry?: string;
+  source?: string;
+}): string {
+  const lines: string[] = [];
+  if (data.creditScore) lines.push(`Credit: ${data.creditScore}`);
+  if (data.amountNeeded) lines.push(`Funding Requested: ${data.amountNeeded}`);
+  if (data.monthlyRevenue) lines.push(`Monthly Revenue: ${data.monthlyRevenue}`);
+  if (data.monthlyDeposits) lines.push(`Monthly Deposits: ${data.monthlyDeposits}`);
+  if (data.useOfFunds) lines.push(`Use of Funds: ${data.useOfFunds}`);
+  if (data.existingLoans) lines.push(`Existing Loans: ${data.existingLoans}`);
+  if (data.industry) lines.push(`Industry: ${data.industry}`);
+  if (data.source) lines.push(`Source: ${data.source}`);
+  return lines.join("\n");
+}
 
 export async function OPTIONS(request: NextRequest) {
         return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -107,17 +135,11 @@ export async function POST(request: NextRequest) {
                   }
                 }
 
-                // Slack: New Visitor Alert (fire-and-forget)
-                const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-                if (hotLeadsChannel) {
-                  slack.postMessage(hotLeadsChannel, [
-                    ":bell: *New Visitor Alert*", "",
-                    `${[firstName, lastName].filter(Boolean).join(" ") || "Unknown"} — ${businessName || "Unknown Business"}`,
-                    `*Email:* ${normalizedEmail}`,
-                    `*Phone:* ${lookupPhone10 || "–"}`,
-                    `*Source:* ${source || "lead magnet"}`,
-                  ].join("\n")).catch(err => console.error("[Slack 10%] postMessage failed:", err instanceof Error ? err.message : err));
-                }
+                // Slack: post or thread-reply to the lead's Slack thread.
+                // First touch creates a top-level message with all known fields;
+                // subsequent calls thread-reply with the diff.
+                postOrThreadLeadUpdate({ contactId: upserted.id, action: "create" })
+                  .catch(err => console.error("[lead-thread 10%] failed:", err instanceof Error ? err.message : err));
 
                 // Log to system_logs for dedup and activity feed
                 await supabaseAdmin.from("system_logs").insert({
@@ -242,30 +264,47 @@ export async function POST(request: NextRequest) {
                                     Ownership_Percentage: ownership,
                                 };
 
-                                if (fullContact?.zoho_lead_id) {
-                                  // Zoho lead exists (created at 10%) — update with enriched data
-                                  zohoUpdateLead(fullContact.zoho_lead_id, zohoUpdateData)
-                                    .catch(err => console.error("[Zoho] update for existing failed:", err instanceof Error ? err.message : err));
-                                  console.log("[Zoho 25%] Updating existing lead:", fullContact.zoho_lead_id, email);
-                                } else {
-                                  // Zoho lead missing — search by email first to avoid duplicates
-                                  let existingZohoId: string | null = null;
+                                // Resolve the Zoho lead ID we want to write to:
+                                // 1) the one stored on the contact (created at 10%), or
+                                // 2) the result of a fresh email search (in case 10% never ran), or
+                                // 3) a new lead we create here.
+                                // We AWAIT every Zoho call so the serverless function isn't torn
+                                // down before the request completes — past fire-and-forget calls
+                                // were silently dropping on Vercel.
+                                let targetZohoId: string | null = fullContact?.zoho_lead_id || null;
+
+                                if (!targetZohoId) {
                                   try {
                                     const searchResults = await zohoSearchLeads({ email: normalizedEmail });
                                     if (searchResults && searchResults.length > 0) {
-                                      existingZohoId = searchResults[0].id as string;
-                                      console.log("[Zoho 25%] Found existing lead by email search:", existingZohoId, email);
+                                      targetZohoId = searchResults[0].id as string;
+                                      console.log("[Zoho 25%] Found existing lead by email search:", targetZohoId, email);
                                     }
-                                  } catch { /* search failed, will create */ }
+                                  } catch (err) {
+                                    console.error("[Zoho 25%] search failed:", err instanceof Error ? err.message : err);
+                                  }
+                                }
 
-                                  if (existingZohoId) {
-                                    // Found existing — update it and save the ID
-                                    zohoUpdateLead(existingZohoId, zohoUpdateData)
-                                      .catch(err => console.error("[Zoho] update found-by-search failed:", err instanceof Error ? err.message : err));
-                                    await supabaseAdmin.from("contacts").update({ zoho_lead_id: existingZohoId }).eq("id", contactId!);
-                                  } else {
-                                    // Truly missing — create now
-                                    zohoCreateLead({
+                                if (targetZohoId) {
+                                  try {
+                                    await zohoUpdateLead(targetZohoId, zohoUpdateData);
+                                    console.log("[Zoho 25%] Lead updated:", targetZohoId, email);
+                                    if (targetZohoId !== fullContact?.zoho_lead_id) {
+                                      await supabaseAdmin.from("contacts").update({ zoho_lead_id: targetZohoId }).eq("id", contactId!);
+                                    }
+                                  } catch (err) {
+                                    const msg = err instanceof Error ? err.message : String(err);
+                                    console.error("[Zoho 25%] update failed:", msg);
+                                    await supabaseAdmin.from("system_logs").insert({
+                                      event_type: "zoho_sync_error",
+                                      description: `Zoho lead update failed at 25% for ${normalizedEmail}: ${msg.slice(0, 300)}`,
+                                      metadata: { contactId, zohoLeadId: targetZohoId, email: normalizedEmail, stage: "25%" },
+                                    });
+                                  }
+                                } else {
+                                  // Truly missing — create now (awaited)
+                                  try {
+                                    const newId = await zohoCreateLead({
                                       firstName, lastName,
                                       businessName: businessName || legalName, legalName, dba,
                                       email, phone: mobilePhone || businessPhone,
@@ -274,47 +313,49 @@ export async function POST(request: NextRequest) {
                                       timeInBusiness: timeInBiz, creditScoreRange: creditScore,
                                       fundingAmount: amountNeeded,
                                       monthlyRevenue,
+                                      monthlyDeposits,
                                       ownership: ownership ? String(ownership) : undefined,
-                                    }).then(async (zohoId) => {
-                                      if (zohoId) {
-                                        await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", contactId!);
-                                        console.log("[Zoho] Lead created for existing contact (fallback):", zohoId, email);
-                                      }
-                                    }).catch(err => console.error("[Zoho] create for existing failed:", err instanceof Error ? err.message : err));
+                                    });
+                                    if (newId) {
+                                      targetZohoId = newId;
+                                      await supabaseAdmin.from("contacts").update({ zoho_lead_id: newId }).eq("id", contactId!);
+                                      console.log("[Zoho 25%] Lead created for existing contact (fallback):", newId, email);
+                                    }
+                                  } catch (err) {
+                                    const msg = err instanceof Error ? err.message : String(err);
+                                    console.error("[Zoho 25%] create for existing failed:", msg);
+                                    await supabaseAdmin.from("system_logs").insert({
+                                      event_type: "zoho_sync_error",
+                                      description: `Zoho lead create failed at 25% for ${normalizedEmail}: ${msg.slice(0, 300)}`,
+                                      metadata: { contactId, email: normalizedEmail, stage: "25%" },
+                                    });
                                   }
                                 }
 
-                                // Slack: Visitor Converted — with dedup (skip if already notified within 5 min)
-                                const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-                                if (hotLeadsChannel) {
-                                  const { data: recentSlackExisting } = await supabaseAdmin
-                                    .from("system_logs").select("id")
-                                    .eq("event_type", "slack_new_lead")
-                                    .like("description", `%${normalizedEmail}%`)
-                                    .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
-                                    .limit(1);
-
-                                  if (!recentSlackExisting || recentSlackExisting.length === 0) {
-                                    slack.postMessage(hotLeadsChannel, [
-                                      ":fire: *New Lead — Visitor Converted!*", "",
-                                      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                      `*Business:* ${businessName || legalName || "–"}`,
-                                      `*Phone:* ${mobilePhone || businessPhone || "–"}`,
-                                      `*Email:* ${email || "–"}`,
-                                      `*Credit:* ${creditScore || "–"}`,
-                                      `*Funding:* ${amountNeeded || "–"}`,
-                                      `*Revenue:* ${monthlyRevenue || "–"}`,
-                                      `*Source:* ${source || "lead magnet"}`,
-                                    ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
-
+                                // Add a Note with the lead-magnet capture data, in case the
+                                // structured fields above were rejected by Zoho field types.
+                                if (targetZohoId) {
+                                  const noteBody = buildLeadMagnetNote({
+                                    creditScore, amountNeeded, monthlyRevenue, monthlyDeposits,
+                                    useOfFunds, existingLoans, industry,
+                                    source: source || "lead magnet",
+                                  });
+                                  if (noteBody) {
                                     try {
-                                      await supabaseAdmin.from("system_logs").insert({
-                                        event_type: "slack_new_lead",
-                                        description: `Slack notification sent for existing lead: ${[firstName, lastName].filter(Boolean).join(" ")} (${normalizedEmail})`,
-                                        metadata: { email: normalizedEmail, contactId },
-                                      });
-                                    } catch { /* ignore */ }
+                                      await zohoAddNote(targetZohoId, "Lead Magnet Capture", noteBody);
+                                      console.log("[Zoho 25%] Lead-magnet note added to:", targetZohoId);
+                                    } catch (err) {
+                                      console.error("[Zoho 25%] addNote failed:", err instanceof Error ? err.message : err);
+                                    }
                                   }
+                                }
+
+                                // Slack: post or thread-reply to the lead's Slack thread.
+                                // The thread system handles dedup (one thread per contact)
+                                // and instant updates per the user's "no 5-minute dedup" requirement.
+                                if (contactId) {
+                                  postOrThreadLeadUpdate({ contactId, action: "update" })
+                                    .catch(err => console.error("[lead-thread 25% existing] failed:", err instanceof Error ? err.message : err));
                                 }
 
                                 // Speed to Lead instant callback (existing contact, 25%+)
@@ -384,51 +425,61 @@ export async function POST(request: NextRequest) {
                               });
                               // fire-and-forget, don't block on system_log insert
 
-                              // Sync NEW contact to Zoho (non-blocking)
+                              // Sync NEW contact to Zoho — AWAITED so the serverless function
+                              // doesn't tear down before the request completes.
                               const timeInBiz = (startMonth && startYear) ? `${startMonth} ${startYear}` : undefined;
-                              zohoCreateLead({
-                                firstName, lastName,
-                                businessName: businessName || legalName, legalName, dba,
-                                email, phone: mobilePhone || businessPhone,
-                                source: source || "Meta Ads", Lead_Status: "New Lead",
-                                industry, ein, bizAddress, bizCity, bizState, bizZip,
-                                timeInBusiness: timeInBiz, creditScoreRange: creditScore,
-                                ownership: ownership ? String(ownership) : undefined,
-                              }).catch(err => console.error("[Zoho 25%] create failed:", err instanceof Error ? err.message : err));
+                              let newZohoLeadId: string | null = null;
+                              try {
+                                newZohoLeadId = await zohoCreateLead({
+                                  firstName, lastName,
+                                  businessName: businessName || legalName, legalName, dba,
+                                  email, phone: mobilePhone || businessPhone,
+                                  source: source || "Meta Ads", Lead_Status: "New Lead",
+                                  industry, ein, bizAddress, bizCity, bizState, bizZip,
+                                  timeInBusiness: timeInBiz, creditScoreRange: creditScore,
+                                  fundingAmount: amountNeeded,
+                                  monthlyRevenue,
+                                  monthlyDeposits,
+                                  ownership: ownership ? String(ownership) : undefined,
+                                });
+                                if (newZohoLeadId) {
+                                  await supabaseAdmin.from("contacts").update({ zoho_lead_id: newZohoLeadId }).eq("id", contactId!);
+                                  console.log("[Zoho 25%] Lead created for new contact:", newZohoLeadId, email);
+                                }
+                              } catch (err) {
+                                const msg = err instanceof Error ? err.message : String(err);
+                                console.error("[Zoho 25%] create failed:", msg);
+                                await supabaseAdmin.from("system_logs").insert({
+                                  event_type: "zoho_sync_error",
+                                  description: `Zoho lead create failed at 25% (new contact) for ${normalizedEmail}: ${msg.slice(0, 300)}`,
+                                  metadata: { contactId, email: normalizedEmail, stage: "25%-new" },
+                                });
+                              }
 
-                              // Slack: new lead captured — with dedup check
-                              if (applicationCompletionPct >= 25 && applicationCompletionPct <= 65) {
-                                const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-                                if (hotLeadsChannel) {
-                                  const { data: recentSlack } = await supabaseAdmin
-                                    .from("system_logs").select("id")
-                                    .eq("event_type", "slack_new_lead")
-                                    .like("description", `%${email}%`)
-                                    .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
-                                    .limit(1);
-
-                                  if (!recentSlack || recentSlack.length === 0) {
-                                    slack.postMessage(hotLeadsChannel, [
-                                      ":fire: *New Lead — Visitor Converted!*", "",
-                                      `*Name:* ${[firstName, lastName].filter(Boolean).join(" ")}`,
-                                      `*Business:* ${businessName || legalName || "–"}`,
-                                      `*Phone:* ${mobilePhone || businessPhone || "–"}`,
-                                      `*Email:* ${email || "–"}`,
-                                      `*Credit:* ${creditScore || "–"}`,
-                                      `*Funding:* ${amountNeeded || "–"}`,
-                                      `*Revenue:* ${monthlyRevenue || "–"}`,
-                                      `*Source:* ${source || "Meta Ads"}`,
-                                    ].join("\n")).catch(err => console.error("[Slack] postMessage failed:", err instanceof Error ? err.message : err));
-
-                                    try {
-                                      await supabaseAdmin.from("system_logs").insert({
-                                        event_type: "slack_new_lead",
-                                        description: `Slack notification sent for new lead: ${contactName} (${email})`,
-                                        metadata: { email, contactId },
-                                      });
-                                    } catch { /* ignore */ }
+                              // Add lead-magnet capture data as a Zoho Note (in case
+                              // structured fields were rejected by Zoho field types).
+                              if (newZohoLeadId) {
+                                const noteBody = buildLeadMagnetNote({
+                                  creditScore, amountNeeded, monthlyRevenue, monthlyDeposits,
+                                  useOfFunds, existingLoans, industry,
+                                  source: source || "Meta Ads",
+                                });
+                                if (noteBody) {
+                                  try {
+                                    await zohoAddNote(newZohoLeadId, "Lead Magnet Capture", noteBody);
+                                    console.log("[Zoho 25%] Lead-magnet note added to:", newZohoLeadId);
+                                  } catch (err) {
+                                    console.error("[Zoho 25%] addNote failed:", err instanceof Error ? err.message : err);
                                   }
                                 }
+                              }
+
+                              // Slack: post or thread-reply to the lead's Slack thread.
+                              // Brand-new contact — first call creates the top-level message
+                              // with all known fields (no 5-minute dedup, instant per user requirement).
+                              if (contactId) {
+                                postOrThreadLeadUpdate({ contactId, action: "create" })
+                                  .catch(err => console.error("[lead-thread 25% new] failed:", err instanceof Error ? err.message : err));
                               }
 
                               // Speed to Lead instant callback (new contact, 25%+)
@@ -739,38 +790,21 @@ export async function POST(request: NextRequest) {
                             }
               })();
 
-              // ── Slack: Application Completed — with dedup ──
+              // ── Slack: post or thread-reply Application Completed event ──
+              // Awaited so we can read slack_thread_ts afterwards for the PDF upload.
               const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
               let slackTs: string | undefined;
-              if (hotLeadsChannel) {
-                const { data: recentComplete } = await supabaseAdmin
-                  .from("system_logs").select("id")
-                  .eq("event_type", "slack_app_complete")
-                  .like("description", `%${email}%`)
-                  .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
-                  .limit(1);
-
-                if (!recentComplete || recentComplete.length === 0) {
-                  const completedLines = [
-                    `:white_check_mark: *Application Completed: ${contactName}*`, "",
-                    `*Business:* ${businessName || legalName || "—"}`,
-                    `*Industry:* ${industry || "—"}`,
-                    `*Funding Requested:* ${amountNeeded ? `$${amountNeeded}` : "—"}`,
-                    `*Monthly Revenue / Deposits:* ${monthlyDeposits || "—"}`,
-                    `*Email:* ${email || "—"}`,
-                    `*Phone:* ${mobilePhone || businessPhone || "—"}`,
-                  ];
-                  slack.postMessage(hotLeadsChannel, completedLines.join("\n"))
-                    .then(res => { slackTs = (res as { ts?: string }).ts; })
-                    .catch(err => console.error("[Slack 100%] postMessage failed:", err instanceof Error ? err.message : err));
-
-                  try {
-                    await supabaseAdmin.from("system_logs").insert({
-                      event_type: "slack_app_complete",
-                      description: `Slack notification sent for completed application: ${contactName} (${email})`,
-                      metadata: { email, contactId },
-                    });
-                  } catch { /* ignore */ }
+              if (contactId) {
+                try {
+                  await postOrThreadLeadUpdate({ contactId, action: "complete" });
+                  const { data: refreshed } = await supabaseAdmin
+                    .from("contacts")
+                    .select("slack_thread_ts")
+                    .eq("id", contactId)
+                    .single();
+                  slackTs = refreshed?.slack_thread_ts || undefined;
+                } catch (err) {
+                  console.error("[lead-thread 100%] failed:", err instanceof Error ? err.message : err);
                 }
               }
 

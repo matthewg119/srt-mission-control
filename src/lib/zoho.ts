@@ -265,6 +265,30 @@ export async function updateLead(
             }
 }
 
+/**
+ * Add a Note to a Zoho CRM Lead. Used for data we don't trust to the structured
+ * custom fields (e.g. funding ranges like "$100K - $250K" that Zoho may reject
+ * if the field is typed as Currency).
+ */
+export async function addNoteToLead(
+            zohoLeadId: string,
+            title: string,
+            content: string
+          ): Promise<void> {
+            const result = await zohoRequest("POST", "/Notes", {
+                          data: [{
+                                          Note_Title: title,
+                                          Note_Content: content,
+                                          Parent_Id: zohoLeadId,
+                                          se_module: "Leads",
+                          }],
+            }) as { data?: Array<{ code: string; message: string; status: string }> };
+            const created = result.data?.[0];
+            if (created && created.status !== "success") {
+                          throw new Error(`Zoho note non-success: code=${created.code} message=${created.message}`);
+            }
+}
+
 export async function getLead(zohoLeadId: string): Promise<ZohoApiRecord> {
             const result = await zohoRequest("GET", `/Leads/${zohoLeadId}`) as {
                           data?: ZohoApiRecord[];
