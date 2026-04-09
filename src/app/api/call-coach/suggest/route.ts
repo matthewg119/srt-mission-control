@@ -53,8 +53,22 @@ PREQUALIFYING-QUESTION RULES (apply to educate + question continuations):
 * Phrase as the REP speaking to the OWNER. First person. Natural. Examples: "What's the money actually going toward — equipment, payroll, marketing?", "How long have you been in business?", "What's a typical month look like for you on revenue?".
 * If fewer than 3 discovery items remain unanswered, fill the remaining slots with deep-dive questions from the DEEP DIVES list (SBA / DSCR / credit-blocker), matching whichever path the merchant is on.
 
+QUALIFICATION + NOTES EXTRACTION (in addition to the 3 ESQ suggestions):
+
+Alongside suggestions, return two more top-level fields based on what the OWNER has revealed across the entire CONVERSATION SO FAR (not just the latest line). These power the rep's prequal checklist and merchant-notes panel.
+
+"qualification": object with these 6 fields, each either a SHORT string snippet (1-6 words, in the owner's own words when possible) or null if not yet stated. Do NOT fabricate. Only fill what the owner actually said.
+  - useOfFunds        ("equipment", "payroll + marketing", "AR bridge", ...)
+  - amount            ("$200K", "around 150K", ...)
+  - monthlyRevenue    ("$150K/mo", "scaling to 300K annually", ...)
+  - timeInBusiness    ("3 years", "since 2019", ...)
+  - creditProfile     ("680", "mid-600s", "had a charge-off", ...)
+  - timeline          ("this week", "30 days", "ASAP", ...)
+
+"notes": array of 0-8 short bullet facts (max 12 words each) — the GOLDEN NUGGETS the owner has revealed that AREN'T already covered by the 6 qualification fields. Goals, motivations, pain points, deal context, lender history, prior bad experiences, growth plans, named projects, industry. Do NOT include qualification items here (those go in qualification). Do NOT include filler or rep-side speculation. Each bullet is a complete fact in plain English. IMPORTANT: notes are ADDITIVE — repeat all earlier facts in every response so the panel stays populated; the extension dedupes.
+
 Return ONLY valid JSON:
-{"suggestions":[{"text":"<educate 1-2 sentences>","category":"educate","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<story>","category":"story","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<question>","category":"question","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}]}`;
+{"suggestions":[{"text":"<educate 1-2 sentences>","category":"educate","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<story>","category":"story","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<question>","category":"question","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}],"qualification":{"useOfFunds":null,"amount":null,"monthlyRevenue":null,"timeInBusiness":null,"creditProfile":null,"timeline":null},"notes":[]}`;
 
 /**
  * POST /api/call-coach/suggest
@@ -147,7 +161,7 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 900,
+          max_tokens: 1100,
           temperature: 0.5,
           stream: true,
           system: [
