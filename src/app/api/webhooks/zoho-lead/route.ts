@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { triggerSpeedToLead } from "@/lib/speed-to-lead";
+import { sendEvent } from "@/lib/meta-capi";
+import { supabaseAdmin } from "@/lib/db";
 
 // Allow up to 60s for RingOut polling on Vercel
 export const maxDuration = 60;
@@ -24,10 +26,6 @@ export async function POST(request: NextRequest) {
 
     // Extract phone — Zoho field names: Phone, Mobile, or phone/mobile
     const phone = lead.Phone || lead.Mobile || lead.phone || lead.mobile || "";
-    if (!phone) {
-      console.log("[Zoho Webhook] No phone number in payload — skipping Speed to Lead");
-      return NextResponse.json({ success: true, skipped: true, reason: "no_phone" });
-    }
 
     // Extract lead name
     const firstName = lead.First_Name || lead.first_name || "";
@@ -35,11 +33,52 @@ export async function POST(request: NextRequest) {
     const fullName = lead.Full_Name || lead.full_name || "";
     const leadName = fullName || [firstName, lastName].filter(Boolean).join(" ") || "Zoho Lead";
 
-    // Extract source and ID
+    // Extract source, ID, email, and status
     const leadSource = lead.Lead_Source || lead.lead_source || "Zoho CRM";
     const leadId = lead.id || lead.Id || undefined;
+    const email = lead.Email || lead.email || "";
+    const leadStatus = lead.Lead_Status || lead.lead_status || "";
 
-    console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}`);
+    console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
+
+    // ── DNQ: fire Meta CAPI event when lead is marked "DNQ" in Zoho ──
+    if (leadStatus === "DNQ") {
+      // Look up contact in Supabase for enriched user data
+      let contact: Record<string, unknown> | null = null;
+      if (email) {
+        const { data } = await supabaseAdmin
+          .from("contacts")
+          .select("id, email, phone, mobile_phone, first_name, last_name")
+          .ilike("email", email)
+          .limit(1)
+          .maybeSingle();
+        contact = data;
+      }
+
+      const contactPhone = (contact?.phone || contact?.mobile_phone || phone) as string;
+      const contactEmail = (contact?.email as string) || email;
+
+      await sendEvent({
+        eventName: "DNQ",
+        actionSource: "system_generated",
+        userData: {
+          email: contactEmail || undefined,
+          phone: contactPhone || undefined,
+          firstName: (contact?.first_name as string) || firstName || undefined,
+          lastName: (contact?.last_name as string) || lastName || undefined,
+          externalId: (contact?.id as string) || undefined,
+        },
+        customData: { content_name: "Did Not Qualify" },
+      });
+      console.log(`[Zoho Webhook] DNQ Meta event fired for ${leadName}`);
+      return NextResponse.json({ success: true, event: "DNQ" });
+    }
+
+    // ── Speed to Lead: instant callback for new leads with phone ──
+    if (!phone) {
+      console.log("[Zoho Webhook] No phone number in payload — skipping Speed to Lead");
+      return NextResponse.json({ success: true, skipped: true, reason: "no_phone" });
+    }
 
     // Fire Speed to Lead (runs full safety gates internally)
     await triggerSpeedToLead({

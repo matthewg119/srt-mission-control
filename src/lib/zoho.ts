@@ -365,6 +365,62 @@ export async function attachPDFToLead(
             }
 }
 
+/**
+ * Convert a Zoho CRM Lead into Account / Contact / Deal in one call.
+ * Used at 100% application completion to materialize the deal in Zoho.
+ *
+ * Returns the IDs of the created records (or null if conversion failed).
+ * Errors are logged and re-thrown so callers can catch + system_log them.
+ */
+export async function convertLeadToDeal(
+  zohoLeadId: string,
+  deal: {
+    dealName: string;
+    amount?: number;
+    closingDate?: string; // YYYY-MM-DD
+    stage?: string;
+    pipeline?: string;
+  }
+): Promise<{ accountId?: string; contactId?: string; dealId?: string } | null> {
+  // Default closing date: 30 days from now
+  const closingDate = deal.closingDate || (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const dealPayload: Record<string, unknown> = {
+    Deal_Name: deal.dealName,
+    Closing_Date: closingDate,
+    Stage: deal.stage || "Qualification",
+  };
+  if (deal.amount && deal.amount > 0) dealPayload.Amount = deal.amount;
+  if (deal.pipeline) dealPayload.Pipeline = deal.pipeline;
+
+  const result = await zohoRequest("POST", `/Leads/${zohoLeadId}/actions/convert`, {
+    data: [{
+      overwrite: false,
+      notify_lead_owner: false,
+      notify_new_entity_owner: false,
+      Deals: dealPayload,
+    }],
+  }) as { data?: Array<{ Accounts?: string; Contacts?: string; Deals?: string; code?: string; message?: string; status?: string }> };
+
+  const item = result.data?.[0];
+  if (!item) {
+    throw new Error("Zoho convertLead returned no data");
+  }
+  // A failed conversion returns a status/code/message instead of the IDs
+  if (item.status && item.status !== "success") {
+    throw new Error(`Zoho convertLead non-success: code=${item.code} message=${item.message}`);
+  }
+  return {
+    accountId: item.Accounts,
+    contactId: item.Contacts,
+    dealId: item.Deals,
+  };
+}
+
 export async function testConnection(): Promise<boolean> {
             try {
                           await zohoRequest("GET", "/Leads?per_page=1");

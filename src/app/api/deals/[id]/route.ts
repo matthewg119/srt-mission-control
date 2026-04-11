@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
+import { sendEvent } from "@/lib/meta-capi";
 
 // GET /api/deals/[id] — single deal with contact, events, and notes
 export async function GET(
@@ -117,6 +118,38 @@ export async function PATCH(
         description: `Moved from "${currentDeal.stage}" to "${stage}"`,
         metadata: { old_stage: currentDeal.stage, new_stage: stage, pipeline: pipeline || currentDeal.pipeline },
       });
+
+      // Fire Meta Purchase CAPI event when deal is funded (moved to "Closed" in Active Deals)
+      const dealPipeline = pipeline || currentDeal.pipeline;
+      if (stage === "Closed" && dealPipeline === "Active Deals") {
+        // Look up contact for user data enrichment
+        const contactId = (data as { contact_id?: string }).contact_id;
+        if (contactId) {
+          const { data: contact } = await supabaseAdmin
+            .from("contacts")
+            .select("id, email, phone, mobile_phone, first_name, last_name")
+            .eq("id", contactId)
+            .maybeSingle();
+
+          if (contact) {
+            const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
+              || (data as { agreement_amount?: number; amount?: number }).amount;
+            await sendEvent({
+              eventName: "Purchase",
+              actionSource: "system_generated",
+              userData: {
+                email: contact.email || undefined,
+                phone: contact.phone || contact.mobile_phone || undefined,
+                firstName: contact.first_name || undefined,
+                lastName: contact.last_name || undefined,
+                externalId: contact.id,
+              },
+              customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
+            });
+            console.log(`[Meta CAPI] Purchase event fired for deal ${id}, amount: ${dealAmount}`);
+          }
+        }
+      }
     }
 
     return NextResponse.json({ deal: data });

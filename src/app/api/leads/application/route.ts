@@ -17,6 +17,7 @@ import {
         searchLeads as zohoSearchLeads,
         attachPDFToLead as zohoAttachPDF,
         addNoteToLead as zohoAddNote,
+        convertLeadToDeal as zohoConvertLeadToDeal,
 } from "@/lib/zoho";
 
 // Build a human-readable summary of the lead-magnet data we capture at the
@@ -350,12 +351,17 @@ export async function POST(request: NextRequest) {
                                   }
                                 }
 
-                                // Slack: post or thread-reply to the lead's Slack thread.
-                                // The thread system handles dedup (one thread per contact)
-                                // and instant updates per the user's "no 5-minute dedup" requirement.
+                                // Slack: only fire milestone notifications at 50% and 80%
+                                // (per user request — 25% updates are quietly synced to
+                                // Supabase + Zoho but don't post to the lead thread).
                                 if (contactId) {
-                                  postOrThreadLeadUpdate({ contactId, action: "update" })
-                                    .catch(err => console.error("[lead-thread 25% existing] failed:", err instanceof Error ? err.message : err));
+                                  let milestoneAction: "milestone_50" | "milestone_80" | null = null;
+                                  if (applicationCompletionPct >= 80) milestoneAction = "milestone_80";
+                                  else if (applicationCompletionPct >= 50) milestoneAction = "milestone_50";
+                                  if (milestoneAction) {
+                                    postOrThreadLeadUpdate({ contactId, action: milestoneAction })
+                                      .catch(err => console.error("[lead-thread milestone existing] failed:", err instanceof Error ? err.message : err));
+                                  }
                                 }
 
                                 // Speed to Lead instant callback (existing contact, 25%+)
@@ -474,12 +480,21 @@ export async function POST(request: NextRequest) {
                                 }
                               }
 
-                              // Slack: post or thread-reply to the lead's Slack thread.
-                              // Brand-new contact — first call creates the top-level message
-                              // with all known fields (no 5-minute dedup, instant per user requirement).
+                              // Slack: brand-new contact — fire `create` so the top-level
+                              // thread message is posted. If we entered the 25%+ block at a
+                              // higher milestone (e.g. 50% or 80%), also fire the milestone
+                              // reply so progress notifications stay consistent.
                               if (contactId) {
                                 postOrThreadLeadUpdate({ contactId, action: "create" })
                                   .catch(err => console.error("[lead-thread 25% new] failed:", err instanceof Error ? err.message : err));
+
+                                let milestoneActionNew: "milestone_50" | "milestone_80" | null = null;
+                                if (applicationCompletionPct >= 80) milestoneActionNew = "milestone_80";
+                                else if (applicationCompletionPct >= 50) milestoneActionNew = "milestone_50";
+                                if (milestoneActionNew) {
+                                  postOrThreadLeadUpdate({ contactId, action: milestoneActionNew })
+                                    .catch(err => console.error("[lead-thread milestone new] failed:", err instanceof Error ? err.message : err));
+                                }
                               }
 
                               // Speed to Lead instant callback (new contact, 25%+)
@@ -891,12 +906,18 @@ export async function POST(request: NextRequest) {
 
               try {
                             let pdfBuffer: Buffer | undefined;
+                            let lenderPdfBuffer: Buffer | undefined;
+                            // Strip internal tracking (funnel variant) from notes before rendering PDF.
+                            // Full notes still flow to Supabase/Zoho for CRM tracking.
+                            const pdfNotes = notes
+                                                          ? notes.replace(/\s*\|?\s*Funnel variant:[^|]*/i, "").trim().replace(/\|\s*$/, "").trim() || undefined
+                                                          : undefined;
                             const pdfData = {
                                                           firstName, lastName, email, businessPhone, mobilePhone,
                                                           businessName, legalName, dba, industry, ein,
                                                           bizAddress, bizCity, bizState, bizZip, incDate, dob,
                                                           creditScore, ownership, amountNeeded, useOfFunds,
-                                                          monthlyDeposits, existingLoans, notes,
+                                                          monthlyDeposits, existingLoans, notes: pdfNotes,
                                                           ssn4,
                                                           signature: signature || undefined,
                                                           signatureName: signatureName || contactName,
@@ -904,13 +925,16 @@ export async function POST(request: NextRequest) {
 
                         try {
                                         pdfBuffer = generateApplicationPDF(pdfData);
-                                        console.log("[100%] PDF generated, size:", pdfBuffer.length, "bytes");
+                                        // Lender copy: identical layout but no phone number — sent to outside funders.
+                                        lenderPdfBuffer = generateApplicationPDF({ ...pdfData, hidePhone: true });
+                                        console.log("[100%] PDFs generated — full:", pdfBuffer.length, "lender:", lenderPdfBuffer.length);
                         } catch (pdfErr) {
                                         throw new Error(`PDF generation failed: ${pdfErr instanceof Error ? pdfErr.message : String(pdfErr)}`);
                         }
 
-                        // Upload to OneDrive
+                        // Upload BOTH PDFs to OneDrive: full (with phone) and lender copy (no phone).
                         let oneDriveUrl: string | undefined;
+                        let lenderOneDriveUrl: string | undefined;
                             try {
                                             await microsoft.createDriveFolder("Working Files");
                                             await microsoft.createDriveFolder(safeName, "Working Files");
@@ -923,10 +947,19 @@ export async function POST(request: NextRequest) {
                                             oneDriveUrl = uploadResult.webUrl;
                                             console.log(`[100%] PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName}.pdf`);
 
+                                            const lenderUploadResult = await microsoft.uploadDriveFile(
+                                                              `Working Files/${safeName}`,
+                                                              `Application - ${safeName} (Lender Copy).pdf`,
+                                                              lenderPdfBuffer,
+                                                              "application/pdf"
+                                                            );
+                                            lenderOneDriveUrl = lenderUploadResult.webUrl;
+                                            console.log(`[100%] Lender PDF uploaded to OneDrive: Working Files/${safeName}/Application - ${safeName} (Lender Copy).pdf`);
+
                               await supabaseAdmin.from("system_logs").insert({
                                                 event_type: "application_pdf",
-                                                description: `PDF uploaded: Working Files/${safeName}/Application - ${safeName}.pdf`,
-                                                metadata: { contactId, businessName: safeName, webUrl: oneDriveUrl },
+                                                description: `PDFs uploaded: Working Files/${safeName}/ (full + lender copy)`,
+                                                metadata: { contactId, businessName: safeName, webUrl: oneDriveUrl, lenderWebUrl: lenderOneDriveUrl },
                               });
                             } catch (odErr) {
                                             const odMsg = odErr instanceof Error ? odErr.message : String(odErr);
@@ -977,17 +1010,49 @@ export async function POST(request: NextRequest) {
                                                                                 });
                                                                               } catch { /* ignore */ }
                                                           }
+
+                                                          // Convert the Zoho Lead → Account / Contact / Deal.
+                                                          // 100% = full registration, so the lead becomes a real
+                                                          // pipeline deal in Zoho. Skipped silently if the lead
+                                                          // was already converted (Zoho returns an error in that case).
+                                                          try {
+                                                                              const dealAmount = parseFloat(String(amountNeeded || "0").replace(/[^0-9.]/g, "")) || 0;
+                                                                              const conv = await zohoConvertLeadToDeal(zohoLeadId, {
+                                                                                dealName: `${businessName || legalName || contactName} — Application`,
+                                                                                amount: dealAmount,
+                                                                                stage: "Qualification",
+                                                                              });
+                                                                              if (conv?.dealId) {
+                                                                                console.log(`[100%] Zoho lead converted → deal ${conv.dealId}`);
+                                                                                if (contactId) {
+                                                                                  await supabaseAdmin.from("contacts").update({ zoho_deal_id: conv.dealId }).eq("id", contactId);
+                                                                                }
+                                                                                await supabaseAdmin.from("system_logs").insert({
+                                                                                  event_type: "zoho_lead_converted",
+                                                                                  description: `Zoho lead converted to deal for ${contactName}`,
+                                                                                  metadata: { contactId, zohoLeadId, zohoDealId: conv.dealId, accountId: conv.accountId, contactZohoId: conv.contactId },
+                                                                                });
+                                                                              }
+                                                          } catch (convErr) {
+                                                                              const cMsg = convErr instanceof Error ? convErr.message : String(convErr);
+                                                                              console.error("[100%] Zoho convertLeadToDeal failed:", cMsg);
+                                                                              try {
+                                                                                await supabaseAdmin.from("system_logs").insert({
+                                                                                  event_type: "zoho_convert_error",
+                                                                                  description: `Zoho lead conversion failed for ${contactName}: ${cMsg.slice(0, 300)}`,
+                                                                                  metadata: { contactId, zohoLeadId, error: cMsg },
+                                                                                });
+                                                                              } catch { /* ignore */ }
+                                                          }
                                         } else {
-                                                          console.warn("[100%] zohoLeadId not available — skipping Zoho PDF attachment");
+                                                          console.warn("[100%] zohoLeadId not available — skipping Zoho PDF attachment + conversion");
                                         }
                         }
 
-                        // Send confirmation email with PDF
+                        // Send confirmation email with PDF — reuses the lender copy
+                        // already generated above (avoids regenerating jsPDF twice).
                         if (email) {
                                         try {
-                                                          // Generate lender copy (no phone number)
-                                                          const lenderPdfBuffer = generateApplicationPDF({ ...pdfData, hidePhone: true });
-
                                                           const summaryHtml = buildApplicationSummaryEmail({ firstName });
                                                           await microsoft.sendMail({
                                                                               to: email,
@@ -1016,7 +1081,7 @@ export async function POST(request: NextRequest) {
                                                                                 {
                                                                                   name: `Application - ${safeName} (Lender Copy).pdf`,
                                                                                   contentType: "application/pdf",
-                                                                                  contentBytes: lenderPdfBuffer.toString("base64"),
+                                                                                  contentBytes: lenderPdfBuffer!.toString("base64"),
                                                                                 },
                                                                               ],
                                                           });

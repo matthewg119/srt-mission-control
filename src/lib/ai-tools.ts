@@ -2,6 +2,7 @@ import { supabaseAdmin } from "./db";
 import { microsoft } from "./microsoft";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { PIPELINES } from "@/config/pipeline";
+import { sendEvent } from "./meta-capi";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
 export interface ToolExecutionResult {
@@ -537,6 +538,40 @@ async function moveDeal(dealId: string, newStage: string): Promise<string> {
       description: `AI moved deal ${dealId} from "${oldStage}" to "${target.stage}" in ${target.pipeline}`,
       metadata: { dealId, oldStage, newStage: target.stage, pipeline: target.pipeline },
     });
+
+    // Fire Meta Purchase CAPI event when deal is funded (moved to "Closed" in Active Deals)
+    if (target.stage === "Closed" && target.pipeline === "Active Deals") {
+      const { data: deal } = await supabaseAdmin
+        .from("deals")
+        .select("contact_id, agreement_amount, amount")
+        .eq("id", dealId)
+        .maybeSingle();
+
+      if (deal?.contact_id) {
+        const { data: contact } = await supabaseAdmin
+          .from("contacts")
+          .select("id, email, phone, mobile_phone, first_name, last_name")
+          .eq("id", deal.contact_id)
+          .maybeSingle();
+
+        if (contact) {
+          const dealAmount = deal.agreement_amount || deal.amount;
+          await sendEvent({
+            eventName: "Purchase",
+            actionSource: "system_generated",
+            userData: {
+              email: contact.email || undefined,
+              phone: contact.phone || contact.mobile_phone || undefined,
+              firstName: contact.first_name || undefined,
+              lastName: contact.last_name || undefined,
+              externalId: contact.id,
+            },
+            customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
+          });
+          console.log(`[Meta CAPI] Purchase event fired via AI for deal ${dealId}, amount: ${dealAmount}`);
+        }
+      }
+    }
 
     return JSON.stringify({ success: true, message: `Deal moved from "${oldStage}" to "${target.stage}" in ${target.pipeline}.` });
   } catch (error) {

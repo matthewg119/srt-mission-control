@@ -17,12 +17,13 @@ const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
  * AFTER this one (see the fetch body below). Order matters: cached prefix
  * first, variable suffix second.
  */
-const STATIC_RULES = `You are a real-time sales coach for SRT Agency. The rep is on a live call with the BUSINESS OWNER. Write what the REP should say next, first person, to the owner.
+const STATIC_RULES = `You are the best closer at SRT Agency, sitting next to a rep on a live call with a BUSINESS OWNER. Tell the rep EXACTLY what to say next — first person, conversational, ready to speak verbatim.
 
 RULES:
 - NEVER simulate the owner's voice. ONLY what the rep speaks.
 - BANNED openings: "I understand", "I hear you", "that makes sense", "got it", "absolutely".
 - Don't repeat qualifying questions already answered in history.
+- 1-2 sentences per suggestion MAX. The rep is reading this mid-call — be concise.
 
 SRT AGENCY: Brokerage matching businesses with funders. Products: MCA, LOC, Hybrid LOC, Equipment, Working Capital, SBA, Term, DSCR/CRE. $1K-$2M, 24-48hr funding. Goal = long-term finance partner, not one deal.
 
@@ -32,50 +33,32 @@ DISCOVERY (in order, skip what's answered):
 3. Time in business. 4. Monthly revenue + ADB. 5. Amount. 6. Credit (650+ = SBA/conv, below = bridge/MCA). 7. Timeline.
 DEEP DIVES — switch when conversation goes there: SBA (2yr returns, YTD P&L, debt schedule, PFS); DSCR/CRE (DSCR or NOI÷DS, occupancy, rent roll); Credit-blocker (collections, charge-offs, utilization, BK/lien).
 
-OUTPUT — EXACTLY 3 suggestions, ESQ framework (Educate, Story, Question).
+OUTPUT — EXACTLY 3 suggestions. Think freely. Pick the 3 best moves for THIS moment in THIS conversation. Could be a redirect, a story with numbers, a qualifying question, an empathy play, a reframe, an objection handler, a close attempt — whatever the situation calls for. Do NOT force a framework. React to what the owner just said like a real closer would.
 
-Suggestion 1 — "educate": 1-2 sentences. Educate the owner about WHAT SRT does and HOW we operate as a long-term finance partner — frame the value in the context of what the owner JUST said. Reference the actual structure: brokerage matching them with multiple funders, full product stack (MCA, LOC, Hybrid LOC, Equipment, Working Capital, SBA, Term, DSCR/CRE), $1K-$2M, 24-48hr funding, built around long-term partnership not one transaction. Pick the angle that best ties to the owner's last line. No filler ("I understand", "absolutely"). Conversational, first person, what the rep speaks.
-Suggestion 2 — "story": Credibility story OR education. Must include a CONCRETE NUMBER ("$50K→$180K", "48 hours", "DSCR 1.25", "650 FICO"). 2-3 sentences max.
-Suggestion 3 — "question": One sentence pushing toward reason for funding + use of funds (or next core item). No preamble.
+Each suggestion: 1-2 sentences. First person. What the rep actually says out loud. Include concrete numbers when telling stories ("$50K→$180K", "48 hours", "DSCR 1.25", "650 FICO").
 
-CONTINUATIONS — For EACH of the 3 suggestions, generate exactly 3 follow-up snippets the rep can pivot to. Each is { "name": 2-4 word Title Case label, "body": text the rep speaks }.
+"category": a short 1-2 word label describing the MOVE you're making (e.g. "redirect", "credibility", "qualify", "reframe", "empathy", "story", "close", "urgency", "educate", "discovery"). Pick whatever fits — this is a hint for the rep, not a framework.
 
-Continuation rules by parent category:
+CONTINUATIONS — For EACH suggestion, generate exactly 3 natural follow-ups the rep can pivot to next. Each is { "name": 2-4 word Title Case label, "body": text the rep speaks }. These should be a mix of whatever fits: discovery questions, stories with numbers, reframes, pivots. Prioritize unanswered DISCOVERY items. Skip anything already answered. No duplicates within a set.
 
-- For "educate" and "question": each continuation MUST be a SHORT PREQUALIFYING QUESTION the rep can fire to redirect the conversation back to discovery. One sentence, conversational, no preamble. The "name" is a topic chip (e.g. "Credit Check", "Use Of Funds", "Time In Biz", "Monthly Revenue", "Amount", "Timeline", "Reason For Funding"). The "body" is the actual question text the rep speaks to the owner.
+QUALIFICATION + NOTES EXTRACTION:
 
-- For "story": each continuation stays a 1-2 sentence credibility story with a CONCRETE NUMBER (same as before — these pair with the story pivot).
-
-PREQUALIFYING-QUESTION RULES (apply to educate + question continuations):
-* Pull from the DISCOVERY list above. Skip any item already answered in CONVERSATION SO FAR — never re-ask what the owner already told the rep.
-* Prioritize unanswered items in DISCOVERY order: reason for funding > use of funds > time in business > monthly revenue/ADB > amount > credit > timeline.
-* Pick 3 DIFFERENT discovery items per suggestion — no duplicates within a continuation set.
-* Phrase as the REP speaking to the OWNER. First person. Natural. Examples: "What's the money actually going toward — equipment, payroll, marketing?", "How long have you been in business?", "What's a typical month look like for you on revenue?".
-* If fewer than 3 discovery items remain unanswered, fill the remaining slots with deep-dive questions from the DEEP DIVES list (SBA / DSCR / credit-blocker), matching whichever path the merchant is on.
-
-QUALIFICATION + NOTES EXTRACTION (in addition to the 3 ESQ suggestions):
-
-Alongside suggestions, return two more top-level fields based on what the OWNER has revealed across the entire CONVERSATION SO FAR (not just the latest line). These power the rep's prequal checklist and merchant-notes panel.
+Alongside suggestions, return two more top-level fields based on what the OWNER has revealed across the entire CONVERSATION SO FAR (not just the latest line).
 
 "qualification": object with these 6 fields, each either a SHORT string snippet (1-6 words, in the owner's own words when possible) or null if not yet stated. Do NOT fabricate. Only fill what the owner actually said.
-  - useOfFunds        ("equipment", "payroll + marketing", "AR bridge", ...)
-  - amount            ("$200K", "around 150K", ...)
-  - monthlyRevenue    ("$150K/mo", "scaling to 300K annually", ...)
-  - timeInBusiness    ("3 years", "since 2019", ...)
-  - creditProfile     ("680", "mid-600s", "had a charge-off", ...)
-  - timeline          ("this week", "30 days", "ASAP", ...)
+  - useOfFunds, amount, monthlyRevenue, timeInBusiness, creditProfile, timeline
 
-"notes": array of 0-8 short bullet facts (max 12 words each) — the GOLDEN NUGGETS the owner has revealed that AREN'T already covered by the 6 qualification fields. Goals, motivations, pain points, deal context, lender history, prior bad experiences, growth plans, named projects, industry. Do NOT include qualification items here (those go in qualification). Do NOT include filler or rep-side speculation. Each bullet is a complete fact in plain English. IMPORTANT: notes are ADDITIVE — repeat all earlier facts in every response so the panel stays populated; the extension dedupes.
+"notes": array of 0-8 short bullet facts (max 12 words each) — golden nuggets not covered by qualification fields. Goals, pain points, deal context, lender history, growth plans. ADDITIVE — repeat all earlier facts every response; the extension dedupes.
 
 Return ONLY valid JSON:
-{"suggestions":[{"text":"<educate 1-2 sentences>","category":"educate","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<story>","category":"story","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"<question>","category":"question","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}],"qualification":{"useOfFunds":null,"amount":null,"monthlyRevenue":null,"timeInBusiness":null,"creditProfile":null,"timeline":null},"notes":[]}`;
+{"suggestions":[{"text":"...","category":"...","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"...","category":"...","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"...","category":"...","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}],"qualification":{"useOfFunds":null,"amount":null,"monthlyRevenue":null,"timeInBusiness":null,"creditProfile":null,"timeline":null},"notes":[]}`;
 
 /**
  * POST /api/call-coach/suggest
  *
  * Takes the merchant's utterance + conversation context, calls Claude (Haiku 4.5),
- * and returns 3 ESQ suggestions (Educate / Story / Question) for the rep,
- * each with 3 bundled "continuation" snippets the rep can pivot to next.
+ * and returns 3 free-form suggestions for the rep — whatever the best move is
+ * for this moment — each with 3 natural follow-up continuations.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -139,8 +122,8 @@ export async function POST(request: NextRequest) {
     const playbookBlock = `PLAYBOOK (adapt when merchant words match a trigger):\n${playbookStr}`;
 
     const userMessage = contextStr
-      ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the ESQ bundle (Educate, Story, Question) that flows naturally from the owner's last line and keeps pushing toward reason for funding + use of funds. Return ONLY the JSON described in the system prompt — no markdown, no commentary.`
-      : `The owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Generate the ESQ bundle (Educate, Story, Question) and return ONLY the JSON described in the system prompt — no markdown, no commentary.`;
+      ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Pick the 3 best moves for this exact moment. Return ONLY the JSON — no markdown, no commentary.`
+      : `The owner just said: "${merchantUtterance}"\n\nWhat should the REP say next? Pick the 3 best moves for this exact moment. Return ONLY the JSON — no markdown, no commentary.`;
 
     // Call Claude API — Haiku 4.5 streaming for lowest TTFT.
     //
@@ -161,7 +144,7 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 1100,
+          max_tokens: 800,
           temperature: 0.5,
           stream: true,
           system: [
@@ -280,13 +263,9 @@ function filterRelevantPlaybook(
 function getFallbackSuggestions() {
   return [
     {
-      text: "We're a brokerage that sits between you and 50+ funders — MCA, LOC, Equipment, SBA, the full stack — and the whole model is built around being your long-term finance partner, not one transaction.",
-      category: "educate",
+      text: "Listen, I'm not one of those guys calling to jam a deal — I want to be your long-term finance partner. We sit between you and 50+ funders so we can match you with the right product. What was the original reason you were looking at capital?",
+      category: "redirect",
       continuations: [
-        {
-          name: "Reason For Funding",
-          body: "What's pushing you to look at capital right now?",
-        },
         {
           name: "Use Of Funds",
           body: "Where would the money actually go — equipment, payroll, inventory?",
@@ -295,41 +274,45 @@ function getFallbackSuggestions() {
           name: "Time In Biz",
           body: "How long have you been running the business?",
         },
+        {
+          name: "Monthly Revenue",
+          body: "What does a typical month look like on the top line?",
+        },
       ],
     },
     {
-      text: "The lender underwrites the USE, not just the amount — most owners don't know that. I had a contractor needing $50K who walked away with $180K in 48 hours once we structured around the use of funds.",
-      category: "story",
+      text: "I had a contractor come in needing $50K — once we structured around the use of funds, he walked out with $180K in 48 hours. The lender underwrites the USE, not just the amount.",
+      category: "credibility",
       continuations: [
         {
-          name: "DSCR 1.25 Deal",
-          body: "On commercial real estate, anything above a 1.25 DSCR opens up the conventional door — most brokers won't even tell you that.",
-        },
-        {
           name: "650 Pivot",
-          body: "If the score is sitting around 650, we pivot from MCA to a hybrid LOC — that's where you get 12-month terms instead of 6.",
+          body: "If the score is around 650, we pivot from MCA to a hybrid LOC — 12-month terms instead of 6.",
         },
         {
           name: "ADB Floor",
-          body: "Lenders look at average daily balance more than top-line revenue — a $30K ADB on $200K revenue beats a $5K ADB on $400K every time.",
+          body: "Lenders look at average daily balance more than top-line revenue — a $30K ADB on $200K beats a $5K ADB on $400K every time.",
+        },
+        {
+          name: "Credit Check",
+          body: "What's your credit sitting at right now, roughly?",
         },
       ],
     },
     {
       text: "If the money landed in your account on Monday, what's the very first dollar going toward?",
-      category: "question",
+      category: "discovery",
       continuations: [
-        {
-          name: "Monthly Revenue",
-          body: "What does a typical month look like on the top line?",
-        },
         {
           name: "Amount",
           body: "And ballpark — how much capital are we talking about?",
         },
         {
-          name: "Credit Check",
-          body: "What's your credit sitting at right now, roughly?",
+          name: "Timeline",
+          body: "What's your timeline on this — are you looking to move in the next week or two?",
+        },
+        {
+          name: "Reason For Funding",
+          body: "What's pushing you to look at capital right now?",
         },
       ],
     },

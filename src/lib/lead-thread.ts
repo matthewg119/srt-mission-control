@@ -15,7 +15,27 @@ export type LeadThreadAction =
   | "phone"
   | "login"
   | "statements"
+  | "milestone_50"
+  | "milestone_80"
   | "complete";
+
+/** Subset of fields shown in the initial top-level Slack message.
+ *  Empty values are filtered out at render time, so the message stays short. */
+const INITIAL_KEY_FIELDS = [
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "mobile_phone",
+  "business_name",
+  "industry",
+  "amount_needed",
+  "monthly_revenue",
+  "credit_score",
+  "source",
+  "application_stage",
+  "application_completion_pct",
+] as const;
 
 interface DiffEntry {
   label: string;
@@ -63,32 +83,33 @@ export function computeContactDiff(
   return diff;
 }
 
-/** Format the initial top-level Slack message. Shows ALL tracked fields. */
+/** Format the initial top-level Slack message. Shows only the key fields
+ *  that are actually populated, so the message stays compact. */
 function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
+  const name = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || (contact.email as string) || "New Lead";
+
   const blocks: SlackBlock[] = [
     {
       type: "header",
-      text: { type: "plain_text", text: "🔥 New Lead — Visitor Converted!", emoji: true },
+      text: { type: "plain_text", text: `🔥 New Lead — ${name}`, emoji: true },
     },
   ];
 
-  // Group fields into chunks of ~10 to fit Slack's 10-field section limit
-  const chunks: Array<Array<{ type: string; text: string }>> = [];
-  let current: Array<{ type: string; text: string }> = [];
-  for (const f of CONTACT_FIELD_MAP) {
-    current.push({
-      type: "mrkdwn",
-      text: `*${f.label}:*\n${formatValue(contact[f.supabase])}`,
-    });
-    if (current.length === 10) {
-      chunks.push(current);
-      current = [];
-    }
+  // Build a single mrkdwn section with non-empty key fields only.
+  const lines: string[] = [];
+  for (const key of INITIAL_KEY_FIELDS) {
+    const entry = CONTACT_FIELD_MAP.find((f) => f.supabase === key);
+    if (!entry) continue;
+    const v = contact[key];
+    if (v === null || v === undefined || v === "") continue;
+    lines.push(`*${entry.label}:* ${formatValue(v)}`);
   }
-  if (current.length > 0) chunks.push(current);
 
-  for (const fields of chunks) {
-    blocks.push({ type: "section", fields });
+  if (lines.length > 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: lines.join("\n") },
+    });
   }
 
   blocks.push({
@@ -124,6 +145,14 @@ function formatUpdateBlocks(
     case "statements":
       headline = "Bank statements uploaded";
       icon = "📎";
+      break;
+    case "milestone_50":
+      headline = "Application 50% complete";
+      icon = "🟡";
+      break;
+    case "milestone_80":
+      headline = "Application 80% complete — almost done";
+      icon = "🟠";
       break;
     case "complete":
       headline = "Application completed";

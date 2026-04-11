@@ -46,7 +46,7 @@ export interface MetaUserData {
 }
 
 export interface MetaEvent {
-  eventName: "Lead" | "CompleteRegistration" | "Purchase" | "PageView" | "InitiateCheckout";
+  eventName: "Lead" | "CompleteRegistration" | "Purchase" | "PageView" | "InitiateCheckout" | "AddToCart" | "ViewContent" | "Schedule" | "SubmitApplication" | "DNQ" | (string & {});
   eventTime?: number;
   eventId?: string;
   eventSourceUrl?: string;
