@@ -98,19 +98,19 @@ export default function SequencesPage() {
 
   const SEQUENCE_META: Record<string, { description: string; color: string }> = {
     "website-lead-nurture": {
-      description: "20-email nurture for contacts who fill the contact form. Runs over 55 days.",
+      description: "4-email nurture over 21 days — urgency with a light touch, no pressure tactics.",
       color: "#1B65A7",
     },
     "application-completed-nurture": {
-      description: "20-email sequence for leads who complete the full application. Runs over 55 days.",
+      description: "4-email stewardship over 10 days — status updates and bank-statement nudge.",
       color: "#00C9A7",
     },
     "application-abandoned": {
-      description: "7-email recovery for leads who start but don't finish the application. Cancels when they complete.",
+      description: "3-email recovery over 5 days — pick up where you left off. Cancels on completion.",
       color: "#F59E0B",
     },
     "website-lead-to-application": {
-      description: "7-email push encouraging website leads to fill out the full application. Cancels when they apply.",
+      description: "3-email push over 7 days — nudge toward the application. Cancels on completion.",
       color: "#8B5CF6",
     },
   };
@@ -122,7 +122,7 @@ export default function SequencesPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Email Sequences</h1>
           <p className="text-sm text-[rgba(255,255,255,0.5)] mt-1">
-            Automated drip campaigns — 54 emails across 4 sequences
+            Automated drip campaigns — 14 emails across 4 sequences
           </p>
         </div>
         <div className="flex gap-2">
