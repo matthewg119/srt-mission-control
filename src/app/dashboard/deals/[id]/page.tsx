@@ -23,7 +23,7 @@ interface Contact {
   address_street: string | null; address_city: string | null;
   address_state: string | null; address_zip: string | null;
   dob: string | null; credit_score_range: string | null;
-  ownership_pct: string | null; ssn_last4: string | null; home_address: string | null;
+  ownership_pct: string | null; ssn_last4: string | null; ssn_full: string | null; home_address: string | null;
   funding_amount_requested: string | null; use_of_funds: string | null;
   monthly_deposits: string | null; existing_loans: string | null;
   title: string | null; iso: string | null; website: string | null;

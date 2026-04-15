@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
 import { generateApplicationPDF } from "@/lib/pdf-generator";
+import { formatSSN, isValidSSN, lastFourOfSSN } from "@/lib/ssn";
 import { microsoft } from "@/lib/microsoft";
 import { getClientIp, getCorsHeaders } from "@/lib/lead-validation";
 import { enrollContact, cancelByTag } from "@/lib/sequence-engine";
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
                         incDate: incDateRaw, incorporatedDate, startMonth, startYear, mobilePhone, dob, creditScore,
                         ownership, amountNeeded, useOfFunds, monthlyDeposits, existingLoans,
                         monthlyRevenue, checkingAccount, hasBusinessChecking,
-                        notes, ssn4, homeAddress, applicationCompletionPct, applicationStage,
+                        notes, ssn4: ssn4Raw, ssnFull: ssnFullRaw, homeAddress, applicationCompletionPct, applicationStage,
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
                         businessStartDate, hasCheckingAccount,
@@ -74,6 +75,12 @@ export async function POST(request: NextRequest) {
 
           // Accept hasCheckingAccount (v6 sends "Yes"/"No") as alias for hasBusinessChecking
           const hasBusinessCheckingResolved = hasBusinessChecking !== undefined ? hasBusinessChecking : hasCheckingAccount;
+
+          // SSN normalization: prefer full SSN when provided. Always keep ssn4
+          // populated (derived from last 4 of ssn_full) so downstream readers
+          // (Zoho SSN_Last_4, PDF, admin views) keep working.
+          const ssnFull: string | undefined = isValidSSN(ssnFullRaw) ? formatSSN(ssnFullRaw) : undefined;
+          const ssn4: string | undefined = ssnFull ? lastFourOfSSN(ssnFull) : (ssn4Raw || undefined);
 
           const serverEventId = eventId || randomUUID();
 
@@ -410,6 +417,7 @@ export async function POST(request: NextRequest) {
                                                               existing_loans: existingLoans,
                                                               notes,
                                                               ssn4,
+                                                              ssn_full: ssnFull,
                                                               home_address: homeAddress,
                                                               source: source || "Meta Ads",
                                                               utm_campaign: utmCampaign || null,
@@ -640,6 +648,7 @@ export async function POST(request: NextRequest) {
                                                               existing_loans: existingLoans,
                                                               notes,
                                                               ssn4,
+                                                              ssn_full: ssnFull,
                                                               home_address: homeAddress,
                                                               signature: signature || null,
                                                               signature_name: signatureName || null,
@@ -746,6 +755,7 @@ export async function POST(request: NextRequest) {
                             existingLoans: existingLoans ? (String(existingLoans).includes("Yes") ? "Yes" : "No") : undefined,
                             dob,
                             ssn4,
+                            ssnFull,
                             homeAddress,
                             signatureName: signatureName || undefined,
                             incDate: incDate || undefined,
@@ -786,6 +796,7 @@ export async function POST(request: NextRequest) {
                                                                   Existing_Loans: existingLoans ? (String(existingLoans).includes("Yes") ? "Yes" : "No") : undefined,
                                                                   Ownership_Percentage: ownership,
                                                                   Date_of_Birth: dob,
+                                                                  SSN: ssnFull,
                                                                   SSN_Last_4: ssn4,
                                                                   Home_Address: homeAddress,
                                                                   Incorporation_Date: timeInBiz100,
@@ -918,7 +929,7 @@ export async function POST(request: NextRequest) {
                                                           bizAddress, bizCity, bizState, bizZip, incDate, dob,
                                                           creditScore, ownership, amountNeeded, useOfFunds,
                                                           monthlyDeposits, existingLoans, notes: pdfNotes,
-                                                          ssn4,
+                                                          ssn4, ssnFull,
                                                           signature: signature || undefined,
                                                           signatureName: signatureName || contactName,
                             };

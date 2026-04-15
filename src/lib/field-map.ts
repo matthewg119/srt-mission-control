@@ -23,6 +23,7 @@ export const CONTACT_FIELD_MAP: FieldEntry[] = [
   { supabase: "phone",            zoho: "Phone",                 label: "Phone" },
   { supabase: "mobile_phone",     zoho: "Mobile",                label: "Mobile" },
   { supabase: "dob",              zoho: "Date_of_Birth",         label: "DOB" },
+  { supabase: "ssn_full",         zoho: "SSN",                   label: "SSN" },
   { supabase: "ssn4",             zoho: "SSN_Last_4",            label: "SSN-4" },
   { supabase: "home_address",     zoho: "Home_Address",          label: "Home Address" },
 

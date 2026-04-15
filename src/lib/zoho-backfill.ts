@@ -69,6 +69,7 @@ function buildLeadDataFromContact(c: Record<string, unknown>): ZohoLeadData {
     ownership: c.ownership ? String(c.ownership) : undefined,
     dob: (c.dob as string) || undefined,
     ssn4: (c.ssn4 as string) || undefined,
+    ssnFull: (c.ssn_full as string) || undefined,
     homeAddress: (c.home_address as string) || undefined,
     incDate: (c.inc_date as string) || undefined,
   };

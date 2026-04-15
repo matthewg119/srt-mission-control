@@ -20,6 +20,7 @@ interface ApplicationData {
   creditScore?: string;
   ownership?: string;
   ssn4?: string;
+  ssnFull?: string;
   amountNeeded?: string;
   useOfFunds?: string;
   monthlyDeposits?: string;
@@ -139,7 +140,7 @@ export function generateApplicationPDF(data: ApplicationData): Buffer {
     ["Est. Credit Score", data.creditScore],
     ["Ownership %", data.ownership ? data.ownership + "%" : undefined],
   ]);
-  cellRow([["SSN (Last 4 Digits)", data.ssn4 ? "***-**-" + data.ssn4 : undefined]]);
+  cellRow([["Social Security Number", data.ssnFull || (data.ssn4 ? "***-**-" + data.ssn4 : undefined)]]);
   y += 3;
 
   // SECTION 3: FUNDING DETAILS

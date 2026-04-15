@@ -14,7 +14,7 @@ export async function PATCH(
       "first_name", "last_name", "email", "phone", "mobile_phone", "additional_phone",
       "business_name", "legal_name", "dba", "industry", "ein", "incorporation_date",
       "address_street", "address_city", "address_state", "address_zip",
-      "dob", "credit_score_range", "ownership_pct", "ssn_last4", "home_address",
+      "dob", "credit_score_range", "ownership_pct", "ssn_last4", "ssn_full", "home_address",
       "funding_amount_requested", "use_of_funds", "monthly_deposits", "existing_loans",
       "title", "iso", "fax", "website", "program_type", "lead_owner", "notes", "source",
     ];

@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
   if (contact.dob || contact.credit_score) {
     completion = 67;
   }
-  if (contact.ssn4) {
+  if (contact.ssn_full || contact.ssn4) {
     completion = 92;
   }
   if (isComplete) {
@@ -107,13 +107,13 @@ export async function GET(request: NextRequest) {
         fundingAmount: contact.funding_amount,
         amountNeeded: contact.amount_needed,
         incDate: contact.inc_date,
-        creditScore: contact.credit_score,
         monthlyRevenue: contact.monthly_revenue,
         checkingAccount: contact.checking_account,
         monthlyDeposits: contact.monthly_deposits,
         existingLoans: contact.existing_loans,
-        dob: contact.dob,
-        ssn4: contact.ssn4,
+        // Sensitive fields (ssn_full, ssn4, dob, credit_score) are intentionally
+        // NOT returned: this endpoint is unauthenticated and only needs existence +
+        // business data for resume-flow. Applicant re-enters sensitive fields.
       },
     },
     { status: 200, headers: corsHeaders }

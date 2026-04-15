@@ -899,6 +899,7 @@ async function underwriteDeal(dealId: string, additionalContext?: string): Promi
       phone: contact.phone || "Not provided",
       credit_score_range: contact.credit_score_range || "Not specified",
       ownership_percentage: contact.ownership_pct || "Not specified",
+      ssn_full: contact.ssn_full || (contact.ssn_last4 ? "***-**-" + contact.ssn_last4 : "Not provided"),
       ssn_last4: contact.ssn_last4 ? "On file" : "Not provided",
       dob: contact.dob ? "On file" : "Not provided",
       home_address: contact.home_address || "Not provided",

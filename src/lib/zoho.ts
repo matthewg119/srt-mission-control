@@ -46,6 +46,7 @@ export interface ZohoLeadData {
             ownership?: string;
             dob?: string;
             ssn4?: string;
+            ssnFull?: string;
             homeAddress?: string;
             signatureName?: string;
             incDate?: string;
@@ -78,6 +79,7 @@ export interface ZohoApiRecord {
             Existing_Loans?: string;
             Ownership_Percentage?: string | number;
             SSN_Last_4?: string;
+            SSN?: string;
             Date_of_Birth?: string;
             Home_Address?: string;
             Legal_Name?: string;
@@ -222,6 +224,7 @@ function buildRecord(leadData: ZohoLeadData): ZohoApiRecord {
   if (leadData.existingLoans) record.Existing_Loans = leadData.existingLoans;
   if (leadData.ownership) record.Ownership_Percentage = leadData.ownership;
   if (leadData.dob) record.Date_of_Birth = leadData.dob;
+  if (leadData.ssnFull) record.SSN = leadData.ssnFull;
   if (leadData.ssn4) record.SSN_Last_4 = leadData.ssn4;
   if (leadData.homeAddress) record.Home_Address = leadData.homeAddress;
   if (leadData.legalName) record.Legal_Name = leadData.legalName;

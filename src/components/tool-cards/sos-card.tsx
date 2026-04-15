@@ -84,7 +84,7 @@ export function SOSCard({ data }: { data: SOSData }) {
             ["Name", op.name || "—"],
             ["Credit", op.credit_score_range || "—"],
             ["Ownership", op.ownership_percentage || "—"],
-            ["SSN", op.ssn_last4 || "—"],
+            ["SSN", op.ssn_full || op.ssn_last4 || "—"],
           ]}
         />
 
