@@ -120,10 +120,14 @@ export async function PATCH(
         metadata: { old_stage: currentDeal.stage, new_stage: stage, pipeline: pipeline || currentDeal.pipeline },
       });
 
-      // Fire Meta CAPI events on terminal stages in Active Deals —
+      // Fire Meta CAPI events on terminal stages —
       // only if the originating contact came from a real Meta ad click.
+      // Purchase is gated to Active Deals (its "Closed" stage). DNQ ("Dead Declined")
+      // can happen from any pipeline/stage (Qualification, Pre-Approved, etc.), so no pipeline gate.
       const dealPipeline = pipeline || currentDeal.pipeline;
-      if (dealPipeline === "Active Deals" && (stage === "Closed" || stage === "Dead Declined")) {
+      const firePurchase = stage === "Closed" && dealPipeline === "Active Deals";
+      const fireDnq = stage === "Dead Declined";
+      if (firePurchase || fireDnq) {
         const contactId = (data as { contact_id?: string }).contact_id;
         if (contactId) {
           const { data: contact } = await supabaseAdmin

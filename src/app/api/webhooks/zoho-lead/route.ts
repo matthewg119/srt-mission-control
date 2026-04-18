@@ -8,9 +8,25 @@ import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  // Authenticate with shared secret header
-  const secret = request.headers.get("x-zoho-webhook-secret");
   const expectedSecret = process.env.ZOHO_WEBHOOK_SECRET;
+
+  // Parse body once so we can also look for the secret inside it
+  // (Zoho CRM Standard plan doesn't expose custom headers — falls back to
+  // query param or body field.)
+  let body: Record<string, unknown> = {};
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+
+  const secret =
+    request.headers.get("x-zoho-webhook-secret") ||
+    request.nextUrl.searchParams.get("x-zoho-webhook-secret") ||
+    request.nextUrl.searchParams.get("secret") ||
+    (body["x-zoho-webhook-secret"] as string | undefined) ||
+    (body.secret as string | undefined) ||
+    "";
 
   if (!expectedSecret || secret !== expectedSecret) {
     console.error("[Zoho Webhook] Unauthorized — bad or missing x-zoho-webhook-secret");
@@ -18,12 +34,15 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json();
     console.log("[Zoho Webhook] Received:", JSON.stringify(body).slice(0, 500));
 
     // Zoho Workflow webhooks send lead data in various shapes.
     // Support both flat payload and nested "data" array (Zoho Notifications API).
-    const lead = body.data?.[0] || body;
+    // Zoho's payload shape is dynamic — treat as any for field access ergonomics.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawBody = body as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead: any = rawBody.data?.[0] || rawBody;
 
     // Extract phone — Zoho field names: Phone, Mobile, or phone/mobile
     const phone = lead.Phone || lead.Mobile || lead.phone || lead.mobile || "";
