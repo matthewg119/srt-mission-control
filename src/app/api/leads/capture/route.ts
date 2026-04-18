@@ -8,6 +8,7 @@ import { systemAlert } from "@/lib/notify";
 import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
+import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -156,37 +157,40 @@ export async function POST(request: NextRequest) {
       console.error("system_logs write failed:", logErr);
     }
 
-    // 4. Fire Meta CAPI Lead event
-    try {
-      const capiResult = await sendEvent({
-        eventName: "Lead",
-        eventId: serverEventId,
-        eventSourceUrl: sourceUrl || "https://srtagency.com",
-        actionSource: "website",
-        userData: {
-          email: email || undefined,
-          phone: phone || undefined,
-          firstName,
-          lastName: lastName || undefined,
-          fbc: _fbc || undefined,
-          fbp: _fbp || undefined,
-          clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
-          clientUserAgent,
-          externalId: contactId,
-        },
-      });
-      if (!capiResult.success) {
-        console.error("[Meta CAPI] Lead event failed:", capiResult.error);
-        try {
-          await supabaseAdmin.from("system_logs").insert({
-            event_type: "meta_capi_error",
-            description: `Meta CAPI Lead event failed: ${capiResult.error}`,
-            metadata: { email, eventName: "Lead" },
-          });
-        } catch { /* ignore */ }
+    // 4. Fire Meta CAPI Lead event — only if the lead came from a Meta ad click.
+    // Without this guard, WhatsApp/cold-call/direct leads get counted as Meta conversions.
+    if (hasMetaAttributionServer({ fbc: _fbc })) {
+      try {
+        const capiResult = await sendEvent({
+          eventName: "Lead",
+          eventId: serverEventId,
+          eventSourceUrl: sourceUrl || "https://srtagency.com",
+          actionSource: "website",
+          userData: {
+            email: email || undefined,
+            phone: phone || undefined,
+            firstName,
+            lastName: lastName || undefined,
+            fbc: _fbc || undefined,
+            fbp: _fbp || undefined,
+            clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+            clientUserAgent,
+            externalId: contactId,
+          },
+        });
+        if (!capiResult.success) {
+          console.error("[Meta CAPI] Lead event failed:", capiResult.error);
+          try {
+            await supabaseAdmin.from("system_logs").insert({
+              event_type: "meta_capi_error",
+              description: `Meta CAPI Lead event failed: ${capiResult.error}`,
+              metadata: { email, eventName: "Lead" },
+            });
+          } catch { /* ignore */ }
+        }
+      } catch (err) {
+        console.error("[Meta CAPI] Lead event error:", err);
       }
-    } catch (err) {
-      console.error("[Meta CAPI] Lead event error:", err);
     }
 
     // 5. Slack notification to #hot-leads

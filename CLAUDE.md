@@ -83,3 +83,25 @@ NEXT_PUBLIC_APP_URL=       # https://mission.srtagency.com
 - **Telegram bot** — same AI, same tools, via /api/telegram/webhook
 - **Website forms** — srtagency.com contact + apply forms → /api/leads/*
 - **Slack** — #hot-leads for new lead + application complete notifications
+
+## Meta Ads Attribution Rule (IMPORTANT)
+Meta Pixel and Meta CAPI events (Lead / CompleteRegistration / Purchase / DNQ) fire
+**only** when the contact came from a real Meta ad click — i.e. `_fbc` cookie is
+present OR `fbclid` was in the landing URL. `_fbp` alone does NOT count (the
+Pixel sets `_fbp` on every visitor, including direct traffic).
+
+This gate lives in `src/lib/metaAttribution.ts` (server) and
+`srt-portal/src/lib/metaAttribution.ts` (browser) and must be checked before
+every `sendEvent(...)` and every client-side `fbq("track", ...)` call.
+
+### Tagged-link convention for non-Meta channels
+When sharing portal links outside of Meta ads, always append a `utm_source` tag
+so the lead's origin is recorded on the `contacts` row (columns: `utm_source`,
+`utm_medium`, `utm_campaign`):
+
+- **WhatsApp:** `https://portal.srtagency.com/?utm_source=whatsapp&utm_medium=dm`
+- **Cold call follow-up SMS:** `https://portal.srtagency.com/?utm_source=cold_call&utm_medium=sms`
+- **Cold call follow-up email:** `https://portal.srtagency.com/?utm_source=cold_call&utm_medium=email`
+- **Organic/referral website CTAs:** already carry internal `source=` — no change needed.
+
+These tagged links never fire Meta events, so they cannot inflate Ads Manager.

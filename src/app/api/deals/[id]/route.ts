@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
+import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 
 // GET /api/deals/[id] — single deal with contact, events, and notes
 export async function GET(
@@ -119,34 +120,50 @@ export async function PATCH(
         metadata: { old_stage: currentDeal.stage, new_stage: stage, pipeline: pipeline || currentDeal.pipeline },
       });
 
-      // Fire Meta Purchase CAPI event when deal is funded (moved to "Closed" in Active Deals)
+      // Fire Meta CAPI events on terminal stages in Active Deals —
+      // only if the originating contact came from a real Meta ad click.
       const dealPipeline = pipeline || currentDeal.pipeline;
-      if (stage === "Closed" && dealPipeline === "Active Deals") {
-        // Look up contact for user data enrichment
+      if (dealPipeline === "Active Deals" && (stage === "Closed" || stage === "Dead Declined")) {
         const contactId = (data as { contact_id?: string }).contact_id;
         if (contactId) {
           const { data: contact } = await supabaseAdmin
             .from("contacts")
-            .select("id, email, phone, mobile_phone, first_name, last_name")
+            .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
             .eq("id", contactId)
             .maybeSingle();
 
-          if (contact) {
-            const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
-              || (data as { agreement_amount?: number; amount?: number }).amount;
-            await sendEvent({
-              eventName: "Purchase",
-              actionSource: "system_generated",
-              userData: {
-                email: contact.email || undefined,
-                phone: contact.phone || contact.mobile_phone || undefined,
-                firstName: contact.first_name || undefined,
-                lastName: contact.last_name || undefined,
-                externalId: contact.id,
-              },
-              customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
-            });
-            console.log(`[Meta CAPI] Purchase event fired for deal ${id}, amount: ${dealAmount}`);
+          if (contact && hasMetaAttributionServer({ fbc: contact.fbc })) {
+            const baseUserData = {
+              email: contact.email || undefined,
+              phone: contact.phone || contact.mobile_phone || undefined,
+              firstName: contact.first_name || undefined,
+              lastName: contact.last_name || undefined,
+              externalId: contact.id,
+              fbc: contact.fbc || undefined,
+              fbp: contact.fbp || undefined,
+            };
+
+            if (stage === "Closed") {
+              const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
+                || (data as { agreement_amount?: number; amount?: number }).amount;
+              await sendEvent({
+                eventName: "Purchase",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
+              });
+              console.log(`[Meta CAPI] Purchase event fired for deal ${id}, amount: ${dealAmount}`);
+            } else if (stage === "Dead Declined") {
+              await sendEvent({
+                eventName: "DNQ",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { content_name: "Did Not Qualify", source: "deal_stage_change" },
+              });
+              console.log(`[Meta CAPI] DNQ event fired for deal ${id}`);
+            }
+          } else if (contact) {
+            console.log(`[Meta CAPI] Skipped ${stage === "Closed" ? "Purchase" : "DNQ"} for deal ${id} — contact has no Meta attribution`);
           }
         }
       }

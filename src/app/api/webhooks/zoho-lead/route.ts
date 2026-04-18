@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { triggerSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
 import { supabaseAdmin } from "@/lib/db";
+import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 
 // Allow up to 60s for RingOut polling on Vercel
 export const maxDuration = 60;
@@ -42,17 +43,23 @@ export async function POST(request: NextRequest) {
     console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
 
     // ── DNQ: fire Meta CAPI event when lead is marked "DNQ" in Zoho ──
+    // Only if the originating contact came from a real Meta ad click.
     if (leadStatus === "DNQ") {
       // Look up contact in Supabase for enriched user data
       let contact: Record<string, unknown> | null = null;
       if (email) {
         const { data } = await supabaseAdmin
           .from("contacts")
-          .select("id, email, phone, mobile_phone, first_name, last_name")
+          .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
           .ilike("email", email)
           .limit(1)
           .maybeSingle();
         contact = data;
+      }
+
+      if (!contact || !hasMetaAttributionServer({ fbc: contact.fbc as string | null | undefined })) {
+        console.log(`[Zoho Webhook] Skipped DNQ Meta event for ${leadName} — no Meta attribution on contact`);
+        return NextResponse.json({ success: true, skipped: "no_meta_attribution" });
       }
 
       const contactPhone = (contact?.phone || contact?.mobile_phone || phone) as string;
@@ -67,6 +74,8 @@ export async function POST(request: NextRequest) {
           firstName: (contact?.first_name as string) || firstName || undefined,
           lastName: (contact?.last_name as string) || lastName || undefined,
           externalId: (contact?.id as string) || undefined,
+          fbc: (contact?.fbc as string) || undefined,
+          fbp: (contact?.fbp as string) || undefined,
         },
         customData: { content_name: "Did Not Qualify" },
       });
