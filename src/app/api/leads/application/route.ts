@@ -102,6 +102,7 @@ export async function POST(request: NextRequest) {
                   ...(businessName ? { business_name: businessName } : {}),
                   ...(lookupPhone10 ? { phone: lookupPhone10, mobile_phone: lookupPhone10 } : {}),
                   ...(source ? { source } : {}),
+                  ...(amountNeeded ? { amount_needed: amountNeeded } : {}),
                   application_stage: applicationStage || "Email Captured",
                   application_completion_pct: applicationCompletionPct,
                 })
@@ -119,6 +120,7 @@ export async function POST(request: NextRequest) {
                     ...(firstName ? { first_name: firstName } : {}),
                     ...(lastName ? { last_name: lastName } : {}),
                     ...(businessName ? { business_name: businessName } : {}),
+                    ...(amountNeeded ? { amount_needed: amountNeeded } : {}),
                   }).eq("id", upserted.id);
                 }
 
@@ -134,6 +136,7 @@ export async function POST(request: NextRequest) {
                       phone: lookupPhone10 || undefined,
                       source: source || "lead magnet",
                       Lead_Status: "New Lead",
+                      fundingAmount: amountNeeded || undefined,
                     });
                     if (zohoId) {
                       await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoId }).eq("id", upserted.id);

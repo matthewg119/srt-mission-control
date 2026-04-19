@@ -17,7 +17,8 @@ export type LeadThreadAction =
   | "statements"
   | "milestone_50"
   | "milestone_80"
-  | "complete";
+  | "complete"
+  | "auto_dnq";
 
 /** Subset of fields shown in the initial top-level Slack message.
  *  Empty values are filtered out at render time, so the message stays short. */
@@ -157,6 +158,10 @@ function formatUpdateBlocks(
     case "complete":
       headline = "Application completed";
       icon = "✅";
+      break;
+    case "auto_dnq":
+      headline = "Auto-DNQ — below revenue threshold";
+      icon = "⛔";
       break;
     case "update":
     default:
