@@ -13,6 +13,9 @@ export const VEKTOR_CHANNELS = {
   workingLeads: process.env.SLACK_VEKTOR_WORKING_LEADS_CHANNEL || "",
   renewals: process.env.SLACK_VEKTOR_RENEWALS_CHANNEL || "",
   matthew: process.env.SLACK_VEKTOR_MATTHEW_DM || "",
+  // #pipeline-new — per-deal Slack threads. Every deal's parent message lives
+  // here; all stage changes and funder-reply summaries are thread replies.
+  pipeline: process.env.SLACK_PIPELINE_CHANNEL || "",
 };
 
 export type VektorCategory =

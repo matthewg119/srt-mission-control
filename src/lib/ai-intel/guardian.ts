@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postApprovalRequest } from "./slack-approval";
-import { TERMINAL_STAGES } from "@/config/pipeline";
+import { LEGACY_TERMINAL_STAGES } from "@/config/pipeline";
 import type { GuardianDecision, PendingActionPayload } from "./types";
 
 const SCHEMA_HINT = `{
@@ -108,7 +108,7 @@ export async function fetchActiveMerchants(limit = 200): Promise<MerchantContext
   const { data: deals, error } = await supabaseAdmin
     .from("deals")
     .select("id, contact_id, stage, pipeline, amount, updated_at, contacts!inner(id, business_name, first_name, last_name, zoho_lead_id)")
-    .not("stage", "in", `(${TERMINAL_STAGES.map((s) => `"${s}"`).join(",")})`)
+    .not("stage", "in", `(${LEGACY_TERMINAL_STAGES.map((s) => `"${s}"`).join(",")})`)
     .order("updated_at", { ascending: true })
     .limit(limit);
 

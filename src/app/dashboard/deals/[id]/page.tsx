@@ -8,7 +8,11 @@ import {
   CheckCircle2, ChevronDown, ChevronRight, Plus, Loader2,
   Edit, DollarSign, Landmark, Shield, Activity, Send,
 } from "lucide-react";
-import { NEW_DEALS_PIPELINE, ACTIVE_DEALS_PIPELINE, PIPELINES } from "@/config/pipeline";
+import {
+  LEGACY_NEW_DEALS_PIPELINE as NEW_DEALS_PIPELINE,
+  LEGACY_ACTIVE_DEALS_PIPELINE as ACTIVE_DEALS_PIPELINE,
+  LEGACY_PIPELINES as PIPELINES,
+} from "@/config/pipeline";
 import { formatCurrency, formatRelativeTime } from "@/lib/utils";
 
 // ─── Types ──────────────────────────────────────────────────────────────────

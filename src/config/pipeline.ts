@@ -1,8 +1,20 @@
-// Two-pipeline structure for SRT Mission Control CRM
-// New Deals: Lead intake (form fills → qualification → conversion)
-// Active Deals: Post-conversion pipeline (contracts → stips → funding)
+// @deprecated — Mission Control's pipeline is no longer the source of truth.
+// Zoho CRM owns deal stage. New code must key off `deals.zoho_stage` (mirrored
+// by the Zoho webhook + reconciliation cron). The legacy constants below exist
+// only because the Kanban UI at /dashboard/pipeline has not yet been rewritten
+// as a read-only Zoho mirror. When that UI is rewritten, delete this file.
+//
+// DO NOT import `LEGACY_*` in new code. The intended shape for all new code
+// is `ZohoStage` (a free-form string, validated at the handler layer).
 
-export const NEW_DEALS_PIPELINE = {
+/** Zoho Lead Stage — free-form string as returned by Zoho. Validate at the
+ *  handler layer (stage-handler.ts), never by TypeScript enum. */
+export type ZohoStage = string;
+
+// ─── LEGACY — do not use in new code ─────────────────────────────────────────
+
+/** @deprecated Use Zoho stage. Retained for the /dashboard/pipeline UI only. */
+export const LEGACY_NEW_DEALS_PIPELINE = {
   name: "New Deals",
   stages: [
     { name: "Open - Not Contacted", color: "#1B65A7" },
@@ -13,7 +25,8 @@ export const NEW_DEALS_PIPELINE = {
   ],
 } as const;
 
-export const ACTIVE_DEALS_PIPELINE = {
+/** @deprecated Use Zoho stage. Retained for the /dashboard/pipeline UI only. */
+export const LEGACY_ACTIVE_DEALS_PIPELINE = {
   name: "Active Deals",
   stages: [
     { name: "Underwriting", color: "#1B65A7" },
@@ -32,31 +45,17 @@ export const ACTIVE_DEALS_PIPELINE = {
   ],
 } as const;
 
-export const PIPELINES = [NEW_DEALS_PIPELINE, ACTIVE_DEALS_PIPELINE] as const;
+/** @deprecated */
+export const LEGACY_PIPELINES = [
+  LEGACY_NEW_DEALS_PIPELINE,
+  LEGACY_ACTIVE_DEALS_PIPELINE,
+] as const;
 
-// All stage names across both pipelines
-export type NewDealStage = (typeof NEW_DEALS_PIPELINE.stages)[number]["name"];
-export type ActiveDealStage = (typeof ACTIVE_DEALS_PIPELINE.stages)[number]["name"];
-export type PipelineStage = NewDealStage | ActiveDealStage;
-
-// For backwards compat — flat list of all stages
-export const PIPELINE_STAGES = [
-  ...NEW_DEALS_PIPELINE.stages,
-  ...ACTIVE_DEALS_PIPELINE.stages,
-];
-
-// Terminal stages (deal is done)
-export const TERMINAL_STAGES: PipelineStage[] = [
-  "Closed - Not Converted",                      // New Deals terminal
-  "Closed", "Dead Declined", "Deal Lost",        // Active Deals terminals
-];
-
-// Stages that mean "active" (not terminal)
-export const ACTIVE_NEW_DEAL_STAGES: NewDealStage[] = [
-  "Open - Not Contacted", "Working - Contacted", "Working - Application Out", "Converted",
-];
-
-export const ACTIVE_DEAL_STAGES: ActiveDealStage[] = [
-  "Underwriting", "Shopping", "Pre-Approved", "Approved", "VC / DL",
-  "Contracts Out", "Contracts In", "Pending Stips", "Funding Call", "In Funding",
+/** @deprecated Kept so `guardian.ts` and ad-hoc "is this terminal?" checks
+ *  keep working until the Zoho-stage handler owns that logic. */
+export const LEGACY_TERMINAL_STAGES: string[] = [
+  "Closed - Not Converted",
+  "Closed",
+  "Dead Declined",
+  "Deal Lost",
 ];

@@ -6,7 +6,10 @@ import {
   Search, X, ChevronDown, Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { NEW_DEALS_PIPELINE, ACTIVE_DEALS_PIPELINE } from "@/config/pipeline";
+import {
+  LEGACY_NEW_DEALS_PIPELINE as NEW_DEALS_PIPELINE,
+  LEGACY_ACTIVE_DEALS_PIPELINE as ACTIVE_DEALS_PIPELINE,
+} from "@/config/pipeline";
 import { formatCurrency } from "@/lib/utils";
 
 interface Deal {
