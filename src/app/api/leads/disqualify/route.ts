@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { getCorsHeaders } from "@/lib/lead-validation";
-import { updateLead as zohoUpdateLead } from "@/lib/zoho";
+import { updateLead as zohoUpdateLead, addNoteToLead as zohoAddNote } from "@/lib/zoho";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 
 export async function OPTIONS(request: NextRequest) {
@@ -142,23 +142,72 @@ export async function POST(request: NextRequest) {
     //    workflow → /api/webhooks/zoho-lead → Meta CAPI DNQ event (gated by
     //    attribution inside the webhook). If Zoho update fails, Meta won't
     //    see the DNQ — log loudly.
+    //
+    //    Zoho's Funding_Amount_Requested / Monthly_Revenue fields are typed
+    //    as Currency and silently reject strings with "$" or commas AND
+    //    reject the entire PUT when any one field is invalid. So we send
+    //    Lead_Status in its own call (guaranteed to land) and put the
+    //    funding/revenue context into a Note — same pattern the 25%+ block
+    //    uses via buildLeadMagnetNote().
+    //
+    //    Parse amountNeeded into a plain integer so we can ALSO attempt the
+    //    structured fields in a separate best-effort call.
+    const parsedAmountNeeded =
+      amountNeeded ? parseInt(String(amountNeeded).replace(/[^\d]/g, ""), 10) || null : null;
+
     if (contact.zoho_lead_id) {
+      // 3a. Critical: flip Lead_Status → DNQ. Nothing else in this PUT so it
+      //     cannot be rejected by a sibling field.
       try {
-        await zohoUpdateLead(contact.zoho_lead_id, {
-          Lead_Status: "DNQ",
-          ...(parsedRevenue ? { Monthly_Revenue: parsedRevenue } : {}),
-          ...(amountNeeded ? { Funding_Amount_Requested: amountNeeded } : {}),
-        });
+        await zohoUpdateLead(contact.zoho_lead_id, { Lead_Status: "DNQ" });
       } catch (err) {
-        console.error("[disqualify] Zoho updateLead failed:", err instanceof Error ? err.message : err);
+        console.error("[disqualify] Zoho Lead_Status update failed:", err instanceof Error ? err.message : err);
         try {
           await supabaseAdmin.from("system_logs").insert({
             event_type: "lead_auto_dnq_error",
-            description: `Zoho DNQ update failed for ${contactName}`,
-            metadata: { contactId: contact.id, reason, error: err instanceof Error ? err.message : String(err) },
+            description: `Zoho DNQ Lead_Status update failed for ${contactName}`,
+            metadata: { contactId: contact.id, zohoLeadId: contact.zoho_lead_id, reason, error: err instanceof Error ? err.message : String(err) },
           });
         } catch { /* ignore */ }
       }
+
+      // 3b. Best-effort: try to populate the structured Currency fields
+      //     using numbers (so Zoho doesn't reject). Failure here is fine —
+      //     the Note below is the reliable record.
+      try {
+        const structuredUpdate: Record<string, unknown> = {};
+        if (parsedRevenue) structuredUpdate.Monthly_Revenue = parsedRevenue;
+        if (parsedAmountNeeded) structuredUpdate.Funding_Amount_Requested = parsedAmountNeeded;
+        if (Object.keys(structuredUpdate).length > 0) {
+          await zohoUpdateLead(contact.zoho_lead_id, structuredUpdate);
+        }
+      } catch (err) {
+        console.warn("[disqualify] Zoho structured-field update skipped:", err instanceof Error ? err.message : err);
+      }
+
+      // 3c. Always attach a Note — this is what the sales team actually
+      //     reads. Safe if any structured field write failed.
+      try {
+        const noteLines: string[] = ["Auto-DNQ — below revenue threshold"];
+        if (parsedRevenue) noteLines.push(`Monthly Revenue: $${parsedRevenue.toLocaleString()}`);
+        if (amountNeeded || parsedAmountNeeded) {
+          noteLines.push(`Funding Requested: ${amountNeeded || "$" + parsedAmountNeeded!.toLocaleString()}`);
+        }
+        if (reason) noteLines.push(`Reason: ${reason}`);
+        if (source) noteLines.push(`Source: ${source}`);
+        await zohoAddNote(contact.zoho_lead_id, "Auto-DNQ", noteLines.join("\n"));
+      } catch (err) {
+        console.error("[disqualify] Zoho addNote failed:", err instanceof Error ? err.message : err);
+      }
+    } else {
+      console.warn(`[disqualify] contact ${contact.id} has no zoho_lead_id — skipping Zoho update`);
+      try {
+        await supabaseAdmin.from("system_logs").insert({
+          event_type: "lead_auto_dnq_error",
+          description: `Zoho DNQ skipped for ${contactName} — contact has no zoho_lead_id`,
+          metadata: { contactId: contact.id, reason },
+        });
+      } catch { /* ignore */ }
     }
 
     // 4. Audit trail
