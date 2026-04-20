@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
+import { MATTHEW, SRT_COMPANY } from "@/config/rep-profile";
 
 /**
  * Seeds all 4 email sequences with their steps.
@@ -94,9 +95,10 @@ const MINUTES = 1;
 const HOURS = 60;
 const DAYS = 60 * 24;
 
-const SIGNATURE_MATTHEW = `<p>— Matthew</p>`;
-const SIGNATURE_MATTHEW_FULL = `<p>— Matthew<br>&nbsp;&nbsp;786-282-2937</p>`;
-const SIGNATURE_MATTHEW_SRT = `<p>— Matthew<br>&nbsp;&nbsp;SRT Agency</p>`;
+const MATTHEW_FIRST = MATTHEW.name.split(" ")[0] ?? "Matthew";
+const SIGNATURE_MATTHEW = `<p>— ${MATTHEW_FIRST}</p>`;
+const SIGNATURE_MATTHEW_FULL = `<p>— ${MATTHEW_FIRST}<br>&nbsp;&nbsp;${MATTHEW.phone}</p>`;
+const SIGNATURE_MATTHEW_SRT = `<p>— ${MATTHEW_FIRST}<br>&nbsp;&nbsp;${SRT_COMPANY.name}</p>`;
 
 const APPLY_LINK = `https://srtagency.com/apply`;
 

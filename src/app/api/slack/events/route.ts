@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { runConversationWithTools, buildSystemPrompt, isAIConfigured } from "@/lib/ai";
+import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
+import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +60,17 @@ export async function POST(request: NextRequest) {
     // Handle events
     if (payload.type === "event_callback") {
       const event = payload.event;
+
+      // Reaction shortcut for AI approval workflow — handled before bot-message filter.
+      if (event.type === "reaction_added" && event.item?.type === "message") {
+        await handleReactionAdded({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+          userId: event.user as string,
+        });
+        return NextResponse.json({ ok: true });
+      }
 
       // Ignore bot messages to prevent loops (multiple checks for safety)
       if (event.bot_id || event.subtype === "bot_message" || event.subtype === "message_changed" || event.subtype === "message_deleted") {
@@ -166,5 +179,65 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Slack events error:", error);
     return NextResponse.json({ ok: true });
+  }
+}
+
+async function handleReactionAdded(args: { reaction: string; slackTs: string; channel: string; userId: string }) {
+  const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+
+  if (args.reaction === "+1" || args.reaction === "thumbsup") {
+    const { action, error } = await resolvePendingAction({
+      slackTs: args.slackTs,
+      status: "approved",
+      approvedBy: args.userId,
+    });
+    if (error || !action) return;
+
+    if (action.payload.requires_matthew && !(matthewId && args.userId === matthewId)) {
+      await supabaseAdmin
+        .from("pending_slack_actions")
+        .update({ status: "pending", approved_by: null, resolved_at: null })
+        .eq("id", action.id);
+      await slack.postThreadReply(args.channel, args.slackTs, `🔒 This requires Matthew's approval (>$50k or submission). Reverted.`);
+      return;
+    }
+
+    const result = await executePendingAction({
+      actionId: action.id,
+      actionType: action.action_type,
+      payload: action.payload,
+      approvedBy: args.userId,
+    });
+
+    await supabaseAdmin.from("fine_tune_examples").insert({
+      trigger_type: action.action_type === "submit_deal" ? "deal_submission" : "merchant_state",
+      input_context: { slack_ts: args.slackTs, channel: args.channel, reaction: args.reaction },
+      ai_draft: action.payload.body ?? JSON.stringify(action.payload).slice(0, 1000),
+      human_correction: null,
+      rep_id: args.userId,
+      was_approved_as_is: true,
+    });
+
+    await postExecutionReceipt({
+      channel: args.channel,
+      threadTs: args.slackTs,
+      summary: result.ok
+        ? `Approved via :+1: by <@${args.userId}>.`
+        : `Execution failed: ${result.error}`,
+      success: result.ok,
+    });
+    return;
+  }
+
+  if (args.reaction === "no_entry" || args.reaction === "x") {
+    const { error } = await resolvePendingAction({
+      slackTs: args.slackTs,
+      status: "cancelled",
+      approvedBy: args.userId,
+    });
+    if (!error) {
+      await slack.postThreadReply(args.channel, args.slackTs, `🚫 Cancelled via reaction by <@${args.userId}>.`);
+    }
+    return;
   }
 }

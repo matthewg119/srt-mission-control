@@ -126,8 +126,10 @@ export async function PATCH(
       // can happen from any pipeline/stage (Qualification, Pre-Approved, etc.), so no pipeline gate.
       const dealPipeline = pipeline || currentDeal.pipeline;
       const firePurchase = stage === "Closed" && dealPipeline === "Active Deals";
+      const fireApproved = stage === "Approved" && dealPipeline === "Active Deals";
       const fireDnq = stage === "Dead Declined";
-      if (firePurchase || fireDnq) {
+      const fireDealLost = stage === "Deal Lost";
+      if (firePurchase || fireApproved || fireDnq || fireDealLost) {
         const contactId = (data as { contact_id?: string }).contact_id;
         if (contactId) {
           const { data: contact } = await supabaseAdmin
@@ -157,6 +159,16 @@ export async function PATCH(
                 customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
               });
               console.log(`[Meta CAPI] Purchase event fired for deal ${id}, amount: ${dealAmount}`);
+            } else if (stage === "Approved") {
+              const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
+                || (data as { agreement_amount?: number; amount?: number }).amount;
+              await sendEvent({
+                eventName: "Qualified",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
+              });
+              console.log(`[Meta CAPI] Qualified event fired for deal ${id}, amount: ${dealAmount}`);
             } else if (stage === "Dead Declined") {
               await sendEvent({
                 eventName: "DNQ",
@@ -165,9 +177,21 @@ export async function PATCH(
                 customData: { content_name: "Did Not Qualify", source: "deal_stage_change" },
               });
               console.log(`[Meta CAPI] DNQ event fired for deal ${id}`);
+            } else if (stage === "Deal Lost") {
+              await sendEvent({
+                eventName: "DealDeclined",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { content_name: "Deal Lost", source: "deal_stage_change" },
+              });
+              console.log(`[Meta CAPI] DealDeclined event fired for deal ${id}`);
             }
           } else if (contact) {
-            console.log(`[Meta CAPI] Skipped ${stage === "Closed" ? "Purchase" : "DNQ"} for deal ${id} — contact has no Meta attribution`);
+            const label =
+              stage === "Closed" ? "Purchase" :
+              stage === "Approved" ? "Qualified" :
+              stage === "Dead Declined" ? "DNQ" : "DealDeclined";
+            console.log(`[Meta CAPI] Skipped ${label} for deal ${id} — contact has no Meta attribution`);
           }
         }
       }

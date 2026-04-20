@@ -422,4 +422,56 @@ export const microsoft = {
       }
     }
   },
+
+  // ── Change Notification Subscriptions ──
+
+  /** Create a Graph change-notification subscription (e.g. new mail on submissions@). */
+  async createSubscription(params: {
+    resource: string;
+    changeType: "created" | "updated" | "deleted" | "created,updated";
+    notificationUrl: string;
+    clientState: string;
+    expirationMinutes?: number;
+  }): Promise<{ id: string; expirationDateTime: string; resource: string }> {
+    const minutes = params.expirationMinutes ?? 60 * 24 * 3;
+    const expirationDateTime = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+
+    const result = await graphRequest("/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({
+        changeType: params.changeType,
+        notificationUrl: params.notificationUrl,
+        resource: params.resource,
+        expirationDateTime,
+        clientState: params.clientState,
+      }),
+    });
+
+    return {
+      id: result.id as string,
+      expirationDateTime: result.expirationDateTime as string,
+      resource: result.resource as string,
+    };
+  },
+
+  /** Renew a subscription to extend its expirationDateTime. */
+  async renewSubscription(subscriptionId: string, expirationMinutes = 60 * 24 * 3): Promise<{ id: string; expirationDateTime: string }> {
+    const expirationDateTime = new Date(Date.now() + expirationMinutes * 60 * 1000).toISOString();
+    const result = await graphRequest(`/subscriptions/${subscriptionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ expirationDateTime }),
+    });
+    return { id: result.id as string, expirationDateTime: result.expirationDateTime as string };
+  },
+
+  /** List all Graph subscriptions for this tenant's signed-in app. */
+  async listSubscriptions(): Promise<Array<{ id: string; resource: string; expirationDateTime: string; notificationUrl: string }>> {
+    const result = await graphRequest("/subscriptions");
+    return (result.value ?? []) as Array<{ id: string; resource: string; expirationDateTime: string; notificationUrl: string }>;
+  },
+
+  /** Delete a Graph subscription. */
+  async deleteSubscription(subscriptionId: string): Promise<void> {
+    await graphRequest(`/subscriptions/${subscriptionId}`, { method: "DELETE" });
+  },
 };

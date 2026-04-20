@@ -13,6 +13,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft } from "@/lib/microsoft";
 import { renderTemplate, type TemplateContext } from "@/lib/template-renderer";
+import { DEFAULT_REP, SRT_COMPANY } from "@/config/rep-profile";
 
 // ── Types ──
 
@@ -243,10 +244,10 @@ export async function processScheduledEmails(): Promise<{
       funding_amount: (enrollment.metadata?.amountNeeded as string) || "",
       approved_amount: "",
       approved_lender: "",
-      agent_name: "Benjamin",
-      agent_phone: "(786) 282-2937",
-      agent_email: "benjamin@srtagency.com",
-      company_name: "SRT Agency",
+      agent_name: DEFAULT_REP.name,
+      agent_phone: DEFAULT_REP.phone,
+      agent_email: DEFAULT_REP.email,
+      company_name: SRT_COMPANY.name,
       stage_name: "",
       pipeline_name: "",
     };

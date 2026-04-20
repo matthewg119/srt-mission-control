@@ -6,23 +6,25 @@ Purpose: Phase 0 of the AI Intelligence Layer build. Identify dead code, duplica
 
 ## Files to Delete
 
-Orphaned components in Mission Control (`src/components/*`) — no imports found via static grep. Before deleting each: run `grep -r "<ComponentName>" src/` to catch dynamic imports; if zero hits, delete. Ambiguous cases go to `src/_archived/`.
+**Initial audit overstated orphans.** Re-verification found most candidates are actually imported. Only one component is confirmed orphan so far:
 
 | File | Reason |
 |------|--------|
-| [src/components/brain-trust/agent-list.tsx](../src/components/brain-trust/agent-list.tsx) | No imports found |
-| [src/components/brainheart-command-center.tsx](../src/components/brainheart-command-center.tsx) | Needs verification — brainheart cron still runs, component may be referenced dynamically |
-| [src/components/chat-interface.tsx](../src/components/chat-interface.tsx) | No imports — `/dashboard/chat` uses a different client component |
-| [src/components/chat-popup.tsx](../src/components/chat-popup.tsx) | No imports |
-| [src/components/coaching-studio/*](../src/components/coaching-studio/) (3 files) | No imports — coaching routes use server components inline |
-| [src/components/dashboard-client.tsx](../src/components/dashboard-client.tsx) | No imports |
-| [src/components/dashboard-shell.tsx](../src/components/dashboard-shell.tsx) | No imports |
-| [src/components/sidebar.tsx](../src/components/sidebar.tsx) | No imports — `app/dashboard/layout.tsx` uses its own nav |
-| [src/components/pipeline-board.tsx](../src/components/pipeline-board.tsx) | No imports — pipeline page uses a newer kanban component |
-| [src/components/template-editor.tsx](../src/components/template-editor.tsx) | No imports |
-| [src/components/tool-cards/*](../src/components/tool-cards/) (5+ files) | No imports |
+| [src/components/dashboard-client.tsx](../src/components/dashboard-client.tsx) | Verified: the only reference is the file itself. Safe to delete after confirming with Matthew. |
 
-Also: dead env vars (see GHL Remnants below).
+**Candidates that were initially flagged but are in active use** — leaving alone:
+- `brain-trust/agent-list.tsx` — imported by [app/dashboard/brain-trust/page.tsx](../src/app/dashboard/brain-trust/page.tsx)
+- `brainheart-command-center.tsx` — imported by [app/dashboard/page.tsx](../src/app/dashboard/page.tsx) and [app/dashboard/brain-trust/page.tsx](../src/app/dashboard/brain-trust/page.tsx)
+- `chat-interface.tsx` — imported by [app/dashboard/brain-trust/page.tsx](../src/app/dashboard/brain-trust/page.tsx)
+- `chat-popup.tsx` — imported by [app/dashboard/page.tsx](../src/app/dashboard/page.tsx)
+- `coaching-studio/*` — imported by [app/dashboard/coaching-studio/page.tsx](../src/app/dashboard/coaching-studio/page.tsx)
+- `dashboard-shell.tsx` — imported by [app/dashboard/page.tsx](../src/app/dashboard/page.tsx)
+- `sidebar.tsx` — imported by `dashboard-shell.tsx`
+- `pipeline-board.tsx` — imported by [app/dashboard/pipeline/page.tsx](../src/app/dashboard/pipeline/page.tsx)
+- `template-editor.tsx` — imported by [app/dashboard/templates/page.tsx](../src/app/dashboard/templates/page.tsx)
+- `tool-cards/*` — imported by `chat-interface.tsx` (transitive via brain-trust)
+
+Dead env vars (GHL) are the main real finding; see below.
 
 ## Files to Consolidate
 
@@ -41,8 +43,8 @@ Also: dead env vars (see GHL Remnants below).
 | `GHL_LOCATION_ID` | Same as above | Delete |
 | `ELEVENLABS_API_KEY` | Referenced in code (call coach) but missing from `.env.local.example` | Verify present in prod Vercel env; add to example |
 | `PLAYBOOK_UPDATE_SECRET` | Referenced in code; verify Vercel env | Verify; add to example |
-| `SLACK_UW_CHANNEL`, `SLACK_SUB_CHANNEL` | Declared in [src/lib/slack-bot.ts](../src/lib/slack-bot.ts) channels object; no route invokes these channels | Candidate removal — confirm with Benjamin they aren't reserved for upcoming workflows |
-| `LEAD_THREAD_API_KEY` | In both `.env.local` files; usage unverified | Grep on execution; delete if truly unused |
+| `SLACK_UW_CHANNEL`, `SLACK_SUB_CHANNEL` | Verified in use: read by [src/app/api/slack/events/route.ts:21-22](../src/app/api/slack/events/route.ts#L21-L22) and [src/lib/slack-bot.ts:118-119](../src/lib/slack-bot.ts#L118-L119). Keep. |
+| `LEAD_THREAD_API_KEY` | Verified in use: [srt-portal/src/lib/lead-thread-client.ts:24](../../../srt-portal/src/lib/lead-thread-client.ts#L24), [srt-portal/src/app/api/admin/zoho-backfill/route.ts:40](../../../srt-portal/src/app/api/admin/zoho-backfill/route.ts#L40), [src/app/api/slack/lead-thread/route.ts:23](../src/app/api/slack/lead-thread/route.ts#L23), [src/app/api/admin/zoho-backfill/route.ts:18](../src/app/api/admin/zoho-backfill/route.ts#L18). Keep. |
 
 GHL removal confirmed zero code hits for `GHL_`, `GoHighLevel`, `gohighlevel`.
 
@@ -86,12 +88,15 @@ Only environment variables (above). Zero code references, zero API calls, zero i
 
 Codebase is in good shape. The integration surface (Zoho, Slack, Microsoft Graph, RingCentral, Anthropic SDK, Meta CAPI, sequence engine, PDF generator) is already built and wired — the AI Intelligence Layer will **compose** existing primitives rather than reinvent them.
 
-**Estimated cleanup effort:** ~1 day
-- Component deletes (pre-verified with grep): 1-2h
-- GHL env var removal: 10 min
-- Agent-profile + defaults config extraction: 2h
-- vercel.json cron additions: 5 min
+**Actual cleanup required is much smaller than first pass suggested:**
+- Delete 4 GHL env var lines from two `.env.local` files: 5 min
+- Delete `dashboard-client.tsx` after Matthew confirms: 1 min
+- Migrate hardcoded Benjamin/Matthew contact fields to [src/config/rep-profile.ts](../src/config/rep-profile.ts) (already created): 1h
+- Migrate Zoho defaults to [src/config/defaults.ts](../src/config/defaults.ts) (already created): 15 min
+- vercel.json cron additions: done
 - Header-comment duplicate markers on Zoho / PDF libs: 10 min
 - Follow-up ticket filed for 30-day table query-log audit: documentation only
+
+**Key correction from initial audit:** First-pass Explore agent reported ~20 orphan components; per-component re-verification showed all but one were actively imported. Lesson: static "no-imports" claims need verification before acting. Only `dashboard-client.tsx` is confirmed orphan.
 
 **Ready to build** the AI Intelligence Layer on top.
