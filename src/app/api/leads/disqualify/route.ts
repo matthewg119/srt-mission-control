@@ -156,19 +156,35 @@ export async function POST(request: NextRequest) {
       amountNeeded ? parseInt(String(amountNeeded).replace(/[^\d]/g, ""), 10) || null : null;
 
     if (contact.zoho_lead_id) {
-      // 3a. Critical: flip Lead_Status → DNQ. Nothing else in this PUT so it
-      //     cannot be rejected by a sibling field.
-      try {
-        await zohoUpdateLead(contact.zoho_lead_id, { Lead_Status: "DNQ" });
-      } catch (err) {
-        console.error("[disqualify] Zoho Lead_Status update failed:", err instanceof Error ? err.message : err);
+      // 3a. Critical: flip Lead_Status to the terminal-declined picklist value.
+      //     Try candidates in priority order — first that lands wins. Zoho's
+      //     picklist values are configured per-org; "Dead Declined" matches
+      //     TERMINAL_ZOHO_STATUSES in zoho-guardian and is the most likely
+      //     valid value. "DNQ" is what the webhook reader checks for — keep
+      //     it as a fallback in case that is configured too.
+      const statusCandidates = ["Dead Declined", "DNQ", "Declined", "Dead"];
+      let landedStatus: string | null = null;
+      const attemptErrors: Array<{ status: string; error: string }> = [];
+      for (const candidate of statusCandidates) {
+        try {
+          await zohoUpdateLead(contact.zoho_lead_id, { Lead_Status: candidate });
+          landedStatus = candidate;
+          break;
+        } catch (err) {
+          attemptErrors.push({ status: candidate, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      if (!landedStatus) {
+        console.error("[disqualify] All Zoho Lead_Status candidates rejected:", JSON.stringify(attemptErrors));
         try {
           await supabaseAdmin.from("system_logs").insert({
             event_type: "lead_auto_dnq_error",
-            description: `Zoho DNQ Lead_Status update failed for ${contactName}`,
-            metadata: { contactId: contact.id, zohoLeadId: contact.zoho_lead_id, reason, error: err instanceof Error ? err.message : String(err) },
+            description: `Zoho DNQ Lead_Status update failed for ${contactName} — all picklist candidates rejected`,
+            metadata: { contactId: contact.id, zohoLeadId: contact.zoho_lead_id, reason, attempts: attemptErrors },
           });
         } catch { /* ignore */ }
+      } else {
+        console.log(`[disqualify] Zoho Lead_Status landed as "${landedStatus}" for ${contactName}`);
       }
 
       // 3b. Best-effort: try to populate the structured Currency fields

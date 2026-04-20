@@ -1,5 +1,9 @@
 // src/lib/zoho.ts
 // Zoho CRM integration with OAuth refresh token flow
+// Intentional duplicate — sibling client lives in srt-portal/src/lib/zoho.ts.
+// Keep both in sync when touching auth, request wrappers, or field mapping.
+
+import { DEFAULTS } from "@/config/defaults";
 
 const ZOHO_TOKEN_ENDPOINT = "https://accounts.zoho.com/oauth/v2/token";
 const ZOHO_API_BASE = "https://www.zohoapis.com/crm/v5";
@@ -201,8 +205,8 @@ function buildRecord(leadData: ZohoLeadData): ZohoApiRecord {
                           Company: leadData.businessName || leadData.legalName || "",
                           Email: leadData.email || "",
                           Phone: leadData.phone || "",
-                          Lead_Source: leadData.source || "Meta Ads",
-                          Lead_Status: leadData.Lead_Status || "New",
+                          Lead_Source: leadData.source || DEFAULTS.zohoLeadSource,
+                          Lead_Status: leadData.Lead_Status || DEFAULTS.zohoLeadStatus,
                           Industry: leadData.industry || "",
             };
 
@@ -260,11 +264,13 @@ export async function updateLead(
             updates: Partial<ZohoApiRecord>
           ): Promise<void> {
             const result = await zohoRequest("PUT", `/Leads/${zohoLeadId}`, { data: [{ id: zohoLeadId, ...updates }] }) as {
-                          data?: Array<{ code: string; message: string; status: string }>;
+                          data?: Array<{ code: string; message: string; status: string; details?: unknown }>;
             };
             const updated = result.data?.[0];
             if (updated && updated.status !== "success" && updated.code !== "SUCCESS") {
-                          console.error("[Zoho] updateLead non-success:", JSON.stringify(updated));
+                          throw new Error(
+                            `Zoho updateLead non-success: code=${updated.code} message=${updated.message} details=${JSON.stringify(updated.details ?? {})} payload=${JSON.stringify(updates)}`
+                          );
             }
 }
 

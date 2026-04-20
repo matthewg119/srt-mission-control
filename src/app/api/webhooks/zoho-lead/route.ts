@@ -61,9 +61,12 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
 
-    // ── DNQ: fire Meta CAPI event when lead is marked "DNQ" in Zoho ──
+    // ── DNQ: fire Meta CAPI event when lead is marked as terminal-declined in Zoho ──
     // Only if the originating contact came from a real Meta ad click.
-    if (leadStatus === "DNQ") {
+    // Match whichever picklist value actually lives in Zoho — /api/leads/disqualify
+    // tries "Dead Declined" first, "DNQ" next, etc. The webhook must accept all.
+    const dnqStatuses = new Set(["DNQ", "Dead Declined", "Declined", "Dead"]);
+    if (dnqStatuses.has(leadStatus)) {
       // Look up contact in Supabase for enriched user data
       let contact: Record<string, unknown> | null = null;
       if (email) {
