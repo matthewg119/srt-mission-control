@@ -21,7 +21,7 @@ const TERMINAL_ZOHO_STATUSES = [
 const SCHEMA_HINT = `{
   "merchant_id": string,
   "zoho_id": string | null,
-  "state": "funded" | "declined" | "dead" | "approved_no_response" | "underwriting_stale" | "active_application" | "missing_stips" | "normal_nurture" | "needs_data_cleanup",
+  "state": "funded" | "declined" | "dead" | "approved_no_response" | "underwriting_stale" | "active_application" | "missing_stips" | "awaiting_statements" | "normal_nurture" | "needs_data_cleanup",
   "days_since_last_touch": number,
   "action": "suppress" | "submit_deal" | "draft_email" | "slack_alert" | "clean_zoho_data" | "none",
   "urgency": "high" | "medium" | "low",
@@ -38,7 +38,7 @@ const SYSTEM_PROMPT = `You are VeKtor, SRT Agency's merchant state classifier. Y
 
 Zoho is the source of truth for stage (Lead_Status), notes, and custom MCA fields.
 
-Possible states: funded | declined | dead | approved_no_response | underwriting_stale | active_application | missing_stips | normal_nurture | needs_data_cleanup
+Possible states: funded | declined | dead | approved_no_response | underwriting_stale | active_application | missing_stips | awaiting_statements | normal_nurture | needs_data_cleanup
 
 Possible actions: suppress | submit_deal | draft_email | slack_alert | clean_zoho_data | none
 
@@ -49,6 +49,15 @@ Rules:
 - approved_no_response (48h+ since last activity, Lead_Status=Approved/Pre-Approved) → action=draft_email.
 - underwriting_stale (72h+ in Underwriting/Shopping) → action=slack_alert.
 - active_application, no stips → action=slack_alert, urgency=medium.
+- awaiting_statements: merchant signed the portal application (portal_app_completed=true) but has NOT uploaded bank statements (portal_statements_uploaded=false), AND at least 24 hours have passed since signature (hours_since_signature ≥ 24). This is the highest-intent re-engagement segment — they are one step from an offer.
+  - Choose cadence based on hours_since_signature: 24–72h = T+24h SMS nudge, 72h–168h = T+3d email nudge, 168h+ = T+7d SMS nudge (last chance, soft close).
+  - For SMS nudges: action="slack_alert". Matt does NOT have A2P with RingCentral yet, so the Slack message must be copy/paste-ready. Set slack_message with EXACTLY this structure:
+    "📱 Text to: {formatted_phone}\\n\\n{sms_body}"
+    where {formatted_phone} is the merchant's phone in (XXX) XXX-XXXX form and {sms_body} is the drafted SMS under 300 chars, in Matt's voice (first name of merchant, friendly, no emojis in the body).
+  - For T+24h SMS template: "Hey {first_name}, Matt from SRT. Saw you wrapped the application yesterday — one last step to get you a number today: send me your last 3 months of business bank statements. I can text you the secure Plaid link if easier — just say the word."
+  - For T+7d SMS template: "Hey {first_name}, this is Matt again — want to keep your SRT app open or should I close it out? No pressure either way."
+  - For T+3d email nudge: action="draft_email", subject="Your SRT offer is on hold", body referencing the one missing step (bank statements) with a link to https://portal.srtagency.com/portal/statements.
+  - urgency="high" for T+24h, "medium" for T+3d, "low" for T+7d.
 - If required fields are missing, malformed, or inconsistent (e.g., phone with letters, missing EIN on a funded deal, duplicate note content) → state="needs_data_cleanup", action="clean_zoho_data". Populate zoho_cleanup_fields with a map of Zoho field names to their corrected values. Only include fields where you have high confidence in the correction.
 - normal_nurture → action=none.
 
@@ -59,6 +68,16 @@ export interface ZohoActiveLead {
   data: ZohoApiRecord;
   supabase_contact_id: string | null;
   last_activity_days: number;
+  portal_funnel: {
+    first_name: string | null;
+    phone: string | null;
+    portal_app_completed: boolean;
+    portal_statements_uploaded: boolean;
+    application_signed_at: string | null;
+    statements_uploaded_at: string | null;
+    hours_since_signature: number | null;
+    last_nudge_posted_at: string | null;
+  } | null;
 }
 
 export async function fetchActiveZohoLeads(limit = 100): Promise<ZohoActiveLead[]> {
@@ -78,15 +97,30 @@ export async function fetchActiveZohoLeads(limit = 100): Promise<ZohoActiveLead[
 
     const { data: contact } = await supabaseAdmin
       .from("contacts")
-      .select("id")
+      .select("id, first_name, phone, mobile_phone, portal_app_completed, portal_statements_uploaded, application_signed_at, statements_uploaded_at, last_nudge_posted_at")
       .eq("zoho_lead_id", zoho_id)
       .maybeSingle();
+
+    const signedAt = (contact?.application_signed_at as string) || null;
+    const hoursSinceSig = signedAt
+      ? Math.floor((Date.now() - new Date(signedAt).getTime()) / (1000 * 60 * 60))
+      : null;
 
     out.push({
       zoho_id,
       data: lead,
       supabase_contact_id: (contact?.id as string) ?? null,
       last_activity_days: daysSince,
+      portal_funnel: contact ? {
+        first_name: (contact.first_name as string) || null,
+        phone: ((contact.phone as string) || (contact.mobile_phone as string)) || null,
+        portal_app_completed: Boolean(contact.portal_app_completed),
+        portal_statements_uploaded: Boolean(contact.portal_statements_uploaded),
+        application_signed_at: signedAt,
+        statements_uploaded_at: (contact.statements_uploaded_at as string) || null,
+        hours_since_signature: hoursSinceSig,
+        last_nudge_posted_at: (contact.last_nudge_posted_at as string) || null,
+      } : null,
     });
   }
 
@@ -120,7 +154,16 @@ MCA Offer (if present):
   Factor Rate: ${d.MCA_Factor_Rate ?? "—"}
   Total Payback: ${d.MCA_Total_Payback ?? "—"}
   Term Months: ${d.MCA_Term_Months ?? "—"}
-  Net Funded: ${d.MCA_Net_Funded ?? "—"}`;
+  Net Funded: ${d.MCA_Net_Funded ?? "—"}
+
+Portal Funnel (Supabase source of truth):
+  First Name: ${lead.portal_funnel?.first_name ?? "—"}
+  Phone (for copy/paste SMS): ${lead.portal_funnel?.phone ?? "—"}
+  Application Signed: ${lead.portal_funnel?.portal_app_completed ? "yes" : "no"}
+  Statements Uploaded: ${lead.portal_funnel?.portal_statements_uploaded ? "yes" : "no"}
+  Signed At: ${lead.portal_funnel?.application_signed_at ?? "—"}
+  Hours Since Signature: ${lead.portal_funnel?.hours_since_signature ?? "—"}
+  Last Nudge Posted: ${lead.portal_funnel?.last_nudge_posted_at ?? "never"}`;
 
   const result = await callClaudeJSON<GuardianDecision & { zoho_cleanup_fields?: Record<string, string> | null }>({
     model: "claude-sonnet-4-6",
@@ -259,6 +302,15 @@ async function processZohoLead(
     if (channel) {
       await slack.postMessage(channel, `🔔 *${lead.data.Company ?? "Merchant"}* — ${decision.state}\n${decision.slack_message}\n_Reason:_ ${decision.reasoning}`);
       slackPosted = true;
+
+      // Stamp last_nudge_posted_at so the RingOut escalation cron can detect
+      // when the Slack message has sat unactioned for 5+ minutes.
+      if (decision.state === "awaiting_statements" && lead.supabase_contact_id) {
+        await supabaseAdmin
+          .from("contacts")
+          .update({ last_nudge_posted_at: new Date().toISOString() })
+          .eq("id", lead.supabase_contact_id);
+      }
     }
   }
 
