@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     // Only if the originating contact came from a real Meta ad click.
     // Match whichever picklist value actually lives in Zoho — /api/leads/disqualify
     // tries "Dead Declined" first, "DNQ" next, etc. The webhook must accept all.
-    const dnqStatuses = new Set(["DNQ", "Dead Declined", "Declined", "Dead"]);
+    const dnqStatuses = new Set(["DNQ", "Dead Declined", "Declined", "Dead", "Take Off List"]);
     if (dnqStatuses.has(leadStatus)) {
       // Look up contact in Supabase for enriched user data
       let contact: Record<string, unknown> | null = null;
