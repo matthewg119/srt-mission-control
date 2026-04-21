@@ -29,7 +29,11 @@ export async function POST(request: NextRequest) {
     "";
 
   if (!expectedSecret || secret !== expectedSecret) {
-    console.error("[Zoho Webhook] Unauthorized — bad or missing x-zoho-webhook-secret");
+    const safe = (s: string | undefined | null) =>
+      !s ? "<empty>" : `len=${s.length} prefix=${s.slice(0, 6)} suffix=${s.slice(-4)}`;
+    console.error(
+      `[Zoho Webhook] Unauthorized — received[${safe(secret)}] expected[${safe(expectedSecret)}] env_set=${!!expectedSecret}`
+    );
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
