@@ -4,6 +4,7 @@ import { slack } from "@/lib/slack-bot";
 import { callClaudeText } from "@/lib/claude-calls";
 import { generateApplicationPDF } from "@/lib/pdf-generator";
 import { postApprovalRequest } from "./slack-approval";
+import { syncLenderSubmissionsSubform } from "@/lib/zoho-mca-fields";
 import type { PendingActionPayload } from "./types";
 
 export interface BuildSubmissionOpts {
@@ -151,6 +152,14 @@ ${opts.requestedAmount > 50_000 ? "🔒 _Matthew approval required._" : ""}`;
     });
 
     if (res.pendingActionId) pendingActionIds.push(res.pendingActionId);
+  }
+
+  if (dealSubmissionIds.length > 0) {
+    try {
+      await syncLenderSubmissionsSubform(contact.id as string);
+    } catch (e) {
+      console.warn("[submission-builder] Zoho subform sync failed:", (e as Error).message);
+    }
   }
 
   return {

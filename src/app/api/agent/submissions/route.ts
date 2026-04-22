@@ -9,6 +9,7 @@ import { maybeFireMetaEvent } from "@/lib/ai-intel/meta-events";
 import { isRoutingSubject, parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
 import { buildSubmissionPackage } from "@/lib/ai-intel/deal-submission-builder";
 import { routeToChannel } from "@/config/vektor";
+import { syncLenderSubmissionsSubform } from "@/lib/zoho-mca-fields";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 
 export const runtime = "nodejs";
@@ -152,12 +153,18 @@ async function processMessage(mailbox: string, messageId: string): Promise<Recor
   }
 }
 
-async function handleApproved(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: { approved_amount: number | null; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleApproved(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     await supabaseAdmin
       .from("deal_submissions")
-      .update({ status: "approved", last_funder_response_at: new Date().toISOString() })
+      .update({
+        status: "approved",
+        last_funder_response_at: new Date().toISOString(),
+        notes: buildNotes("Approved", args.classification),
+        ...pickOfferFields(args.classification),
+      })
       .eq("id", args.submission.id);
+    await zohoSubformSync(args.contact.id, "handleApproved");
   }
   const channel = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
   if (channel) {
@@ -172,8 +179,13 @@ async function handleDeclined(args: { contact: { id: string; business_name: stri
   if (args.submission) {
     await supabaseAdmin
       .from("deal_submissions")
-      .update({ status: "declined", last_funder_response_at: new Date().toISOString(), notes: args.classification.declined_reason })
+      .update({
+        status: "declined",
+        last_funder_response_at: new Date().toISOString(),
+        notes: `Declined — ${args.classification.declined_reason ?? args.classification.summary}`,
+      })
       .eq("id", args.submission.id);
+    await zohoSubformSync(args.contact.id, "handleDeclined");
   }
   const metaResult = await maybeFireMetaEvent({ eventName: "DealDeclined", contactId: args.contact.id });
   await supabaseAdmin
@@ -189,6 +201,16 @@ async function handleDeclined(args: { contact: { id: string; business_name: stri
 }
 
 async function handleStipsNeeded(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string } | null; classification: { stips_required: string[]; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+  if (args.submission) {
+    const stipsText = args.classification.stips_required.length > 0
+      ? `Pending stips: ${args.classification.stips_required.join(", ")}`
+      : `Pending stips: ${args.classification.summary}`;
+    await supabaseAdmin
+      .from("deal_submissions")
+      .update({ last_funder_response_at: new Date().toISOString(), notes: stipsText })
+      .eq("id", args.submission.id);
+    await zohoSubformSync(args.contact.id, "handleStipsNeeded");
+  }
   const payload: PendingActionPayload = {
     action_type: "update_zoho",
     zoho_id: args.contact.zoho_lead_id ?? undefined,
@@ -206,19 +228,26 @@ async function handleStipsNeeded(args: { contact: { id: string; business_name: s
   return { intent: "stips_needed", business: args.contact.business_name };
 }
 
-async function handleCounterOffer(args: { contact: { id: string; business_name: string | null }; submission: { id: string } | null; classification: { approved_amount: number | null; factor_rate: number | null; term_months: number | null; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleCounterOffer(args: { contact: { id: string; business_name: string | null }; submission: { id: string } | null; classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     await supabaseAdmin
       .from("deal_submissions")
-      .update({ status: "counter", last_funder_response_at: new Date().toISOString(), notes: args.classification.summary })
+      .update({
+        status: "counter",
+        last_funder_response_at: new Date().toISOString(),
+        notes: buildNotes("Counter", args.classification),
+        ...pickOfferFields(args.classification),
+      })
       .eq("id", args.submission.id);
+    await zohoSubformSync(args.contact.id, "handleCounterOffer");
   }
   const channel = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
   if (channel) {
     const details = [
       args.classification.approved_amount ? `Amount: $${args.classification.approved_amount.toLocaleString()}` : null,
-      args.classification.factor_rate ? `Factor: ${args.classification.factor_rate}` : null,
-      args.classification.term_months ? `Term: ${args.classification.term_months}mo` : null,
+      args.classification.buy_rate ? `Buy: ${args.classification.buy_rate}` : null,
+      args.classification.sell_rate ? `Sell: ${args.classification.sell_rate}` : null,
+      args.classification.term ? `Term: ${args.classification.term}` : null,
     ].filter(Boolean).join(" | ");
     await slack.postMessage(channel, `💬 *COUNTER OFFER* — ${args.contact.business_name}\n${details}\n*Summary:* ${args.classification.summary}`);
   }
@@ -354,6 +383,29 @@ async function getUserAccessToken(): Promise<string> {
   const cfg = data?.config as { access_token?: string; refresh_token?: string; expires_at?: string } | undefined;
   if (!cfg?.access_token) throw new Error("Microsoft 365 not connected");
   return cfg.access_token;
+}
+
+function pickOfferFields(c: import("@/lib/ai-intel/inbound-classifier").InboundClassification): Record<string, number | string | null> {
+  const out: Record<string, number | string | null> = {};
+  if (c.approved_amount != null) out.approved_amount = c.approved_amount;
+  if (c.buy_rate != null) out.buy_rate = c.buy_rate;
+  if (c.sell_rate != null) out.sell_rate = c.sell_rate;
+  if (c.term != null) out.term = c.term;
+  return out;
+}
+
+function buildNotes(label: "Approved" | "Counter", c: import("@/lib/ai-intel/inbound-classifier").InboundClassification): string {
+  const parts: string[] = [label];
+  if (c.summary) parts.push(c.summary);
+  return parts.join(" — ");
+}
+
+async function zohoSubformSync(merchantId: string, caller: string): Promise<void> {
+  try {
+    await syncLenderSubmissionsSubform(merchantId);
+  } catch (e) {
+    console.warn(`[${caller}] Zoho subform sync failed:`, (e as Error).message);
+  }
 }
 
 function stripHtml(html: string): string {

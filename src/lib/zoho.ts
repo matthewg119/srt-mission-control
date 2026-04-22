@@ -279,6 +279,38 @@ export async function updateLead(
  * custom fields (e.g. funding ranges like "$100K - $250K" that Zoho may reject
  * if the field is typed as Currency).
  */
+export interface ZohoNote {
+  id: string;
+  Note_Title: string | null;
+  Note_Content: string | null;
+  Created_Time: string | null;
+  Modified_Time: string | null;
+  Owner?: { name?: string | null; email?: string | null } | null;
+}
+
+/**
+ * Fetch notes attached to a Zoho Lead, newest first. Lightweight wrapper around
+ * GET /Leads/{id}/Notes — returns up to `limit` notes (default 25). Used by the
+ * Email Marketing Director to read recent context before drafting follow-ups.
+ */
+export async function getLeadNotes(
+  zohoLeadId: string,
+  limit: number = 25
+): Promise<ZohoNote[]> {
+  if (!zohoLeadId) return [];
+  try {
+    const perPage = Math.min(limit, 100);
+    const result = await zohoRequest(
+      "GET",
+      `/Leads/${zohoLeadId}/Notes?sort_order=desc&sort_by=Modified_Time&per_page=${perPage}`
+    ) as { data?: ZohoNote[] };
+    return result.data ?? [];
+  } catch (e) {
+    console.error("[zoho] getLeadNotes failed:", (e as Error).message);
+    return [];
+  }
+}
+
 export async function addNoteToLead(
             zohoLeadId: string,
             title: string,
@@ -428,6 +460,27 @@ export async function convertLeadToDeal(
     contactId: item.Contacts,
     dealId: item.Deals,
   };
+}
+
+/**
+ * Upsert records into any Zoho module (Leads or a custom module like `Deal_Submissions`).
+ * Matches on one or more unique fields so calling it twice with the same key updates the existing row.
+ * Returns the Zoho response `data` array (one entry per record).
+ */
+export async function upsertRecords(
+  moduleName: string,
+  records: Array<Record<string, unknown>>,
+  duplicateCheckFields: string[]
+): Promise<Array<{ code?: string; status?: string; details?: { id?: string } }>> {
+  if (records.length === 0) return [];
+  const payload = {
+    data: records,
+    duplicate_check_fields: duplicateCheckFields,
+  };
+  const res = (await zohoRequest("POST", `/${moduleName}/upsert`, payload)) as {
+    data?: Array<{ code?: string; status?: string; details?: { id?: string } }>;
+  };
+  return res.data ?? [];
 }
 
 export async function testConnection(): Promise<boolean> {

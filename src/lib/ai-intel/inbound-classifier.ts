@@ -14,8 +14,9 @@ export interface InboundClassification {
   business_name: string | null;
   missing_fields: string[];
   approved_amount: number | null;
-  factor_rate: number | null;
-  term_months: number | null;
+  buy_rate: number | null;
+  sell_rate: number | null;
+  term: string | null;
   declined_reason: string | null;
   stips_required: string[];
   summary: string;
@@ -26,8 +27,9 @@ const SCHEMA_HINT = `{
   "business_name": string | null,
   "missing_fields": string[],
   "approved_amount": number | null,
-  "factor_rate": number | null,
-  "term_months": number | null,
+  "buy_rate": number | null,
+  "sell_rate": number | null,
+  "term": string | null,
   "declined_reason": string | null,
   "stips_required": string[],
   "summary": string
@@ -46,6 +48,14 @@ intents:
 Extract business_name from the email content (subject or body) — this is the merchant whose deal the funder is responding to.
 For missing_fields, list the specific fields as short keywords ("ssn", "ein", "bank_3mo", "drivers_license", "articles_of_org", "voided_check").
 For stips_needed, list stipulations.
+
+When the funder quotes an offer (approved or counter), extract:
+- approved_amount: dollars approved (e.g. "$45,000" → 45000).
+- buy_rate: lender's buy rate / factor as a decimal (e.g. "1.25 buy" → 1.25). Use the buy rate the lender quotes us, not the sell rate to the merchant.
+- sell_rate: sell rate presented to the merchant if mentioned (e.g. "1.35 sell" → 1.35). Null if the funder only quoted one rate.
+- term: free text exactly as the funder wrote it (e.g. "40 weeks", "12 months", "90 days", "6 mo"). Preserve the unit.
+
+If a value isn't stated, leave it null — do NOT guess.
 summary is one sentence.`;
 
 export async function classifyInboundEmail(email: { subject: string; from: string; body: string }): Promise<{
