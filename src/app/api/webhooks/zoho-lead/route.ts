@@ -115,17 +115,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, skipped: true, reason: "no_phone" });
     }
 
-    // Fire Speed to Lead (runs full safety gates internally)
-    await triggerSpeedToLead({
-      leadId,
-      leadPhone: phone,
-      leadName,
-      leadSource,
-    });
+    // Fire Speed to Lead — wrap separately so a RingCentral/downstream failure
+    // can't crash the webhook response and trigger Zoho retries. We always
+    // return 200 to Zoho; failures are logged for Vercel log triage.
+    try {
+      await triggerSpeedToLead({
+        leadId,
+        leadPhone: phone,
+        leadName,
+        leadSource,
+      });
+    } catch (stlError) {
+      console.error(
+        "[Zoho Webhook] triggerSpeedToLead failed:",
+        stlError instanceof Error ? stlError.stack || stlError.message : stlError
+      );
+      return NextResponse.json({ success: true, skipped: true, reason: "speed_to_lead_error" });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("[Zoho Webhook] Error:", error instanceof Error ? error.message : error);
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+    // Log full stack + which stage we were in (leadId is available if we parsed it).
+    console.error(
+      "[Zoho Webhook] Error:",
+      error instanceof Error ? error.stack || error.message : error
+    );
+    // Return 200 anyway so Zoho doesn't retry-hammer a broken path. The error
+    // lives in Vercel logs for us to triage; nothing about Zoho retry helps us.
+    return NextResponse.json({ success: false, error: "logged", retry: false }, { status: 200 });
   }
 }
