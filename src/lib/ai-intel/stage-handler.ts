@@ -2,8 +2,8 @@
 //
 // Phase 1: just mirrors the stage into deal_events + posts to the deal
 // thread. Phase 2 adds lender-matcher dispatch on Pre-Approved, pitch
-// angles on Approved, SBA qualification, etc. Keep this file thin — it's
-// the switchboard, not the worker.
+// angles on Approved, etc. Keep this file thin — it's the switchboard,
+// not the worker.
 
 import { supabaseAdmin } from "@/lib/db";
 import { postDealThreadUpdate } from "./deal-thread";
@@ -55,8 +55,8 @@ export async function handleStageChange(opts: {
     text,
   });
 
-  // 4. Phase-2 dispatch (lender-matcher, pitch angles, SBA check) will
-  //    hook in here. For now we just log and return.
+  // 4. Phase-2 dispatch (lender-matcher, pitch angles) will hook in here.
+  //    For now we just log and return.
   switch (newStage) {
     case "Shopping":
       // TODO Phase 2.1: onShopping(dealId)
@@ -65,7 +65,7 @@ export async function handleStageChange(opts: {
       // TODO Phase 2.2: onPreApproved(dealId) → lender-matcher.ts
       break;
     case "Approved":
-      // TODO Phase 5: onApproved(dealId) → pitch angles + SBA check
+      // TODO Phase 5: onApproved(dealId) → pitch angles
       break;
     default:
       break;

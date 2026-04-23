@@ -1,8 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
-import { postApprovalRequest } from "./slack-approval";
-import { LEGACY_TERMINAL_STAGES } from "@/config/pipeline";
-import type { GuardianDecision, PendingActionPayload } from "./types";
+import { ZOHO_TERMINAL_STAGES } from "@/config/stage-display";
+import type { GuardianDecision } from "./types";
 
 const SCHEMA_HINT = `{
   "merchant_id": string,
@@ -24,18 +23,17 @@ Given merchant data, classify their state and return a decision object.
 
 Possible states: funded | declined | dead | approved_no_response | underwriting_stale | active_application | missing_stips | normal_nurture
 
-Possible actions: suppress | submit_deal | draft_email | slack_alert | none
+Possible actions: suppress | submit_deal | slack_alert | none
 
 Rules:
 - funded/declined/dead → always suppress, never email again (action=suppress, suppress_sequences=true).
 - funded → also fire_meta_capi_event="Purchase".
 - declined → also fire_meta_capi_event="DealDeclined".
-- approved_no_response (48h+ since last touch with merchant, deal stage Approved/Pre-Approved) → draft check-in email + slack Benjamin (action=draft_email).
+- approved_no_response (48h+ since last touch with merchant, deal stage Approved/Pre-Approved) → action=slack_alert. Email drafts are owned by the Email Marketing Director pipeline (separate flow).
 - underwriting_stale (72h+ with no movement in Underwriting/Shopping) → slack Benjamin with last touch summary (action=slack_alert).
 - active_application, no stips → slack Benjamin reminder (action=slack_alert, urgency=medium).
 - normal_nurture → action=none (let sequences run).
 
-Keep draft_body concise (3-5 sentences max). Speak in Benjamin's voice (friendly, direct, no fluff). Sign off as "Benjamin". Never include subject line inside body.
 Reasoning must be one sentence explaining the classification.`;
 
 export interface MerchantContext {
@@ -108,7 +106,7 @@ export async function fetchActiveMerchants(limit = 200): Promise<MerchantContext
   const { data: deals, error } = await supabaseAdmin
     .from("deals")
     .select("id, contact_id, stage, pipeline, amount, updated_at, contacts!inner(id, business_name, first_name, last_name, zoho_lead_id)")
-    .not("stage", "in", `(${LEGACY_TERMINAL_STAGES.map((s) => `"${s}"`).join(",")})`)
+    .not("zoho_stage", "in", `(${ZOHO_TERMINAL_STAGES.map((s) => `"${s}"`).join(",")})`)
     .order("updated_at", { ascending: true })
     .limit(limit);
 
@@ -251,26 +249,7 @@ async function processMerchant(
     suppressedSequences = cancelled?.length ?? 0;
   }
 
-  if (decision.action === "draft_email" && decision.draft_subject && decision.draft_body) {
-    const payload: PendingActionPayload = {
-      action_type: "send_email",
-      subject: decision.draft_subject,
-      body: decision.draft_body,
-      is_html: false,
-      zoho_id: ctx.zoho_lead_id ?? undefined,
-      requires_matthew: (ctx.amount ?? 0) > 50_000,
-      amount: ctx.amount ?? undefined,
-    };
-    const summary = `*${ctx.business_name ?? ctx.contact_name}* — ${decision.state}\nSubject: ${decision.draft_subject}\n\`\`\`${decision.draft_body.slice(0, 600)}\`\`\`\n_Reason:_ ${decision.reasoning}`;
-    const res = await postApprovalRequest({
-      summary,
-      payload,
-      merchantId: ctx.contact_id,
-      zohoId: ctx.zoho_lead_id ?? undefined,
-      aiDecisionId,
-    });
-    if (res.slackTs) slackPosted = true;
-  } else if (decision.action === "slack_alert" && decision.slack_message) {
+  if (decision.action === "slack_alert" && decision.slack_message) {
     const { slack } = await import("@/lib/slack-bot");
     const channel = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
     if (channel) {

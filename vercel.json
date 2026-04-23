@@ -31,6 +31,14 @@
     {
       "path": "/api/cron/daily-digest",
       "schedule": "0 12 * * 1-5"
+    },
+    {
+      "path": "/api/cron/email-director",
+      "schedule": "0 13,16,19 * * 1-6"
+    },
+    {
+      "path": "/api/cron/daily-content-ideas",
+      "schedule": "0 13,17,21 * * 1-5"
     }
   ]
 }

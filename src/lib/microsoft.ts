@@ -17,11 +17,28 @@ const SCOPES = [
   "offline_access",
   "User.Read",
   "Mail.Read",
+  "Mail.Read.Shared",
   "Mail.Send",
+  "Mail.Send.Shared",
   "Mail.ReadWrite",
+  "Mail.ReadWrite.Shared",
   "Files.ReadWrite",
   "MailboxSettings.ReadWrite",
 ].join(" ");
+
+// ── Types ──
+
+export interface GraphMessage {
+  id: string;
+  conversationId: string;
+  subject: string;
+  from: { emailAddress: { address: string; name?: string } };
+  toRecipients: Array<{ emailAddress: { address: string; name?: string } }>;
+  receivedDateTime: string;
+  bodyPreview: string;
+  webLink?: string;
+  isDraft?: boolean;
+}
 
 // ── OAuth Helpers ──
 
@@ -167,7 +184,8 @@ async function graphRequest(
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(`${GRAPH_URL}${endpoint}`, {
+  const url = endpoint.startsWith("http") ? endpoint : `${GRAPH_URL}${endpoint}`;
+  const res = await fetch(url, {
     ...fetchOptions,
     headers,
   });
@@ -203,6 +221,70 @@ export const microsoft = {
   /** Get a single email by ID */
   async getMessage(id: string): Promise<Record<string, unknown>> {
     return graphRequest(`/me/messages/${id}`);
+  },
+
+  /**
+   * Paginate messages from a specific mailbox folder. Follows @odata.nextLink.
+   * `mailbox` undefined → /me. Otherwise /users/{mailbox} (works for shared/other mailboxes
+   * the signed-in user has Mail.Read.Shared access to, e.g. submissions@srtagency.com).
+   */
+  async *listMessages(opts: {
+    mailbox?: string;
+    folder?: string;
+    filter?: string;
+    top?: number;
+    select?: string[];
+  }): AsyncIterable<GraphMessage> {
+    const mailboxPath = opts.mailbox ? `/users/${encodeURIComponent(opts.mailbox)}` : "/me";
+    const folder = opts.folder ?? "inbox";
+    const top = opts.top ?? 100;
+    const select = (opts.select ?? [
+      "id",
+      "conversationId",
+      "subject",
+      "from",
+      "toRecipients",
+      "receivedDateTime",
+      "bodyPreview",
+      "webLink",
+      "isDraft",
+    ]).join(",");
+
+    const params = new URLSearchParams();
+    params.set("$top", String(top));
+    params.set("$orderby", "receivedDateTime desc");
+    params.set("$select", select);
+    if (opts.filter) params.set("$filter", opts.filter);
+
+    let endpoint: string | null = `${mailboxPath}/mailFolders/${folder}/messages?${params.toString()}`;
+
+    while (endpoint) {
+      const page: Record<string, unknown> = await graphRequest(endpoint);
+      const value = (page.value as GraphMessage[] | undefined) ?? [];
+      for (const msg of value) yield msg;
+      endpoint = (page["@odata.nextLink"] as string | undefined) ?? null;
+    }
+  },
+
+  /**
+   * Fetch a message's body + headers. Returns plaintext body (via Prefer header).
+   * Mailbox defaults to /me.
+   */
+  async getMessageBody(
+    messageId: string,
+    mailbox?: string
+  ): Promise<{ body: string; conversationId: string; internetMessageHeaders: Array<{ name: string; value: string }> }> {
+    const mailboxPath = mailbox ? `/users/${encodeURIComponent(mailbox)}` : "/me";
+    const result = await graphRequest(
+      `${mailboxPath}/messages/${messageId}?$select=body,conversationId,internetMessageHeaders`,
+      { headers: { Prefer: 'outlook.body-content-type="text"' } }
+    );
+    const body = (result.body as { content?: string } | undefined)?.content ?? "";
+    return {
+      body,
+      conversationId: (result.conversationId as string) ?? "",
+      internetMessageHeaders: (result.internetMessageHeaders as Array<{ name: string; value: string }> | undefined) ?? [],
+    };
   },
 
   /** Send an email (with optional attachments) */
@@ -339,6 +421,106 @@ export const microsoft = {
 
     const result = await res.json();
     return { id: result.id, webUrl: result.webUrl };
+  },
+
+  /** Get a driveItem by id (returns path, webUrl, @microsoft.graph.downloadUrl when expanded). */
+  async getDriveItem(itemId: string): Promise<{
+    id: string;
+    name: string;
+    webUrl: string;
+    downloadUrl: string | null;
+    parentPath: string | null;
+    size: number;
+    file?: { mimeType?: string } | null;
+  }> {
+    const result = await graphRequest(
+      `/me/drive/items/${itemId}?$select=id,name,webUrl,size,file,parentReference,@microsoft.graph.downloadUrl`
+    );
+    const parentRef = result.parentReference as { path?: string } | undefined;
+    const pathStr = parentRef?.path ?? null;
+    const parentPath = pathStr ? decodeURIComponent(pathStr.replace(/^\/drive\/root:/, "")) : null;
+    return {
+      id: result.id as string,
+      name: result.name as string,
+      webUrl: result.webUrl as string,
+      downloadUrl: (result["@microsoft.graph.downloadUrl"] as string | undefined) ?? null,
+      parentPath,
+      size: (result.size as number) ?? 0,
+      file: (result.file as { mimeType?: string } | null | undefined) ?? null,
+    };
+  },
+
+  /** Download a driveItem's bytes via its short-lived downloadUrl. */
+  async downloadDriveItem(itemId: string): Promise<{ buffer: Buffer; name: string; mimeType: string | null }> {
+    const item = await this.getDriveItem(itemId);
+    if (!item.downloadUrl) throw new Error(`No downloadUrl for driveItem ${itemId}`);
+    const res = await fetch(item.downloadUrl);
+    if (!res.ok) throw new Error(`OneDrive download failed: ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return { buffer, name: item.name, mimeType: item.file?.mimeType ?? null };
+  },
+
+  /**
+   * Drive delta query. Pass no token to bootstrap (returns @odata.deltaLink only via initialLatest=true),
+   * or a saved deltaLink URL to fetch changes since last call. Returns items + the next deltaLink.
+   */
+  async driveDelta(opts: { deltaLink?: string; initialLatest?: boolean } = {}): Promise<{
+    items: Array<{
+      id: string;
+      name: string;
+      webUrl?: string;
+      lastModifiedDateTime?: string;
+      parentReference?: { path?: string };
+      file?: { mimeType?: string };
+      deleted?: { state?: string };
+    }>;
+    deltaLink: string | null;
+  }> {
+    const endpoint = opts.deltaLink
+      ? opts.deltaLink
+      : `/me/drive/root/delta${opts.initialLatest ? "?token=latest" : ""}`;
+
+    type DeltaItem = {
+      id: string;
+      name: string;
+      webUrl?: string;
+      lastModifiedDateTime?: string;
+      parentReference?: { path?: string };
+      file?: { mimeType?: string };
+      deleted?: { state?: string };
+    };
+    const items: DeltaItem[] = [];
+    let nextLink: string | null = endpoint;
+    let deltaLink: string | null = null;
+
+    while (nextLink) {
+      const page: Record<string, unknown> = await graphRequest(nextLink);
+      const value = (page.value as DeltaItem[] | undefined) ?? [];
+      items.push(...value);
+      nextLink = (page["@odata.nextLink"] as string | undefined) ?? null;
+      const dl = page["@odata.deltaLink"] as string | undefined;
+      if (dl) deltaLink = dl;
+    }
+
+    return { items, deltaLink };
+  },
+
+  /** Search the drive (optionally within a subfolder path). Returns ranked matches with id/name/webUrl. */
+  async searchDrive(query: string, withinPath?: string): Promise<Array<{ id: string; name: string; webUrl: string; parentPath: string | null }>> {
+    const endpoint = withinPath
+      ? `/me/drive/root:/${withinPath.split("/").map(encodeURIComponent).join("/")}:/search(q='${encodeURIComponent(query)}')`
+      : `/me/drive/root/search(q='${encodeURIComponent(query)}')`;
+    const result = await graphRequest(`${endpoint}?$select=id,name,webUrl,parentReference&$top=10`);
+    const value = (result.value as Array<{ id: string; name: string; webUrl: string; parentReference?: { path?: string } }> | undefined) ?? [];
+    return value.map((item) => {
+      const raw = item.parentReference?.path ?? null;
+      return {
+        id: item.id,
+        name: item.name,
+        webUrl: item.webUrl,
+        parentPath: raw ? decodeURIComponent(raw.replace(/^\/drive\/root:/, "")) : null,
+      };
+    });
   },
 
   // ── Outlook Signature ──

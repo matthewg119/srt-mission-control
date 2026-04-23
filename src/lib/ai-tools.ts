@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "./db";
 import { microsoft } from "./microsoft";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
-import { LEGACY_PIPELINES } from "@/config/pipeline";
+import { STAGE_PIPELINES } from "@/config/stage-display";
 import { sendEvent } from "./meta-capi";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
@@ -493,7 +493,7 @@ async function searchDeals(query: string): Promise<string> {
 
 async function moveDeal(dealId: string, newStage: string): Promise<string> {
   // Validate stage exists in our pipeline config
-  const allStages = LEGACY_PIPELINES.flatMap((p) => p.stages.map((s) => ({ pipeline: p.name, stage: s.name })));
+  const allStages = STAGE_PIPELINES.flatMap((p) => p.stages.map((s) => ({ pipeline: p.name, stage: s.name })));
   const target = allStages.find((s) => s.stage.toLowerCase() === newStage.toLowerCase());
 
   if (!target) {

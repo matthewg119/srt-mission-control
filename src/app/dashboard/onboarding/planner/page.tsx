@@ -117,9 +117,9 @@ function generateAIAnalysis(deal: Deal): AnalysisData {
       `Consider offering a smaller initial advance with renewal option to reduce risk`,
     ],
     productRecommendations: [
-      amount > 150000 ? "Term Loan (6-18 months)" : "Revenue-Based Advance",
+      amount > 150000 ? "Revenue-Based Advance (12-18 months)" : "Revenue-Based Advance",
       "Working Capital Line of Credit",
-      amount > 100000 ? "SBA Express Loan referral" : "Short-term MCA bridge",
+      amount > 100000 ? "Equipment Financing (if asset-backed)" : "Short-term MCA bridge",
     ],
   };
 }

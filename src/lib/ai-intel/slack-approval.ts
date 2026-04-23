@@ -13,6 +13,8 @@ export interface PostApprovalOpts {
   aiDecisionId?: string;
   channel?: string;
   category?: VektorCategory;
+  threadTs?: string;
+  blocks?: unknown[];
 }
 
 export interface PostApprovalResult {
@@ -38,7 +40,7 @@ export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostA
 
   const headerText = `:shark: VeKtor recommends: *${actionId.replace(/_/g, " ")}*${tag}`;
 
-  const blocks = [
+  const defaultBlocks = [
     {
       type: "section",
       text: { type: "mrkdwn", text: `${headerText}\n${opts.summary}` },
@@ -76,7 +78,12 @@ export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostA
     },
   ];
 
-  const resp = (await slack.postMessage(channel, headerText, blocks as unknown as Parameters<typeof slack.postMessage>[2])) as {
+  const blocks = opts.blocks ?? defaultBlocks;
+  const slackBlocks = blocks as unknown as Parameters<typeof slack.postMessage>[2];
+
+  const resp = (opts.threadTs
+    ? await slack.postThreadReply(channel, opts.threadTs, headerText, slackBlocks)
+    : await slack.postMessage(channel, headerText, slackBlocks)) as {
     ok: boolean;
     ts?: string;
     channel?: string;

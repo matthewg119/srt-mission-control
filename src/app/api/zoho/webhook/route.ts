@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { handleStageChange } from "@/lib/ai-intel/stage-handler";
-import { LEGACY_TERMINAL_STAGES } from "@/config/pipeline";
+import { ZOHO_TERMINAL_STAGES } from "@/config/stage-display";
 
 export const dynamic = "force-dynamic";
 
@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
 
   let deal = (deals || []).find((d) => {
     const s = d.zoho_stage || "";
-    return !LEGACY_TERMINAL_STAGES.includes(s);
+    return !ZOHO_TERMINAL_STAGES.includes(s);
   });
 
   if (!deal) {

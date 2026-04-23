@@ -16,7 +16,24 @@ const TERMINAL_ZOHO_STATUSES = [
   "Closed",
   "Funded",
   "Declined",
+  "Not Interested",
+  "Unresponsive",
+  "Lost",
+  "Bad Lead",
+  "Wrong Number",
+  "Duplicate",
 ];
+
+// Defense in depth: picklist labels drift; match the keyword regardless of exact casing/wording.
+const TERMINAL_KEYWORDS = ["declined", "dead", "dnq", "lost", "not interested", "junk", "duplicate"];
+
+function isTerminalStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = String(status).trim();
+  if (TERMINAL_ZOHO_STATUSES.includes(s)) return true;
+  const lower = s.toLowerCase();
+  return TERMINAL_KEYWORDS.some((k) => lower.includes(k));
+}
 
 const SCHEMA_HINT = `{
   "merchant_id": string,
@@ -40,13 +57,15 @@ Zoho is the source of truth for stage (Lead_Status), notes, and custom MCA field
 
 Possible states: funded | declined | dead | approved_no_response | underwriting_stale | active_application | missing_stips | awaiting_statements | normal_nurture | needs_data_cleanup
 
-Possible actions: suppress | submit_deal | draft_email | slack_alert | clean_zoho_data | none
+Possible actions: suppress | submit_deal | slack_alert | clean_zoho_data | none
+
+Email drafts are owned by the Email Marketing Director pipeline — this classifier never drafts merchant emails, only Slack alerts / cleanup / suppression.
 
 Rules:
 - funded/declined/dead → action=suppress, suppress_sequences=true.
 - funded → fire_meta_capi_event="Purchase".
 - declined → fire_meta_capi_event="DealDeclined".
-- approved_no_response (48h+ since last activity, Lead_Status=Approved/Pre-Approved) → action=draft_email.
+- approved_no_response (48h+ since last activity, Lead_Status=Approved/Pre-Approved) → action=slack_alert. Email drafts are owned by the Email Marketing Director pipeline (not this classifier).
 - underwriting_stale (72h+ in Underwriting/Shopping) → action=slack_alert.
 - active_application, no stips → action=slack_alert, urgency=medium.
 - awaiting_statements: merchant signed the portal application (portal_app_completed=true) but has NOT uploaded bank statements (portal_statements_uploaded=false), AND at least 24 hours have passed since signature (hours_since_signature ≥ 24). This is the highest-intent re-engagement segment — they are one step from an offer.
@@ -56,7 +75,7 @@ Rules:
     where {formatted_phone} is the merchant's phone in (XXX) XXX-XXXX form and {sms_body} is the drafted SMS under 300 chars, in Matt's voice (first name of merchant, friendly, no emojis in the body).
   - For T+24h SMS template: "Hey {first_name}, Matt from SRT. Saw you wrapped the application yesterday — one last step to get you a number today: send me your last 3 months of business bank statements. I can text you the secure Plaid link if easier — just say the word."
   - For T+7d SMS template: "Hey {first_name}, this is Matt again — want to keep your SRT app open or should I close it out? No pressure either way."
-  - For T+3d email nudge: action="draft_email", subject="Your SRT offer is on hold", body referencing the one missing step (bank statements) with a link to https://portal.srtagency.com/portal/statements.
+  - For T+3d: action="slack_alert" with the same copy/paste SMS structure — no email drafts here. All merchant email drafts are owned by the Email Marketing Director pipeline (separate flow, separate channel).
   - urgency="high" for T+24h, "medium" for T+3d, "low" for T+7d.
 - If required fields are missing, malformed, or inconsistent (e.g., phone with letters, missing EIN on a funded deal, duplicate note content) → state="needs_data_cleanup", action="clean_zoho_data". Populate zoho_cleanup_fields with a map of Zoho field names to their corrected values. Only include fields where you have high confidence in the correction.
 - normal_nurture → action=none.
@@ -97,9 +116,15 @@ export async function fetchActiveZohoLeads(limit = 100): Promise<ZohoActiveLead[
 
     const { data: contact } = await supabaseAdmin
       .from("contacts")
-      .select("id, first_name, phone, mobile_phone, portal_app_completed, portal_statements_uploaded, application_signed_at, statements_uploaded_at, last_nudge_posted_at")
+      .select("id, first_name, phone, mobile_phone, portal_app_completed, portal_statements_uploaded, application_signed_at, statements_uploaded_at, last_nudge_posted_at, do_not_contact")
       .eq("zoho_lead_id", zoho_id)
       .maybeSingle();
+
+    // Skip anything the human side has explicitly flagged, plus keyword-match
+    // the Zoho status (handles picklist label drift like Codi's "Dead Declined"
+    // → new variants). Defense in depth over the Zoho-side criteria filter.
+    if (contact?.do_not_contact === true) continue;
+    if (isTerminalStatus(lead.Lead_Status as string | null | undefined)) continue;
 
     const signedAt = (contact?.application_signed_at as string) || null;
     const hoursSinceSig = signedAt
@@ -268,29 +293,6 @@ async function processZohoLead(
       zohoId: lead.zoho_id,
       aiDecisionId: ai?.id as string | undefined,
       category: "merchant_state",
-    });
-    if (res.slackTs) slackPosted = true;
-  }
-
-  if (decision.action === "draft_email" && decision.draft_subject && decision.draft_body) {
-    const payload: PendingActionPayload = {
-      action_type: "send_email",
-      subject: decision.draft_subject,
-      body: decision.draft_body,
-      to: (lead.data.Email as string) || undefined,
-      is_html: false,
-      zoho_id: lead.zoho_id,
-      amount: Number(lead.data.Funding_Amount_Requested ?? 0) || undefined,
-      requires_matthew: Number(lead.data.Funding_Amount_Requested ?? 0) > 50_000,
-    };
-    const summary = `*${lead.data.Company ?? "Merchant"}* — ${decision.state}\nSubject: ${decision.draft_subject}\n\`\`\`${decision.draft_body.slice(0, 600)}\`\`\`\n_Reason:_ ${decision.reasoning}`;
-    const res = await postApprovalRequest({
-      summary,
-      payload,
-      merchantId: lead.supabase_contact_id ?? undefined,
-      zohoId: lead.zoho_id,
-      aiDecisionId: ai?.id as string | undefined,
-      category: "working_lead",
     });
     if (res.slackTs) slackPosted = true;
   }

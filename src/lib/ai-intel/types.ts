@@ -6,6 +6,8 @@ export type MerchantState =
   | "underwriting_stale"
   | "active_application"
   | "missing_stips"
+  | "awaiting_statements"
+  | "needs_data_cleanup"
   | "normal_nurture";
 
 export type AIAction = "suppress" | "submit_deal" | "draft_email" | "slack_alert" | "clean_zoho_data" | "none";
@@ -14,7 +16,29 @@ export type AIUrgency = "high" | "medium" | "low";
 
 export type TriggerType = "cron" | "webhook_zoho" | "inbound_email" | "slack_command";
 
-export type ActionType = "send_email" | "submit_deal" | "update_zoho" | "reply_funder";
+export type ActionType =
+  | "send_email"
+  | "submit_deal"
+  | "update_zoho"
+  | "reply_funder"
+  | "send_marketing_email";
+
+export type CadenceTrack =
+  | "new_lead"
+  | "awaiting_statements"
+  | "approved_nurture"
+  | "confirmation"
+  | "paused"
+  | "done";
+
+export type MarketingCampaignKey =
+  | "new_lead_d1"
+  | "new_lead_d2"
+  | "new_lead_d3"
+  | "confirmation_daily"
+  | "awaiting_statements"
+  | "approved_nurture"
+  | "custom";
 
 export interface GuardianDecision {
   merchant_id: string;
@@ -42,7 +66,16 @@ export interface PendingActionPayload {
   deal_id?: string;
   lender_id?: string;
   zoho_id?: string;
+  contact_id?: string;
   requires_matthew?: boolean;
   amount?: number;
+  stage?: string;
+  zoho_fields?: Record<string, unknown>;
+  note?: { title: string; content: string };
+  // send_marketing_email specific
+  campaign_key?: MarketingCampaignKey;
+  cadence_day?: number;
+  sequence_position?: number;
+  magic_link_redirect?: string;
   [key: string]: unknown;
 }

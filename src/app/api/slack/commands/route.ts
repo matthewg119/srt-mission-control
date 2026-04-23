@@ -3,6 +3,7 @@ import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { buildSubmissionPackage } from "@/lib/ai-intel/deal-submission-builder";
 import { sendLenderRoutingRequest } from "@/lib/ai-intel/request-lender-routing";
+import { microsoft } from "@/lib/microsoft";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,8 +48,10 @@ export async function POST(req: NextRequest) {
       return handleEmails();
     case "activity":
       return handleActivity();
+    case "doc":
+      return handleDoc({ arg });
     default:
-      return respond(`Unknown subcommand. Try: \`/srt route [merchant]\` (ask where to send), \`/srt submit [merchant]\` (auto submit to T1), \`/srt status [merchant]\`, \`/srt followups\`, \`/srt emails\`, \`/srt activity\`.`);
+      return respond(`Unknown subcommand. Try: \`/srt route [merchant]\` (ask where to send), \`/srt submit [merchant]\` (auto submit to T1), \`/srt status [merchant]\`, \`/srt doc [merchant] [filename]\`, \`/srt followups\`, \`/srt emails\`, \`/srt activity\`.`);
   }
 }
 
@@ -280,6 +283,54 @@ async function handleEmails(): Promise<NextResponse> {
   const enrLines = enr.length === 0 ? "_No sequence emails due in next 24h._" : enr.map((e) => `  • ${e.contact_name ?? "?"} — ${e.email_sequences?.name ?? "?"} step ${e.current_step + 1} @ ${new Date(e.next_send_at).toLocaleString()}`).join("\n");
 
   return respond(`*Emails queued:*\n\n*Pending AI approval:*\n${pendLines}\n\n*Sequence drips (24h):*\n${enrLines}`);
+}
+
+async function handleDoc(args: { arg: string }): Promise<NextResponse> {
+  if (!args.arg) {
+    return respond('Usage: `/srt doc "Joes Pizza" bank statement` — searches the OneDrive deal folder for a file.');
+  }
+
+  // Parse: either `"Merchant Name" query terms` or `Merchant query terms`
+  let merchantQuery: string;
+  let query: string;
+  const quoted = args.arg.match(/^"([^"]+)"\s*(.*)$/);
+  if (quoted) {
+    merchantQuery = quoted[1].trim();
+    query = quoted[2].trim();
+  } else {
+    const parts = args.arg.split(/\s+/);
+    merchantQuery = parts[0];
+    query = parts.slice(1).join(" ").trim();
+  }
+
+  if (!merchantQuery) return respond("Couldn't parse merchant name. Try `/srt doc \"Joes Pizza\" bank statement`.");
+
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select("id, business_name")
+    .ilike("business_name", `%${merchantQuery}%`)
+    .limit(1)
+    .maybeSingle();
+
+  if (!contact) return respond(`No merchant matching "${merchantQuery}".`);
+  const merchantName = (contact.business_name as string) ?? merchantQuery;
+
+  const folderPath = `Deals/${merchantName}`;
+  try {
+    const matches = await microsoft.searchDrive(query || "statement", folderPath);
+    const topFiles = matches
+      .filter((m) => m.parentPath?.toLowerCase().startsWith(`/${folderPath.toLowerCase()}`) || m.parentPath?.toLowerCase().startsWith(folderPath.toLowerCase()))
+      .slice(0, 5);
+
+    if (topFiles.length === 0) {
+      return respond(`No files matching "${query}" in OneDrive \`Deals/${merchantName}/\`.`);
+    }
+
+    const lines = topFiles.map((f) => `• <${f.webUrl}|${f.name}> — \`${f.parentPath ?? ""}\``).join("\n");
+    return respond(`*Files in Deals/${merchantName}/:*\n${lines}`);
+  } catch (e) {
+    return respond(`⚠️ OneDrive search failed: ${(e as Error).message}`);
+  }
 }
 
 async function handleActivity(): Promise<NextResponse> {

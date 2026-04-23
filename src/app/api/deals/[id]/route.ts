@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
+import { updateLead as updateZohoLead } from "@/lib/zoho";
 
 // GET /api/deals/[id] — single deal with contact, events, and notes
 export async function GET(
@@ -69,10 +70,10 @@ export async function PATCH(
       ucc_filing_fee, selected_lender, bank_name, bank_account, routing_number,
     } = body;
 
-    // Get current deal for logging
+    // Get current deal for logging + Zoho forward
     const { data: currentDeal } = await supabaseAdmin
       .from("deals")
-      .select("stage, pipeline")
+      .select("stage, pipeline, zoho_stage, contact_id, contacts(zoho_lead_id)")
       .eq("id", id)
       .single();
 
@@ -80,8 +81,27 @@ export async function PATCH(
       return NextResponse.json({ error: "Deal not found" }, { status: 404 });
     }
 
+    // If stage is changing, forward to Zoho first — Zoho owns pipeline stage.
+    // The Zoho webhook will ride back and update `zoho_stage` for us, but we
+    // also set it locally now so the UI reflects the change without a round-trip.
+    if (stage !== undefined && stage !== currentDeal.stage) {
+      const contactRef = (currentDeal as unknown as { contacts?: { zoho_lead_id?: string | null } }).contacts;
+      const zohoLeadId = contactRef?.zoho_lead_id ?? null;
+      if (zohoLeadId) {
+        try {
+          await updateZohoLead(zohoLeadId, { Lead_Status: stage });
+        } catch (e) {
+          console.error("[deals PATCH] Zoho stage forward failed:", (e as Error).message);
+          // Non-fatal — Supabase update below still runs so the user isn't stuck.
+        }
+      }
+    }
+
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (stage !== undefined) updates.stage = stage;
+    if (stage !== undefined) {
+      updates.stage = stage;        // legacy column — will be dropped once Meta CAPI
+      updates.zoho_stage = stage;   // block is moved behind the Zoho webhook
+    }
     if (pipeline !== undefined) updates.pipeline = pipeline;
     if (amount !== undefined) updates.amount = amount;
     if (product_type !== undefined) updates.product_type = product_type;

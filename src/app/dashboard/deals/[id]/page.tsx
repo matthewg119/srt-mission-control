@@ -9,10 +9,10 @@ import {
   Edit, DollarSign, Landmark, Shield, Activity, Send,
 } from "lucide-react";
 import {
-  LEGACY_NEW_DEALS_PIPELINE as NEW_DEALS_PIPELINE,
-  LEGACY_ACTIVE_DEALS_PIPELINE as ACTIVE_DEALS_PIPELINE,
-  LEGACY_PIPELINES as PIPELINES,
-} from "@/config/pipeline";
+  NEW_DEALS_PIPELINE,
+  ACTIVE_DEALS_PIPELINE,
+  STAGE_PIPELINES as PIPELINES,
+} from "@/config/stage-display";
 import { formatCurrency, formatRelativeTime } from "@/lib/utils";
 
 // ─── Types ──────────────────────────────────────────────────────────────────

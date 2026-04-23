@@ -16,7 +16,9 @@ function getToken(): string {
 export interface SlackBlock {
         type: string;
         text?: { type: string; text: string; emoji?: boolean };
-        elements?: Array<{ type: string; text: string; emoji?: boolean }>;
+        // `elements` accepts either plain text/mrkdwn elements OR interactive
+        // elements (buttons) whose `text` is itself a plain_text object.
+        elements?: Array<Record<string, unknown>>;
         fields?: Array<{ type: string; text: string }>;
         accessory?: Record<string, unknown>;
 }
@@ -110,6 +112,35 @@ export const slack = {
         isConfigured(): boolean {
                   const token = getToken();
                   return !!token && token.trim().length > 0;
+        },
+
+        /** Fetch file metadata via files.info — returns url_private_download, mimetype, channels, thread context. */
+        async filesInfo(fileId: string): Promise<Record<string, unknown>> {
+                  const token = getToken();
+                  if (!token) return { ok: false, error: "no_token" };
+                  const res = await fetch(`${SLACK_API}/files.info?file=${encodeURIComponent(fileId)}`, {
+                            headers: { Authorization: `Bearer ${token}` },
+                  });
+                  const json = await res.json() as Record<string, unknown>;
+                  if (!json.ok) console.error("[Slack] files.info error:", JSON.stringify(json));
+                  return json;
+        },
+
+        /** Download a Slack file by its url_private_download. Returns the raw Buffer. */
+        async downloadFile(urlPrivateDownload: string): Promise<Buffer> {
+                  const token = getToken();
+                  if (!token) throw new Error("SLACK_BOT_TOKEN not set");
+                  const res = await fetch(urlPrivateDownload, {
+                            headers: { Authorization: `Bearer ${token}` },
+                  });
+                  if (!res.ok) throw new Error(`Slack file download failed: ${res.status}`);
+                  return Buffer.from(await res.arrayBuffer());
+        },
+
+        /** Post an ephemeral message visible only to one user (confirmations, errors). */
+        async postEphemeral(channel: string, user: string, text: string): Promise<Record<string, unknown>> {
+                  if (!channel || !user) return { ok: false, error: "missing_channel_or_user" };
+                  return slackFetch("chat.postEphemeral", { channel, user, text });
         },
 
         /** Get channel IDs from env */
