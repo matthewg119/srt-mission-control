@@ -1,0 +1,38 @@
+name: Daily Content Ideas Cron
+
+# External scheduler for /api/cron/daily-content-ideas (3x weekdays).
+# Vercel Hobby caps crons at 1/day — GitHub Actions has no such limit.
+
+on:
+  schedule:
+    # 9am / 1pm / 5pm Eastern on weekdays (13/17/21 UTC during EDT).
+    - cron: "0 13 * * 1-5"
+    - cron: "0 17 * * 1-5"
+    - cron: "0 21 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fire /api/cron/daily-content-ideas
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repo secret not set"
+            exit 1
+          fi
+          http_code=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "https://mission.srtagency.com/api/cron/daily-content-ideas")
+          echo "http_code=$http_code"
+          echo "--- response ---"
+          cat response.txt
+          echo ""
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Non-200 response from daily-content-ideas cron"
+            exit 1
+          fi
