@@ -170,7 +170,7 @@ ${opts.requestedAmount > 50_000 ? "🔒 _Matthew approval required._" : ""}`;
   };
 }
 
-async function draftSubmissionEmail(args: { businessName: string; amountRequested: number; useOfFunds: string; revenueTable: string }): Promise<string> {
+export async function draftSubmissionEmail(args: { businessName: string; amountRequested: number; useOfFunds: string; revenueTable: string }): Promise<string> {
   const system = `You are SRT Submissions, writing a deal-submission email to an MCA funder. Follow SRT's exact format:
 
 Hello team,
@@ -235,7 +235,7 @@ async function buildRevenueTable(contactId: string): Promise<string> {
   return "(Revenue data not available — bank statements pending)";
 }
 
-function formatRevenueForSubject(rev: unknown): string {
+export function formatRevenueForSubject(rev: unknown): string {
   if (typeof rev === "number") return Math.round(rev).toLocaleString();
   if (typeof rev === "string") {
     const parsed = parseFloat(rev.replace(/[^0-9.]/g, ""));

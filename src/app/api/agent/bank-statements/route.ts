@@ -22,6 +22,14 @@ interface RequestBody {
   onedrive_folder_url?: string;
 }
 
+interface RevenueTableRow {
+  month: string;             // "December", "Jan", "Feb", "March"
+  deposits: number | null;   // total deposits for the month
+  avg_daily_ledger: number | null; // average daily ledger balance
+  deposit_count: number | null;    // number of deposits
+  nsf_count: number | null;        // number of NSFs
+}
+
 interface BankMetrics {
   avg_monthly_deposits: number | null;
   avg_daily_balance: number | null;
@@ -34,6 +42,7 @@ interface BankMetrics {
   red_flags: string[];
   qualification_signal: "strong" | "moderate" | "weak" | null;
   statement_months_covered: string[];
+  revenue_table: RevenueTableRow[];
 }
 
 const METRICS_SYSTEM = `You extract structured underwriting metrics from a bank-statement analysis report.
@@ -50,7 +59,14 @@ Output JSON only, matching this shape:
   "top_mca_lenders": string[],
   "red_flags": string[],
   "qualification_signal": "strong" | "moderate" | "weak" | null,
-  "statement_months_covered": string[]
+  "statement_months_covered": string[],
+  "revenue_table": Array<{
+    "month": string,
+    "deposits": number | null,
+    "avg_daily_ledger": number | null,
+    "deposit_count": number | null,
+    "nsf_count": number | null
+  }>
 }
 
 Rules:
@@ -58,7 +74,11 @@ Rules:
 - Dollar values as plain numbers (no $/commas).
 - red_flags: max 6 concise items from the report's Red Flags section.
 - top_mca_lenders: names only, max 5.
-- statement_months_covered: YYYY-MM format from the Monthly Breakdown section.`;
+- statement_months_covered: YYYY-MM format from the Monthly Breakdown section.
+- revenue_table: one row per statement month the report covers. Use the short
+  month label the report uses (e.g. "December", "Jan", "Feb", "March"). Populate
+  deposits (total deposits for month), avg_daily_ledger, deposit_count, and
+  nsf_count from the Monthly Breakdown. Leave individual fields null if absent.`;
 
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as RequestBody;
@@ -179,13 +199,14 @@ export async function POST(req: NextRequest) {
     red_flags: [],
     qualification_signal: null,
     statement_months_covered: [],
+    revenue_table: [],
   };
   try {
     const metricsResult = await callClaudeJSON<BankMetrics>({
       model: "claude-sonnet-4-6",
       system: METRICS_SYSTEM,
       user: analysis.report,
-      maxTokens: 1200,
+      maxTokens: 1800,
       temperature: 0.1,
     });
     metrics = { ...metrics, ...metricsResult.data };
@@ -332,7 +353,14 @@ export async function POST(req: NextRequest) {
       content: analysis.report,
     },
     deal_id: dealId,
+    contact_id: contactId ?? undefined,
     requires_matthew: false,
+    // After 👍 updates Zoho, execute-action will chain a submission-email
+    // draft card into the same thread using the extracted revenue_table.
+    followup: "draft_submission",
+    onedrive_folder_url: body.onedrive_folder_url,
+    bank_stmt_drive_item_ids: fetched.map((f) => f.drive_item_id).filter(Boolean) as string[],
+    revenue_table: metrics.revenue_table,
   };
 
   let approvalTs: string | null = null;

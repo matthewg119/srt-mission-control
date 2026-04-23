@@ -10,10 +10,21 @@ import { isRoutingSubject, parseLenderChoicesFromReply } from "@/lib/ai-intel/re
 import { buildSubmissionPackage } from "@/lib/ai-intel/deal-submission-builder";
 import { routeToChannel } from "@/config/vektor";
 import { syncLenderSubmissionsSubform } from "@/lib/zoho-mca-fields";
+import { addNoteToLead } from "@/lib/zoho";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+async function lookupLenderName(lenderId: string | null): Promise<string> {
+  if (!lenderId) return "—";
+  const { data } = await supabaseAdmin
+    .from("lenders")
+    .select("name")
+    .eq("id", lenderId)
+    .maybeSingle();
+  return (data?.name as string | null) ?? "—";
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -166,16 +177,29 @@ async function handleApproved(args: { contact: { id: string; business_name: stri
       .eq("id", args.submission.id);
     await zohoSubformSync(args.contact.id, "handleApproved");
   }
-  const channel = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
-  if (channel) {
-    const amt = args.classification.approved_amount ? ` for $${args.classification.approved_amount.toLocaleString()}` : "";
-    await slack.postMessage(channel, `✅ *APPROVED* — ${args.contact.business_name}${amt}\n*Subject:* ${args.msg.subject}\n*Summary:* ${args.classification.summary}`);
-  }
+  const lenderName = await lookupLenderName(args.submission?.lender_id ?? null);
+  const amt = args.classification.approved_amount ? `$${args.classification.approved_amount.toLocaleString()}` : "—";
+  const rate = args.classification.buy_rate ?? args.classification.sell_rate;
+  const rateStr = rate ? String(rate) : "—";
+  const termStr = args.classification.term ?? "—";
+  const noteContent = `${amt} @ ${rateStr} / ${termStr}`;
+  await writeFunderReplyNote({
+    zohoId: args.contact.zoho_lead_id,
+    lenderName,
+    status: "Approved",
+    content: noteContent,
+  });
+  await postFunderReplyToDealChannel({
+    contactId: args.contact.id,
+    headline: `🎉 *APPROVED* — ${args.contact.business_name} · ${lenderName ?? "lender"}`,
+    body: `*Offer:* ${noteContent}\n*Subject:* ${args.msg.subject}\n*Summary:* ${args.classification.summary}`,
+    fallbackIntent: "approved",
+  });
   await supabaseAdmin.from("ai_decisions").update({ action_taken: "slack_alert" }).eq("id", args.aiDecisionId ?? "");
   return { intent: "approved", business: args.contact.business_name };
 }
 
-async function handleDeclined(args: { contact: { id: string; business_name: string | null }; submission: { id: string } | null; classification: { declined_reason: string | null; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleDeclined(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: { declined_reason: string | null; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     await supabaseAdmin
       .from("deal_submissions")
@@ -193,14 +217,24 @@ async function handleDeclined(args: { contact: { id: string; business_name: stri
     .update({ action_taken: "slack_alert", meta_capi_event_fired: metaResult.fired ? "DealDeclined" : `skipped:${metaResult.reason}` })
     .eq("id", args.aiDecisionId ?? "");
 
-  const channel = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
-  if (channel) {
-    await slack.postMessage(channel, `❌ *DECLINED* — ${args.contact.business_name}\n*Reason:* ${args.classification.declined_reason ?? "not stated"}\n*Subject:* ${args.msg.subject}`);
-  }
+  const lenderName = await lookupLenderName(args.submission?.lender_id ?? null);
+  const reason = args.classification.declined_reason ?? args.classification.summary;
+  await writeFunderReplyNote({
+    zohoId: args.contact.zoho_lead_id,
+    lenderName,
+    status: "Declined",
+    content: reason,
+  });
+  await postFunderReplyToDealChannel({
+    contactId: args.contact.id,
+    headline: `⛔ *DECLINED* — ${args.contact.business_name} · ${lenderName ?? "lender"}`,
+    body: `*Reason:* ${reason}\n*Subject:* ${args.msg.subject}`,
+    fallbackIntent: "declined",
+  });
   return { intent: "declined", business: args.contact.business_name, meta_event: metaResult };
 }
 
-async function handleStipsNeeded(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string } | null; classification: { stips_required: string[]; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleStipsNeeded(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: { stips_required: string[]; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     const stipsText = args.classification.stips_required.length > 0
       ? `Pending stips: ${args.classification.stips_required.join(", ")}`
@@ -211,6 +245,16 @@ async function handleStipsNeeded(args: { contact: { id: string; business_name: s
       .eq("id", args.submission.id);
     await zohoSubformSync(args.contact.id, "handleStipsNeeded");
   }
+  const lenderName = await lookupLenderName(args.submission?.lender_id ?? null);
+  const stipsList = args.classification.stips_required.length > 0
+    ? args.classification.stips_required.join(", ")
+    : args.classification.summary;
+  await writeFunderReplyNote({
+    zohoId: args.contact.zoho_lead_id,
+    lenderName,
+    status: "Stips",
+    content: stipsList,
+  });
   const payload: PendingActionPayload = {
     action_type: "update_zoho",
     zoho_id: args.contact.zoho_lead_id ?? undefined,
@@ -218,7 +262,7 @@ async function handleStipsNeeded(args: { contact: { id: string; business_name: s
     stips_required: args.classification.stips_required,
   };
   await postApprovalRequest({
-    summary: `📎 *STIPS NEEDED* — ${args.contact.business_name}\n*Stips:* ${args.classification.stips_required.join(", ")}\n*Summary:* ${args.classification.summary}`,
+    summary: `📎 *STIPS NEEDED* — ${args.contact.business_name} · ${lenderName ?? "lender"}\n*Stips:* ${stipsList}\n*Summary:* ${args.classification.summary}`,
     payload,
     merchantId: args.contact.id,
     zohoId: args.contact.zoho_lead_id ?? undefined,
@@ -228,7 +272,7 @@ async function handleStipsNeeded(args: { contact: { id: string; business_name: s
   return { intent: "stips_needed", business: args.contact.business_name };
 }
 
-async function handleCounterOffer(args: { contact: { id: string; business_name: string | null }; submission: { id: string } | null; classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleCounterOffer(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     await supabaseAdmin
       .from("deal_submissions")
@@ -241,16 +285,24 @@ async function handleCounterOffer(args: { contact: { id: string; business_name: 
       .eq("id", args.submission.id);
     await zohoSubformSync(args.contact.id, "handleCounterOffer");
   }
-  const channel = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
-  if (channel) {
-    const details = [
-      args.classification.approved_amount ? `Amount: $${args.classification.approved_amount.toLocaleString()}` : null,
-      args.classification.buy_rate ? `Buy: ${args.classification.buy_rate}` : null,
-      args.classification.sell_rate ? `Sell: ${args.classification.sell_rate}` : null,
-      args.classification.term ? `Term: ${args.classification.term}` : null,
-    ].filter(Boolean).join(" | ");
-    await slack.postMessage(channel, `💬 *COUNTER OFFER* — ${args.contact.business_name}\n${details}\n*Summary:* ${args.classification.summary}`);
-  }
+  const lenderName = await lookupLenderName(args.submission?.lender_id ?? null);
+  const details = [
+    args.classification.approved_amount ? `$${args.classification.approved_amount.toLocaleString()}` : null,
+    args.classification.buy_rate ? `@ ${args.classification.buy_rate}` : null,
+    args.classification.term ? `/ ${args.classification.term}` : null,
+  ].filter(Boolean).join(" ");
+  await writeFunderReplyNote({
+    zohoId: args.contact.zoho_lead_id,
+    lenderName,
+    status: "Counter",
+    content: details || args.classification.summary,
+  });
+  await postFunderReplyToDealChannel({
+    contactId: args.contact.id,
+    headline: `💬 *COUNTER OFFER* — ${args.contact.business_name} · ${lenderName ?? "lender"}`,
+    body: `*Offer:* ${details || "—"}\n*Summary:* ${args.classification.summary}`,
+    fallbackIntent: "counter",
+  });
   await supabaseAdmin.from("ai_decisions").update({ action_taken: "slack_alert" }).eq("id", args.aiDecisionId ?? "");
   return { intent: "counter_offer", business: args.contact.business_name };
 }
@@ -406,6 +458,42 @@ async function zohoSubformSync(merchantId: string, caller: string): Promise<void
   } catch (e) {
     console.warn(`[${caller}] Zoho subform sync failed:`, (e as Error).message);
   }
+}
+
+async function writeFunderReplyNote(args: {
+  zohoId: string | null;
+  lenderName: string;
+  status: "Approved" | "Declined" | "Counter" | "Stips";
+  content: string;
+}): Promise<void> {
+  if (!args.zohoId) return;
+  const lender = args.lenderName === "—" ? "Lender" : args.lenderName;
+  try {
+    await addNoteToLead(args.zohoId, `${lender} — ${args.status}`, args.content);
+  } catch (e) {
+    console.warn(`[submissions] addNoteToLead(${args.status}) failed:`, (e as Error).message);
+  }
+}
+
+async function postFunderReplyToDealChannel(args: {
+  contactId: string;
+  headline: string;
+  body: string;
+  fallbackIntent: "approved" | "declined" | "counter";
+}): Promise<void> {
+  const { data: deal } = await supabaseAdmin
+    .from("deals")
+    .select("slack_deal_channel_id")
+    .eq("contact_id", args.contactId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const channelId = (deal?.slack_deal_channel_id as string | null) ?? null;
+  const fallback = process.env.SLACK_AI_APPROVALS_CHANNEL || process.env.SLACK_HOT_LEADS_CHANNEL || "";
+  const target = channelId || fallback;
+  if (!target) return;
+  await slack.postMessage(target, `${args.headline}\n${args.body}`);
 }
 
 function stripHtml(html: string): string {

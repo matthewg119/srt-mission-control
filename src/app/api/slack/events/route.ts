@@ -6,6 +6,8 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
+import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
+import type { PendingActionPayload } from "@/lib/ai-intel/types";
 
 interface SlackEventFile {
   id: string;
@@ -129,6 +131,27 @@ export async function POST(request: NextRequest) {
       const attachedFiles = (event.files as SlackEventFile[] | undefined) ?? [];
       const isContentChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.content;
       const isContentFullChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.contentFull;
+
+      // Thread reply in a #pipeline-new deal thread? Check for a pending
+      // send_submission action and interpret the reply as lender names to
+      // send the draft to.
+      const pipelineChannelEnv = process.env.SLACK_PIPELINE_CHANNEL || "";
+      const parentThreadTs = (event.thread_ts as string | undefined) || null;
+      if (
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        pipelineChannelEnv &&
+        channel === pipelineChannelEnv &&
+        userText.trim().length > 0
+      ) {
+        const handled = await handleDealThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          userId: event.user as string,
+          replyText: userText,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
 
       // #content / #content-full: fork to the Viral Video Decoder. Accepts any
       // mix of images + text brief; one call per Slack message (not per file).
@@ -465,6 +488,91 @@ async function handleContentDrop(args: {
       `⚠️ Decoder error: ${(e as Error).message}`
     );
   }
+}
+
+// Thread-reply handler for deal threads with a pending send_submission card.
+// Parses lender names, edits the pending payload with lender_ids, resolves
+// the action as approved, and fires submit-to-lenders via executePendingAction.
+// Returns true if the reply was consumed as a lender list (even on parse
+// failure) so the outer AI-agent branch doesn't also respond.
+async function handleDealThreadReply(args: {
+  channel: string;
+  threadTs: string;
+  userId: string;
+  replyText: string;
+}): Promise<boolean> {
+  const { data: deal } = await supabaseAdmin
+    .from("deals")
+    .select("id")
+    .eq("slack_thread_ts", args.threadTs)
+    .maybeSingle();
+  if (!deal) return false;
+
+  const { data: pending } = await supabaseAdmin
+    .from("pending_slack_actions")
+    .select("id, slack_ts, slack_channel, payload")
+    .eq("action_type", "send_submission")
+    .eq("status", "pending")
+    .eq("payload->>deal_id", deal.id as string)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!pending) return false;
+
+  const choice = await parseLenderChoicesFromReply(args.replyText);
+  if (choice.lender_ids.length === 0) {
+    await slack.postEphemeral(
+      args.channel,
+      args.userId,
+      `Couldn't match any lender from "${args.replyText.slice(0, 120)}". Try: \`send to Forward Financing, Credibly\` or \`Tier 1 only\`.`,
+    );
+    return true;
+  }
+
+  const currentPayload = (pending.payload as PendingActionPayload) ?? {};
+  const editedPayload: PendingActionPayload = {
+    ...currentPayload,
+    lender_ids: choice.lender_ids,
+  };
+
+  const { action, error } = await resolvePendingAction({
+    slackTs: pending.slack_ts as string,
+    status: "approved",
+    approvedBy: args.userId,
+    editedPayload,
+  });
+  if (error || !action) {
+    await slack.postEphemeral(args.channel, args.userId, `Couldn't resolve send: ${error ?? "unknown"}`);
+    return true;
+  }
+
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    `📤 Sending to: ${choice.matched_names.join(", ")}${choice.unmatched.length ? ` _(unmatched: ${choice.unmatched.join(", ")})_` : ""}`,
+  );
+
+  const result = await executePendingAction({
+    actionId: action.id,
+    actionType: action.action_type,
+    payload: action.payload,
+    approvedBy: args.userId,
+  });
+
+  const channelId = result.details?.channel_id as string | undefined;
+  const summary = result.ok
+    ? `Sent to ${(result.details?.sent as string[] | undefined)?.length ?? 0} lender(s)${
+        channelId ? ` — channel: <#${channelId}>` : ""
+      }`
+    : `Send failed: ${result.error ?? "unknown"}`;
+
+  await postExecutionReceipt({
+    channel: args.channel,
+    threadTs: pending.slack_ts as string,
+    summary,
+    success: result.ok,
+  });
+  return true;
 }
 
 interface SlackFileInfo {

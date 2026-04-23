@@ -125,9 +125,29 @@ export async function postDealThreadUpdate(opts: {
   action: DealThreadAction;
   text: string;
   blocks?: SlackBlock[];
+  // When set, the update is posted as a top-level message in this channel
+  // instead of a thread reply in #pipeline-new. Used for per-deal channels
+  // created by ensureDealChannel() once submissions start flowing.
+  channelOverride?: string;
 }): Promise<void> {
-  const { dealId, action, text, blocks: extraBlocks } = opts;
+  const { dealId, action, text, blocks: extraBlocks, channelOverride } = opts;
   if (!dealId) return;
+
+  // Per-deal channel route: post a top-level message, don't touch the
+  // pipeline thread. Channel is already created + persisted on the deal.
+  if (channelOverride) {
+    const icon = iconFor(action);
+    const headline = `${icon} ${text}`;
+    const blocks: SlackBlock[] = extraBlocks && extraBlocks.length > 0
+      ? extraBlocks
+      : [{ type: "section", text: { type: "mrkdwn", text: headline } }];
+    try {
+      await slack.postMessage(channelOverride, headline, blocks);
+    } catch (err) {
+      console.error("[deal-thread] channelOverride postMessage failed:", err);
+    }
+    return;
+  }
 
   const channel = VEKTOR_CHANNELS.pipeline;
   if (!channel) {
