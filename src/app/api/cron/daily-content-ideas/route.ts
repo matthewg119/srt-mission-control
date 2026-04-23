@@ -6,6 +6,8 @@ import { VEKTOR_CHANNELS } from "@/config/vektor";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 // Daily content ideas cron.
 // Fires 3× per weekday (9 AM / 1 PM / 5 PM ET) from vercel.json.
