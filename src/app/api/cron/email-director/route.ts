@@ -4,6 +4,8 @@ import { supabaseAdmin } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
