@@ -18,7 +18,7 @@
     },
     {
       "path": "/api/cron/ai-guardian",
-      "schedule": "0 */4 * * *"
+      "schedule": "0 14 * * *"
     },
     {
       "path": "/api/cron/graph-subscription-renew",
@@ -34,11 +34,11 @@
     },
     {
       "path": "/api/cron/email-director",
-      "schedule": "0 13,16,19 * * 1-6"
+      "schedule": "0 14 * * *"
     },
     {
       "path": "/api/cron/daily-content-ideas",
-      "schedule": "0 13,17,21 * * 1-5"
+      "schedule": "0 17 * * *"
     },
     {
       "path": "/api/cron/archive-deal-channels",
