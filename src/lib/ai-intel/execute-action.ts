@@ -8,6 +8,8 @@ import { wrapWithSignature } from "@/config/email-signature";
 import { substituteMagicLinkInBody } from "@/lib/portal-magic-link";
 import { recordSend } from "./cadence-scheduler";
 import type { CadenceTrack } from "./types";
+import { postDraftSubmissionCard } from "./draft-submission-card";
+import { submitToLenders } from "./submit-to-lenders";
 
 export interface ExecuteResult {
   ok: boolean;
@@ -32,6 +34,10 @@ export async function executePendingAction(opts: {
         return await submitDeal(opts.payload);
       case "update_zoho":
         return await updateZoho(opts.payload);
+      case "send_submission":
+        return await sendSubmission(opts.payload);
+      case "clear_lead_amounts":
+        return await clearLeadAmounts(opts.payload);
       default:
         return { ok: false, error: `unknown_action_type:${opts.actionType}` };
     }
@@ -106,9 +112,60 @@ async function updateZoho(payload: PendingActionPayload): Promise<ExecuteResult>
   if (payload.note) {
     await addNoteToLead(payload.zoho_id, payload.note.title, payload.note.content);
   }
+
+  // Follow-up chaining: bank-statement approvals set followup="draft_submission"
+  // so the next card (draft email) posts into the same deal thread once the
+  // Zoho write is confirmed. Best-effort — a failed card doesn't fail the
+  // underlying Zoho update.
+  if (payload.followup === "draft_submission" && payload.deal_id && payload.contact_id) {
+    try {
+      await postDraftSubmissionCard({
+        dealId: payload.deal_id,
+        contactId: payload.contact_id,
+        zohoId: payload.zoho_id,
+        revenueTable: payload.revenue_table ?? [],
+        onedriveFolderUrl: payload.onedrive_folder_url,
+        bankStmtDriveItemIds: payload.bank_stmt_drive_item_ids,
+      });
+    } catch (e) {
+      console.error("[execute-action] draft-submission card failed:", (e as Error).message);
+    }
+  }
+
   return {
     ok: true,
-    details: { zoho_id: payload.zoho_id, fields: fieldKeys, note: !!payload.note },
+    details: { zoho_id: payload.zoho_id, fields: fieldKeys, note: !!payload.note, followup: payload.followup ?? null },
+  };
+}
+
+async function sendSubmission(payload: PendingActionPayload): Promise<ExecuteResult> {
+  if (!payload.deal_id || !payload.contact_id) return { ok: false, error: "missing_deal_or_contact" };
+  if (!payload.draft_subject || !payload.draft_body) return { ok: false, error: "missing_draft" };
+  const lenderIds = (payload as { lender_ids?: string[] }).lender_ids ?? [];
+  if (lenderIds.length === 0) return { ok: false, error: "no_lender_ids" };
+
+  const result = await submitToLenders({
+    dealId: payload.deal_id,
+    contactId: payload.contact_id,
+    zohoId: payload.zoho_id ?? null,
+    lenderIds,
+    draftSubject: payload.draft_subject,
+    draftBody: payload.draft_body,
+    bankStmtDriveItemIds: payload.bank_stmt_drive_item_ids ?? [],
+    onedriveFolderUrl: payload.onedrive_folder_url ?? null,
+    amountRequested: payload.amount ?? null,
+  });
+
+  return {
+    ok: result.ok && result.sent.length + result.skipped.length > 0,
+    error: result.error,
+    details: {
+      sent: result.sent.map((l) => l.name),
+      failed: result.failed.map((l) => `${l.name}: ${l.error}`),
+      skipped: result.skipped.map((l) => `${l.name} (${l.reason})`),
+      channel_id: result.channelId,
+      channel_name: result.channelName,
+    },
   };
 }
 
@@ -181,4 +238,22 @@ function inferTrackFromCampaign(campaignKey: string): CadenceTrack {
 export async function postExecutionReceipt(opts: { channel: string; threadTs: string; summary: string; success: boolean }): Promise<void> {
   const icon = opts.success ? "✅" : "⚠️";
   await slack.postThreadReply(opts.channel, opts.threadTs, `${icon} ${opts.summary}`);
+}
+
+async function clearLeadAmounts(payload: PendingActionPayload): Promise<ExecuteResult> {
+  const targets = (payload.zoho_fields as { targets?: Array<{ zoho_lead_id: string; business_name: string; current_amount: number }> } | undefined)?.targets;
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return { ok: false, error: "no_targets" };
+  }
+  const results: Array<{ zoho_lead_id: string; ok: boolean; error?: string }> = [];
+  for (const t of targets) {
+    try {
+      await updateLead(t.zoho_lead_id, { MCA_Approved_Amount: null } as Parameters<typeof updateLead>[1]);
+      results.push({ zoho_lead_id: t.zoho_lead_id, ok: true });
+    } catch (e) {
+      results.push({ zoho_lead_id: t.zoho_lead_id, ok: false, error: (e as Error).message });
+    }
+  }
+  const succeeded = results.filter((r) => r.ok).length;
+  return { ok: true, details: { cleared: succeeded, total: targets.length, results } };
 }

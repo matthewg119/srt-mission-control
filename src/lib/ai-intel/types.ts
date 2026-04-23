@@ -21,7 +21,9 @@ export type ActionType =
   | "submit_deal"
   | "update_zoho"
   | "reply_funder"
-  | "send_marketing_email";
+  | "send_marketing_email"
+  | "send_submission"
+  | "clear_lead_amounts";
 
 export type CadenceTrack =
   | "new_lead"
@@ -72,6 +74,24 @@ export interface PendingActionPayload {
   stage?: string;
   zoho_fields?: Record<string, unknown>;
   note?: { title: string; content: string };
+  // send_submission specific — draft posted in deal thread, resolved when
+  // Matt replies with lender names in the same thread.
+  draft_subject?: string;
+  draft_body?: string;
+  onedrive_folder_url?: string;
+  bank_stmt_drive_item_ids?: string[];
+  lender_ids?: string[];
+  revenue_table?: Array<{
+    month: string;
+    deposits: number | null;
+    avg_daily_ledger: number | null;
+    deposit_count: number | null;
+    nsf_count: number | null;
+  }>;
+  // Instructs execute-action to post a follow-up card after `update_zoho`
+  // finishes (e.g. "draft_submission" chains the submission email draft
+  // after a bank-statement approval).
+  followup?: "draft_submission" | null;
   // send_marketing_email specific
   campaign_key?: MarketingCampaignKey;
   cadence_day?: number;

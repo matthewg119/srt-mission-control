@@ -7,6 +7,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { postDealThreadUpdate } from "./deal-thread";
+import { onPreApproved } from "./pre-approved-handler";
 import type { ZohoStage } from "@/config/pipeline";
 
 /**
@@ -62,7 +63,11 @@ export async function handleStageChange(opts: {
       // TODO Phase 2.1: onShopping(dealId)
       break;
     case "Pre-Approved":
-      // TODO Phase 2.2: onPreApproved(dealId) → lender-matcher.ts
+      try {
+        await onPreApproved(dealId);
+      } catch (e) {
+        console.error("[stage-handler] onPreApproved failed:", (e as Error).message);
+      }
       break;
     case "Approved":
       // TODO Phase 5: onApproved(dealId) → pitch angles

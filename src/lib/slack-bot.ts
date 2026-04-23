@@ -143,6 +143,34 @@ export const slack = {
                   return slackFetch("chat.postEphemeral", { channel, user, text });
         },
 
+        /** Create a public channel. Returns { id, name } on success. */
+        async createChannel(name: string, isPrivate = false): Promise<{ ok: boolean; id?: string; name?: string; error?: string }> {
+                  const res = (await slackFetch("conversations.create", { name, is_private: isPrivate })) as {
+                            ok: boolean; channel?: { id: string; name: string }; error?: string;
+                  };
+                  if (!res.ok || !res.channel) return { ok: false, error: res.error };
+                  return { ok: true, id: res.channel.id, name: res.channel.name };
+        },
+
+        /** Invite users to a channel. users = comma-separated list of user IDs. */
+        async inviteToChannel(channel: string, users: string): Promise<Record<string, unknown>> {
+                  if (!channel || !users) return { ok: false, error: "missing_channel_or_users" };
+                  return slackFetch("conversations.invite", { channel, users });
+        },
+
+        /** Pin a message to a channel. */
+        async pinMessage(channel: string, timestamp: string): Promise<Record<string, unknown>> {
+                  if (!channel || !timestamp) return { ok: false, error: "missing_channel_or_ts" };
+                  return slackFetch("pins.add", { channel, timestamp });
+        },
+
+        /** Archive a channel. Requires channels:manage scope. */
+        async archiveChannel(channel: string): Promise<{ ok: boolean; error?: string }> {
+                  if (!channel) return { ok: false, error: "missing_channel" };
+                  const res = (await slackFetch("conversations.archive", { channel })) as { ok: boolean; error?: string };
+                  return res;
+        },
+
         /** Get channel IDs from env */
         channels: {
                   get ceo() { return process.env.SLACK_CEO_CHANNEL || ""; },

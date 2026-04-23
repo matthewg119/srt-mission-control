@@ -505,6 +505,19 @@ export const microsoft = {
     return { items, deltaLink };
   },
 
+  /** List children of a specific OneDrive folder by path. Returns [] if the folder doesn't exist. */
+  async listFolderChildren(folderPath: string): Promise<Array<{ id: string; name: string; size: number; webUrl: string; isFile: boolean }>> {
+    const encoded = folderPath.split("/").map(encodeURIComponent).join("/");
+    try {
+      const page = await graphRequest(`/me/drive/root:/${encoded}:/children?$select=id,name,size,webUrl,file,folder&$top=100`);
+      const value = (page.value as Array<{ id: string; name: string; size?: number; webUrl: string; file?: unknown; folder?: unknown }> | undefined) ?? [];
+      return value.map((v) => ({ id: v.id, name: v.name, size: v.size ?? 0, webUrl: v.webUrl, isFile: Boolean(v.file) }));
+    } catch (e) {
+      if ((e as Error).message.includes("404") || (e as Error).message.toLowerCase().includes("itemnotfound")) return [];
+      throw e;
+    }
+  },
+
   /** Search the drive (optionally within a subfolder path). Returns ranked matches with id/name/webUrl. */
   async searchDrive(query: string, withinPath?: string): Promise<Array<{ id: string; name: string; webUrl: string; parentPath: string | null }>> {
     const endpoint = withinPath
