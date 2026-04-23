@@ -50,9 +50,11 @@ async function handle(req: NextRequest) {
 
   // Drop a seed message in #content-full so the package has a thread to land in.
   const seedText = [
-    `🤖 *Daily auto-generated content idea*`,
+    `💡 *Daily content idea*`,
     `> *${brief.hook_angle}*`,
     `_${brief.vertical} • ${brief.persona} • $${brief.funding_amount_usd.toLocaleString()} for ${brief.use_of_funds}_`,
+    ``,
+    `_Full production package (voiceover, image prompts, animation prompts, SFX) coming in thread — pick 👍 to build, ✏️ to regenerate, 🚫 to kill._`,
   ].join("\n");
 
   const seed = (await slack.postMessage(contentFullChannel, seedText)) as {
@@ -66,8 +68,12 @@ async function handle(req: NextRequest) {
     );
   }
 
-  // Call the viral decoder with auto_render — it generates the full 9-slide
-  // package, saves it as approved, and kicks off the video pipeline.
+  // Call the viral decoder — it generates the full 9-slide text package
+  // (voiceover, image prompts, animation prompts, music, timeline) and posts
+  // it as a Slack Block Kit reply in the seed thread. Matt picks which idea
+  // to shoot later — we do NOT auto-render. Image + animation generation
+  // happens manually after Matt reacts, using his own tools (ElevenLabs
+  // images, Seedance 1.5 for animation).
   const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const decoderRes = await fetch(`${siteUrl}/api/agent/viral-decoder`, {
     method: "POST",
@@ -77,7 +83,6 @@ async function handle(req: NextRequest) {
       thread_ts: seed.ts,
       brief: brief.brief_line,
       files: [],
-      auto_render: true,
     }),
   });
 
