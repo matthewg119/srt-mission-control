@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "./db";
 import { microsoft } from "./microsoft";
+import { addNoteToLead } from "./zoho";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { STAGE_PIPELINES } from "@/config/stage-display";
 import { sendEvent } from "./meta-capi";
@@ -242,6 +243,58 @@ export const AI_TOOLS = [
     },
   },
   {
+    name: "add_lender",
+    description:
+      "Add a new lender to the database. Use when asked to 'add [lender name] as a lender', 'create a lender for [name]', 'set up [lender] with email [email]', or 'register a new funder'. Requires at minimum a name and submission email.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description: "Lender name (e.g. 'SRT Funding', 'Legend Funding')",
+        },
+        submission_email: {
+          type: "string",
+          description: "Email address to send deal submissions to",
+        },
+        tier: {
+          type: "number",
+          description: "Lender tier: 1 = A Paper (best rates), 2 = B Paper, 3 = High Risk. Defaults to 2.",
+        },
+        rep_name: {
+          type: "string",
+          description: "Optional: name of the rep/contact at this lender",
+        },
+        rep_email: {
+          type: "string",
+          description: "Optional: rep's direct email",
+        },
+        min_credit_score: {
+          type: "number",
+          description: "Optional: minimum credit score required",
+        },
+        min_monthly_revenue: {
+          type: "number",
+          description: "Optional: minimum monthly revenue in dollars",
+        },
+        max_amount: {
+          type: "number",
+          description: "Optional: maximum funding amount in dollars",
+        },
+        products: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional: products this lender funds (e.g. ['Working Capital', 'MCA', 'Line of Credit'])",
+        },
+        notes: {
+          type: "string",
+          description: "Optional: any notes about this lender",
+        },
+      },
+      required: ["name", "submission_email"],
+    },
+  },
+  {
     name: "underwrite_deal",
     description:
       "Analyze a deal's profile and generate an SOS (Statement of Scenario) document. Pulls deal data and contact fields, assesses viability, and stores the SOS. Use when asked to 'underwrite [deal]', 'analyze [business]', 'create SOS for [contact]', or 'run underwriting on [deal]'.",
@@ -282,7 +335,7 @@ export const AI_TOOLS = [
   {
     name: "submit_to_lender",
     description:
-      "Create an email submission draft to a lender for a deal. Uses the latest SOS document to compose the email. Creates a draft in email_drafts for user approval before sending. Use when asked to 'submit [deal] to [lender]' or 'send this deal to [lender]'.",
+      "Send a deal submission email to a lender immediately. Uses the latest SOS document to compose the email, sends it via Microsoft 365, records a deal_submissions entry (so replies are tracked), and writes a note in the pipeline. Use when asked to 'submit [deal] to [lender]', 'send this deal to [lender]', or 'send to SRT Funding'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -358,6 +411,21 @@ export async function executeTool(
         content = await getDealNotes(input.contact_id as string, (input.deal_id || input.opportunity_id) as string | undefined); break;
       case "get_lenders":
         content = await getLenders(input.filter as string | undefined, input.tier as number | undefined, input.submission_method as string | undefined); break;
+      case "add_lender":
+        content = await addLender(
+          input.name as string,
+          input.submission_email as string,
+          (input.tier as number) || 2,
+          {
+            rep_name: input.rep_name as string | undefined,
+            rep_email: input.rep_email as string | undefined,
+            min_credit_score: input.min_credit_score as number | undefined,
+            min_monthly_revenue: input.min_monthly_revenue as number | undefined,
+            max_amount: input.max_amount as number | undefined,
+            products: input.products as string[] | undefined,
+            notes: input.notes as string | undefined,
+          }
+        ); break;
       case "underwrite_deal":
         content = await underwriteDeal(dealId as string, input.additional_context as string | undefined); break;
       case "match_lenders":
@@ -1130,8 +1198,8 @@ async function submitToLender(dealId: string, lenderId: string, customNotes?: st
     .single();
 
   if (!lender) return JSON.stringify({ error: `Lender ${lenderId} not found.` });
-  if (!lender.submission_email && lender.submission_method === "email") {
-    return JSON.stringify({ error: `Lender ${lender.name} has no submission email on file. Add one in the Lenders page.` });
+  if (!lender.submission_email) {
+    return JSON.stringify({ error: `Lender ${lender.name} has no submission email on file.` });
   }
 
   // Get the latest SOS for this deal
@@ -1147,62 +1215,163 @@ async function submitToLender(dealId: string, lenderId: string, customNotes?: st
     return JSON.stringify({ error: `No SOS found for deal ${dealId}. Run underwrite_deal first to generate the SOS document.` });
   }
 
-  const businessName = sos.business_name || "Unknown Business";
+  // Fetch contact for Zoho note
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select("id, zoho_lead_id, business_name")
+    .eq("id", sos.contact_id)
+    .maybeSingle();
+
+  const businessName = sos.business_name || contact?.business_name || "Unknown Business";
   const sosContent = sos.sos_content as Record<string, unknown>;
-  const fundingRequest = sosContent?.funding_request as Record<string, unknown> || {};
+  const fundingRequest = (sosContent?.funding_request as Record<string, unknown>) || {};
   const amount = fundingRequest.amount_requested || "TBD";
   const product = fundingRequest.financing_type || "Working Capital";
 
-  const subject = `SOS - ${businessName} - ${product} - $${typeof amount === 'number' ? amount.toLocaleString() : amount}`;
-  const body = sos.sos_text + (customNotes ? `\n\nADDITIONAL NOTES:\n${customNotes}` : "");
+  const subject = `SOS - ${businessName} - ${product} - $${typeof amount === "number" ? amount.toLocaleString() : amount}`;
+  const emailBody = sos.sos_text + (customNotes ? `\n\nADDITIONAL NOTES:\n${customNotes}` : "");
 
-  // Create email draft
-  const { data: draft, error: draftErr } = await supabaseAdmin
-    .from("email_drafts")
-    .insert({
-      agent: "submissions",
-      opportunity_id: dealId,
-      contact_id: sos.contact_id,
-      to_email: lender.submission_email || "",
+  // Send the email immediately via Microsoft 365
+  try {
+    await microsoft.sendMail({
+      to: lender.submission_email as string,
       subject,
-      body,
-      attachments: [],
-      deal_data: { sos_id: sos.id, lender_id: lenderId, lender_name: lender.name, business_name: businessName },
-      status: "draft",
+      body: emailBody,
+      isHtml: false,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: `Failed to send email to ${lender.name}: ${(err as Error).message}` });
+  }
+
+  const sentAt = new Date().toISOString();
+
+  // Record the submission in deal_submissions (enables reply tracking)
+  const { data: submission } = await supabaseAdmin
+    .from("deal_submissions")
+    .insert({
+      merchant_id: sos.contact_id,
+      deal_id: dealId,
+      lender_id: lenderId,
+      submission_method: "email",
+      status: "pending",
+      submitted_at: sentAt,
+      notes: customNotes || null,
     })
-    .select()
+    .select("id")
     .single();
 
-  if (draftErr) return JSON.stringify({ error: `Failed to create email draft: ${draftErr.message}` });
+  // Write a pipeline note in deal_notes
+  const noteBody = `Submitted to ${lender.name} (${lender.submission_email}) on ${new Date(sentAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}. Awaiting response.`;
+  await supabaseAdmin.from("deal_notes").insert({
+    contact_id: sos.contact_id,
+    opportunity_id: dealId,
+    body: noteBody,
+    author: "Vektor",
+  });
 
-  // Create submission task
-  try {
-    await supabaseAdmin.from("submission_tasks").insert({
-      opportunity_id: dealId,
-      contact_id: sos.contact_id,
-      lender_id: lenderId,
-      lender_name: lender.name,
-      submission_method: "email",
-      status: "draft_created",
-      email_draft_id: draft?.id,
-    });
-  } catch { /* table may not exist yet */ }
+  // Write Zoho note if we have a zoho_lead_id
+  if (contact?.zoho_lead_id) {
+    try {
+      await addNoteToLead(contact.zoho_lead_id, `Submitted to ${lender.name}`, noteBody);
+    } catch { /* non-fatal */ }
+  }
+
+  // Keep email_drafts record for audit trail (status: sent)
+  await supabaseAdmin.from("email_drafts").insert({
+    agent: "submissions",
+    opportunity_id: dealId,
+    contact_id: sos.contact_id,
+    to_email: lender.submission_email as string,
+    subject,
+    body: emailBody,
+    attachments: [],
+    deal_data: { sos_id: sos.id, lender_id: lenderId, lender_name: lender.name, business_name: businessName, submission_id: submission?.id },
+    status: "sent",
+  });
 
   // Log it
   await supabaseAdmin.from("system_logs").insert({
-    event_type: "ai_action",
-    description: `AI created submission draft: ${businessName} → ${lender.name}`,
-    metadata: { dealId, lenderId, lenderName: lender.name, draftId: draft?.id },
+    event_type: "lender_submission",
+    description: `Submission sent: ${businessName} → ${lender.name}`,
+    metadata: { dealId, lenderId, lenderName: lender.name, submissionId: submission?.id, sentAt },
   });
 
   return JSON.stringify({
     tool: "submit_to_lender",
     success: true,
-    draft_id: draft?.id,
+    submission_id: submission?.id,
     lender_name: lender.name,
     to_email: lender.submission_email,
     subject,
-    message: `Email draft created for submission to ${lender.name} (${lender.submission_email}). Review and approve in the Submissions page to send.`,
+    message: `✅ Email sent to ${lender.name} (${lender.submission_email}) for ${businessName}. A pipeline note has been written and the submission is being tracked — I'll notify you in Slack when they reply.`,
+  });
+}
+
+async function addLender(
+  name: string,
+  submissionEmail: string,
+  tier: number,
+  options: {
+    rep_name?: string;
+    rep_email?: string;
+    min_credit_score?: number;
+    min_monthly_revenue?: number;
+    max_amount?: number;
+    products?: string[];
+    notes?: string;
+  } = {}
+): Promise<string> {
+  const tierLabels: Record<number, string> = { 1: "A Paper", 2: "B Paper", 3: "High Risk" };
+
+  const { data: existing } = await supabaseAdmin
+    .from("lenders")
+    .select("id, name")
+    .ilike("name", name.trim())
+    .maybeSingle();
+
+  if (existing) {
+    return JSON.stringify({ error: `Lender "${existing.name}" already exists (id: ${existing.id}). Use get_lenders to look it up.` });
+  }
+
+  const record: Record<string, unknown> = {
+    name: name.trim(),
+    submission_email: submissionEmail.trim(),
+    submission_method: "email",
+    tier: tier || 2,
+    tier_label: tierLabels[tier] || "B Paper",
+    is_active: true,
+  };
+
+  if (options.rep_name) record.rep_name = options.rep_name;
+  if (options.rep_email) record.rep_email = options.rep_email;
+  if (options.min_credit_score) record.min_credit_score = options.min_credit_score;
+  if (options.min_monthly_revenue) record.min_monthly_revenue = options.min_monthly_revenue;
+  if (options.max_amount) record.max_amount = options.max_amount;
+  if (options.products?.length) record.products = options.products;
+  if (options.notes) record.notes = options.notes;
+
+  const { data, error } = await supabaseAdmin
+    .from("lenders")
+    .insert([record])
+    .select("id, name, submission_email, tier")
+    .single();
+
+  if (error) return JSON.stringify({ error: `Failed to add lender: ${error.message}` });
+
+  await supabaseAdmin.from("system_logs").insert({
+    event_type: "lender_added",
+    description: `Lender added: ${name}`,
+    metadata: { lenderId: data.id, name, submissionEmail, tier },
+  });
+
+  return JSON.stringify({
+    tool: "add_lender",
+    success: true,
+    lender_id: data.id,
+    name: data.name,
+    submission_email: data.submission_email,
+    tier: data.tier,
+    message: `✅ Lender "${data.name}" added with submission email ${data.submission_email}. Use submit_to_lender with lender_id "${data.id}" to send deals.`,
   });
 }
 
