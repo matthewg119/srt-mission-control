@@ -13,9 +13,37 @@ export async function POST(request: NextRequest) {
   // Parse body once so we can also look for the secret inside it
   // (Zoho CRM Standard plan doesn't expose custom headers — falls back to
   // query param or body field.)
+  //
+  // Zoho sends Content-Type: application/x-www-form-urlencoded even when the
+  // body is raw JSON, which makes request.json() throw. Read raw text first,
+  // then try JSON; if that fails, parse as URL-encoded form fields (Zoho also
+  // sometimes wraps the whole JSON payload as a single form field value).
   let body: Record<string, unknown> = {};
   try {
-    body = await request.json();
+    const contentType = request.headers.get("content-type") || "";
+    const rawText = await request.text();
+    console.log(`[Zoho Webhook] Incoming content-type="${contentType}" bytes=${rawText.length}`);
+    if (rawText) {
+      try {
+        body = JSON.parse(rawText);
+      } catch {
+        // Try URL-encoded form: each value might itself be JSON (Zoho wraps it),
+        // or the fields map directly (Phone=..., Lead_Status=..., etc.).
+        const params = new URLSearchParams(rawText);
+        for (const [key, value] of params.entries()) {
+          try {
+            // If a single field holds the entire JSON payload, use it as the body.
+            const parsed = JSON.parse(value);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              body = parsed as Record<string, unknown>;
+              break;
+            }
+          } catch {
+            body[key] = value;
+          }
+        }
+      }
+    }
   } catch {
     body = {};
   }
