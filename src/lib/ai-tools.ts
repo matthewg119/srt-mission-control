@@ -335,7 +335,7 @@ export const AI_TOOLS = [
   {
     name: "submit_to_lender",
     description:
-      "Send a deal submission email to a lender immediately. Uses the latest SOS document to compose the email, sends it via Microsoft 365, records a deal_submissions entry (so replies are tracked), and writes a note in the pipeline. Use when asked to 'submit [deal] to [lender]', 'send this deal to [lender]', or 'send to SRT Funding'.",
+      "Prepare a deal submission email draft to a lender. Uses the latest SOS document to compose the email, creates a deal_submissions entry (so replies are tracked), writes a pipeline note, and queues the draft for approval in the Email Agents page. Use when asked to 'submit [deal] to [lender]', 'send this deal to [lender]', or 'prepare a submission for SRT Funding'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1231,21 +1231,9 @@ async function submitToLender(dealId: string, lenderId: string, customNotes?: st
   const subject = `SOS - ${businessName} - ${product} - $${typeof amount === "number" ? amount.toLocaleString() : amount}`;
   const emailBody = sos.sos_text + (customNotes ? `\n\nADDITIONAL NOTES:\n${customNotes}` : "");
 
-  // Send the email immediately via Microsoft 365
-  try {
-    await microsoft.sendMail({
-      to: lender.submission_email as string,
-      subject,
-      body: emailBody,
-      isHtml: false,
-    });
-  } catch (err) {
-    return JSON.stringify({ error: `Failed to send email to ${lender.name}: ${(err as Error).message}` });
-  }
+  const draftAt = new Date().toISOString();
 
-  const sentAt = new Date().toISOString();
-
-  // Record the submission in deal_submissions (enables reply tracking)
+  // Pre-create the deal_submissions record (status: draft) so it's ready when approved
   const { data: submission } = await supabaseAdmin
     .from("deal_submissions")
     .insert({
@@ -1253,15 +1241,15 @@ async function submitToLender(dealId: string, lenderId: string, customNotes?: st
       deal_id: dealId,
       lender_id: lenderId,
       submission_method: "email",
-      status: "pending",
-      submitted_at: sentAt,
+      status: "draft",
+      submitted_at: null,
       notes: customNotes || null,
     })
     .select("id")
     .single();
 
   // Write a pipeline note in deal_notes
-  const noteBody = `Submitted to ${lender.name} (${lender.submission_email}) on ${new Date(sentAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}. Awaiting response.`;
+  const noteBody = `Draft submission prepared for ${lender.name} (${lender.submission_email}) on ${new Date(draftAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}. Pending approval to send.`;
   await supabaseAdmin.from("deal_notes").insert({
     contact_id: sos.contact_id,
     opportunity_id: dealId,
@@ -1272,38 +1260,45 @@ async function submitToLender(dealId: string, lenderId: string, customNotes?: st
   // Write Zoho note if we have a zoho_lead_id
   if (contact?.zoho_lead_id) {
     try {
-      await addNoteToLead(contact.zoho_lead_id, `Submitted to ${lender.name}`, noteBody);
+      await addNoteToLead(contact.zoho_lead_id, `Submission drafted — ${lender.name}`, noteBody);
     } catch { /* non-fatal */ }
   }
 
-  // Keep email_drafts record for audit trail (status: sent)
-  await supabaseAdmin.from("email_drafts").insert({
-    agent: "submissions",
-    opportunity_id: dealId,
-    contact_id: sos.contact_id,
-    to_email: lender.submission_email as string,
-    subject,
-    body: emailBody,
-    attachments: [],
-    deal_data: { sos_id: sos.id, lender_id: lenderId, lender_name: lender.name, business_name: businessName, submission_id: submission?.id },
-    status: "sent",
-  });
+  // Create email draft for review/approval
+  const { data: draft, error: draftErr } = await supabaseAdmin
+    .from("email_drafts")
+    .insert({
+      agent: "submissions",
+      opportunity_id: dealId,
+      contact_id: sos.contact_id,
+      to_email: lender.submission_email as string,
+      subject,
+      body: emailBody,
+      attachments: [],
+      deal_data: { sos_id: sos.id, lender_id: lenderId, lender_name: lender.name, business_name: businessName, submission_id: submission?.id },
+      status: "draft",
+    })
+    .select()
+    .single();
+
+  if (draftErr) return JSON.stringify({ error: `Failed to create email draft: ${draftErr.message}` });
 
   // Log it
   await supabaseAdmin.from("system_logs").insert({
-    event_type: "lender_submission",
-    description: `Submission sent: ${businessName} → ${lender.name}`,
-    metadata: { dealId, lenderId, lenderName: lender.name, submissionId: submission?.id, sentAt },
+    event_type: "lender_submission_draft",
+    description: `Submission draft created: ${businessName} → ${lender.name}`,
+    metadata: { dealId, lenderId, lenderName: lender.name, draftId: draft?.id, submissionId: submission?.id },
   });
 
   return JSON.stringify({
     tool: "submit_to_lender",
     success: true,
+    draft_id: draft?.id,
     submission_id: submission?.id,
     lender_name: lender.name,
     to_email: lender.submission_email,
     subject,
-    message: `✅ Email sent to ${lender.name} (${lender.submission_email}) for ${businessName}. A pipeline note has been written and the submission is being tracked — I'll notify you in Slack when they reply.`,
+    message: `📋 Submission draft created for ${lender.name} (${lender.submission_email}). A pipeline note has been written. Review and approve the draft in the Email Agents page → it will send automatically when you approve.`,
   });
 }
 
