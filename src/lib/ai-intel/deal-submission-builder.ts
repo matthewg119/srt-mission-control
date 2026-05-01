@@ -88,7 +88,8 @@ export async function buildSubmissionPackage(opts: BuildSubmissionOpts): Promise
     const folder = await microsoft.createDriveFolder("Completed Package", `Deals/${(contact.business_name as string) ?? "Unknown"}`);
     onedriveUrl = folder.webUrl;
 
-    const appUpload = await microsoft.uploadDriveFile(folderName, "application.pdf", pdfBuffer, "application/pdf");
+    const appPdfName = `Application Completed ${(contact.business_name as string) ?? "Unknown"}.pdf`;
+    const appUpload = await microsoft.uploadDriveFile(folderName, appPdfName, pdfBuffer, "application/pdf");
     applicationPdfUrl = appUpload.webUrl;
 
     const bodyBuffer = Buffer.from(`Subject: ${draftedSubject}\n\n${draftedBody}`, "utf8");

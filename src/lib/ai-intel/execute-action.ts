@@ -38,6 +38,8 @@ export async function executePendingAction(opts: {
         return await sendSubmission(opts.payload);
       case "clear_lead_amounts":
         return await clearLeadAmounts(opts.payload);
+      case "add_lender":
+        return await addLender(opts.payload);
       default:
         return { ok: false, error: `unknown_action_type:${opts.actionType}` };
     }
@@ -238,6 +240,67 @@ function inferTrackFromCampaign(campaignKey: string): CadenceTrack {
 export async function postExecutionReceipt(opts: { channel: string; threadTs: string; summary: string; success: boolean }): Promise<void> {
   const icon = opts.success ? "✅" : "⚠️";
   await slack.postThreadReply(opts.channel, opts.threadTs, `${icon} ${opts.summary}`);
+}
+
+async function addLender(payload: PendingActionPayload): Promise<ExecuteResult> {
+  const name = payload.lender_name as string | undefined;
+  if (!name) return { ok: false, error: "missing lender_name in payload" };
+
+  const submissionEmail = (payload.submission_email as string | undefined) ?? null;
+  const ccEmails = (payload.cc_emails as string[] | undefined) ?? [];
+  const portalUrl = (payload.portal_url as string | undefined) ?? null;
+
+  const { data, error } = await supabaseAdmin
+    .from("lenders")
+    .upsert(
+      {
+        name,
+        tier: (payload.tier as number | undefined) ?? 2,
+        is_active: true,
+        submission_method: submissionEmail ? "email" : (portalUrl ? "portal" : "email"),
+        submission_email: submissionEmail,
+        cc_emails: ccEmails,
+        portal_url: portalUrl,
+        rep_name: (payload.rep_name as string | undefined) ?? null,
+        rep_email: (payload.rep_email as string | undefined) ?? null,
+        notes: [
+          payload.docs_required ? `Docs: ${payload.docs_required}` : null,
+          payload.subject_line_format ? `Subject: "${payload.subject_line_format}"` : null,
+          payload.notes as string | undefined,
+        ].filter(Boolean).join(" | ") || null,
+      },
+      { onConflict: "id" }
+    )
+    .select("id, name")
+    .maybeSingle();
+
+  if (error) {
+    // No unique constraint on name — fall back to insert
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from("lenders")
+      .insert({
+        name,
+        tier: (payload.tier as number | undefined) ?? 2,
+        is_active: true,
+        submission_method: submissionEmail ? "email" : (portalUrl ? "portal" : "email"),
+        submission_email: submissionEmail,
+        cc_emails: ccEmails,
+        portal_url: portalUrl,
+        rep_name: (payload.rep_name as string | undefined) ?? null,
+        rep_email: (payload.rep_email as string | undefined) ?? null,
+        notes: [
+          payload.docs_required ? `Docs: ${payload.docs_required}` : null,
+          payload.subject_line_format ? `Subject: "${payload.subject_line_format}"` : null,
+          payload.notes as string | undefined,
+        ].filter(Boolean).join(" | ") || null,
+      })
+      .select("id, name")
+      .single();
+    if (insertErr) return { ok: false, error: insertErr.message };
+    return { ok: true, details: { lender: inserted.name, id: inserted.id, action: "inserted" } };
+  }
+
+  return { ok: true, details: { lender: data?.name ?? name, id: data?.id, action: "upserted" } };
 }
 
 async function clearLeadAmounts(payload: PendingActionPayload): Promise<ExecuteResult> {

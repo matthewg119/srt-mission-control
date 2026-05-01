@@ -9,17 +9,38 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const expectedSecret = process.env.ZOHO_WEBHOOK_SECRET;
+  let stage = "parse_body";
 
   // Parse body once so we can also look for the secret inside it
   // (Zoho CRM Standard plan doesn't expose custom headers — falls back to
   // query param or body field.)
-  let body: Record<string, unknown> = {};
+  // Read as text first so we can log what Zoho actually sent and fall back
+  // to form-encoded parsing if JSON.parse fails.
+  const contentType = request.headers.get("content-type") || "";
+  let rawText = "";
   try {
-    body = await request.json();
+    rawText = await request.text();
   } catch {
-    body = {};
+    rawText = "";
+  }
+  console.log(
+    `[Zoho Webhook] Incoming content-type="${contentType}" bytes=${rawText.length}`
+  );
+
+  let body: Record<string, unknown> = {};
+  if (rawText.trim()) {
+    try {
+      body = JSON.parse(rawText);
+    } catch {
+      try {
+        body = Object.fromEntries(new URLSearchParams(rawText));
+      } catch {
+        body = {};
+      }
+    }
   }
 
+  stage = "check_secret";
   const secret =
     request.headers.get("x-zoho-webhook-secret") ||
     request.nextUrl.searchParams.get("x-zoho-webhook-secret") ||
@@ -38,6 +59,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    stage = "extract_fields";
     console.log("[Zoho Webhook] Received:", JSON.stringify(body).slice(0, 500));
 
     // Zoho Workflow webhooks send lead data in various shapes.
@@ -71,16 +93,28 @@ export async function POST(request: NextRequest) {
     // tries "Dead Declined" first, "DNQ" next, etc. The webhook must accept all.
     const dnqStatuses = new Set(["DNQ", "Dead Declined", "Declined", "Dead", "Take Off List"]);
     if (dnqStatuses.has(leadStatus)) {
+      stage = "dnq_lookup";
       // Look up contact in Supabase for enriched user data
       let contact: Record<string, unknown> | null = null;
       if (email) {
-        const { data } = await supabaseAdmin
-          .from("contacts")
-          .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
-          .ilike("email", email)
-          .limit(1)
-          .maybeSingle();
-        contact = data;
+        try {
+          const { data, error: dbError } = await supabaseAdmin
+            .from("contacts")
+            .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
+            .ilike("email", email)
+            .limit(1)
+            .maybeSingle();
+          if (dbError) {
+            console.error("[Zoho Webhook] Supabase contact lookup error:", dbError);
+          }
+          contact = data;
+        } catch (dbThrown) {
+          console.error(
+            "[Zoho Webhook] Supabase contact lookup threw:",
+            dbThrown instanceof Error ? dbThrown.stack || dbThrown.message : dbThrown
+          );
+          return NextResponse.json({ success: false, skipped: "db_error" });
+        }
       }
 
       if (!contact || !hasMetaAttributionServer({ fbc: contact.fbc as string | null | undefined })) {
@@ -88,6 +122,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: true, skipped: "no_meta_attribution" });
       }
 
+      stage = "dnq_send_event";
       const contactPhone = (contact?.phone || contact?.mobile_phone || phone) as string;
       const contactEmail = (contact?.email as string) || email;
 
@@ -118,6 +153,7 @@ export async function POST(request: NextRequest) {
     // Fire Speed to Lead — wrap separately so a RingCentral/downstream failure
     // can't crash the webhook response and trigger Zoho retries. We always
     // return 200 to Zoho; failures are logged for Vercel log triage.
+    stage = "speed_to_lead";
     try {
       await triggerSpeedToLead({
         leadId,
@@ -135,9 +171,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    // Log full stack + which stage we were in (leadId is available if we parsed it).
+    // Log full stack + which stage we were in so we can pinpoint the failure.
     console.error(
-      "[Zoho Webhook] Error:",
+      `[Zoho Webhook] Error at stage=${stage}:`,
       error instanceof Error ? error.stack || error.message : error
     );
     // Return 200 anyway so Zoho doesn't retry-hammer a broken path. The error

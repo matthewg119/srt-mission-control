@@ -23,7 +23,8 @@ export type ActionType =
   | "reply_funder"
   | "send_marketing_email"
   | "send_submission"
-  | "clear_lead_amounts";
+  | "clear_lead_amounts"
+  | "add_lender";
 
 export type CadenceTrack =
   | "new_lead"

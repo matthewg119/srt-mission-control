@@ -138,9 +138,11 @@ export const slack = {
         },
 
         /** Post an ephemeral message visible only to one user (confirmations, errors). */
-        async postEphemeral(channel: string, user: string, text: string): Promise<Record<string, unknown>> {
+        async postEphemeral(channel: string, user: string, text: string, threadTs?: string): Promise<Record<string, unknown>> {
                   if (!channel || !user) return { ok: false, error: "missing_channel_or_user" };
-                  return slackFetch("chat.postEphemeral", { channel, user, text });
+                  const body: Record<string, unknown> = { channel, user, text };
+                  if (threadTs) body.thread_ts = threadTs;
+                  return slackFetch("chat.postEphemeral", body);
         },
 
         /** Create a public channel. Returns { id, name } on success. */

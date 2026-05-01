@@ -45,6 +45,7 @@ export type VektorCategory =
   | "daily_digest"
   | "content_package"
   | "content_full_video"
+  | "lender_mgmt"
   | "misc";
 
 export function routeToChannel(category: VektorCategory): string {
@@ -61,6 +62,7 @@ export function routeToChannel(category: VektorCategory): string {
     case "renewal":
       return VEKTOR_CHANNELS.renewals || VEKTOR_CHANNELS.main;
     case "approval_required":
+    case "lender_mgmt":
       return VEKTOR_CHANNELS.matthew || VEKTOR_CHANNELS.main;
     case "marketing_email":
     case "marketing_metrics":

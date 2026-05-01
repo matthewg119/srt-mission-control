@@ -72,7 +72,40 @@ export async function submitToLenders(opts: SubmitToLendersOpts): Promise<Submit
     return { ...result, ok: false, error: lendersErr?.message ?? "no_matching_lenders" };
   }
 
-  const attachments = await buildAttachments(opts.bankStmtDriveItemIds);
+  // Load deal thread + business name so we can pull the app PDF from
+  // Deals/{business_name}/Completed Package/ and post an ephemeral warning
+  // to Matt in the thread if it's missing.
+  const { data: dealCtx } = await supabaseAdmin
+    .from("deals")
+    .select("slack_thread_ts, slack_channel, contacts:contact_id(business_name)")
+    .eq("id", opts.dealId)
+    .maybeSingle();
+  const dealRow = (dealCtx ?? null) as {
+    slack_thread_ts: string | null;
+    slack_channel: string | null;
+    contacts: { business_name: string | null } | null;
+  } | null;
+  const businessName = dealRow?.contacts?.business_name ?? null;
+  const dealThreadTs = dealRow?.slack_thread_ts ?? null;
+  const dealChannel = dealRow?.slack_channel ?? null;
+
+  const { attachments, appPdfMissing } = await buildAttachments(opts.bankStmtDriveItemIds, businessName);
+
+  if (appPdfMissing && businessName && dealChannel) {
+    const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+    if (matthewId) {
+      try {
+        await slack.postEphemeral(
+          dealChannel,
+          matthewId,
+          `Application PDF missing from Deals/${businessName}/Completed Package. Sent bank statements only. Upload the app PDF and re-send if needed.`,
+          dealThreadTs ?? undefined,
+        );
+      } catch (e) {
+        console.warn("[submit-to-lenders] ephemeral warning failed:", (e as Error).message);
+      }
+    }
+  }
 
   for (const lender of lenders as LenderRow[]) {
     if (lender.submission_method !== "email" || !lender.submission_email) {
@@ -212,8 +245,39 @@ async function insertOrUpdateSubmission(args: {
   }
 }
 
-async function buildAttachments(driveItemIds: string[]): Promise<Array<{ name: string; contentType: string; contentBytes: string }>> {
+async function buildAttachments(
+  driveItemIds: string[],
+  businessName: string | null,
+): Promise<{ attachments: Array<{ name: string; contentType: string; contentBytes: string }>; appPdfMissing: boolean }> {
   const out: Array<{ name: string; contentType: string; contentBytes: string }> = [];
+  let appPdfMissing = false;
+
+  // Prepend the lender-version application PDF from Deals/{business}/Completed Package
+  // so funders see the application first and bank statements after.
+  if (businessName) {
+    const folderPath = `Deals/${businessName}/Completed Package`;
+    try {
+      const children = await microsoft.listFolderChildren(folderPath);
+      const pdfChildren = children.filter((c) => c.isFile && /\.pdf$/i.test(c.name));
+      const exactName = `Application Completed ${businessName}.pdf`.toLowerCase();
+      const exact = pdfChildren.find((c) => c.name.toLowerCase() === exactName);
+      const fallback = exact ?? pdfChildren.find((c) => /^application/i.test(c.name));
+      if (fallback) {
+        const file = await microsoft.downloadDriveItem(fallback.id);
+        out.push({
+          name: file.name,
+          contentType: file.mimeType ?? "application/pdf",
+          contentBytes: file.buffer.toString("base64"),
+        });
+      } else {
+        appPdfMissing = true;
+      }
+    } catch (e) {
+      console.warn("[submit-to-lenders] Completed Package lookup failed:", (e as Error).message);
+      appPdfMissing = true;
+    }
+  }
+
   for (const id of driveItemIds) {
     try {
       const file = await microsoft.downloadDriveItem(id);
@@ -226,7 +290,7 @@ async function buildAttachments(driveItemIds: string[]): Promise<Array<{ name: s
       console.warn("[submit-to-lenders] attachment fetch failed:", id, (e as Error).message);
     }
   }
-  return out;
+  return { attachments: out, appPdfMissing };
 }
 
 function buildNoteContent(r: SubmitToLendersResult): string {

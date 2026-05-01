@@ -24,6 +24,7 @@ async function handle(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const mailbox: string = body.mailbox || "submissions@srtagency.com";
+  const notificationPath: string = body.notificationPath || "/api/agent/submissions";
   const integrationName = `graph_subscription_${mailbox.replace(/[^a-z0-9]/gi, "_")}`;
 
   const { data: existing } = await supabaseAdmin
@@ -47,7 +48,7 @@ async function handle(req: NextRequest) {
     sub = await microsoft.createSubscription({
       resource: `users/${mailbox}/messages`,
       changeType: "created",
-      notificationUrl: `${getAppUrl()}/api/agent/submissions`,
+      notificationUrl: `${getAppUrl()}${notificationPath}`,
       clientState,
       expirationMinutes: 60 * 24 * 3,
     });
@@ -64,6 +65,7 @@ async function handle(req: NextRequest) {
           subscription_id: sub.id,
           resource: sub.resource,
           mailbox,
+          notification_path: notificationPath,
           client_state: clientState,
           expires_at: sub.expirationDateTime,
         },
