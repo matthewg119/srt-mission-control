@@ -75,6 +75,36 @@ export const slack = {
                   return slackFetch("chat.update", body);
         },
 
+        /** Upload any file to a channel (optionally in a thread) */
+        async uploadFile(channel: string, fileName: string, buffer: Buffer, mimetype: string, threadTs?: string): Promise<Record<string, unknown>> {
+                  const token = getToken();
+                  if (!token) return { ok: false, error: "no_token" };
+
+                  const urlRes = await fetch(`${SLACK_API}/files.getUploadURLExternal`, {
+                            method: "POST",
+                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                            body: JSON.stringify({ filename: fileName, length: buffer.length }),
+                  });
+                  const urlData = await urlRes.json() as { ok: boolean; upload_url?: string; file_id?: string };
+                  if (!urlData.ok || !urlData.upload_url || !urlData.file_id) {
+                            console.error("[Slack] getUploadURLExternal failed:", JSON.stringify(urlData));
+                            return { ok: false, error: "get_upload_url_failed" };
+                  }
+
+                  await fetch(urlData.upload_url, {
+                            method: "POST",
+                            headers: { "Content-Type": mimetype },
+                            body: new Uint8Array(buffer),
+                  });
+
+                  const completeBody: Record<string, unknown> = {
+                            files: [{ id: urlData.file_id, title: fileName }],
+                            channel_id: channel,
+                  };
+                  if (threadTs) completeBody.thread_ts = threadTs;
+                  return slackFetch("files.completeUploadExternal", completeBody);
+        },
+
         /** Upload a PDF file to a channel (optionally in a thread) */
         async uploadFilePDF(channel: string, fileName: string, buffer: Buffer, threadTs?: string): Promise<Record<string, unknown>> {
                   const token = getToken();

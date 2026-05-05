@@ -43,6 +43,22 @@
     {
       "path": "/api/cron/archive-deal-channels",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/bot-scan",
+      "schedule": "*/5 13-21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/bot-monitor",
+      "schedule": "* 13-21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/bot-daily-summary",
+      "schedule": "0 21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/sms-delayed-sends",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

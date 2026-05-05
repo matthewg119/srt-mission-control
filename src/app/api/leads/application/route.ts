@@ -386,6 +386,11 @@ export async function POST(request: NextRequest) {
                                     leadName: [firstName, lastName].filter(Boolean).join(" "),
                                     leadSource: "application-25%",
                                   });
+
+                                  // Schedule first SMS 3 minutes after signup
+                                  scheduleFirstSms(stlPhone25Existing, contactId, "new-lead").catch(
+                                    (e) => console.error("[sms-schedule] failed:", (e as Error).message)
+                                  );
                                 }
                               }
                         } else {
@@ -520,6 +525,11 @@ export async function POST(request: NextRequest) {
                                   leadName: contactName,
                                   leadSource: "application-25%",
                                 });
+
+                                // Schedule first SMS 3 minutes after signup
+                                scheduleFirstSms(stlPhone25New, contactId, "new-lead").catch(
+                                  (e) => console.error("[sms-schedule] failed:", (e as Error).message)
+                                );
                               }
                         }
 
@@ -1144,6 +1154,28 @@ export async function POST(request: NextRequest) {
                   { status: 500, headers: corsHeaders }
                       );
   }
+}
+
+// Schedule a first SMS to be sent 3 minutes after the lead signs up.
+// Stored in DB; picked up by /api/cron/sms-delayed-sends (runs every 5 min).
+async function scheduleFirstSms(phone: string, contactId: string, template: string): Promise<void> {
+  const { normalizePhone } = await import("@/lib/linq");
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return;
+
+  const sendAt = new Date(Date.now() + 3 * 60 * 1000).toISOString();
+
+  await supabaseAdmin.from("sms_conversations").upsert(
+    {
+      phone: normalizedPhone,
+      contact_id: contactId,
+      first_sms_scheduled_at: sendAt,
+      first_sms_template: template,
+      first_sms_sent: false,
+      outcome: "open",
+    },
+    { onConflict: "phone", ignoreDuplicates: true }
+  );
 }
 
 

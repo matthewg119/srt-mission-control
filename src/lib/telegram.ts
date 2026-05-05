@@ -57,6 +57,20 @@ export const telegram = {
     return res.json();
   },
 
+  /** Send a photo by URL with optional caption */
+  async sendPhoto(chatId: number | string, photoUrl: string, caption?: string): Promise<void> {
+    await fetch(`${getApi()}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        photo: photoUrl,
+        caption,
+        parse_mode: "Markdown",
+      }),
+    });
+  },
+
   /** Check if bot token is configured */
   isConfigured(): boolean {
     const token = process.env.TELEGRAM_BOT_TOKEN || "";

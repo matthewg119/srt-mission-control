@@ -10,6 +10,7 @@ import {
   FileText,
   LayoutList,
   GraduationCap,
+  TrendingUp,
 } from "lucide-react";
 
 export interface NavSection {
@@ -45,6 +46,12 @@ export const navSections: NavSection[] = [
     label: "Coaching",
     items: [
       { label: "Coaching Studio", href: "/dashboard/coaching-studio", icon: GraduationCap },
+    ],
+  },
+  {
+    label: "Trading",
+    items: [
+      { label: "Options Bot", href: "/bot", icon: TrendingUp },
     ],
   },
   {

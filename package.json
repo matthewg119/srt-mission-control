@@ -31,6 +31,7 @@
     "client-only": "^0.0.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "ffmpeg-static": "^5.3.0",
     "jspdf": "^4.2.0",
     "lucide-react": "^0.575.0",
     "next": "14.2.28",
@@ -38,9 +39,11 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.3",
+    "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "technicalindicators": "^3.1.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

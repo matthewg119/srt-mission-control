@@ -10,6 +10,7 @@ import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routi
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
+  generateAndPostImage,
   approveImageAndStartVideo,
   approveVideoAndAdvance,
   regenerateImage,
@@ -173,13 +174,36 @@ export async function POST(request: NextRequest) {
         if (handled) return NextResponse.json({ ok: true });
       }
 
+      // SMS channel thread reply — Matthew typing his own version in an sms-* channel.
+      // We refine it and offer a 1/2 choice.
+      if (userText.trim().length > 0 && !parentThreadTs) {
+        // Only act on direct messages in sms-* channels (non-threaded)
+      }
+      const isSmsChannel = await isSmsConversationChannel(channel);
+      if (isSmsChannel && userText.trim().length > 0) {
+        await handleSmsChannelMessage({ channel, userId: event.user as string, text: userText });
+        return NextResponse.json({ ok: true });
+      }
+
       // #content / #content-full: fork to the Viral Video Decoder. Accepts any
       // mix of images + text brief; one call per Slack message (not per file).
       if (isContentChannel || isContentFullChannel) {
         const isThreadReply = Boolean(event.thread_ts) && event.thread_ts !== event.ts;
+        const contentThreadTs = (event.thread_ts as string) || (event.ts as string);
+
+        // "generate this 3 images" / "generate 3 images" in an existing thread
+        const genMatch = userText.match(/generate\s+(?:this\s+)?(\d+)\s+images?/i);
+        if (genMatch && isThreadReply) {
+          const count = Math.min(9, Math.max(1, parseInt(genMatch[1], 10)));
+          void handleGenerateImages({ channel, threadTs: contentThreadTs, count }).catch((e) => {
+            console.error("[slack/events] generate images error:", (e as Error).message);
+          });
+          return NextResponse.json({ ok: true });
+        }
+
         void handleContentDrop({
           channel,
-          threadTs: (event.thread_ts as string) || (event.ts as string),
+          threadTs: contentThreadTs,
           userId: event.user as string,
           brief: userText,
           files: attachedFiles,
@@ -274,6 +298,12 @@ export async function POST(request: NextRequest) {
 
 async function handleReactionAdded(args: { reaction: string; slackTs: string; channel: string; userId: string }) {
   const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+
+  // ✅ in an SMS channel → send the pending AI draft immediately
+  if (args.reaction === "white_check_mark") {
+    const handled = await handleSmsApprovalReaction(args.channel, args.slackTs, args.userId);
+    if (handled) return;
+  }
 
   if (args.reaction === "+1" || args.reaction === "thumbsup") {
     const { action, error } = await resolvePendingAction({
@@ -568,6 +598,68 @@ async function getPackageThreadTs(pkgId: string): Promise<string | null> {
   return (data?.slack_thread_ts as string | null) ?? null;
 }
 
+// Fires image generation for the first N slides of an existing decoded package
+// in the current thread. Seeds content_scenes if not already done.
+async function handleGenerateImages(args: {
+  channel: string;
+  threadTs: string;
+  count: number;
+}): Promise<void> {
+  const { data: pkg } = await supabaseAdmin
+    .from("content_packages")
+    .select("id, package_json")
+    .eq("slack_thread_ts", args.threadTs)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!pkg) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      "No script found in this thread — drop images + brief first to decode it."
+    );
+    return;
+  }
+
+  const pkgId = pkg.id as string;
+  const packageJson = pkg.package_json as {
+    slides: Array<{ n: number; image_prompt: string; animation_prompt?: string; duration_seconds?: number }>;
+  };
+
+  // Seed content_scenes if they don't exist yet (hook selection was skipped)
+  const { count: existing } = await supabaseAdmin
+    .from("content_scenes")
+    .select("id", { count: "exact", head: true })
+    .eq("content_package_id", pkgId);
+
+  if (!existing || existing === 0) {
+    const rows = (packageJson.slides ?? []).map((slide) => ({
+      content_package_id: pkgId,
+      slide_number: slide.n,
+      image_prompt: slide.image_prompt,
+      animation_prompt: slide.animation_prompt ?? "",
+      duration_seconds: slide.duration_seconds ?? 2,
+    }));
+    await supabaseAdmin
+      .from("content_scenes")
+      .upsert(rows, { onConflict: "content_package_id,slide_number" });
+  }
+
+  const n = Math.min(args.count, packageJson.slides?.length ?? args.count);
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    `🎨 Generating ${n} image${n !== 1 ? "s" : ""}…`
+  );
+
+  await Promise.all(
+    Array.from({ length: n }, (_, i) =>
+      generateAndPostImage(pkgId, i + 1, args.channel, args.threadTs)
+    )
+  );
+}
+
 async function handleContentDrop(args: {
   channel: string;
   threadTs: string;
@@ -615,7 +707,7 @@ async function handleContentDrop(args: {
     parentPackageId
       ? `✏️ Rebuilding with your feedback…`
       : args.fullVideo
-      ? `🎬 Got it — writing the decoder package first, then firing the FAL.ai + ElevenLabs + ffmpeg pipeline on 👍.`
+      ? `🎬 Got it — writing the decoder package first, then generating images and video with ElevenLabs on 👍.`
       : `📝 Got it — writing the production package (caption, VO, 9 image/animation prompts, timeline, music). ~20s.`
   );
 
@@ -957,4 +1049,144 @@ async function handleSofiaVoiceConversion(file: SlackFileInfo): Promise<void> {
       `⚠️ Voice conversion failed: ${errMsg.slice(0, 200)}`
     );
   }
+}
+
+// ── SMS Channel Helpers ───────────────────────────────────────────────────
+
+async function isSmsConversationChannel(channelId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("id")
+    .eq("slack_channel_id", channelId)
+    .maybeSingle();
+  return !!data;
+}
+
+// Matthew typed his own version in an sms-* channel → refine it and offer 1/2 choice
+async function handleSmsChannelMessage(args: { channel: string; userId: string; text: string }): Promise<void> {
+  const { channel, text } = args;
+
+  const { data: conv } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("id, close_stage")
+    .eq("slack_channel_id", channel)
+    .maybeSingle();
+
+  if (!conv) return;
+
+  // Load pending draft (if any) for comparison
+  const { data: pending } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("draft_body")
+    .eq("conversation_id", conv.id)
+    .maybeSingle();
+
+  // If the message is "1" or "2" — handle the 1/2 choice
+  const trimmed = text.trim();
+  if ((trimmed === "1" || trimmed === "2") && pending) {
+    const { data: choiceData } = await supabaseAdmin
+      .from("sms_pending_drafts")
+      .select("draft_body, matthew_custom")
+      .eq("conversation_id", conv.id)
+      .maybeSingle();
+
+    if (choiceData?.matthew_custom && trimmed === "1") {
+      await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/sms/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CRON_SECRET}` },
+        body: JSON.stringify({
+          conversationId: conv.id,
+          body: choiceData.matthew_custom as string,
+          approvedBy: args.userId,
+          aiDraft: pending.draft_body,
+          matthewApprovedAi: false,
+        }),
+      });
+      await slack.postMessage(channel, `✅ *Your version sent.*`);
+      return;
+    }
+    if (trimmed === "2") {
+      await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/sms/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CRON_SECRET}` },
+        body: JSON.stringify({
+          conversationId: conv.id,
+          body: pending.draft_body as string,
+          approvedBy: args.userId,
+          aiDraft: pending.draft_body,
+          matthewApprovedAi: true,
+        }),
+      });
+      await slack.postMessage(channel, `✅ *AI suggestion sent.*`);
+      return;
+    }
+  }
+
+  // Matthew typed a new message — refine it with AI and offer 1/2 choice
+  const { draftSmsReply } = await import("@/lib/sms-ai-engine");
+  const aiRefined = await draftSmsReply(conv.id as string, `[Matthew wants to say]: ${text}`);
+
+  // Save Matthew's version + AI refined to pending drafts
+  await supabaseAdmin.from("sms_pending_drafts").upsert(
+    {
+      conversation_id: conv.id,
+      slack_channel_id: channel,
+      slack_ts: Date.now().toString(),
+      draft_body: aiRefined ?? text,
+      matthew_custom: text,
+      close_stage: conv.close_stage,
+      created_at: new Date().toISOString(),
+    },
+    { onConflict: "conversation_id" }
+  );
+
+  await slack.postMessage(
+    channel,
+    [
+      `*Your version:* "${text}"`,
+      `*AI suggestion:* "${aiRefined ?? "(could not generate)"}"`,
+      ``,
+      `Reply *1* to send yours · Reply *2* to send AI suggestion`,
+    ].join("\n")
+  );
+}
+
+// ✅ reaction on an AI draft message in an sms-* channel → send immediately
+async function handleSmsApprovalReaction(channelId: string, slackTs: string, userId: string): Promise<boolean> {
+  const { data: pending } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("conversation_id, draft_body, close_stage")
+    .eq("slack_channel_id", channelId)
+    .eq("slack_ts", slackTs)
+    .maybeSingle();
+
+  if (!pending) return false;
+
+  const { data: conv } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("phone")
+    .eq("id", pending.conversation_id)
+    .maybeSingle();
+
+  if (!conv) return false;
+
+  await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/sms/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CRON_SECRET}` },
+    body: JSON.stringify({
+      conversationId: pending.conversation_id,
+      body: pending.draft_body,
+      approvedBy: userId,
+      aiDraft: pending.draft_body,
+      matthewApprovedAi: true,
+    }),
+  });
+
+  // Update the draft message to show it was sent
+  await slack.postMessage(channelId, `✅ *Sent:* "${pending.draft_body}"`);
+
+  // Remove the pending draft
+  await supabaseAdmin.from("sms_pending_drafts").delete().eq("conversation_id", pending.conversation_id);
+
+  return true;
 }

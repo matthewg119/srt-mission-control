@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { VIRAL_DECODER_SYSTEM_PROMPT } from "@/config/viral-video-decoder-prompt";
+import { createRecords, slideSection } from "@/lib/airtable";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -207,6 +208,31 @@ export async function POST(request: NextRequest) {
     }
   } catch (e) {
     console.error("[viral-decoder] persist failed:", (e as Error).message);
+  }
+
+  // Push slides to Airtable kanban if configured
+  if (packageId && process.env.AIRTABLE_API_TOKEN && process.env.AIRTABLE_SLIDES_TABLE_ID) {
+    void (async () => {
+      try {
+        const scriptTitle = pkg.concept_summary.slice(0, 80);
+        const records = pkg.slides.map((slide) => ({
+          fields: {
+            "Script Title": scriptTitle,
+            "Slide #": slide.n,
+            "Section": slideSection(slide.n),
+            "Image Prompt": slide.image_prompt,
+            "Animation Prompt": slide.animation_prompt,
+            "Duration (s)": slide.duration_seconds,
+            "Status": "Draft",
+            "Package ID": packageId,
+          },
+        }));
+        await createRecords(process.env.AIRTABLE_SLIDES_TABLE_ID!, records);
+        console.log(`[viral-decoder] pushed ${records.length} slides to Airtable pkg=${packageId}`);
+      } catch (e) {
+        console.error("[viral-decoder] Airtable push failed:", (e as Error).message);
+      }
+    })();
   }
 
   // Auto-render path: skip the 👍 gate and fire the video pipeline directly.

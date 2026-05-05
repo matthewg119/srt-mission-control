@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { updateLead as updateZohoLead } from "@/lib/zoho";
+import { onPreApproved } from "@/lib/ai-intel/pre-approved-handler";
 
 // GET /api/deals/[id] — single deal with contact, events, and notes
 export async function GET(
@@ -81,10 +82,17 @@ export async function PATCH(
       return NextResponse.json({ error: "Deal not found" }, { status: 404 });
     }
 
-    // If stage is changing, forward to Zoho first — Zoho owns pipeline stage.
-    // The Zoho webhook will ride back and update `zoho_stage` for us, but we
-    // also set it locally now so the UI reflects the change without a round-trip.
-    if (stage !== undefined && stage !== currentDeal.stage) {
+    // Only sync terminal/key lead stages to Zoho — keeps outbound webhook count well under
+    // the 100/day org limit. Intermediate deal stages (Contracts Out, Pending Stips, etc.)
+    // are Supabase-only and never need to appear in the CRM lead record.
+    const ZOHO_SYNC_STAGES = new Set([
+      "Working - Contacted",
+      "Working - Application Out",
+      "Dead Declined",
+      "Closed - Not Converted",
+      "Converted",
+    ]);
+    if (stage !== undefined && stage !== currentDeal.stage && ZOHO_SYNC_STAGES.has(stage)) {
       const contactRef = (currentDeal as unknown as { contacts?: { zoho_lead_id?: string | null } }).contacts;
       const zohoLeadId = contactRef?.zoho_lead_id ?? null;
       if (zohoLeadId) {
@@ -95,6 +103,13 @@ export async function PATCH(
           // Non-fatal — Supabase update below still runs so the user isn't stuck.
         }
       }
+    }
+
+    // Pre-Approved no longer syncs to Zoho (saves a webhook), so call the handler directly.
+    if (stage === "Pre-Approved" && stage !== currentDeal.stage) {
+      onPreApproved(id).catch((e: Error) =>
+        console.error("[deals PATCH] onPreApproved failed:", e.message)
+      );
     }
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -140,16 +155,12 @@ export async function PATCH(
         metadata: { old_stage: currentDeal.stage, new_stage: stage, pipeline: pipeline || currentDeal.pipeline },
       });
 
-      // Fire Meta CAPI events on terminal stages —
-      // only if the originating contact came from a real Meta ad click.
-      // Purchase is gated to Active Deals (its "Closed" stage). DNQ ("Dead Declined")
-      // can happen from any pipeline/stage (Qualification, Pre-Approved, etc.), so no pipeline gate.
-      const dealPipeline = pipeline || currentDeal.pipeline;
-      const firePurchase = stage === "Closed" && dealPipeline === "Active Deals";
-      const fireApproved = stage === "Approved" && dealPipeline === "Active Deals";
+      // Fire Meta CAPI events for three stage types only — requires real Meta ad attribution.
+      // Working = application out (high-intent signal); DNQ = disqualified; Converted = funded/won.
+      const fireWorking = stage === "Working - Application Out";
       const fireDnq = stage === "Dead Declined";
-      const fireDealLost = stage === "Deal Lost";
-      if (firePurchase || fireApproved || fireDnq || fireDealLost) {
+      const fireConverted = stage === "Converted";
+      if (fireWorking || fireDnq || fireConverted) {
         const contactId = (data as { contact_id?: string }).contact_id;
         if (contactId) {
           const { data: contact } = await supabaseAdmin
@@ -169,7 +180,23 @@ export async function PATCH(
               fbp: contact.fbp || undefined,
             };
 
-            if (stage === "Closed") {
+            if (fireWorking) {
+              await sendEvent({
+                eventName: "Lead",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { content_name: "Application Out" },
+              });
+              console.log(`[Meta CAPI] Lead (Working) event fired for deal ${id}`);
+            } else if (fireDnq) {
+              await sendEvent({
+                eventName: "DNQ",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { content_name: "Did Not Qualify", source: "deal_stage_change" },
+              });
+              console.log(`[Meta CAPI] DNQ event fired for deal ${id}`);
+            } else if (fireConverted) {
               const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
                 || (data as { agreement_amount?: number; amount?: number }).amount;
               await sendEvent({
@@ -178,39 +205,10 @@ export async function PATCH(
                 userData: baseUserData,
                 customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
               });
-              console.log(`[Meta CAPI] Purchase event fired for deal ${id}, amount: ${dealAmount}`);
-            } else if (stage === "Approved") {
-              const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
-                || (data as { agreement_amount?: number; amount?: number }).amount;
-              await sendEvent({
-                eventName: "Qualified",
-                actionSource: "system_generated",
-                userData: baseUserData,
-                customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
-              });
-              console.log(`[Meta CAPI] Qualified event fired for deal ${id}, amount: ${dealAmount}`);
-            } else if (stage === "Dead Declined") {
-              await sendEvent({
-                eventName: "DNQ",
-                actionSource: "system_generated",
-                userData: baseUserData,
-                customData: { content_name: "Did Not Qualify", source: "deal_stage_change" },
-              });
-              console.log(`[Meta CAPI] DNQ event fired for deal ${id}`);
-            } else if (stage === "Deal Lost") {
-              await sendEvent({
-                eventName: "DealDeclined",
-                actionSource: "system_generated",
-                userData: baseUserData,
-                customData: { content_name: "Deal Lost", source: "deal_stage_change" },
-              });
-              console.log(`[Meta CAPI] DealDeclined event fired for deal ${id}`);
+              console.log(`[Meta CAPI] Purchase (Converted) event fired for deal ${id}, amount: ${dealAmount}`);
             }
           } else if (contact) {
-            const label =
-              stage === "Closed" ? "Purchase" :
-              stage === "Approved" ? "Qualified" :
-              stage === "Dead Declined" ? "DNQ" : "DealDeclined";
+            const label = fireWorking ? "Lead/Working" : fireDnq ? "DNQ" : "Purchase/Converted";
             console.log(`[Meta CAPI] Skipped ${label} for deal ${id} — contact has no Meta attribution`);
           }
         }
