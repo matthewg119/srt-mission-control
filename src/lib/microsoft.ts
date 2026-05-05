@@ -26,6 +26,9 @@ const SCOPES = [
   "MailboxSettings.ReadWrite",
 ].join(" ");
 
+// ── Signature cache ──
+let _signatureCache: { html: string; fetchedAt: number } | null = null;
+
 // ── Types ──
 
 export interface GraphMessage {
@@ -285,6 +288,16 @@ export const microsoft = {
       conversationId: (result.conversationId as string) ?? "",
       internetMessageHeaders: (result.internetMessageHeaders as Array<{ name: string; value: string }> | undefined) ?? [],
     };
+  },
+
+  /** Get PDF/file attachments for a message. Returns array with name, size, contentBytes (base64), contentType. */
+  async getMessageAttachments(messageId: string): Promise<Array<{
+    id: string; name: string; size: number; contentBytes: string; contentType: string;
+  }>> {
+    const result = await graphRequest(
+      `/me/messages/${messageId}/attachments?$select=id,name,size,contentBytes,contentType&$top=20`
+    );
+    return (result.value as Array<{ id: string; name: string; size: number; contentBytes: string; contentType: string }> | undefined) ?? [];
   },
 
   /** Send an email (with optional attachments) */
@@ -615,6 +628,40 @@ export const microsoft = {
         const err = await settingsRes.text();
         console.warn("Set default signature failed (signature was still created):", err);
       }
+    }
+  },
+
+  /**
+   * Read the user's default Outlook signature via Graph beta API.
+   * Returns null if no default signature is configured or the call fails.
+   * Cached for 30 minutes.
+   */
+  async getDefaultSignature(): Promise<string | null> {
+    const now = Date.now();
+    if (_signatureCache && now - _signatureCache.fetchedAt < 30 * 60 * 1000) {
+      return _signatureCache.html;
+    }
+    try {
+      const token = await getValidAccessToken();
+      const BETA = "https://graph.microsoft.com/beta";
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const settingsRes = await fetch(`${BETA}/me/mailboxSettings`, { headers });
+      if (!settingsRes.ok) return null;
+      const settings = await settingsRes.json();
+      const defaultId: string | undefined =
+        settings?.signatureSettings?.useForNewMessages ??
+        settings?.signatureSettings?.useForRepliesOrForwards;
+      if (!defaultId) return null;
+
+      const sigRes = await fetch(`${BETA}/me/mailboxSettings/signatures/${defaultId}`, { headers });
+      if (!sigRes.ok) return null;
+      const sig = await sigRes.json();
+      const html: string = sig.html ?? "";
+      if (html) _signatureCache = { html, fetchedAt: now };
+      return html || null;
+    } catch {
+      return null;
     }
   },
 

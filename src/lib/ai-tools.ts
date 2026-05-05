@@ -3,6 +3,7 @@ import { microsoft } from "./microsoft";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { STAGE_PIPELINES } from "@/config/stage-display";
 import { sendEvent } from "./meta-capi";
+import { analyzeBankStatements } from "./ai-intel/bank-statement-analyzer";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
 export interface ToolExecutionResult {
@@ -244,7 +245,7 @@ export const AI_TOOLS = [
   {
     name: "underwrite_deal",
     description:
-      "Analyze a deal's profile and generate an SOS (Statement of Scenario) document. Pulls deal data and contact fields, assesses viability, and stores the SOS. Use when asked to 'underwrite [deal]', 'analyze [business]', 'create SOS for [contact]', or 'run underwriting on [deal]'.",
+      "Analyze a deal and generate an SOS (Statement of Scenario). Automatically fetches and reads bank statement PDFs from OneDrive (Deals/{merchant}/Bank Statements/). Use when asked to 'underwrite [deal]', 'analyze [business]', 'create SOS for [contact]', or 'run underwriting on [deal]'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -254,7 +255,7 @@ export const AI_TOOLS = [
         },
         additional_context: {
           type: "string",
-          description: "Optional: extra info like bank statement summary, credit details, or notes to include",
+          description: "Optional: supplementary notes to include alongside the automatic bank statement analysis",
         },
       },
       required: ["deal_id"],
@@ -884,6 +885,29 @@ async function underwriteDeal(dealId: string, additionalContext?: string): Promi
 
   const { deal, contact, notes } = profile;
 
+  // Auto-fetch bank statement PDFs from OneDrive
+  let bankStatementReport: string | null = null;
+  const merchantName = String(contact.business_name || contact.legal_name || "").trim();
+  if (merchantName) {
+    try {
+      const folderPath = `Deals/${merchantName}/Bank Statements`;
+      const files = await microsoft.listFolderChildren(folderPath);
+      const pdfs = files.filter((f) => f.isFile && f.name.toLowerCase().endsWith(".pdf"));
+      if (pdfs.length > 0) {
+        const buffers = await Promise.all(
+          pdfs.map(async (f) => {
+            const dl = await microsoft.downloadDriveItem(f.id);
+            return { name: dl.name, buffer: dl.buffer };
+          })
+        );
+        const result = await analyzeBankStatements(buffers);
+        bankStatementReport = result.report;
+      }
+    } catch (e) {
+      console.error("[underwrite] OneDrive bank statement fetch failed:", (e as Error).message);
+    }
+  }
+
   // Build SOS document using contacts table columns directly
   const sos = {
     business_profile: {
@@ -910,8 +934,9 @@ async function underwriteDeal(dealId: string, additionalContext?: string): Promi
       financing_type: deal.product_type || "Working Capital",
     },
     financial_summary: {
-      monthly_deposits: contact.monthly_deposits || "Not provided",
+      monthly_deposits: contact.monthly_deposits || (bankStatementReport ? "See bank statement analysis" : "Not provided"),
       existing_loans: contact.existing_loans || "Unknown",
+      bank_statement_analysis: bankStatementReport ?? (merchantName ? "No PDFs found in OneDrive — upload statements to Deals/" + merchantName + "/Bank Statements/" : "No bank statement analysis available"),
     },
     additional_context: additionalContext || null,
     notes: notes.length > 0 ? notes : ["No notes on file"],
@@ -945,6 +970,7 @@ async function underwriteDeal(dealId: string, additionalContext?: string): Promi
     `FINANCIAL SUMMARY`,
     `Monthly Deposits: ${sos.financial_summary.monthly_deposits}`,
     `Existing Loans: ${sos.financial_summary.existing_loans}`,
+    bankStatementReport ? `\nBANK STATEMENT ANALYSIS\n${bankStatementReport}` : `\nBANK STATEMENT ANALYSIS\n${sos.financial_summary.bank_statement_analysis}`,
     additionalContext ? `\nADDITIONAL CONTEXT\n${additionalContext}` : "",
     ``,
     `--- SRT Agency | srtagency.com ---`,
