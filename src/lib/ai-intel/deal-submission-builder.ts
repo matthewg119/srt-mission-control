@@ -50,7 +50,7 @@ export async function buildSubmissionPackage(opts: BuildSubmissionOpts): Promise
 
   const revenueTable = await buildRevenueTable(contact.id as string);
 
-  const draftedSubject = `${contact.business_name ?? contact.legal_name ?? contact.dba ?? "Merchant"} | $${opts.requestedAmount.toLocaleString()} | ${contact.industry ?? "General"} | $${formatRevenueForSubject(contact.monthly_revenue)}/mo avg`;
+  const draftedSubject = `${contact.business_name ?? contact.legal_name ?? contact.dba ?? "Merchant"} - Funding Application`;
 
   const draftedBody = await draftSubmissionEmail({
     businessName: (contact.business_name as string) ?? "Merchant",

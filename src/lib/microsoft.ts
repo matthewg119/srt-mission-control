@@ -665,6 +665,28 @@ export const microsoft = {
     }
   },
 
+  /**
+   * Fetch a specific Outlook signature by its display name.
+   * Returns the HTML content or null if not found. Not cached (used infrequently).
+   */
+  async getSignatureByName(name: string): Promise<string | null> {
+    try {
+      const token = await getValidAccessToken();
+      const BETA = "https://graph.microsoft.com/beta";
+      const res = await fetch(`${BETA}/me/mailboxSettings/signatures`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const match = (data.value as Array<{ id: string; displayName: string; html?: string }> | undefined)?.find(
+        (s) => s.displayName.toLowerCase() === name.toLowerCase()
+      );
+      return match?.html ?? null;
+    } catch {
+      return null;
+    }
+  },
+
   // ── Change Notification Subscriptions ──
 
   /** Create a Graph change-notification subscription (e.g. new mail on submissions@). */

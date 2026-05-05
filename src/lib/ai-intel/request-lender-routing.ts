@@ -83,8 +83,18 @@ export async function parseLenderChoicesFromReply(replyBody: string): Promise<{
   lender_ids: string[];
   matched_names: string[];
   unmatched: string[];
+  note: string | null;
 }> {
-  const text = replyBody.slice(0, 2000).toLowerCase();
+  // Extract optional note: text after "note:" or "/ note" separator
+  let note: string | null = null;
+  let lenderText = replyBody.slice(0, 2000);
+  const noteMatch = replyBody.match(/(?:\/\s*note\s*:?|^note\s*:)(.*)/im);
+  if (noteMatch) {
+    note = noteMatch[1].trim() || null;
+    lenderText = replyBody.slice(0, noteMatch.index).trim();
+  }
+
+  const text = lenderText.toLowerCase();
 
   const { data: lenders } = await supabaseAdmin
     .from("lenders")
@@ -101,6 +111,7 @@ export async function parseLenderChoicesFromReply(replyBody: string): Promise<{
       lender_ids: matches.map((l) => l.id),
       matched_names: matches.map((l) => l.name),
       unmatched: [],
+      note,
     };
   }
 
@@ -137,5 +148,6 @@ export async function parseLenderChoicesFromReply(replyBody: string): Promise<{
     lender_ids: matched.map((m) => m.id),
     matched_names: matched.map((m) => m.name),
     unmatched: unmatched.slice(0, 5),
+    note,
   };
 }

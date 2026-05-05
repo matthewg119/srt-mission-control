@@ -5,6 +5,7 @@ import { callClaudeJSON } from "@/lib/claude-calls";
 import { postDealThreadUpdate } from "@/lib/ai-intel/deal-thread";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { microsoft } from "@/lib/microsoft";
+import { slack } from "@/lib/slack-bot";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import type { SlackBlock } from "@/lib/slack-bot";
 
@@ -20,6 +21,8 @@ interface RequestBody {
   drive_item_ids?: string[];
   source?: "onedrive" | "slack_drop" | "manual" | "portal";
   onedrive_folder_url?: string;
+  slack_channel?: string;
+  slack_thread_ts?: string;
 }
 
 interface RevenueTableRow {
@@ -31,6 +34,7 @@ interface RevenueTableRow {
 }
 
 interface BankMetrics {
+  account_holder: string | null;
   avg_monthly_deposits: number | null;
   avg_daily_balance: number | null;
   total_nsfs: number | null;
@@ -49,6 +53,7 @@ const METRICS_SYSTEM = `You extract structured underwriting metrics from a bank-
 
 Output JSON only, matching this shape:
 {
+  "account_holder": string | null,
   "avg_monthly_deposits": number | null,
   "avg_daily_balance": number | null,
   "total_nsfs": number | null,
@@ -70,6 +75,7 @@ Output JSON only, matching this shape:
 }
 
 Rules:
+- account_holder: business or individual name from the Account Summary "Account Holder" field.
 - null when the report doesn't state the value.
 - Dollar values as plain numbers (no $/commas).
 - red_flags: max 6 concise items from the report's Red Flags section.
@@ -117,6 +123,9 @@ export async function POST(req: NextRequest) {
   if (fetched.length === 0) {
     return NextResponse.json({ error: "no PDFs to analyze (pass pdf_urls or drive_item_ids)" }, { status: 400 });
   }
+
+  const slackChannel = body.slack_channel ?? null;
+  const slackThreadTs = body.slack_thread_ts ?? null;
 
   // Resolve the deal — deal_id wins, otherwise look up by contact_id or merchant_name
   let dealId = body.deal_id ?? null;
@@ -174,11 +183,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (!dealId) {
-    return NextResponse.json({ error: "could not resolve a deal — pass deal_id or contact_id or merchant_name" }, { status: 400 });
-  }
-
-  // Run analyzer
+  // Run analyzer (before deal check so we can extract account_holder for deal lookup)
   let analysis;
   try {
     analysis = await analyzeBankStatements(fetched.map((f) => ({ name: f.name, buffer: f.buffer })));
@@ -186,8 +191,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  // Extract structured metrics
+  // Extract structured metrics (includes account_holder for deal lookup)
   let metrics: BankMetrics = {
+    account_holder: null,
     avg_monthly_deposits: null,
     avg_daily_balance: null,
     total_nsfs: null,
@@ -212,6 +218,56 @@ export async function POST(req: NextRequest) {
     metrics = { ...metrics, ...metricsResult.data };
   } catch (e) {
     console.error("[bank-statements] metrics extraction failed:", (e as Error).message);
+  }
+
+  // If we still don't have a deal, try matching by the account holder extracted from the PDF
+  let nameAdjusted = false;
+  const extractedName = metrics.account_holder?.trim() ?? null;
+  if (!dealId && extractedName) {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("id, business_name")
+      .ilike("business_name", `%${extractedName.split(" ")[0]}%`)
+      .limit(1)
+      .maybeSingle();
+    if (contact) {
+      contactId = contact.id as string;
+      if ((contact.business_name as string | null)?.toLowerCase() !== extractedName.toLowerCase()) {
+        nameAdjusted = true;
+      }
+      merchantName = extractedName; // use exact bank-statement name for subject
+      const { data: deal } = await supabaseAdmin
+        .from("deals")
+        .select("id, zoho_lead_id")
+        .eq("contact_id", contactId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (deal) {
+        dealId = deal.id as string;
+        zohoId = (deal.zoho_lead_id as string | null) ?? null;
+      }
+    }
+  }
+
+  // Use exact bank-statement name (if available) as the authoritative merchant name
+  if (extractedName && merchantName !== extractedName) {
+    merchantName = extractedName;
+    nameAdjusted = true;
+  }
+
+  // No deal found — post a Slack ask instead of a hard error
+  if (!dealId) {
+    const displayName = extractedName ?? merchantName ?? "Unknown Merchant";
+    if (slackChannel && slackThreadTs) {
+      await slack.postThreadReply(
+        slackChannel,
+        slackThreadTs,
+        `📄 Found bank statements for *${displayName}* but no deal exists in the pipeline.\n\nReply \`create deal\` to create one, or \`link to [deal name]\` if it's under a different name.`,
+      );
+      return NextResponse.json({ ok: true, status: "no_deal_found", merchant: displayName });
+    }
+    return NextResponse.json({ error: "could not resolve a deal", merchant: displayName }, { status: 400 });
   }
 
   // Build Zoho field patches (only non-null numerics — unknown fields fall into the Note)
@@ -250,12 +306,15 @@ export async function POST(req: NextRequest) {
     .single();
 
   // Post the report to the deal thread
+  const nameNote = nameAdjusted && extractedName
+    ? `\n⚠️ _Name in bank statements: *${extractedName}* — deal name adjusted to match._`
+    : "";
   const reportBlocks: SlackBlock[] = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `🏦 *Bank Statement Analysis* — ${merchantName ?? "Merchant"}\n_${fetched.length} statement${fetched.length > 1 ? "s" : ""} · ${analysis.model} · ${(analysis.latencyMs / 1000).toFixed(1)}s · source: ${body.source ?? "manual"}_`,
+        text: `🏦 *Bank Statement Analysis* — ${merchantName ?? "Merchant"}\n_${fetched.length} statement${fetched.length > 1 ? "s" : ""} · ${analysis.model} · ${(analysis.latencyMs / 1000).toFixed(1)}s · source: ${body.source ?? "manual"}_${nameNote}`,
       },
     },
   ];

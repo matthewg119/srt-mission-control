@@ -28,6 +28,7 @@ export interface SubmitToLendersOpts {
   bankStmtDriveItemIds: string[];
   onedriveFolderUrl: string | null;
   amountRequested: number | null;
+  clientNote?: string | null;
 }
 
 export interface SubmitToLendersResult {
@@ -125,12 +126,13 @@ export async function submitToLenders(opts: SubmitToLendersOpts): Promise<Submit
     }
 
     try {
+      const htmlBody = await buildSubmissionHtml(opts.draftBody, opts.clientNote ?? null);
       await microsoft.sendMail({
         to: lender.submission_email,
         bcc: lender.cc_emails && lender.cc_emails.length > 0 ? lender.cc_emails.join(",") : undefined,
         subject: opts.draftSubject,
-        body: opts.draftBody,
-        isHtml: false,
+        body: htmlBody,
+        isHtml: true,
         attachments,
       });
 
@@ -291,6 +293,33 @@ async function buildAttachments(
     }
   }
   return { attachments: out, appPdfMissing };
+}
+
+async function buildSubmissionHtml(plainBody: string, clientNote: string | null): Promise<string> {
+  // Try to use the "Submission" Outlook signature; fall back to default
+  const { EMAIL_SIGNATURE_HTML } = await import("@/config/email-signature");
+  const sig = (await microsoft.getSignatureByName("Submission").catch(() => null))
+    ?? (await microsoft.getDefaultSignature().catch(() => null))
+    ?? EMAIL_SIGNATURE_HTML;
+
+  const bodyLines = plainBody.split("\n").map((line) => {
+    if (line.trim() === "") return "<br>";
+    return `<p style="margin:0 0 8px 0;">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`;
+  });
+
+  // Inject client note in italic before the sign-off if provided
+  if (clientNote) {
+    const noteHtml = `<p style="margin:0 0 8px 0;"><em>${clientNote.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</em></p>`;
+    // Insert before the last non-empty paragraph (the sign-off)
+    const lastNonEmpty = bodyLines.reduceRight((acc, _, i) => acc === -1 && bodyLines[i] !== "<br>" ? i : acc, -1);
+    if (lastNonEmpty > 0) {
+      bodyLines.splice(lastNonEmpty, 0, noteHtml);
+    } else {
+      bodyLines.push(noteHtml);
+    }
+  }
+
+  return `${bodyLines.join("")}<br><br>${sig}`;
 }
 
 function buildNoteContent(r: SubmitToLendersResult): string {

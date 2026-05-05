@@ -68,7 +68,7 @@ export async function postDraftSubmissionCard(opts: {
     revenueTable: revenueTableText,
   });
 
-  const draftSubject = `${businessName} | $${amount.toLocaleString()} | ${industry} | $${formatRevenueForSubject(monthlyRevenue)}/mo avg`;
+  const draftSubject = `${businessName} - Funding Application`;
 
   const payload: PendingActionPayload = {
     action_type: "send_submission",
@@ -100,7 +100,7 @@ export async function postDraftSubmissionCard(opts: {
       elements: [
         {
           type: "mrkdwn",
-          text: "Reply in this thread with lender name(s) to send. Examples: `send to Forward Financing, Credibly` · `Tier 1 only`.",
+          text: "Reply with lender name(s) and an optional client note.\nExamples:\n• `Forward Financing, Credibly`\n• `Tier 1 only / note: Client looking for expansion capital`\nNote will appear in *italic* in the email.",
         },
       ],
     },

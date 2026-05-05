@@ -161,6 +161,7 @@ async function sendSubmission(payload: PendingActionPayload): Promise<ExecuteRes
     bankStmtDriveItemIds: payload.bank_stmt_drive_item_ids ?? [],
     onedriveFolderUrl: payload.onedrive_folder_url ?? null,
     amountRequested: payload.amount ?? null,
+    clientNote: (payload as { client_note?: string }).client_note ?? null,
   });
 
   return {

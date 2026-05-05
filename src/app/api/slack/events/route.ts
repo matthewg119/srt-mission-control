@@ -8,6 +8,16 @@ import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
+import {
+  startSlideGenerationWithHook,
+  approveImageAndStartVideo,
+  approveVideoAndAdvance,
+  regenerateImage,
+  regenerateVideo,
+  getSceneByImageTs,
+  getSceneByVideoTs,
+} from "@/lib/content-scene-runner";
+import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 
 interface SlackEventFile {
   id: string;
@@ -77,12 +87,22 @@ export async function POST(request: NextRequest) {
 
       // Reaction shortcut for AI approval workflow — handled before bot-message filter.
       if (event.type === "reaction_added" && event.item?.type === "message") {
-        await handleReactionAdded({
+        // Try content reaction handler first (no channel restriction — it self-routes by looking
+        // up slack_package_ts / scene ts / hooks_message_ts in the DB).
+        const contentHandled = await handleContentReaction({
           reaction: event.reaction as string,
           slackTs: event.item.ts as string,
           channel: event.item.channel as string,
           userId: event.user as string,
         });
+        if (!contentHandled) {
+          await handleReactionAdded({
+            reaction: event.reaction as string,
+            slackTs: event.item.ts as string,
+            channel: event.item.channel as string,
+            userId: event.user as string,
+          });
+        }
         return NextResponse.json({ ok: true });
       }
 
@@ -255,15 +275,6 @@ export async function POST(request: NextRequest) {
 async function handleReactionAdded(args: { reaction: string; slackTs: string; channel: string; userId: string }) {
   const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
 
-  // Content-package reactions take priority: the package rows have their own
-  // table and their own downstream action (kick off the full video pipeline
-  // on 👍 in #content-full). Fall through to the deal-approval path only if
-  // no content package matches this message ts.
-  if (args.channel === VEKTOR_CHANNELS.content || args.channel === VEKTOR_CHANNELS.contentFull) {
-    const handled = await handleContentReaction(args);
-    if (handled) return;
-  }
-
   if (args.reaction === "+1" || args.reaction === "thumbsup") {
     const { action, error } = await resolvePendingAction({
       slackTs: args.slackTs,
@@ -327,19 +338,100 @@ async function handleContentReaction(args: {
   channel: string;
   userId: string;
 }): Promise<boolean> {
+  const isApprove = args.reaction === "white_check_mark";
+  const isRegen = args.reaction === "arrows_counterclockwise";
+  const isThumbsUp = args.reaction === "+1" || args.reaction === "thumbsup";
+  const isKill = args.reaction === "no_entry" || args.reaction === "x";
+  const isEdit = args.reaction === "pencil2" || args.reaction === "memo" || args.reaction === "writing_hand";
+  const hookIndex = args.reaction === "one" ? 0 : args.reaction === "two" ? 1 : args.reaction === "three" ? 2 : -1;
+
+  console.log(`[events] handleContentReaction reaction=${args.reaction} ts=${args.slackTs} channel=${args.channel}`);
+
+  // --- Hook selection (1️⃣/2️⃣/3️⃣ on the hooks message) ---
+  if (hookIndex >= 0) {
+    const { data: pkg } = await supabaseAdmin
+      .from("content_packages")
+      .select("id, slack_thread_ts, package_json, hook_options_json")
+      .eq("hooks_message_ts", args.slackTs)
+      .maybeSingle();
+
+    if (pkg) {
+      const threadTs = pkg.slack_thread_ts as string;
+      console.log(`[events] hook selected=${hookIndex} pkg=${pkg.id}`);
+
+      await supabaseAdmin
+        .from("content_packages")
+        .update({ selected_hook_index: hookIndex })
+        .eq("id", pkg.id);
+
+      const hookOptions = pkg.hook_options_json as HookOption[] | null;
+      const selectedHook = hookOptions?.[hookIndex] ?? null;
+
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        `✅ Hook ${hookIndex + 1} selected${selectedHook ? ` — *${selectedHook.name}*` : ""}. Generating Slides 1, 2 & 3 now…`
+      );
+
+      void startSlideGenerationWithHook(
+        pkg.id as string,
+        pkg.package_json as Parameters<typeof startSlideGenerationWithHook>[1],
+        selectedHook,
+        args.channel,
+        threadTs
+      ).catch((e) => console.error("[events] startSlideGenerationWithHook error:", (e as Error).message));
+
+      return true;
+    }
+  }
+
+  // --- Scene-level reactions (✅/🔄 on image or video posts) ---
+  if (isApprove || isRegen) {
+    const imageScene = await getSceneByImageTs(args.slackTs);
+    if (imageScene) {
+      const threadTs = await getPackageThreadTs(imageScene.content_package_id as string);
+      if (!threadTs) return true;
+      console.log(`[events] image reaction=${args.reaction} scene=${imageScene.id} slide=${imageScene.slide_number}`);
+      if (isApprove) {
+        void approveImageAndStartVideo(imageScene.id as string, args.channel, threadTs)
+          .catch((e) => console.error("[events] approveImageAndStartVideo error:", (e as Error).message));
+      } else {
+        void regenerateImage(imageScene.id as string, args.channel, threadTs)
+          .catch((e) => console.error("[events] regenerateImage error:", (e as Error).message));
+      }
+      return true;
+    }
+
+    const videoScene = await getSceneByVideoTs(args.slackTs);
+    if (videoScene) {
+      const threadTs = await getPackageThreadTs(videoScene.content_package_id as string);
+      if (!threadTs) return true;
+      console.log(`[events] video reaction=${args.reaction} scene=${videoScene.id} slide=${videoScene.slide_number}`);
+      if (isApprove) {
+        void approveVideoAndAdvance(
+          videoScene.id as string,
+          videoScene.content_package_id as string,
+          args.channel,
+          threadTs
+        ).catch((e) => console.error("[events] approveVideoAndAdvance error:", (e as Error).message));
+      } else {
+        void regenerateVideo(videoScene.id as string, args.channel, threadTs)
+          .catch((e) => console.error("[events] regenerateVideo error:", (e as Error).message));
+      }
+      return true;
+    }
+  }
+
+  // --- Package-level reactions (👍 kill ✏️ on the package card) ---
   const { data: pkg } = await supabaseAdmin
     .from("content_packages")
-    .select("id, status, slack_channel, slack_thread_ts")
+    .select("id, status, slack_channel, slack_thread_ts, package_json")
     .eq("slack_package_ts", args.slackTs)
     .maybeSingle();
 
   if (!pkg) return false;
 
-  const isApprove = args.reaction === "+1" || args.reaction === "thumbsup";
-  const isKill = args.reaction === "no_entry" || args.reaction === "x";
-  const isEdit = args.reaction === "pencil2" || args.reaction === "memo" || args.reaction === "writing_hand";
-
-  if (!isApprove && !isKill && !isEdit) return false;
+  if (!isThumbsUp && !isKill && !isEdit) return false;
 
   if (pkg.status !== "awaiting_approval" && pkg.status !== "regenerating") {
     await slack.postThreadReply(
@@ -360,10 +452,7 @@ async function handleContentReaction(args: {
   }
 
   if (isEdit) {
-    await supabaseAdmin
-      .from("content_packages")
-      .update({ status: "regenerating" })
-      .eq("id", pkg.id);
+    await supabaseAdmin.from("content_packages").update({ status: "regenerating" }).eq("id", pkg.id);
     await slack.postThreadReply(
       args.channel,
       pkg.slack_thread_ts as string,
@@ -372,33 +461,111 @@ async function handleContentReaction(args: {
     return true;
   }
 
-  // Approve
+  // 👍 on package — mark approved and generate 3 hook options before any images
   await supabaseAdmin
     .from("content_packages")
     .update({ status: "approved", resolved_at: new Date().toISOString() })
     .eq("id", pkg.id);
 
-  if (args.channel === VEKTOR_CHANNELS.contentFull) {
-    // Kick off the full video pipeline — fire-and-forget so Slack gets 200 fast.
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-    void fetch(`${siteUrl}/api/agent/video-pipeline`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package_id: pkg.id, approved_by: args.userId }),
-    }).catch((e) => console.error("[content] pipeline kickoff failed:", (e as Error).message));
-    await slack.postThreadReply(
-      args.channel,
-      pkg.slack_thread_ts as string,
-      `👍 Approved by <@${args.userId}> — firing video pipeline now.`
-    );
-  } else {
-    await slack.postThreadReply(
-      args.channel,
-      pkg.slack_thread_ts as string,
-      `👍 Approved by <@${args.userId}>. Ready to build in CapCut.`
-    );
-  }
+  await slack.postThreadReply(
+    args.channel,
+    pkg.slack_thread_ts as string,
+    `👍 Approved — generating 3 hook options…`
+  );
+
+  void generateAndPostHooks(
+    pkg.id as string,
+    pkg.package_json as Parameters<typeof generateAndPostHooks>[1],
+    args.channel,
+    pkg.slack_thread_ts as string
+  ).catch((e) => console.error("[events] generateAndPostHooks error:", (e as Error).message));
+
   return true;
+}
+
+export interface HookOption {
+  name: string;
+  slide1_image_prompt: string;
+  slide1_text_overlay: string;
+  slide2_image_prompt: string;
+}
+
+async function generateAndPostHooks(
+  pkgId: string,
+  packageJson: { concept_summary?: string; target_persona?: string; slides?: Array<{ n: number; image_prompt: string }> },
+  channel: string,
+  threadTs: string
+): Promise<void> {
+  const Anthropic = (await import("@anthropic-ai/sdk")).default;
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  const slide2Prompt = packageJson.slides?.find((s) => s.n === 2)?.image_prompt ?? "";
+
+  const msg = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 1024,
+    messages: [
+      {
+        role: "user",
+        content: `You are a viral short-form video strategist for SRT Agency, a business funding broker.
+
+Generate 3 distinct hook options for this video. Each hook is a combination of:
+1. Slide 1 (wide compelling visual — NO faces, extreme close-up of the avatar's world, stops the scroll)
+2. Slide 2 (the specific avatar in their environment — full shot, authentic setting)
+
+Concept: ${packageJson.concept_summary ?? "business funding story"}
+Avatar: ${packageJson.target_persona ?? "small business owner"}
+
+Return ONLY valid JSON, no preamble:
+{
+  "hooks": [
+    {
+      "name": "short hook name (3-5 words)",
+      "slide1_image_prompt": "Extreme close-up photorealistic 9:16 vertical. [specific object from avatar's world that signals the problem — no people]. Ultra-detailed, cinematic lighting.",
+      "slide1_text_overlay": "Bold 6-10 word hook text that creates a curiosity gap",
+      "slide2_image_prompt": "Full shot photorealistic 9:16 vertical. [avatar — specific age/appearance/setting]. Natural light, authentic, not staged."
+    }
+  ]
+}`,
+      },
+    ],
+  });
+
+  let hooks: HookOption[] = [];
+  try {
+    const raw = ((msg.content[0] as { type: string; text: string }).text ?? "").trim();
+    const json = raw.startsWith("{") ? raw : raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1]?.trim() ?? raw;
+    hooks = (JSON.parse(json) as { hooks: HookOption[] }).hooks.slice(0, 3);
+  } catch (e) {
+    console.error("[events] hook generation parse failed:", (e as Error).message);
+    await slack.postThreadReply(channel, threadTs, "⚠️ Hook generation failed — react 👍 again to retry.");
+    return;
+  }
+
+  const lines = hooks.map((h, i) => {
+    const num = i === 0 ? "1️⃣" : i === 1 ? "2️⃣" : "3️⃣";
+    return `${num} *${h.name}*\n> Slide 1: ${h.slide1_text_overlay}\n> Visual: ${h.slide1_image_prompt.slice(0, 120)}…`;
+  });
+
+  const hooksText = `🎣 *3 Hook Options — react 1️⃣ 2️⃣ or 3️⃣ to choose:*\n\n${lines.join("\n\n")}`;
+  const hooksRes = await slack.postThreadReply(channel, threadTs, hooksText);
+  const hooksTs = hooksRes.ts as string | undefined;
+
+  await supabaseAdmin
+    .from("content_packages")
+    .update({ hook_options_json: hooks, hooks_message_ts: hooksTs ?? null })
+    .eq("id", pkgId);
+
+  console.log(`[events] hooks posted pkg=${pkgId} ts=${hooksTs}`);
+}
+
+async function getPackageThreadTs(pkgId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from("content_packages")
+    .select("slack_thread_ts")
+    .eq("id", pkgId)
+    .maybeSingle();
+  return (data?.slack_thread_ts as string | null) ?? null;
 }
 
 async function handleContentDrop(args: {
@@ -524,7 +691,7 @@ async function handleDealThreadReply(args: {
     await slack.postEphemeral(
       args.channel,
       args.userId,
-      `Couldn't match any lender from "${args.replyText.slice(0, 120)}". Try: \`send to Forward Financing, Credibly\` or \`Tier 1 only\`.`,
+      `Couldn't match any lender from "${args.replyText.slice(0, 120)}". Try: \`Forward Financing, Credibly\` or \`Tier 1 only\` — optionally add \`/ note: client note here\`.`,
     );
     return true;
   }
@@ -533,7 +700,8 @@ async function handleDealThreadReply(args: {
   const editedPayload: PendingActionPayload = {
     ...currentPayload,
     lender_ids: choice.lender_ids,
-  };
+    ...(choice.note ? { client_note: choice.note } : {}),
+  } as PendingActionPayload & { client_note?: string };
 
   const { action, error } = await resolvePendingAction({
     slackTs: pending.slack_ts as string,
@@ -596,20 +764,35 @@ async function handleFileShared(fileId: string): Promise<void> {
   }
   const file = info.file;
 
-  if (file.mimetype !== "application/pdf") {
-    console.log("[slack/events] skipping non-PDF file:", file.mimetype, file.name);
-    return;
-  }
-
-  // If the file landed in a content channel, the message-event branch already
-  // fired the decoder — don't also try to treat it as a bank statement.
   const allShareChannels = Object.keys({
     ...(file.shares?.public ?? {}),
     ...(file.shares?.private ?? {}),
   });
-  if (
-    allShareChannels.some((ch) => ch === VEKTOR_CHANNELS.content || ch === VEKTOR_CHANNELS.contentFull)
-  ) {
+  const isInContentChannel = allShareChannels.some(
+    (ch) => ch === VEKTOR_CHANNELS.content || ch === VEKTOR_CHANNELS.contentFull
+  );
+  const mimeType = file.mimetype ?? "";
+  const isAudio =
+    mimeType.startsWith("audio/") ||
+    file.filetype === "mp4a" ||
+    file.filetype === "voice-message" ||
+    mimeType === "video/mp4a-latm";
+
+  // Voice note in a content channel → strip silence + convert to Sofia's voice
+  if (isAudio && isInContentChannel) {
+    void handleSofiaVoiceConversion(file).catch((e) =>
+      console.error("[slack/events] sofia voice conversion error:", (e as Error).message)
+    );
+    return;
+  }
+
+  if (mimeType !== "application/pdf") {
+    console.log("[slack/events] skipping non-PDF file:", mimeType, file.name);
+    return;
+  }
+
+  // If a PDF landed in a content channel, the message-event branch already fired the decoder.
+  if (isInContentChannel) {
     return;
   }
 
@@ -647,15 +830,15 @@ async function handleFileShared(fileId: string): Promise<void> {
     .eq("slack_thread_ts", threadTs)
     .maybeSingle();
 
-  if (!deal) {
-    await slack.postThreadReply(channelId, threadTs, "⚠️ VeKtor couldn't match this thread to a deal. Drop the PDF in a thread VeKtor started.");
-    return;
-  }
-
-  const dealId = deal.id as string;
-  const merchantName = (
-    (deal as { contacts?: { business_name?: string } | null }).contacts?.business_name ?? "Merchant"
-  ).trim();
+  // Allow PDFs dropped outside a known deal thread — the bank-statements route
+  // will try to match by merchant name extracted from the analysis, and will
+  // post back into this same thread if no deal is found.
+  const dealId = deal ? (deal.id as string) : null;
+  const merchantName = deal
+    ? (
+        (deal as { contacts?: { business_name?: string } | null }).contacts?.business_name ?? "Merchant"
+      ).trim()
+    : null;
 
   if (!file.url_private_download) {
     console.error("[slack/events] no url_private_download on file", file.id);
@@ -663,13 +846,15 @@ async function handleFileShared(fileId: string): Promise<void> {
   }
   const buffer = await slack.downloadFile(file.url_private_download);
 
-  const folderPath = `Deals/${merchantName}/Bank Statements`;
+  // Use known merchant folder if we have a deal, otherwise temp staging folder
+  const folderBase = merchantName ? `Deals/${merchantName}/Bank Statements` : "Deals/_Inbox/Bank Statements";
   const fileName = file.name ?? `statement-${Date.now()}.pdf`;
   let driveItemId: string | null = null;
   let driveWebUrl: string | null = null;
   try {
-    await microsoft.createDriveFolder("Bank Statements", `Deals/${merchantName}`).catch(() => {});
-    const uploaded = await microsoft.uploadDriveFile(folderPath, fileName, buffer, "application/pdf");
+    const parentFolder = merchantName ? `Deals/${merchantName}` : "Deals/_Inbox";
+    await microsoft.createDriveFolder("Bank Statements", parentFolder).catch(() => {});
+    const uploaded = await microsoft.uploadDriveFile(folderBase, fileName, buffer, "application/pdf");
     driveItemId = uploaded.id;
     driveWebUrl = uploaded.webUrl;
     await slack.postThreadReply(channelId, threadTs, `📥 Saved \`${fileName}\` to OneDrive — analyzing…`);
@@ -680,10 +865,13 @@ async function handleFileShared(fileId: string): Promise<void> {
 
   const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const analyzeBody: Record<string, unknown> = {
-    deal_id: dealId,
     source: "slack_drop",
     onedrive_folder_url: driveWebUrl,
+    slack_channel: channelId,
+    slack_thread_ts: threadTs,
   };
+  if (dealId) analyzeBody.deal_id = dealId;
+  else if (merchantName) analyzeBody.merchant_name = merchantName;
   if (driveItemId) {
     analyzeBody.drive_item_ids = [driveItemId];
   } else {
@@ -699,5 +887,74 @@ async function handleFileShared(fileId: string): Promise<void> {
   if (!res.ok) {
     const errText = await res.text();
     await slack.postThreadReply(channelId, threadTs, `⚠️ Analysis failed: ${errText.slice(0, 200)}`);
+  }
+}
+
+// Voice note dropped in a content thread → strip silence → convert to Sofia's voice → post back.
+async function handleSofiaVoiceConversion(file: SlackFileInfo): Promise<void> {
+  const allShares: Record<string, Array<{ thread_ts?: string; ts?: string }>> = {
+    ...(file.shares?.public ?? {}),
+    ...(file.shares?.private ?? {}),
+  };
+
+  // Find which content channel + thread this was dropped into
+  let channelId: string | null = null;
+  let threadTs: string | null = null;
+  for (const [ch, arr] of Object.entries(allShares)) {
+    if (ch !== VEKTOR_CHANNELS.content && ch !== VEKTOR_CHANNELS.contentFull) continue;
+    for (const share of arr ?? []) {
+      if (share.thread_ts) {
+        channelId = ch;
+        threadTs = share.thread_ts;
+        break;
+      }
+    }
+    if (channelId) break;
+  }
+
+  if (!channelId || !threadTs) {
+    console.log("[slack/events] sofia voice: no content thread context found");
+    return;
+  }
+
+  if (!file.url_private_download) {
+    console.error("[slack/events] sofia voice: no url_private_download on file", file.id);
+    return;
+  }
+
+  console.log(`[slack/events] sofia voice: processing voice note in channel=${channelId} thread=${threadTs}`);
+  await slack.postThreadReply(
+    channelId,
+    threadTs,
+    "🎙️ Voice note received — stripping silence and applying Sofia's voice…"
+  );
+
+  try {
+    const rawBuffer = await slack.downloadFile(file.url_private_download);
+    const trimmedBuffer = await stripSilence(rawBuffer);
+    const sofiaBuffer = await sofiaVoiceConvert(trimmedBuffer);
+
+    await slack.uploadFile(channelId, "sofia-voiceover.mp3", sofiaBuffer, "audio/mpeg", threadTs);
+    await slack.postThreadReply(
+      channelId,
+      threadTs,
+      "🎙️ Sofia voiceover ready — silence stripped and voice converted."
+    );
+
+    // Best-effort: mark sofia_voiceover_url on the package for this thread
+    await supabaseAdmin
+      .from("content_packages")
+      .update({ sofia_voiceover_url: "slack_uploaded" })
+      .eq("slack_channel", channelId)
+      .eq("slack_thread_ts", threadTs)
+      .eq("status", "rendered");
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    console.error("[slack/events] sofia voice conversion failed:", errMsg);
+    await slack.postThreadReply(
+      channelId,
+      threadTs,
+      `⚠️ Voice conversion failed: ${errMsg.slice(0, 200)}`
+    );
   }
 }
