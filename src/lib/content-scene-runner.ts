@@ -1,7 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { spawnSync } from "child_process";
+import { randomUUID } from "crypto";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { generateImage } from "@/lib/elevenlabs-media";
+import { generateImage, generateVideo, pollVideo } from "@/lib/elevenlabs-media";
 import type { HookOption } from "@/app/api/slack/events/route";
 
 interface Slide {
@@ -472,4 +475,325 @@ async function getSlideCount(pkgId: string): Promise<number> {
     .select("id", { count: "exact", head: true })
     .eq("content_package_id", pkgId);
   return count ?? 0;
+}
+
+// ─── 2-Stage Pipeline ─────────────────────────────────────────────────────────
+
+const SHOT_LABELS = ["Shot 1 — Hook", "Shot 2 — Problem Setup", "Shot 3 — Problem Amplified"];
+
+function getShotLabel(slideNumber: number): string {
+  return SHOT_LABELS[slideNumber - 1] ?? `Shot ${slideNumber}`;
+}
+
+// Converts an image URL (HTTPS or data:) to a raw buffer for Slack file upload.
+async function imageUrlToBuffer(imageUrl: string): Promise<{ buffer: Buffer; mimetype: string }> {
+  if (imageUrl.startsWith("data:")) {
+    const [header, b64] = imageUrl.split(",");
+    const mimetype = header.split(":")[1].split(";")[0];
+    return { buffer: Buffer.from(b64, "base64"), mimetype };
+  }
+  const res = await fetch(imageUrl);
+  if (!res.ok) throw new Error(`Image download failed (${res.status})`);
+  const mimetype = (res.headers.get("content-type") ?? "image/png").split(";")[0];
+  return { buffer: Buffer.from(await res.arrayBuffer()), mimetype };
+}
+
+// Stage 1: Generate 3 still images via OpenAI, upload as Slack files, post a
+// single approval gate message. Set package status to 'stills_pending'.
+// Does NOT kick off video. Triggered by "generate this [N]" in the thread.
+export async function startStillsGeneration(
+  pkgId: string,
+  channel: string,
+  threadTs: string
+): Promise<void> {
+  console.log(`[scene-runner] startStillsGeneration pkg=${pkgId}`);
+
+  const { data: pkg } = await supabaseAdmin
+    .from("content_packages")
+    .select("id, package_json")
+    .eq("id", pkgId)
+    .maybeSingle();
+
+  if (!pkg) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ Package not found.");
+    return;
+  }
+
+  const packageJson = pkg.package_json as {
+    slides: Array<{ n: number; image_prompt: string; animation_prompt?: string; duration_seconds?: number }>;
+  };
+
+  // Seed content_scenes rows if not already seeded (hook flow was skipped)
+  const { count: existing } = await supabaseAdmin
+    .from("content_scenes")
+    .select("id", { count: "exact", head: true })
+    .eq("content_package_id", pkgId);
+
+  if (!existing || existing === 0) {
+    const rows = (packageJson.slides ?? []).map((slide) => ({
+      content_package_id: pkgId,
+      slide_number: slide.n,
+      image_prompt: slide.image_prompt,
+      animation_prompt: slide.animation_prompt ?? "",
+      duration_seconds: slide.duration_seconds ?? 2,
+    }));
+    await supabaseAdmin
+      .from("content_scenes")
+      .upsert(rows, { onConflict: "content_package_id,slide_number" });
+  }
+
+  // Generate shots 1, 2, 3 in parallel via OpenAI
+  await slack.postThreadReply(channel, threadTs, "🎨 Generating 3 stills with OpenAI…");
+
+  const results = await Promise.allSettled([
+    generateAndPostStill(pkgId, 1, channel, threadTs),
+    generateAndPostStill(pkgId, 2, channel, threadTs),
+    generateAndPostStill(pkgId, 3, channel, threadTs),
+  ]);
+
+  const failed = results.filter((r) => r.status === "rejected").length;
+  if (failed === 3) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ All 3 stills failed — check OPENAI_API_KEY.");
+    return;
+  }
+
+  // Post the approval gate message and save its ts to hooks_message_ts so
+  // a ✅ reaction on it can be detected by handleContentReaction.
+  const gateText = [
+    `🖼️ *3 stills generated${failed ? ` (${failed} failed)` : ""}.* Review above.`,
+    `React ✅ on this message *or* reply \`animate\` to animate all shots with Seedance + stitch final video.`,
+    `React 🔄 on this message to regenerate all stills.`,
+  ].join("\n");
+
+  const gateRes = await slack.postThreadReply(channel, threadTs, gateText);
+  const gateTs = (gateRes as Record<string, unknown>).ts as string | undefined;
+
+  await supabaseAdmin
+    .from("content_packages")
+    .update({ status: "stills_pending", hooks_message_ts: gateTs ?? null })
+    .eq("id", pkgId);
+
+  console.log(`[scene-runner] stills gate posted pkg=${pkgId} ts=${gateTs}`);
+}
+
+// Generates one still image via ElevenLabs Seedream and uploads it to the
+// Slack thread as a file. Saves image_url to content_scenes for Seedance Stage 2.
+async function generateAndPostStill(
+  pkgId: string,
+  slideNumber: number,
+  channel: string,
+  threadTs: string
+): Promise<void> {
+  const { data: scene } = await supabaseAdmin
+    .from("content_scenes")
+    .select("id, image_prompt")
+    .eq("content_package_id", pkgId)
+    .eq("slide_number", slideNumber)
+    .maybeSingle();
+
+  if (!scene) {
+    await slack.postThreadReply(channel, threadTs, `⚠️ Scene ${slideNumber} not found.`);
+    return;
+  }
+
+  const label = getShotLabel(slideNumber);
+  let imageUrl: string;
+
+  try {
+    imageUrl = await generateImage(scene.image_prompt as string);
+    console.log(`[scene-runner] still ${slideNumber} generated (ElevenLabs Seedream)`);
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    console.error(`[scene-runner] still ${slideNumber} generation failed:`, errMsg);
+    await supabaseAdmin
+      .from("content_scenes")
+      .update({ image_error: errMsg })
+      .eq("id", scene.id);
+    await slack.postThreadReply(
+      channel, threadTs,
+      `⚠️ *${label}* failed.\n_${errMsg.slice(0, 200)}_`
+    );
+    return;
+  }
+
+  // Convert URL / data URL to a buffer and upload as a Slack file
+  try {
+    const { buffer, mimetype } = await imageUrlToBuffer(imageUrl);
+    await slack.uploadFile(channel, `${label}.png`, buffer, mimetype, threadTs);
+  } catch (err) {
+    console.error(`[scene-runner] still ${slideNumber} Slack upload failed:`, (err as Error).message);
+    // Fall back: post as an image block so the user can still see it
+    await slack.postThreadReply(channel, threadTs, `🖼️ *${label}*`, [
+      { type: "image", image_url: imageUrl, alt_text: label },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any);
+  }
+
+  // Save URL to content_scenes so Seedance can use it as image_url in Stage 2
+  await supabaseAdmin
+    .from("content_scenes")
+    .update({ image_url: imageUrl, image_error: null })
+    .eq("id", scene.id);
+
+  console.log(`[scene-runner] still ${slideNumber} posted to Slack`);
+}
+
+// Regenerate a single still (used when 🔄 is reacted to the stills gate).
+// Resets ALL 3 stills and restarts Stage 1.
+export async function regenerateAllStills(
+  pkgId: string,
+  channel: string,
+  threadTs: string
+): Promise<void> {
+  console.log(`[scene-runner] regenerateAllStills pkg=${pkgId}`);
+
+  // Clear image data for all scenes in this package
+  await supabaseAdmin
+    .from("content_scenes")
+    .update({ image_url: null, image_error: null, slack_image_ts: null })
+    .eq("content_package_id", pkgId);
+
+  await slack.postThreadReply(channel, threadTs, "🔄 Regenerating all 3 stills…");
+  await startStillsGeneration(pkgId, channel, threadTs);
+}
+
+// Stage 2: Animate all scenes with ElevenLabs Seedance, stitch the clips with
+// ffmpeg, and post the final MP4 to the Slack thread.
+// Triggered by "animate" text reply OR ✅ on the stills gate message.
+export async function animateAndStitch(
+  pkgId: string,
+  channel: string,
+  threadTs: string
+): Promise<void> {
+  console.log(`[scene-runner] animateAndStitch pkg=${pkgId}`);
+
+  await supabaseAdmin
+    .from("content_packages")
+    .update({ status: "animating" })
+    .eq("id", pkgId);
+
+  const { data: scenes } = await supabaseAdmin
+    .from("content_scenes")
+    .select("id, slide_number, image_url, animation_prompt")
+    .eq("content_package_id", pkgId)
+    .not("image_url", "is", null)
+    .order("slide_number")
+    .limit(3);
+
+  if (!scenes || scenes.length === 0) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ No stills found — run Stage 1 first (generate this).");
+    return;
+  }
+
+  await slack.postThreadReply(
+    channel, threadTs,
+    `🎬 Animating ${scenes.length} shots with Seedance… (~4 min, running in parallel)`
+  );
+
+  // Animate all clips in parallel; collect MP4 buffers in slide order
+  const clipBuffers = await Promise.all(
+    scenes.map(async (scene) => {
+      const label = getShotLabel(scene.slide_number as number);
+      try {
+        console.log(`[scene-runner] animating ${label}`);
+        const jobId = await generateVideo(
+          (scene.animation_prompt as string) || "Slow cinematic drift. Photorealistic.",
+          scene.image_url as string
+        );
+        const videoUrl = await pollVideo(jobId, 300_000);
+
+        const res = await fetch(videoUrl);
+        if (!res.ok) throw new Error(`download failed (${res.status})`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+
+        // Upload individual clip so the user can see each shot
+        await slack.uploadFile(channel, `${label}.mp4`, buffer, "video/mp4", threadTs);
+
+        await supabaseAdmin
+          .from("content_scenes")
+          .update({ video_url: videoUrl, video_approved: true })
+          .eq("id", scene.id);
+
+        console.log(`[scene-runner] ${label} clip uploaded`);
+        return buffer;
+      } catch (err) {
+        const errMsg = (err as Error).message;
+        console.error(`[scene-runner] ${label} animation failed:`, errMsg);
+        await slack.postThreadReply(
+          channel, threadTs,
+          `⚠️ *${label}* animation failed: ${errMsg.slice(0, 200)}`
+        );
+        return null;
+      }
+    })
+  );
+
+  const validClips = clipBuffers.filter((b) => b !== null) as Buffer[];
+
+  if (validClips.length === 0) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ All clips failed — individual errors above.");
+    await supabaseAdmin.from("content_packages").update({ status: "error" }).eq("id", pkgId);
+    return;
+  }
+
+  // Stitch and post final video
+  if (validClips.length > 1) {
+    await slack.postThreadReply(channel, threadTs, "🎞️ Stitching final video…");
+    try {
+      const finalMp4 = await stitchClips(validClips);
+      await slack.uploadFile(channel, "final-video.mp4", finalMp4, "video/mp4", threadTs);
+      await slack.postThreadReply(channel, threadTs, "✅ Final video ready — download above!");
+    } catch (err) {
+      await slack.postThreadReply(
+        channel, threadTs,
+        `⚠️ Stitch failed — individual clips are above.\n_${(err as Error).message.slice(0, 200)}_`
+      );
+    }
+  } else {
+    await slack.postThreadReply(channel, threadTs, "✅ Clip ready — see above.");
+  }
+
+  await supabaseAdmin
+    .from("content_packages")
+    .update({ status: "rendered", assembly_guide_posted: true })
+    .eq("id", pkgId);
+}
+
+// Concatenates MP4 clip buffers using ffmpeg concat demuxer (stream copy, no re-encode).
+async function stitchClips(clips: Buffer[]): Promise<Buffer> {
+  let ffmpegPath: string;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    ffmpegPath = require("ffmpeg-static") as string;
+  } catch {
+    ffmpegPath = "ffmpeg";
+  }
+
+  const id = randomUUID();
+  const clipPaths = clips.map((_, i) => `/tmp/stitch-${id}-${i}.mp4`);
+  const listPath = `/tmp/stitch-list-${id}.txt`;
+  const outPath = `/tmp/stitch-out-${id}.mp4`;
+
+  try {
+    clips.forEach((buf, i) => writeFileSync(clipPaths[i], buf));
+    writeFileSync(listPath, clipPaths.map((p) => `file '${p}'`).join("\n"));
+
+    const result = spawnSync(
+      ffmpegPath,
+      ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outPath],
+      { timeout: 120_000 }
+    );
+
+    if (result.status !== 0) {
+      const stderr = result.stderr?.toString() ?? "";
+      throw new Error(`ffmpeg concat failed: ${stderr.slice(0, 400)}`);
+    }
+
+    console.log("[scene-runner] stitch complete");
+    return readFileSync(outPath);
+  } finally {
+    clipPaths.forEach((p) => { if (existsSync(p)) unlinkSync(p); });
+    if (existsSync(listPath)) unlinkSync(listPath);
+    if (existsSync(outPath)) unlinkSync(outPath);
+  }
 }

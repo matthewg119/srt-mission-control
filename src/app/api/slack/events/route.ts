@@ -17,6 +17,9 @@ import {
   regenerateVideo,
   getSceneByImageTs,
   getSceneByVideoTs,
+  startStillsGeneration,
+  animateAndStitch,
+  regenerateAllStills,
 } from "@/lib/content-scene-runner";
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 
@@ -191,12 +194,29 @@ export async function POST(request: NextRequest) {
         const isThreadReply = Boolean(event.thread_ts) && event.thread_ts !== event.ts;
         const contentThreadTs = (event.thread_ts as string) || (event.ts as string);
 
-        // "generate this 3 images" / "generate 3 images" in an existing thread
-        const genMatch = userText.match(/generate\s+(?:this\s+)?(\d+)\s+images?/i);
+        // "generate this [N]" → Stage 1: OpenAI stills → approval gate
+        // "generate N images" (no "this") → legacy ElevenLabs direct flow
+        const genThisMatch = userText.match(/generate\s+this(?:\s+(\d+))?(?:\s+images?)?/i);
+        if (genThisMatch && isThreadReply) {
+          void handleGenerateStills({ channel, threadTs: contentThreadTs }).catch((e) => {
+            console.error("[slack/events] generate stills error:", (e as Error).message);
+          });
+          return NextResponse.json({ ok: true });
+        }
+
+        const genMatch = userText.match(/generate\s+(\d+)\s+images?/i);
         if (genMatch && isThreadReply) {
           const count = Math.min(9, Math.max(1, parseInt(genMatch[1], 10)));
           void handleGenerateImages({ channel, threadTs: contentThreadTs, count }).catch((e) => {
             console.error("[slack/events] generate images error:", (e as Error).message);
+          });
+          return NextResponse.json({ ok: true });
+        }
+
+        // "animate" in an existing thread → Stage 2: Seedance + stitch
+        if (/^animate$/i.test(userText.trim()) && isThreadReply) {
+          void handleAnimateThread({ channel, threadTs: contentThreadTs }).catch((e) => {
+            console.error("[slack/events] animate thread error:", (e as Error).message);
           });
           return NextResponse.json({ ok: true });
         }
@@ -444,6 +464,30 @@ async function handleContentReaction(args: {
     }
   }
 
+  // --- Stills gate reactions (✅/🔄 on the "stills_pending" approval card) ---
+  // hooks_message_ts is reused as the gate message ts in the stills-only flow.
+  if (isApprove || isRegen) {
+    const { data: stillsPkg } = await supabaseAdmin
+      .from("content_packages")
+      .select("id, slack_thread_ts, status")
+      .eq("hooks_message_ts", args.slackTs)
+      .eq("status", "stills_pending")
+      .maybeSingle();
+
+    if (stillsPkg) {
+      const threadTs = stillsPkg.slack_thread_ts as string;
+      console.log(`[events] stills gate reaction=${args.reaction} pkg=${stillsPkg.id}`);
+      if (isApprove) {
+        void animateAndStitch(stillsPkg.id as string, args.channel, threadTs)
+          .catch((e) => console.error("[events] animateAndStitch error:", (e as Error).message));
+      } else {
+        void regenerateAllStills(stillsPkg.id as string, args.channel, threadTs)
+          .catch((e) => console.error("[events] regenerateAllStills error:", (e as Error).message));
+      }
+      return true;
+    }
+  }
+
   // --- Scene-level reactions (✅/🔄 on image or video posts) ---
   if (isApprove || isRegen) {
     const imageScene = await getSceneByImageTs(args.slackTs);
@@ -625,6 +669,59 @@ async function getPackageThreadTs(pkgId: string): Promise<string | null> {
     .eq("id", pkgId)
     .maybeSingle();
   return (data?.slack_thread_ts as string | null) ?? null;
+}
+
+// Stage 1: Generate 3 OpenAI stills for the decoded package in this thread.
+async function handleGenerateStills(args: { channel: string; threadTs: string }): Promise<void> {
+  const { data: pkg } = await supabaseAdmin
+    .from("content_packages")
+    .select("id")
+    .eq("slack_thread_ts", args.threadTs)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!pkg) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      "No script found in this thread — drop images + brief first to decode it."
+    );
+    return;
+  }
+
+  await startStillsGeneration(pkg.id as string, args.channel, args.threadTs);
+}
+
+// Stage 2: Animate all stills in this thread's package with Seedance + stitch.
+async function handleAnimateThread(args: { channel: string; threadTs: string }): Promise<void> {
+  const { data: pkg } = await supabaseAdmin
+    .from("content_packages")
+    .select("id, status")
+    .eq("slack_thread_ts", args.threadTs)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!pkg) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      "⚠️ No package found in this thread."
+    );
+    return;
+  }
+
+  if (pkg.status !== "stills_pending") {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      `_(animate ignored — package status is \`${pkg.status}\`, not \`stills_pending\`)_`
+    );
+    return;
+  }
+
+  await animateAndStitch(pkg.id as string, args.channel, args.threadTs);
 }
 
 // Fires image generation for the first N slides of an existing decoded package
