@@ -739,8 +739,10 @@ export const microsoft = {
     await graphRequest(`/subscriptions/${subscriptionId}`, { method: "DELETE" });
   },
 
-  /** Search inbox for emails matching a keyword (merchant name, lender, deal ref). */
-  async searchMail(query: string, top = 20): Promise<Array<{
+  /** Search inbox for emails matching a keyword (merchant name, lender, deal ref).
+   *  mailbox defaults to submissions@srtagency.com (shared mailbox with lender replies).
+   *  Falls back to /me/messages if the shared mailbox isn't accessible. */
+  async searchMail(query: string, top = 20, mailbox = "submissions@srtagency.com"): Promise<Array<{
     id: string;
     subject: string;
     from: string;
@@ -749,9 +751,17 @@ export const microsoft = {
     webLink?: string;
   }>> {
     const encoded = encodeURIComponent(`"${query}"`);
-    const result = await graphRequest(
-      `/me/messages?$search=${encoded}&$top=${top}&$orderby=receivedDateTime desc&$select=id,subject,from,receivedDateTime,bodyPreview,webLink`
-    );
+    // Try shared mailbox first, fall back to /me if permission error
+    let result: Record<string, unknown>;
+    try {
+      result = await graphRequest(
+        `/users/${mailbox}/messages?$search=${encoded}&$top=${top}&$select=id,subject,from,receivedDateTime,bodyPreview,webLink`
+      );
+    } catch {
+      result = await graphRequest(
+        `/me/messages?$search=${encoded}&$top=${top}&$select=id,subject,from,receivedDateTime,bodyPreview,webLink`
+      );
+    }
     const messages = (result.value ?? []) as Array<{
       id: string;
       subject: string;

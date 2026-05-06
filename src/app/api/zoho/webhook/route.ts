@@ -75,6 +75,12 @@ export async function POST(request: NextRequest) {
     return ok({ skipped: "no_stage" });
   }
 
+  // "Working - No Contact" fires on every outbound call attempt in Zoho — can be
+  // hundreds per day. Skip all processing; return 200 so Zoho marks it delivered.
+  if (newStage === "Working - No Contact" || newStage === "Open - Not Contacted") {
+    return ok({ skipped: "no_contact_stage_ignored" });
+  }
+
   // Find the contact by zoho_lead_id.
   const { data: contact, error: contactErr } = await supabaseAdmin
     .from("contacts")
