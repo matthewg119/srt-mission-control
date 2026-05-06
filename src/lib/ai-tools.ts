@@ -321,6 +321,29 @@ export const AI_TOOLS = [
       required: ["contact_id", "contact_email", "contact_name", "sequence_slug"],
     },
   },
+  {
+    name: "search_lender_emails",
+    description:
+      "Search the inbox for lender responses, approvals, or declines related to a specific deal or merchant. Use when asked 'check lender emails for [merchant]', 'did we hear back from [lender]?', or 'any approvals for [deal]?'. Searches the Microsoft 365 inbox and returns matching emails with subject, sender, date, and preview.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        merchant_name: {
+          type: "string",
+          description: "The business or merchant name to search for in emails",
+        },
+        lender_name: {
+          type: "string",
+          description: "Optional: specific lender name to narrow the search",
+        },
+        days_back: {
+          type: "number",
+          description: "How many days back to search. Default 14.",
+        },
+      },
+      required: ["merchant_name"],
+    },
+  },
 ];
 
 // Tool execution functions
@@ -367,6 +390,8 @@ export async function executeTool(
         content = await submitToLender(dealId as string, input.lender_id as string, input.custom_notes as string | undefined); break;
       case "enroll_in_sequence":
         content = await enrollInSequence(input.contact_id as string, input.contact_email as string, input.contact_name as string, input.sequence_slug as string); break;
+      case "search_lender_emails":
+        content = await searchLenderEmails(input.merchant_name as string, input.lender_name as string | undefined, (input.days_back as number) || 14); break;
       default:
         content = JSON.stringify({ error: `Unknown tool: ${toolName}` });
     }
@@ -1239,5 +1264,38 @@ async function enrollInSequence(contactId: string, contactEmail: string, contact
     return JSON.stringify(result);
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to enroll in sequence" });
+  }
+}
+
+async function searchLenderEmails(merchantName: string, lenderName?: string, daysBack = 14): Promise<string> {
+  try {
+    const query = lenderName ? `${merchantName} ${lenderName}` : merchantName;
+    const emails = await microsoft.searchMail(query, 20);
+
+    const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+    const filtered = emails.filter((e) => new Date(e.receivedDateTime) >= since);
+
+    if (filtered.length === 0) {
+      return JSON.stringify({
+        message: `No emails found matching "${query}" in the last ${daysBack} days.`,
+        emails: [],
+      });
+    }
+
+    return JSON.stringify({
+      query,
+      days_searched: daysBack,
+      count: filtered.length,
+      emails: filtered.map((e) => ({
+        subject: e.subject,
+        from: e.from,
+        received: new Date(e.receivedDateTime).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+        preview: e.bodyPreview?.slice(0, 300),
+        link: e.webLink,
+      })),
+      hint: "Check the 'from' field to identify approvals (lender addresses) vs declines. Ask me to read a specific email in full if needed.",
+    });
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "Email search failed. Microsoft 365 may need reconnecting at /dashboard/integrations." });
   }
 }

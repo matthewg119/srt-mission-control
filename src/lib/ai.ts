@@ -119,18 +119,33 @@ interface AnthropicResponse {
  * Handles the tool loop: AI calls tool → we execute → send results → AI continues.
  * Returns the final text response.
  */
+export interface ImageBlock {
+  type: "image";
+  source: { type: "base64"; media_type: string; data: string };
+}
+
 export async function runConversationWithTools(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
-  systemPrompt: string
+  systemPrompt: string,
+  lastMessageImages?: ImageBlock[]
 ): Promise<{ response: string; actions: string[]; toolResults: ToolResult[] }> {
   if (!isAIConfigured()) {
     throw new Error("AI_NOT_CONFIGURED");
   }
 
-  const conversationMessages: AnthropicMessage[] = messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  const conversationMessages: AnthropicMessage[] = messages.map((m, i) => {
+    // Last user message: prepend images if provided
+    if (lastMessageImages && lastMessageImages.length > 0 && i === messages.length - 1 && m.role === "user") {
+      return {
+        role: m.role,
+        content: [
+          ...lastMessageImages,
+          { type: "text", text: m.content },
+        ],
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
 
   const actions: string[] = [];
   const uiToolResults: ToolResult[] = []; // structured results for UI card rendering

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
-import { runConversationWithTools, buildSystemPrompt, isAIConfigured } from "@/lib/ai";
+import { runConversationWithTools, buildSystemPrompt, isAIConfigured, type ImageBlock } from "@/lib/ai";
 import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import { microsoft } from "@/lib/microsoft";
@@ -215,7 +215,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      if (!userText || userText.trim().length === 0) {
+      // Skip if no text AND no image files (pure file drops without text go to handleFileShared)
+      const hasImages = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
+      if ((!userText || userText.trim().length === 0) && !hasImages) {
         return NextResponse.json({ ok: true });
       }
 
@@ -251,9 +253,36 @@ export async function POST(request: NextRequest) {
       const agentPrompt = AGENT_PROMPTS[agentType] || AGENT_PROMPTS.brainheart;
       const systemPrompt = `${agentPrompt}\n\n${basePrompt}`;
 
-      // Run AI
-      const messages = [...history, { role: "user" as const, content: userText }];
-      const { response, actions } = await runConversationWithTools(messages, systemPrompt);
+      // Download any image files attached to the message so Claude can see them
+      const imageFiles = attachedFiles.filter((f) => (f.mimetype ?? "").startsWith("image/"));
+      let imageBlocks: ImageBlock[] = [];
+      if (imageFiles.length > 0) {
+        const botToken = process.env.SLACK_BOT_TOKEN || "";
+        imageBlocks = (
+          await Promise.all(
+            imageFiles.map(async (f) => {
+              try {
+                const url = f.url_private ?? f.url_private_download;
+                if (!url) return null;
+                const res = await fetch(url, { headers: { Authorization: `Bearer ${botToken}` } });
+                if (!res.ok) return null;
+                const buf = Buffer.from(await res.arrayBuffer());
+                const mediaType = (f.mimetype ?? "image/jpeg").split(";")[0];
+                return {
+                  type: "image" as const,
+                  source: { type: "base64" as const, media_type: mediaType, data: buf.toString("base64") },
+                } satisfies ImageBlock;
+              } catch {
+                return null;
+              }
+            })
+          )
+        ).filter((b): b is ImageBlock => b !== null);
+      }
+
+      // Run AI — pass images as extra content on the last user message
+      const messages = [...history, { role: "user" as const, content: userText || (imageBlocks.length > 0 ? "What do you see in this image?" : "") }];
+      const { response, actions } = await runConversationWithTools(messages, systemPrompt, imageBlocks.length > 0 ? imageBlocks : undefined);
 
       // Format response with tool summary
       let reply = response;

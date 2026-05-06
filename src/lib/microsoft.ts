@@ -738,4 +738,37 @@ export const microsoft = {
   async deleteSubscription(subscriptionId: string): Promise<void> {
     await graphRequest(`/subscriptions/${subscriptionId}`, { method: "DELETE" });
   },
+
+  /** Search inbox for emails matching a keyword (merchant name, lender, deal ref). */
+  async searchMail(query: string, top = 20): Promise<Array<{
+    id: string;
+    subject: string;
+    from: string;
+    receivedDateTime: string;
+    bodyPreview: string;
+    webLink?: string;
+  }>> {
+    const encoded = encodeURIComponent(`"${query}"`);
+    const result = await graphRequest(
+      `/me/messages?$search=${encoded}&$top=${top}&$orderby=receivedDateTime desc&$select=id,subject,from,receivedDateTime,bodyPreview,webLink`
+    );
+    const messages = (result.value ?? []) as Array<{
+      id: string;
+      subject: string;
+      from: { emailAddress: { address: string; name?: string } };
+      receivedDateTime: string;
+      bodyPreview: string;
+      webLink?: string;
+    }>;
+    return messages.map((m) => ({
+      id: m.id,
+      subject: m.subject ?? "(no subject)",
+      from: m.from?.emailAddress?.name
+        ? `${m.from.emailAddress.name} <${m.from.emailAddress.address}>`
+        : (m.from?.emailAddress?.address ?? ""),
+      receivedDateTime: m.receivedDateTime,
+      bodyPreview: m.bodyPreview ?? "",
+      webLink: m.webLink,
+    }));
+  },
 };

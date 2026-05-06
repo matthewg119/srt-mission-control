@@ -86,7 +86,6 @@ export async function PATCH(
     // the 100/day org limit. Intermediate deal stages (Contracts Out, Pending Stips, etc.)
     // are Supabase-only and never need to appear in the CRM lead record.
     const ZOHO_SYNC_STAGES = new Set([
-      "Working - Contacted",
       "Working - Application Out",
       "Dead Declined",
       "Closed - Not Converted",
