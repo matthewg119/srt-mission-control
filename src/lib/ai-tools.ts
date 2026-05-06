@@ -80,7 +80,7 @@ export const AI_TOOLS = [
   {
     name: "send_sms",
     description:
-      "Send an SMS message to a contact. Currently unavailable — Twilio integration coming soon.",
+      "Send an SMS message to a contact via LINQ. Looks up the contact's active SMS conversation and sends the message through their Slack-monitored channel.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -605,10 +605,49 @@ async function moveDeal(dealId: string, newStage: string): Promise<string> {
   }
 }
 
-async function sendSms(_contactId: string, _message: string): Promise<string> {
-  return JSON.stringify({
-    error: "SMS is not available yet. Twilio integration coming soon. Use send_email instead to reach this contact.",
-  });
+async function sendSms(contactId: string, message: string): Promise<string> {
+  try {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("phone, first_name, last_name")
+      .eq("id", contactId)
+      .maybeSingle();
+
+    if (!contact?.phone) {
+      return JSON.stringify({ error: "Contact not found or has no phone number on file." });
+    }
+
+    const { data: conv } = await supabaseAdmin
+      .from("sms_conversations")
+      .select("id, outcome")
+      .eq("contact_id", contactId)
+      .maybeSingle();
+
+    if (!conv) {
+      return JSON.stringify({
+        error: "No SMS conversation exists for this contact yet. Initiate one from the pipeline first.",
+      });
+    }
+
+    if (conv.outcome === "dead") {
+      return JSON.stringify({ error: "This conversation is marked dead — cannot send." });
+    }
+
+    const { sendSMS } = await import("@/lib/sms-sender");
+    const result = await sendSMS(contact.phone as string, message, conv.id as string);
+
+    if (!result.ok) {
+      return JSON.stringify({ error: result.error ?? "SMS send failed" });
+    }
+
+    return JSON.stringify({
+      success: true,
+      message: `SMS sent to ${contact.first_name ?? ""} ${contact.last_name ?? ""}`.trim(),
+      provider: result.provider,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "SMS send failed" });
+  }
 }
 
 async function sendEmail(contactId: string, subject: string, message: string): Promise<string> {
@@ -694,7 +733,11 @@ async function sendTemplate(
 
   try {
     if (template.type === "SMS") {
-      return JSON.stringify({ error: "SMS is not available yet. Twilio integration coming soon." });
+      if (!contact.phone) {
+        return JSON.stringify({ error: "Contact has no phone number on file." });
+      }
+      const result = await sendSms(contactId, renderedBody);
+      return result;
     }
 
     // Email via Microsoft Graph

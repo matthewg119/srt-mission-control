@@ -9,6 +9,8 @@ import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
+import { normalizePhone } from "@/lib/linq";
+import { ensureSmsChannel } from "@/lib/sms-channel";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -220,6 +222,53 @@ export async function POST(request: NextRequest) {
         .catch((err) => console.error("[Sequence] website-lead-nurture enrollment error:", err));
       enrollContact("website-lead-to-application", contactId, email, `${firstName} ${lastName}`.trim())
         .catch((err) => console.error("[Sequence] website-lead-to-application enrollment error:", err));
+    }
+
+    // 8. For /bfunding leads with a phone: create SMS conversation + Slack channel now.
+    // The text is NOT sent yet — it fires 30s after the lead leaves the portal
+    // (portal calls /api/portal/exit which sets first_sms_scheduled_at).
+    const isBfundingSource =
+      source === "bfunding" ||
+      utmSource === "bfunding" ||
+      (typeof sourceUrl === "string" && sourceUrl.includes("/bfunding"));
+
+    if (phone && isBfundingSource) {
+      const normalizedPhone = normalizePhone(phone);
+      if (normalizedPhone) {
+        try {
+          const portalToken = randomUUID();
+          const displayName = `${firstName} ${lastName}`.trim() || firstName;
+
+          const { data: conv } = await supabaseAdmin
+            .from("sms_conversations")
+            .upsert(
+              {
+                contact_id: contactId,
+                phone: normalizedPhone,
+                portal_token: portalToken,
+                first_sms_template: "bfunding-lead",
+                first_sms_sent: false,
+                first_sms_scheduled_at: null,
+                outcome: "open",
+              },
+              { onConflict: "phone" }
+            )
+            .select("id")
+            .single();
+
+          if (conv?.id) {
+            ensureSmsChannel({
+              conversationId: conv.id as string,
+              phone: normalizedPhone,
+              displayName,
+              contactId,
+              zohoLeadId: null,
+            }).catch((err) => console.error("[leads/capture] ensureSmsChannel error:", err));
+          }
+        } catch (err) {
+          console.error("[leads/capture] SMS channel setup error:", (err as Error).message);
+        }
+      }
     }
 
     return NextResponse.json(

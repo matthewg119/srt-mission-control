@@ -966,10 +966,18 @@ async function handleFileShared(fileId: string): Promise<void> {
     return;
   }
   const buffer = await slack.downloadFile(file.url_private_download);
+  const fileName = file.name ?? `document-${Date.now()}.pdf`;
+
+  // Application PDFs are routed to a separate extractor — they contain merchant form data,
+  // not bank transaction history. Detect by filename keywords.
+  const isApplicationPDF = /\b(application|merchant[\s_-]?app|mca[\s_-]?app)\b/i.test(fileName);
+  if (isApplicationPDF) {
+    await extractApplicationPDF(buffer, fileName, channelId, threadTs, dealId, merchantName);
+    return;
+  }
 
   // Use known merchant folder if we have a deal, otherwise temp staging folder
   const folderBase = merchantName ? `Deals/${merchantName}/Bank Statements` : "Deals/_Inbox/Bank Statements";
-  const fileName = file.name ?? `statement-${Date.now()}.pdf`;
   let driveItemId: string | null = null;
   let driveWebUrl: string | null = null;
   try {
@@ -1008,6 +1016,125 @@ async function handleFileShared(fileId: string): Promise<void> {
   if (!res.ok) {
     const errText = await res.text();
     await slack.postThreadReply(channelId, threadTs, `⚠️ Analysis failed: ${errText.slice(0, 200)}`);
+  }
+}
+
+// Application PDF dropped into a deal thread → extract merchant form fields → post structured card.
+async function extractApplicationPDF(
+  buffer: Buffer,
+  fileName: string,
+  channelId: string,
+  threadTs: string,
+  dealId: string | null,
+  merchantName: string | null
+): Promise<void> {
+  await slack.postThreadReply(channelId, threadTs, `📋 Application PDF detected — extracting fields from \`${fileName}\`…`);
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    await slack.postThreadReply(channelId, threadTs, "⚠️ ANTHROPIC_API_KEY not set — cannot extract application data.");
+    return;
+  }
+
+  interface AppData {
+    business_name: string | null;
+    owner_name: string | null;
+    ein: string | null;
+    ssn_last4: string | null;
+    monthly_revenue: string | null;
+    credit_score: string | null;
+    time_in_business: string | null;
+    funding_requested: string | null;
+    existing_advances: string | null;
+    industry: string | null;
+    address: string | null;
+    phone: string | null;
+    email: string | null;
+  }
+
+  try {
+    const base64 = buffer.toString("base64");
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1024,
+        system: `You are extracting data from an MCA (merchant cash advance) application PDF. Return ONLY valid JSON matching this exact schema — null for any field you cannot find:
+{
+  "business_name": string | null,
+  "owner_name": string | null,
+  "ein": string | null,
+  "ssn_last4": string | null,
+  "monthly_revenue": string | null,
+  "credit_score": string | null,
+  "time_in_business": string | null,
+  "funding_requested": string | null,
+  "existing_advances": string | null,
+  "industry": string | null,
+  "address": string | null,
+  "phone": string | null,
+  "email": string | null
+}
+For SSN: extract ONLY the last 4 digits for privacy. No preamble, no markdown.`,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: { type: "base64", media_type: "application/pdf", data: base64 },
+              },
+              { type: "text", text: "Extract all merchant application fields from this PDF." },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      await slack.postThreadReply(channelId, threadTs, `⚠️ Claude extraction failed (${res.status}): ${errText.slice(0, 200)}`);
+      return;
+    }
+
+    const json = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+    const raw = json.content?.find((b) => b.type === "text")?.text ?? "{}";
+    let data: AppData;
+    try {
+      data = JSON.parse(raw) as AppData;
+    } catch {
+      await slack.postThreadReply(channelId, threadTs, `⚠️ Could not parse extraction result:\n\`\`\`\n${raw.slice(0, 400)}\n\`\`\``);
+      return;
+    }
+
+    const lines = [
+      `📋 *Application Data — \`${fileName}\`*`,
+      data.business_name ? `*Business:* ${data.business_name}` : null,
+      data.owner_name ? `*Owner:* ${data.owner_name}` : null,
+      data.ein ? `*EIN:* ${data.ein}` : null,
+      data.ssn_last4 ? `*SSN (last 4):* ****${data.ssn_last4}` : null,
+      data.phone ? `*Phone:* ${data.phone}` : null,
+      data.email ? `*Email:* ${data.email}` : null,
+      data.industry ? `*Industry:* ${data.industry}` : null,
+      data.address ? `*Address:* ${data.address}` : null,
+      data.time_in_business ? `*Time in Business:* ${data.time_in_business}` : null,
+      data.monthly_revenue ? `*Monthly Revenue:* ${data.monthly_revenue}` : null,
+      data.credit_score ? `*Credit Score:* ${data.credit_score}` : null,
+      data.funding_requested ? `*Funding Requested:* ${data.funding_requested}` : null,
+      data.existing_advances ? `*Existing Advances:* ${data.existing_advances}` : null,
+      dealId ? `\n_Deal ID: ${dealId}_` : (merchantName ? `\n_Merchant: ${merchantName}_` : null),
+      `\n_Review and confirm before updating the CRM._`,
+    ].filter(Boolean);
+
+    await slack.postThreadReply(channelId, threadTs, lines.join("\n"));
+  } catch (err) {
+    await slack.postThreadReply(channelId, threadTs, `⚠️ Application extraction error: ${(err as Error).message}`);
   }
 }
 
