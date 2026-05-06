@@ -6,11 +6,11 @@ import { postApprovalRequest } from "./slack-approval";
 import type { GuardianDecision, PendingActionPayload } from "./types";
 
 const TERMINAL_ZOHO_STATUSES = [
+  // Hard closed / dead
   "Closed - Not Converted",
   "Closed - Converted",
   "Junk Lead",
   "Lost Lead",
-  "Not Contacted",
   "Dead Declined",
   "Deal Lost",
   "Closed",
@@ -22,6 +22,11 @@ const TERMINAL_ZOHO_STATUSES = [
   "Bad Lead",
   "Wrong Number",
   "Duplicate",
+  // Pre-contact — no action possible yet; excluded to stop webhook quota flooding.
+  "Not Contacted",
+  "Open - Not Contacted",
+  "Working - No Contact",
+  "New",
 ];
 
 // Defense in depth: picklist labels drift; match the keyword regardless of exact casing/wording.

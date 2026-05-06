@@ -51,6 +51,7 @@ export const STAGE_PIPELINES: readonly StagePipeline[] = [
 
 /** Terminal Zoho stages — not editable, not eligible for cadence/nurture. */
 export const ZOHO_TERMINAL_STAGES: readonly string[] = [
+  // Hard closed / dead
   "Closed - Not Converted",
   "Closed",
   "Closed - Converted",
@@ -66,6 +67,12 @@ export const ZOHO_TERMINAL_STAGES: readonly string[] = [
   "Duplicate",
   "Junk Lead",
   "Lost Lead",
+  // Pre-contact stages — no outreach has happened yet; guardian has nothing to act on.
+  // These were flooding Zoho webhook quota because the guardian processed them daily.
+  "Open - Not Contacted",
+  "Not Contacted",
+  "Working - No Contact",
+  "New",
 ];
 
 export function isTerminalStage(stage: string | null | undefined): boolean {
