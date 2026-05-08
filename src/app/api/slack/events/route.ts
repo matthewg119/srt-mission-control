@@ -177,14 +177,16 @@ export async function POST(request: NextRequest) {
         if (handled) return NextResponse.json({ ok: true });
       }
 
-      // SMS channel thread reply — Matthew typing his own version in an sms-* channel.
-      // We refine it and offer a 1/2 choice.
-      if (userText.trim().length > 0 && !parentThreadTs) {
-        // Only act on direct messages in sms-* channels (non-threaded)
-      }
+      // Human message in an sms-* channel → forward directly to merchant via LoopMessage.
       const isSmsChannel = await isSmsConversationChannel(channel);
       if (isSmsChannel && userText.trim().length > 0) {
-        await handleSmsChannelMessage({ channel, userId: event.user as string, text: userText });
+        await handleSmsChannelMessage({
+          channel,
+          userId: event.user as string,
+          text: userText,
+          ts: event.ts as string,
+          threadTs: (event.thread_ts as string | undefined) ?? null,
+        });
         return NextResponse.json({ ok: true });
       }
 
@@ -351,6 +353,12 @@ async function handleReactionAdded(args: { reaction: string; slackTs: string; ch
   // ✅ in an SMS channel → send the pending AI draft immediately
   if (args.reaction === "white_check_mark") {
     const handled = await handleSmsApprovalReaction(args.channel, args.slackTs, args.userId);
+    if (handled) return;
+  }
+
+  // 1️⃣ / 2️⃣ — send Matthew's version or AI-refined version from override draft flow
+  if (args.reaction === "one" || args.reaction === "two") {
+    const handled = await handleSmsOverrideDraftReaction(args.channel, args.slackTs, args.userId, args.reaction);
     if (handled) return;
   }
 
@@ -1315,97 +1323,123 @@ async function isSmsConversationChannel(channelId: string): Promise<boolean> {
   return !!data;
 }
 
-// Matthew typed his own version in an sms-* channel → refine it and offer 1/2 choice
-async function handleSmsChannelMessage(args: { channel: string; userId: string; text: string }): Promise<void> {
-  const { channel, text } = args;
+// Human typed directly in an sms-* channel → send to merchant immediately via LoopMessage.
+// If it's a thread reply under an [AI DRAFT] message, treat it as an override: post both
+// Matthew's version and an AI-refined version with 1️⃣/2️⃣ selection.
+async function handleSmsChannelMessage(args: {
+  channel: string;
+  userId: string;
+  text: string;
+  ts: string;
+  threadTs: string | null;
+}): Promise<void> {
+  const { channel, text, userId, ts, threadTs } = args;
 
+  // Thread reply under an AI DRAFT → override flow
+  if (threadTs && threadTs !== ts) {
+    const parentMsg = await slack.getMessage(channel, threadTs);
+    const parentText = (parentMsg?.text as string) ?? "";
+    if (parentText.toLowerCase().includes("[ai draft")) {
+      await handleSmsThreadOverride({ channel, userId, text: text.trim(), ts, threadTs });
+      return;
+    }
+  }
+
+  // Direct channel message → send immediately
   const { data: conv } = await supabaseAdmin
     .from("sms_conversations")
-    .select("id, close_stage")
+    .select("id, phone, assigned_sender, close_stage")
     .eq("slack_channel_id", channel)
     .maybeSingle();
 
   if (!conv) return;
 
-  // Load pending draft (if any) for comparison
-  const { data: pending } = await supabaseAdmin
-    .from("sms_pending_drafts")
-    .select("draft_body")
-    .eq("conversation_id", conv.id)
+  const { sendSMS } = await import("@/lib/sms-sender");
+  const result = await sendSMS(conv.phone as string, text.trim(), conv.id as string, conv.assigned_sender as string | undefined);
+
+  if (result.ok) {
+    await supabaseAdmin.from("sms_messages").insert({
+      conversation_id: conv.id,
+      direction: "outbound",
+      body: text.trim(),
+      close_stage: conv.close_stage,
+      metadata: { source: "human_direct" },
+    });
+    await slack.addReaction(channel, ts, "white_check_mark");
+  } else {
+    await slack.postMessage(channel, `⚠️ Send failed: ${result.error ?? "unknown"}`);
+  }
+}
+
+// Matthew replied in thread under an AI DRAFT → offer his version vs AI-refined version
+async function handleSmsThreadOverride(args: {
+  channel: string;
+  userId: string;
+  text: string;
+  ts: string;
+  threadTs: string;
+}): Promise<void> {
+  const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+  if (args.userId !== matthewId) return; // only Matthew triggers override flow
+
+  const { data: conv } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("id, close_stage")
+    .eq("slack_channel_id", args.channel)
     .maybeSingle();
+  if (!conv) return;
 
-  // If the message is "1" or "2" — handle the 1/2 choice
-  const trimmed = text.trim();
-  if ((trimmed === "1" || trimmed === "2") && pending) {
-    const { data: choiceData } = await supabaseAdmin
-      .from("sms_pending_drafts")
-      .select("draft_body, matthew_custom")
-      .eq("conversation_id", conv.id)
-      .maybeSingle();
-
-    if (choiceData?.matthew_custom && trimmed === "1") {
-      await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/sms/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CRON_SECRET}` },
-        body: JSON.stringify({
-          conversationId: conv.id,
-          body: choiceData.matthew_custom as string,
-          approvedBy: args.userId,
-          aiDraft: pending.draft_body,
-          matthewApprovedAi: false,
-        }),
-      });
-      await slack.postMessage(channel, `✅ *Your version sent.*`);
-      return;
-    }
-    if (trimmed === "2") {
-      await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/sms/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CRON_SECRET}` },
-        body: JSON.stringify({
-          conversationId: conv.id,
-          body: pending.draft_body as string,
-          approvedBy: args.userId,
-          aiDraft: pending.draft_body,
-          matthewApprovedAi: true,
-        }),
-      });
-      await slack.postMessage(channel, `✅ *AI suggestion sent.*`);
-      return;
-    }
+  // Generate AI-refined version via Haiku
+  let aiVersion = args.text;
+  try {
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const resp = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 200,
+      messages: [
+        {
+          role: "user",
+          content: `Refine this SMS draft for a business financing context. Keep it under 160 characters. Return only the refined message, no quotes or explanation.\n\nOriginal: ${args.text}`,
+        },
+      ],
+    });
+    aiVersion = (resp.content[0] as { type: string; text: string }).text?.trim() ?? args.text;
+  } catch (e) {
+    console.error("[sms/thread-override] AI refine failed:", e);
   }
 
-  // Matthew typed a new message — refine it with AI and offer 1/2 choice
-  const { draftSmsReply } = await import("@/lib/sms-ai-engine");
-  const aiRefined = await draftSmsReply(conv.id as string, `[Matthew wants to say]: ${text}`);
-
-  // Save Matthew's version + AI refined to pending drafts
-  await supabaseAdmin.from("sms_pending_drafts").upsert(
-    {
-      conversation_id: conv.id,
-      slack_channel_id: channel,
-      slack_ts: Date.now().toString(),
-      draft_body: aiRefined ?? text,
-      matthew_custom: text,
-      close_stage: conv.close_stage,
-      created_at: new Date().toISOString(),
-    },
-    { onConflict: "conversation_id" }
+  const overrideMsg = await slack.postMessage(
+    args.channel,
+    `Your version: ${args.text}\nAI suggestion: ${aiVersion}\n\nReact 1️⃣ to send yours · React 2️⃣ to send AI suggestion`
   );
 
-  await slack.postMessage(
-    channel,
-    [
-      `*Your version:* "${text}"`,
-      `*AI suggestion:* "${aiRefined ?? "(could not generate)"}"`,
-      ``,
-      `Reply *1* to send yours · Reply *2* to send AI suggestion`,
-    ].join("\n")
-  );
+  if (overrideMsg.ok && overrideMsg.ts) {
+    await supabaseAdmin.from("sms_pending_drafts").upsert(
+      {
+        conversation_id: conv.id,
+        slack_channel_id: args.channel,
+        slack_ts: overrideMsg.ts as string,
+        draft_body: args.text,
+        alt_draft_body: aiVersion,
+        close_stage: conv.close_stage,
+      },
+      { onConflict: "slack_ts" }
+    );
+  }
 }
 
 // ✅ reaction on an AI draft message in an sms-* channel → send immediately
 async function handleSmsApprovalReaction(channelId: string, slackTs: string, userId: string): Promise<boolean> {
+  // Matthew-only guard
+  const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+  if (!matthewId || userId !== matthewId) return false;
+
+  // Verify this is an sms-* channel
+  const channelInfo = await slack.getChannelInfo(channelId);
+  if (!channelInfo?.name?.startsWith("sms-")) return false;
+
+  // Look up the pending draft
   const { data: pending } = await supabaseAdmin
     .from("sms_pending_drafts")
     .select("conversation_id, draft_body, close_stage")
@@ -1413,32 +1447,193 @@ async function handleSmsApprovalReaction(channelId: string, slackTs: string, use
     .eq("slack_ts", slackTs)
     .maybeSingle();
 
+  let draftBody: string | null = null;
+  let conversationId: string | null = null;
+  let closeStage: number = 1;
+
+  if (pending) {
+    draftBody = pending.draft_body as string;
+    conversationId = pending.conversation_id as string;
+    closeStage = (pending.close_stage as number) ?? 1;
+  } else {
+    // Fallback: parse message text for the draft body
+    const msg = await slack.getMessage(channelId, slackTs);
+    const msgText = (msg?.text as string) ?? "";
+    if (!msgText.toLowerCase().includes("[ai draft")) return false;
+
+    // Extract body between quotes or between header and "React ✅"
+    const quotedMatch = msgText.match(/"([^"]+)"/);
+    if (quotedMatch) {
+      draftBody = quotedMatch[1];
+    } else {
+      const lines = msgText.split("\n");
+      const headerIdx = lines.findIndex((l) => l.toLowerCase().includes("[ai draft"));
+      const footerIdx = lines.findIndex((l) => l.toLowerCase().includes("react ✅") || l.toLowerCase().includes("react :white_check_mark:"));
+      if (headerIdx >= 0 && footerIdx > headerIdx + 1) {
+        draftBody = lines.slice(headerIdx + 1, footerIdx).join("\n").trim();
+      }
+    }
+    if (!draftBody) return false;
+
+    // Look up conversation by channel
+    const { data: convByChannel } = await supabaseAdmin
+      .from("sms_conversations")
+      .select("id, close_stage")
+      .eq("slack_channel_id", channelId)
+      .maybeSingle();
+    if (!convByChannel) return false;
+    conversationId = convByChannel.id as string;
+    closeStage = (convByChannel.close_stage as number) ?? 1;
+  }
+
+  if (!draftBody || !conversationId) return false;
+
+  // Fetch full conversation row
+  const { data: conv } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("phone, assigned_sender, first_sms_sent, close_stage")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (!conv) return false;
+
+  // Idempotency: check for duplicate outbound in last 30s
+  const thirtySecondsAgo = new Date(Date.now() - 30_000).toISOString();
+  const { data: recentDupe } = await supabaseAdmin
+    .from("sms_messages")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .eq("direction", "outbound")
+    .eq("body", draftBody)
+    .gte("created_at", thirtySecondsAgo)
+    .maybeSingle();
+
+  if (recentDupe) {
+    await slack.postThreadReply(channelId, slackTs, `⚠️ Duplicate detected, skipped`);
+    return true;
+  }
+
+  // Send via LoopMessage
+  const { sendSMS } = await import("@/lib/sms-sender");
+  const result = await sendSMS(
+    conv.phone as string,
+    draftBody,
+    conversationId,
+    (conv.assigned_sender as string | null) ?? undefined
+  );
+
+  if (!result.ok) {
+    await slack.postThreadReply(channelId, slackTs, `❌ Send failed: ${result.error ?? "unknown"}`);
+    try { await slack.addReaction(channelId, slackTs, "x"); } catch { /* emoji may not exist */ }
+    return true;
+  }
+
+  // Log outbound message
+  await supabaseAdmin.from("sms_messages").insert({
+    conversation_id: conversationId,
+    direction: "outbound",
+    body: draftBody,
+    close_stage: closeStage,
+    metadata: { source: "ai_draft" },
+  });
+
+  // Flip first_sms_sent if needed
+  if (conv.first_sms_sent === false) {
+    await supabaseAdmin
+      .from("sms_conversations")
+      .update({ first_sms_sent: true })
+      .eq("id", conversationId);
+  }
+
+  // Thread reply confirmation
+  const preview = draftBody.length > 50 ? draftBody.slice(0, 50) + "…" : draftBody;
+  await slack.postThreadReply(channelId, slackTs, `✅ Sent via LoopMessage — "${preview}"`);
+
+  // Add sent reaction (try custom emoji, fall back gracefully)
+  try {
+    await slack.addReaction(channelId, slackTs, "sent_via_imessage");
+  } catch {
+    try { await slack.addReaction(channelId, slackTs, "white_check_mark"); } catch { /* ignore */ }
+  }
+
+  // Clean up pending draft
+  if (pending) {
+    await supabaseAdmin.from("sms_pending_drafts").delete().eq("conversation_id", conversationId);
+  }
+
+  return true;
+}
+
+// 1️⃣ or 2️⃣ reaction on an override-draft message → send chosen version
+async function handleSmsOverrideDraftReaction(
+  channelId: string,
+  slackTs: string,
+  userId: string,
+  reaction: "one" | "two"
+): Promise<boolean> {
+  const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+  if (!matthewId || userId !== matthewId) return false;
+
+  const { data: pending } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("conversation_id, draft_body, alt_draft_body, close_stage")
+    .eq("slack_channel_id", channelId)
+    .eq("slack_ts", slackTs)
+    .maybeSingle();
+
   if (!pending) return false;
+
+  const chosenBody: string | null =
+    reaction === "one"
+      ? (pending.draft_body as string)
+      : ((pending.alt_draft_body as string | null) ?? null);
+
+  if (!chosenBody) {
+    await slack.postThreadReply(channelId, slackTs, `⚠️ No AI suggestion found`);
+    return true;
+  }
 
   const { data: conv } = await supabaseAdmin
     .from("sms_conversations")
-    .select("phone")
+    .select("phone, assigned_sender, first_sms_sent")
     .eq("id", pending.conversation_id)
     .maybeSingle();
 
   if (!conv) return false;
 
-  await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/sms/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CRON_SECRET}` },
-    body: JSON.stringify({
-      conversationId: pending.conversation_id,
-      body: pending.draft_body,
-      approvedBy: userId,
-      aiDraft: pending.draft_body,
-      matthewApprovedAi: true,
-    }),
+  const { sendSMS } = await import("@/lib/sms-sender");
+  const result = await sendSMS(
+    conv.phone as string,
+    chosenBody,
+    pending.conversation_id as string,
+    (conv.assigned_sender as string | null) ?? undefined
+  );
+
+  if (!result.ok) {
+    await slack.postThreadReply(channelId, slackTs, `❌ Send failed: ${result.error ?? "unknown"}`);
+    try { await slack.addReaction(channelId, slackTs, "x"); } catch { /* ignore */ }
+    return true;
+  }
+
+  await supabaseAdmin.from("sms_messages").insert({
+    conversation_id: pending.conversation_id,
+    direction: "outbound",
+    body: chosenBody,
+    close_stage: pending.close_stage,
+    metadata: { source: reaction === "one" ? "human_override" : "ai_refined" },
   });
 
-  // Update the draft message to show it was sent
-  await slack.postMessage(channelId, `✅ *Sent:* "${pending.draft_body}"`);
+  if (conv.first_sms_sent === false) {
+    await supabaseAdmin
+      .from("sms_conversations")
+      .update({ first_sms_sent: true })
+      .eq("id", pending.conversation_id);
+  }
 
-  // Remove the pending draft
+  const preview = chosenBody.length > 50 ? chosenBody.slice(0, 50) + "…" : chosenBody;
+  await slack.postThreadReply(channelId, slackTs, `✅ Sent via LoopMessage — "${preview}"`);
+  try { await slack.addReaction(channelId, slackTs, "white_check_mark"); } catch { /* ignore */ }
+
   await supabaseAdmin.from("sms_pending_drafts").delete().eq("conversation_id", pending.conversation_id);
 
   return true;

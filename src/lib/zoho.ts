@@ -4,6 +4,7 @@
 // Keep both in sync when touching auth, request wrappers, or field mapping.
 
 import { DEFAULTS } from "@/config/defaults";
+import { supabaseAdmin } from "@/lib/db";
 
 const ZOHO_TOKEN_ENDPOINT = "https://accounts.zoho.com/oauth/v2/token";
 const ZOHO_API_BASE = "https://www.zohoapis.com/crm/v5";
@@ -491,4 +492,78 @@ export async function testConnection(): Promise<boolean> {
                           console.error("Zoho connection test failed:", error);
                           return false;
             }
+}
+
+// Mark a lead as Hot Lead when they reply to an SMS. Fire-and-forget safe — never throws.
+export async function markZohoHotLead(
+  zohoLeadId: string,
+  replyText: string,
+  slackChannelId: string | null
+): Promise<void> {
+  try {
+    const { slack } = await import("@/lib/slack-bot");
+
+    // Check if already marked hot lead (avoid duplicate Zoho update, but still post Slack)
+    let alreadyHot = false;
+    if (slackChannelId) {
+      const { data: conv } = await supabaseAdmin
+        .from("sms_conversations")
+        .select("outcome")
+        .eq("slack_channel_id", slackChannelId)
+        .maybeSingle();
+      alreadyHot = (conv?.outcome as string | null) === "hot_lead";
+    }
+
+    if (!alreadyHot) {
+      // Update Zoho lead status
+      const updateResult = await zohoRequest("PUT", `/Leads/${zohoLeadId}`, {
+        data: [{ Lead_Status: "Hot Lead" }],
+      }) as { data?: Array<{ code?: string; status?: string }> };
+
+      const updateCode = updateResult.data?.[0]?.code;
+      if (updateCode === "INVALID_DATA" || updateCode === "FIELD_NOT_FOUND") {
+        console.error(`[markZohoHotLead] invalid picklist value "Hot Lead" for lead ${zohoLeadId}`);
+        if (slackChannelId) {
+          await slack.postMessage(
+            slackChannelId,
+            `⚠️ Zoho stage 'Hot Lead' not found in picklist — add it manually.`
+          );
+        }
+        return;
+      }
+
+      // Add note
+      try {
+        await addNoteToLead(
+          zohoLeadId,
+          "Hot Lead",
+          `Replied to SMS: "${replyText.slice(0, 200)}"`
+        );
+      } catch (noteErr) {
+        console.error("[markZohoHotLead] note failed:", noteErr);
+      }
+
+      // Flip outcome on conversation
+      if (slackChannelId) {
+        await supabaseAdmin
+          .from("sms_conversations")
+          .update({ outcome: "hot_lead" })
+          .eq("slack_channel_id", slackChannelId);
+      }
+    }
+
+    // Post 🔥 notification to Slack channel
+    if (slackChannelId) {
+      const orgId = process.env.ZOHO_ORG_ID ?? "";
+      const zohoUrl = orgId
+        ? `https://crm.zoho.com/crm/org${orgId}/tab/Leads/${zohoLeadId}`
+        : `https://crm.zoho.com/crm/tab/Leads/${zohoLeadId}`;
+      await slack.postMessage(
+        slackChannelId,
+        `🔥 *HOT LEAD* — replied to text. ${alreadyHot ? "(already marked)" : "Zoho updated to *Hot Lead*."} Call immediately.\n<${zohoUrl}|Open in Zoho>`
+      );
+    }
+  } catch (err) {
+    console.error("[markZohoHotLead] unexpected error:", err);
+  }
 }

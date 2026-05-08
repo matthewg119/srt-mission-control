@@ -203,6 +203,34 @@ export const slack = {
                   return res;
         },
 
+        /** Add an emoji reaction to a message. */
+        async addReaction(channel: string, timestamp: string, name: string): Promise<Record<string, unknown>> {
+                  if (!channel || !timestamp || !name) return { ok: false, error: "missing_args" };
+                  return slackFetch("reactions.add", { channel, timestamp, name });
+        },
+
+        /** Fetch a single message by channel + ts. Returns null if not found or error. */
+        async getMessage(channel: string, ts: string): Promise<Record<string, unknown> | null> {
+                  const token = getToken();
+                  if (!token) return null;
+                  const url = `${SLACK_API}/conversations.history?channel=${encodeURIComponent(channel)}&latest=${encodeURIComponent(ts)}&limit=1&inclusive=true`;
+                  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+                  const data = await res.json() as { ok: boolean; messages?: Record<string, unknown>[] };
+                  if (!data.ok || !data.messages?.length) return null;
+                  return data.messages[0];
+        },
+
+        /** Fetch channel info (name, etc.). Returns null if not found or error. */
+        async getChannelInfo(channel: string): Promise<{ name?: string } | null> {
+                  const token = getToken();
+                  if (!token) return null;
+                  const url = `${SLACK_API}/conversations.info?channel=${encodeURIComponent(channel)}`;
+                  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+                  const data = await res.json() as { ok: boolean; channel?: { name?: string } };
+                  if (!data.ok) return null;
+                  return data.channel ?? null;
+        },
+
         /** Get channel IDs from env */
         channels: {
                   get ceo() { return process.env.SLACK_CEO_CHANNEL || ""; },
