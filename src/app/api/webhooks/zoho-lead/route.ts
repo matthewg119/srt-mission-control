@@ -161,6 +161,60 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, event: "DNQ" });
     }
 
+    // ── Interested: fire Meta CAPI Lead event for Working / Hot Lead / Converted ──
+    // These fire when a cold-call lead picks up or shows intent, or when a lead
+    // is manually converted to a deal in Zoho (not via the online application).
+    const interestedStatuses = new Set([
+      "Working",
+      "Working - Contacted",
+      "Working - Application Out",
+      "Hot Lead",
+      "Converted",
+    ]);
+    if (interestedStatuses.has(leadStatus)) {
+      stage = "interested_lookup";
+      let intContact: Record<string, unknown> | null = null;
+      if (email) {
+        try {
+          const { data, error: dbError } = await supabaseAdmin
+            .from("contacts")
+            .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
+            .ilike("email", email)
+            .limit(1)
+            .maybeSingle();
+          if (dbError) console.error("[Zoho Webhook] Supabase lookup error (interested):", dbError);
+          intContact = data;
+        } catch (dbThrown) {
+          console.error("[Zoho Webhook] Supabase lookup threw (interested):",
+            dbThrown instanceof Error ? dbThrown.message : dbThrown);
+          return NextResponse.json({ success: true, skipped: "db_error_interested" });
+        }
+      }
+
+      if (!intContact || !hasMetaAttributionServer({ fbc: intContact.fbc as string | null | undefined })) {
+        console.log(`[Zoho Webhook] Skipped interested Meta event for ${leadName} — no Meta attribution`);
+        return NextResponse.json({ success: true, skipped: "no_meta_attribution" });
+      }
+
+      stage = "interested_send_event";
+      await sendEvent({
+        eventName: "Lead",
+        actionSource: "system_generated",
+        userData: {
+          email: (intContact.email as string) || email || undefined,
+          phone: (intContact.phone as string) || (intContact.mobile_phone as string) || phone || undefined,
+          firstName: (intContact.first_name as string) || firstName || undefined,
+          lastName: (intContact.last_name as string) || lastName || undefined,
+          externalId: (intContact.id as string) || undefined,
+          fbc: (intContact.fbc as string) || undefined,
+          fbp: (intContact.fbp as string) || undefined,
+        },
+        customData: { content_name: leadStatus },
+      });
+      console.log(`[Zoho Webhook] Lead Meta event fired for ${leadName} (status: ${leadStatus})`);
+      return NextResponse.json({ success: true, event: "Lead", status: leadStatus });
+    }
+
     // ── Speed to Lead: instant callback for new leads with phone ──
     if (!phone) {
       console.log("[Zoho Webhook] No phone number in payload — skipping Speed to Lead");
