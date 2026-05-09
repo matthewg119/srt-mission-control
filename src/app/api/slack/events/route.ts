@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { HookOption } from "@/lib/content-types";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { runConversationWithTools, buildSystemPrompt, isAIConfigured, type ImageBlock } from "@/lib/ai";
@@ -91,8 +92,16 @@ export async function POST(request: NextRequest) {
 
       // Reaction shortcut for AI approval workflow — handled before bot-message filter.
       if (event.type === "reaction_added" && event.item?.type === "message") {
-        // Try content reaction handler first (no channel restriction — it self-routes by looking
-        // up slack_package_ts / scene ts / hooks_message_ts in the DB).
+        // Code Guardian reactions — check first so ✅ on a guardian card doesn't trigger SMS approval
+        const guardianHandled = await handleGuardianReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+          userId: event.user as string,
+        });
+        if (guardianHandled) return NextResponse.json({ ok: true });
+
+        // Try content reaction handler (self-routes by DB lookup)
         const contentHandled = await handleContentReaction({
           reaction: event.reaction as string,
           slackTs: event.item.ts as string,
@@ -155,6 +164,20 @@ export async function POST(request: NextRequest) {
       const attachedFiles = (event.files as SlackEventFile[] | undefined) ?? [];
       const isContentChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.content;
       const isContentFullChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.contentFull;
+
+      // Code Guardian channel — thread replies become conversational Q&A with Claude
+      const guardianChannelEnv = process.env.SLACK_CODE_GUARDIAN_CHANNEL || "";
+      if (guardianChannelEnv && channel === guardianChannelEnv && parentThreadTs && parentThreadTs !== event.ts && userText.trim().length > 0) {
+        void handleGuardianThreadMessage({
+          channel,
+          threadTs: parentThreadTs,
+          userId: event.user as string,
+          text: userText,
+        }).catch((e) => {
+          console.error("[slack/events] guardian thread message error:", (e as Error).message);
+        });
+        return NextResponse.json({ ok: true });
+      }
 
       // Thread reply in a #pipeline-new deal thread? Check for a pending
       // send_submission action and interpret the reply as lender names to
@@ -594,12 +617,7 @@ async function handleContentReaction(args: {
   return true;
 }
 
-export interface HookOption {
-  name: string;
-  slide1_image_prompt: string;
-  slide1_text_overlay: string;
-  slide2_image_prompt: string;
-}
+export type { HookOption } from "@/lib/content-types";
 
 async function generateAndPostHooks(
   pkgId: string,
@@ -1345,7 +1363,7 @@ async function handleSmsChannelMessage(args: {
     }
   }
 
-  // Direct channel message → send immediately
+  // Direct channel message → cancel pending auto-send, then send immediately
   const { data: conv } = await supabaseAdmin
     .from("sms_conversations")
     .select("id, phone, assigned_sender, close_stage")
@@ -1353,6 +1371,13 @@ async function handleSmsChannelMessage(args: {
     .maybeSingle();
 
   if (!conv) return;
+
+  // Cancel any pending auto-send for this conversation
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ auto_send_status: "cancelled" })
+    .eq("conversation_id", conv.id)
+    .eq("auto_send_status", "pending");
 
   const { sendSMS } = await import("@/lib/sms-sender");
   const result = await sendSMS(conv.phone as string, text.trim(), conv.id as string, conv.assigned_sender as string | undefined);
@@ -1371,7 +1396,7 @@ async function handleSmsChannelMessage(args: {
   }
 }
 
-// Matthew replied in thread under an AI DRAFT → offer his version vs AI-refined version
+// Matthew replied in thread under an AI DRAFT → cancel old auto-send, post override with new timer
 async function handleSmsThreadOverride(args: {
   channel: string;
   userId: string;
@@ -1380,14 +1405,21 @@ async function handleSmsThreadOverride(args: {
   threadTs: string;
 }): Promise<void> {
   const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
-  if (args.userId !== matthewId) return; // only Matthew triggers override flow
+  if (args.userId !== matthewId) return;
 
   const { data: conv } = await supabaseAdmin
     .from("sms_conversations")
-    .select("id, close_stage")
+    .select("id, close_stage, last_inbound_at")
     .eq("slack_channel_id", args.channel)
     .maybeSingle();
   if (!conv) return;
+
+  // Cancel the existing auto-send for this conversation
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ auto_send_status: "cancelled" })
+    .eq("conversation_id", conv.id)
+    .eq("auto_send_status", "pending");
 
   // Generate AI-refined version via Haiku
   let aiVersion = args.text;
@@ -1409,22 +1441,35 @@ async function handleSmsThreadOverride(args: {
     console.error("[sms/thread-override] AI refine failed:", e);
   }
 
+  // Compute new auto-send delay (Matthew's version auto-sends if he doesn't pick)
+  const { calcAutoSendDelay } = await import("@/lib/sms-channel");
+  const delaySecs = calcAutoSendDelay(new Date(), conv.last_inbound_at as string | null);
+  const autoSendAt = new Date(Date.now() + delaySecs * 1000).toISOString();
+
   const overrideMsg = await slack.postMessage(
     args.channel,
-    `Your version: ${args.text}\nAI suggestion: ${aiVersion}\n\nReact 1️⃣ to send yours · React 2️⃣ to send AI suggestion`
+    [
+      `Your version: ${args.text}`,
+      `AI suggestion: ${aiVersion}`,
+      ``,
+      `⏱ Auto-sending your version in ${delaySecs}s · React 1️⃣ to send yours now · React 2️⃣ to send AI · React ❌ to cancel`,
+    ].join("\n")
   );
 
   if (overrideMsg.ok && overrideMsg.ts) {
+    // Upsert keyed on conversation_id (one active draft per conversation)
     await supabaseAdmin.from("sms_pending_drafts").upsert(
       {
         conversation_id: conv.id,
         slack_channel_id: args.channel,
         slack_ts: overrideMsg.ts as string,
-        draft_body: args.text,
+        draft_body: args.text,         // Matthew's version — this is what auto-sends
         alt_draft_body: aiVersion,
         close_stage: conv.close_stage,
+        auto_send_at: autoSendAt,
+        auto_send_status: "pending",
       },
-      { onConflict: "slack_ts" }
+      { onConflict: "conversation_id" }
     );
   }
 }
@@ -1637,4 +1682,100 @@ async function handleSmsOverrideDraftReaction(
   await supabaseAdmin.from("sms_pending_drafts").delete().eq("conversation_id", pending.conversation_id);
 
   return true;
+}
+
+// ─── Code Guardian ───────────────────────────────────────────────────────────
+
+async function handleGuardianReaction(args: {
+  reaction: string;
+  slackTs: string;
+  channel: string;
+  userId: string;
+}): Promise<boolean> {
+  const { reaction, slackTs, channel, userId } = args;
+  if (reaction !== "white_check_mark" && reaction !== "pencil" && reaction !== "x" && reaction !== "no_entry") {
+    return false;
+  }
+
+  const { data: fix } = await supabaseAdmin
+    .from("code_guardian_fixes")
+    .select("id, status, fix_payload, workflow_name")
+    .eq("slack_ts", slackTs)
+    .maybeSingle();
+
+  if (!fix) return false;
+
+  if (reaction === "white_check_mark") {
+    if (fix.status !== "pending") {
+      await slack.postThreadReply(channel, slackTs, `⚠️ Fix already ${fix.status as string}.`);
+      return true;
+    }
+    // Delegate to apply-fix endpoint (runs async, keeps event handler fast)
+    void fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "https://mission.srtagency.com"}/api/code-guardian/apply-fix`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}`,
+      },
+      body: JSON.stringify({ slack_ts: slackTs, applied_by: userId }),
+    }).catch((e) => console.error("[guardian] apply-fix fetch error:", (e as Error).message));
+
+    await slack.postThreadReply(channel, slackTs, `⏳ Applying fix, opening PR…`);
+    return true;
+  }
+
+  if (reaction === "pencil") {
+    await supabaseAdmin
+      .from("code_guardian_fixes")
+      .update({ status: "pending", updated_at: new Date().toISOString() })
+      .eq("slack_ts", slackTs);
+    await slack.postThreadReply(
+      channel,
+      slackTs,
+      `✏️ Revision requested. Reply in this thread describing what to change and I'll re-analyze.`
+    );
+    return true;
+  }
+
+  if (reaction === "x" || reaction === "no_entry") {
+    await supabaseAdmin
+      .from("code_guardian_fixes")
+      .update({ status: "skipped", updated_at: new Date().toISOString() })
+      .eq("slack_ts", slackTs);
+    await slack.postThreadReply(channel, slackTs, `🚫 Skipped by <@${userId}>.`);
+    return true;
+  }
+
+  return false;
+}
+
+async function handleGuardianThreadMessage(args: {
+  channel: string;
+  threadTs: string;
+  userId: string;
+  text: string;
+}): Promise<void> {
+  const { channel, threadTs, userId, text } = args;
+
+  const { data: fix } = await supabaseAdmin
+    .from("code_guardian_fixes")
+    .select("fix_payload, workflow_name")
+    .eq("slack_ts", threadTs)
+    .maybeSingle();
+
+  let replyText: string;
+
+  if (fix?.fix_payload) {
+    const { answerGuardianQuestion } = await import("@/lib/code-guardian/analyzer");
+    const payload = fix.fix_payload as { analysis: import("@/lib/code-guardian/analyzer").GuardianAnalysis };
+    replyText = await answerGuardianQuestion({
+      question: text,
+      originalAnalysis: payload.analysis,
+      workflowName: (fix.workflow_name as string) ?? "Unknown",
+    });
+  } else {
+    replyText = `No fix record found for this thread. Please re-trigger the guardian or ask in <#${channel}>.`;
+  }
+
+  await slack.postThreadReply(channel, threadTs, `🛡️ ${replyText}`);
 }

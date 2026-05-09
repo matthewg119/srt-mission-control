@@ -5,7 +5,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { generateImage, generateVideo, pollVideo } from "@/lib/elevenlabs-media";
-import type { HookOption } from "@/app/api/slack/events/route";
+import type { HookOption } from "@/lib/content-types";
 
 interface Slide {
   n: number;

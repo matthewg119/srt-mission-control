@@ -1,0 +1,70 @@
+name: Code Guardian
+
+# Fires whenever any workflow in this repo completes with a failure.
+# Posts a bug report + proposed fix to #code-guardian in Slack.
+
+on:
+  workflow_run:
+    workflows:
+      - "AI Guardian Cron"
+      - "Daily Content Ideas Cron"
+      - "Email Director Cron"
+      - "Stale Deals Cron"
+      - "Daily Recap Cron"
+      - "Process Sequences Cron"
+      - "Bot Monitor Cron"
+      - "Bot Daily Summary Cron"
+      - "Code Guardian"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: "Workflow name to simulate failure for"
+        required: false
+        default: "Manual Test"
+      run_id:
+        description: "Run ID to analyze"
+        required: false
+        default: ""
+
+jobs:
+  notify-guardian:
+    # Only run when the triggering workflow failed (not on workflow_dispatch)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Trigger Code Guardian Analysis
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          WORKFLOW_NAME="${{ github.event.workflow_run.name || inputs.workflow_name }}"
+          RUN_ID="${{ github.event.workflow_run.id || inputs.run_id }}"
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          REPO="${{ github.repository }}"
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::warning::CRON_SECRET not set — calling without auth"
+            AUTH_HEADER=""
+          else
+            AUTH_HEADER="Authorization: Bearer $CRON_SECRET"
+          fi
+
+          PAYLOAD=$(printf '{"workflow_name":"%s","run_id":"%s","commit_sha":"%s","branch":"%s","repo":"%s"}' \
+            "$WORKFLOW_NAME" "$RUN_ID" "$COMMIT_SHA" "$BRANCH" "$REPO")
+
+          http_code=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST \
+            ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://mission.srtagency.com/api/code-guardian/analyze")
+
+          echo "http_code=$http_code"
+          echo "--- response ---"
+          cat response.txt
+          echo ""
+          if [ "$http_code" != "200" ]; then
+            echo "::warning::Code Guardian returned $http_code — analysis may have failed"
+          fi
