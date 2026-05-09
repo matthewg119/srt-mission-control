@@ -14,7 +14,6 @@ on:
       - "Process Sequences Cron"
       - "Bot Monitor Cron"
       - "Bot Daily Summary Cron"
-      - "Code Guardian"
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -29,7 +28,6 @@ on:
 
 jobs:
   notify-guardian:
-    # Only run when the triggering workflow failed (not on workflow_dispatch)
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -37,28 +35,27 @@ jobs:
       - name: Trigger Code Guardian Analysis
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || inputs.workflow_name }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          WORKFLOW_NAME="${{ github.event.workflow_run.name || inputs.workflow_name }}"
-          RUN_ID="${{ github.event.workflow_run.id || inputs.run_id }}"
-          COMMIT_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
-          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
-          REPO="${{ github.repository }}"
-
-          if [ -z "$CRON_SECRET" ]; then
-            echo "::warning::CRON_SECRET not set — calling without auth"
-            AUTH_HEADER=""
-          else
-            AUTH_HEADER="Authorization: Bearer $CRON_SECRET"
-          fi
-
           PAYLOAD=$(printf '{"workflow_name":"%s","run_id":"%s","commit_sha":"%s","branch":"%s","repo":"%s"}' \
             "$WORKFLOW_NAME" "$RUN_ID" "$COMMIT_SHA" "$BRANCH" "$REPO")
 
-          http_code=$(curl -s -o response.txt -w "%{http_code}" \
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::warning::CRON_SECRET not set — calling without auth"
+            AUTH_ARGS=""
+          else
+            AUTH_ARGS="-H \"Authorization: Bearer $CRON_SECRET\""
+          fi
+
+          http_code=$(eval curl -s -o response.txt -w "%{http_code}" \
             -X POST \
-            ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+            $AUTH_ARGS \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
+            -d "'$PAYLOAD'" \
             "https://mission.srtagency.com/api/code-guardian/analyze")
 
           echo "http_code=$http_code"

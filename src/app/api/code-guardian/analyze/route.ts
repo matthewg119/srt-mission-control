@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { slack } from "@/lib/slack-bot";
+import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { fetchWorkflowLogs, fetchCommitFiles } from "@/lib/code-guardian/github-api";
 import { analyzeFailure } from "@/lib/code-guardian/analyzer";
 
@@ -22,12 +22,12 @@ function buildSlackBlocks(opts: {
   rootCause: string;
   fixes: Array<{ file: string; explanation: string }>;
   confidence: string;
-}): object[] {
+}): SlackBlock[] {
   const { workflowName, commitSha, repo, summary, rootCause, fixes, confidence } = opts;
   const shortSha = commitSha.slice(0, 7);
   const confidenceEmoji = confidence === "high" ? "🟢" : confidence === "medium" ? "🟡" : "🔴";
 
-  const blocks: object[] = [
+  const blocks: SlackBlock[] = [
     {
       type: "header",
       text: { type: "plain_text", text: "🛡️ Code Guardian — Failure Detected", emoji: true },

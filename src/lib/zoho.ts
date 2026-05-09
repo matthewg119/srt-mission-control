@@ -145,7 +145,7 @@ async function getAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-async function zohoRequest(
+export async function zohoRequest(
             method: string,
             path: string,
             body?: unknown

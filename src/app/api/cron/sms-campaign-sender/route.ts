@@ -154,12 +154,14 @@ async function handle(req: NextRequest) {
           });
 
           // Increment campaign sent_count
-          await supabaseAdmin.rpc("increment_campaign_sent", { campaign_id: campaignId }).catch(() =>
-            supabaseAdmin
+          try {
+            await supabaseAdmin.rpc("increment_campaign_sent", { campaign_id: campaignId });
+          } catch {
+            await supabaseAdmin
               .from("sms_campaigns")
               .update({ sent_count: ((campaign.sent_count as number) ?? 0) + sent + 1 })
-              .eq("id", campaignId)
-          );
+              .eq("id", campaignId);
+          }
 
           sent++;
         } else {
