@@ -3,6 +3,7 @@ import { triggerSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
 import { supabaseAdmin } from "@/lib/db";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
+import { getLead } from "@/lib/zoho";
 
 // Allow up to 60s for RingOut polling on Vercel
 export const maxDuration = 60;
@@ -82,8 +83,24 @@ export async function POST(request: NextRequest) {
     // Extract source, ID, email, and status
     const leadSource = lead.Lead_Source || lead.lead_source || "Zoho CRM";
     const leadId = lead.id || lead.Id || undefined;
-    const email = lead.Email || lead.email || "";
-    const leadStatus = lead.Lead_Status || lead.lead_status || "";
+    let email = lead.Email || lead.email || "";
+    let leadStatus = lead.Lead_Status || lead.lead_status || "";
+
+    // Zoho sometimes sends an empty body (bytes=0) when the webhook body config breaks.
+    // If we have the lead ID but are missing status or email, fetch them from the Zoho API.
+    if (leadId && (!leadStatus || !email)) {
+      try {
+        const zohoLead = await getLead(leadId);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const zl = zohoLead as any;
+        if (!leadStatus) leadStatus = zl.Lead_Status || "";
+        if (!email) email = zl.Email || "";
+        console.log(`[Zoho Webhook] Fetched from Zoho API: status=${leadStatus} email=${email}`);
+      } catch (fetchErr) {
+        console.error("[Zoho Webhook] getLead fallback failed:",
+          fetchErr instanceof Error ? fetchErr.message : fetchErr);
+      }
+    }
 
     console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
 
