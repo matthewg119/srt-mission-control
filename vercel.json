@@ -59,6 +59,14 @@
     {
       "path": "/api/cron/sms-delayed-sends",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/sms-campaign-sender",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/sms-auto-send",
+      "schedule": "* * * * *"
     }
   ]
 }

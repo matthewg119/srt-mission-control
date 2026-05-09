@@ -165,6 +165,8 @@ export async function POST(request: NextRequest) {
       const isContentChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.content;
       const isContentFullChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.contentFull;
 
+      const parentThreadTs = (event.thread_ts as string | undefined) || null;
+
       // Code Guardian channel — thread replies become conversational Q&A with Claude
       const guardianChannelEnv = process.env.SLACK_CODE_GUARDIAN_CHANNEL || "";
       if (guardianChannelEnv && channel === guardianChannelEnv && parentThreadTs && parentThreadTs !== event.ts && userText.trim().length > 0) {
@@ -183,7 +185,6 @@ export async function POST(request: NextRequest) {
       // send_submission action and interpret the reply as lender names to
       // send the draft to.
       const pipelineChannelEnv = process.env.SLACK_PIPELINE_CHANNEL || "";
-      const parentThreadTs = (event.thread_ts as string | undefined) || null;
       if (
         parentThreadTs &&
         parentThreadTs !== event.ts &&
@@ -427,6 +428,12 @@ async function handleReactionAdded(args: { reaction: string; slackTs: string; ch
       success: result.ok,
     });
     return;
+  }
+
+  // ❌ in an SMS channel draft → cancel auto-send without sending (check before generic pending-action cancel)
+  if (args.reaction === "x") {
+    const handled = await handleSmsCancelReaction(args.channel, args.slackTs, args.userId);
+    if (handled) return;
   }
 
   if (args.reaction === "no_entry" || args.reaction === "x") {
@@ -1558,6 +1565,13 @@ async function handleSmsApprovalReaction(channelId: string, slackTs: string, use
     return true;
   }
 
+  // Cancel pending auto-send to prevent cron double-fire
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ auto_send_status: "cancelled" })
+    .eq("conversation_id", conversationId)
+    .eq("auto_send_status", "pending");
+
   // Send via LoopMessage
   const { sendSMS } = await import("@/lib/sms-sender");
   const result = await sendSMS(
@@ -1646,6 +1660,13 @@ async function handleSmsOverrideDraftReaction(
 
   if (!conv) return false;
 
+  // Cancel pending auto-send to prevent cron double-fire
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ auto_send_status: "cancelled" })
+    .eq("conversation_id", pending.conversation_id as string)
+    .eq("auto_send_status", "pending");
+
   const { sendSMS } = await import("@/lib/sms-sender");
   const result = await sendSMS(
     conv.phone as string,
@@ -1681,6 +1702,31 @@ async function handleSmsOverrideDraftReaction(
 
   await supabaseAdmin.from("sms_pending_drafts").delete().eq("conversation_id", pending.conversation_id);
 
+  return true;
+}
+
+// ❌ reaction on an SMS pending draft → cancel auto-send without sending
+async function handleSmsCancelReaction(channelId: string, slackTs: string, userId: string): Promise<boolean> {
+  const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+  if (!matthewId || userId !== matthewId) return false;
+
+  const { data: pending } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("conversation_id")
+    .eq("slack_channel_id", channelId)
+    .eq("slack_ts", slackTs)
+    .eq("auto_send_status", "pending")
+    .maybeSingle();
+
+  if (!pending) return false;
+
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ auto_send_status: "cancelled" })
+    .eq("conversation_id", pending.conversation_id as string)
+    .eq("auto_send_status", "pending");
+
+  await slack.postThreadReply(channelId, slackTs, `🚫 Auto-send cancelled`);
   return true;
 }
 

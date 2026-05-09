@@ -129,21 +129,28 @@ export async function postAIDraft(
   closeStage: number,
   merchantName: string,
   draft: string,
-  conversationId: string
+  conversationId: string,
+  autoSendDelaySecs?: number
 ): Promise<string | null> {
   const stageLabel = ["", "Soft Pitch", "Wisdom Window", "UW Drama", "Close"][closeStage] ?? "Stage " + closeStage;
+  const timerLine = autoSendDelaySecs != null
+    ? `⏱ Auto-sending in ${autoSendDelaySecs}s · React ✅ to send now · Reply here to edit & reset timer · React ❌ to cancel`
+    : `React ✅ to send · Or type your version below and I'll refine it`;
 
   const text = [
     `*[AI DRAFT — Stage ${closeStage}: ${stageLabel}]*`,
     `"${draft}"`,
     ``,
-    `React ✅ to send · Or type your version below and I'll refine it`,
+    timerLine,
   ].join("\n");
 
   const res = await slack.postMessage(channelId, text);
 
   if (res.ok && res.ts) {
-    // Save pending draft so ✅ reaction handler knows what to send
+    const autoSendAt = autoSendDelaySecs != null
+      ? new Date(Date.now() + autoSendDelaySecs * 1000).toISOString()
+      : null;
+
     await supabaseAdmin.from("sms_pending_drafts").upsert(
       {
         conversation_id: conversationId,
@@ -152,6 +159,8 @@ export async function postAIDraft(
         draft_body: draft,
         close_stage: closeStage,
         created_at: new Date().toISOString(),
+        auto_send_at: autoSendAt,
+        auto_send_status: autoSendAt ? "pending" : null,
       },
       { onConflict: "conversation_id" }
     );
@@ -182,6 +191,18 @@ export async function renameSmsChannel(
     .from("sms_conversations")
     .update({ slack_channel_name: newName })
     .eq("id", conversationId);
+}
+
+// Returns the auto-send delay in seconds based on ET time of day.
+export function calcAutoSendDelay(now: Date, lastInboundAt: string | null): number {
+  const etHour = parseInt(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }).format(now),
+    10
+  );
+  const isActive = lastInboundAt !== null && now.getTime() - new Date(lastInboundAt).getTime() < 2 * 60 * 1000;
+  if (etHour >= 0 && etHour < 6) return isActive ? 60 : 300;
+  if (etHour >= 21) return isActive ? 60 : 180;
+  return 90;
 }
 
 function buildChannelName(phone: string, displayName: string, businessName: string | null): string {

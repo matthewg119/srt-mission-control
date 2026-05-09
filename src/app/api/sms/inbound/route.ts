@@ -117,9 +117,10 @@ export async function POST(req: NextRequest) {
   }
 
   // Draft AI reply and post for approval (non-blocking)
+  const autoDelay = getAutoSendDelaySecs(new Date(), conv.last_inbound_at as string | null);
   draftSmsReply(conv.id as string, body).then(async (draft) => {
     if (draft) {
-      await postAIDraft(channelId, conv.close_stage as number, displayName, draft, conv.id as string);
+      await postAIDraft(channelId, conv.close_stage as number, displayName, draft, conv.id as string, autoDelay);
     }
   }).catch((err) => console.error("[sms/inbound] AI draft failed:", err));
 
@@ -166,4 +167,28 @@ async function postCampaignReplyNotification(
     outreachChannelId,
     `Reply from *${displayName}* (${last4}) — <#${perContactChannelId}>`
   );
+}
+
+// Returns auto-send delay in seconds based on ET time of day.
+// After 9pm: 3 min (180s), or 60s if it's an active back-and-forth.
+// After midnight: 5 min (300s), or 60s if active.
+// Daytime: always 90s.
+function getAutoSendDelaySecs(now: Date, lastInboundAt: string | null): number {
+  const etHour = parseInt(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false })
+      .format(now),
+    10
+  );
+
+  const isActiveConvo =
+    lastInboundAt !== null &&
+    now.getTime() - new Date(lastInboundAt).getTime() < 2 * 60 * 1000;
+
+  if (etHour >= 0 && etHour < 6) {
+    return isActiveConvo ? 60 : 300;
+  }
+  if (etHour >= 21) {
+    return isActiveConvo ? 60 : 180;
+  }
+  return 90;
 }
