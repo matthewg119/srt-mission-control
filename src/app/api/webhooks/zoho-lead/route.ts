@@ -104,12 +104,16 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
 
+    // Normalize once for case-insensitive set lookups (Zoho picklist values
+    // vary in casing across environments, e.g. "Not interested" vs "Not Interested").
+    const normalizedStatus = leadStatus.trim().toLowerCase();
+
     // ── DNQ: fire Meta CAPI event when lead is marked as terminal-declined in Zoho ──
     // Only if the originating contact came from a real Meta ad click.
     // Match whichever picklist value actually lives in Zoho — /api/leads/disqualify
     // tries "Dead Declined" first, "DNQ" next, etc. The webhook must accept all.
-    const dnqStatuses = new Set(["DNQ", "Dead Declined", "Declined", "Dead", "Take Off List", "Not Interested"]);
-    if (dnqStatuses.has(leadStatus)) {
+    const dnqStatuses = new Set(["dnq", "dead declined", "declined", "dead", "take off list", "not interested"]);
+    if (dnqStatuses.has(normalizedStatus)) {
       stage = "dnq_lookup";
       // Look up contact in Supabase for enriched user data
       let contact: Record<string, unknown> | null = null;
@@ -165,13 +169,13 @@ export async function POST(request: NextRequest) {
     // These fire when a cold-call lead picks up or shows intent, or when a lead
     // is manually converted to a deal in Zoho (not via the online application).
     const interestedStatuses = new Set([
-      "Working",
-      "Working - Contacted",
-      "Working - Application Out",
-      "Hot Lead",
-      "Converted",
+      "working",
+      "working - contacted",
+      "working - application out",
+      "hot lead",
+      "converted",
     ]);
-    if (interestedStatuses.has(leadStatus)) {
+    if (interestedStatuses.has(normalizedStatus)) {
       stage = "interested_lookup";
       let intContact: Record<string, unknown> | null = null;
       if (email) {
