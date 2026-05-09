@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
-import { normalizePhone } from "@/lib/linq";
+import { normalizePhone } from "@/lib/loopmessage";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 import { sendSMS } from "@/lib/sms-sender";
 import { slack } from "@/lib/slack-bot";

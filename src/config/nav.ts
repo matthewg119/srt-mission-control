@@ -11,6 +11,7 @@ import {
   LayoutList,
   GraduationCap,
   TrendingUp,
+  MessageSquare,
 } from "lucide-react";
 
 export interface NavSection {
@@ -40,6 +41,7 @@ export const navSections: NavSection[] = [
       { label: "Templates", href: "/dashboard/templates", icon: FileText },
       { label: "Sequences", href: "/dashboard/sequences", icon: Mail },
       { label: "Automations", href: "/dashboard/automations", icon: Zap },
+      { label: "Campaigns", href: "/dashboard/campaigns", icon: MessageSquare },
     ],
   },
   {

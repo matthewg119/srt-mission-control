@@ -80,7 +80,7 @@ export const AI_TOOLS = [
   {
     name: "send_sms",
     description:
-      "Send an SMS message to a contact via LINQ. Looks up the contact's active SMS conversation and sends the message through their Slack-monitored channel.",
+      "Send an iMessage to a contact via LoopMessage. Looks up the contact's active SMS conversation and sends the message through their Slack-monitored channel.",
     input_schema: {
       type: "object" as const,
       properties: {

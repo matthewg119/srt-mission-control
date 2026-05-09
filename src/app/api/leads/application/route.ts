@@ -1159,7 +1159,7 @@ export async function POST(request: NextRequest) {
 // Schedule a first SMS to be sent 3 minutes after the lead signs up.
 // Stored in DB; picked up by /api/cron/sms-delayed-sends (runs every 5 min).
 async function scheduleFirstSms(phone: string, contactId: string, template: string): Promise<void> {
-  const { normalizePhone } = await import("@/lib/linq");
+  const { normalizePhone } = await import("@/lib/loopmessage");
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return;
 
