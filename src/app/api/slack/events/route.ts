@@ -23,6 +23,7 @@ import {
   regenerateAllStills,
 } from "@/lib/content-scene-runner";
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
+import { normalizePhone } from "@/lib/loopmessage";
 
 interface SlackEventFile {
   id: string;
@@ -199,6 +200,38 @@ export async function POST(request: NextRequest) {
           replyText: userText,
         });
         if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // #personal-texts: Slack thread reply → queue an outbound iMessage for the
+      // Mac-side AirMessage poller. Top-level messages get a nudge.
+      const personalTextsChannel = process.env.SLACK_PERSONAL_TEXTS_CHANNEL || "";
+      if (personalTextsChannel && channel === personalTextsChannel && userText.trim().length > 0) {
+        const userId = event.user as string;
+        if (!event.thread_ts) {
+          await slack.postEphemeral(
+            channel,
+            userId,
+            "Reply in the thread of an inbound text — top-level messages aren't routed."
+          );
+          return NextResponse.json({ ok: true });
+        }
+        const parent = await slack.getMessage(channel, event.thread_ts as string);
+        const parentText = ((parent?.text as string) || "");
+        const match = parentText.match(/\((\+?\d[\d\s\-().]{6,})\)/);
+        const phone = match ? normalizePhone(match[1]) : null;
+        if (!phone) {
+          await slack.postEphemeral(
+            channel,
+            userId,
+            "Couldn't find a phone number in the parent message."
+          );
+          return NextResponse.json({ ok: true });
+        }
+        await supabaseAdmin
+          .from("imessage_outbound_queue")
+          .insert({ to_phone: phone, body: userText });
+        await slack.postEphemeral(channel, userId, "✅ Queued — sending in ~10s");
+        return NextResponse.json({ ok: true });
       }
 
       // Human message in an sms-* channel → forward directly to merchant via LoopMessage.
