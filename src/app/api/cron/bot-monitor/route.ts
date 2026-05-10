@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { schwab, buildSellToCloseMarket } from "@/lib/schwab";
+import { ibkr, buildSellToCloseMarket } from "@/lib/ibkr";
 import { telegram } from "@/lib/telegram";
 
 export const runtime = "nodejs";
@@ -27,30 +27,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, monitored: 0 });
   }
 
-  const { data: cfgRows } = await supabaseAdmin
-    .from("bot_config")
-    .select("key, value");
-  const cfg: Record<string, string> = {};
-  for (const row of cfgRows ?? []) cfg[row.key] = row.value;
-
   const telegramChatId = process.env.TELEGRAM_USER_ID ?? "";
-  const accountHash = await schwab.getAccountHash();
+  const accountId = ibkr.getAccountId();
 
   let closed = 0;
 
   for (const trade of openTrades) {
     try {
-      const quote = await schwab.getQuote(trade.option_symbol);
-      const mark = Number(
-        (quote as Record<string, Record<string, unknown>>)?.quote?.mark ?? 0
-      );
+      // IBKR uses conid for quotes; we store the OCC symbol in option_symbol.
+      // The conid is stored as schwab_order_id prefix — or we look it up fresh.
+      // For monitoring we use the mark price from the IBKR snapshot.
+      const snapshot = await ibkr.getQuoteBySymbol(trade.option_symbol);
+      const mark = snapshot?.mark ?? 0;
 
       if (mark <= 0) continue;
 
       const pnl = (mark - trade.entry_price) * trade.contracts * 100;
       const pnlPct = ((mark - trade.entry_price) / trade.entry_price) * 100;
 
-      // Update unrealized P&L
       await supabaseAdmin
         .from("bot_trades")
         .update({ pnl, pnl_percent: pnlPct })
@@ -58,16 +52,13 @@ export async function GET(req: NextRequest) {
 
       const hitStop = mark <= trade.stop_loss_price;
       const hitTarget = mark >= trade.take_profit_price;
-
       if (!hitStop && !hitTarget) continue;
 
       // Close position
       if (!trade.is_paper) {
-        const closeOrder = buildSellToCloseMarket(
-          trade.option_symbol,
-          trade.contracts
-        );
-        await schwab.placeOrder(accountHash, closeOrder);
+        const conid = await ibkr.searchContract(trade.option_symbol);
+        const closeOrder = buildSellToCloseMarket(conid, trade.contracts, accountId);
+        await ibkr.placeOrder(closeOrder);
       }
 
       const reason = hitStop ? "stop_loss" : "take_profit";
@@ -85,7 +76,6 @@ export async function GET(req: NextRequest) {
 
       closed++;
 
-      // Telegram notification
       if (telegramChatId) {
         const isWin = pnl >= 0;
         const emoji = hitStop ? "🛑" : "✅";

@@ -1,0 +1,26 @@
+listenPort: 5055
+listenSsl: true
+
+# Self-signed cert (IBKR default) — accept in browser/Node with cert warnings
+sslCert: "root/cacert.pem"
+sslCustom: false
+
+# IP allowlist — localhost + Docker internal network
+ips:
+  allow:
+    - 127.0.0.1
+    - 0.0.0.0/0   # lock down to your VPS IP before any cloud deploy
+
+# Logging
+logging:
+  logLevel: INFO
+  maxFileSize: 10000000
+  maxBackupFiles: 3
+
+# Session management
+session:
+  isSso: false
+  expireMinutes: 1440   # 24 hours
+
+# Paper trading is controlled by which account you log in with.
+# Log in with your IBKR Paper account (DU...) to stay in paper mode.

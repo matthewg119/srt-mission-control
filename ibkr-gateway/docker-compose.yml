@@ -1,0 +1,20 @@
+services:
+  ibkr-gateway:
+    build: .
+    ports:
+      - "5055:5055"
+    restart: unless-stopped
+    environment:
+      - IBKR_ACCOUNT_ID=${IBKR_ACCOUNT_ID}
+    volumes:
+      # Persist the session so re-deploys don't log you out
+      - gateway-session:/app/gateway/root
+    healthcheck:
+      test: ["CMD", "curl", "-k", "-s", "-o", "/dev/null", "-w", "%{http_code}", "https://localhost:5055/v1/api/iserver/auth/status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  gateway-session:

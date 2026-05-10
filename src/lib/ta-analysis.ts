@@ -4,7 +4,7 @@ import {
   MACD,
   BollingerBands,
 } from "technicalindicators";
-import type { SchwabBar } from "@/lib/schwab";
+import type { IbkrBar as SchwabBar } from "@/lib/ibkr";
 
 export interface BotConfig {
   target_delta: number;
@@ -227,6 +227,7 @@ export function selectBestOption(
   dteMax: number
 ): {
   symbol: string;
+  conid?: number;
   strike: number;
   expiration: string;
   delta: number;
@@ -241,6 +242,7 @@ export function selectBestOption(
   const today = new Date();
   const candidates: {
     symbol: string;
+    conid?: number;
     strike: number;
     expiration: string;
     delta: number;
@@ -272,6 +274,7 @@ export function selectBestOption(
 
         candidates.push({
           symbol: String(c.symbol ?? ""),
+          conid: Number(c.conid ?? 0) || undefined,
           strike: Number(c.strikePrice ?? 0),
           expiration: dateStr,
           delta,

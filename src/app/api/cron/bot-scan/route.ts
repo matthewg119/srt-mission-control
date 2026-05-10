@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { schwab, buildBuyToOpenLimit } from "@/lib/schwab";
+import { ibkr, buildBuyToOpenLimit } from "@/lib/ibkr";
 import {
   calculateIndicators,
   detectStandardSignal,
@@ -13,6 +13,9 @@ import { telegram } from "@/lib/telegram";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// conid cache — contract IDs don't change, avoid repeated lookups
+const conidCache = new Map<string, number>();
+
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true;
@@ -22,21 +25,16 @@ function isAuthorized(req: NextRequest): boolean {
 
 function isMarketHours(): boolean {
   const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun, 6=Sat
+  const day = now.getUTCDay();
   if (day === 0 || day === 6) return false;
-
-  // Market hours: 9:30–16:00 ET
-  // EDT = UTC-4, EST = UTC-5. Use UTC-4 for simplicity (EDT / summer)
-  const etHour = now.getUTCHours() - 4;
+  const etHour = now.getUTCHours() - 4; // EDT
   const etMin = now.getUTCMinutes();
   const totalMins = etHour * 60 + etMin;
   return totalMins >= 9 * 60 + 30 && totalMins < 16 * 60;
 }
 
 async function loadConfig(): Promise<Record<string, string>> {
-  const { data } = await supabaseAdmin
-    .from("bot_config")
-    .select("key, value");
+  const { data } = await supabaseAdmin.from("bot_config").select("key, value");
   const cfg: Record<string, string> = {};
   for (const row of data ?? []) cfg[row.key] = row.value;
   return cfg;
@@ -66,10 +64,16 @@ async function checkRiskLimits(
   return { allowed: true };
 }
 
+async function getConid(symbol: string): Promise<number> {
+  if (conidCache.has(symbol)) return conidCache.get(symbol)!;
+  const conid = await ibkr.searchContract(symbol);
+  conidCache.set(symbol, conid);
+  return conid;
+}
+
 async function processSymbol(
   symbol: string,
-  cfg: Record<string, string>,
-  accountHash: string
+  cfg: Record<string, string>
 ): Promise<void> {
   const telegramChatId = process.env.TELEGRAM_USER_ID ?? "";
   const isPaper = cfg.paper_mode === "true";
@@ -80,21 +84,28 @@ async function processSymbol(
   const stopPct = parseFloat(cfg.stop_loss_percent ?? "50") / 100;
   const tpPct = parseFloat(cfg.take_profit_percent ?? "100") / 100;
 
+  const conid = await getConid(symbol);
+
   // Fetch OHLCV data for multiple timeframes
-  const [bars5m, bars15m, bars3m, prevClose] = await Promise.all([
-    schwab.getPriceHistory(symbol, "minute", 5),
-    schwab.getPriceHistory(symbol, "minute", 15),
-    schwab.getPriceHistory(symbol, "minute", 3),
-    schwab.getPreviousClose(symbol),
+  const [bars5m, bars15m, bars3m] = await Promise.all([
+    ibkr.getPriceHistory(conid, "1d", "5min"),
+    ibkr.getPriceHistory(conid, "1d", "15min"),
+    ibkr.getPriceHistory(conid, "1d", "3min"),
   ]);
 
-  if (bars5m.length < 55) return; // need enough bars for indicators
+  // Get previous close (last bar of prior day)
+  const prevDayBars = await ibkr.getPriceHistory(conid, "2d", "1day");
+  const prevClose =
+    prevDayBars.length >= 2
+      ? prevDayBars[prevDayBars.length - 2].close
+      : bars5m[0]?.close ?? 0;
+
+  if (bars5m.length < 30) return;
 
   const ind5m = calculateIndicators(bars5m);
   const ind15m = calculateIndicators(bars15m);
 
-  // Try standard signal first, then BOS fallback
-  let signal =
+  const signal =
     detectStandardSignal(ind5m, prevClose) ??
     detectBOSSignal(bars3m, bars5m, bars15m);
 
@@ -118,20 +129,12 @@ async function processSymbol(
 
   if (!signalRow) return;
 
-  // Find best option contract
-  const today = new Date();
-  const fromDate = new Date(today.getTime() + dteMin * 86400000)
-    .toISOString()
-    .slice(0, 10);
-  const toDate = new Date(today.getTime() + dteMax * 86400000)
-    .toISOString()
-    .slice(0, 10);
-
-  const chain = await schwab.getOptionsChain(
+  // Find best option contract via IBKR
+  const chain = await ibkr.getOptionsChain(
     symbol,
-    signal.type,
-    fromDate,
-    toDate
+    signal.type === "CALL" ? "C" : "P",
+    dteMin,
+    dteMax
   );
 
   const contract = selectBestOption(
@@ -150,7 +153,6 @@ async function processSymbol(
     return;
   }
 
-  // Update signal with option details
   await supabaseAdmin
     .from("trade_signals")
     .update({
@@ -166,16 +168,19 @@ async function processSymbol(
   const takeProfit = parseFloat((limitPrice * (1 + tpPct)).toFixed(2));
 
   // Place order
-  let schwabOrderId = "paper_" + Date.now();
+  let ibkrOrderId = "paper_" + Date.now();
   if (!isPaper) {
-    const order = buildBuyToOpenLimit(contract.symbol, maxContracts, limitPrice);
-    schwabOrderId = await schwab.placeOrder(accountHash, order);
+    const order = buildBuyToOpenLimit(
+      contract.conid ?? 0,
+      maxContracts,
+      limitPrice
+    );
+    ibkrOrderId = await ibkr.placeOrder(order);
   }
 
-  // Record trade
   await supabaseAdmin.from("bot_trades").insert({
     signal_id: signalRow.id,
-    schwab_order_id: schwabOrderId,
+    schwab_order_id: ibkrOrderId, // reusing column for IBKR order ID
     symbol,
     option_symbol: contract.symbol,
     trade_type: "BUY_TO_OPEN",
@@ -189,7 +194,6 @@ async function processSymbol(
     is_paper: isPaper,
   });
 
-  // Build and send Telegram alert with chart screenshots
   if (telegramChatId) {
     const modeTag = isPaper ? "📄 PAPER" : "💰 LIVE";
     const direction = signal.type === "CALL" ? "📈 CALL" : "📉 PUT";
@@ -201,7 +205,6 @@ async function processSymbol(
       `Entry: $${limitPrice.toFixed(2)} | Stop: $${stopLoss.toFixed(2)} | TP: $${takeProfit.toFixed(2)}`,
     ].join("\n");
 
-    // Chart images (15m and 5m)
     const chart15mUrl = buildChartUrl(bars15m, ind15m, "15m", signal.type);
     const chart5mUrl = buildChartUrl(bars5m, ind5m, "5m", signal.type);
 
@@ -222,22 +225,34 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: "outside_market_hours" });
   }
 
+  const telegramChatId = process.env.TELEGRAM_USER_ID ?? "";
+
+  // Check IBKR auth first
+  const authed = await ibkr.checkAuth();
+  if (!authed) {
+    if (telegramChatId) {
+      await telegram.sendMessage(
+        telegramChatId,
+        "⚠️ *IBKR gateway needs re-auth*\nVisit https://localhost:5055 to log back in."
+      );
+    }
+    return NextResponse.json({ ok: false, error: "ibkr_not_authenticated" });
+  }
+
   const cfg = await loadConfig();
   const risk = await checkRiskLimits(cfg);
   if (!risk.allowed) {
     return NextResponse.json({ ok: true, skipped: risk.reason });
   }
 
-  const accountHash = await schwab.getAccountHash();
   const symbols: string[] = [];
   if (cfg.spy_enabled === "true") symbols.push("SPY");
   if (cfg.qqq_enabled === "true") symbols.push("QQQ");
 
   const results: string[] = [];
-
   for (const symbol of symbols) {
     try {
-      await processSymbol(symbol, cfg, accountHash);
+      await processSymbol(symbol, cfg);
       results.push(`${symbol}: processed`);
     } catch (err) {
       results.push(`${symbol}: error — ${String(err)}`);

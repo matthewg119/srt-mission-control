@@ -1,4 +1,4 @@
-import type { SchwabBar } from "@/lib/schwab";
+import type { IbkrBar as SchwabBar } from "@/lib/ibkr";
 import type { Indicators } from "@/lib/ta-analysis";
 
 // Renders chart images via QuickChart.io — zero native dependencies, works on Vercel.
