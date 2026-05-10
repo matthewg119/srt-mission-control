@@ -46,11 +46,11 @@
     },
     {
       "path": "/api/cron/bot-scan",
-      "schedule": "*/5 13-21 * * 1-5"
+      "schedule": "0 14 * * 1-5"
     },
     {
       "path": "/api/cron/bot-monitor",
-      "schedule": "* 13-21 * * 1-5"
+      "schedule": "30 14 * * 1-5"
     },
     {
       "path": "/api/cron/bot-daily-summary",
@@ -58,15 +58,15 @@
     },
     {
       "path": "/api/cron/sms-delayed-sends",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 10 * * *"
     },
     {
       "path": "/api/cron/sms-campaign-sender",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 11 * * *"
     },
     {
       "path": "/api/cron/sms-auto-send",
-      "schedule": "* * * * *"
+      "schedule": "0 12 * * *"
     }
   ]
 }
