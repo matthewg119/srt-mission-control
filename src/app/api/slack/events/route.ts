@@ -220,9 +220,8 @@ export async function POST(request: NextRequest) {
         const isThreadReply = Boolean(event.thread_ts) && event.thread_ts !== event.ts;
         const contentThreadTs = (event.thread_ts as string) || (event.ts as string);
 
-        // "generate this [N]" → Stage 1: OpenAI stills → approval gate
-        // "generate N images" (no "this") → legacy ElevenLabs direct flow
-        const genThisMatch = userText.match(/generate\s+this(?:\s+(\d+))?(?:\s+images?)?/i);
+        // "generate this / generate images / generate only images" → Stage 1 stills
+        const genThisMatch = userText.match(/generate\s+(this|images?|only\s+images?)/i);
         if (genThisMatch && isThreadReply) {
           void handleGenerateStills({ channel, threadTs: contentThreadTs }).catch((e) => {
             console.error("[slack/events] generate stills error:", (e as Error).message);
