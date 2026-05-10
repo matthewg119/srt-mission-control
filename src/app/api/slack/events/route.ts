@@ -23,6 +23,7 @@ import {
   regenerateAllStills,
 } from "@/lib/content-scene-runner";
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
+import { normalizePhone } from "@/lib/loopmessage";
 
 interface SlackEventFile {
   id: string;
@@ -199,6 +200,58 @@ export async function POST(request: NextRequest) {
           replyText: userText,
         });
         if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // #personal-texts → DIGITS bridge. Thread replies queue an outbound text
+      // for the Mac-side Playwright worker to deliver via digits.t-mobile.com.
+      const personalTextsChannel = process.env.SLACK_PERSONAL_TEXTS_CHANNEL || "";
+      if (personalTextsChannel && channel === personalTextsChannel && userText.trim().length > 0) {
+        if (!event.thread_ts) {
+          await slack.postEphemeral(
+            channel,
+            event.user as string,
+            "Reply in the thread of an inbound text — top-level messages aren't routed."
+          );
+          return NextResponse.json({ ok: true });
+        }
+
+        const parent = await slack.getMessage(channel, event.thread_ts as string);
+        const parentText = (parent?.text as string | undefined) ?? "";
+        const phoneMatch = parentText.match(/\((\+?\d[\d\s\-().]{6,})\)/);
+        const toPhone = phoneMatch ? normalizePhone(phoneMatch[1]) : null;
+
+        if (!toPhone) {
+          await slack.postEphemeral(
+            channel,
+            event.user as string,
+            "Couldn't find a phone number in the parent message.",
+            event.thread_ts as string
+          );
+          return NextResponse.json({ ok: true });
+        }
+
+        const { error: queueErr } = await supabaseAdmin
+          .from("digits_outbound_queue")
+          .insert({ to_phone: toPhone, body: userText });
+
+        if (queueErr) {
+          console.error("[slack/events] digits queue insert error:", queueErr.message);
+          await slack.postEphemeral(
+            channel,
+            event.user as string,
+            `❌ Couldn't queue: ${queueErr.message}`,
+            event.thread_ts as string
+          );
+          return NextResponse.json({ ok: true });
+        }
+
+        await slack.postEphemeral(
+          channel,
+          event.user as string,
+          "✅ Queued — sending in ~10s",
+          event.thread_ts as string
+        );
+        return NextResponse.json({ ok: true });
       }
 
       // Human message in an sms-* channel → forward directly to merchant via LoopMessage.
