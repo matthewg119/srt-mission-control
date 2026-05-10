@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { triggerSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
 import { supabaseAdmin } from "@/lib/db";
-import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { getLead } from "@/lib/zoho";
 
 // Allow up to 60s for RingOut polling on Vercel
@@ -108,14 +107,13 @@ export async function POST(request: NextRequest) {
     // vary in casing across environments, e.g. "Not interested" vs "Not Interested").
     const normalizedStatus = leadStatus.trim().toLowerCase();
 
-    // ── DNQ: fire Meta CAPI event when lead is marked as terminal-declined in Zoho ──
-    // Only if the originating contact came from a real Meta ad click.
-    // Match whichever picklist value actually lives in Zoho — /api/leads/disqualify
-    // tries "Dead Declined" first, "DNQ" next, etc. The webhook must accept all.
+    // ── DNQ: fire Meta CAPI event for ALL leads marked terminal-declined in Zoho ──
+    // No attribution gate here — purpose is negative pixel training, not conversion
+    // attribution. Meta uses email/phone to exclude these people from future ads.
     const dnqStatuses = new Set(["dnq", "dead declined", "declined", "dead", "take off list", "not interested"]);
     if (dnqStatuses.has(normalizedStatus)) {
       stage = "dnq_lookup";
-      // Look up contact in Supabase for enriched user data
+      // Look up contact in Supabase for enriched user data (fbc/fbp help matching but are optional)
       let contact: Record<string, unknown> | null = null;
       if (email) {
         try {
@@ -138,21 +136,21 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      if (!contact || !hasMetaAttributionServer({ fbc: contact.fbc as string | null | undefined })) {
-        console.log(`[Zoho Webhook] Skipped DNQ Meta event for ${leadName} — no Meta attribution on contact`);
-        return NextResponse.json({ success: true, skipped: "no_meta_attribution" });
+      // Need at least email or phone to send a useful event to Meta
+      const eventEmail = (contact?.email as string) || email;
+      const eventPhone = (contact?.phone || contact?.mobile_phone || phone) as string;
+      if (!eventEmail && !eventPhone) {
+        console.log(`[Zoho Webhook] Skipped DNQ Meta event for ${leadName} — no email or phone`);
+        return NextResponse.json({ success: true, skipped: "no_user_data" });
       }
 
       stage = "dnq_send_event";
-      const contactPhone = (contact?.phone || contact?.mobile_phone || phone) as string;
-      const contactEmail = (contact?.email as string) || email;
-
       await sendEvent({
         eventName: "DNQ",
         actionSource: "system_generated",
         userData: {
-          email: contactEmail || undefined,
-          phone: contactPhone || undefined,
+          email: eventEmail || undefined,
+          phone: eventPhone || undefined,
           firstName: (contact?.first_name as string) || firstName || undefined,
           lastName: (contact?.last_name as string) || lastName || undefined,
           externalId: (contact?.id as string) || undefined,

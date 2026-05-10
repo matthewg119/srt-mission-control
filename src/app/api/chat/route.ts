@@ -53,8 +53,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const systemPrompt = await buildSystemPrompt();
-    const { response, actions, toolResults } = await runConversationWithTools(messages, systemPrompt);
+    const systemMsg = messages.find((m: { role: string }) => m.role === "system");
+    const filteredMessages = messages.filter((m: { role: string }) => m.role !== "system");
+    const systemPrompt = systemMsg
+      ? (systemMsg as { content: string }).content
+      : await buildSystemPrompt();
+    const { response, actions, toolResults } = await runConversationWithTools(filteredMessages, systemPrompt);
 
     // Save conversation (best-effort — tables may not exist yet)
     if (conversationId) {
