@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { triggerSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
+import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
 
