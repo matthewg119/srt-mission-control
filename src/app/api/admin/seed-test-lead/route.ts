@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Seed a test lead end-to-end to verify Pre-Approved → channel creation flow.
 // Creates:
 //   1. contact row (business_name = "TEST Pizza Co")

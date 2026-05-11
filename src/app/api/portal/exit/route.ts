@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Portal exit beacon endpoint — called by navigator.sendBeacon() when a lead leaves the portal.
 // Sets first_sms_scheduled_at = now + 30s so the sms-delayed-sends cron picks it up.
 // No auth: the contact's email is the identifier (lookup-only, no sensitive write exposure).

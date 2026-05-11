@@ -214,6 +214,17 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      // Matthew typed in #personal-texts or #lead-texts thread → queue outbound reply
+      const personalTextsChannel = process.env.SLACK_PERSONAL_TEXTS_CHANNEL;
+      if (personalTextsChannel && channel === personalTextsChannel && parentThreadTs && parentThreadTs !== event.ts && userText.trim().length > 0) {
+        await handleMessageReply({
+          threadTs: parentThreadTs,
+          userId: event.user as string,
+          text: userText.trim(),
+        });
+        return NextResponse.json({ ok: true });
+      }
+
       // #content / #content-full: fork to the Viral Video Decoder. Accepts any
       // mix of images + text brief; one call per Slack message (not per file).
       if (isContentChannel || isContentFullChannel) {
@@ -865,7 +876,7 @@ async function handleContentDrop(args: {
     parentPackageId
       ? `✏️ Rebuilding with your feedback…`
       : args.fullVideo
-      ? `🎬 Got it — writing the decoder package first, then generating images and video with ElevenLabs on 👍.`
+      ? `🎬 Got it — decoding now, then auto-generating images with ElevenLabs. ~20–30s.`
       : `📝 Got it — writing the production package (caption, VO, 9 image/animation prompts, timeline, music). ~20s.`
   );
 
@@ -888,6 +899,7 @@ async function handleContentDrop(args: {
         })),
         parent_package_id: parentPackageId,
         regenerate_feedback: regenFeedback,
+        auto_render: args.fullVideo,
       }),
     });
     if (!res.ok) {
@@ -1727,6 +1739,41 @@ async function handleSmsCancelReaction(channelId: string, slackTs: string, userI
 
   await slack.postThreadReply(channelId, slackTs, `🚫 Auto-send cancelled`);
   return true;
+}
+
+// ── Message Reply (#personal-texts / #lead-texts) ────────────────────────────
+
+// Matthew replied in a message thread → look up the originating channel
+// (imessage or ringcentral) from the unified messages table and enqueue an outbound reply.
+async function handleMessageReply(args: {
+  threadTs: string;
+  userId: string;
+  text: string;
+}): Promise<void> {
+  const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
+  if (matthewId && args.userId !== matthewId) return;
+
+  // Find the originating inbound message by its Slack thread timestamp
+  const { data: originalMsg } = await supabaseAdmin
+    .from("messages")
+    .select("from_address, channel")
+    .eq("slack_ts", args.threadTs)
+    .eq("direction", "inbound")
+    .maybeSingle();
+
+  if (!originalMsg?.from_address) {
+    console.warn("[message-reply] no matching messages row for thread_ts", args.threadTs);
+    return;
+  }
+
+  // Enqueue in the unified outbound_queue; channel determines which transport fires
+  await supabaseAdmin.from("outbound_queue").insert({
+    channel: originalMsg.channel,
+    to_address: originalMsg.from_address as string,
+    body: args.text,
+    status: "pending",
+    slack_thread_ts: args.threadTs,
+  });
 }
 
 // ─── Code Guardian ───────────────────────────────────────────────────────────

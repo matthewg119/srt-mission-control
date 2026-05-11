@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Bulk-scan Matthew's inbox for lender ISO/onboarding emails.
 // Searches the last 18 months for emails with ISO/partner/onboarding keywords,
 // runs each through the lender-signup-detector, deduplicates by lender name,

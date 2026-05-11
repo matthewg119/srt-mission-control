@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Amount sweep — scans submissions@srtagency.com inbox for the last 90 days,
 // classifies every message, and proposes clearing MCA_Approved_Amount on any
 // Zoho Lead that has an amount on file but NO approval email from a lender in

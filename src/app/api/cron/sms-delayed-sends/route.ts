@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Cron: fire delayed first SMS messages (runs every 5 minutes).
 // Picks up sms_conversations where:
 //   first_sms_scheduled_at <= now()

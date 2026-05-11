@@ -235,20 +235,17 @@ export async function POST(request: NextRequest) {
     })();
   }
 
-  // Auto-render path: skip the 👍 gate and fire the video pipeline directly.
-  // Used by the daily-content-ideas cron posting into #content-full.
+  // Auto-render path: skip the 👍 + hook-selection gate and start generating
+  // images immediately. Used by #content-full manual drops and the daily cron.
   if (autoRender && packageId) {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-    void fetch(`${siteUrl}/api/agent/video-pipeline`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package_id: packageId, approved_by: "cron:daily-content-ideas" }),
-    }).catch((e) => console.error("[viral-decoder] auto-render kickoff failed:", (e as Error).message));
     await slack.postThreadReply(
       channel,
       threadTs,
-      `🤖 Auto-approved (daily cron) — firing video pipeline now.`
+      `🎬 Auto-approved — generating images now…`
     );
+    void import("@/lib/content-scene-runner").then(({ startSlideGenerationWithHook }) =>
+      startSlideGenerationWithHook(packageId!, pkg, null, channel, threadTs)
+    ).catch((e) => console.error("[viral-decoder] auto-render image gen failed:", (e as Error).message));
   }
 
   return NextResponse.json({ ok: true, package: pkg, package_id: packageId });

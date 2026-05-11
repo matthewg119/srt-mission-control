@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // One-time admin endpoint to create the two SMS provider test channels in Slack.
 // Hit POST /api/admin/create-demo-channels once. Safe to call again — Slack returns
 // name_taken if the channel already exists, and we handle it gracefully.

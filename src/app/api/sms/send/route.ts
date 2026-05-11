@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Outbound SMS sender — called by Slack approval handler and Zoho buttons.
 // POST body: { conversationId, body, approvedBy, templateName? }
 

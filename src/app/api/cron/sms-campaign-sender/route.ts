@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Cron: fire campaign SMS sends (runs every 5 minutes).
 // Picks up sms_campaign_contacts where:
 //   status = 'pending'

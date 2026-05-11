@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // SMS Import API — parse contacts from CSV or pull from Zoho CRM.
 // Returns a preview of contacts before they're committed to a campaign.
 //

@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { runGuardian } from "@/lib/ai-intel/guardian";
 import { supabaseAdmin } from "@/lib/db";

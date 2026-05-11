@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Chrome extension → draft SMS endpoint.
 // Creates a Slack channel for the lead and posts an AI draft for ✅ approval.
 // Does NOT send the SMS — approval via Slack reaction triggers sending.

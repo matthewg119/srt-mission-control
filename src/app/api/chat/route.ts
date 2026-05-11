@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { isAIConfigured, buildSystemPrompt, runConversationWithTools } from "@/lib/ai";
 import { supabaseAdmin } from "@/lib/db";

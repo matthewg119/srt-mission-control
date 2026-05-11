@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Archive per-deal Slack channels whose deal was created ≥90 days ago.
 // Triggered by Vercel cron daily. Safe to re-run — Slack returns
 // "already_archived" for already-archived channels and we clear

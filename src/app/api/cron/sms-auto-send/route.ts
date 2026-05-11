@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Cron: auto-send AI drafts after their timer expires (runs every minute).
 // Claims sms_pending_drafts WHERE auto_send_status='pending' AND auto_send_at <= now()
 // Uses optimistic locking: UPDATE to 'sending' first to prevent concurrent double-fire.

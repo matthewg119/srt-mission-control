@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
 import { EMAIL_SIGNATURE_HTML } from "@/config/email-signature";

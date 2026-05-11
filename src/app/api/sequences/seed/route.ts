@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { MATTHEW, SRT_COMPANY } from "@/config/rep-profile";

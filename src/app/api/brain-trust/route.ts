@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { isAIConfigured } from "@/lib/ai";
 import { executeTool, AI_TOOLS, type ToolExecutionResult } from "@/lib/ai-tools";

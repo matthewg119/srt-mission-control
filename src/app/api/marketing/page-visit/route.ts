@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 /**
  * Server-side visit beacon for srtagency.com landing pages.
  *

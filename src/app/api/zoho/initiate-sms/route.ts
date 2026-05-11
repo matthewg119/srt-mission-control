@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Zoho CRM → initiate SMS conversation endpoint.
 // Called by Zoho custom buttons (Deluge scripts) to start a text conversation
 // for any lead/contact in the CRM — not just /bfunding signups.

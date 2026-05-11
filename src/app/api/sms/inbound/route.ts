@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Inbound iMessage webhook — handles messages from LoopMessage.
 // LoopMessage POSTs to this URL when a message arrives on any of our sender numbers.
 // Configure in LoopMessage dashboard → Webhook URL:

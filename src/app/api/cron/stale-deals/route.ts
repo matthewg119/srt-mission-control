@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { processStaleDeals } from "@/lib/automation-engine";
 import { supabaseAdmin } from "@/lib/db";

@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Campaign CRUD API — create, list, pause/resume campaigns.
 // POST   /api/sms/campaign     — create a new campaign
 // GET    /api/sms/campaign     — list all campaigns with stats

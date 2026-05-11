@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // Graph change notification handler for Matthew's personal inbox.
 // Detects lender/funder ISO approval emails and posts a Slack card
 // asking if the lender should be added to the active lender list.

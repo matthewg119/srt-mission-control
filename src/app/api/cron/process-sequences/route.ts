@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { processScheduledEmails } from "@/lib/sequence-engine";
 import { supabaseAdmin } from "@/lib/db";
