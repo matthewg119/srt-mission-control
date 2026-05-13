@@ -3,28 +3,26 @@
  *
  * Sequences are stored in Supabase:
  *   email_sequences       → defines a sequence (trigger tag, cancel tag)
- *   email_sequence_steps   → ordered emails with delays
+ *   email_sequence_steps   → scheduling anchors (delay_minutes, step_number)
  *   sequence_enrollments   → per-contact progress tracking
  *
- * A cron job calls processScheduledEmails() every 5 minutes.
- * Emails sent via Microsoft Graph (Microsoft 365).
+ * processScheduledEmails() is called by the cron every 5 minutes.
+ * For each due enrollment it:
+ *   1. Re-checks Zoho status (stops if funded/declined/etc.)
+ *   2. AI-drafts the email via Claude (email-director.ts draftEmail())
+ *   3. Posts a Slack approval card (#vektor-email-director)
+ *   4. Marks the enrollment pending_action_id so it's not re-drafted
+ * After the card is approved, execute-action.ts calls advanceEnrollment().
  */
 
 import { supabaseAdmin } from "@/lib/db";
-import { microsoft } from "@/lib/microsoft";
-import { renderTemplate, type TemplateContext } from "@/lib/template-renderer";
-import { DEFAULT_REP, SRT_COMPANY } from "@/config/rep-profile";
+import { buildMerchantContext } from "@/lib/ai-intel/merchant-context";
+import { draftEmail } from "@/lib/ai-intel/email-director";
+import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
+import { VEKTOR_CHANNELS } from "@/config/vektor";
+import type { MarketingCampaignKey, PendingActionPayload } from "@/lib/ai-intel/types";
 
 // ── Types ──
-
-interface SequenceStep {
-  id: string;
-  sequence_id: string;
-  step_number: number;
-  delay_minutes: number;
-  subject: string;
-  body: string;
-}
 
 interface Enrollment {
   id: string;
@@ -36,6 +34,7 @@ interface Enrollment {
   next_send_at: string;
   status: string;
   enrolled_at: string;
+  pending_action_id: string | null;
   metadata: Record<string, unknown> | null;
 }
 
@@ -48,7 +47,48 @@ interface Sequence {
   is_active: boolean;
 }
 
-// ── Enrollment ──
+// ── Stop-list (Zoho statuses that halt all sequences) ──────────────────────
+
+const SEQUENCE_STOP_STATUSES = new Set([
+  "Not Interested", "DNQ", "Take Off List", "Dead Declined", "Declined",
+  "Junk Lead", "Lost", "Funded", "Closed - Not Converted", "Closed - Converted",
+  "Unresponsive", "Bad Lead", "Wrong Number", "Duplicate",
+]);
+
+function shouldStopForZohoStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  if (SEQUENCE_STOP_STATUSES.has(status)) return true;
+  const s = status.toLowerCase();
+  return ["funded", "declined", "dead", "dnq", "not interested", "junk", "lost", "converted"].some(
+    (k) => s.includes(k)
+  );
+}
+
+// ── Campaign key resolution ────────────────────────────────────────────────
+
+function resolveSequenceCampaignKey(slug: string, stepNumber: number): MarketingCampaignKey {
+  if (slug === "fu-new-inbound") {
+    if (stepNumber <= 1) return "new_lead_d1";
+    if (stepNumber === 2) return "new_lead_d2";
+    if (stepNumber === 3) return "new_lead_d3";
+    return "confirmation_daily";
+  }
+  if (slug === "awaiting-statements") return "awaiting_statements";
+  if (slug === "pre-approved-nurture" || slug === "approved-nurture") return "approved_nurture";
+  return "custom";
+}
+
+// Hours to wait after a send before the next step (indexed by step that was just sent).
+// step index 0 = gap after step 1 was sent, etc.
+const STEP_GAPS_HOURS: Record<string, number[]> = {
+  "fu-new-inbound":       [48, 96, 168, 168, 168, 168],  // D1→D3, D3→D7, D7→D14, D14→D21, D21→D28
+  "awaiting-statements":  [48, 96, 168],                  // D1→D3, D3→D7, D7→D14
+  "pre-approved-nurture": [72, 144],                      // D1→D4, D4→D10
+  "post-call-followup":   [48, 96],                       // D1→D3, D3→D7
+  "approved-nurture":     [720, 720, 720, 720],           // 30d each
+};
+
+// ── Enrollment ──────────────────────────────────────────────────────────────
 
 export async function enrollContact(
   sequenceSlug: string,
@@ -74,27 +114,21 @@ export async function enrollContact(
     return { enrolled: false, reason: "Sequence not found or inactive" };
   }
 
+  // Block if already active or pending
   const { data: existing } = await supabaseAdmin
     .from("sequence_enrollments")
     .select("id, status")
     .eq("sequence_id", sequence.id)
     .eq("contact_id", contactId)
-    .eq("status", "active")
+    .in("status", ["active"])
     .maybeSingle();
 
   if (existing) {
     return { enrolled: false, reason: "Already enrolled" };
   }
 
-  const { data: firstStep } = await supabaseAdmin
-    .from("email_sequence_steps")
-    .select("delay_minutes")
-    .eq("sequence_id", sequence.id)
-    .eq("step_number", 1)
-    .single();
-
-  const delayMs = (firstStep?.delay_minutes || 3) * 60 * 1000;
-  const nextSendAt = new Date(Date.now() + delayMs).toISOString();
+  // First email fires after a short delay (5 min) so the caller's Slack confirm shows first
+  const nextSendAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
   const { error: insertError } = await supabaseAdmin
     .from("sequence_enrollments")
@@ -107,6 +141,7 @@ export async function enrollContact(
       next_send_at: nextSendAt,
       status: "active",
       enrolled_at: new Date().toISOString(),
+      enrolled_by: (metadata?.enrolled_by as string | undefined) ?? "system",
       metadata: metadata || null,
     });
 
@@ -119,7 +154,7 @@ export async function enrollContact(
   return { enrolled: true };
 }
 
-// ── Cancellation ──
+// ── Cancellation ────────────────────────────────────────────────────────────
 
 export async function cancelByTag(
   contactId: string,
@@ -157,24 +192,85 @@ export async function cancelByTag(
   return count;
 }
 
-// ── Processing (called by cron) ──
+export async function stopAllForContact(
+  contactId: string,
+  reason: string,
+): Promise<number> {
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("sequence_enrollments")
+    .update({ status: "stopped", stopped_at: now, stop_reason: reason, pending_action_id: null })
+    .eq("contact_id", contactId)
+    .in("status", ["active"])
+    .select("id");
+
+  if (error) {
+    console.error("[Sequence] stopAllForContact failed:", error.message);
+    return 0;
+  }
+  return data?.length ?? 0;
+}
+
+// ── Enrollment advancement (called by execute-action after approved send) ───
+
+export async function advanceEnrollment(enrollmentId: string, sequenceSlug: string): Promise<void> {
+  const { data: enrollment } = await supabaseAdmin
+    .from("sequence_enrollments")
+    .select("id, current_step, sequence_id")
+    .eq("id", enrollmentId)
+    .maybeSingle();
+
+  if (!enrollment) return;
+
+  const nextStep = enrollment.current_step + 1;
+  const gaps = STEP_GAPS_HOURS[sequenceSlug] ?? [];
+  const gapHours = gaps[enrollment.current_step] ?? 0;
+
+  if (gapHours === 0) {
+    // No more steps defined → complete
+    await supabaseAdmin
+      .from("sequence_enrollments")
+      .update({ status: "completed", current_step: nextStep, pending_action_id: null })
+      .eq("id", enrollmentId);
+    return;
+  }
+
+  const nextSendAt = new Date(Date.now() + gapHours * 3_600_000).toISOString();
+  await supabaseAdmin
+    .from("sequence_enrollments")
+    .update({ current_step: nextStep, next_send_at: nextSendAt, pending_action_id: null })
+    .eq("id", enrollmentId);
+}
+
+/** Reset a pending draft (user clicked 🚫) so the sequence retries in 3 days. */
+export async function resetEnrollmentAfterCancel(enrollmentId: string): Promise<void> {
+  const retryAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  await supabaseAdmin
+    .from("sequence_enrollments")
+    .update({ pending_action_id: null, next_send_at: retryAt })
+    .eq("id", enrollmentId);
+}
+
+// ── Processing (called by cron every 5 minutes) ────────────────────────────
 
 export async function processScheduledEmails(): Promise<{
   processed: number;
-  sent: number;
+  drafted: number;
+  stopped: number;
   errors: number;
-  cancelled: number;
 }> {
   const now = new Date().toISOString();
-  const stats = { processed: 0, sent: 0, errors: 0, cancelled: 0 };
+  const stats = { processed: 0, drafted: 0, stopped: 0, errors: 0 };
 
+  // Only pull enrollments with no pending draft already waiting
   const { data: dueEnrollments, error: fetchError } = await supabaseAdmin
     .from("sequence_enrollments")
     .select("*")
     .eq("status", "active")
     .lte("next_send_at", now)
+    .is("pending_action_id", null)
     .order("next_send_at", { ascending: true })
-    .limit(50);
+    .limit(20);
 
   if (fetchError || !dueEnrollments || dueEnrollments.length === 0) {
     return stats;
@@ -183,148 +279,122 @@ export async function processScheduledEmails(): Promise<{
   for (const enrollment of dueEnrollments as Enrollment[]) {
     stats.processed++;
 
-    const { data: sequence } = await supabaseAdmin
-      .from("email_sequences")
-      .select("*")
-      .eq("id", enrollment.sequence_id)
-      .single();
-
-    if (!sequence || !sequence.is_active) {
-      await supabaseAdmin
-        .from("sequence_enrollments")
-        .update({ status: "cancelled", cancelled_at: now })
-        .eq("id", enrollment.id);
-      stats.cancelled++;
-      continue;
-    }
-
-    const seq = sequence as Sequence;
-
-    // Check if contact has the cancel tag (query contacts table directly)
-    if (seq.cancel_tag) {
-      try {
-        const { data: contact } = await supabaseAdmin
-          .from("contacts")
-          .select("tags")
-          .eq("id", enrollment.contact_id)
-          .single();
-        if (contact?.tags && (contact.tags as string[]).includes(seq.cancel_tag)) {
-          await supabaseAdmin
-            .from("sequence_enrollments")
-            .update({ status: "cancelled", cancelled_at: now })
-            .eq("id", enrollment.id);
-          stats.cancelled++;
-          console.log(`[Sequence] Cancelled for ${enrollment.contact_name} — has tag "${seq.cancel_tag}"`);
-          continue;
-        }
-      } catch {
-        // Can't check tags — proceed with sending
-      }
-    }
-
-    // Get the next step
-    const nextStepNumber = enrollment.current_step + 1;
-    const { data: step } = await supabaseAdmin
-      .from("email_sequence_steps")
-      .select("*")
-      .eq("sequence_id", enrollment.sequence_id)
-      .eq("step_number", nextStepNumber)
-      .single();
-
-    if (!step) {
-      await supabaseAdmin
-        .from("sequence_enrollments")
-        .update({ status: "completed" })
-        .eq("id", enrollment.id);
-      continue;
-    }
-
-    const emailStep = step as SequenceStep;
-
-    // Build template context
-    const context: TemplateContext = {
-      contact_name: enrollment.contact_name,
-      first_name: enrollment.contact_name?.split(" ")[0] || "",
-      business_name: (enrollment.metadata?.businessName as string) || "",
-      funding_amount: (enrollment.metadata?.amountNeeded as string) || "",
-      approved_amount: "",
-      approved_lender: "",
-      agent_name: DEFAULT_REP.name,
-      agent_phone: DEFAULT_REP.phone,
-      agent_email: DEFAULT_REP.email,
-      company_name: SRT_COMPANY.name,
-      stage_name: "",
-      pipeline_name: "",
-    };
-
-    const renderedSubject = renderTemplate(emailStep.subject, context);
-    const renderedBody = renderTemplate(emailStep.body, context);
-
-    // Send via Microsoft Graph
     try {
-      await microsoft.sendMail({
-        to: enrollment.contact_email,
-        subject: renderedSubject,
-        body: renderedBody,
-        isHtml: true,
+      const { data: sequence } = await supabaseAdmin
+        .from("email_sequences")
+        .select("id, slug, name, is_active, cancel_tag")
+        .eq("id", enrollment.sequence_id)
+        .single();
+
+      if (!sequence || !(sequence as Sequence).is_active) {
+        await supabaseAdmin
+          .from("sequence_enrollments")
+          .update({ status: "cancelled", cancelled_at: now })
+          .eq("id", enrollment.id);
+        continue;
+      }
+
+      const seq = sequence as Sequence;
+
+      // ── 1. Build merchant context + re-check Zoho status ──────────────
+      const ctx = await buildMerchantContext({ contactId: enrollment.contact_id });
+      if (!ctx) {
+        console.warn(`[Sequence] No context for contact ${enrollment.contact_id} — skipping`);
+        stats.errors++;
+        continue;
+      }
+
+      const zohoStatus = ctx.zoho?.lead_status ?? null;
+      if (ctx.contact.do_not_contact || shouldStopForZohoStatus(zohoStatus)) {
+        await supabaseAdmin
+          .from("sequence_enrollments")
+          .update({
+            status: "stopped",
+            stopped_at: now,
+            stop_reason: ctx.contact.do_not_contact ? "do_not_contact" : `Zoho status: ${zohoStatus}`,
+            pending_action_id: null,
+          })
+          .eq("id", enrollment.id);
+        stats.stopped++;
+        continue;
+      }
+
+      if (!ctx.contact.email) {
+        console.warn(`[Sequence] Contact ${enrollment.contact_id} has no email — skipping`);
+        stats.errors++;
+        continue;
+      }
+
+      // ── 2. Map sequence slug → campaign key ───────────────────────────
+      const nextStepNumber = enrollment.current_step + 1;
+      const campaignKey = resolveSequenceCampaignKey(seq.slug, nextStepNumber);
+
+      // ── 3. AI-draft the email ─────────────────────────────────────────
+      const draft = await draftEmail(ctx, campaignKey, nextStepNumber);
+      if (!draft) {
+        console.error(`[Sequence] Draft failed for ${enrollment.contact_id} in ${seq.slug}`);
+        stats.errors++;
+        continue;
+      }
+
+      // ── 4. Build approval payload ─────────────────────────────────────
+      const payload: PendingActionPayload = {
+        action_type: "send_marketing_email",
+        to: ctx.contact.email,
+        subject: draft.subject,
+        body: draft.body,
+        is_html: true,
+        contact_id: ctx.contact.id,
+        zoho_id: ctx.contact.zoho_lead_id ?? undefined,
+        campaign_key: campaignKey,
+        cadence_day: nextStepNumber,
+        sequence_position: nextStepNumber,
+        magic_link_redirect: draft.redirectPath,
+        enrollment_id: enrollment.id,
+      };
+
+      const who = ctx.contact.business_name ?? ctx.contact.first_name ?? "Merchant";
+      const summary = [
+        `*${who}* — Sequence: ${seq.name} (step ${nextStepNumber})`,
+        ``,
+        `*To:* ${ctx.contact.email}`,
+        `*Subject:* ${draft.subject}`,
+        `*Zoho status:* ${zohoStatus ?? "—"}`,
+        ``,
+        "```",
+        draft.body.replace(/<[^>]+>/g, "").slice(0, 900),
+        "```",
+        `_Angle:_ ${draft.hook}`,
+      ].join("\n");
+
+      // ── 5. Post Slack approval card ───────────────────────────────────
+      const channel = VEKTOR_CHANNELS.emailDirector || VEKTOR_CHANNELS.main;
+      const result = await postApprovalRequest({
+        summary,
+        payload,
+        merchantId: ctx.contact.id,
+        zohoId: ctx.contact.zoho_lead_id ?? undefined,
+        category: "marketing_email",
+        channel,
       });
-      stats.sent++;
-      console.log(`[Sequence] Sent step ${nextStepNumber} to ${enrollment.contact_name} (${seq.name})`);
-    } catch (err) {
+
+      if (!result.pendingActionId) {
+        console.error(`[Sequence] Slack approval post failed for ${enrollment.contact_id}`);
+        stats.errors++;
+        continue;
+      }
+
+      // ── 6. Mark enrollment as pending (won't re-draft until cleared) ──
+      await supabaseAdmin
+        .from("sequence_enrollments")
+        .update({ pending_action_id: result.pendingActionId })
+        .eq("id", enrollment.id);
+
+      stats.drafted++;
+    } catch (e) {
+      console.error(`[Sequence] Unhandled error for enrollment ${enrollment.id}:`, (e as Error).message);
       stats.errors++;
-      console.error(`[Sequence] Failed to send to ${enrollment.contact_name}:`, err instanceof Error ? err.message : err);
-
-      await supabaseAdmin.from("system_logs").insert({
-        event_type: "sequence_error",
-        description: `Failed to send step ${nextStepNumber} of "${seq.name}" to ${enrollment.contact_name}`,
-        metadata: { enrollmentId: enrollment.id, step: nextStepNumber, error: err instanceof Error ? err.message : String(err) },
-      });
-      continue;
     }
-
-    // Advance to next step
-    const { data: nextNextStep } = await supabaseAdmin
-      .from("email_sequence_steps")
-      .select("delay_minutes")
-      .eq("sequence_id", enrollment.sequence_id)
-      .eq("step_number", nextStepNumber + 1)
-      .maybeSingle();
-
-    if (nextNextStep) {
-      const nextSendAt = new Date(
-        Date.now() + (nextNextStep.delay_minutes - emailStep.delay_minutes) * 60 * 1000
-      ).toISOString();
-
-      await supabaseAdmin
-        .from("sequence_enrollments")
-        .update({
-          current_step: nextStepNumber,
-          next_send_at: nextSendAt,
-        })
-        .eq("id", enrollment.id);
-    } else {
-      await supabaseAdmin
-        .from("sequence_enrollments")
-        .update({
-          current_step: nextStepNumber,
-          status: "completed",
-        })
-        .eq("id", enrollment.id);
-    }
-
-    // Log the send
-    await supabaseAdmin.from("automation_logs").insert({
-      contact_id: enrollment.contact_id,
-      action_type: "send_email",
-      template_slug: `${seq.slug}-step-${nextStepNumber}`,
-      status: "success",
-      metadata: {
-        sequence: seq.name,
-        step: nextStepNumber,
-        subject: renderedSubject,
-        rendered_body: renderedBody.slice(0, 500),
-      },
-    });
   }
 
   return stats;

@@ -102,7 +102,7 @@ export async function draftForContact(contactId: string): Promise<DraftResult> {
   }
 }
 
-interface DraftedEmail {
+export interface DraftedEmail {
   subject: string;
   body: string;          // HTML-ready, with `{magic_link}` placeholder unresolved
   hook: string;          // 1-line "why this angle" for Matt
@@ -129,7 +129,7 @@ Return JSON: { subject, body, hook, redirectPath }.
     - "/portal/apply" for partial applications
     - "/portal/dashboard" default`;
 
-async function draftEmail(
+export async function draftEmail(
   ctx: MerchantContext,
   campaignKey: MarketingCampaignKey,
   cadenceDay: number

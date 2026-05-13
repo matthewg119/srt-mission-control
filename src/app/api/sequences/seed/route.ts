@@ -288,4 +288,90 @@ ${SIGNATURE_MATTHEW}`,
       },
     ],
   },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEQUENCE 5: FU — New Inbound Lead (6 emails, 30 days)
+  // AI-drafted at send time — step bodies are fallback placeholders only.
+  // Trigger: manual enrollment | Slug used by sequence-engine.ts
+  // ═══════════════════════════════════════════════════════════
+  {
+    name: "FU — New Inbound Lead",
+    slug: "fu-new-inbound",
+    trigger_tag: null,
+    cancel_tag: null,
+    steps: [
+      { delay_minutes: 1 * DAYS, subject: "Following up on your inquiry", body: `<p>Hi {{first_name}},</p><p>Just following up on your inquiry. Let me know if you have any questions.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 3 * DAYS, subject: "Still here when you're ready", body: `<p>Hi {{first_name}},</p><p>Checking in — still here if you want to talk funding options.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 7 * DAYS, subject: "Quick question", body: `<p>Hi {{first_name}},</p><p>Quick question — what's the biggest thing holding you back right now?</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 14 * DAYS, subject: "Funding options update", body: `<p>Hi {{first_name}},</p><p>Programs have changed — wanted to make sure you have the latest info.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 21 * DAYS, subject: "Still thinking it over?", body: `<p>Hi {{first_name}},</p><p>No pressure, but wanted to check in one more time.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 30 * DAYS, subject: "Last check-in", body: `<p>Hi {{first_name}},</p><p>Last note from me — if things change and you need capital, I'm here.</p>${SIGNATURE_MATTHEW}` },
+    ],
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEQUENCE 6: Awaiting Bank Statements (4 emails, 14 days)
+  // AI-drafted at send time — step bodies are fallback placeholders only.
+  // ═══════════════════════════════════════════════════════════
+  {
+    name: "Awaiting Bank Statements",
+    slug: "awaiting-statements",
+    trigger_tag: null,
+    cancel_tag: null,
+    steps: [
+      { delay_minutes: 1 * DAYS, subject: "One thing needed to move forward", body: `<p>Hi {{first_name}},</p><p>We just need your last 3 months of bank statements to move forward.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 3 * DAYS, subject: "Still waiting on statements", body: `<p>Hi {{first_name}},</p><p>Just a reminder — your application is on hold pending bank statements.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 7 * DAYS, subject: "Getting your statements is easy", body: `<p>Hi {{first_name}},</p><p>Log into your bank → Statements → Download last 3 months → reply with attachments.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 14 * DAYS, subject: "Final request for statements", body: `<p>Hi {{first_name}},</p><p>This is my final follow-up on statements. Let me know if you need help.</p>${SIGNATURE_MATTHEW}` },
+    ],
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEQUENCE 7: Pre-Approved Nurture (3 emails, 10 days)
+  // AI-drafted at send time — step bodies are fallback placeholders only.
+  // ═══════════════════════════════════════════════════════════
+  {
+    name: "Pre-Approved Nurture",
+    slug: "pre-approved-nurture",
+    trigger_tag: null,
+    cancel_tag: null,
+    steps: [
+      { delay_minutes: 1 * DAYS, subject: "You're pre-approved — here's what's next", body: `<p>Hi {{first_name}},</p><p>Great news — you're pre-approved. Here's what we need to finalize your offer.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 4 * DAYS, subject: "Your pre-approval is waiting", body: `<p>Hi {{first_name}},</p><p>Your pre-approval is still active. Let's get this across the finish line.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 10 * DAYS, subject: "Pre-approval expires soon", body: `<p>Hi {{first_name}},</p><p>Pre-approvals don't last forever — let me know if you want to lock in your offer.</p>${SIGNATURE_MATTHEW}` },
+    ],
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEQUENCE 8: Post-Call Follow-Up (3 emails, 7 days)
+  // AI-drafted at send time — step bodies are fallback placeholders only.
+  // ═══════════════════════════════════════════════════════════
+  {
+    name: "Post-Call Follow-Up",
+    slug: "post-call-followup",
+    trigger_tag: null,
+    cancel_tag: null,
+    steps: [
+      { delay_minutes: 1 * DAYS, subject: "Great talking with you", body: `<p>Hi {{first_name}},</p><p>Great connecting today. Here's a summary of what we discussed and next steps.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 3 * DAYS, subject: "Following up from our call", body: `<p>Hi {{first_name}},</p><p>Checking in after our call — any questions as you think it over?</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 7 * DAYS, subject: "Still a fit?", body: `<p>Hi {{first_name}},</p><p>Just wanted to circle back after our conversation. Still a good time to move forward?</p>${SIGNATURE_MATTHEW}` },
+    ],
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEQUENCE 9: Approved — Renewal Nurture (ongoing, +30 days each)
+  // AI-drafted at send time — step bodies are fallback placeholders only.
+  // ═══════════════════════════════════════════════════════════
+  {
+    name: "Approved — Renewal Nurture",
+    slug: "approved-nurture",
+    trigger_tag: null,
+    cancel_tag: null,
+    steps: [
+      { delay_minutes: 30 * DAYS, subject: "Renewal check-in", body: `<p>Hi {{first_name}},</p><p>Checking in — how's business going? When you're ready for a renewal or top-up, I'm here.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 30 * DAYS, subject: "How's the capital working for you?", body: `<p>Hi {{first_name}},</p><p>Just checking in on how things are going since your last funding.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 30 * DAYS, subject: "Renewal options available", body: `<p>Hi {{first_name}},</p><p>New programs are available — wanted to make sure you have the latest options.</p>${SIGNATURE_MATTHEW}` },
+      { delay_minutes: 30 * DAYS, subject: "Quarterly check-in", body: `<p>Hi {{first_name}},</p><p>Quarterly check-in — anything I can help with on the business financing side?</p>${SIGNATURE_MATTHEW}` },
+    ],
+  },
 ];

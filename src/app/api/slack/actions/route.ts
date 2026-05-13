@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
-import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
+import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel } from "@/lib/ai-intel/execute-action";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 
@@ -141,7 +141,7 @@ async function approveAction(args: { slackTs: string; channel: string; userId: s
 }
 
 async function cancelAction(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
-  const { error } = await resolvePendingAction({
+  const { action, error } = await resolvePendingAction({
     slackTs: args.slackTs,
     status: "cancelled",
     approvedBy: args.userId,
@@ -150,6 +150,11 @@ async function cancelAction(args: { slackTs: string; channel: string; userId: st
   if (error) {
     await slack.postThreadReply(args.channel, args.slackTs, `⚠️ Could not cancel: ${error}`);
     return NextResponse.json({ ok: true });
+  }
+
+  // If this was a sequence email draft, reset the enrollment so it retries in 3 days
+  if (action?.action_type === "send_marketing_email" && action.payload.enrollment_id) {
+    await handleMarketingEmailCancel(action.payload);
   }
 
   await slack.postThreadReply(args.channel, args.slackTs, `🚫 Cancelled by <@${args.userId}>. AI will not act on this.`);

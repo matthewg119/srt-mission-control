@@ -98,5 +98,7 @@ export interface PendingActionPayload {
   cadence_day?: number;
   sequence_position?: number;
   magic_link_redirect?: string;
+  // links back to sequence_enrollments so the runner can advance the step after send
+  enrollment_id?: string;
   [key: string]: unknown;
 }

@@ -40,6 +40,61 @@ export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostA
 
   const headerText = `:shark: VeKtor recommends: *${actionId.replace(/_/g, " ")}*${tag}`;
 
+  // For marketing emails we pre-insert to get the UUID for the preview link
+  const isMarketingEmail = opts.payload.action_type === "send_marketing_email";
+  let preInsertedId: string | null = null;
+  if (isMarketingEmail) {
+    const { data: pre } = await supabaseAdmin
+      .from("pending_slack_actions")
+      .insert({
+        slack_ts: "pending",
+        slack_channel: channel,
+        action_type: opts.payload.action_type,
+        payload: opts.payload,
+        status: "pending",
+        merchant_id: opts.merchantId ?? null,
+        zoho_id: opts.zohoId ?? null,
+        ai_decision_id: opts.aiDecisionId ?? null,
+      })
+      .select("id")
+      .single();
+    preInsertedId = pre?.id ?? null;
+  }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+  const previewUrl = preInsertedId ? `${appUrl}/api/email-preview/${preInsertedId}` : null;
+
+  const actionElements: unknown[] = [
+    {
+      type: "button",
+      text: { type: "plain_text", text: ":thumbsup: Approve" },
+      style: "primary",
+      action_id: "ai_approve",
+      value: "pending",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: ":pencil2: Edit" },
+      action_id: "ai_edit",
+      value: "pending",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: ":no_entry: Cancel" },
+      style: "danger",
+      action_id: "ai_cancel",
+      value: "pending",
+    },
+  ];
+
+  if (previewUrl) {
+    actionElements.push({
+      type: "button",
+      text: { type: "plain_text", text: "👁 Preview" },
+      url: previewUrl,
+    });
+  }
+
   const defaultBlocks = [
     {
       type: "section",
@@ -47,28 +102,7 @@ export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostA
     },
     {
       type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: ":thumbsup: Approve" },
-          style: "primary",
-          action_id: "ai_approve",
-          value: "pending",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: ":pencil2: Edit" },
-          action_id: "ai_edit",
-          value: "pending",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: ":no_entry: Cancel" },
-          style: "danger",
-          action_id: "ai_cancel",
-          value: "pending",
-        },
-      ],
+      elements: actionElements,
     },
     {
       type: "context",
@@ -98,6 +132,16 @@ export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostA
   const slackTs = resp.ts;
   const slackChannel = resp.channel || channel;
 
+  // If we pre-inserted, update the row with the real slack_ts
+  if (preInsertedId) {
+    await supabaseAdmin
+      .from("pending_slack_actions")
+      .update({ slack_ts: slackTs, slack_channel: slackChannel })
+      .eq("id", preInsertedId);
+    return { pendingActionId: preInsertedId, slackTs, channel: slackChannel };
+  }
+
+  // Normal (non-marketing) insert after posting
   const { data, error } = await supabaseAdmin
     .from("pending_slack_actions")
     .insert({

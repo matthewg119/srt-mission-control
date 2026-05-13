@@ -5,6 +5,7 @@ import { addNoteToLead, updateLead } from "@/lib/zoho";
 import type { PendingActionPayload } from "./types";
 import { DEFAULTS } from "@/config/defaults";
 import { EMAIL_SIGNATURE_HTML } from "@/config/email-signature";
+import { advanceEnrollment, resetEnrollmentAfterCancel } from "@/lib/sequence-engine";
 
 async function buildHtmlBody(body: string, isHtml: boolean): Promise<string> {
   if (isHtml) return body;
@@ -231,7 +232,27 @@ async function sendMarketingEmail(
     });
   }
 
+  // Advance the sequence enrollment step if this email came from the sequence runner
+  if (payload.enrollment_id) {
+    const slugFromCampaign = campaignKey.startsWith("new_lead") ? "fu-new-inbound" : campaignKey;
+    await advanceEnrollment(payload.enrollment_id, slugFromCampaign).catch((e) =>
+      console.error("[execute-action] advanceEnrollment failed:", (e as Error).message)
+    );
+  }
+
   return { ok: true, details: { to: payload.to, subject: payload.subject, campaign: campaignKey } };
+}
+
+/**
+ * Called by the Slack 🚫 cancel handler when a marketing email draft is rejected.
+ * Clears pending_action_id and pushes next_send_at out 3 days so the sequence retries.
+ */
+export async function handleMarketingEmailCancel(payload: PendingActionPayload): Promise<void> {
+  if (payload.enrollment_id) {
+    await resetEnrollmentAfterCancel(payload.enrollment_id).catch((e) =>
+      console.error("[execute-action] resetEnrollmentAfterCancel failed:", (e as Error).message)
+    );
+  }
 }
 
 function inferTrackFromCampaign(campaignKey: string): CadenceTrack {

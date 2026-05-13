@@ -11,7 +11,7 @@ export async function GET() {
     // Log the run
     await supabaseAdmin.from("system_logs").insert({
       event_type: "cron_sequences",
-      description: `Sequence processor: ${result.sent} sent, ${result.cancelled} cancelled, ${result.errors} errors (${result.processed} processed)`,
+      description: `Sequence processor: ${result.drafted} drafted, ${result.stopped} stopped, ${result.errors} errors (${result.processed} processed)`,
       metadata: result,
     });
 
@@ -19,7 +19,7 @@ export async function GET() {
     if (result.errors > 0) {
       await systemAlert(
         "Sequence Errors",
-        `${result.errors} error(s) occurred during sequence processing (${result.sent} sent, ${result.processed} processed)`,
+        `${result.errors} error(s) occurred during sequence processing (${result.drafted} drafted, ${result.processed} processed)`,
         "cron/process-sequences",
         "warning"
       );

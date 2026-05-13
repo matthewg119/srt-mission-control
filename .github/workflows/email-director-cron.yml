@@ -6,13 +6,11 @@ name: Email Director Cron
 # Vercel keeps a once/day baseline as a safety net (see vercel.json).
 
 on:
-  schedule:
-    # 9am / 12pm / 3pm Eastern on weekdays.
-    # In EDT (summer): 13/16/19 UTC. In EST (winter): runs at 8am/11am/2pm Eastern.
-    # Adjust if winter timing matters — but these are business-hours windows either way.
-    - cron: "0 13 * * 1-5"
-    - cron: "0 16 * * 1-5"
-    - cron: "0 19 * * 1-5"
+  # schedule disabled — replaced by enrollment-based sequence runner (sequence-segmenter-cron.yml)
+  # Uncomment to re-enable auto-blast (not recommended):
+  #   - cron: "0 13 * * 1-5"
+  #   - cron: "0 16 * * 1-5"
+  #   - cron: "0 19 * * 1-5"
   workflow_dispatch:  # lets Matt trigger manually from the Actions tab
 
 jobs:
