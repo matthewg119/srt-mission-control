@@ -57,6 +57,11 @@ export async function enrollContact(
   contactName: string,
   metadata?: Record<string, unknown>,
 ): Promise<{ enrolled: boolean; reason?: string }> {
+  if (!contactEmail || !contactEmail.includes("@")) {
+    console.warn(`[Sequence] Skipping enrollment for ${contactName} — invalid email: "${contactEmail}"`);
+    return { enrolled: false, reason: "Invalid email address" };
+  }
+
   const { data: sequence, error: seqError } = await supabaseAdmin
     .from("email_sequences")
     .select("*")

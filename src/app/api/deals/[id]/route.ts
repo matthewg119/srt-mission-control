@@ -170,7 +170,7 @@ export async function PATCH(
             .eq("id", contactId)
             .maybeSingle();
 
-          if (contact && hasMetaAttributionServer({ fbc: contact.fbc })) {
+          if (contact) {
             const baseUserData = {
               email: contact.email || undefined,
               phone: contact.phone || contact.mobile_phone || undefined,
@@ -180,16 +180,11 @@ export async function PATCH(
               fbc: contact.fbc || undefined,
               fbp: contact.fbp || undefined,
             };
+            const hasAttribution = hasMetaAttributionServer({ fbc: contact.fbc });
 
-            if (fireWorking) {
-              await sendEvent({
-                eventName: "Lead",
-                actionSource: "system_generated",
-                userData: baseUserData,
-                customData: { content_name: "Application Out" },
-              });
-              console.log(`[Meta CAPI] Lead (Working) event fired for deal ${id}`);
-            } else if (fireDnq) {
+            // DNQ fires for ALL leads (no attribution gate) — negative audience training.
+            // Working + Converted require real Meta attribution to avoid polluting ad events.
+            if (fireDnq) {
               await sendEvent({
                 eventName: "DNQ",
                 actionSource: "system_generated",
@@ -197,7 +192,15 @@ export async function PATCH(
                 customData: { content_name: "Did Not Qualify", source: "deal_stage_change" },
               });
               console.log(`[Meta CAPI] DNQ event fired for deal ${id}`);
-            } else if (fireConverted) {
+            } else if (fireWorking && hasAttribution) {
+              await sendEvent({
+                eventName: "Lead",
+                actionSource: "system_generated",
+                userData: baseUserData,
+                customData: { content_name: "Application Out" },
+              });
+              console.log(`[Meta CAPI] Lead (Working) event fired for deal ${id}`);
+            } else if (fireConverted && hasAttribution) {
               const dealAmount = (data as { agreement_amount?: number; amount?: number }).agreement_amount
                 || (data as { agreement_amount?: number; amount?: number }).amount;
               await sendEvent({
@@ -207,10 +210,10 @@ export async function PATCH(
                 customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
               });
               console.log(`[Meta CAPI] Purchase (Converted) event fired for deal ${id}, amount: ${dealAmount}`);
+            } else if (!hasAttribution) {
+              const label = fireWorking ? "Lead/Working" : "Purchase/Converted";
+              console.log(`[Meta CAPI] Skipped ${label} for deal ${id} — contact has no Meta attribution`);
             }
-          } else if (contact) {
-            const label = fireWorking ? "Lead/Working" : fireDnq ? "DNQ" : "Purchase/Converted";
-            console.log(`[Meta CAPI] Skipped ${label} for deal ${id} — contact has no Meta attribution`);
           }
         }
       }
