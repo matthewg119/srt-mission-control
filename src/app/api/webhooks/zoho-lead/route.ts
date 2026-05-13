@@ -2,8 +2,6 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { triggerSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
-import { hasMetaAttributionServer } from "@/lib/metaAttribution";
-import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
 
 // Allow up to 60s for RingOut polling on Vercel
@@ -105,118 +103,31 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
 
-    // Normalize once for case-insensitive set lookups (Zoho picklist values
-    // vary in casing across environments, e.g. "Not interested" vs "Not Interested").
     const normalizedStatus = leadStatus.trim().toLowerCase();
 
-    // ── DNQ: fire Meta CAPI event for ALL leads marked terminal-declined in Zoho ──
-    // No attribution gate here — purpose is negative pixel training, not conversion
-    // attribution. Meta uses email/phone to exclude these people from future ads.
+    // ── DNQ: direct Zoho → Meta CAPI, no database lookup ──
+    // Fires for all terminal-declined statuses. No attribution gate — purpose is
+    // negative audience training (Meta excludes these people from future ad targeting).
     const dnqStatuses = new Set(["dnq", "dead declined", "declined", "dead", "take off list", "not interested"]);
     if (dnqStatuses.has(normalizedStatus)) {
-      stage = "dnq_lookup";
-      // Look up contact in Supabase for enriched user data (fbc/fbp help matching but are optional)
-      let contact: Record<string, unknown> | null = null;
-      if (email) {
-        try {
-          const { data, error: dbError } = await supabaseAdmin
-            .from("contacts")
-            .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
-            .ilike("email", email)
-            .limit(1)
-            .maybeSingle();
-          if (dbError) {
-            console.error("[Zoho Webhook] Supabase contact lookup error:", dbError);
-          }
-          contact = data;
-        } catch (dbThrown) {
-          console.error(
-            "[Zoho Webhook] Supabase contact lookup threw:",
-            dbThrown instanceof Error ? dbThrown.stack || dbThrown.message : dbThrown
-          );
-          return NextResponse.json({ success: false, skipped: "db_error" });
-        }
-      }
-
-      // Need at least email or phone to send a useful event to Meta
-      const eventEmail = (contact?.email as string) || email;
-      const eventPhone = (contact?.phone || contact?.mobile_phone || phone) as string;
-      if (!eventEmail && !eventPhone) {
-        console.log(`[Zoho Webhook] Skipped DNQ Meta event for ${leadName} — no email or phone`);
+      stage = "dnq_send_event";
+      if (!email && !phone) {
+        console.log(`[Zoho Webhook] Skipped DNQ — no email or phone for ${leadName}`);
         return NextResponse.json({ success: true, skipped: "no_user_data" });
       }
-
-      stage = "dnq_send_event";
       await sendEvent({
         eventName: "DNQ",
         actionSource: "system_generated",
         userData: {
-          email: eventEmail || undefined,
-          phone: eventPhone || undefined,
-          firstName: (contact?.first_name as string) || firstName || undefined,
-          lastName: (contact?.last_name as string) || lastName || undefined,
-          externalId: (contact?.id as string) || undefined,
-          fbc: (contact?.fbc as string) || undefined,
-          fbp: (contact?.fbp as string) || undefined,
+          email: email || undefined,
+          phone: phone || undefined,
+          firstName: firstName || undefined,
+          lastName: lastName || undefined,
         },
         customData: { content_name: "Did Not Qualify" },
       });
-      console.log(`[Zoho Webhook] DNQ Meta event fired for ${leadName}`);
+      console.log(`[Zoho Webhook] DNQ Meta event fired for ${leadName} (${email || phone})`);
       return NextResponse.json({ success: true, event: "DNQ" });
-    }
-
-    // ── Interested: fire Meta CAPI Lead event for Working / Hot Lead / Converted ──
-    // These fire when a cold-call lead picks up or shows intent, or when a lead
-    // is manually converted to a deal in Zoho (not via the online application).
-    const interestedStatuses = new Set([
-      "working",
-      "working - contacted",
-      "working - application out",
-      "hot lead",
-      "converted",
-    ]);
-    if (interestedStatuses.has(normalizedStatus)) {
-      stage = "interested_lookup";
-      let intContact: Record<string, unknown> | null = null;
-      if (email) {
-        try {
-          const { data, error: dbError } = await supabaseAdmin
-            .from("contacts")
-            .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
-            .ilike("email", email)
-            .limit(1)
-            .maybeSingle();
-          if (dbError) console.error("[Zoho Webhook] Supabase lookup error (interested):", dbError);
-          intContact = data;
-        } catch (dbThrown) {
-          console.error("[Zoho Webhook] Supabase lookup threw (interested):",
-            dbThrown instanceof Error ? dbThrown.message : dbThrown);
-          return NextResponse.json({ success: true, skipped: "db_error_interested" });
-        }
-      }
-
-      if (!intContact || !hasMetaAttributionServer({ fbc: intContact.fbc as string | null | undefined })) {
-        console.log(`[Zoho Webhook] Skipped interested Meta event for ${leadName} — no Meta attribution`);
-        return NextResponse.json({ success: true, skipped: "no_meta_attribution" });
-      }
-
-      stage = "interested_send_event";
-      await sendEvent({
-        eventName: "Lead",
-        actionSource: "system_generated",
-        userData: {
-          email: (intContact.email as string) || email || undefined,
-          phone: (intContact.phone as string) || (intContact.mobile_phone as string) || phone || undefined,
-          firstName: (intContact.first_name as string) || firstName || undefined,
-          lastName: (intContact.last_name as string) || lastName || undefined,
-          externalId: (intContact.id as string) || undefined,
-          fbc: (intContact.fbc as string) || undefined,
-          fbp: (intContact.fbp as string) || undefined,
-        },
-        customData: { content_name: leadStatus },
-      });
-      console.log(`[Zoho Webhook] Lead Meta event fired for ${leadName} (status: ${leadStatus})`);
-      return NextResponse.json({ success: true, event: "Lead", status: leadStatus });
     }
 
     // ── Speed to Lead: instant callback for new leads with phone ──
