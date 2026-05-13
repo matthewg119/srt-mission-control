@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
+import { ensureSmsChannel } from "@/lib/sms-channel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,6 +80,8 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return cancelAction({ slackTs, channel, userId });
     case "ai_edit":
       return openEditModal({ slackTs, channel, userId, triggerId: payload.trigger_id ?? "" });
+    case "sms_create_channel":
+      return createSmsChannelFromSlack({ slackTs, channel, userId, contactId: action.value });
     default:
       return NextResponse.json({ ok: true });
   }
@@ -292,6 +295,64 @@ async function handleViewSubmission(payload: SlackInteractivePayload): Promise<N
   });
 
   return NextResponse.json({ response_action: "clear" });
+}
+
+async function createSmsChannelFromSlack(args: {
+  slackTs: string;
+  channel: string;
+  userId: string;
+  contactId: string;
+}): Promise<NextResponse> {
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select("id, first_name, last_name, phone, mobile_phone, business_name, zoho_lead_id")
+    .eq("id", args.contactId)
+    .maybeSingle();
+
+  if (!contact) {
+    await slack.postEphemeral(args.channel, args.userId, "⚠️ Contact not found.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const digits = (contact.phone || contact.mobile_phone || "").replace(/\D/g, "");
+  if (!digits) {
+    await slack.postEphemeral(args.channel, args.userId, "⚠️ No phone number on this contact.");
+    return NextResponse.json({ ok: true });
+  }
+  const normalizedPhone = `+1${digits.slice(-10)}`;
+
+  const { data: convo } = await supabaseAdmin
+    .from("sms_conversations")
+    .upsert(
+      { phone: normalizedPhone, contact_id: contact.id },
+      { onConflict: "phone", ignoreDuplicates: false }
+    )
+    .select("id, slack_channel_id, slack_channel_name")
+    .maybeSingle();
+
+  if (!convo) {
+    await slack.postEphemeral(args.channel, args.userId, "⚠️ Could not create SMS conversation record.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const displayName =
+    [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Lead";
+
+  const result = await ensureSmsChannel({
+    conversationId: convo.id,
+    phone: normalizedPhone,
+    displayName,
+    contactId: contact.id,
+    zohoLeadId: contact.zoho_lead_id ?? null,
+    businessName: contact.business_name ?? null,
+  });
+
+  const msg = result.created
+    ? `✅ SMS channel created: <#${result.channelId}>`
+    : `ℹ️ SMS channel already exists: <#${result.channelId}>`;
+
+  await slack.postEphemeral(args.channel, args.userId, msg);
+  return NextResponse.json({ ok: true });
 }
 
 function isMatthew(slackUserId: string): boolean {

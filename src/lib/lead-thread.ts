@@ -123,6 +123,24 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
     ],
   });
 
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        action_id: "save_contact_vcard",
+        text: { type: "plain_text", text: "💾 Save Contact", emoji: true },
+        url: `https://mission.srtagency.com/api/contacts/${contact.id}/vcard`,
+      },
+      {
+        type: "button",
+        action_id: "sms_create_channel",
+        text: { type: "plain_text", text: "📱 Start SMS Thread", emoji: true },
+        value: String(contact.id),
+      },
+    ],
+  });
+
   return blocks;
 }
 
@@ -198,6 +216,26 @@ function formatUpdateBlocks(
       )
       .join("\n");
     blocks.push({ type: "section", text: { type: "mrkdwn", text: lines } });
+  }
+
+  if (action === "complete") {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          action_id: "save_contact_vcard",
+          text: { type: "plain_text", text: "💾 Save Contact", emoji: true },
+          url: `https://mission.srtagency.com/api/contacts/${contact.id}/vcard`,
+        },
+        {
+          type: "button",
+          action_id: "sms_create_channel",
+          text: { type: "plain_text", text: "📱 Start SMS Thread", emoji: true },
+          value: String(contact.id),
+        },
+      ],
+    });
   }
 
   return { headline: `${icon} ${headline}`, blocks };
