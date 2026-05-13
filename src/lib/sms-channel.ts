@@ -75,6 +75,12 @@ async function setupChannel(args: {
     : null;
   const portalUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/dashboard/pipeline`;
 
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+  const vcardId = zohoLeadId ?? contactId;
+  const vcardLink = vcardId
+    ? `📱 *<${appUrl}/api/vcard/${vcardId}|Save to iPhone Contacts>* · <${appUrl}/contacts/${vcardId}|Open contact card>`
+    : null;
+
   const cardText = [
     `📱 *New SMS Conversation — ${displayName}*`,
     ``,
@@ -82,6 +88,7 @@ async function setupChannel(args: {
     contactId ? `*Contact ID:* ${contactId}` : null,
     zohoUrl ? `*Zoho:* <${zohoUrl}|Open in Zoho>` : null,
     `*Portal:* <${portalUrl}|Mission Control>`,
+    vcardLink,
     ``,
     `_Stage 1: Soft Pitch — qualify, build rapport, request application._`,
     `React ✅ to an AI draft to send it · type in thread to write your own`,

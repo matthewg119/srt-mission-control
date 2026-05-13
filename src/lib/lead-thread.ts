@@ -123,6 +123,18 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
     ],
   });
 
+  // vCard + contact card links — use Zoho ID when available, else Supabase UUID
+  const vcardId = (contact.zoho_lead_id as string | null) ?? contact.id;
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text:
+        `📱 *<https://mission.srtagency.com/api/vcard/${vcardId}|Save to iPhone Contacts>*` +
+        ` · <https://mission.srtagency.com/contacts/${vcardId}|Open contact card>`,
+    },
+  });
+
   blocks.push({
     type: "actions",
     elements: [
@@ -130,7 +142,7 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
         type: "button",
         action_id: "save_contact_vcard",
         text: { type: "plain_text", text: "💾 Save Contact", emoji: true },
-        url: `https://mission.srtagency.com/api/contacts/${contact.id}/vcard`,
+        url: `https://mission.srtagency.com/api/vcard/${vcardId}`,
       },
       {
         type: "button",
@@ -219,6 +231,16 @@ function formatUpdateBlocks(
   }
 
   if (action === "complete") {
+    const vcardId = (contact.zoho_lead_id as string | null) ?? contact.id;
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `📱 *<https://mission.srtagency.com/api/vcard/${vcardId}|Save to iPhone Contacts>*` +
+          ` · <https://mission.srtagency.com/contacts/${vcardId}|Open contact card>`,
+      },
+    });
     blocks.push({
       type: "actions",
       elements: [
@@ -226,7 +248,7 @@ function formatUpdateBlocks(
           type: "button",
           action_id: "save_contact_vcard",
           text: { type: "plain_text", text: "💾 Save Contact", emoji: true },
-          url: `https://mission.srtagency.com/api/contacts/${contact.id}/vcard`,
+          url: `https://mission.srtagency.com/api/vcard/${vcardId}`,
         },
         {
           type: "button",

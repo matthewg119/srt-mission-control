@@ -199,11 +199,13 @@ export async function POST(request: NextRequest) {
     // 5. Slack notification to #hot-leads
     const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
     if (hotLeadsChannel) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
       const lines = [`:large_green_circle: *New Lead: ${firstName} ${lastName}*`];
       if (email) lines.push(`Email: ${email}`);
       if (phone) lines.push(`Phone: ${phone}`);
       if (message) lines.push(`Message: ${message.slice(0, 200)}`);
-      lines.push("Source: Contact Form");
+      lines.push(`Source: Contact Form`);
+      lines.push(`📱 *<${appUrl}/api/vcard/${contactId}|Save to iPhone Contacts>* · <${appUrl}/contacts/${contactId}|Open contact card>`);
       slack.postMessage(hotLeadsChannel, lines.join("\n")).catch(() => {});
     }
 
