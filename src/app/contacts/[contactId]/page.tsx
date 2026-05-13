@@ -74,7 +74,7 @@ async function resolveContact(contactId: string): Promise<ContactData | null> {
     email:           row.email         ? String(row.email)         : null,
     city:            row.biz_city      ? String(row.biz_city)      : null,
     state:           row.biz_state     ? String(row.biz_state)     : null,
-    amountNeeded:    row.amount_needed ? Number(row.amount_needed) : null,
+    amountNeeded:    (() => { const n = Number(row.amount_needed); return (row.amount_needed && !isNaN(n) && n > 0) ? n : null; })(),
     source:          row.source        ? String(row.source)        : null,
     applicationStage: row.application_stage ? String(row.application_stage) : null,
   };

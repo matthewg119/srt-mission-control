@@ -64,7 +64,8 @@ export async function GET(
   const noteParts: string[] = ["SRT Lead"];
   if (contact.zoho_lead_id) noteParts.push(`Zoho ID: ${contact.zoho_lead_id}`);
   if (contact.source)       noteParts.push(`Source: ${contact.source}`);
-  if (contact.amount_needed) noteParts.push(`Funding: $${Number(contact.amount_needed).toLocaleString()}`);
+  const fundingNum = Number(contact.amount_needed);
+  if (contact.amount_needed && !isNaN(fundingNum) && fundingNum > 0) noteParts.push(`Funding: $${fundingNum.toLocaleString()}`);
   const note = noteParts.join(" — ");
 
   const categories = ["SRT Lead", contact.industry].filter(Boolean).join(",");
