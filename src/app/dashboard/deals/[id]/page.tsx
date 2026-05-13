@@ -573,10 +573,11 @@ function EditModal({ deal, onClose, onSave }: { deal: Deal; onClose: () => void;
 
 // ─── New Deals (Lead) Layout ─────────────────────────────────────────────────
 
-function NewDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit }: {
+function NewDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit, onLeadStatus }: {
   deal: Deal; events: DealEvent[]; notes: DealNote[];
   onMove: (s: string, p?: string) => void; moving: string | null;
   onAddNote: (t: string) => Promise<void>; onEdit: () => void;
+  onLeadStatus: (status: string) => void;
 }) {
   const contact = deal.contacts;
   const displayName = [contact?.first_name, contact?.last_name].filter(Boolean).join(" ") || "Unknown";
@@ -609,7 +610,7 @@ function NewDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit }
         </div>
       </div>
 
-      <StageBar deal={deal} onMove={onMove} moving={moving} onLeadStatus={handleLeadStatus} />
+      <StageBar deal={deal} onMove={onMove} moving={moving} onLeadStatus={onLeadStatus} />
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Left column */}
@@ -720,10 +721,11 @@ function NewDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit }
 
 // ─── Active Deals (Opportunity) Layout ──────────────────────────────────────
 
-function ActiveDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit }: {
+function ActiveDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit, onLeadStatus }: {
   deal: Deal; events: DealEvent[]; notes: DealNote[];
   onMove: (s: string, p?: string) => void; moving: string | null;
   onAddNote: (t: string) => Promise<void>; onEdit: () => void;
+  onLeadStatus: (status: string) => void;
 }) {
   const contact = deal.contacts;
   const [tab, setTab] = useState<"details" | "terms" | "kyc" | "activity">("details");
@@ -763,7 +765,7 @@ function ActiveDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdi
         </div>
       </div>
 
-      <StageBar deal={deal} onMove={onMove} moving={moving} onLeadStatus={handleLeadStatus} />
+      <StageBar deal={deal} onMove={onMove} moving={moving} onLeadStatus={onLeadStatus} />
 
       {/* Tabs */}
       <div className="flex border-b border-[rgba(255,255,255,0.06)] mb-4">
@@ -1012,7 +1014,7 @@ export default function DealRoomPage() {
 
   if (!deal) return null;
 
-  const sharedProps = { deal, events, notes, onMove: handleMove, moving, onAddNote: handleAddNote, onEdit: () => setEditOpen(true) };
+  const sharedProps = { deal, events, notes, onMove: handleMove, moving, onAddNote: handleAddNote, onEdit: () => setEditOpen(true), onLeadStatus: handleLeadStatus };
 
   return (
     <div className="max-w-7xl mx-auto">
