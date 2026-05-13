@@ -1,0 +1,38 @@
+name: Sequence Segmenter Cron
+
+# Nightly segmenter: classifies contacts into eligibility lists.
+# Fires at 4am Eastern (8 UTC) every day.
+# No emails sent — only updates sequence_eligibility_lists in Supabase.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"    # 4am Eastern (EDT), daily
+  workflow_dispatch:        # allows manual trigger from GitHub Actions tab
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire /api/cron/run-segmenter
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::warning::CRON_SECRET not set — calling without auth"
+            AUTH_ARGS=""
+          else
+            AUTH_ARGS="-H \"Authorization: Bearer $CRON_SECRET\""
+          fi
+          http_code=$(eval curl -s -o response.txt -w "%{http_code}" \
+            -X POST \
+            $AUTH_ARGS \
+            "https://mission.srtagency.com/api/cron/run-segmenter")
+          echo "http_code=$http_code"
+          echo "--- response ---"
+          cat response.txt
+          echo ""
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Non-200 response from segmenter cron (status=$http_code)"
+            exit 1
+          fi

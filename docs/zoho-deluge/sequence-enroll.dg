@@ -1,0 +1,177 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Zoho CRM Custom Buttons — Sequence Enrollment
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// HOW TO SET UP IN ZOHO CRM:
+// 1. Go to CRM → Setup → Customization → Modules and Fields → Leads
+// 2. Click "Custom Buttons" → New Button
+// 3. Set Name, Label, Placement (Detail View), and paste the Deluge code below
+// 4. Repeat for each button
+// 5. Make sure LEAD_ID used below is the Zoho Record ID (not a custom field)
+//
+// BASE URL: https://mission.srtagency.com/api/sequences/enroll
+// STOP URL: https://mission.srtagency.com/api/sequences/stop
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── BUTTON 1: Add to FU Sequence ──────────────────────────────────────────
+// Label: "📧 Add to FU Sequence"
+// Placement: Detail View — Leads module
+
+leadId = input.get("Lead ID").toString();
+email = zoho.crm.getRecordById("Leads", leadId).get("Email");
+firstName = zoho.crm.getRecordById("Leads", leadId).get("First Name");
+
+if(email == null || email == "")
+{
+    info "No email address on this lead — cannot enroll.";
+}
+else
+{
+    payload = Map();
+    payload.put("zoho_contact_id", leadId);
+    payload.put("sequence_slug", "fu-new-inbound");
+    payload.put("enrolled_by", "zoho_button");
+
+    response = invokeurl
+    [
+        url: "https://mission.srtagency.com/api/sequences/enroll"
+        type: POST
+        parameters: payload.toString()
+        headers: {"Content-Type":"application/json"}
+    ];
+
+    info response;
+    if(response.get("enrolled") == true)
+    {
+        info firstName + " enrolled in FU Sequence. First email in ~5 min.";
+    }
+    else
+    {
+        info "Could not enroll: " + response.get("reason");
+    }
+}
+
+
+// ── BUTTON 2: Add to Statements Sequence ─────────────────────────────────
+// Label: "📧 Add to Statements Sequence"
+// Placement: Detail View — Leads module
+
+leadId = input.get("Lead ID").toString();
+
+payload = Map();
+payload.put("zoho_contact_id", leadId);
+payload.put("sequence_slug", "awaiting-statements");
+payload.put("enrolled_by", "zoho_button");
+
+response = invokeurl
+[
+    url: "https://mission.srtagency.com/api/sequences/enroll"
+    type: POST
+    parameters: payload.toString()
+    headers: {"Content-Type":"application/json"}
+];
+
+info response;
+
+
+// ── BUTTON 3: Add to Pre-Approved Sequence ────────────────────────────────
+// Label: "📧 Add to Pre-Approved Sequence"
+
+leadId = input.get("Lead ID").toString();
+
+payload = Map();
+payload.put("zoho_contact_id", leadId);
+payload.put("sequence_slug", "pre-approved-nurture");
+payload.put("enrolled_by", "zoho_button");
+
+response = invokeurl
+[
+    url: "https://mission.srtagency.com/api/sequences/enroll"
+    type: POST
+    parameters: payload.toString()
+    headers: {"Content-Type":"application/json"}
+];
+
+info response;
+
+
+// ── BUTTON 4: Add to Post-Call Followup ───────────────────────────────────
+// Label: "📧 Add to Post-Call Followup"
+
+leadId = input.get("Lead ID").toString();
+
+payload = Map();
+payload.put("zoho_contact_id", leadId);
+payload.put("sequence_slug", "post-call-followup");
+payload.put("enrolled_by", "zoho_button");
+
+response = invokeurl
+[
+    url: "https://mission.srtagency.com/api/sequences/enroll"
+    type: POST
+    parameters: payload.toString()
+    headers: {"Content-Type":"application/json"}
+];
+
+info response;
+
+
+// ── BUTTON 5: Stop All Sequences ──────────────────────────────────────────
+// Label: "🛑 Stop All Sequences"
+// Style: Danger (red)
+
+leadId = input.get("Lead ID").toString();
+firstName = zoho.crm.getRecordById("Leads", leadId).get("First Name");
+
+payload = Map();
+payload.put("zoho_contact_id", leadId);
+payload.put("reason", "Manually stopped via Zoho button");
+
+response = invokeurl
+[
+    url: "https://mission.srtagency.com/api/sequences/stop"
+    type: POST
+    parameters: payload.toString()
+    headers: {"Content-Type":"application/json"}
+];
+
+stopped = response.get("stopped");
+info "Stopped " + stopped + " active sequence(s) for " + firstName;
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-STOP WORKFLOW RULE (Zoho Workflow Automation)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// This rule fires automatically when Lead_Status changes to a terminal value.
+//
+// Setup:
+// 1. Go to CRM → Setup → Automation → Workflow Rules → New Rule
+// 2. Module: Leads
+// 3. Trigger: "Record Action" → "Field Update" → Field: Lead Status
+// 4. Condition: Lead Status is any of:
+//    Not Interested, DNQ, Take Off List, Dead Declined, Declined, Junk Lead,
+//    Lost, Funded, Closed - Not Converted, Unresponsive, Bad Lead, Wrong Number,
+//    Duplicate
+// 5. Action: Custom Function (paste code below)
+//
+// Custom Function (Deluge):
+// ─────────────────────────────────────────────────────────────────────────
+
+leadId = input.get("Lead ID").toString();
+leadStatus = zoho.crm.getRecordById("Leads", leadId).get("Lead Status");
+
+payload = Map();
+payload.put("zoho_contact_id", leadId);
+payload.put("reason", "Zoho status changed to: " + leadStatus);
+
+response = invokeurl
+[
+    url: "https://mission.srtagency.com/api/sequences/stop"
+    type: POST
+    parameters: payload.toString()
+    headers: {"Content-Type":"application/json"}
+];
+
+info "Auto-stopped sequences for lead " + leadId + " — " + response.get("stopped") + " stopped.";
