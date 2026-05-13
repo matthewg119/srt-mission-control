@@ -70,6 +70,7 @@ export async function PATCH(
       agreement_amount, repayment_amount, num_payments, payment_frequency, payment_method,
       buy_rate, sell_rate, underwriting_fee, bank_wire_fee, lender_origination_fee,
       ucc_filing_fee, selected_lender, bank_name, bank_account, routing_number,
+      lead_status,
     } = body;
 
     // Get current deal for logging + Zoho forward
@@ -104,6 +105,60 @@ export async function PATCH(
           // Non-fatal — Supabase update below still runs so the user isn't stuck.
         }
       }
+    }
+
+    // lead_status: set Zoho Lead_Status directly (separate from deal stage).
+    // Used for DNQ / Take Off List / Not Interested — lead-level dispositions
+    // that have no corresponding deal stage in our pipeline.
+    if (lead_status) {
+      const contactRef2 = (currentDeal as unknown as { contacts?: { zoho_lead_id?: string | null } }).contacts;
+      const zohoLeadId2 = contactRef2?.zoho_lead_id ?? null;
+      if (zohoLeadId2) {
+        try {
+          await updateZohoLead(zohoLeadId2, { Lead_Status: lead_status });
+        } catch (e) {
+          console.error("[deals PATCH] Zoho lead_status update failed:", (e as Error).message);
+        }
+      }
+
+      // Fire Meta CAPI DNQ for all terminal-declined statuses — no attribution gate.
+      const dnqStatuses = new Set(["dnq", "take off list", "not interested", "dead declined", "declined", "dead"]);
+      if (dnqStatuses.has(lead_status.toLowerCase())) {
+        const contactId3 = (currentDeal as unknown as { contact_id?: string }).contact_id;
+        if (contactId3) {
+          const { data: contact3 } = await supabaseAdmin
+            .from("contacts")
+            .select("id, email, phone, mobile_phone, first_name, last_name, fbc, fbp")
+            .eq("id", contactId3)
+            .maybeSingle();
+          if (contact3) {
+            await sendEvent({
+              eventName: "DNQ",
+              actionSource: "system_generated",
+              userData: {
+                email: contact3.email || undefined,
+                phone: contact3.phone || contact3.mobile_phone || undefined,
+                firstName: contact3.first_name || undefined,
+                lastName: contact3.last_name || undefined,
+                externalId: contact3.id,
+                fbc: contact3.fbc || undefined,
+                fbp: contact3.fbp || undefined,
+              },
+              customData: { content_name: "Did Not Qualify", source: "lead_status_change", status: lead_status },
+            });
+            console.log(`[Meta CAPI] DNQ event fired for lead_status="${lead_status}" deal ${id}`);
+          }
+        }
+      }
+
+      await supabaseAdmin.from("deal_events").insert({
+        deal_id: id,
+        event_type: "lead_status_change",
+        description: `Lead status set to "${lead_status}"`,
+        metadata: { lead_status },
+      });
+
+      return NextResponse.json({ ok: true, lead_status });
     }
 
     // Pre-Approved no longer syncs to Zoho (saves a webhook), so call the handler directly.

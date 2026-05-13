@@ -91,8 +91,8 @@ function Section({
 }
 
 function StageBar({
-  deal, onMove, moving,
-}: { deal: Deal; onMove: (stage: string, pipeline?: string) => void; moving: string | null }) {
+  deal, onMove, moving, onLeadStatus,
+}: { deal: Deal; onMove: (stage: string, pipeline?: string) => void; moving: string | null; onLeadStatus?: (status: string) => void }) {
   const pipeline = deal.pipeline === "Active Deals" ? ACTIVE_DEALS_PIPELINE : NEW_DEALS_PIPELINE;
   const currentIndex = pipeline.stages.findIndex((s) => s.name === deal.stage);
 
@@ -152,6 +152,7 @@ function StageBar({
         )}
         <MoveToAnyStage deal={deal} onMove={onMove} moving={moving} />
       </div>
+      {onLeadStatus && <LeadStatusActions dealId={deal.id} onDone={onLeadStatus} />}
     </div>
   );
 }
@@ -185,6 +186,60 @@ function MoveToAnyStage({ deal, onMove, moving }: { deal: Deal; onMove: (s: stri
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function LeadStatusActions({
+  dealId, onDone,
+}: { dealId: string; onDone: (status: string) => void }) {
+  const [loading, setLoading] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  const mark = async (status: string) => {
+    setLoading(status);
+    try {
+      const res = await fetch(`/api/deals/${dealId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_status: status }),
+      });
+      if (res.ok) { setDone(status); onDone(status); }
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const btns: { label: string; status: string; color: string }[] = [
+    { label: "Mark DNQ", status: "DNQ", color: "rgba(231,76,60,0.15)" },
+    { label: "Take Off List", status: "Take Off List", color: "rgba(150,150,150,0.12)" },
+    { label: "Not Interested", status: "Not Interested", color: "rgba(150,150,150,0.12)" },
+  ];
+
+  if (done) {
+    return (
+      <div className="flex items-center gap-2 mt-2">
+        <CheckCircle2 size={12} className="text-[#00C9A7]" />
+        <span className="text-xs text-[rgba(255,255,255,0.5)]">Lead status set to <strong className="text-white">{done}</strong> — Zoho updated</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 mt-2 flex-wrap">
+      <span className="text-[10px] text-[rgba(255,255,255,0.25)] uppercase tracking-wider">Lead status:</span>
+      {btns.map((b) => (
+        <button
+          key={b.status}
+          onClick={() => mark(b.status)}
+          disabled={loading !== null}
+          style={{ backgroundColor: b.color }}
+          className="text-[11px] px-3 py-1 text-[rgba(255,255,255,0.55)] border border-[rgba(255,255,255,0.08)] rounded hover:text-white hover:border-[rgba(255,255,255,0.2)] transition-colors flex items-center gap-1 disabled:opacity-50"
+        >
+          {loading === b.status ? <Loader2 size={9} className="animate-spin" /> : null}
+          {b.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -554,7 +609,7 @@ function NewDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdit }
         </div>
       </div>
 
-      <StageBar deal={deal} onMove={onMove} moving={moving} />
+      <StageBar deal={deal} onMove={onMove} moving={moving} onLeadStatus={handleLeadStatus} />
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Left column */}
@@ -708,7 +763,7 @@ function ActiveDealsView({ deal, events, notes, onMove, moving, onAddNote, onEdi
         </div>
       </div>
 
-      <StageBar deal={deal} onMove={onMove} moving={moving} />
+      <StageBar deal={deal} onMove={onMove} moving={moving} onLeadStatus={handleLeadStatus} />
 
       {/* Tabs */}
       <div className="flex border-b border-[rgba(255,255,255,0.06)] mb-4">
@@ -929,6 +984,13 @@ export default function DealRoomPage() {
       setMoving(null);
     }
   }, [deal, params.id]);
+
+  const handleLeadStatus = useCallback((status: string) => {
+    setEvents((prev) => [
+      { id: Date.now().toString(), event_type: "lead_status_change", description: `Lead status set to "${status}"`, created_at: new Date().toISOString() },
+      ...prev,
+    ]);
+  }, []);
 
   const handleAddNote = useCallback(async (text: string) => {
     if (!deal) return;
