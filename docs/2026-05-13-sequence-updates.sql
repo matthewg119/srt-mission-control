@@ -6,7 +6,7 @@
 -- 1. New table: nightly segmenter output — who is eligible for each sequence
 CREATE TABLE IF NOT EXISTS sequence_eligibility_lists (
   id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  contact_id      text NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  contact_id      uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   list_name       text NOT NULL,         -- 'eligible_fu_new' | 'eligible_awaiting_statements' | etc.
   computed_at     timestamptz NOT NULL DEFAULT now(),
   reason_snapshot jsonb,                 -- Zoho status, portal flags, days since created, etc.
@@ -35,6 +35,11 @@ ALTER TABLE sequence_enrollments
 CREATE INDEX IF NOT EXISTS idx_enrollments_due_no_pending
   ON sequence_enrollments (status, next_send_at)
   WHERE status = 'active' AND pending_action_id IS NULL;
+
+-- 5. Add category column for SBA / LOC / CRE / MCA labeling on enrollments
+ALTER TABLE sequence_enrollments
+  ADD COLUMN IF NOT EXISTS category text DEFAULT 'mca'
+  CHECK (category IN ('mca', 'sba', 'loc', 'cre'));
 
 -- ═══════════════════════════════════════════════════════════════
 -- ALSO RUN THIS BEFORE GOING LIVE (cancel old auto-blast drafts):

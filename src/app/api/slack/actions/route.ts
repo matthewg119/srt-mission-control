@@ -82,6 +82,13 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return openEditModal({ slackTs, channel, userId, triggerId: payload.trigger_id ?? "" });
     case "sms_create_channel":
       return createSmsChannelFromSlack({ slackTs, channel, userId, contactId: action.value });
+    case "sequence_cancel":
+      return sequenceCancel({ channel, userId, slackTs, actionValue: action.value });
+    case "sequence_cat_mca":
+    case "sequence_cat_sba":
+    case "sequence_cat_loc":
+    case "sequence_cat_cre":
+      return sequenceUpdateCategory({ channel, userId, slackTs, actionValue: action.value });
     default:
       return NextResponse.json({ ok: true });
   }
@@ -357,6 +364,81 @@ async function createSmsChannelFromSlack(args: {
     : `ℹ️ SMS channel already exists: <#${result.channelId}>`;
 
   await slack.postEphemeral(args.channel, args.userId, msg);
+  return NextResponse.json({ ok: true });
+}
+
+async function sequenceCancel(args: {
+  channel: string; userId: string; slackTs: string; actionValue: string;
+}): Promise<NextResponse> {
+  let enrollmentId: string | undefined;
+  try {
+    enrollmentId = (JSON.parse(args.actionValue) as { enrollment_id?: string }).enrollment_id;
+  } catch { /* ignore */ }
+
+  if (!enrollmentId) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Could not parse enrollment ID.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const { data: enrollment } = await supabaseAdmin
+    .from("sequence_enrollments")
+    .update({ status: "stopped", stopped_at: new Date().toISOString(), stop_reason: "cancelled_by_slack" })
+    .eq("id", enrollmentId)
+    .select("contact_name, contact_id")
+    .single();
+
+  if (!enrollment) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Enrollment not found or already stopped.");
+    return NextResponse.json({ ok: true });
+  }
+
+  await slack.postThreadReply(
+    args.channel,
+    args.slackTs,
+    `🚫 Workflow cancelled for *${enrollment.contact_name ?? "Contact"}* by <@${args.userId}>. No more emails will be sent.`
+  );
+  return NextResponse.json({ ok: true });
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  mca: "💳 MCA", sba: "🏛 SBA", loc: "💰 Line of Credit", cre: "🏢 Commercial RE",
+};
+
+async function sequenceUpdateCategory(args: {
+  channel: string; userId: string; slackTs: string; actionValue: string;
+}): Promise<NextResponse> {
+  let enrollmentId: string | undefined;
+  let category: string | undefined;
+  try {
+    const parsed = JSON.parse(args.actionValue) as { enrollment_id?: string; category?: string };
+    enrollmentId = parsed.enrollment_id;
+    category = parsed.category;
+  } catch { /* ignore */ }
+
+  if (!enrollmentId || !category) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Could not parse action data.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const { data: enrollment } = await supabaseAdmin
+    .from("sequence_enrollments")
+    .update({ category })
+    .eq("id", enrollmentId)
+    .eq("status", "active")
+    .select("contact_name")
+    .single();
+
+  if (!enrollment) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Enrollment not found or not active.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const label = CATEGORY_LABELS[category] ?? category.toUpperCase();
+  await slack.postThreadReply(
+    args.channel,
+    args.slackTs,
+    `✅ Category updated to ${label} for *${enrollment.contact_name ?? "Contact"}* by <@${args.userId}>.`
+  );
   return NextResponse.json({ ok: true });
 }
 

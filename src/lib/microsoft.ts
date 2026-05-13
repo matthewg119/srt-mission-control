@@ -781,4 +781,25 @@ export const microsoft = {
       webLink: m.webLink,
     }));
   },
+
+  /**
+   * Create a draft email via Graph API (POST /me/messages, isDraft: true).
+   * Returns the draft's id and webLink — webLink opens it in Outlook Web compose view.
+   */
+  async createDraft(params: {
+    to: string;
+    subject: string;
+    body: string;
+  }): Promise<{ id: string; webLink: string }> {
+    const result = await graphRequest("/me/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        subject: params.subject,
+        body: { contentType: "HTML", content: params.body },
+        toRecipients: [{ emailAddress: { address: params.to } }],
+        isDraft: true,
+      }),
+    });
+    return { id: result.id as string, webLink: result.webLink as string };
+  },
 };

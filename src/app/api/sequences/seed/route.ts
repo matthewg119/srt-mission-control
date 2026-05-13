@@ -291,7 +291,6 @@ ${SIGNATURE_MATTHEW}`,
 
   // ═══════════════════════════════════════════════════════════
   // SEQUENCE 5: FU — New Inbound Lead (6 emails, 30 days)
-  // AI-drafted at send time — step bodies are fallback placeholders only.
   // Trigger: manual enrollment | Slug used by sequence-engine.ts
   // ═══════════════════════════════════════════════════════════
   {
@@ -300,18 +299,57 @@ ${SIGNATURE_MATTHEW}`,
     trigger_tag: null,
     cancel_tag: null,
     steps: [
-      { delay_minutes: 1 * DAYS, subject: "Following up on your inquiry", body: `<p>Hi {{first_name}},</p><p>Just following up on your inquiry. Let me know if you have any questions.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 3 * DAYS, subject: "Still here when you're ready", body: `<p>Hi {{first_name}},</p><p>Checking in — still here if you want to talk funding options.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 7 * DAYS, subject: "Quick question", body: `<p>Hi {{first_name}},</p><p>Quick question — what's the biggest thing holding you back right now?</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 14 * DAYS, subject: "Funding options update", body: `<p>Hi {{first_name}},</p><p>Programs have changed — wanted to make sure you have the latest info.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 21 * DAYS, subject: "Still thinking it over?", body: `<p>Hi {{first_name}},</p><p>No pressure, but wanted to check in one more time.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 30 * DAYS, subject: "Last check-in", body: `<p>Hi {{first_name}},</p><p>Last note from me — if things change and you need capital, I'm here.</p>${SIGNATURE_MATTHEW}` },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "Following up on your inquiry",
+        body: `<p>Hi {{first_name}},</p>
+<p>Saw your inquiry come through. Next step is a quick 5-minute application — no hard credit pull, and it's the only thing standing between you and a funding decision.</p>
+<p>Apply here: <a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 3 * DAYS,
+        subject: "Still here when you're ready",
+        body: `<p>Hi {{first_name}},</p>
+<p>Quick check-in. We process applications in batches — the sooner you're in, the sooner you hear back. Applications submitted this week go into this week's batch.</p>
+<p>5 minutes: <a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 7 * DAYS,
+        subject: "Quick question",
+        body: `<p>Hi {{first_name}},</p>
+<p>What's holding you back right now — is it timing, or something about the process you're unsure about?</p>
+<p>Just reply. I read every response.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 14 * DAYS,
+        subject: "Funding programs update",
+        body: `<p>Hi {{first_name}},</p>
+<p>A few programs changed this month — better terms on shorter paybacks for certain industries. Not sure if it applies to you, but worth checking before they close out.</p>
+<p>Takes 5 minutes to find out: <a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 21 * DAYS,
+        subject: "Still thinking it over?",
+        body: `<p>Hi {{first_name}},</p>
+<p>No pressure — just wanted to check in one more time. If you're still weighing it, just reply "yes" and I'll send you exactly what the next step looks like.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 30 * DAYS,
+        subject: "Last check-in from me",
+        body: `<p>Hi {{first_name}},</p>
+<p>Last note from me. If capital comes back on the table, I'm easy to find — just reach out and we'll pick up from here.</p>
+${SIGNATURE_MATTHEW}`,
+      },
     ],
   },
 
   // ═══════════════════════════════════════════════════════════
   // SEQUENCE 6: Awaiting Bank Statements (4 emails, 14 days)
-  // AI-drafted at send time — step bodies are fallback placeholders only.
   // ═══════════════════════════════════════════════════════════
   {
     name: "Awaiting Bank Statements",
@@ -319,16 +357,49 @@ ${SIGNATURE_MATTHEW}`,
     trigger_tag: null,
     cancel_tag: null,
     steps: [
-      { delay_minutes: 1 * DAYS, subject: "One thing needed to move forward", body: `<p>Hi {{first_name}},</p><p>We just need your last 3 months of bank statements to move forward.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 3 * DAYS, subject: "Still waiting on statements", body: `<p>Hi {{first_name}},</p><p>Just a reminder — your application is on hold pending bank statements.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 7 * DAYS, subject: "Getting your statements is easy", body: `<p>Hi {{first_name}},</p><p>Log into your bank → Statements → Download last 3 months → reply with attachments.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 14 * DAYS, subject: "Final request for statements", body: `<p>Hi {{first_name}},</p><p>This is my final follow-up on statements. Let me know if you need help.</p>${SIGNATURE_MATTHEW}` },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "One thing needed to move forward",
+        body: `<p>Hi {{first_name}},</p>
+<p>Your application looks good — the only thing we're waiting on is your last 3 months of business bank statements. Once we have those, I can start submitting to lenders.</p>
+<p>Upload here: <a href="{magic_link}">{magic_link}</a> — or reply with them attached.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 3 * DAYS,
+        subject: "Statements — quick reminder",
+        body: `<p>Hi {{first_name}},</p>
+<p>Still waiting on statements before I can move your file. Once received, they go out to lenders the same day.</p>
+<p>Upload: <a href="{magic_link}">{magic_link}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 7 * DAYS,
+        subject: "How to get your statements in 2 minutes",
+        body: `<p>Hi {{first_name}},</p>
+<p>Quick walkthrough:</p>
+<ol>
+<li>Log into your bank online</li>
+<li>Go to Statements or Documents</li>
+<li>Download the last 3 months as PDF</li>
+<li>Upload at <a href="{magic_link}">{magic_link}</a> — or reply with them attached</li>
+</ol>
+<p>That's it. No other documents needed right now.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 14 * DAYS,
+        subject: "Last request before I close your file",
+        body: `<p>Hi {{first_name}},</p>
+<p>Archiving your file at the end of this week if I don't hear back. If you still want to move forward — bank statements are all I need: <a href="{magic_link}">{magic_link}</a></p>
+<p>If timing isn't right, no problem. You can always come back when it is.</p>
+${SIGNATURE_MATTHEW}`,
+      },
     ],
   },
 
   // ═══════════════════════════════════════════════════════════
   // SEQUENCE 7: Pre-Approved Nurture (3 emails, 10 days)
-  // AI-drafted at send time — step bodies are fallback placeholders only.
   // ═══════════════════════════════════════════════════════════
   {
     name: "Pre-Approved Nurture",
@@ -336,15 +407,35 @@ ${SIGNATURE_MATTHEW}`,
     trigger_tag: null,
     cancel_tag: null,
     steps: [
-      { delay_minutes: 1 * DAYS, subject: "You're pre-approved — here's what's next", body: `<p>Hi {{first_name}},</p><p>Great news — you're pre-approved. Here's what we need to finalize your offer.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 4 * DAYS, subject: "Your pre-approval is waiting", body: `<p>Hi {{first_name}},</p><p>Your pre-approval is still active. Let's get this across the finish line.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 10 * DAYS, subject: "Pre-approval expires soon", body: `<p>Hi {{first_name}},</p><p>Pre-approvals don't last forever — let me know if you want to lock in your offer.</p>${SIGNATURE_MATTHEW}` },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "You're pre-approved — here's what's next",
+        body: `<p>Hi {{first_name}},</p>
+<p>Your file has been reviewed and you're pre-approved. A lender has looked at your application and expressed interest — all we need now is your confirmation to finalize the offer.</p>
+<p>Log in to see the offer details: <a href="{magic_link}">{magic_link}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 4 * DAYS,
+        subject: "Your offer is waiting",
+        body: `<p>Hi {{first_name}},</p>
+<p>Your pre-approval is still active, but these don't stay on the table indefinitely. Log in to review your offer: <a href="{magic_link}">{magic_link}</a></p>
+<p>Any questions, just reply.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 10 * DAYS,
+        subject: "Last chance on this offer",
+        body: `<p>Hi {{first_name}},</p>
+<p>This offer is about to expire. If you have questions before you decide, I'm available for a quick call — just reply and I'll find a time.</p>
+<p>Last chance to lock it in: <a href="{magic_link}">{magic_link}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
     ],
   },
 
   // ═══════════════════════════════════════════════════════════
   // SEQUENCE 8: Post-Call Follow-Up (3 emails, 7 days)
-  // AI-drafted at send time — step bodies are fallback placeholders only.
   // ═══════════════════════════════════════════════════════════
   {
     name: "Post-Call Follow-Up",
@@ -352,15 +443,33 @@ ${SIGNATURE_MATTHEW}`,
     trigger_tag: null,
     cancel_tag: null,
     steps: [
-      { delay_minutes: 1 * DAYS, subject: "Great talking with you", body: `<p>Hi {{first_name}},</p><p>Great connecting today. Here's a summary of what we discussed and next steps.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 3 * DAYS, subject: "Following up from our call", body: `<p>Hi {{first_name}},</p><p>Checking in after our call — any questions as you think it over?</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 7 * DAYS, subject: "Still a fit?", body: `<p>Hi {{first_name}},</p><p>Just wanted to circle back after our conversation. Still a good time to move forward?</p>${SIGNATURE_MATTHEW}` },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "Good talking with you",
+        body: `<p>Hi {{first_name}},</p>
+<p>Good talking with you today. Based on what we discussed, the next step is to get the application in — 5 minutes, no hard credit pull.</p>
+<p><a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 3 * DAYS,
+        subject: "Following up from our call",
+        body: `<p>Hi {{first_name}},</p>
+<p>Checking in after our call — have you had a chance to look at the next step? Let me know if anything changed or if you have questions.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 7 * DAYS,
+        subject: "Circling back",
+        body: `<p>Hi {{first_name}},</p>
+<p>Still interested, or did the timing shift? Just a yes or no works.</p>
+${SIGNATURE_MATTHEW}`,
+      },
     ],
   },
 
   // ═══════════════════════════════════════════════════════════
-  // SEQUENCE 9: Approved — Renewal Nurture (ongoing, +30 days each)
-  // AI-drafted at send time — step bodies are fallback placeholders only.
+  // SEQUENCE 9: Approved — Renewal Nurture (4 emails, monthly)
   // ═══════════════════════════════════════════════════════════
   {
     name: "Approved — Renewal Nurture",
@@ -368,10 +477,81 @@ ${SIGNATURE_MATTHEW}`,
     trigger_tag: null,
     cancel_tag: null,
     steps: [
-      { delay_minutes: 30 * DAYS, subject: "Renewal check-in", body: `<p>Hi {{first_name}},</p><p>Checking in — how's business going? When you're ready for a renewal or top-up, I'm here.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 30 * DAYS, subject: "How's the capital working for you?", body: `<p>Hi {{first_name}},</p><p>Just checking in on how things are going since your last funding.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 30 * DAYS, subject: "Renewal options available", body: `<p>Hi {{first_name}},</p><p>New programs are available — wanted to make sure you have the latest options.</p>${SIGNATURE_MATTHEW}` },
-      { delay_minutes: 30 * DAYS, subject: "Quarterly check-in", body: `<p>Hi {{first_name}},</p><p>Quarterly check-in — anything I can help with on the business financing side?</p>${SIGNATURE_MATTHEW}` },
+      {
+        delay_minutes: 30 * DAYS,
+        subject: "Checking in",
+        body: `<p>Hi {{first_name}},</p>
+<p>Congrats on getting funded — just checking in to see how things are going. How's the capital working for the business?</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 30 * DAYS,
+        subject: "How's business going?",
+        body: `<p>Hi {{first_name}},</p>
+<p>Quick check-in. When you're ready for a renewal or need a top-up, the process is faster the second time — same-day decisions in most cases.</p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 30 * DAYS,
+        subject: "Renewal programs available",
+        body: `<p>Hi {{first_name}},</p>
+<p>A few new renewal programs came through this month that might be a fit depending on where your revenue is now. Want me to run the numbers? Just reply or log in to see current options.</p>
+<p><a href="{magic_link}">{magic_link}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 30 * DAYS,
+        subject: "Quarterly check-in",
+        body: `<p>Hi {{first_name}},</p>
+<p>Quarterly check-in — anything I can help with on the financing side?</p>
+${SIGNATURE_MATTHEW}`,
+      },
+    ],
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEQUENCE 10: Post-Call Daily Drip (4 emails over 3 days)
+  // Enrolled by extension when "Nice Speaking" SMS is sent.
+  // After completing step 4, sequence-engine auto-enrolls in fu-new-inbound.
+  // ═══════════════════════════════════════════════════════════
+  {
+    name: "Post-Call Daily",
+    slug: "post-call-daily",
+    trigger_tag: null,
+    cancel_tag: null,
+    steps: [
+      {
+        delay_minutes: 2 * HOURS,
+        subject: "Nice talking with you",
+        body: `<p>Hi {{first_name}},</p>
+<p>Enjoyed our conversation. The next step is a quick application — 5 minutes, no hard credit pull. That's what gets you an actual number from lenders.</p>
+<p><a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "Following up",
+        body: `<p>Hi {{first_name}},</p>
+<p>Wanted to follow up on our conversation. Have you had a chance to look at the application? That's the fastest path to an actual offer.</p>
+<p><a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "One thing I didn't mention",
+        body: `<p>Hi {{first_name}},</p>
+<p>Funding timelines are tighter right now — lenders are processing applications in weekly batches. Getting your application in this week puts you in the current round.</p>
+<p><a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
+      {
+        delay_minutes: 1 * DAYS,
+        subject: "Last one this week",
+        body: `<p>Hi {{first_name}},</p>
+<p>Last email from me this week. If you want to move, the application is always open — I'll be here when you're ready.</p>
+<p><a href="${APPLY_LINK}">${APPLY_LINK}</a></p>
+${SIGNATURE_MATTHEW}`,
+      },
     ],
   },
 ];

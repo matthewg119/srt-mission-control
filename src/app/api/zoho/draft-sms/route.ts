@@ -10,6 +10,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
 import { normalizePhone } from "@/lib/loopmessage";
 import { ensureSmsChannel, postAIDraft } from "@/lib/sms-channel";
+import { buildVCard, sanitizeFilename } from "@/lib/vcard";
+import { slack } from "@/lib/slack-bot";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -39,6 +41,19 @@ const SMS_TEMPLATES: Record<string, string> = {
     "Say anything and I'll take it as a win {{firstName}} 😂",
   "tuesday-opener":
     "Happy Tuesday! Are you still looking for money for your business? 💰",
+};
+
+// Human-readable labels for each template key (used in Slack copy-paste block header)
+const SMS_TEMPLATES_LABELS: Record<string, string> = {
+  "nice-speaking":    "Nice Speaking With You",
+  "app-link":         "Application Link",
+  "fu1-guide":        "FU1: PDF Guide Ask",
+  "fu2-authorized":   "FU2: Authorized + Contact Info",
+  "fu3-worth-reply":  "FU3: Worth a Reply? KHRT",
+  "fu4-black-hole":   "FU4: Black Hole Inbox",
+  "fu5-last-ping":    "FU5: Last Ping",
+  "fu6-say-anything": "FU6: Say Anything",
+  "tuesday-opener":   "Tuesday Opener",
 };
 
 function isAuthorized(req: NextRequest): boolean {
@@ -182,6 +197,30 @@ export async function POST(req: NextRequest) {
 
   // Render template
   const draft = templateRaw.replace(/\{\{firstName\}\}/g, firstName || "there");
+
+  // Upload vCard so Matthew can tap to add contact to his phone
+  const email = (zohoLead.Email ?? "") as string;
+  const vCardText = buildVCard({
+    firstName,
+    lastName,
+    businessName: businessName || null,
+    phone,
+    email: email || null,
+  });
+  const vcfName = `${sanitizeFilename([firstName, lastName].filter(Boolean).join("_") || phone)}.vcf`;
+  try {
+    await slack.uploadFile(channelId, vcfName, Buffer.from(vCardText, "utf8"), "text/vcard");
+  } catch (e) {
+    console.warn("[draft-sms] vCard upload failed (non-fatal):", (e as Error).message);
+  }
+
+  // Post the template text as a preformatted block so Matthew can copy + paste it
+  const templateLabel = SMS_TEMPLATES_LABELS[template_name] ?? template_name;
+  try {
+    await slack.postMessage(channelId, `*📋 SMS Template: ${templateLabel}*\n\`\`\`${draft}\`\`\``);
+  } catch (e) {
+    console.warn("[draft-sms] Template text post failed (non-fatal):", (e as Error).message);
+  }
 
   // Post as AI draft (✅ to send)
   await postAIDraft(channelId, 1, displayName, draft, conv.id as string);

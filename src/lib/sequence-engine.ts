@@ -20,6 +20,7 @@ import { buildMerchantContext } from "@/lib/ai-intel/merchant-context";
 import { draftEmail } from "@/lib/ai-intel/email-director";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
+import { microsoft } from "@/lib/microsoft";
 import type { MarketingCampaignKey, PendingActionPayload } from "@/lib/ai-intel/types";
 
 // ── Types ──
@@ -53,15 +54,25 @@ const SEQUENCE_STOP_STATUSES = new Set([
   "Not Interested", "DNQ", "Take Off List", "Dead Declined", "Declined",
   "Junk Lead", "Lost", "Funded", "Closed - Not Converted", "Closed - Converted",
   "Unresponsive", "Bad Lead", "Wrong Number", "Duplicate",
+  // File in-progress statuses — stop drip while underwriting
+  "Underwriting", "Under Review", "Submitted to Lender", "File Submitted",
+  "Documents Received",
 ]);
 
 function shouldStopForZohoStatus(status: string | null | undefined): boolean {
   if (!status) return false;
   if (SEQUENCE_STOP_STATUSES.has(status)) return true;
   const s = status.toLowerCase();
-  return ["funded", "declined", "dead", "dnq", "not interested", "junk", "lost", "converted"].some(
-    (k) => s.includes(k)
-  );
+  return [
+    "funded", "declined", "dead", "dnq", "not interested", "junk", "lost", "converted",
+    "underwriting", "under review", "submitted",
+  ].some((k) => s.includes(k));
+}
+
+function isDeclinedStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = status.toLowerCase();
+  return s.includes("declined") || s.includes("dead declined");
 }
 
 // ── Campaign key resolution ────────────────────────────────────────────────
@@ -75,6 +86,7 @@ function resolveSequenceCampaignKey(slug: string, stepNumber: number): Marketing
   }
   if (slug === "awaiting-statements") return "awaiting_statements";
   if (slug === "pre-approved-nurture" || slug === "approved-nurture") return "approved_nurture";
+  if (slug === "post-call-daily") return "new_lead_d1";
   return "custom";
 }
 
@@ -86,6 +98,7 @@ const STEP_GAPS_HOURS: Record<string, number[]> = {
   "pre-approved-nurture": [72, 144],                      // D1→D4, D4→D10
   "post-call-followup":   [48, 96],                       // D1→D3, D3→D7
   "approved-nurture":     [720, 720, 720, 720],           // 30d each
+  "post-call-daily":      [24, 24, 24],                   // 2h→D1, D1→D2, D2→D3 (then completes → fu-new-inbound)
 };
 
 // ── Enrollment ──────────────────────────────────────────────────────────────
@@ -96,7 +109,7 @@ export async function enrollContact(
   contactEmail: string,
   contactName: string,
   metadata?: Record<string, unknown>,
-): Promise<{ enrolled: boolean; reason?: string }> {
+): Promise<{ enrolled: boolean; enrollmentId?: string; reason?: string }> {
   if (!contactEmail || !contactEmail.includes("@")) {
     console.warn(`[Sequence] Skipping enrollment for ${contactName} — invalid email: "${contactEmail}"`);
     return { enrolled: false, reason: "Invalid email address" };
@@ -129,8 +142,9 @@ export async function enrollContact(
 
   // First email fires after a short delay (5 min) so the caller's Slack confirm shows first
   const nextSendAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const category = (metadata?.category as string | undefined) ?? "mca";
 
-  const { error: insertError } = await supabaseAdmin
+  const { data: inserted, error: insertError } = await supabaseAdmin
     .from("sequence_enrollments")
     .insert({
       sequence_id: sequence.id,
@@ -142,16 +156,20 @@ export async function enrollContact(
       status: "active",
       enrolled_at: new Date().toISOString(),
       enrolled_by: (metadata?.enrolled_by as string | undefined) ?? "system",
+      category,
       metadata: metadata || null,
-    });
+    })
+    .select("id")
+    .single();
 
   if (insertError) {
     console.error("[Sequence] Enrollment failed:", insertError.message);
     return { enrolled: false, reason: insertError.message };
   }
 
-  console.log(`[Sequence] Enrolled ${contactName} in "${sequenceSlug}" — first email at ${nextSendAt}`);
-  return { enrolled: true };
+  const enrollmentId = inserted?.id as string | undefined;
+  console.log(`[Sequence] Enrolled ${contactName} in "${sequenceSlug}" (${category}) — first email at ${nextSendAt}`);
+  return { enrolled: true, enrollmentId };
 }
 
 // ── Cancellation ────────────────────────────────────────────────────────────
@@ -214,17 +232,29 @@ export async function stopAllForContact(
 // ── Enrollment advancement (called by execute-action after approved send) ───
 
 export async function advanceEnrollment(enrollmentId: string, sequenceSlug: string): Promise<void> {
+  type PartialEnrollment = {
+    id: string;
+    current_step: number;
+    sequence_id: string;
+    contact_id: string;
+    contact_email: string;
+    contact_name: string;
+    category: string | null;
+    metadata: Record<string, unknown> | null;
+  };
+
   const { data: enrollment } = await supabaseAdmin
     .from("sequence_enrollments")
-    .select("id, current_step, sequence_id")
+    .select("id, current_step, sequence_id, contact_id, contact_email, contact_name, category, metadata")
     .eq("id", enrollmentId)
     .maybeSingle();
 
   if (!enrollment) return;
 
-  const nextStep = enrollment.current_step + 1;
+  const e = enrollment as unknown as PartialEnrollment;
+  const nextStep = e.current_step + 1;
   const gaps = STEP_GAPS_HOURS[sequenceSlug] ?? [];
-  const gapHours = gaps[enrollment.current_step] ?? 0;
+  const gapHours = gaps[e.current_step] ?? 0;
 
   if (gapHours === 0) {
     // No more steps defined → complete
@@ -232,6 +262,18 @@ export async function advanceEnrollment(enrollmentId: string, sequenceSlug: stri
       .from("sequence_enrollments")
       .update({ status: "completed", current_step: nextStep, pending_action_id: null })
       .eq("id", enrollmentId);
+
+    // post-call-daily completing → auto-enroll in fu-new-inbound
+    if (sequenceSlug === "post-call-daily") {
+      const category = (e.metadata?.category as string | undefined) ?? e.category ?? "mca";
+      await enrollContact(
+        "fu-new-inbound",
+        e.contact_id,
+        e.contact_email,
+        e.contact_name,
+        { enrolled_by: "post-call-daily-auto", category },
+      );
+    }
     return;
   }
 
@@ -306,16 +348,34 @@ export async function processScheduledEmails(): Promise<{
 
       const zohoStatus = ctx.zoho?.lead_status ?? null;
       if (ctx.contact.do_not_contact || shouldStopForZohoStatus(zohoStatus)) {
+        const stopReason = ctx.contact.do_not_contact ? "do_not_contact" : `Zoho status: ${zohoStatus}`;
         await supabaseAdmin
           .from("sequence_enrollments")
-          .update({
-            status: "stopped",
-            stopped_at: now,
-            stop_reason: ctx.contact.do_not_contact ? "do_not_contact" : `Zoho status: ${zohoStatus}`,
-            pending_action_id: null,
-          })
+          .update({ status: "stopped", stopped_at: now, stop_reason: stopReason, pending_action_id: null })
           .eq("id", enrollment.id);
         stats.stopped++;
+
+        // Send one-time decline email when status is Declined
+        if (!ctx.contact.do_not_contact && isDeclinedStatus(zohoStatus) && ctx.contact.email) {
+          const firstName = ctx.contact.first_name ?? enrollment.contact_name?.split(" ")[0] ?? "there";
+          const declineBody = `<p>Hi ${firstName},</p>
+<p>Wanted to give you a direct update: the lenders we submitted to weren't able to move forward at this time.</p>
+<p>This doesn't mean permanently — business conditions change and some programs have different criteria. If you'd like, I can check back in 60–90 days to see if anything has shifted.</p>
+<p>Just reply "yes" and I'll put a note to follow up.</p>
+<p>— Matthew</p>`;
+          try {
+            await microsoft.sendMail({
+              to: ctx.contact.email,
+              subject: "Re: Your funding application",
+              body: declineBody,
+              isHtml: true,
+            });
+            console.log(`[Sequence] Decline email sent to ${ctx.contact.email}`);
+          } catch (e) {
+            console.error("[Sequence] Decline email failed:", (e as Error).message);
+          }
+        }
+
         continue;
       }
 
