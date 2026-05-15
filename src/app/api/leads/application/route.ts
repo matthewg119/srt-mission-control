@@ -104,6 +104,8 @@ export async function POST(request: NextRequest) {
                   ...(lookupPhone10 ? { phone: lookupPhone10, mobile_phone: lookupPhone10 } : {}),
                   ...(source ? { source } : {}),
                   ...(amountNeeded ? { amount_needed: amountNeeded } : {}),
+                  ...(_fbc ? { fbc: _fbc } : {}),
+                  ...(_fbp ? { fbp: _fbp } : {}),
                   application_stage: applicationStage || "Email Captured",
                   application_completion_pct: applicationCompletionPct,
                 })
@@ -226,7 +228,7 @@ export async function POST(request: NextRequest) {
                               : `email.ilike.${normalizedEmail}`;
                             const { data: existingContact } = await supabaseAdmin
                               .from("contacts")
-                              .select("id")
+                              .select("id, fbc, fbp")
                               .or(orFilter)
                               .order("created_at", { ascending: false })
                               .limit(1)
@@ -251,6 +253,9 @@ export async function POST(request: NextRequest) {
                                                 ...(incDate ? { inc_date: incDate } : {}),
                                                 ...(startMonth ? { start_month: startMonth } : {}),
                                                 ...(startYear ? { start_year: startYear } : {}),
+                                                // Store attribution on first touch — don't overwrite if already set
+                                                ...(_fbc && !existingContact.fbc ? { fbc: _fbc } : {}),
+                                                ...(_fbp && !existingContact.fbp ? { fbp: _fbp } : {}),
                                                 updated_at: new Date().toISOString(),
                               }).eq("id", contactId!);
 
@@ -436,6 +441,8 @@ export async function POST(request: NextRequest) {
                                                               utm_content: utmContent || null,
                                                               utm_medium: utmMedium || null,
                                                               ad_id: adId || utmContent || null,
+                                                              fbc: _fbc || null,
+                                                              fbp: _fbp || null,
                                           })
                                           .select("id")
                                           .single();

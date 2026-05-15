@@ -82,7 +82,7 @@ export const slack = {
 
                   const urlRes = await fetch(`${SLACK_API}/files.getUploadURLExternal`, {
                             method: "POST",
-                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
                             body: JSON.stringify({ filename: fileName, length: buffer.length }),
                   });
                   const urlData = await urlRes.json() as { ok: boolean; upload_url?: string; file_id?: string };
@@ -113,7 +113,7 @@ export const slack = {
                   // Step 1: Get pre-signed upload URL + file_id
                   const urlRes = await fetch(`${SLACK_API}/files.getUploadURLExternal`, {
                             method: "POST",
-                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
                             body: JSON.stringify({ filename: fileName, length: buffer.length }),
                   });
                   const urlData = await urlRes.json() as { ok: boolean; upload_url?: string; file_id?: string };

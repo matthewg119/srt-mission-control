@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { triggerSpeedToLead } from "@/lib/speed-to-lead";
+import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
 import { getLead } from "@/lib/zoho";
 
@@ -140,20 +140,16 @@ export async function POST(request: NextRequest) {
     // can't crash the webhook response and trigger Zoho retries. We always
     // return 200 to Zoho; failures are logged for Vercel log triage.
     stage = "speed_to_lead";
-    try {
-      await triggerSpeedToLead({
-        leadId,
-        leadPhone: phone,
-        leadName,
-        leadSource,
-      });
-    } catch (stlError) {
-      console.error(
-        "[Zoho Webhook] triggerSpeedToLead failed:",
-        stlError instanceof Error ? stlError.stack || stlError.message : stlError
-      );
-      return NextResponse.json({ success: true, skipped: true, reason: "speed_to_lead_error" });
-    }
+    // Fire-and-forget — respond to Zoho immediately so it doesn't retry.
+    // triggerSpeedToLead polls RingCentral for up to 60s, which blows the
+    // Vercel timeout. fireSpeedToLead posts to /api/speed-to-lead (its own
+    // serverless invocation) and returns in milliseconds.
+    fireSpeedToLead({
+      leadId,
+      leadPhone: phone,
+      leadName,
+      leadSource,
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
