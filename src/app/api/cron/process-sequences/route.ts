@@ -5,6 +5,9 @@ import { supabaseAdmin } from "@/lib/db";
 import { systemAlert } from "@/lib/notify";
 
 export async function GET() {
+  // EMAIL MARKETING DISABLED — re-enable when ready
+  return NextResponse.json({ ok: false, disabled: true, reason: "email marketing paused" });
+
   try {
     const result = await processScheduledEmails();
 

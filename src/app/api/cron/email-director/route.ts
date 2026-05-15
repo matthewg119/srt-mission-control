@@ -15,6 +15,9 @@ function isAuthorized(req: NextRequest): boolean {
 }
 
 async function handle(req: NextRequest) {
+  // EMAIL MARKETING DISABLED — re-enable when ready
+  return NextResponse.json({ ok: false, disabled: true, reason: "email marketing paused" }, { status: 200 });
+
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
