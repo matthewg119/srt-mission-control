@@ -14,6 +14,9 @@ function isAuthorized(req: NextRequest): boolean {
 }
 
 async function handle(req: NextRequest) {
+  // GUARDIAN SLACK ALERTS DISABLED — re-enable when ready
+  return NextResponse.json({ ok: false, disabled: true, reason: "guardian paused" }, { status: 200 });
+
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

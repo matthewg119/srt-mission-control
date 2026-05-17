@@ -25,6 +25,12 @@ export interface PostApprovalResult {
 }
 
 export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostApprovalResult> {
+  // EMAIL MARKETING DISABLED — block all marketing email cards at the source
+  if (opts.payload.action_type === "send_marketing_email") {
+    console.log("[vektor] send_marketing_email suppressed — email marketing is paused");
+    return { pendingActionId: null, slackTs: null, channel: null, skipped: "no_channel" };
+  }
+
   const channel =
     opts.channel ||
     (opts.category ? routeToChannel(opts.category) : "") ||
