@@ -46,26 +46,8 @@ export async function postApprovalRequest(opts: PostApprovalOpts): Promise<PostA
 
   const headerText = `:shark: VeKtor recommends: *${actionId.replace(/_/g, " ")}*${tag}`;
 
-  // For marketing emails we pre-insert to get the UUID for the preview link
-  const isMarketingEmail = opts.payload.action_type === "send_marketing_email";
-  let preInsertedId: string | null = null;
-  if (isMarketingEmail) {
-    const { data: pre } = await supabaseAdmin
-      .from("pending_slack_actions")
-      .insert({
-        slack_ts: "pending",
-        slack_channel: channel,
-        action_type: opts.payload.action_type,
-        payload: opts.payload,
-        status: "pending",
-        merchant_id: opts.merchantId ?? null,
-        zoho_id: opts.zohoId ?? null,
-        ai_decision_id: opts.aiDecisionId ?? null,
-      })
-      .select("id")
-      .single();
-    preInsertedId = pre?.id ?? null;
-  }
+  // Preview link pre-insert disabled (email marketing paused; early return above blocks send_marketing_email)
+  const preInsertedId: string | null = null;
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
   const previewUrl = preInsertedId ? `${appUrl}/api/email-preview/${preInsertedId}` : null;
