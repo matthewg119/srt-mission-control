@@ -99,64 +99,7 @@ export async function POST(req: NextRequest) {
     { enrolled_by, businessName: bizName, category: normalizedCategory }
   );
 
-  // Post rich Slack enrollment confirmation card with category + cancel button
-  if (result.enrolled && result.enrollmentId) {
-    const channel = VEKTOR_CHANNELS.emailDirector || VEKTOR_CHANNELS.main;
-    if (channel) {
-      const seqLabel = SEQUENCE_LABELS[sequence_slug] ?? sequence_slug;
-      const catLabel = CATEGORY_LABELS[normalizedCategory] ?? normalizedCategory.toUpperCase();
-      const cancelUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/api/sequences/stop`;
-
-      await slack.postMessage(channel, `📬 ${name} enrolled in ${seqLabel} [${catLabel}]`, [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `📬 *${name}*${bizName ? ` (${bizName})` : ""} enrolled in *${seqLabel}*\nCategory: ${catLabel} · by ${enrolled_by} · first email in ~5 min`,
-          },
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: { type: "plain_text", text: "🚫 Cancel Workflow" },
-              style: "danger",
-              action_id: "sequence_cancel",
-              value: JSON.stringify({ enrollment_id: result.enrollmentId }),
-            },
-            {
-              type: "button",
-              text: { type: "plain_text", text: "💳 MCA" },
-              action_id: "sequence_cat_mca",
-              value: JSON.stringify({ enrollment_id: result.enrollmentId, category: "mca" }),
-            },
-            {
-              type: "button",
-              text: { type: "plain_text", text: "🏛 SBA" },
-              action_id: "sequence_cat_sba",
-              value: JSON.stringify({ enrollment_id: result.enrollmentId, category: "sba" }),
-            },
-            {
-              type: "button",
-              text: { type: "plain_text", text: "💰 LOC" },
-              action_id: "sequence_cat_loc",
-              value: JSON.stringify({ enrollment_id: result.enrollmentId, category: "loc" }),
-            },
-          ],
-        },
-        {
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: `Cancel stops all emails. Category buttons update the follow-up type. Stop URL: ${cancelUrl}`,
-            },
-          ],
-        },
-      ]);
-    }
-  }
+  // Slack enrollment notifications paused — email marketing channel silenced
 
   return NextResponse.json(result);
 }

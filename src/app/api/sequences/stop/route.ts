@@ -47,15 +47,7 @@ export async function POST(req: NextRequest) {
 
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Merchant";
 
-  if (count > 0) {
-    const channel = VEKTOR_CHANNELS.emailDirector || VEKTOR_CHANNELS.main;
-    if (channel) {
-      await slack.postMessage(
-        channel,
-        `🛑 *${name}* (${contact.business_name ?? "—"}) — ${count} sequence(s) stopped.\nReason: ${reason}`
-      );
-    }
-  }
+  // Slack stop notifications paused — email marketing channel silenced
 
   return NextResponse.json({ stopped: count, contact_id: contact.id });
 }

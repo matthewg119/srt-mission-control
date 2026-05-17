@@ -251,13 +251,7 @@ export async function runSegmenter(): Promise<{
     .map(([k, n]) => `• ${n} ${k.replace("eligible_", "").replace(/_/g, " ")}`)
     .join("\n");
 
-  const channel = VEKTOR_CHANNELS.emailDirector || VEKTOR_CHANNELS.main;
-  if (channel) {
-    await slack.postMessage(
-      channel,
-      `📋 Nightly segmentation — ${dateStr}\n${lines || "• No eligible contacts found"}\n\nView → https://mission.srtagency.com/dashboard/email-sequences`
-    );
-  }
+  // Slack segmentation summary paused — email marketing channel silenced
 
   return { totals, excluded, processed };
 }

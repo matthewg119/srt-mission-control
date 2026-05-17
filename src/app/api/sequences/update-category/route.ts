@@ -69,14 +69,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const catLabel = CATEGORY_LABELS[category as Category];
-  const channel = VEKTOR_CHANNELS.emailDirector || VEKTOR_CHANNELS.main;
-  if (channel) {
-    await slack.postMessage(
-      channel,
-      `✅ Category updated: *${enrollment.contact_name ?? "Contact"}* → ${catLabel}`
-    );
-  }
+  // Slack category-update notifications paused — email marketing channel silenced
 
   return NextResponse.json({ ok: true, enrollment_id, category });
 }
