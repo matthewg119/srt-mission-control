@@ -1,45 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
-import { processScheduledEmails } from "@/lib/sequence-engine";
-import { supabaseAdmin } from "@/lib/db";
-import { systemAlert } from "@/lib/notify";
 
 export async function GET() {
-  // EMAIL MARKETING DISABLED — re-enable when ready
   return NextResponse.json({ ok: false, disabled: true, reason: "email marketing paused" });
-
-  try {
-    const result = await processScheduledEmails();
-
-    // Log the run
-    await supabaseAdmin.from("system_logs").insert({
-      event_type: "cron_sequences",
-      description: `Sequence processor: ${result.drafted} drafted, ${result.stopped} stopped, ${result.errors} errors (${result.processed} processed)`,
-      metadata: result,
-    });
-
-    // Alert if there were errors
-    if (result.errors > 0) {
-      await systemAlert(
-        "Sequence Errors",
-        `${result.errors} error(s) occurred during sequence processing (${result.drafted} drafted, ${result.processed} processed)`,
-        "cron/process-sequences",
-        "warning"
-      );
-    }
-
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error("Sequence cron error:", error);
-    await systemAlert(
-      "Sequence Cron Crashed",
-      error instanceof Error ? error.message : "Sequence processing failed unexpectedly",
-      "cron/process-sequences",
-      "critical"
-    );
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Sequence processing failed" },
-      { status: 500 }
-    );
-  }
 }
