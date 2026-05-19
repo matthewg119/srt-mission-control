@@ -153,7 +153,7 @@ export async function POST(request: NextRequest) {
                 // Slack: post or thread-reply to the lead's Slack thread.
                 // First touch creates a top-level message with all known fields;
                 // subsequent calls thread-reply with the diff.
-                postOrThreadLeadUpdate({ contactId: upserted.id, action: "create" })
+                await postOrThreadLeadUpdate({ contactId: upserted.id, action: "create" })
                   .catch(err => console.error("[lead-thread 10%] failed:", err instanceof Error ? err.message : err));
 
                 // Log to system_logs for dedup and activity feed
@@ -378,7 +378,7 @@ export async function POST(request: NextRequest) {
                                   if (applicationCompletionPct >= 80) milestoneAction = "milestone_80";
                                   else if (applicationCompletionPct >= 50) milestoneAction = "milestone_50";
                                   if (milestoneAction) {
-                                    postOrThreadLeadUpdate({ contactId, action: milestoneAction })
+                                    await postOrThreadLeadUpdate({ contactId, action: milestoneAction })
                                       .catch(err => console.error("[lead-thread milestone existing] failed:", err instanceof Error ? err.message : err));
                                   }
                                 }
@@ -512,14 +512,14 @@ export async function POST(request: NextRequest) {
                               // higher milestone (e.g. 50% or 80%), also fire the milestone
                               // reply so progress notifications stay consistent.
                               if (contactId) {
-                                postOrThreadLeadUpdate({ contactId, action: "create" })
+                                await postOrThreadLeadUpdate({ contactId, action: "create" })
                                   .catch(err => console.error("[lead-thread 25% new] failed:", err instanceof Error ? err.message : err));
 
                                 let milestoneActionNew: "milestone_50" | "milestone_80" | null = null;
                                 if (applicationCompletionPct >= 80) milestoneActionNew = "milestone_80";
                                 else if (applicationCompletionPct >= 50) milestoneActionNew = "milestone_50";
                                 if (milestoneActionNew) {
-                                  postOrThreadLeadUpdate({ contactId, action: milestoneActionNew })
+                                  await postOrThreadLeadUpdate({ contactId, action: milestoneActionNew })
                                     .catch(err => console.error("[lead-thread milestone new] failed:", err instanceof Error ? err.message : err));
                                 }
                               }
