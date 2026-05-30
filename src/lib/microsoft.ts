@@ -666,6 +666,45 @@ export const microsoft = {
   },
 
   /**
+   * Capture helper: find the most recent message whose subject contains `subject`
+   * and return its raw HTML body. Used to extract an Outlook signature that Graph
+   * won't expose directly — compose a new mail in OWA (the default signature
+   * auto-inserts), send it, then read the HTML back here.
+   * Searches /me across all folders by default.
+   */
+  async getLatestHtmlBySubject(subject: string): Promise<{ id: string; subject: string; receivedDateTime: string; html: string } | null> {
+    const search = encodeURIComponent(`"subject:${subject}"`);
+    const list = await graphRequest(
+      `/me/messages?$search=${search}&$top=5&$select=id,subject,receivedDateTime`
+    );
+    const first = ((list.value as Array<{ id: string; subject: string; receivedDateTime: string }> | undefined) ?? [])[0];
+    if (!first) return null;
+    // Graph returns HTML body by default (no Prefer header).
+    const msg = await graphRequest(`/me/messages/${first.id}?$select=id,subject,receivedDateTime,body`);
+    const html = (msg.body as { content?: string } | undefined)?.content ?? "";
+    return {
+      id: msg.id as string,
+      subject: (msg.subject as string) ?? "",
+      receivedDateTime: (msg.receivedDateTime as string) ?? "",
+      html,
+    };
+  },
+
+  /**
+   * Diagnostic: hit the (non-existent) Graph beta signatures endpoint directly
+   * and return the raw HTTP status + body text. Proves Graph does not expose
+   * Outlook signatures — used by /api/debug/signature.
+   */
+  async rawSignaturesProbe(): Promise<{ status: number; ok: boolean; body: string }> {
+    const token = await getValidAccessToken();
+    const res = await fetch("https://graph.microsoft.com/beta/me/mailboxSettings/signatures", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await res.text().catch(() => "");
+    return { status: res.status, ok: res.ok, body: body.slice(0, 500) };
+  },
+
+  /**
    * Fetch a specific Outlook signature by its display name.
    * Returns the HTML content or null if not found. Not cached (used infrequently).
    */

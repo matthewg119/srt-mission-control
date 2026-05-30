@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
+import { SIGNATURE_S_HTML } from "@/config/email-signature";
 
 export const runtime = "nodejs";
 
@@ -24,13 +25,29 @@ export async function GET(req: NextRequest) {
 
   const named = await microsoft.getSignatureByName(name).catch((e) => `error: ${(e as Error).message}`);
   const def = await microsoft.getDefaultSignature().catch((e) => `error: ${(e as Error).message}`);
+  const rawProbe = await microsoft
+    .rawSignaturesProbe()
+    .catch((e) => ({ status: 0, ok: false, body: `error: ${(e as Error).message}` }));
 
   const preview = (html: unknown) =>
     typeof html === "string" ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200) : html;
 
+  // What buildHtmlBody would actually use for signature_name === "S".
+  const storedS = process.env.SIGNATURE_S_HTML || SIGNATURE_S_HTML;
+
   return NextResponse.json({
     ok: true,
     name,
+    // Proves Graph does not expose Outlook signatures (expect a non-2xx status
+    // and/or an error body — there is no such endpoint).
+    graph_raw_signatures_probe: rawProbe,
+    // The store-once fix: what gets appended for signature_name "S".
+    stored_s_signature: {
+      source: process.env.SIGNATURE_S_HTML ? "env:SIGNATURE_S_HTML" : "const:SIGNATURE_S_HTML",
+      found: storedS.length > 0,
+      length: storedS.length,
+      preview: preview(storedS),
+    },
     named_signature: {
       found: typeof named === "string" && !named.startsWith("error:"),
       length: typeof named === "string" ? named.length : 0,

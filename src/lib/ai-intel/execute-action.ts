@@ -4,17 +4,23 @@ import { slack } from "@/lib/slack-bot";
 import { addNoteToLead, updateLead } from "@/lib/zoho";
 import type { PendingActionPayload } from "./types";
 import { DEFAULTS } from "@/config/defaults";
-import { EMAIL_SIGNATURE_HTML } from "@/config/email-signature";
+import { EMAIL_SIGNATURE_HTML, SIGNATURE_S_HTML } from "@/config/email-signature";
 import { advanceEnrollment, resetEnrollmentAfterCancel } from "@/lib/sequence-engine";
 
 async function buildHtmlBody(body: string, isHtml: boolean, signatureName?: string): Promise<string> {
   if (isHtml) return body;
-  // Prefer a named Outlook signature (e.g. "S") when requested, then the
-  // account's default signature, then the hard-coded fallback.
+  // The "S" signature lives server-side as a stored constant — Microsoft Graph
+  // does NOT expose Outlook roaming signatures (the /beta/me/mailboxSettings/
+  // signatures endpoint doesn't exist), so the dialer's signature_name:"S" is
+  // resolved here, not via Graph. An env override wins if set.
+  // For any other named signature, fall back to the (best-effort) Graph helpers,
+  // then the account default, then the hard-coded block.
   const sig =
-    (signatureName ? await microsoft.getSignatureByName(signatureName).catch(() => null) : null) ??
-    (await microsoft.getDefaultSignature().catch(() => null)) ??
-    EMAIL_SIGNATURE_HTML;
+    signatureName === "S"
+      ? (process.env.SIGNATURE_S_HTML || SIGNATURE_S_HTML)
+      : ((signatureName ? await microsoft.getSignatureByName(signatureName).catch(() => null) : null) ??
+        (await microsoft.getDefaultSignature().catch(() => null)) ??
+        EMAIL_SIGNATURE_HTML);
   const htmlBody = body
     .split("\n")
     .map((line) => (line.trim() === "" ? "<br>" : `<p style="margin:0 0 8px 0;">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`))
