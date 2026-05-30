@@ -40,9 +40,11 @@ export async function GET(req: NextRequest) {
   // table reachable? (If pending_slack_actions errors, 👍 approvals can't persist
   // → no email is ever sent.)
   const supabaseRef = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/^https?:\/\//, "").split(".")[0];
-  const approvalProbe = await supabaseAdmin
-    .from("pending_slack_actions")
-    .select("id", { count: "exact", head: true })
+  const approvalProbe = await Promise.resolve(
+    supabaseAdmin
+      .from("pending_slack_actions")
+      .select("id", { count: "exact", head: true })
+  )
     .then((r) => ({ reachable: !r.error, error: r.error?.message ?? null, count: r.count ?? null }))
     .catch((e) => ({ reachable: false, error: (e as Error).message, count: null }));
 
