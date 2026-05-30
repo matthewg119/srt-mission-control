@@ -59,63 +59,71 @@ export async function POST(req: NextRequest) {
   // send time by buildHtmlBody (signature_name: "S").
   const emailBody = `Hello ${firstName},\n\n${copy}`;
 
-  // Resolve the lead's per-lead Slack channel (contacts → sms_conversations).
-  // If none, postApprovalRequest routes to the default working-leads channel.
-  let channel: string | undefined;
-  const { data: contact } = await supabaseAdmin
-    .from("contacts")
-    .select("id")
-    .eq("zoho_lead_id", zoho_lead_id)
-    .maybeSingle();
-  if (contact?.id) {
-    const { data: conv } = await supabaseAdmin
-      .from("sms_conversations")
-      .select("slack_channel_id")
-      .eq("contact_id", contact.id)
-      .not("slack_channel_id", "is", null)
+  // Everything past Zoho is wrapped so any Supabase/Slack failure returns a
+  // readable JSON error instead of a 500 HTML page (which the extension can
+  // only render as a generic "compose_failed").
+  try {
+    // Resolve the lead's per-lead Slack channel (contacts → sms_conversations).
+    // If none, postApprovalRequest routes to the default working-leads channel.
+    let channel: string | undefined;
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("id")
+      .eq("zoho_lead_id", zoho_lead_id)
       .maybeSingle();
-    channel = (conv?.slack_channel_id as string | undefined) ?? undefined;
+    if (contact?.id) {
+      const { data: conv } = await supabaseAdmin
+        .from("sms_conversations")
+        .select("slack_channel_id")
+        .eq("contact_id", contact.id)
+        .not("slack_channel_id", "is", null)
+        .maybeSingle();
+      channel = (conv?.slack_channel_id as string | undefined) ?? undefined;
+    }
+
+    const payload: PendingActionPayload = {
+      action_type: "send_email",
+      to: email,
+      subject,
+      body: emailBody,
+      is_html: false,
+      zoho_id: zoho_lead_id,
+      contact_id: contact?.id ?? undefined,
+      signature_name: "S",
+      note: {
+        title: "Email sent",
+        content: `Email sent successfully from matthew@srtagency.com — Subject: ${subject}`,
+      },
+    };
+
+    const summary = [
+      `*To:* ${email}`,
+      `*Subject:* ${subject}`,
+      ``,
+      "```",
+      `Hello ${firstName},`,
+      ``,
+      copy,
+      "```",
+      `_+ your Outlook "S" signature (appended on send)_`,
+    ].join("\n");
+
+    const res = await postApprovalRequest({
+      summary,
+      payload,
+      channel,
+      category: "working_lead",
+      zohoId: zoho_lead_id,
+      merchantId: contact?.id ?? undefined,
+    });
+
+    if (!res.slackTs) {
+      return NextResponse.json({ error: res.skipped || "slack_post_failed" }, { status: 502 });
+    }
+
+    return NextResponse.json({ ok: true, channel: res.channel, ts: res.slackTs });
+  } catch (err) {
+    console.error("[compose-email-approval] failed:", (err as Error).message);
+    return NextResponse.json({ error: `compose_error: ${(err as Error).message}` }, { status: 500 });
   }
-
-  const payload: PendingActionPayload = {
-    action_type: "send_email",
-    to: email,
-    subject,
-    body: emailBody,
-    is_html: false,
-    zoho_id: zoho_lead_id,
-    contact_id: contact?.id ?? undefined,
-    signature_name: "S",
-    note: {
-      title: "Email sent",
-      content: `Email sent successfully from matthew@srtagency.com — Subject: ${subject}`,
-    },
-  };
-
-  const summary = [
-    `*To:* ${email}`,
-    `*Subject:* ${subject}`,
-    ``,
-    "```",
-    `Hello ${firstName},`,
-    ``,
-    copy,
-    "```",
-    `_+ your Outlook "S" signature (appended on send)_`,
-  ].join("\n");
-
-  const res = await postApprovalRequest({
-    summary,
-    payload,
-    channel,
-    category: "working_lead",
-    zohoId: zoho_lead_id,
-    merchantId: contact?.id ?? undefined,
-  });
-
-  if (!res.slackTs) {
-    return NextResponse.json({ error: res.skipped || "slack_post_failed" }, { status: 502 });
-  }
-
-  return NextResponse.json({ ok: true, channel: res.channel, ts: res.slackTs });
 }
