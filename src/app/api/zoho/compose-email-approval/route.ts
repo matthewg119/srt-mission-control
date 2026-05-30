@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
+import { VEKTOR_CHANNELS } from "@/config/vektor";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 
 export const runtime = "nodejs";
@@ -63,23 +64,17 @@ export async function POST(req: NextRequest) {
   // readable JSON error instead of a 500 HTML page (which the extension can
   // only render as a generic "compose_failed").
   try {
-    // Resolve the lead's per-lead Slack channel (contacts → sms_conversations).
-    // If none, postApprovalRequest routes to the default working-leads channel.
-    let channel: string | undefined;
+    // Look up the contact only for contact_id / merchant linkage on the payload.
     const { data: contact } = await supabaseAdmin
       .from("contacts")
       .select("id")
       .eq("zoho_lead_id", zoho_lead_id)
       .maybeSingle();
-    if (contact?.id) {
-      const { data: conv } = await supabaseAdmin
-        .from("sms_conversations")
-        .select("slack_channel_id")
-        .eq("contact_id", contact.id)
-        .not("slack_channel_id", "is", null)
-        .maybeSingle();
-      channel = (conv?.slack_channel_id as string | undefined) ?? undefined;
-    }
+
+    // Dialer email-approval cards post to #vektor-email-director (not the lead's
+    // hot-leads channel). If SLACK_VEKTOR_EMAIL_DIRECTOR_CHANNEL isn't set,
+    // postApprovalRequest falls back via the working_lead category.
+    const channel: string | undefined = VEKTOR_CHANNELS.emailDirector || undefined;
 
     const payload: PendingActionPayload = {
       action_type: "send_email",
