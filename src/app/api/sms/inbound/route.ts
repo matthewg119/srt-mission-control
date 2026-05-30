@@ -87,10 +87,11 @@ export async function POST(req: NextRequest) {
     .eq("phone", phone)
     .eq("status", "sent");
 
-  // Ensure Slack channel exists
+  // Ensure Slack channel exists. Prefer the lead's name for channel naming
+  // (sms-first-last); fall back to business name, then phone.
   const displayName =
+    ([contact?.first_name, contact?.last_name].filter(Boolean).join(" ") || null) ??
     contact?.business_name ??
-    [contact?.first_name, contact?.last_name].filter(Boolean).join(" ") ??
     phone;
 
   const { channelId } = await ensureSmsChannel({

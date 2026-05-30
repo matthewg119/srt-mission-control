@@ -65,6 +65,10 @@ export interface PendingActionPayload {
   subject?: string;
   body?: string;
   is_html?: boolean;
+  // Name of an Outlook signature to append at send time (e.g. "S"). When set,
+  // buildHtmlBody fetches it via microsoft.getSignatureByName before falling
+  // back to the default signature.
+  signature_name?: string;
   attachments?: Array<{ name: string; url: string; contentType: string }>;
   deal_id?: string;
   lender_id?: string;

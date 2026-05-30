@@ -1,5 +1,6 @@
 // Per-contact Slack channel manager for SMS conversations.
-// Channel naming: sms-{firstname}-{last4} (renamed to sms-{biz}-{firstname}-{last4} after app received)
+// Channel naming: sms-{firstname}-{lastname} (named after the lead). Duplicate
+// names fall back to a random suffix via the name_taken retry in ensureSmsChannel.
 
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
@@ -213,20 +214,21 @@ export function calcAutoSendDelay(now: Date, lastInboundAt: string | null): numb
 }
 
 function buildChannelName(phone: string, displayName: string, businessName: string | null): string {
-  const last4 = phone.replace(/\D/g, "").slice(-4);
-  const firstName = displayName.split(" ")[0];
+  const slug = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 
-  const parts = businessName
-    ? [businessName, firstName, last4]
-    : [firstName, last4];
+  // Name by the lead's name. displayName is "First Last" (or a business name /
+  // phone fallback from the caller). Slugify the whole thing so we get
+  // sms-john-smith rather than sms-john-1234.
+  let base = slug(displayName);
 
-  return "sms-" + parts
-    .map((p) =>
-      p.toLowerCase()
-        .replace(/[^a-z0-9]/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "")
-    )
-    .join("-")
-    .slice(0, 75); // Slack channel names max 80 chars
+  // Guard against numeric-only junk (e.g. a phone or a raw Meta lead id passed
+  // as displayName) — fall back to the phone last-4 so the channel is still
+  // creatable. Collisions are handled by the name_taken retry in ensureSmsChannel.
+  if (!base || /^[0-9-]+$/.test(base)) {
+    const last4 = phone.replace(/\D/g, "").slice(-4);
+    base = businessName ? `${slug(businessName)}-${last4}` : `lead-${last4}`;
+  }
+
+  return ("sms-" + base).slice(0, 75); // Slack channel names max 80 chars
 }

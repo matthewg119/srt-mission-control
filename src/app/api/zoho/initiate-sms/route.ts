@@ -111,7 +111,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "conversation_upsert_failed" }, { status: 500 });
   }
 
-  const displayName = businessName || [firstName, lastName].filter(Boolean).join(" ") || phone;
+  // Prefer the lead's name for channel naming (sms-first-last); fall back to
+  // business name, then phone.
+  const displayName = [firstName, lastName].filter(Boolean).join(" ") || businessName || phone;
 
   // Ensure Slack channel exists
   const { channelId } = await ensureSmsChannel({

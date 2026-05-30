@@ -7,9 +7,14 @@ import { DEFAULTS } from "@/config/defaults";
 import { EMAIL_SIGNATURE_HTML } from "@/config/email-signature";
 import { advanceEnrollment, resetEnrollmentAfterCancel } from "@/lib/sequence-engine";
 
-async function buildHtmlBody(body: string, isHtml: boolean): Promise<string> {
+async function buildHtmlBody(body: string, isHtml: boolean, signatureName?: string): Promise<string> {
   if (isHtml) return body;
-  const sig = (await microsoft.getDefaultSignature().catch(() => null)) ?? EMAIL_SIGNATURE_HTML;
+  // Prefer a named Outlook signature (e.g. "S") when requested, then the
+  // account's default signature, then the hard-coded fallback.
+  const sig =
+    (signatureName ? await microsoft.getSignatureByName(signatureName).catch(() => null) : null) ??
+    (await microsoft.getDefaultSignature().catch(() => null)) ??
+    EMAIL_SIGNATURE_HTML;
   const htmlBody = body
     .split("\n")
     .map((line) => (line.trim() === "" ? "<br>" : `<p style="margin:0 0 8px 0;">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`))
@@ -63,13 +68,24 @@ async function sendEmail(payload: PendingActionPayload): Promise<ExecuteResult> 
   if (!payload.to || !payload.subject || !payload.body) {
     return { ok: false, error: "missing_email_fields" };
   }
-  const htmlBody = await buildHtmlBody(payload.body, !!payload.is_html);
+  const htmlBody = await buildHtmlBody(payload.body, !!payload.is_html, payload.signature_name);
   await microsoft.sendMail({
     to: payload.to,
     subject: payload.subject,
     body: htmlBody,
     isHtml: true,
   });
+
+  // Log the send back to the Zoho lead (e.g. "Email sent successfully …").
+  // Best-effort — a note failure must not mark the send as failed.
+  if (payload.zoho_id && payload.note) {
+    try {
+      await addNoteToLead(payload.zoho_id, payload.note.title, payload.note.content);
+    } catch (e) {
+      console.error("[execute-action] sendEmail note write failed:", (e as Error).message);
+    }
+  }
+
   return { ok: true, details: { to: payload.to, subject: payload.subject } };
 }
 
