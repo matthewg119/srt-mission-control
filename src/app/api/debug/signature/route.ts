@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
 import { SIGNATURE_S_HTML } from "@/config/email-signature";
+import { supabaseAdmin } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -35,9 +36,21 @@ export async function GET(req: NextRequest) {
   // What buildHtmlBody would actually use for signature_name === "S".
   const storedS = process.env.SIGNATURE_S_HTML || SIGNATURE_S_HTML;
 
+  // Which Supabase project is prod actually using, and is the approval queue
+  // table reachable? (If pending_slack_actions errors, 👍 approvals can't persist
+  // → no email is ever sent.)
+  const supabaseRef = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/^https?:\/\//, "").split(".")[0];
+  const approvalProbe = await supabaseAdmin
+    .from("pending_slack_actions")
+    .select("id", { count: "exact", head: true })
+    .then((r) => ({ reachable: !r.error, error: r.error?.message ?? null, count: r.count ?? null }))
+    .catch((e) => ({ reachable: false, error: (e as Error).message, count: null }));
+
   return NextResponse.json({
     ok: true,
     name,
+    supabase_ref: supabaseRef,
+    pending_slack_actions_table: approvalProbe,
     // Proves Graph does not expose Outlook signatures (expect a non-2xx status
     // and/or an error body — there is no such endpoint).
     graph_raw_signatures_probe: rawProbe,
