@@ -40,13 +40,13 @@ export async function GET(req: NextRequest) {
   // table reachable? (If pending_slack_actions errors, 👍 approvals can't persist
   // → no email is ever sent.)
   const supabaseRef = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/^https?:\/\//, "").split(".")[0];
+  // NOTE: a real GET (not head:true) — a HEAD request can't return the 404
+  // error body, which would mask a missing table as "reachable".
   const approvalProbe = await Promise.resolve(
-    supabaseAdmin
-      .from("pending_slack_actions")
-      .select("id", { count: "exact", head: true })
+    supabaseAdmin.from("pending_slack_actions").select("id").limit(1)
   )
-    .then((r) => ({ reachable: !r.error, error: r.error?.message ?? null, count: r.count ?? null }))
-    .catch((e) => ({ reachable: false, error: (e as Error).message, count: null }));
+    .then((r) => ({ reachable: !r.error, error: r.error?.message ?? null }))
+    .catch((e) => ({ reachable: false, error: (e as Error).message }));
 
   return NextResponse.json({
     ok: true,
