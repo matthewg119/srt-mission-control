@@ -3,7 +3,13 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { getNextSender, getSenderCount, normalizePhone } from "@/lib/loopmessage";
+import { normalizePhone } from "@/lib/phone";
+
+// LoopMessage has been removed — campaigns no longer auto-send (the sender cron
+// is gone). createCampaign still builds the contact list + schedule so the
+// dashboard renders, but there is no outbound transport to assign senders to.
+const getSenderCount = (): number => 1;
+const getNextSender = (_index: number): string | null => null;
 
 // Wave windows in America/New_York: [startHour, endHour (exclusive)]
 const SEND_WAVES: [number, number][] = [

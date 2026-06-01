@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
-import { normalizePhone } from "@/lib/loopmessage";
+import { normalizePhone } from "@/lib/phone";
 
 interface ContactData {
   id: string | null;

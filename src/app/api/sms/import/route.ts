@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 //   response: { ok, contacts: [{phone, first_name, business_name, contact_id}], total, skipped }
 
 import { NextRequest, NextResponse } from "next/server";
-import { normalizePhone } from "@/lib/loopmessage";
+import { normalizePhone } from "@/lib/phone";
 import { supabaseAdmin } from "@/lib/db";
 
 export const runtime = "nodejs";

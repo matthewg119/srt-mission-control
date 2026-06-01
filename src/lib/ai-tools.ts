@@ -633,17 +633,13 @@ async function sendSms(contactId: string, message: string): Promise<string> {
       return JSON.stringify({ error: "This conversation is marked dead — cannot send." });
     }
 
-    const { sendSMS } = await import("@/lib/sms-sender");
-    const result = await sendSMS(contact.phone as string, message, conv.id as string);
-
-    if (!result.ok) {
-      return JSON.stringify({ error: result.error ?? "SMS send failed" });
-    }
-
+    // Outbound is manual now: there is no programmatic send transport (LoopMessage
+    // was removed). Texting happens in the Mac's Messages app; the iMessage bridge
+    // mirrors both sides into the lead's Slack channel. Tell the caller to reply there.
     return JSON.stringify({
-      success: true,
-      message: `SMS sent to ${contact.first_name ?? ""} ${contact.last_name ?? ""}`.trim(),
-      provider: result.provider,
+      error:
+        "Programmatic SMS send is disabled — reply to this merchant from the Messages app on the Mac. " +
+        "Their conversation is mirrored in the lead's Slack channel with a suggested reply you can copy.",
     });
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "SMS send failed" });

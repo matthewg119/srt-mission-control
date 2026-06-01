@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for the SRT iMessage bridge.
+
+  Install:
+    1. Edit the paths + secret below (node path, script path, IMESSAGE_WEBHOOK_SECRET).
+    2. cp com.srt.imessage-bridge.plist ~/Library/LaunchAgents/
+    3. launchctl load -w ~/Library/LaunchAgents/com.srt.imessage-bridge.plist
+  Reload after edits:
+    launchctl unload ~/Library/LaunchAgents/com.srt.imessage-bridge.plist
+    launchctl load -w ~/Library/LaunchAgents/com.srt.imessage-bridge.plist
+
+  NOTE: the user/login session running this agent must have Full Disk Access
+  granted to the node binary (System Settings → Privacy & Security → Full Disk
+  Access) so it can read ~/Library/Messages/chat.db.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.srt.imessage-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/matthew/srt/mac-bridge/imessage-bridge.mjs</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>IMESSAGE_WEBHOOK_SECRET</key>
+        <string>REPLACE_WITH_SECRET</string>
+        <key>IMESSAGE_API_URL</key>
+        <string>https://mission.srtagency.com/api/imessage/inbound</string>
+        <key>IMESSAGE_POLL_MS</key>
+        <string>10000</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/srt-imessage-bridge.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/srt-imessage-bridge.err.log</string>
+</dict>
+</plist>

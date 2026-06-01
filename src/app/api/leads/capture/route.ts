@@ -10,7 +10,7 @@ import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
-import { normalizePhone } from "@/lib/loopmessage";
+import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 
 export async function OPTIONS(request: NextRequest) {

@@ -1,5 +1,5 @@
 // vCard 3.0 builder — RFC 2426 compliant with CRLF line endings required by iOS.
-import { normalizePhone } from "@/lib/loopmessage";
+import { normalizePhone } from "@/lib/phone";
 
 export interface VCardFields {
   firstName?: string | null;

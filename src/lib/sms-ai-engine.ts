@@ -37,9 +37,20 @@ Be direct, confident, specific. This is the close — make it count.
 Keep it under 4 sentences.`,
 };
 
+// Used for iMessage threads that have no funnel stage set (personal Apple ID
+// conversations the Mac bridge ingests). One adaptive prompt — the "data
+// response model" — reads the thread and responds in Matthew's voice.
+const ADAPTIVE_PROMPT = `You are drafting a reply on behalf of Matthew at SRT Agency, a business funding broker, texting a merchant from his personal line.
+Read the conversation and reply naturally in Matthew's voice: casual, first-name basis, direct, no corporate language. Sound like a real person, not a bot.
+Move the relationship forward — answer their question, qualify, or push toward the next step (application, statements, or an offer) based on where the thread is.
+Keep it short (1-3 sentences). Max 1-2 emojis. Never say "unfortunately" or "I apologize". If qualified and not yet sent, the apply link is https://srtagency.com/bfunding`;
+
 export async function draftSmsReply(
   conversationId: string,
-  inboundMessage: string
+  inboundMessage: string,
+  // Optional free-text steer from the Slack "🎛 Remix" modal, e.g. "make it
+  // shorter", "more urgent", "answer their pricing question directly".
+  remixInstruction?: string
 ): Promise<string | null> {
   try {
     // Load conversation state
@@ -51,7 +62,7 @@ export async function draftSmsReply(
 
     if (!conv) return null;
 
-    const stage = (conv.close_stage as number) ?? 1;
+    const stage = (conv.close_stage as number | null) ?? null;
 
     // Load contact info
     const { data: contact } = conv.contact_id
@@ -76,7 +87,8 @@ export async function draftSmsReply(
       .join("\n");
 
     const merchantName = contact?.first_name ?? "there";
-    const systemPrompt = STAGE_PROMPTS[stage] ?? STAGE_PROMPTS[1];
+    // No funnel stage (typical for personal iMessage threads) → adaptive prompt.
+    const systemPrompt = stage != null ? (STAGE_PROMPTS[stage] ?? ADAPTIVE_PROMPT) : ADAPTIVE_PROMPT;
 
     const userPrompt = [
       `Merchant first name: ${merchantName}`,
@@ -88,6 +100,7 @@ export async function draftSmsReply(
       history || "(no prior messages)",
       ``,
       `Latest inbound message: "${inboundMessage}"`,
+      remixInstruction ? `\nAdjust the draft per this instruction: ${remixInstruction}` : null,
       ``,
       `Reply with ONLY the text message body — no quotes, no prefix, no explanation.`,
     ]
@@ -97,6 +110,8 @@ export async function draftSmsReply(
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 300,
+      // Slightly high so 🔄 Regenerate yields a genuinely different variation.
+      temperature: 0.8,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     });

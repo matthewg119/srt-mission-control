@@ -5,6 +5,8 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel } from "@/lib/ai-intel/execute-action";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { ensureSmsChannel } from "@/lib/sms-channel";
+import { draftSmsReply } from "@/lib/sms-ai-engine";
+import { buildSuggestionBlocks } from "@/lib/imessage-suggestion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +84,10 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return openEditModal({ slackTs, channel, userId, triggerId: payload.trigger_id ?? "" });
     case "sms_create_channel":
       return createSmsChannelFromSlack({ slackTs, channel, userId, contactId: action.value });
+    case "imsg_regenerate":
+      return regenerateSuggestion({ slackTs, channel });
+    case "imsg_remix":
+      return openRemixModal({ slackTs, channel, triggerId: payload.trigger_id ?? "" });
     case "sequence_cancel":
       return sequenceCancel({ channel, userId, slackTs, actionValue: action.value });
     case "sequence_cat_mca":
@@ -236,6 +242,9 @@ async function openEditModal(args: { slackTs: string; channel: string; userId: s
 }
 
 async function handleViewSubmission(payload: SlackInteractivePayload): Promise<NextResponse> {
+  if (payload.view?.callback_id === "imsg_remix_submit") {
+    return handleRemixSubmit(payload);
+  }
   if (payload.view?.callback_id !== "ai_edit_submit") {
     return NextResponse.json({ ok: true });
   }
@@ -306,6 +315,117 @@ async function handleViewSubmission(payload: SlackInteractivePayload): Promise<N
     success: result.ok,
   });
 
+  return NextResponse.json({ response_action: "clear" });
+}
+
+// ── iMessage reply suggestions (🔄 Regenerate / 🎛 Remix) ───────────────────
+// The live suggestion lives in sms_pending_drafts keyed by slack_ts. Regenerate
+// re-runs the draft engine on the latest inbound message; Remix does the same
+// with a free-text steer from a modal. Both update the card in place. There is
+// no send — Matthew copies the reply into Messages on his Mac.
+
+interface PendingSuggestion {
+  conversation_id: string;
+  slack_channel_id: string;
+  regenerate_count: number | null;
+}
+
+async function loadSuggestion(slackTs: string): Promise<PendingSuggestion | null> {
+  const { data } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("conversation_id, slack_channel_id, regenerate_count")
+    .eq("slack_ts", slackTs)
+    .maybeSingle();
+  return (data as PendingSuggestion | null) ?? null;
+}
+
+async function getLastInbound(conversationId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from("sms_messages")
+    .select("body")
+    .eq("conversation_id", conversationId)
+    .eq("direction", "inbound")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data?.body as string | undefined) ?? null;
+}
+
+async function applyNewDraft(channel: string, slackTs: string, draft: string, prevCount: number): Promise<void> {
+  const count = prevCount + 1;
+  await slack.updateMessage(channel, slackTs, `💬 Suggested reply: ${draft}`, buildSuggestionBlocks(draft, count));
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ draft_body: draft, regenerate_count: count })
+    .eq("slack_ts", slackTs);
+}
+
+async function regenerateSuggestion(args: { slackTs: string; channel: string }): Promise<NextResponse> {
+  const s = await loadSuggestion(args.slackTs);
+  if (!s) return NextResponse.json({ ok: true });
+  const lastInbound = await getLastInbound(s.conversation_id);
+  if (!lastInbound) return NextResponse.json({ ok: true });
+  const draft = await draftSmsReply(s.conversation_id, lastInbound);
+  if (!draft) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Couldn't regenerate a reply.");
+    return NextResponse.json({ ok: true });
+  }
+  await applyNewDraft(args.channel, args.slackTs, draft, (s.regenerate_count ?? 0));
+  return NextResponse.json({ ok: true });
+}
+
+async function openRemixModal(args: { slackTs: string; channel: string; triggerId: string }): Promise<NextResponse> {
+  if (!args.triggerId) return NextResponse.json({ ok: true });
+  const token = process.env.SLACK_BOT_TOKEN || "";
+  const view = {
+    type: "modal",
+    callback_id: "imsg_remix_submit",
+    private_metadata: JSON.stringify({ slackTs: args.slackTs, channel: args.channel }),
+    title: { type: "plain_text", text: "Remix reply" },
+    submit: { type: "plain_text", text: "Regenerate" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "instr_block",
+        label: { type: "plain_text", text: "How should I adjust it?" },
+        element: {
+          type: "plain_text_input",
+          action_id: "instr_input",
+          multiline: true,
+          placeholder: { type: "plain_text", text: "e.g. shorter · more urgent · answer their pricing question" },
+        },
+      },
+    ],
+  };
+  const res = await fetch(`${SLACK_API}/views.open`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ trigger_id: args.triggerId, view }),
+  });
+  const json = (await res.json()) as { ok: boolean; error?: string };
+  if (!json.ok) {
+    await slack.postThreadReply(args.channel, args.slackTs, `⚠️ Could not open remix: ${json.error}`);
+  }
+  return NextResponse.json({ ok: true });
+}
+
+async function handleRemixSubmit(payload: SlackInteractivePayload): Promise<NextResponse> {
+  const meta = JSON.parse(payload.view?.private_metadata ?? "{}") as { slackTs?: string; channel?: string };
+  if (!meta.slackTs || !meta.channel) return NextResponse.json({ ok: true });
+  const instruction = payload.view?.state.values.instr_block?.instr_input?.value ?? "";
+
+  const s = await loadSuggestion(meta.slackTs);
+  if (!s) return NextResponse.json({ ok: true });
+  const lastInbound = await getLastInbound(s.conversation_id);
+  if (!lastInbound) return NextResponse.json({ ok: true });
+
+  const draft = await draftSmsReply(s.conversation_id, lastInbound, instruction || undefined);
+  if (!draft) {
+    await slack.postThreadReply(meta.channel, meta.slackTs, "⚠️ Couldn't remix a reply.");
+    return NextResponse.json({ ok: true });
+  }
+  await applyNewDraft(meta.channel, meta.slackTs, draft, (s.regenerate_count ?? 0));
   return NextResponse.json({ response_action: "clear" });
 }
 

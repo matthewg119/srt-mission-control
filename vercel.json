@@ -30,7 +30,7 @@
     },
     {
       "path": "/api/cron/daily-content-ideas",
-      "schedule": "0 17 * * *"
+      "schedule": "0 13 * * 1-5"
     },
     {
       "path": "/api/cron/archive-deal-channels",
@@ -49,16 +49,8 @@
       "schedule": "0 21 * * 1-5"
     },
     {
-      "path": "/api/cron/sms-delayed-sends",
-      "schedule": "0 10 * * *"
-    },
-    {
-      "path": "/api/cron/sms-campaign-sender",
-      "schedule": "0 11 * * *"
-    },
-    {
-      "path": "/api/cron/sms-auto-send",
-      "schedule": "0 12 * * *"
+      "path": "/api/cron/email-followup-suggestions",
+      "schedule": "30 15 * * 1-5"
     }
   ]
 }
