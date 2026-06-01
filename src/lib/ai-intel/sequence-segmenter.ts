@@ -17,15 +17,11 @@ import { slack } from "@/lib/slack-bot";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 
 // ── Paid-ads exclusion ─────────────────────────────────────────────────────
-// NOTE: Update this list after running the Q1 SQL and confirming actual values:
-//   SELECT source, ad_source, COUNT(*) FROM contacts GROUP BY source, ad_source ORDER BY count DESC;
-
-const PAID_AD_SOURCES = ["meta", "facebook", "instagram"]; // matches contacts.ad_source
+// contacts has no `ad_source` column, so paid-ad leads are detected purely by
+// keyword-matching the `source` text field.
 const PAID_SOURCE_KEYWORDS = ["db 1.0", "facebook", "meta", "instagram", "fb ads", "ig ads"];
 
 function isPaidAdLead(row: ContactRow): boolean {
-  const adSource = (row.ad_source ?? "").toLowerCase();
-  if (PAID_AD_SOURCES.some((s) => adSource.includes(s))) return true;
   const source = (row.source ?? "").toLowerCase();
   return PAID_SOURCE_KEYWORDS.some((k) => source.includes(k));
 }
@@ -42,7 +38,6 @@ interface ContactRow {
   updated_at: string | null;
   do_not_contact: boolean;
   source: string | null;
-  ad_source: string | null;
   portal_app_completed: boolean;
   portal_statements_uploaded: boolean;
   application_signed_at: string | null;
@@ -85,7 +80,7 @@ export async function runSegmenter(): Promise<{
     .from("contacts")
     .select(
       "id, email, first_name, last_name, business_name, created_at, updated_at, " +
-      "do_not_contact, source, ad_source, portal_app_completed, portal_statements_uploaded, " +
+      "do_not_contact, source, portal_app_completed, portal_statements_uploaded, " +
       "application_signed_at, statements_uploaded_at, last_portal_login_at, portal_login_count, " +
       "zoho_lead_id"
     )
