@@ -14,6 +14,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
+import { FULL_HTML_EMAIL_TEMPLATES } from "@/config/dialer-email-templates";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 
 export const runtime = "nodejs";
@@ -35,10 +36,20 @@ export async function POST(req: NextRequest) {
     zoho_lead_id?: string;
     subject?: string;
     copy?: string;
+    template_key?: string;
   };
 
-  const { zoho_lead_id, subject, copy } = body;
-  if (!zoho_lead_id || !subject || !copy) {
+  const { zoho_lead_id, subject, copy, template_key } = body;
+
+  // Full-HTML templates (e.g. "next-steps") are sent verbatim — no greeting,
+  // no signature. They only need a zoho_lead_id; subject + body come from the
+  // stored template, so the dialer's textarea copy is ignored.
+  const fullHtmlTemplate = template_key ? FULL_HTML_EMAIL_TEMPLATES[template_key] : undefined;
+
+  if (!zoho_lead_id) {
+    return NextResponse.json({ error: "missing zoho_lead_id" }, { status: 400 });
+  }
+  if (!fullHtmlTemplate && (!subject || !copy)) {
     return NextResponse.json({ error: "missing zoho_lead_id, subject, or copy" }, { status: 400 });
   }
 
@@ -56,9 +67,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "no_email_on_lead" }, { status: 422 });
   }
 
-  // Email body: greeting is always prepended; the S signature is appended at
-  // send time by buildHtmlBody (signature_name: "S").
-  const emailBody = `Hello ${firstName},\n\n${copy}`;
+  // Email body: for normal templates the greeting is prepended and the S
+  // signature is appended at send time by buildHtmlBody (signature_name: "S").
+  // Full-HTML templates skip both — they're sent exactly as stored.
+  const emailSubject = fullHtmlTemplate ? fullHtmlTemplate.subject : (subject as string);
+  const emailBody = fullHtmlTemplate ? fullHtmlTemplate.html : `Hello ${firstName},\n\n${copy}`;
 
   // Everything past Zoho is wrapped so any Supabase/Slack failure returns a
   // readable JSON error instead of a 500 HTML page (which the extension can
@@ -79,29 +92,38 @@ export async function POST(req: NextRequest) {
     const payload: PendingActionPayload = {
       action_type: "send_email",
       to: email,
-      subject,
+      subject: emailSubject,
       body: emailBody,
-      is_html: false,
+      // Full-HTML templates send verbatim (is_html:true → no greeting/signature);
+      // normal templates send plain text with the "S" signature appended.
+      is_html: !!fullHtmlTemplate,
       zoho_id: zoho_lead_id,
       contact_id: contact?.id ?? undefined,
-      signature_name: "S",
+      ...(fullHtmlTemplate ? {} : { signature_name: "S" }),
       note: {
         title: "Email sent",
-        content: `Email sent successfully from matthew@srtagency.com — Subject: ${subject}`,
+        content: `Email sent successfully from matthew@srtagency.com — Subject: ${emailSubject}`,
       },
     };
 
-    const summary = [
-      `*To:* ${email}`,
-      `*Subject:* ${subject}`,
-      ``,
-      "```",
-      `Hello ${firstName},`,
-      ``,
-      copy,
-      "```",
-      `_+ your Outlook "S" signature (appended on send)_`,
-    ].join("\n");
+    const summary = fullHtmlTemplate
+      ? [
+          `*To:* ${email}`,
+          `*Subject:* ${emailSubject}`,
+          ``,
+          `*Sends the branded "Next Steps" email (verbatim — no signature).*`,
+        ].join("\n")
+      : [
+          `*To:* ${email}`,
+          `*Subject:* ${emailSubject}`,
+          ``,
+          "```",
+          `Hello ${firstName},`,
+          ``,
+          copy,
+          "```",
+          `_+ your Outlook "S" signature (appended on send)_`,
+        ].join("\n");
 
     const res = await postApprovalRequest({
       summary,
