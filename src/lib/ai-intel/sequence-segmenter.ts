@@ -40,8 +40,6 @@ interface ContactRow {
   source: string | null;
   portal_app_completed: boolean;
   portal_statements_uploaded: boolean;
-  application_signed_at: string | null;
-  statements_uploaded_at: string | null;
   last_portal_login_at: string | null;
   portal_login_count: number;
   zoho_lead_id: string | null;
@@ -81,7 +79,7 @@ export async function runSegmenter(): Promise<{
     .select(
       "id, email, first_name, last_name, business_name, created_at, updated_at, " +
       "do_not_contact, source, portal_app_completed, portal_statements_uploaded, " +
-      "application_signed_at, statements_uploaded_at, last_portal_login_at, portal_login_count, " +
+      "last_portal_login_at, portal_login_count, " +
       "zoho_lead_id"
     )
     .not("email", "is", null)
@@ -97,10 +95,11 @@ export async function runSegmenter(): Promise<{
   const since7d = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const { data: recentCalls } = await supabaseAdmin
     .from("call_log")
-    .select("contact_id, created_at")
+    .select("lead_id, created_at")
     .gte("created_at", since7d);
 
-  const recentCallIds = new Set((recentCalls ?? []).map((c: { contact_id: string }) => c.contact_id));
+  // call_log.lead_id references contacts(id)
+  const recentCallIds = new Set((recentCalls ?? []).map((c: { lead_id: string }) => c.lead_id));
 
   // Fetch recent marketing_sends (last 7 days) to exclude contacts with recent email
   const { data: recentSends } = await supabaseAdmin
@@ -180,7 +179,6 @@ export async function runSegmenter(): Promise<{
             portal_statements_uploaded: false,
             onedrive_checked: !!biz,
             onedrive_has_files: false,
-            days_since_signed: Math.floor(daysSince(row.application_signed_at)),
           },
         });
       }
