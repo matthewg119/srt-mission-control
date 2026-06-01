@@ -1,4 +1,11 @@
 /**
+ * Public HTTPS URL for the SRT logo shown in email signatures. Gmail (and most
+ * webmail) strip embedded `data:` image URIs, so the logo must be hosted. Served
+ * from the Next.js public/ folder (public/srt-logo.png).
+ */
+export const SRT_LOGO_URL = "https://mission.srtagency.com/srt-logo.png";
+
+/**
  * Default email signature for outgoing emails from Mission Control.
  * Based on the SRT Agency HTML signature template.
  */
@@ -19,7 +26,7 @@ export const EMAIL_SIGNATURE_HTML = `
       <table cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="vertical-align: middle; padding-right: 8px;">
-            <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACEAAAAkCAYAAAAHKVPcAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAADkUlEQVR4nO2YT2hcVRTGv+/ceTOTycQYNCWIK4MIiV2Ja+PWra0IotVaCagLF+6HQQSXBVsKKgZXQgLdiJuCmCy7CApiIrS1gmgqldj8m7yZefd8LiYTU5NOZkImuPBshnc4797fPX/vG6KfooqBVX/kq89eSU8NfdRAfIxRFAHQVIj67tQvq++xbwCViqFa9YmZS2O3nxy5mQ6XBllruCgTBAhuQ2Ur3F39Idc3iMlJAsBvo8nTjXJxUFvbEWSAAEIQYL6x5Y1Ccrp/EG0ZGnABAkjtKncCQDc6ZH2HaO3ZKew8GYhD5GjhODsbMDFKLN39x8Pt57mX4glAiJhjh41EYE/4gY6x6B1CIkg98erFF3zg0RejOAKPQDAG4PeB+p2ry1/wG0jE3FzXy3YPcXY2gIzj5z6eapbGvlYoAB4BElCEWw6p5d8ef/PK87fI+YnZ2bAEHB4aAt0n5sQoASCG4hmFgjzdTGOzFr2+GWNzO8Z0K425oqKSMwDQWCl33Qh7zoks5IeISEA5ggFs15/kED0UhlqWN7pesweIeQAAYbGVe/stWqpOSXuw9NwnBO/oZkE9z6OWJyoVe24ehilgAQAwhaPW/FEk1552C4DvEACo7vzur/n+QFSrPv7ypUmUH3pG8hABwALzWe3HGzO8jgclwHFCjL9+5d0sP3zRk3IwOBwAIKT5MsbfuPz5zRleYKXSVwprWuGDphWC19ebWX0r83ot8/p20+up0sLo+dPnPnwK1apPLE32bdiZLP8ws4ZIS0DLgciBTKAo0nw9P/Y4ADTGVvrgDQIgTJLEdva1c1AQDYCMDP2tELX6ROe698594TjkP3Gp+R+iLYdA9D0duoE4GTkhiM4ePRmIQ0ZgzxAGax3sGGfriXjisGtOzxB+VJIOkiMEHujblj7woO/Vg+wN1AEpGEwPeKG91u4G+w5IQpKD3ti+Tx8zQeb/vnGZmhLgiNl9eq2nCWEEfB+IOZ0ELXhjkYWytf4y2D2oMxkMaKZrxfU7ywA4XC86ABSxfS0YTbRkjz3AXJKzYObZAgAMF1v2o7fvLScbWzUMlgKkvSCu4ZLlG9n3lo+b5y3967rRo0miXARgXv8p8dqFpbnqKiri4ifTTVQqlmx8e5Wbf3yaMFsD4JQrwN2D3ePGyuVnt659CYmL09NNqGK33nn/14G12lulWvZzIijnUs6lxMHSn5uLIxv22t+k65Yz9Q9hnwAAAABJRU5ErkJggg==" width="28" height="30" alt="SRT Agency" style="display: block; border: 0;" />
+            <img src="${SRT_LOGO_URL}" width="28" height="30" alt="SRT Agency" style="display: block; border: 0;" />
           </td>
           <td style="vertical-align: middle;">
             <span style="font-size: 14px; font-weight: 700; color: #0d1b2a; line-height: 1;">Scaling Revenue Together</span>
@@ -75,10 +82,6 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// Logo base64 (same one used in EMAIL_SIGNATURE_HTML above)
-export const SRT_LOGO_BASE64 =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACEAAAAkCAYAAAAHKVPcAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAADkUlEQVR4nO2YT2hcVRTGv+/ceTOTycQYNCWIK4MIiV2Ja+PWra0IotVaCagLF+6HQQSXBVsKKgZXQgLdiJuCmCy7CApiIrS1gmgqldj8m7yZefd8LiYTU5NOZkImuPBshnc4797fPX/vG6KfooqBVX/kq89eSU8NfdRAfIxRFAHQVIj67tQvq++xbwCViqFa9YmZS2O3nxy5mQ6XBllruCgTBAhuQ2Ur3F39Idc3iMlJAsBvo8nTjXJxUFvbEWSAAEIQYL6x5Y1Ccrp/EG0ZGnABAkjtKncCQDc6ZH2HaO3ZKew8GYhD5GjhODsbMDFKLN39x8Pt57mX4glAiJhjh41EYE/4gY6x6B1CIkg98erFF3zg0RejOAKPQDAG4PeB+p2ry1/wG0jE3FzXy3YPcXY2gIzj5z6eapbGvlYoAB4BElCEWw6p5d8ef/PK87fI+YnZ2bAEHB4aAt0n5sQoASCG4hmFgjzdTGOzFr2+GWNzO8Z0K425oqKSMwDQWCl33Qh7zoks5IeISEA5ggFs15/kED0UhlqWN7pesweIeQAAYbGVe/stWqpOSXuw9NwnBO/oZkE9z6OWJyoVe24ehilgAQAwhaPW/FEk1552C4DvEACo7vzur/n+QFSrPv7ypUmUH3pG8hABwALzWe3HGzO8jgclwHFCjL9+5d0sP3zRk3IwOBwAIKT5MsbfuPz5zRleYKXSVwprWuGDphWC19ebWX0r83ot8/p20+up0sLo+dPnPnwK1apPLE32bdiZLP8ws4ZIS0DLgciBTKAo0nw9P/Y4ADTGVvrgDQIgTJLEdva1c1AQDYCMDP2tELX6ROe698594TjkP3Gp+R+iLYdA9D0duoE4GTkhiM4ePRmIQ0ZgzxAGax3sGGfriXjisGtOzxB+VJIOkiMEHujblj7woO/Vg+wN1AEpGEwPeKG91u4G+w5IQpKD3ti+Tx8zQeb/vnGZmhLgiNl9eq2nCWEEfB+IOZ0ELXhjkYWytf4y2D2oMxkMaKZrxfU7ywA4XC86ABSxfS0YTbRkjz3AXJKzYObZAgAMF1v2o7fvLScbWzUMlgKkvSCu4ZLlG9n3lo+b5y3967rRo0miXARgXv8p8dqFpbnqKiri4ifTTVQqlmx8e5Wbf3yaMFsD4JQrwN2D3ePGyuVnt659CYmL09NNqGK33nn/14G12lulWvZzIijnUs6lxMHSn5uLIxv22t+k65Yz9Q9hnwAAAABJRU5ErkJggg==";
-
 /**
  * The Outlook "S" signature (Matthew Garcia / Senior Capital Strategist),
  * captured once from a real OWA-composed message and stored server-side.
@@ -90,7 +93,7 @@ export const SRT_LOGO_BASE64 =
  *
  * The captured HTML referenced the logo via `cid:` (an inline attachment Outlook
  * adds at send time). We send via Graph without that attachment, so the logo is
- * inlined here as the SRT_LOGO_BASE64 data-URI instead.
+ * referenced via the hosted SRT_LOGO_URL instead.
  */
 export const SIGNATURE_S_HTML = `
 <div style="font-family:Arial,Helvetica,sans-serif;">
@@ -112,7 +115,7 @@ export const SIGNATURE_S_HTML = `
             <tbody>
               <tr>
                 <td style="padding-right:8px; vertical-align:middle;">
-                  <img alt="SRT Agency" width="28" height="30" src="${SRT_LOGO_BASE64}" style="width:28px; height:30px; display:block; border:0;" />
+                  <img alt="SRT Agency" width="28" height="30" src="${SRT_LOGO_URL}" style="width:28px; height:30px; display:block; border:0;" />
                 </td>
                 <td style="vertical-align:middle;">
                   <div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:rgb(13,27,42);"><span style="line-height:1; font-weight:700;">Scaling Revenue Together</span></div>
@@ -187,7 +190,7 @@ export function generateSignatureHtml(params: SignatureParams): string {
       <table cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="vertical-align: middle; padding-right: 8px;">
-            <img src="${SRT_LOGO_BASE64}" width="28" height="30" alt="SRT Agency" style="display: block; border: 0;" />
+            <img src="${SRT_LOGO_URL}" width="28" height="30" alt="SRT Agency" style="display: block; border: 0;" />
           </td>
           <td style="vertical-align: middle;">
             <span style="font-size: 14px; font-weight: 700; color: #0d1b2a; line-height: 1;">Scaling Revenue Together</span>
