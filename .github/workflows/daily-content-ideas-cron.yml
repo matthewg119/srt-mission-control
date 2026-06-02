@@ -1,14 +1,14 @@
 name: Daily Content Ideas Cron
 
-# External scheduler for /api/cron/daily-content-ideas (3x weekdays).
-# Vercel Hobby caps crons at 1/day — GitHub Actions has no such limit.
+# External scheduler for /api/cron/daily-content-ideas (once per weekday).
+# Vercel Hobby caps crons at 1/day — GitHub Actions is the primary trigger.
 
 on:
-  schedule:
-    # 9am / 1pm / 5pm Eastern on weekdays (13/17/21 UTC during EDT).
-    - cron: "0 13 * * 1-5"
-    - cron: "0 17 * * 1-5"
-    - cron: "0 21 * * 1-5"
+  # Scheduled trigger disabled — content idea/hook cards paused (2026-06-02).
+  # Re-enable by uncommenting the schedule below.
+  # schedule:
+  #   # 9am Eastern on weekdays (13:00 UTC during EDT).
+  #   - cron: "0 13 * * 1-5"
   workflow_dispatch:
 
 jobs:
