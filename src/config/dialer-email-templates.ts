@@ -18,13 +18,12 @@ export interface FullHtmlEmailTemplate {
 // matthew@srtagency.com → "funded in less than 24 hours" → "Best regards,".
 // Sent verbatim — no greeting, no signature.
 //
-// NOTE: TODO_SKYLINE_IMAGE_URL must be replaced with the real hosted skyline
-// image URL from the original Outlook email before this renders correctly.
+// NOTE: the skyline banner image was removed for now (per request). Add it back
+// as an <img> at the top of the html when a hosted URL is available.
 export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = {
   "next-steps": {
     subject: "Business loan Inquire (Next Steps)",
     html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;max-width:640px;">
-  <p style="text-align:center;"><img src="TODO_SKYLINE_IMAGE_URL" alt="Miami skyline" width="560" style="max-width:100%;height:auto;border:0;border-radius:6px;" /></p>
   <p style="text-align:center;font-size:16px;">Nice speaking with you!</p>
   <p style="text-align:center;font-size:15px;">Please complete the following <strong>application &amp; Income Verification</strong>:</p>
   <p style="text-align:center;"><span style="background:#fff200;padding:2px 4px;">&rarr; 2-minute <strong>Funding</strong> application</span></p>
