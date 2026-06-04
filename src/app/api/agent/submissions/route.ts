@@ -11,7 +11,7 @@ import { isRoutingSubject, parseLenderChoicesFromReply } from "@/lib/ai-intel/re
 import { buildSubmissionPackage } from "@/lib/ai-intel/deal-submission-builder";
 import { routeToChannel } from "@/config/vektor";
 import { syncLenderSubmissionsSubform } from "@/lib/zoho-mca-fields";
-import { addNoteToLead } from "@/lib/zoho";
+import { addNoteResilient } from "@/lib/zoho";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { DEFAULTS } from "@/config/defaults";
 import {
@@ -275,6 +275,7 @@ async function handleApproved(args: { contact: { id: string; business_name: stri
   const noteContent = `${amt} @ ${rateStr} / ${termStr}`;
   await writeFunderReplyNote({
     zohoId: args.contact.zoho_lead_id,
+    businessName: args.contact.business_name,
     lenderName,
     status: "Approved",
     content: noteContent,
@@ -346,6 +347,7 @@ async function handleDeclined(args: { contact: { id: string; business_name: stri
   const reason = args.classification.declined_reason ?? args.classification.summary;
   await writeFunderReplyNote({
     zohoId: args.contact.zoho_lead_id,
+    businessName: args.contact.business_name,
     lenderName,
     status: "Declined",
     content: reason,
@@ -376,6 +378,7 @@ async function handleStipsNeeded(args: { contact: { id: string; business_name: s
     : args.classification.summary;
   await writeFunderReplyNote({
     zohoId: args.contact.zoho_lead_id,
+    businessName: args.contact.business_name,
     lenderName,
     status: "Stips",
     content: stipsList,
@@ -418,6 +421,7 @@ async function handleCounterOffer(args: { contact: { id: string; business_name: 
   ].filter(Boolean).join(" ");
   await writeFunderReplyNote({
     zohoId: args.contact.zoho_lead_id,
+    businessName: args.contact.business_name,
     lenderName,
     status: "Counter",
     content: details || args.classification.summary,
@@ -649,9 +653,10 @@ async function handleFunderReplyForEmailSubmission(args: {
       : classification.intent === "counter_offer" ? "Counter"
       : (classification.intent === "stips_needed" || classification.intent === "missing_fields") ? "Stips"
       : null;
-    if (contact?.zoho_lead_id && zStatus) {
+    if (zStatus) {
       await writeFunderReplyNote({
-        zohoId: contact.zoho_lead_id,
+        zohoId: contact?.zoho_lead_id ?? null,
+        businessName: submission.business_name,
         lenderName: funderName,
         status: zStatus,
         content: detail || classification.summary,
@@ -802,16 +807,24 @@ async function zohoSubformSync(merchantId: string, caller: string): Promise<void
 
 async function writeFunderReplyNote(args: {
   zohoId: string | null;
+  businessName?: string | null;
   lenderName: string;
   status: "Approved" | "Declined" | "Counter" | "Stips";
   content: string;
 }): Promise<void> {
-  if (!args.zohoId) return;
+  if (!args.zohoId && !args.businessName) return;
   const lender = args.lenderName === "—" ? "Lender" : args.lenderName;
   try {
-    await addNoteToLead(args.zohoId, `${lender} — ${args.status}`, args.content);
+    // Resilient: writes to the Lead, or the converted Deal (by business name) if the lead was converted.
+    const r = await addNoteResilient({
+      zohoLeadId: args.zohoId,
+      businessName: args.businessName,
+      title: `${lender} — ${args.status}`,
+      content: args.content,
+    });
+    if (!r.ok) console.warn(`[submissions] funder note not written (${args.status}) for ${args.businessName ?? args.zohoId}`);
   } catch (e) {
-    console.warn(`[submissions] addNoteToLead(${args.status}) failed:`, (e as Error).message);
+    console.warn(`[submissions] writeFunderReplyNote(${args.status}) failed:`, (e as Error).message);
   }
 }
 

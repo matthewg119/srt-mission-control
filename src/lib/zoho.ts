@@ -331,6 +331,78 @@ export async function addNoteToLead(
             }
 }
 
+/** Add a note to any module record (Leads, Deals, Contacts, ...). */
+export async function addNoteToRecord(
+  module: string,
+  recordId: string,
+  title: string,
+  content: string
+): Promise<void> {
+  const result = await zohoRequest("POST", "/Notes", {
+    data: [{ Note_Title: title, Note_Content: content, Parent_Id: recordId, se_module: module }],
+  }) as { data?: Array<{ code: string; message: string; status: string }> };
+  const created = result.data?.[0];
+  if (created && created.status !== "success") {
+    throw new Error(`Zoho note non-success: code=${created.code} message=${created.message}`);
+  }
+}
+
+/** Find a Deal id by (business) name. Returns the first match or null. */
+export async function findDealByName(name: string): Promise<string | null> {
+  const q = (name ?? "").trim();
+  if (!q) return null;
+  try {
+    const result = await zohoRequest(
+      "GET",
+      `/Deals/search?criteria=${encodeURIComponent(`(Deal_Name:starts_with:${q})`)}`
+    ) as { data?: ZohoApiRecord[] };
+    let hit = result.data?.[0];
+    if (!hit) {
+      const byWord = await zohoRequest("GET", `/Deals/search?word=${encodeURIComponent(q)}`) as { data?: ZohoApiRecord[] };
+      hit = byWord.data?.[0];
+    }
+    return hit ? String(hit.id) : null;
+  } catch (e) {
+    console.warn("[zoho] findDealByName failed:", (e as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Write a CRM note, surviving lead conversion. Tries the Lead first; if the lead has been
+ * converted (Zoho rejects notes on converted leads) or is missing, falls back to the converted
+ * Deal matched by business name. Returns where it landed (or null on total failure).
+ */
+export async function addNoteResilient(opts: {
+  zohoLeadId?: string | null;
+  businessName?: string | null;
+  title: string;
+  content: string;
+}): Promise<{ ok: boolean; target: string | null }> {
+  if (opts.zohoLeadId) {
+    try {
+      await addNoteToLead(opts.zohoLeadId, opts.title, opts.content);
+      return { ok: true, target: `Leads/${opts.zohoLeadId}` };
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Only fall back on conversion/not-found; rethrow nothing — try the Deal next.
+      console.warn("[zoho] addNoteToLead failed, trying converted Deal:", msg.slice(0, 120));
+    }
+  }
+  if (opts.businessName) {
+    const dealId = await findDealByName(opts.businessName);
+    if (dealId) {
+      try {
+        await addNoteToRecord("Deals", dealId, opts.title, opts.content);
+        return { ok: true, target: `Deals/${dealId}` };
+      } catch (e) {
+        console.warn("[zoho] addNoteToRecord(Deals) failed:", (e as Error).message.slice(0, 120));
+      }
+    }
+  }
+  return { ok: false, target: null };
+}
+
 export async function getLead(zohoLeadId: string): Promise<ZohoApiRecord> {
             const result = await zohoRequest("GET", `/Leads/${zohoLeadId}`) as {
                           data?: ZohoApiRecord[];
