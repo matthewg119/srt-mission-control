@@ -61,6 +61,24 @@ export async function GET(req: NextRequest) {
   if (token) {
     return new NextResponse(token, { status: 200, headers: { "Content-Type": "text/plain" } });
   }
+  // Manual replay of a single message (e.g. mail that arrived before a fix was deployed).
+  // createEmailSubmission is idempotent on original_message_id, so this is safe to re-run.
+  const reprocess = url.searchParams.get("reprocess");
+  if (reprocess) {
+    const secret = process.env.CRON_SECRET;
+    const auth = req.headers.get("authorization") ?? "";
+    const qsecret = url.searchParams.get("secret") ?? "";
+    if (secret && auth !== `Bearer ${secret}` && qsecret !== secret) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const mailbox = url.searchParams.get("mailbox") || "submissions@srtagency.com";
+    try {
+      const result = await processMessage(mailbox, reprocess);
+      return NextResponse.json({ ok: true, reprocessed: reprocess, result });
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
+    }
+  }
   return NextResponse.json({ ok: true, endpoint: "agent/submissions" });
 }
 
@@ -136,8 +154,28 @@ async function processMessage(mailbox: string, messageId: string): Promise<Recor
   const fromAddress = msg.from?.emailAddress?.address ?? "unknown";
   const fromDomain = fromAddress.split("@")[1]?.toLowerCase() ?? null;
 
+  // Observability: record every inbound + the branch it routes to, so failures aren't invisible.
+  const newDeal = isNewDealEmail(fromAddress, msg.subject);
+  const routing = isRoutingSubject(msg.subject);
+  try {
+    await supabaseAdmin.from("system_logs").insert({
+      event_type: "submissions_webhook",
+      description: `Inbound to ${mailbox}: "${msg.subject}" from ${fromAddress} → ${newDeal ? "new_deal" : routing ? "routing" : "classify"}`,
+      metadata: {
+        message_id: msg.id,
+        from: fromAddress,
+        subject: msg.subject,
+        is_new_deal: newDeal,
+        is_routing: routing,
+        allow_count: (process.env.SUBMISSIONS_INTERNAL_SENDERS || "").split(",").map((s) => s.trim()).filter(Boolean).length,
+      },
+    });
+  } catch (e) {
+    console.warn("[agent/submissions] system_logs insert failed:", (e as Error).message);
+  }
+
   // Matthew's own "New Deal — {Business}" intake email → start the verbatim-forward flow.
-  if (isNewDealEmail(fromAddress, msg.subject)) {
+  if (newDeal) {
     return handleNewDealEmail(mailbox, msg, fromAddress);
   }
 
@@ -545,9 +583,9 @@ async function handleNewDealEmail(
 
   const channel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
   const text =
-    `📦 *New Deal — ${business}*\n` +
-    "Reply in this thread with the funder names to submit to " +
-    "(e.g. `Legend, Fundbox, Kapitus`) and I'll forward this exact package to each.";
+    `📦 *New Deal — ${business}* — ready to show.\n` +
+    "Reply in this thread with the funder name(s) to send to " +
+    "(e.g. `Lexio, CFG, Bitty`) and I'll forward this exact package to each.";
 
   let threadTs: string | null = null;
   try {
