@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { getLead } from "@/lib/zoho";
+import { getLead, addNoteToLead } from "@/lib/zoho";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction } from "@/lib/ai-intel/execute-action";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
@@ -91,6 +91,12 @@ export async function POST(req: NextRequest) {
     // postApprovalRequest falls back via the working_lead category.
     const channel: string | undefined = VEKTOR_CHANNELS.emailDirector || undefined;
 
+    // Tracking note: who got which template. Logged to the Zoho lead so every
+    // send is auditable from the CRM timeline.
+    const templateLabel = template_key || "custom copy";
+    const noteTitle = `Email sent — ${emailSubject}`;
+    const noteContent = `Sent to ${email}${firstName !== "there" ? ` (${firstName})` : ""} from matthew@srtagency.com. Template: ${templateLabel}. Subject: "${emailSubject}".`;
+
     const payload: PendingActionPayload = {
       action_type: "send_email",
       to: email,
@@ -102,26 +108,35 @@ export async function POST(req: NextRequest) {
       zoho_id: zoho_lead_id,
       contact_id: contact?.id ?? undefined,
       ...(fullHtmlTemplate ? {} : { signature_name: "S" }),
-      note: {
-        title: "Email sent",
-        content: `Email sent successfully from matthew@srtagency.com — Subject: ${emailSubject}`,
-      },
+      note: { title: noteTitle, content: noteContent },
     };
 
     // Direct send (dialer default): skip the Slack 👍 round-trip and mail the
     // email immediately via the same executor the Slack approval would have run.
-    // sendEmail() writes the "Email sent" Zoho note from payload.note.
+    // The tracking note is written here (not inside sendEmail) so we can report
+    // back whether it landed in Zoho — payload.note is dropped to avoid a double note.
     if (send_now) {
       const result = await executePendingAction({
         actionId: "dialer-direct",
         actionType: "send_email",
-        payload,
+        payload: { ...payload, note: undefined },
         approvedBy: "dialer",
       });
       if (!result.ok) {
         return NextResponse.json({ error: result.error || "send_failed" }, { status: 502 });
       }
-      return NextResponse.json({ ok: true, sent: true, to: email });
+
+      let noteWritten = false;
+      let noteError: string | undefined;
+      try {
+        await addNoteToLead(zoho_lead_id, noteTitle, noteContent);
+        noteWritten = true;
+      } catch (e) {
+        noteError = (e as Error).message;
+        console.error("[compose-email-approval] note write failed:", noteError);
+      }
+
+      return NextResponse.json({ ok: true, sent: true, to: email, template: templateLabel, note_written: noteWritten, note_error: noteError });
     }
 
     const summary = fullHtmlTemplate
