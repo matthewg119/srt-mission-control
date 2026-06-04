@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/db";
 import { handleStatementDrop } from "@/lib/ai-intel/build-draft";
 
 export const runtime = "nodejs";
@@ -10,6 +11,11 @@ export const maxDuration = 300; // statement analysis + BTF fill + drafts can ru
 // its own invocation/timeout instead of the short-lived events function.
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
+  await supabaseAdmin.from("system_logs").insert({
+    event_type: "build_drafts_received",
+    description: "[build-drafts] POST received",
+    metadata: { files: Array.isArray(body?.files) ? body.files.length : 0, channel: body?.channel ?? null },
+  }).then(() => {}, () => {});
   if (!body || !body.channel || !body.threadTs || !Array.isArray(body.files)) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }

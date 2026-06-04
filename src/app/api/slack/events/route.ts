@@ -225,6 +225,11 @@ export async function POST(request: NextRequest) {
       ) {
         const dropThread = parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : (event.ts as string);
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+        await supabaseAdmin.from("system_logs").insert({
+          event_type: "build_drafts_dispatch",
+          description: "[slack/events] #srt-sub PDF drop → dispatch build-drafts",
+          metadata: { files: attachedFiles.length, channel },
+        }).then(() => {}, () => {});
         void fetch(`${appUrl}/api/agent/build-drafts`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

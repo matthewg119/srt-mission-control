@@ -23,6 +23,12 @@ export interface LeadMatch {
 
 type ContactRow = { id: string; business_name: string | null; zoho_lead_id: string | null };
 
+async function logEvent(event_type: string, metadata: Record<string, unknown>): Promise<void> {
+  try {
+    await supabaseAdmin.from("system_logs").insert({ event_type, description: `[build-draft] ${event_type}`, metadata });
+  } catch { /* non-fatal */ }
+}
+
 const STOP = new Set(["llc", "inc", "corp", "co", "the", "and", "group", "company", "services", "service"]);
 
 function tokens(name: string): string[] {
@@ -256,7 +262,12 @@ export async function handleStatementDrop(args: {
   text?: string;
 }): Promise<void> {
   const pdfs = args.files.filter((f) => f.filetype === "pdf" || f.mimetype === "application/pdf" || /\.pdf$/i.test(f.name ?? ""));
-  if (pdfs.length === 0) return;
+  await logEvent("build_drafts_start", { files: args.files.length, pdfs: pdfs.length, withUrl: pdfs.filter((f) => f.url_private_download).length });
+  if (pdfs.length === 0) {
+    await slack.postThreadReply(args.channel, args.threadTs, "No PDF files found in that drop.");
+    return;
+  }
+  await slack.postThreadReply(args.channel, args.threadTs, `📥 Got ${pdfs.length} PDF(s) — downloading…`);
 
   const downloaded: Array<{ name: string; buffer: Buffer }> = [];
   for (const f of pdfs) {
@@ -264,11 +275,15 @@ export async function handleStatementDrop(args: {
     try { downloaded.push({ name: f.name ?? `doc-${Date.now()}.pdf`, buffer: await slack.downloadFile(f.url_private_download) }); }
     catch (e) { console.warn("[build-draft] download failed:", (e as Error).message); }
   }
-  if (downloaded.length === 0) return;
+  if (downloaded.length === 0) {
+    await logEvent("build_drafts_no_download", { pdfs: pdfs.length });
+    await slack.postThreadReply(args.channel, args.threadTs, "⚠️ Couldn't download the files from Slack (files:read scope / expired link). Re-drop or check the bot's file permissions.");
+    return;
+  }
 
   const appDoc = downloaded.find((d) => isAppFile(d.name));
   const statements = downloaded.filter((d) => !isAppFile(d.name));
-  await slack.postThreadReply(args.channel, args.threadTs, `📥 Got ${downloaded.length} file(s)${appDoc ? " (incl. application)" : ""} — analyzing ${statements.length} statement(s)…`);
+  await slack.postThreadReply(args.channel, args.threadTs, `Analyzing ${statements.length} statement(s)${appDoc ? " + application" : ""}…`);
 
   // §3 analyze
   let metrics: BankMetrics | null = null;
