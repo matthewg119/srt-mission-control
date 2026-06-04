@@ -638,6 +638,29 @@ async function handleFunderReplyForEmailSubmission(args: {
     console.error("[handleFunderReplyForEmailSubmission] thread post failed:", (e as Error).message);
   }
 
+  // Mirror the funder reply into Zoho so the deal history is tracked there too.
+  // Email-driven deals have no Zoho link on the email_submissions row, so match the
+  // merchant by business name (handles minor spelling/casing differences).
+  try {
+    const contact = await findContactByBusinessName(submission.business_name);
+    const zStatus: "Approved" | "Declined" | "Counter" | "Stips" | null =
+      classification.intent === "approved" ? "Approved"
+      : classification.intent === "declined" ? "Declined"
+      : classification.intent === "counter_offer" ? "Counter"
+      : (classification.intent === "stips_needed" || classification.intent === "missing_fields") ? "Stips"
+      : null;
+    if (contact?.zoho_lead_id && zStatus) {
+      await writeFunderReplyNote({
+        zohoId: contact.zoho_lead_id,
+        lenderName: funderName,
+        status: zStatus,
+        content: detail || classification.summary,
+      });
+    }
+  } catch (e) {
+    console.warn("[handleFunderReplyForEmailSubmission] Zoho note failed:", (e as Error).message);
+  }
+
   // Draft a suggested reply to the funder, gated by 👍, sent FROM submissions@.
   if (draftReply) {
     try {
