@@ -230,17 +230,23 @@ export async function POST(request: NextRequest) {
           description: "[slack/events] #srt-sub PDF drop → dispatch build-drafts",
           metadata: { files: attachedFiles.length, channel },
         }).then(() => {}, () => {});
-        void fetch(`${appUrl}/api/agent/build-drafts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            channel,
-            threadTs: dropThread,
-            userId: event.user as string,
-            text: userText,
-            files: attachedFiles.map((f) => ({ name: f.name, mimetype: f.mimetype, url_private_download: f.url_private_download })),
-          }),
-        }).catch((e) => console.error("[slack/events] build-drafts dispatch error:", (e as Error).message));
+        // build-drafts responds immediately (work continues there via waitUntil), so awaiting
+        // this is fast and guarantees the request is actually sent before this function returns.
+        try {
+          await fetch(`${appUrl}/api/agent/build-drafts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              channel,
+              threadTs: dropThread,
+              userId: event.user as string,
+              text: userText,
+              files: attachedFiles.map((f) => ({ name: f.name, mimetype: f.mimetype, url_private_download: f.url_private_download })),
+            }),
+          });
+        } catch (e) {
+          console.error("[slack/events] build-drafts dispatch error:", (e as Error).message);
+        }
         return NextResponse.json({ ok: true });
       }
 

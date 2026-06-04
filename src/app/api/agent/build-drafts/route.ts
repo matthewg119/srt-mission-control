@@ -1,14 +1,15 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { supabaseAdmin } from "@/lib/db";
 import { handleStatementDrop } from "@/lib/ai-intel/build-draft";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // statement analysis + BTF fill + drafts can run long
 
-// Internal endpoint: the Slack events route fires a non-blocking POST here on a #srt-sub
-// statement drop so the heavy work (analyze → report → BTF fill → 2 Outlook drafts) runs in
-// its own invocation/timeout instead of the short-lived events function.
+// Internal endpoint: the Slack events route POSTs here on a #srt-sub statement drop. We respond
+// immediately and run the heavy work (analyze → report → BTF fill → 2 Outlook drafts) via
+// waitUntil so Vercel keeps the function alive to completion instead of freezing after the 200.
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   await supabaseAdmin.from("system_logs").insert({
@@ -19,16 +20,14 @@ export async function POST(req: NextRequest) {
   if (!body || !body.channel || !body.threadTs || !Array.isArray(body.files)) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
-  try {
-    await handleStatementDrop({
+  waitUntil(
+    handleStatementDrop({
       channel: body.channel,
       threadTs: body.threadTs,
       userId: body.userId ?? "",
       files: body.files,
       text: body.text,
-    });
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
-  }
+    }).catch((e) => console.error("[build-drafts] handleStatementDrop error:", (e as Error).message))
+  );
+  return NextResponse.json({ ok: true }); // respond fast; work continues via waitUntil
 }
