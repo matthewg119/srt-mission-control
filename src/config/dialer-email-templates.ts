@@ -7,10 +7,15 @@
 // so buildHtmlBody() (src/lib/ai-intel/execute-action.ts) returns the HTML
 // untouched. The email is mailed exactly as defined here.
 
+import { SIGNATURE_S_HTML } from "@/config/email-signature";
+
 export interface FullHtmlEmailTemplate {
   subject: string;
   html: string;
 }
+
+// Resolve the Outlook "S" signature, preferring a runtime env override.
+const SIG_S = process.env.SIGNATURE_S_HTML || SIGNATURE_S_HTML;
 
 // The "Business loan Inquire (Next Steps)" email Matthew sends after a call:
 // skyline banner → "Nice speaking with you!" → 2-minute application (Start Now,
@@ -22,7 +27,7 @@ export interface FullHtmlEmailTemplate {
 // as an <img> at the top of the html when a hosted URL is available.
 export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = {
   "next-steps": {
-    subject: "Business loan Inquire (Next Steps)",
+    subject: "(Next Steps) Business loan Inquire",
     html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;max-width:640px;">
   <p style="text-align:center;font-size:16px;">Nice speaking with you!</p>
   <p style="text-align:center;font-size:15px;">Please complete the following <strong>application &amp; Income Verification</strong>:</p>
@@ -33,6 +38,7 @@ export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = 
   <p style="text-align:center;"><span style="background:#fff200;padding:2px 4px;">&rarr; Last 3 months of <strong>business bank statements</strong> sent to <a href="mailto:matthew@srtagency.com">matthew@srtagency.com</a></span></p>
   <p style="text-align:center;font-size:15px;">Once you send that over to me, I can get you an approval and have you funded in less than 24 hours.</p>
   <p style="text-align:center;font-size:15px;">Best regards,</p>
-</div>`,
+</div>
+${SIG_S}`,
   },
 };
