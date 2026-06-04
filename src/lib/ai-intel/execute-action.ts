@@ -357,7 +357,7 @@ async function addLender(payload: PendingActionPayload): Promise<ExecuteResult> 
 }
 
 async function seedLenders(payload: PendingActionPayload): Promise<ExecuteResult> {
-  const list = (payload.lenders_to_seed as Array<{ name: string; email: string }> | undefined) ?? [];
+  const list = (payload.lenders_to_seed as Array<{ name: string; email: string; to_emails?: string[]; cc_emails?: string[] }> | undefined) ?? [];
   if (list.length === 0) return { ok: false, error: "no_lenders_to_seed" };
 
   // Skip any whose submission_email already exists, so the card is idempotent.
@@ -376,7 +376,9 @@ async function seedLenders(payload: PendingActionPayload): Promise<ExecuteResult
       is_active: true,
       submission_method: "email",
       submission_email: l.email,
-      cc_emails: [] as string[],
+      to_emails: l.to_emails && l.to_emails.length > 0 ? l.to_emails : [l.email],
+      cc_emails: l.cc_emails ?? [],
+      recipient_source: "seeded_from_sent",
     }));
 
   if (toInsert.length === 0) {

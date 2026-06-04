@@ -31,7 +31,15 @@ interface LenderRow {
   name: string;
   submission_method: string | null;
   submission_email: string | null;
+  to_emails: string[] | null;
   cc_emails: string[] | null;
+}
+
+/** Ordered To-list for a funder: prefer the seeded to_emails, else the single submission_email. */
+function resolveToList(lender: LenderRow): string[] {
+  const ordered = (lender.to_emails ?? []).map((e) => e.trim()).filter(Boolean);
+  if (ordered.length > 0) return ordered;
+  return lender.submission_email ? [lender.submission_email] : [];
 }
 
 export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<ForwardDealResult> {
@@ -48,7 +56,7 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
 
   const { data: lenders, error: lendersErr } = await supabaseAdmin
     .from("lenders")
-    .select("id, name, submission_method, submission_email, cc_emails")
+    .select("id, name, submission_method, submission_email, to_emails, cc_emails")
     .in("id", opts.lenderIds)
     .eq("is_active", true);
 
@@ -57,7 +65,7 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
   }
 
   // Re-download the original attachments once, from the submissions@ mailbox.
-  let attachments: Array<{ name: string; contentType: string; contentBytes: string }> = [];
+  let attachments: Array<{ name: string; contentType: string; contentBytes: string; isInline?: boolean; contentId?: string | null }> = [];
   try {
     const raw = await microsoft.getMessageAttachments(submission.original_message_id, submission.mailbox);
     attachments = raw
@@ -66,6 +74,8 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
         name: a.name,
         contentType: a.contentType || "application/octet-stream",
         contentBytes: a.contentBytes,
+        isInline: a.isInline,       // keep the signature image inline (cid) rather than as a stray file
+        contentId: a.contentId,
       }));
   } catch (e) {
     // Don't abort — some funders accept the body-only pitch; surface the issue in the receipt.
@@ -79,15 +89,18 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
   const recorded: Array<{ lenderId: string | null; name: string; email: string; status: "sent" | "failed"; notes?: string }> = [];
 
   for (const lender of lenders as LenderRow[]) {
-    if (lender.submission_method === "portal" || !lender.submission_email) {
-      result.skipped.push({ id: lender.id, name: lender.name, reason: lender.submission_email ? "portal_only" : "no_email" });
+    const toList = resolveToList(lender);
+    if (lender.submission_method === "portal" || toList.length === 0) {
+      result.skipped.push({ id: lender.id, name: lender.name, reason: toList.length > 0 ? "portal_only" : "no_email" });
       continue;
     }
+    const ccList = (lender.cc_emails ?? []).map((e) => e.trim()).filter(Boolean);
+    const primaryEmail = toList[0];
 
     try {
       await microsoft.sendMail({
-        to: lender.submission_email,
-        bcc: lender.cc_emails && lender.cc_emails.length > 0 ? lender.cc_emails.join(",") : undefined,
+        to: toList,              // ordered To-list (some funders require a specific set/order)
+        cc: ccList,              // real CC, not BCC
         subject,
         body,
         isHtml: true,
@@ -95,11 +108,11 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
         fromMailbox: DEFAULTS.submissionsFromAddress,
       });
       result.sent.push({ id: lender.id, name: lender.name });
-      recorded.push({ lenderId: lender.id, name: lender.name, email: lender.submission_email, status: "sent" });
+      recorded.push({ lenderId: lender.id, name: lender.name, email: primaryEmail, status: "sent" });
     } catch (e) {
       const error = (e as Error).message;
       result.failed.push({ id: lender.id, name: lender.name, error });
-      recorded.push({ lenderId: lender.id, name: lender.name, email: lender.submission_email, status: "failed", notes: error });
+      recorded.push({ lenderId: lender.id, name: lender.name, email: primaryEmail, status: "failed", notes: error });
     }
   }
 
@@ -113,7 +126,8 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
   const channel = submission.slack_channel || process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
   const threadTs = submission.slack_thread_ts;
   if (threadTs) {
-    const attachNote = attachments.length > 0 ? ` (${attachments.length} attachment${attachments.length === 1 ? "" : "s"})` : " (no attachments)";
+    const fileCount = attachments.filter((a) => !a.isInline).length;
+    const attachNote = fileCount > 0 ? ` (${fileCount} attachment${fileCount === 1 ? "" : "s"})` : " (no attachments)";
     for (const s of result.sent) {
       await safeThreadReply(channel, threadTs, `✅ Forwarded to *${s.name}*${attachNote}`);
     }

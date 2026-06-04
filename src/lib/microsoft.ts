@@ -37,6 +37,7 @@ export interface GraphMessage {
   subject: string;
   from: { emailAddress: { address: string; name?: string } };
   toRecipients: Array<{ emailAddress: { address: string; name?: string } }>;
+  ccRecipients?: Array<{ emailAddress: { address: string; name?: string } }>;
   receivedDateTime: string;
   bodyPreview: string;
   webLink?: string;
@@ -206,6 +207,31 @@ async function graphRequest(
   return res.json();
 }
 
+/**
+ * Normalize a recipient input into Graph `{ emailAddress: { address } }[]`, preserving order.
+ * Accepts a single address, a comma-separated string, or an ordered array (which may itself
+ * contain comma-separated entries). De-dupes case-insensitively while keeping first-seen order.
+ */
+function toGraphRecipients(
+  input: string | string[] | undefined | null
+): Array<{ emailAddress: { address: string } }> {
+  if (!input) return [];
+  const list = Array.isArray(input) ? input : [input];
+  const seen = new Set<string>();
+  const out: Array<{ emailAddress: { address: string } }> = [];
+  for (const entry of list) {
+    for (const raw of String(entry).split(",")) {
+      const addr = raw.trim();
+      if (!addr) continue;
+      const key = addr.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ emailAddress: { address: addr } });
+    }
+  }
+  return out;
+}
+
 // ── Public Methods ──
 
 export const microsoft = {
@@ -247,6 +273,7 @@ export const microsoft = {
       "subject",
       "from",
       "toRecipients",
+      "ccRecipients",
       "receivedDateTime",
       "bodyPreview",
       "webLink",
@@ -296,13 +323,27 @@ export const microsoft = {
    * re-download the attachments of a message that landed in a shared mailbox.
    */
   async getMessageAttachments(messageId: string, mailbox?: string): Promise<Array<{
-    id: string; name: string; size: number; contentBytes: string; contentType: string;
+    id: string; name: string; size: number; contentBytes: string; contentType: string; isInline: boolean; contentId: string | null;
   }>> {
     const mailboxPath = mailbox ? `/users/${encodeURIComponent(mailbox)}` : "/me";
+    // No $select: contentBytes is only on the fileAttachment subtype, not the base
+    // microsoft.graph.attachment, so $select-ing it 400s. Fetching without $select returns
+    // the full fileAttachment incl. contentBytes, isInline, and contentId.
     const result = await graphRequest(
-      `${mailboxPath}/messages/${messageId}/attachments?$select=id,name,size,contentBytes,contentType&$top=20`
+      `${mailboxPath}/messages/${messageId}/attachments?$top=20`
     );
-    return (result.value as Array<{ id: string; name: string; size: number; contentBytes: string; contentType: string }> | undefined) ?? [];
+    const raw = (result.value as Array<{
+      id: string; name: string; size: number; contentBytes?: string; contentType: string; isInline?: boolean; contentId?: string | null;
+    }> | undefined) ?? [];
+    return raw.map((a) => ({
+      id: a.id,
+      name: a.name,
+      size: a.size,
+      contentBytes: a.contentBytes ?? "",
+      contentType: a.contentType,
+      isInline: a.isInline ?? false,
+      contentId: a.contentId ?? null,
+    }));
   },
 
   /**
@@ -313,12 +354,13 @@ export const microsoft = {
    * (e.g. submissions@srtagency.com).
    */
   async sendMail(params: {
-    to: string;
-    bcc?: string;
+    to: string | string[];
+    cc?: string | string[];
+    bcc?: string | string[];
     subject: string;
     body: string;
     isHtml?: boolean;
-    attachments?: Array<{ name: string; contentType: string; contentBytes: string }>;
+    attachments?: Array<{ name: string; contentType: string; contentBytes: string; isInline?: boolean; contentId?: string | null }>;
     fromMailbox?: string;
   }): Promise<void> {
     const token = await getValidAccessToken();
@@ -329,22 +371,31 @@ export const microsoft = {
         contentType: params.isHtml ? "HTML" : "Text",
         content: params.body,
       },
-      toRecipients: [
-        { emailAddress: { address: params.to } },
-      ],
+      // Order is preserved: pass an array (e.g. funders that require a specific To-list order).
+      toRecipients: toGraphRecipients(params.to),
     };
 
-    if (params.bcc) {
-      message.bccRecipients = [{ emailAddress: { address: params.bcc } }];
-    }
+    const cc = toGraphRecipients(params.cc);
+    if (cc.length > 0) message.ccRecipients = cc;
+    const bcc = toGraphRecipients(params.bcc);
+    if (bcc.length > 0) message.bccRecipients = bcc;
 
     if (params.attachments && params.attachments.length > 0) {
-      message.attachments = params.attachments.map((a) => ({
-        "@odata.type": "#microsoft.graph.fileAttachment",
-        name: a.name,
-        contentType: a.contentType,
-        contentBytes: a.contentBytes,
-      }));
+      message.attachments = params.attachments.map((a) => {
+        const att: Record<string, unknown> = {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: a.name,
+          contentType: a.contentType,
+          contentBytes: a.contentBytes,
+        };
+        // Preserve inline images (e.g. the signature) so they render via cid: instead of
+        // showing as stray attachments.
+        if (a.isInline) {
+          att.isInline = true;
+          if (a.contentId) att.contentId = a.contentId;
+        }
+        return att;
+      });
     }
 
     const sendPath = params.fromMailbox

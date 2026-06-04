@@ -46,7 +46,15 @@ interface LenderRow {
   name: string;
   submission_method: string | null;
   submission_email: string | null;
+  to_emails: string[] | null;
   cc_emails: string[] | null;
+}
+
+/** Ordered To-list for a funder: prefer the seeded to_emails, else the single submission_email. */
+function resolveToList(lender: LenderRow): string[] {
+  const ordered = (lender.to_emails ?? []).map((e) => e.trim()).filter(Boolean);
+  if (ordered.length > 0) return ordered;
+  return lender.submission_email ? [lender.submission_email] : [];
 }
 
 export async function submitToLenders(opts: SubmitToLendersOpts): Promise<SubmitToLendersResult> {
@@ -65,7 +73,7 @@ export async function submitToLenders(opts: SubmitToLendersOpts): Promise<Submit
 
   const { data: lenders, error: lendersErr } = await supabaseAdmin
     .from("lenders")
-    .select("id, name, submission_method, submission_email, cc_emails")
+    .select("id, name, submission_method, submission_email, to_emails, cc_emails")
     .in("id", opts.lenderIds)
     .eq("is_active", true);
 
@@ -109,7 +117,8 @@ export async function submitToLenders(opts: SubmitToLendersOpts): Promise<Submit
   }
 
   for (const lender of lenders as LenderRow[]) {
-    if (lender.submission_method !== "email" || !lender.submission_email) {
+    const toList = resolveToList(lender);
+    if (lender.submission_method !== "email" || toList.length === 0) {
       // Portal-only lenders: still log a submission row so the Zoho subform
       // reflects the queue, but don't send email.
       await insertOrUpdateSubmission({
@@ -128,8 +137,8 @@ export async function submitToLenders(opts: SubmitToLendersOpts): Promise<Submit
     try {
       const htmlBody = await buildSubmissionHtml(opts.draftBody, opts.clientNote ?? null);
       await microsoft.sendMail({
-        to: lender.submission_email,
-        bcc: lender.cc_emails && lender.cc_emails.length > 0 ? lender.cc_emails.join(",") : undefined,
+        to: toList,                                       // ordered To-list
+        cc: (lender.cc_emails ?? []).map((e) => e.trim()).filter(Boolean), // real CC
         subject: opts.draftSubject,
         body: htmlBody,
         isHtml: true,
