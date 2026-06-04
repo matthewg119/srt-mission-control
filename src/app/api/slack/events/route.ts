@@ -10,6 +10,7 @@ import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
 import { getEmailSubmissionByThread } from "@/lib/ai-intel/email-submissions";
 import { forwardDealToFunders } from "@/lib/ai-intel/forward-deal-to-funders";
+import { isBuildCommand, handleBuildCommand } from "@/lib/ai-intel/build-draft";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
@@ -213,6 +214,23 @@ export async function POST(request: NextRequest) {
       // forward the verbatim package to. Must run BEFORE the submissions-AI
       // agent fallthrough (getAgentType maps #srt-sub → "submissions").
       const subChannelEnv = process.env.SLACK_SUB_CHANNEL || "";
+
+      // #srt-sub "build" command → resolve the lead + (later) build report + drafts.
+      // Must run before the funder-name reply handler so "build …" isn't parsed as lenders.
+      if (
+        subChannelEnv &&
+        channel === subChannelEnv &&
+        isBuildCommand(userText)
+      ) {
+        const handled = await handleBuildCommand({
+          channel,
+          threadTs: parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : (event.ts as string),
+          userId: event.user as string,
+          text: userText,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
       if (
         parentThreadTs &&
         parentThreadTs !== event.ts &&
