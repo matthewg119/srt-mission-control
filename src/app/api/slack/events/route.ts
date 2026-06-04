@@ -215,7 +215,31 @@ export async function POST(request: NextRequest) {
       // agent fallthrough (getAgentType maps #srt-sub → "submissions").
       const subChannelEnv = process.env.SLACK_SUB_CHANNEL || "";
 
-      // #srt-sub "build" command → resolve the lead + (later) build report + drafts.
+      // #srt-sub statement/app drop → analyze + build report + the two Outlook drafts.
+      // Fire a non-blocking POST to the dedicated endpoint (its own 300s timeout) so the
+      // slow work doesn't run in this short-lived events function.
+      if (
+        subChannelEnv &&
+        channel === subChannelEnv &&
+        attachedFiles.some((f) => f.mimetype === "application/pdf" || /\.pdf$/i.test(f.name ?? ""))
+      ) {
+        const dropThread = parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : (event.ts as string);
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+        void fetch(`${appUrl}/api/agent/build-drafts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel,
+            threadTs: dropThread,
+            userId: event.user as string,
+            text: userText,
+            files: attachedFiles.map((f) => ({ name: f.name, mimetype: f.mimetype, url_private_download: f.url_private_download })),
+          }),
+        }).catch((e) => console.error("[slack/events] build-drafts dispatch error:", (e as Error).message));
+        return NextResponse.json({ ok: true });
+      }
+
+      // #srt-sub "build" command (no files) → resolve the lead only.
       // Must run before the funder-name reply handler so "build …" isn't parsed as lenders.
       if (
         subChannelEnv &&

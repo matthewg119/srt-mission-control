@@ -888,23 +888,41 @@ export const microsoft = {
   },
 
   /**
-   * Create a draft email via Graph API (POST /me/messages, isDraft: true).
-   * Returns the draft's id and webLink — webLink opens it in Outlook Web compose view.
+   * Create a draft email via Graph API (isDraft: true). Lands in the mailbox's Drafts folder
+   * so the user can open, edit, and send it. `mailbox` undefined → /me; otherwise /users/{mailbox}.
+   * Supports optional To list + file/inline attachments. Returns id + webLink (opens in Outlook).
    */
   async createDraft(params: {
-    to: string;
+    mailbox?: string;
+    to?: string | string[];
     subject: string;
     body: string;
+    attachments?: Array<{ name: string; contentType: string; contentBytes: string; isInline?: boolean; contentId?: string | null }>;
   }): Promise<{ id: string; webLink: string }> {
-    const result = await graphRequest("/me/messages", {
-      method: "POST",
-      body: JSON.stringify({
-        subject: params.subject,
-        body: { contentType: "HTML", content: params.body },
-        toRecipients: [{ emailAddress: { address: params.to } }],
-        isDraft: true,
-      }),
-    });
+    const path = params.mailbox ? `/users/${encodeURIComponent(params.mailbox)}/messages` : "/me/messages";
+    const message: Record<string, unknown> = {
+      subject: params.subject,
+      body: { contentType: "HTML", content: params.body },
+      isDraft: true,
+    };
+    const to = toGraphRecipients(params.to);
+    if (to.length > 0) message.toRecipients = to;
+    if (params.attachments && params.attachments.length > 0) {
+      message.attachments = params.attachments.map((a) => {
+        const att: Record<string, unknown> = {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: a.name,
+          contentType: a.contentType,
+          contentBytes: a.contentBytes,
+        };
+        if (a.isInline) {
+          att.isInline = true;
+          if (a.contentId) att.contentId = a.contentId;
+        }
+        return att;
+      });
+    }
+    const result = await graphRequest(path, { method: "POST", body: JSON.stringify(message) });
     return { id: result.id as string, webLink: result.webLink as string };
   },
 };
