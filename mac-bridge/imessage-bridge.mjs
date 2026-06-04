@@ -13,6 +13,7 @@
 //   node imessage-bridge.mjs            # live: poll every POLL_MS, ship new rows
 //   node imessage-bridge.mjs --once     # one poll, then exit
 //   node imessage-bridge.mjs --backfill # ship ALL history once, then finalize
+//   node imessage-bridge.mjs --doctor   # preflight checks; report PASS/FAIL to #srt-sub
 //
 // Env:
 //   IMESSAGE_WEBHOOK_SECRET   (required) shared secret, must match the server
@@ -23,7 +24,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, copyFileSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 
 const SECRET = process.env.IMESSAGE_WEBHOOK_SECRET;
@@ -35,15 +36,12 @@ const SQLITE = "/usr/bin/sqlite3";
 const PAGE = 500;
 
 const APPLE_EPOCH_MS = 978307200000; // 2001-01-01 UTC in unix ms
+const RS = "\x1e"; // row separator (control char — never appears in message text)
+const US = "\x1f"; // unit/field separator
 
-if (!SECRET) {
-  console.error("[bridge] IMESSAGE_WEBHOOK_SECRET is not set — refusing to start.");
-  process.exit(1);
-}
-if (!existsSync(CHAT_DB)) {
-  console.error(`[bridge] chat.db not found at ${CHAT_DB}. Grant Full Disk Access and check the path.`);
-  process.exit(1);
-}
+// Loud, unmissable failure reporting (the user couldn't see prior errors).
+process.on("uncaughtException", (e) => { console.error("[bridge] FATAL (uncaught):", e?.stack || e?.message || e); process.exit(1); });
+process.on("unhandledRejection", (e) => { console.error("[bridge] FATAL (rejection):", e?.stack || e?.message || e); process.exit(1); });
 
 function readState() {
   try { return JSON.parse(readFileSync(STATE_FILE, "utf8")); } catch { return { lastRowid: 0 }; }
@@ -51,6 +49,7 @@ function readState() {
 function writeState(s) { writeFileSync(STATE_FILE, JSON.stringify(s), "utf8"); }
 
 // Copy chat.db (+ wal/shm) to a temp file so we never lock the live database.
+// Throws (EPERM/EACCES) if Full Disk Access isn't granted to this node binary.
 function snapshotDb() {
   const dest = join(tmpdir(), `srt-chatdb-${process.pid}.db`);
   copyFileSync(CHAT_DB, dest);
@@ -63,20 +62,42 @@ function cleanupSnapshot(dest) {
   for (const ext of ["", "-wal", "-shm"]) { try { rmSync(dest + ext, { force: true }); } catch { /* ignore */ } }
 }
 
+// Run sqlite3 with control-char separators (works on ALL sqlite3 versions —
+// avoids -json/-csv which Big Sur's sqlite 3.32 doesn't support). Returns raw text.
+function sqlite(dbPath, sql) {
+  return execFileSync(
+    SQLITE,
+    ["-readonly", "-batch", "-noheader", "-newline", RS, "-separator", US, dbPath, sql],
+    { maxBuffer: 256 * 1024 * 1024 }
+  ).toString("utf8");
+}
+
 // chat.chat_identifier is the counterpart handle for 1:1 chats (phone/email) and
 // a group id for group chats (those won't normalize to a phone → discarded server-side).
 function queryPage(dbPath, sinceRowid) {
   const sql =
-    `SELECT m.ROWID AS rowid, m.guid AS guid, c.chat_identifier AS handle, ` +
-    `m.text AS text, hex(m.attributedBody) AS attributed_hex, ` +
-    `m.is_from_me AS is_from_me, m.date AS date ` +
+    `SELECT m.ROWID, m.guid, c.chat_identifier, ` +
+    `m.text, hex(m.attributedBody), ` +
+    `m.is_from_me, m.date ` +
     `FROM message m ` +
     `JOIN chat_message_join cmj ON cmj.message_id = m.ROWID ` +
     `JOIN chat c ON c.ROWID = cmj.chat_id ` +
     `WHERE m.ROWID > ${Number(sinceRowid) || 0} ` +
     `ORDER BY m.ROWID ASC LIMIT ${PAGE};`;
-  const out = execFileSync(SQLITE, ["-json", "-readonly", dbPath, sql], { maxBuffer: 256 * 1024 * 1024 }).toString();
-  return out.trim() ? JSON.parse(out) : [];
+  const raw = sqlite(dbPath, sql);
+  if (!raw) return [];
+  return raw.split(RS).filter((r) => r.length > 0).map((r) => {
+    const f = r.split(US);
+    return {
+      rowid: Number(f[0]),
+      guid: f[1] ?? "",
+      handle: f[2] ?? "",
+      text: f[3] ?? "",
+      attributed_hex: f[4] ?? "",
+      is_from_me: Number(f[5]) === 1,
+      date: f[6] ?? "",
+    };
+  });
 }
 
 // Apple stores date in nanoseconds (modern macOS) or seconds (legacy) since 2001.
@@ -110,7 +131,7 @@ function toMessage(row) {
     guid: row.guid,
     handle: row.handle || "",
     text: text || "",
-    is_from_me: row.is_from_me === 1 || row.is_from_me === true,
+    is_from_me: row.is_from_me === true,
     date: appleDateToISO(row.date),
   };
 }
@@ -121,11 +142,14 @@ async function post(body) {
     headers: { "Content-Type": "application/json", "X-Imessage-Secret": SECRET },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`server ${res.status}: ${await res.text()}`);
-  return res.json();
+  const txt = await res.text();
+  if (!res.ok) throw new Error(`server ${res.status}: ${txt}`);
+  try { return JSON.parse(txt); } catch { return {}; }
 }
 
 async function poll({ backfill = false } = {}) {
+  if (!SECRET) throw new Error("IMESSAGE_WEBHOOK_SECRET is not set");
+  if (!existsSync(CHAT_DB)) throw new Error(`chat.db not found at ${CHAT_DB}`);
   const state = readState();
   let since = backfill ? 0 : (state.lastRowid || 0);
   const dbPath = snapshotDb();
@@ -155,15 +179,67 @@ async function poll({ backfill = false } = {}) {
   return total;
 }
 
-const args = process.argv.slice(2);
-if (args.includes("--backfill")) {
-  await poll({ backfill: true });
-} else if (args.includes("--once")) {
-  await poll();
-} else {
-  console.log(`[bridge] live mode — polling ${CHAT_DB} every ${POLL_MS}ms`);
-  for (;;) {
-    try { await poll(); } catch (e) { console.error("[bridge] poll error:", e.message); }
-    await new Promise((r) => setTimeout(r, POLL_MS));
+// Preflight: run checks, print locally, and POST the report so it lands in #srt-sub.
+async function doctor() {
+  const checks = [];
+  const add = (name, ok, detail) => { checks.push({ name, ok, detail }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`); };
+
+  add("node", true, process.version);
+
+  let sqliteVer = "";
+  try { sqliteVer = execFileSync(SQLITE, ["--version"]).toString().trim().split(" ")[0]; add("sqlite3 present", true, sqliteVer); }
+  catch (e) { add("sqlite3 present", false, e.message); }
+
+  add("chat.db exists", existsSync(CHAT_DB), CHAT_DB);
+
+  // The real Full Disk Access test: copy + read chat.db.
+  try {
+    const dbPath = snapshotDb();
+    try {
+      const out = sqlite(dbPath, "SELECT COUNT(*) FROM message;");
+      add("read chat.db (Full Disk Access)", true, `${out.trim()} messages`);
+    } finally { cleanupSnapshot(dbPath); }
+  } catch (e) {
+    const fda = `${e.code || ""} ${e.message}`.trim();
+    add("read chat.db (Full Disk Access)", false,
+      `${fda} → grant Full Disk Access to this node binary (${process.execPath}) in System Settings → Privacy & Security → Full Disk Access, then re-run`);
+  }
+
+  add("secret set", !!SECRET, SECRET ? "present" : "IMESSAGE_WEBHOOK_SECRET missing");
+
+  // Connectivity + secret match: harmless empty batch.
+  try {
+    await post({ messages: [] });
+    add("server reachable + secret OK", true, API_URL);
+  } catch (e) {
+    add("server reachable + secret OK", false, `${e.message} (401 ⇒ secret mismatch with Vercel)`);
+  }
+
+  // Try to surface the report in Slack (only works if secret+connectivity pass).
+  try { await post({ diagnostics: { checks, host: hostname() } }); console.log("[bridge] doctor report posted to #srt-sub"); }
+  catch (e) { console.error("[bridge] could not post doctor report to Slack:", e.message); }
+
+  const allOk = checks.every((c) => c.ok);
+  console.log(allOk ? "\n[bridge] ALL CHECKS PASS — safe to run --backfill" : "\n[bridge] ISSUES FOUND — fix the FAIL lines above, then re-run --doctor");
+  return allOk;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.includes("--doctor")) {
+    const ok = await doctor();
+    process.exit(ok ? 0 : 1);
+  } else if (args.includes("--backfill")) {
+    await poll({ backfill: true });
+  } else if (args.includes("--once")) {
+    await poll();
+  } else {
+    console.log(`[bridge] live mode — polling ${CHAT_DB} every ${POLL_MS}ms`);
+    for (;;) {
+      try { await poll(); } catch (e) { console.error("[bridge] poll error:", e.message); }
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
   }
 }
+
+main().catch((e) => { console.error("[bridge] FATAL:", e?.stack || e?.message || e); process.exit(1); });

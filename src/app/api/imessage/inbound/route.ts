@@ -33,9 +33,16 @@ interface InboundMessage {
   date?: string; // ISO; informational
 }
 
+interface DoctorCheck {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
 interface InboundPayload {
   backfill?: boolean;
   finalizeBackfill?: boolean;
+  diagnostics?: { checks?: DoctorCheck[]; host?: string };
   messages?: InboundMessage[];
 }
 
@@ -51,6 +58,12 @@ export async function POST(req: NextRequest) {
     payload = (await req.json()) as InboundPayload;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+  }
+
+  // Bridge --doctor report — relay PASS/FAIL to #srt-sub so the user sees it
+  // without reading the Mac terminal.
+  if (payload.diagnostics) {
+    return relayDiagnostics(payload.diagnostics);
   }
 
   // One-time backfill finalizer — posts a single summary to #srt-sub.
@@ -161,9 +174,10 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, imported, duplicates, discarded });
 }
 
-// Match a normalized E.164 number against contacts.phone OR contacts.mobile_phone.
-// Both columns are normalized on capture (leads/capture calls normalizePhone), so an
-// exact E.164 compare catches the common case.
+// Match by the last 10 digits, format-agnostic. Contacts store phones in mixed
+// formats ("7865909616", "(684) 984-6516", "+1…") — an exact compare misses most.
+// `phone_last10` / `mobile_last10` are STORED generated columns (see
+// docs/2026-06-04-contacts-phone-last10.sql) holding the last 10 digits.
 async function findContactByPhone(phone: string): Promise<{
   id: string;
   first_name: string | null;
@@ -171,10 +185,12 @@ async function findContactByPhone(phone: string): Promise<{
   business_name: string | null;
   zoho_lead_id: string | null;
 } | null> {
+  const last10 = phone.replace(/\D/g, "").slice(-10);
+  if (last10.length < 10) return null;
   const { data } = await supabaseAdmin
     .from("contacts")
     .select("id, first_name, last_name, business_name, zoho_lead_id")
-    .or(`phone.eq.${phone},mobile_phone.eq.${phone}`)
+    .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
     .limit(1)
     .maybeSingle();
   return (data as {
@@ -184,6 +200,22 @@ async function findContactByPhone(phone: string): Promise<{
     business_name: string | null;
     zoho_lead_id: string | null;
   } | null) ?? null;
+}
+
+async function relayDiagnostics(diag: { checks?: DoctorCheck[]; host?: string }): Promise<NextResponse> {
+  const checks = diag.checks ?? [];
+  const allOk = checks.length > 0 && checks.every((c) => c.ok);
+  const lines = checks.map((c) => `${c.ok ? "✅" : "❌"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
+  const channel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM"; // #srt-sub
+  await slack.postMessage(
+    channel,
+    [
+      `${allOk ? "🩺 *iMessage bridge doctor — ALL PASS*" : "🩺 *iMessage bridge doctor — ISSUES FOUND*"}` +
+        (diag.host ? ` _(host: ${diag.host})_` : ""),
+      ...lines,
+    ].join("\n")
+  );
+  return NextResponse.json({ ok: true, allOk });
 }
 
 async function finalizeBackfill(): Promise<NextResponse> {

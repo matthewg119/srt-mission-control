@@ -42,12 +42,20 @@ chat.db ──(sqlite3 read-only snapshot)──▶ imessage-bridge.mjs
    ```sh
    export IMESSAGE_WEBHOOK_SECRET='…'   # same value as the server
    ```
-3. **Backfill existing history** (CRM contacts only; no Slack spam — history is
+3. **Run the doctor first** — checks Node, sqlite3, chat.db readability (Full Disk
+   Access), the secret, and server connectivity, and posts a PASS/FAIL report to
+   Slack `#srt-sub` (so you can see the result without reading the terminal):
+   ```sh
+   node imessage-bridge.mjs --doctor
+   ```
+   Fix any `FAIL` lines before continuing. The most common one is "read chat.db
+   (Full Disk Access)" — it prints the exact `node` binary that needs access.
+4. **Backfill existing history** (CRM contacts only; no Slack spam — history is
    imported silently, then one summary is posted to `#srt-sub`):
    ```sh
    node imessage-bridge.mjs --backfill
    ```
-4. **Run live**:
+5. **Run live**:
    ```sh
    node imessage-bridge.mjs          # foreground test
    ```
