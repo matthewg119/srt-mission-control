@@ -666,48 +666,8 @@ async function handleFunderReplyForEmailSubmission(args: {
     console.warn("[handleFunderReplyForEmailSubmission] Zoho note failed:", (e as Error).message);
   }
 
-  // Draft a suggested reply to the funder, gated by 👍, sent FROM submissions@.
-  if (draftReply) {
-    try {
-      const { text: draft } = await callClaudeText({
-        model: "claude-sonnet-4-6",
-        system:
-          "You are the SRT Agency submissions desk replying to an MCA funder about a deal we shopped them. " +
-          "Write a short, professional plain-text reply (no subject line, no signature — those are added automatically). " +
-          "Be direct and factual, no filler. Do not invent numbers or attachments that weren't mentioned.",
-        user:
-          `Merchant: ${submission.business_name}. Funder: ${funderName}. ` +
-          `Their reply was classified as "${classification.intent}". ` +
-          `Details: ${detail || classification.summary}. ` +
-          `Draft our reply back to the funder.`,
-        maxTokens: 400,
-      });
-
-      // Send exactly the drafted text with NO signature. Pre-build minimal HTML and
-      // mark is_html so buildHtmlBody returns it untouched (no signature appended).
-      const draftHtml = draft
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\n/g, "<br>");
-      const payload: PendingActionPayload = {
-        action_type: "reply_funder",
-        to: args.fromAddress,
-        subject: args.msg.subject.toLowerCase().startsWith("re:") ? args.msg.subject : `Re: ${args.msg.subject}`,
-        body: draftHtml,
-        is_html: true,
-        from_mailbox: DEFAULTS.submissionsFromAddress,
-      };
-      await postApprovalRequest({
-        summary: `📤 *Suggested reply to ${funderName}* — ${submission.business_name}\n>${draft.replace(/\n/g, "\n>")}`,
-        payload,
-        channel,
-        threadTs,
-      });
-    } catch (e) {
-      console.error("[handleFunderReplyForEmailSubmission] draft reply failed:", (e as Error).message);
-    }
-  }
+  // (Suggested auto-reply drafts removed per Matthew — funder replies just post to the
+  // thread + Zoho note; he replies to funders himself.)
 
   // Once any funder responds, the deal is actively in market.
   if (submission.status === "awaiting_funders") {
