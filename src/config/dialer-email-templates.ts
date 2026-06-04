@@ -36,7 +36,7 @@ export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = 
     <a href="https://srtagency.com/capital" style="display:inline-block;background:#2ee6a8;color:#0d1b2a;text-decoration:none;font-weight:700;padding:10px 28px;border-radius:6px;">Start Now &#8594;</a>
   </p>
   <p style="margin:0 0 32px 0;text-align:left;"><span style="background:#fff200;padding:2px 4px;line-height:1.8;">&rarr; Last 3 months of <strong>business bank statements</strong> sent to <a href="mailto:matthew@srtagency.com">matthew@srtagency.com</a></span></p>
-  <p style="margin:0 0 24px 0;text-align:left;">Once you send that over to me,<br>I can get you an approval and have you funded in less than 24 hours.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Once you send that over to me,<br>I will get you an approval and have you funded in less than 24 hours.</p>
   <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
 </div>
 ${SIG_S}`,
