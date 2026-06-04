@@ -278,12 +278,12 @@ async function handleApproved(args: { contact: { id: string; business_name: stri
     businessName: args.contact.business_name,
     lenderName,
     status: "Approved",
-    content: noteContent,
+    content: replyBullets(args.classification),
   });
   await postFunderReplyToDealChannel({
     contactId: args.contact.id,
     headline: `🎉 *APPROVED* — ${args.contact.business_name} · ${lenderName ?? "lender"}`,
-    body: `*Offer:* ${noteContent}\n*Subject:* ${args.msg.subject}\n*Summary:* ${args.classification.summary}`,
+    body: replyBullets(args.classification),
     fallbackIntent: "approved",
   });
   await dmMatthewApprovalReminder({
@@ -325,7 +325,7 @@ async function dmMatthewApprovalReminder(opts: {
   }
 }
 
-async function handleDeclined(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: { declined_reason: string | null; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleDeclined(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     await supabaseAdmin
       .from("deal_submissions")
@@ -350,18 +350,18 @@ async function handleDeclined(args: { contact: { id: string; business_name: stri
     businessName: args.contact.business_name,
     lenderName,
     status: "Declined",
-    content: reason,
+    content: replyBullets(args.classification),
   });
   await postFunderReplyToDealChannel({
     contactId: args.contact.id,
     headline: `⛔ *DECLINED* — ${args.contact.business_name} · ${lenderName ?? "lender"}`,
-    body: `*Reason:* ${reason}\n*Subject:* ${args.msg.subject}`,
+    body: replyBullets(args.classification),
     fallbackIntent: "declined",
   });
   return { intent: "declined", business: args.contact.business_name, meta_event: metaResult };
 }
 
-async function handleStipsNeeded(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: { stips_required: string[]; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
+async function handleStipsNeeded(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
   if (args.submission) {
     const stipsText = args.classification.stips_required.length > 0
       ? `Pending stips: ${args.classification.stips_required.join(", ")}`
@@ -381,7 +381,7 @@ async function handleStipsNeeded(args: { contact: { id: string; business_name: s
     businessName: args.contact.business_name,
     lenderName,
     status: "Stips",
-    content: stipsList,
+    content: replyBullets(args.classification),
   });
   const payload: PendingActionPayload = {
     action_type: "update_zoho",
@@ -424,12 +424,12 @@ async function handleCounterOffer(args: { contact: { id: string; business_name: 
     businessName: args.contact.business_name,
     lenderName,
     status: "Counter",
-    content: details || args.classification.summary,
+    content: replyBullets(args.classification),
   });
   await postFunderReplyToDealChannel({
     contactId: args.contact.id,
     headline: `💬 *COUNTER OFFER* — ${args.contact.business_name} · ${lenderName ?? "lender"}`,
-    body: `*Offer:* ${details || "—"}\n*Summary:* ${args.classification.summary}`,
+    body: replyBullets(args.classification),
     fallbackIntent: "counter",
   });
   await supabaseAdmin.from("ai_decisions").update({ action_taken: "slack_alert" }).eq("id", args.aiDecisionId ?? "");
@@ -630,7 +630,7 @@ async function handleFunderReplyForEmailSubmission(args: {
   const channel = submission.slack_channel || process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
   const threadTs = submission.slack_thread_ts ?? undefined;
   const headline = `${emoji} *${label}* — ${submission.business_name} · ${funderName}`;
-  const bodyLines = [headline, detail ? detail : null, `_Summary:_ ${classification.summary}`].filter(Boolean).join("\n");
+  const bodyLines = `${headline}\n${replyBullets(classification)}`;
 
   try {
     if (threadTs) {
@@ -659,7 +659,7 @@ async function handleFunderReplyForEmailSubmission(args: {
         businessName: submission.business_name,
         lenderName: funderName,
         status: zStatus,
-        content: detail || classification.summary,
+        content: replyBullets(classification),
       });
     }
   } catch (e) {
@@ -795,6 +795,47 @@ function buildNotes(label: "Approved" | "Counter", c: import("@/lib/ai-intel/inb
   const parts: string[] = [label];
   if (c.summary) parts.push(c.summary);
   return parts.join(" — ");
+}
+
+/**
+ * Up to 3 concise bullets summarizing a funder's reply. Used for BOTH the Slack post and the
+ * Zoho note so messages stay short and uncluttered. Built from the structured classification
+ * (no extra LLM call); falls back to a trimmed summary line to fill remaining bullets.
+ */
+function replyBullets(c: import("@/lib/ai-intel/inbound-classifier").InboundClassification): string {
+  const money = (n: number | null) => (n ? `$${n.toLocaleString()}` : null);
+  const b: string[] = [];
+  switch (c.intent) {
+    case "approved": {
+      const rate = c.buy_rate ?? c.sell_rate;
+      b.push(`Approved${money(c.approved_amount) ? ` ${money(c.approved_amount)}` : ""}`);
+      if (rate || c.term) b.push(`Terms: ${rate ?? "—"}${c.term ? ` / ${c.term}` : ""}`);
+      break;
+    }
+    case "declined":
+      b.push("Declined");
+      if (c.declined_reason) b.push(`Reason: ${c.declined_reason}`);
+      break;
+    case "stips_needed":
+      b.push("Stips needed");
+      if (c.stips_required.length) b.push(`Need: ${c.stips_required.slice(0, 5).join(", ")}`);
+      break;
+    case "counter_offer": {
+      const offer = [money(c.approved_amount), c.buy_rate ? `@ ${c.buy_rate}` : null, c.term ? `/ ${c.term}` : null].filter(Boolean).join(" ");
+      b.push("Counter offer");
+      if (offer) b.push(`Offer: ${offer}`);
+      break;
+    }
+    case "missing_fields":
+      b.push("Docs requested");
+      if (c.missing_fields.length) b.push(`Requested: ${c.missing_fields.slice(0, 5).join(", ")}`);
+      break;
+  }
+  if (b.length < 3 && c.summary) {
+    const s = c.summary.trim();
+    b.push(s.length > 160 ? `${s.slice(0, 157)}…` : s);
+  }
+  return b.slice(0, 3).map((x) => `• ${x}`).join("\n");
 }
 
 async function zohoSubformSync(merchantId: string, caller: string): Promise<void> {
