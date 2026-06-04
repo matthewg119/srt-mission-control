@@ -24,7 +24,8 @@ export type ActionType =
   | "send_marketing_email"
   | "send_submission"
   | "clear_lead_amounts"
-  | "add_lender";
+  | "add_lender"
+  | "seed_lenders";
 
 export type CadenceTrack =
   | "new_lead"
@@ -69,6 +70,9 @@ export interface PendingActionPayload {
   // buildHtmlBody fetches it via microsoft.getSignatureByName before falling
   // back to the default signature.
   signature_name?: string;
+  // When set, the email is sent FROM this shared mailbox (POST /users/{mailbox}/sendMail)
+  // instead of the connected account. Used so funder replies go out from submissions@.
+  from_mailbox?: string;
   attachments?: Array<{ name: string; url: string; contentType: string }>;
   deal_id?: string;
   lender_id?: string;
