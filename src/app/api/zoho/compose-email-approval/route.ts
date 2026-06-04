@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { getLead } from "@/lib/zoho";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
+import { executePendingAction } from "@/lib/ai-intel/execute-action";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { FULL_HTML_EMAIL_TEMPLATES } from "@/config/dialer-email-templates";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
@@ -37,9 +38,10 @@ export async function POST(req: NextRequest) {
     subject?: string;
     copy?: string;
     template_key?: string;
+    send_now?: boolean;
   };
 
-  const { zoho_lead_id, subject, copy, template_key } = body;
+  const { zoho_lead_id, subject, copy, template_key, send_now } = body;
 
   // Full-HTML templates (e.g. "next-steps") are sent verbatim — no greeting,
   // no signature. They only need a zoho_lead_id; subject + body come from the
@@ -105,6 +107,22 @@ export async function POST(req: NextRequest) {
         content: `Email sent successfully from matthew@srtagency.com — Subject: ${emailSubject}`,
       },
     };
+
+    // Direct send (dialer default): skip the Slack 👍 round-trip and mail the
+    // email immediately via the same executor the Slack approval would have run.
+    // sendEmail() writes the "Email sent" Zoho note from payload.note.
+    if (send_now) {
+      const result = await executePendingAction({
+        actionId: "dialer-direct",
+        actionType: "send_email",
+        payload,
+        approvedBy: "dialer",
+      });
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error || "send_failed" }, { status: 502 });
+      }
+      return NextResponse.json({ ok: true, sent: true, to: email });
+    }
 
     const summary = fullHtmlTemplate
       ? [
