@@ -13,6 +13,34 @@ import { routeToChannel } from "@/config/vektor";
 import { syncLenderSubmissionsSubform } from "@/lib/zoho-mca-fields";
 import { addNoteToLead } from "@/lib/zoho";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
+import { DEFAULTS } from "@/config/defaults";
+import {
+  createEmailSubmission,
+  setEmailSubmissionThread,
+  setEmailSubmissionStatus,
+  findEmailSubmissionForFunderReply,
+  updateFunderReplyStatus,
+  type EmailSubmissionRow,
+} from "@/lib/ai-intel/email-submissions";
+
+/**
+ * True when this is Matthew's own "New Deal — {Business}" intake email (the trigger
+ * for the verbatim-forward flow), as opposed to a funder reply. Requires BOTH an
+ * allow-listed sender (SUBMISSIONS_INTERNAL_SENDERS) AND a subject starting "New Deal".
+ */
+function isNewDealEmail(from: string, subject: string | undefined | null): boolean {
+  if (!subject || !/^\s*new\s+deal\b/i.test(subject)) return false;
+  const allow = (process.env.SUBMISSIONS_INTERNAL_SENDERS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (allow.length === 0) return false;
+  return allow.includes(from.toLowerCase());
+}
+
+function parseBusinessFromNewDealSubject(subject: string): string {
+  return subject.replace(/^\s*new\s+deal\b\s*[—:\-–]*\s*/i, "").trim() || subject.trim();
+}
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -108,6 +136,11 @@ async function processMessage(mailbox: string, messageId: string): Promise<Recor
   const fromAddress = msg.from?.emailAddress?.address ?? "unknown";
   const fromDomain = fromAddress.split("@")[1]?.toLowerCase() ?? null;
 
+  // Matthew's own "New Deal — {Business}" intake email → start the verbatim-forward flow.
+  if (isNewDealEmail(fromAddress, msg.subject)) {
+    return handleNewDealEmail(mailbox, msg, fromAddress);
+  }
+
   if (isRoutingSubject(msg.subject)) {
     return handleRoutingReply(msg, bodyText);
   }
@@ -117,6 +150,24 @@ async function processMessage(mailbox: string, messageId: string): Promise<Recor
     from: fromAddress,
     body: bodyText,
   });
+
+  // Funder reply to an email-driven deal? These have no Zoho contact, so match the
+  // email_submissions tracking table first (by conversationId / business / domain).
+  const emailSubMatch = await findEmailSubmissionForFunderReply({
+    conversationId: msg.conversationId ?? null,
+    businessName: classification.business_name,
+    funderDomain: fromDomain,
+  });
+  if (emailSubMatch) {
+    return handleFunderReplyForEmailSubmission({
+      submission: emailSubMatch.submission,
+      funderRowId: emailSubMatch.funderRowId,
+      classification,
+      msg,
+      fromAddress,
+      fromDomain,
+    });
+  }
 
   const contact = await findContactByBusinessName(classification.business_name);
 
@@ -196,8 +247,43 @@ async function handleApproved(args: { contact: { id: string; business_name: stri
     body: `*Offer:* ${noteContent}\n*Subject:* ${args.msg.subject}\n*Summary:* ${args.classification.summary}`,
     fallbackIntent: "approved",
   });
+  await dmMatthewApprovalReminder({
+    businessName: args.contact.business_name,
+    zohoLeadId: args.contact.zoho_lead_id,
+    lenderName,
+    offer: noteContent,
+  });
   await supabaseAdmin.from("ai_decisions").update({ action_taken: "slack_alert" }).eq("id", args.aiDecisionId ?? "");
   return { intent: "approved", business: args.contact.business_name };
+}
+
+async function dmMatthewApprovalReminder(opts: {
+  businessName: string | null;
+  zohoLeadId: string | null;
+  lenderName: string;
+  offer: string;
+}): Promise<void> {
+  const matthewDM = process.env.SLACK_VEKTOR_MATTHEW_DM || "";
+  if (!matthewDM) {
+    console.warn("[handleApproved] SLACK_VEKTOR_MATTHEW_DM not set — skipping approval reminder DM");
+    return;
+  }
+  const zohoLink = opts.zohoLeadId
+    ? `<https://crm.zoho.com/crm/org/_/tab/Leads/${opts.zohoLeadId}|Open in Zoho>`
+    : "";
+  const lines = [
+    `✅ *Approval received* — ${opts.businessName ?? "unknown merchant"}`,
+    `Lender: ${opts.lenderName === "—" ? "unknown" : opts.lenderName}`,
+    `Offer: ${opts.offer}`,
+    "",
+    `👉 Update Zoho stage to *Approved* to fire Meta CAPI \`DealApproved\``,
+    zohoLink,
+  ].filter(Boolean);
+  try {
+    await slack.postMessage(matthewDM, lines.join("\n"));
+  } catch (e) {
+    console.warn("[handleApproved] DM to Matthew failed:", (e as Error).message);
+  }
 }
 
 async function handleDeclined(args: { contact: { id: string; business_name: string | null; zoho_lead_id: string | null }; submission: { id: string; lender_id: string | null } | null; classification: { declined_reason: string | null; summary: string }; msg: { subject: string }; aiDecisionId?: string }): Promise<Record<string, unknown>> {
@@ -425,6 +511,198 @@ async function handleRoutingReply(msg: { subject: string; body: { content: strin
     submission_drafts: result.pendingActionIds.length,
     onedrive: result.onedriveUrl,
   };
+}
+
+// ── Email-driven deal shopping (verbatim forward) ──
+
+async function handleNewDealEmail(
+  mailbox: string,
+  msg: {
+    id: string;
+    subject: string;
+    body: { content: string; contentType: string };
+    conversationId: string;
+  },
+  fromAddress: string,
+): Promise<Record<string, unknown>> {
+  const business = parseBusinessFromNewDealSubject(msg.subject);
+  const htmlBody = msg.body.content ?? "";
+
+  const { id, created } = await createEmailSubmission({
+    businessName: business,
+    originalMessageId: msg.id,
+    conversationId: msg.conversationId ?? null,
+    mailbox,
+    subject: msg.subject,
+    htmlBody,
+    fromAddress,
+  });
+
+  // Duplicate Graph notification for the same email — already captured, don't re-post.
+  if (!created) {
+    return { intent: "new_deal", business, deduped: true };
+  }
+
+  const channel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
+  const text =
+    `📦 *New Deal — ${business}*\n` +
+    "Reply in this thread with the funder names to submit to " +
+    "(e.g. `Legend, Fundbox, Kapitus`) and I'll forward this exact package to each.";
+
+  let threadTs: string | null = null;
+  try {
+    const resp = (await slack.postMessage(channel, text)) as { ok?: boolean; ts?: string; channel?: string };
+    if (resp?.ts) {
+      threadTs = resp.ts;
+      await setEmailSubmissionThread(id, resp.channel || channel, resp.ts);
+    }
+  } catch (e) {
+    console.error("[handleNewDealEmail] Slack post failed:", (e as Error).message);
+  }
+
+  return { intent: "new_deal", business, email_submission_id: id, slack_thread_ts: threadTs };
+}
+
+async function handleFunderReplyForEmailSubmission(args: {
+  submission: EmailSubmissionRow;
+  funderRowId: string | null;
+  classification: import("@/lib/ai-intel/inbound-classifier").InboundClassification;
+  msg: { id: string; subject: string };
+  fromAddress: string;
+  fromDomain: string | null;
+}): Promise<Record<string, unknown>> {
+  const { submission, classification } = args;
+  const funderName = await lookupFunderName(args.funderRowId, args.fromAddress);
+
+  const { emoji, label, detail, status, draftReply } = describeFunderReply(classification);
+
+  await updateFunderReplyStatus({
+    funderRowId: args.funderRowId,
+    emailSubmissionId: submission.id,
+    funderDomain: args.fromDomain,
+    status,
+    replyMessageId: args.msg.id,
+    notes: detail,
+  });
+
+  const channel = submission.slack_channel || process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
+  const threadTs = submission.slack_thread_ts ?? undefined;
+  const headline = `${emoji} *${label}* — ${submission.business_name} · ${funderName}`;
+  const bodyLines = [headline, detail ? detail : null, `_Summary:_ ${classification.summary}`].filter(Boolean).join("\n");
+
+  try {
+    if (threadTs) {
+      await slack.postThreadReply(channel, threadTs, bodyLines);
+    } else {
+      await slack.postMessage(channel, bodyLines);
+    }
+  } catch (e) {
+    console.error("[handleFunderReplyForEmailSubmission] thread post failed:", (e as Error).message);
+  }
+
+  // Draft a suggested reply to the funder, gated by 👍, sent FROM submissions@.
+  if (draftReply) {
+    try {
+      const { text: draft } = await callClaudeText({
+        model: "claude-sonnet-4-6",
+        system:
+          "You are the SRT Agency submissions desk replying to an MCA funder about a deal we shopped them. " +
+          "Write a short, professional plain-text reply (no subject line, no signature — those are added automatically). " +
+          "Be direct and factual, no filler. Do not invent numbers or attachments that weren't mentioned.",
+        user:
+          `Merchant: ${submission.business_name}. Funder: ${funderName}. ` +
+          `Their reply was classified as "${classification.intent}". ` +
+          `Details: ${detail || classification.summary}. ` +
+          `Draft our reply back to the funder.`,
+        maxTokens: 400,
+      });
+
+      // Send exactly the drafted text with NO signature. Pre-build minimal HTML and
+      // mark is_html so buildHtmlBody returns it untouched (no signature appended).
+      const draftHtml = draft
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br>");
+      const payload: PendingActionPayload = {
+        action_type: "reply_funder",
+        to: args.fromAddress,
+        subject: args.msg.subject.toLowerCase().startsWith("re:") ? args.msg.subject : `Re: ${args.msg.subject}`,
+        body: draftHtml,
+        is_html: true,
+        from_mailbox: DEFAULTS.submissionsFromAddress,
+      };
+      await postApprovalRequest({
+        summary: `📤 *Suggested reply to ${funderName}* — ${submission.business_name}\n>${draft.replace(/\n/g, "\n>")}`,
+        payload,
+        channel,
+        threadTs,
+      });
+    } catch (e) {
+      console.error("[handleFunderReplyForEmailSubmission] draft reply failed:", (e as Error).message);
+    }
+  }
+
+  // Once any funder responds, the deal is actively in market.
+  if (submission.status === "awaiting_funders") {
+    await setEmailSubmissionStatus(submission.id, "forwarded");
+  }
+
+  return { intent: classification.intent, business: submission.business_name, source: "email_submission" };
+}
+
+async function lookupFunderName(funderRowId: string | null, fallbackEmail: string): Promise<string> {
+  if (funderRowId) {
+    const { data } = await supabaseAdmin
+      .from("email_submission_funders")
+      .select("funder_name")
+      .eq("id", funderRowId)
+      .maybeSingle();
+    const name = data?.funder_name as string | null;
+    if (name) return name;
+  }
+  return fallbackEmail;
+}
+
+function describeFunderReply(
+  c: import("@/lib/ai-intel/inbound-classifier").InboundClassification,
+): { emoji: string; label: string; detail: string; status: string; draftReply: boolean } {
+  switch (c.intent) {
+    case "approved": {
+      const amt = c.approved_amount ? `$${c.approved_amount.toLocaleString()}` : "—";
+      const rate = c.buy_rate ?? c.sell_rate;
+      const detail = `Offer: ${amt} @ ${rate ?? "—"} / ${c.term ?? "—"}`;
+      return { emoji: "🎉", label: "APPROVED", detail, status: "approved", draftReply: true };
+    }
+    case "declined":
+      return { emoji: "⛔", label: "DECLINED", detail: `Reason: ${c.declined_reason ?? c.summary}`, status: "declined", draftReply: true };
+    case "stips_needed":
+      return {
+        emoji: "📎",
+        label: "STIPS NEEDED",
+        detail: c.stips_required.length > 0 ? `Stips: ${c.stips_required.join(", ")}` : c.summary,
+        status: "stips",
+        draftReply: true,
+      };
+    case "counter_offer": {
+      const details = [
+        c.approved_amount ? `$${c.approved_amount.toLocaleString()}` : null,
+        c.buy_rate ? `@ ${c.buy_rate}` : null,
+        c.term ? `/ ${c.term}` : null,
+      ].filter(Boolean).join(" ");
+      return { emoji: "💬", label: "COUNTER OFFER", detail: details || c.summary, status: "counter", draftReply: true };
+    }
+    case "missing_fields":
+      return {
+        emoji: "🔍",
+        label: "DOCS REQUESTED",
+        detail: c.missing_fields.length > 0 ? `Requested: ${c.missing_fields.join(", ")}` : c.summary,
+        status: "stips",
+        draftReply: true,
+      };
+    default:
+      return { emoji: "📨", label: "REPLY", detail: c.summary, status: "sent", draftReply: false };
+  }
 }
 
 async function getUserAccessToken(): Promise<string> {

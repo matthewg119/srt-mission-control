@@ -4,7 +4,7 @@ import { slack } from "@/lib/slack-bot";
 import { addNoteToLead, updateLead } from "@/lib/zoho";
 import type { PendingActionPayload } from "./types";
 import { DEFAULTS } from "@/config/defaults";
-import { EMAIL_SIGNATURE_HTML, SIGNATURE_S_HTML } from "@/config/email-signature";
+import { EMAIL_SIGNATURE_HTML, SIGNATURE_S_HTML, resolveSubmissionSignature } from "@/config/email-signature";
 import { advanceEnrollment, resetEnrollmentAfterCancel } from "@/lib/sequence-engine";
 
 async function buildHtmlBody(body: string, isHtml: boolean, signatureName?: string): Promise<string> {
@@ -18,9 +18,11 @@ async function buildHtmlBody(body: string, isHtml: boolean, signatureName?: stri
   const sig =
     signatureName === "S"
       ? (process.env.SIGNATURE_S_HTML || SIGNATURE_S_HTML)
-      : ((signatureName ? await microsoft.getSignatureByName(signatureName).catch(() => null) : null) ??
-        (await microsoft.getDefaultSignature().catch(() => null)) ??
-        EMAIL_SIGNATURE_HTML);
+      : signatureName === "Submission"
+        ? resolveSubmissionSignature()
+        : ((signatureName ? await microsoft.getSignatureByName(signatureName).catch(() => null) : null) ??
+          (await microsoft.getDefaultSignature().catch(() => null)) ??
+          EMAIL_SIGNATURE_HTML);
   const htmlBody = body
     .split("\n")
     .map((line) => (line.trim() === "" ? "<br>" : `<p style="margin:0 0 8px 0;">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`))
@@ -62,6 +64,8 @@ export async function executePendingAction(opts: {
         return await clearLeadAmounts(opts.payload);
       case "add_lender":
         return await addLender(opts.payload);
+      case "seed_lenders":
+        return await seedLenders(opts.payload);
       default:
         return { ok: false, error: `unknown_action_type:${opts.actionType}` };
     }
@@ -80,6 +84,7 @@ async function sendEmail(payload: PendingActionPayload): Promise<ExecuteResult> 
     subject: payload.subject,
     body: htmlBody,
     isHtml: true,
+    fromMailbox: payload.from_mailbox as string | undefined,
   });
 
   // Log the send back to the Zoho lead (e.g. "Email sent successfully …").
@@ -349,6 +354,39 @@ async function addLender(payload: PendingActionPayload): Promise<ExecuteResult> 
   }
 
   return { ok: true, details: { lender: data?.name ?? name, id: data?.id, action: "upserted" } };
+}
+
+async function seedLenders(payload: PendingActionPayload): Promise<ExecuteResult> {
+  const list = (payload.lenders_to_seed as Array<{ name: string; email: string }> | undefined) ?? [];
+  if (list.length === 0) return { ok: false, error: "no_lenders_to_seed" };
+
+  // Skip any whose submission_email already exists, so the card is idempotent.
+  const emails = list.map((l) => l.email.toLowerCase());
+  const { data: existing } = await supabaseAdmin
+    .from("lenders")
+    .select("submission_email")
+    .in("submission_email", emails);
+  const have = new Set(((existing ?? []) as Array<{ submission_email: string | null }>).map((r) => (r.submission_email ?? "").toLowerCase()));
+
+  const toInsert = list
+    .filter((l) => !have.has(l.email.toLowerCase()))
+    .map((l) => ({
+      name: l.name,
+      tier: 2,
+      is_active: true,
+      submission_method: "email",
+      submission_email: l.email,
+      cc_emails: [] as string[],
+    }));
+
+  if (toInsert.length === 0) {
+    return { ok: true, details: { inserted: 0, skipped: list.length, reason: "all_exist" } };
+  }
+
+  const { data, error } = await supabaseAdmin.from("lenders").insert(toInsert).select("id");
+  if (error) return { ok: false, error: error.message };
+
+  return { ok: true, details: { inserted: data?.length ?? 0, skipped: list.length - toInsert.length } };
 }
 
 async function clearLeadAmounts(payload: PendingActionPayload): Promise<ExecuteResult> {

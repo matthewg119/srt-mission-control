@@ -157,6 +157,75 @@ export const SIGNATURE_S_HTML = `
 </div>
 `.trim();
 
+/**
+ * "Submission" signature — used on emails that go out FROM submissions@srtagency.com
+ * to funders (the verbatim deal forward and the AI-drafted funder replies).
+ *
+ * Graph does NOT expose Outlook roaming signatures, so this is resolved as a
+ * server-side constant the same way SIGNATURE_S_HTML is. The env var
+ * SIGNATURE_SUBMISSION_HTML overrides it at runtime — paste the captured HTML
+ * there (or replace the placeholder below) once Matthew sends the model email and
+ * we extract it via microsoft.getLatestHtmlBySubject().
+ *
+ * Until the real signature is captured, this is a minimal SRT Submissions block so
+ * funders still get a branded sign-off instead of falling back to the personal sig.
+ */
+export const SIGNATURE_SUBMISSION_HTML = `
+<div style="font-family:Arial,Helvetica,sans-serif;">
+  <table cellspacing="0" cellpadding="0" border="0" style="text-align:left; color:rgb(51,51,51);">
+    <tbody>
+      <tr>
+        <td style="text-align:left; padding-bottom:1px;">
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:16px; color:rgb(232,121,43);"><span style="font-weight:700;">SRT Submissions</span></div>
+        </td>
+      </tr>
+      <tr>
+        <td style="text-align:left; padding-bottom:10px;">
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px; color:rgb(102,102,102);">Submissions Desk · SRT Agency</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="text-align:left; padding-bottom:10px;">
+          <table cellspacing="0" cellpadding="0" border="0" style="text-align:left;">
+            <tbody>
+              <tr>
+                <td style="padding-right:8px; vertical-align:middle;">
+                  <img alt="SRT Agency" width="28" height="30" src="${SRT_LOGO_URL}" style="width:28px; height:30px; display:block; border:0;" />
+                </td>
+                <td style="vertical-align:middle;">
+                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:rgb(13,27,42);"><span style="line-height:1; font-weight:700;">Scaling Revenue Together</span></div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="text-align:left; padding-bottom:10px;">
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px;"><span style="color:rgb(102,102,102);">E: </span><a href="mailto:submissions@srtagency.com" style="color:rgb(51,51,51); text-decoration:none;">submissions@srtagency.com</a></div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <table cellspacing="0" cellpadding="0" border="0" style="text-align:left; color:rgb(51,51,51);">
+    <tbody>
+      <tr>
+        <td style="text-align:left;">
+          <p style="line-height:1.4; margin:0; max-width:500px; font-size:8px; color:rgb(170,170,170); font-family:Arial,Helvetica,sans-serif;"><span style="color:rgb(136,136,136); font-weight:700;">CONFIDENTIALITY NOTICE:</span>&nbsp;This e-mail and any files or previous e-mail messages attached to it, may contain proprietary and confidential information. If you are not an intended recipient, you are hereby notified that any disclosure or use of this information obtained is STRICTLY PROHIBITED. If you have received this email in error, please notify us by replying to the sender of the e-mail and destroy the original transmission and its attachments without reading them or saving them. Thank you.</p>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+`.trim();
+
+/**
+ * Resolves the Submissions signature HTML, preferring the runtime env override.
+ */
+export function resolveSubmissionSignature(): string {
+  return process.env.SIGNATURE_SUBMISSION_HTML || SIGNATURE_SUBMISSION_HTML;
+}
+
 export interface SignatureParams {
   name: string;
   title: string;

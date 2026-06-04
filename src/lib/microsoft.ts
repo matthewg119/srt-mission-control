@@ -290,17 +290,28 @@ export const microsoft = {
     };
   },
 
-  /** Get PDF/file attachments for a message. Returns array with name, size, contentBytes (base64), contentType. */
-  async getMessageAttachments(messageId: string): Promise<Array<{
+  /**
+   * Get PDF/file attachments for a message. Returns array with name, size, contentBytes (base64), contentType.
+   * `mailbox` undefined → /me. Otherwise /users/{mailbox} (e.g. submissions@srtagency.com), so we can
+   * re-download the attachments of a message that landed in a shared mailbox.
+   */
+  async getMessageAttachments(messageId: string, mailbox?: string): Promise<Array<{
     id: string; name: string; size: number; contentBytes: string; contentType: string;
   }>> {
+    const mailboxPath = mailbox ? `/users/${encodeURIComponent(mailbox)}` : "/me";
     const result = await graphRequest(
-      `/me/messages/${messageId}/attachments?$select=id,name,size,contentBytes,contentType&$top=20`
+      `${mailboxPath}/messages/${messageId}/attachments?$select=id,name,size,contentBytes,contentType&$top=20`
     );
     return (result.value as Array<{ id: string; name: string; size: number; contentBytes: string; contentType: string }> | undefined) ?? [];
   },
 
-  /** Send an email (with optional attachments) */
+  /**
+   * Send an email (with optional attachments).
+   * `fromMailbox` undefined → POST /me/sendMail (sends as the connected account).
+   * Otherwise → POST /users/{mailbox}/sendMail so the message originates from a
+   * shared mailbox the signed-in user has Send-As / Mail.Send.Shared on
+   * (e.g. submissions@srtagency.com).
+   */
   async sendMail(params: {
     to: string;
     bcc?: string;
@@ -308,6 +319,7 @@ export const microsoft = {
     body: string;
     isHtml?: boolean;
     attachments?: Array<{ name: string; contentType: string; contentBytes: string }>;
+    fromMailbox?: string;
   }): Promise<void> {
     const token = await getValidAccessToken();
 
@@ -335,7 +347,10 @@ export const microsoft = {
       }));
     }
 
-    const res = await fetch(`${GRAPH_URL}/me/sendMail`, {
+    const sendPath = params.fromMailbox
+      ? `${GRAPH_URL}/users/${encodeURIComponent(params.fromMailbox)}/sendMail`
+      : `${GRAPH_URL}/me/sendMail`;
+    const res = await fetch(sendPath, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,

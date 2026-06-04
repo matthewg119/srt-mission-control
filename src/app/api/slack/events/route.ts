@@ -8,6 +8,8 @@ import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execu
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
+import { getEmailSubmissionByThread } from "@/lib/ai-intel/email-submissions";
+import { forwardDealToFunders } from "@/lib/ai-intel/forward-deal-to-funders";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
@@ -92,6 +94,12 @@ export async function POST(request: NextRequest) {
 
       // Reaction shortcut for AI approval workflow — handled before bot-message filter.
       if (event.type === "reaction_added" && event.item?.type === "message") {
+        console.log("[slack/events] reaction_added", {
+          reaction: event.reaction,
+          ts: event.item.ts,
+          channel: event.item.channel,
+          user: event.user,
+        });
         // Code Guardian reactions — check first so ✅ on a guardian card doesn't trigger SMS approval
         const guardianHandled = await handleGuardianReaction({
           reaction: event.reaction as string,
@@ -193,6 +201,26 @@ export async function POST(request: NextRequest) {
         userText.trim().length > 0
       ) {
         const handled = await handleDealThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          userId: event.user as string,
+          replyText: userText,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // Thread reply under a "New Deal" message in #srt-sub → funder names to
+      // forward the verbatim package to. Must run BEFORE the submissions-AI
+      // agent fallthrough (getAgentType maps #srt-sub → "submissions").
+      const subChannelEnv = process.env.SLACK_SUB_CHANNEL || "";
+      if (
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        subChannelEnv &&
+        channel === subChannelEnv &&
+        userText.trim().length > 0
+      ) {
+        const handled = await handleSubDealThreadReply({
           channel,
           threadTs: parentThreadTs,
           userId: event.user as string,
@@ -386,7 +414,19 @@ async function handleReactionAdded(args: { reaction: string; slackTs: string; ch
       status: "approved",
       approvedBy: args.userId,
     });
-    if (error || !action) return;
+    if (error || !action) {
+      console.warn("[slack/events] 👍 approve could not resolve pending action", {
+        slackTs: args.slackTs,
+        channel: args.channel,
+        error,
+      });
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        `⚠️ Could not approve via 👍: ${error ?? "no pending action found"}`
+      );
+      return;
+    }
 
     if (action.payload.requires_matthew && !(matthewId && args.userId === matthewId)) {
       await supabaseAdmin
@@ -980,6 +1020,47 @@ async function handleDealThreadReply(args: {
     summary,
     success: result.ok,
   });
+  return true;
+}
+
+// Reply under a "New Deal" parent message in #srt-sub: parse funder names and
+// forward the verbatim package to each. Returns true if this thread is a tracked
+// email_submissions deal (so the caller stops before the AI agent answers).
+async function handleSubDealThreadReply(args: {
+  channel: string;
+  threadTs: string;
+  userId: string;
+  replyText: string;
+}): Promise<boolean> {
+  const submission = await getEmailSubmissionByThread(args.threadTs);
+  if (!submission) return false;
+
+  const choice = await parseLenderChoicesFromReply(args.replyText);
+  if (choice.lender_ids.length === 0) {
+    await slack.postEphemeral(
+      args.channel,
+      args.userId,
+      `Couldn't match any funder from "${args.replyText.slice(0, 120)}". Try: \`Legend, Fundbox\` or \`Tier 1 only\`.`,
+    );
+    return true;
+  }
+
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    `📤 Forwarding *${submission.business_name}* to: ${choice.matched_names.join(", ")}${
+      choice.unmatched.length ? ` _(unmatched: ${choice.unmatched.join(", ")})_` : ""
+    }`,
+  );
+
+  const result = await forwardDealToFunders({
+    emailSubmissionId: submission.id,
+    lenderIds: choice.lender_ids,
+  });
+
+  if (!result.ok && result.sent.length === 0) {
+    await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Forward failed: ${result.error ?? "unknown"}`);
+  }
   return true;
 }
 
