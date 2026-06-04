@@ -2,13 +2,21 @@ import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 
-export type IntelMetaEventName = "Purchase" | "DealDeclined";
+export type IntelMetaEventName = "Purchase" | "DealDeclined" | "DealApproved";
 
 export interface MaybeFireArgs {
   eventName: IntelMetaEventName;
   contactId: string;
   value?: number;
   eventId?: string;
+  /**
+   * When false, fires regardless of `_fbc` presence — use for audience-training
+   * signals (DealApproved, DNQ-style) where we want Meta to learn from every
+   * lead, not just Meta-attributed ones. Default: true.
+   */
+  enforceAttribution?: boolean;
+  /** Extra custom_data fields to merge alongside value/currency. */
+  customData?: Record<string, unknown>;
 }
 
 export interface MaybeFireResult {
@@ -28,8 +36,15 @@ export async function maybeFireMetaEvent(args: MaybeFireArgs): Promise<MaybeFire
   }
 
   const fbc = (contact.fbc as string | null) ?? null;
-  if (!hasMetaAttributionServer({ fbc })) {
+  const enforceAttribution = args.enforceAttribution ?? true;
+  if (enforceAttribution && !hasMetaAttributionServer({ fbc })) {
     return { fired: false, reason: "no_meta_attribution" };
+  }
+
+  const customData: Record<string, unknown> = { ...(args.customData ?? {}) };
+  if (args.value != null) {
+    customData.value = args.value;
+    customData.currency = "USD";
   }
 
   const res = await sendEvent({
@@ -45,7 +60,7 @@ export async function maybeFireMetaEvent(args: MaybeFireArgs): Promise<MaybeFire
       fbp: (contact.fbp as string | null) ?? undefined,
       externalId: args.contactId,
     },
-    customData: args.value ? { value: args.value, currency: "USD" } : undefined,
+    customData: Object.keys(customData).length > 0 ? customData : undefined,
   });
 
   return { fired: res.success, reason: res.success ? "fired" : (res.error ?? "send_failed") };

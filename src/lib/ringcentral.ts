@@ -2,7 +2,7 @@
 
 // ── Config ──
 
-function getConfig() {
+export function getConfig() {
   return {
     serverUrl: process.env.RC_SERVER_URL || "https://platform.ringcentral.com",
     clientId: process.env.RC_APP_CLIENT_ID || "",
@@ -16,7 +16,7 @@ function getConfig() {
 
 let cachedToken: { access_token: string; expires_at: number } | null = null;
 
-async function getAccessToken(): Promise<string | null> {
+export async function getAccessToken(): Promise<string | null> {
   // Return cached token if still valid (60s buffer)
   if (cachedToken && Date.now() < cachedToken.expires_at - 60_000) {
     return cachedToken.access_token;

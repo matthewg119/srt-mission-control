@@ -10,7 +10,7 @@ import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
 import { getEmailSubmissionByThread } from "@/lib/ai-intel/email-submissions";
 import { forwardDealToFunders } from "@/lib/ai-intel/forward-deal-to-funders";
-import { isBuildCommand, handleBuildCommand } from "@/lib/ai-intel/build-draft";
+import { isBuildCommand, handleBuildCommand, handleStatementDropThreadReply } from "@/lib/ai-intel/build-draft";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
@@ -262,6 +262,25 @@ export async function POST(request: NextRequest) {
           threadTs: parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : (event.ts as string),
           userId: event.user as string,
           text: userText,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // Thread reply under a #srt-sub bank-statement drop → Vektor controls
+      // (N-months trim, name override, rebuild, or a conversational answer).
+      // Runs BEFORE the email-submissions funder-forward handler below.
+      if (
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        subChannelEnv &&
+        channel === subChannelEnv &&
+        userText.trim().length > 0
+      ) {
+        const handled = await handleStatementDropThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          userId: event.user as string,
+          replyText: userText,
         });
         if (handled) return NextResponse.json({ ok: true });
       }

@@ -8,6 +8,8 @@
 import { supabaseAdmin } from "@/lib/db";
 import { postDealThreadUpdate } from "./deal-thread";
 import { onPreApproved } from "./pre-approved-handler";
+import { onApproved } from "./approved-handler";
+import { onClosed } from "./closed-handler";
 import type { ZohoStage } from "@/config/pipeline";
 
 /**
@@ -70,7 +72,18 @@ export async function handleStageChange(opts: {
       }
       break;
     case "Approved":
-      // TODO Phase 5: onApproved(dealId) → pitch angles
+      try {
+        await onApproved(dealId);
+      } catch (e) {
+        console.error("[stage-handler] onApproved failed:", (e as Error).message);
+      }
+      break;
+    case "Closed":
+      try {
+        await onClosed(dealId);
+      } catch (e) {
+        console.error("[stage-handler] onClosed failed:", (e as Error).message);
+      }
       break;
     default:
       break;

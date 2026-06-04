@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentBrief } from "@/lib/ai-intel/content-brief-generator";
+import { generateDailyIdeasAndHooks } from "@/lib/ai-intel/content-ideas-generator";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 120;
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 // Daily content ideas cron.
-// Fires 3× per weekday (9 AM / 1 PM / 5 PM ET) from vercel.json.
-// Each fire generates one fresh brief and pipes it through the existing
-// viral-decoder → video-pipeline (FAL + ElevenLabs + ffmpeg) flow, so
-// a finished MP4 lands in #content-full without any manual step.
+// Fires once per weekday at 9 AM ET from vercel.json / GitHub Actions.
+// Generates 10 divergent video ideas + 30 direct-response hooks and posts
+// them as stand-alone messages in #content-full for Matthew to write from.
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -22,97 +21,74 @@ function isAuthorized(req: NextRequest): boolean {
   return header === `Bearer ${secret}`;
 }
 
+function todayLabel(): string {
+  return new Date().toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "America/New_York",
+  });
+}
+
 async function handle(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const start = Date.now();
-  const contentFullChannel = VEKTOR_CHANNELS.contentFull;
-  if (!contentFullChannel) {
-    return NextResponse.json(
-      { error: "SLACK_CONTENT_FULL_CHANNEL not set" },
-      { status: 500 }
-    );
+  const channel = VEKTOR_CHANNELS.contentFull;
+  if (!channel) {
+    return NextResponse.json({ error: "SLACK_CONTENT_FULL_CHANNEL not set" }, { status: 500 });
   }
 
-  let brief;
+  let output;
   try {
-    brief = await generateContentBrief();
+    output = await generateDailyIdeasAndHooks();
   } catch (e) {
     const msg = (e as Error).message;
-    console.error("[daily-content-ideas] brief generation failed:", msg);
+    console.error("[daily-content-ideas] generation failed:", msg);
     await supabaseAdmin.from("system_logs").insert({
-      event_type: "cron_daily_content_ideas_error",
-      description: `brief generation failed: ${msg}`,
+      event_type: "cron_daily_ideas_hooks_error",
+      description: `generation failed: ${msg}`,
       metadata: { duration_ms: Date.now() - start },
     });
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 
-  // Drop a seed message in #content-full so the package has a thread to land in.
-  const seedText = [
-    `💡 *Daily content idea*`,
-    `> *${brief.hook_angle}*`,
-    `_${brief.vertical} • ${brief.persona} • $${brief.funding_amount_usd.toLocaleString()} for ${brief.use_of_funds}_`,
-    ``,
-    `_Full production package (voiceover, image prompts, animation prompts, SFX) coming in thread — pick 👍 to build, ✏️ to regenerate, 🚫 to kill._`,
+  const date = todayLabel();
+
+  // Message A — 10 video ideas
+  const ideasText = [
+    `💡 *10 Video Ideas — ${date}*`,
+    "",
+    ...output.video_ideas.map((idea, i) => `${i + 1}. ${idea}`),
   ].join("\n");
 
-  const seed = (await slack.postMessage(contentFullChannel, seedText)) as {
-    ok?: boolean;
-    ts?: string;
-  };
-  if (!seed.ok || !seed.ts) {
-    return NextResponse.json(
-      { ok: false, error: "slack seed post failed" },
-      { status: 500 }
-    );
-  }
+  await slack.postMessage(channel, ideasText);
 
-  // Call the viral decoder — it generates the full 9-slide text package
-  // (voiceover, image prompts, animation prompts, music, timeline) and posts
-  // it as a Slack Block Kit reply in the seed thread. Matt picks which idea
-  // to shoot later — we do NOT auto-render. Image + animation generation
-  // happens manually after Matt reacts, using his own tools (ElevenLabs
-  // images, Seedance 1.5 for animation).
-  const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  const decoderRes = await fetch(`${siteUrl}/api/agent/viral-decoder`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      channel: contentFullChannel,
-      thread_ts: seed.ts,
-      brief: brief.brief_line,
-      files: [],
-    }),
-  });
+  // Message B — hooks 1–15
+  const hooks1Text = [
+    `🎣 *30 Hooks — ${date} (1–15)*`,
+    "",
+    ...output.hooks.slice(0, 15).map((hook, i) => `${i + 1}. ${hook}`),
+  ].join("\n");
 
-  if (!decoderRes.ok) {
-    const errText = await decoderRes.text();
-    await supabaseAdmin.from("system_logs").insert({
-      event_type: "cron_daily_content_ideas_error",
-      description: `viral-decoder call failed (${decoderRes.status}): ${errText.slice(0, 500)}`,
-      metadata: { brief, duration_ms: Date.now() - start },
-    });
-    return NextResponse.json(
-      { ok: false, error: `decoder_failed_${decoderRes.status}` },
-      { status: 500 }
-    );
-  }
+  await slack.postMessage(channel, hooks1Text);
 
-  const decoderJson = (await decoderRes.json()) as {
-    ok?: boolean;
-    package_id?: string | null;
-  };
+  // Message C — hooks 16–30
+  const hooks2Text = [
+    `🎣 *(16–30)*`,
+    "",
+    ...output.hooks.slice(15).map((hook, i) => `${i + 16}. ${hook}`),
+  ].join("\n");
+
+  await slack.postMessage(channel, hooks2Text);
 
   await supabaseAdmin.from("system_logs").insert({
-    event_type: "cron_daily_content_ideas",
-    description: `Auto-generated content idea: ${brief.vertical} (${brief.hook_angle})`,
+    event_type: "cron_daily_ideas_hooks",
+    description: `Generated ${output.video_ideas.length} video ideas + ${output.hooks.length} hooks`,
     metadata: {
-      brief,
-      package_id: decoderJson.package_id,
-      seed_ts: seed.ts,
+      ideas: output.video_ideas,
+      hooks: output.hooks,
       duration_ms: Date.now() - start,
     },
   });
@@ -120,9 +96,8 @@ async function handle(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     duration_ms: Date.now() - start,
-    brief,
-    package_id: decoderJson.package_id,
-    seed_ts: seed.ts,
+    ideas_count: output.video_ideas.length,
+    hooks_count: output.hooks.length,
   });
 }
 

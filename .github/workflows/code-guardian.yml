@@ -46,17 +46,19 @@ jobs:
 
           if [ -z "$CRON_SECRET" ]; then
             echo "::warning::CRON_SECRET not set — calling without auth"
-            AUTH_ARGS=""
+            http_code=$(curl -s -o response.txt -w "%{http_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://mission.srtagency.com/api/code-guardian/analyze")
           else
-            AUTH_ARGS="-H \"Authorization: Bearer $CRON_SECRET\""
+            http_code=$(curl -s -o response.txt -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://mission.srtagency.com/api/code-guardian/analyze")
           fi
-
-          http_code=$(eval curl -s -o response.txt -w "%{http_code}" \
-            -X POST \
-            $AUTH_ARGS \
-            -H "Content-Type: application/json" \
-            -d "'$PAYLOAD'" \
-            "https://mission.srtagency.com/api/code-guardian/analyze")
 
           echo "http_code=$http_code"
           echo "--- response ---"

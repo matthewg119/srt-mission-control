@@ -175,13 +175,8 @@ export const SIGNATURE_SUBMISSION_HTML = `
   <table cellspacing="0" cellpadding="0" border="0" style="text-align:left; color:rgb(51,51,51);">
     <tbody>
       <tr>
-        <td style="text-align:left; padding-bottom:1px;">
-          <div style="font-family:Arial,Helvetica,sans-serif; font-size:16px; color:rgb(232,121,43);"><span style="font-weight:700;">SRT Submissions</span></div>
-        </td>
-      </tr>
-      <tr>
         <td style="text-align:left; padding-bottom:10px;">
-          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px; color:rgb(102,102,102);">Submissions Desk · SRT Agency</div>
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:16px; color:rgb(232,121,43);"><span style="font-weight:700;">SRT Submissions</span></div>
         </td>
       </tr>
       <tr>
@@ -202,7 +197,20 @@ export const SIGNATURE_SUBMISSION_HTML = `
       </tr>
       <tr>
         <td style="text-align:left; padding-bottom:10px;">
-          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px;"><span style="color:rgb(102,102,102);">E: </span><a href="mailto:submissions@srtagency.com" style="color:rgb(51,51,51); text-decoration:none;">submissions@srtagency.com</a></div>
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px;"><span style="color:rgb(102,102,102);">T: </span><a href="tel:+17432646016" style="color:rgb(51,51,51); text-decoration:none;">(743) 264-6016</a><span style="color:rgb(204,204,204);">&nbsp;| </span><span style="color:rgb(102,102,102);">F: </span><span style="color:rgb(51,51,51);">(252) 556-1444</span></div>
+        </td>
+      </tr>
+      <tr>
+        <td style="text-align:left; padding-bottom:14px;">
+          <table cellspacing="0" cellpadding="0" border="0" style="text-align:left;">
+            <tbody>
+              <tr>
+                <td style="border-radius:5px; background-color:rgb(46,230,168); padding:10px 24px;">
+                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:13px; color:rgb(13,27,42);"><span style="letter-spacing:1px; font-weight:700;"><a href="https://srtagency.com/apply" style="color:rgb(13,27,42); text-decoration:none;">Apply Now&nbsp;&#8594;</a></span></div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </td>
       </tr>
     </tbody>

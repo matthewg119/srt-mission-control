@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales Twin — Red Panther (reference)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Bebas+Neue&family=Barlow:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --red:#FF3B30;--red-dark:#B22020;--red-darker:#3D0A0A;--red-glow:#7A1515;--red-mid:#CC2222;
+  --green:#00C87A;--green-dark:#007A4A;--green-glow:#003D25;--green-light:#6FECB8;--green-mid:#00A562;
+  --bg:#0A0606;--bg2:#110808;--bg3:#180C0C;--bg4:#200F0F;--bg5:#2A1212;
+  --border:#2E1010;--border2:#4A1C1C;--border3:#661E1E;
+  --text:#F5E8E8;--text2:#C49898;--text3:#8A5050;--text4:#4A2828;
+  --amber:#F5A623;--amber-bg:#3D1E00;--amber-dark:#5A3200;
+  --purple:#C4B5FD;--purple-bg:#160D28;--purple-border:#3B1D8A;
+  --cyan:#00D4FF;--cyan-bg:#001E28;--cyan-border:#004D5C;
+  --mono:'Space Mono',monospace;--display:'Bebas Neue',sans-serif;--body:'Barlow',sans-serif;
+  --state-color:var(--red);--state-glow:var(--red-glow);--state-bg:var(--red-darker);
+  --state-dark:var(--red-dark);
+}
+html,body{width:100%;height:100%;background:var(--bg);font-family:var(--body);overflow:hidden;}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.04) 2px,rgba(0,0,0,0.04) 4px);pointer-events:none;z-index:9999;}
+.shell{display:grid;grid-template-rows:44px 1fr;height:100vh;}
+.topbar{background:var(--bg2);border-bottom:2px solid var(--border3);display:flex;align-items:center;justify-content:space-between;padding:0 18px;gap:12px;position:relative;box-shadow:0 1px 0 var(--red-glow),0 2px 20px rgba(255,59,48,0.08);}
+.topbar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--state-color) 30%,var(--state-color) 70%,transparent);opacity:0.4;transition:opacity 0.6s;}
+.logo{font-family:var(--display);font-size:22px;color:var(--state-color);letter-spacing:0.12em;transition:color 0.6s;line-height:1;}
+.logo-sub{font-family:var(--mono);font-size:8px;color:var(--text4);letter-spacing:0.15em;text-transform:uppercase;display:block;margin-top:-3px;}
+.rep-wrap{display:flex;align-items:center;gap:7px;}
+.rep-avatar{width:22px;height:22px;border-radius:50%;background:var(--state-bg);border:1px solid var(--state-glow);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:11px;color:var(--state-color);transition:all 0.6s;}
+.rep-name{font-family:var(--mono);font-size:10px;color:var(--text3);}
+.state-pill{display:flex;align-items:center;gap:6px;padding:3px 12px;border-radius:3px;font-family:var(--display);font-size:13px;letter-spacing:0.1em;background:var(--state-bg);color:var(--state-color);border:1px solid var(--state-glow);transition:all 0.6s;}
+.pulse-dot{width:7px;height:7px;border-radius:50%;background:var(--state-color);animation:blink 1.4s infinite;transition:background 0.6s;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.15}}
+.topbar-stats{display:flex;gap:20px;align-items:center;}
+.stat{font-size:11px;font-family:var(--mono);color:var(--text4);}
+.stat span{color:var(--text2);}
+.clock-el{font-family:var(--display);font-size:16px;color:var(--text4);letter-spacing:0.08em;}
+.main{display:grid;grid-template-columns:215px 1fr 192px;overflow:hidden;}
+.panel{background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;}
+.panel-right{border-right:none;border-left:1px solid var(--border);}
+.ph{padding:7px 12px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:8px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text4);display:flex;align-items:center;gap:6px;flex-shrink:0;}
+.ph-dot{width:5px;height:5px;border-radius:50%;background:var(--state-color);animation:blink 1.4s infinite;transition:background 0.6s;}
+.ph-dot.off{animation:none;background:var(--text4);}
+.ph-dot.amber{animation:blink 0.9s infinite;background:var(--amber);}
+.ph-dot.green-dot{animation:blink 1s infinite;background:var(--green);}
+.coach-scroll{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.coach-scroll::-webkit-scrollbar{width:2px;}
+.coach-scroll::-webkit-scrollbar-thumb{background:var(--border3);}
+.tc-card{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
+.tc-label{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;display:flex;align-items:center;gap:4px;}
+.tc-label::before{content:'';display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--state-color);transition:background 0.6s;}
+.tc-line{font-size:11px;line-height:1.55;margin-bottom:4px;}
+.tc-line.rep-line{color:var(--text);}
+.tc-line.lead-line{color:var(--text3);}
+.tc-speaker{font-family:var(--mono);font-size:9px;opacity:0.5;margin-right:4px;}
+.tc-empty{font-size:11px;color:var(--text4);font-style:italic;}
+.sug-card{background:linear-gradient(135deg,rgba(0,200,122,0.06),rgba(0,200,122,0.02));border:1px solid var(--green-dark);border-radius:6px;padding:10px 10px 8px;display:none;position:relative;overflow:hidden;}
+.sug-card::before{content:'AI';position:absolute;right:8px;top:6px;font-family:var(--display);font-size:28px;color:rgba(0,200,122,0.06);letter-spacing:0.05em;}
+.sug-lbl{font-size:8px;font-family:var(--mono);color:var(--green);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:5px;display:flex;align-items:center;gap:5px;}
+.sug-tag{font-size:8px;padding:1px 7px;border-radius:2px;background:var(--green-glow);color:var(--green-light);font-family:var(--mono);}
+.sug-text{font-size:11px;color:var(--text);line-height:1.55;margin-bottom:8px;font-weight:500;}
+.sug-btns{display:flex;gap:4px;}
+.sug-btn{padding:3px 10px;border-radius:3px;font-size:10px;cursor:pointer;border:1px solid var(--border2);background:var(--bg4);color:var(--text3);font-family:var(--mono);transition:all 0.15s;}
+.sug-btn:hover{color:var(--text);border-color:var(--border3);}
+.sug-btn.used{background:var(--green-glow);border-color:var(--green-dark);color:var(--green-light);}
+.preq-card{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
+.pq-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px;}
+.pq-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text3);cursor:pointer;font-family:var(--mono);}
+.pq-item input{accent-color:var(--red);width:11px;height:11px;}
+.pq-item.done{color:var(--green-light);}
+.notes-side-card{background:var(--bg3);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+.nsc-hdr{display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-bottom:1px solid var(--border);}
+.nsc-lbl{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;}
+.nsc-clear{font-size:9px;font-family:var(--mono);color:var(--red);cursor:pointer;padding:1px 7px;border:1px solid var(--border2);border-radius:2px;background:transparent;transition:background 0.15s;}
+.nsc-clear:hover{background:var(--red-darker);}
+textarea.nsc-ta{width:100%;background:transparent;border:none;outline:none;resize:none;padding:7px 8px;font-size:11px;color:var(--text2);font-family:var(--body);line-height:1.5;}
+.center-panel{background:var(--bg);display:flex;flex-direction:column;border:none;position:relative;}
+.call-hero{padding:14px 20px 12px;background:var(--bg2);border-bottom:1px solid var(--border2);flex-shrink:0;position:relative;overflow:hidden;}
+.call-hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at top right,rgba(255,59,48,0.06) 0%,transparent 60%);transition:background 0.6s;pointer-events:none;}
+.ch-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;position:relative;}
+.caller-wrap{display:flex;align-items:center;gap:12px;}
+.avatar{width:42px;height:42px;border-radius:4px;background:var(--state-bg);border:2px solid var(--state-glow);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:16px;color:var(--state-color);transition:all 0.6s;flex-shrink:0;letter-spacing:0.05em;position:relative;}
+.cn-name{font-family:var(--display);font-size:20px;font-weight:400;color:var(--text);letter-spacing:0.06em;}
+.cn-sub{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:1px;}
+.timer-big{font-family:var(--display);font-size:32px;color:var(--state-color);letter-spacing:0.08em;transition:color 0.6s;min-width:88px;text-align:right;text-shadow:0 0 20px rgba(255,59,48,0.3);}
+.dial-bar-wrap{height:2px;background:var(--bg4);border-radius:0;overflow:hidden;margin-bottom:10px;position:relative;}
+.dial-bar{height:100%;background:var(--state-color);border-radius:0;width:0%;transition:width 0.25s linear,background 0.6s;position:relative;}
+.dial-bar::after{content:'';position:absolute;right:0;top:-2px;width:3px;height:6px;background:var(--state-color);border-radius:1px;box-shadow:0 0 6px var(--state-color);}
+.disp-row{display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
+.disp-row-lbl{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;margin-right:4px;}
+.dr-btn{padding:5px 11px;border-radius:3px;font-size:10px;font-family:var(--mono);cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--text3);transition:all 0.15s;display:flex;align-items:center;gap:4px;letter-spacing:0.04em;}
+.dr-btn:hover:not(:disabled){color:var(--text);border-color:var(--border3);}
+.dr-btn.connected{border-color:var(--green);color:var(--green-light);background:var(--green-glow);}
+.dr-btn.noans{border-color:var(--text4);color:var(--text4);}
+.dr-btn.vm{border-color:var(--amber);color:var(--amber);background:var(--amber-bg);}
+.dr-btn:disabled{opacity:0.2;cursor:not-allowed;}
+.status-strip{padding:5px 20px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:10px;font-family:var(--mono);color:var(--state-color);display:flex;align-items:center;gap:6px;flex-shrink:0;transition:color 0.6s;letter-spacing:0.04em;}
+.ss-dot{width:5px;height:5px;border-radius:50%;background:var(--state-color);animation:blink 1s infinite;flex-shrink:0;transition:background 0.6s;}
+.ai-sum{padding:8px 20px;background:var(--bg2);border-bottom:1px solid var(--border);cursor:pointer;flex-shrink:0;transition:background 0.2s;}
+.ai-sum:hover{background:var(--bg3);}
+.ai-sum-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;}
+.ai-sum-lbl{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:4px;}
+.ai-sum-text{font-size:11px;color:var(--text2);line-height:1.5;}
+.ai-sum-text strong{color:var(--text);font-weight:600;}
+.fields-row{display:grid;grid-template-columns:repeat(3,1fr);padding:0 20px;background:var(--bg2);border-bottom:1px solid var(--border2);flex-shrink:0;}
+.fld{padding:6px 0;}
+.fld-l{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px;}
+.fld-v{font-size:12px;color:var(--text);font-weight:600;}
+.center-body{flex:1;overflow-y:auto;display:flex;flex-direction:column;}
+.center-body::-webkit-scrollbar{width:2px;}
+.center-body::-webkit-scrollbar-thumb{background:var(--border3);}
+.slack-area{padding:10px 20px;flex:1;}
+.slack-hdr{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;display:flex;align-items:center;gap:6px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.ap-card{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:10px 12px;margin-bottom:8px;transition:border-color 0.2s,opacity 0.3s;}
+.ap-top{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;}
+.ch-badge{padding:1px 7px;border-radius:2px;font-size:8px;background:var(--red-darker);color:var(--red);border:1px solid var(--border2);font-family:var(--mono);letter-spacing:0.06em;}
+.ch-badge.green{background:var(--green-glow);color:var(--green-light);border-color:var(--green-dark);}
+.sl-badge{padding:1px 7px;border-radius:2px;font-size:8px;background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple-border);font-family:var(--mono);}
+.ap-sub{font-size:9px;color:var(--text4);margin-left:auto;font-family:var(--mono);}
+.ap-body{font-size:11px;color:var(--text);line-height:1.55;margin-bottom:8px;background:var(--bg3);border-radius:4px;padding:7px 9px;border:1px solid var(--border);outline:none;border-left:3px solid var(--state-color);transition:border-color 0.3s;}
+.ap-btns{display:flex;gap:5px;flex-wrap:wrap;}
+.ap-btn{flex:1;padding:4px 0;border-radius:3px;font-size:9px;font-family:var(--mono);cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--text4);text-align:center;display:flex;align-items:center;justify-content:center;gap:3px;transition:all 0.15s;min-width:44px;letter-spacing:0.04em;}
+.ap-btn:hover{color:var(--text);border-color:var(--border3);}
+.ap-btn.send{background:rgba(0,200,122,0.08);border-color:var(--green-dark);color:var(--green-light);}
+.ap-btn.send:hover{background:var(--green-glow);}
+.ap-btn.remix{background:var(--amber-bg);border-color:var(--amber-dark);color:var(--amber);}
+.ap-btn.remix:hover{opacity:0.85;}
+.ap-btn:disabled{opacity:0.3;cursor:not-allowed;}
+.crm-note-section{padding:10px 20px;border-top:1px solid var(--border2);background:var(--bg2);flex-shrink:0;}
+.crm-note-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+.crm-note-lbl{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:5px;}
+.zoho-badge{font-size:8px;padding:1px 7px;border-radius:2px;background:#0A1A0A;color:#4ADE80;border:1px solid #166534;font-family:var(--mono);letter-spacing:0.05em;}
+.crm-note-wrap{background:var(--bg3);border:1px solid var(--border2);border-radius:6px;overflow:hidden;}
+.crm-ta{width:100%;background:transparent;border:none;outline:none;resize:none;padding:8px 10px;font-size:11px;color:var(--text2);font-family:var(--body);line-height:1.5;}
+.crm-note-footer{display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-top:1px solid var(--border);background:var(--bg4);}
+.crm-note-meta{font-size:9px;font-family:var(--mono);color:var(--text4);}
+.crm-save-btn{padding:4px 12px;border-radius:3px;font-size:9px;font-family:var(--mono);cursor:pointer;border:1px solid #166534;background:#0A1A0A;color:#4ADE80;display:flex;align-items:center;gap:4px;transition:all 0.15s;letter-spacing:0.05em;}
+.crm-save-btn:hover{background:#14532D;}
+.crm-save-btn.saved{border-color:var(--green);background:var(--green-glow);color:var(--green-light);}
+.momentum-blk{padding:14px;border-bottom:1px solid var(--border);text-align:center;flex-shrink:0;}
+.big-dot-wrap{position:relative;width:50px;margin:0 auto 8px;}
+.big-dot{width:50px;height:50px;border-radius:50%;background:radial-gradient(circle at 35% 35%,var(--red-mid),var(--red));border:2px solid var(--red-glow);animation:bigblink 2s infinite;transition:all 0.6s;box-shadow:0 0 20px rgba(255,59,48,0.4),inset 0 1px 0 rgba(255,255,255,0.1);}
+@keyframes bigblink{0%,100%{box-shadow:0 0 20px rgba(255,59,48,0.4),inset 0 1px 0 rgba(255,255,255,0.1)}50%{box-shadow:0 0 35px rgba(255,59,48,0.7),inset 0 1px 0 rgba(255,255,255,0.1)}}
+.mode-lbl{font-family:var(--display);font-size:16px;color:var(--state-color);letter-spacing:0.12em;text-transform:uppercase;transition:color 0.6s;}
+.mode-sub{font-size:9px;color:var(--text4);margin-top:3px;font-family:var(--mono);letter-spacing:0.06em;}
+.connects-bar{margin-top:12px;}
+.cb-lbl{font-size:8px;font-family:var(--mono);color:var(--text4);margin-bottom:3px;display:flex;justify-content:space-between;letter-spacing:0.06em;}
+.cb-track{height:3px;background:var(--bg4);border-radius:0;overflow:hidden;}
+.cb-fill{height:100%;background:var(--state-color);border-radius:0;transition:width 0.5s,background 0.6s;}
+.goals-blk{padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.g-row{margin-bottom:7px;}
+.g-meta{display:flex;justify-content:space-between;margin-bottom:3px;}
+.g-name{font-size:9px;color:var(--text4);font-family:var(--mono);letter-spacing:0.08em;text-transform:uppercase;}
+.g-val{font-size:11px;font-family:var(--display);color:var(--text2);letter-spacing:0.06em;}
+.g-bar{height:2px;background:var(--bg4);border-radius:0;overflow:hidden;}
+.g-fill{height:100%;background:var(--state-color);border-radius:0;transition:width 0.4s,background 0.6s;}
+.auto-btn-wrap{padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.auto-btn{width:100%;padding:10px;border-radius:4px;border:none;font-family:var(--display);font-size:16px;font-weight:400;cursor:pointer;background:var(--state-color);color:#fff;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.6s,transform 0.1s,box-shadow 0.3s;letter-spacing:0.12em;box-shadow:0 0 20px rgba(255,59,48,0.35);}
+.auto-btn:hover{filter:brightness(1.12);box-shadow:0 0 28px rgba(255,59,48,0.5);}
+.auto-btn:active{transform:scale(0.97);}
+.queue-blk{flex:1;overflow-y:auto;padding:10px 14px;}
+.queue-blk::-webkit-scrollbar{width:2px;}
+.queue-blk::-webkit-scrollbar-thumb{background:var(--border3);}
+.q-lbl{font-size:8px;font-family:var(--mono);color:var(--text4);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;}
+.q-section-lbl{font-size:7px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.1em;padding:3px 7px;border-radius:2px;margin-bottom:4px;margin-top:8px;}
+.q-section-lbl.red-sec{background:var(--red-darker);color:var(--red);}
+.q-section-lbl.green-sec{background:var(--green-glow);color:var(--green-light);}
+.q-item{padding:6px 8px;border-radius:4px;border:1px solid var(--border);margin-bottom:3px;background:var(--bg3);transition:all 0.3s;cursor:pointer;}
+.q-item:hover{border-color:var(--border3);}
+.q-item.active{border-color:var(--state-color);background:var(--state-bg);border-left:3px solid var(--state-color);}
+.q-item.done{opacity:0.25;}
+.q-item.connected-item{border-color:var(--green);background:var(--green-glow);}
+.q-item.overdue{border-color:var(--amber-dark);}
+.qi-name{font-size:11px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:4px;font-family:var(--body);}
+.qi-meta{font-size:9px;color:var(--text4);font-family:var(--mono);margin-top:1px;}
+.qi-badge{display:inline-block;font-size:7px;padding:1px 5px;border-radius:2px;font-family:var(--mono);}
+.badge-na{background:var(--bg4);color:var(--text4);}
+.badge-conn{background:var(--green-glow);color:var(--green-light);}
+.badge-vm{background:var(--amber-bg);color:var(--amber);}
+.badge-tasks{background:var(--amber-bg);color:var(--amber);}
+.badge-due{background:var(--green-glow);color:var(--green-light);}
+.badge-kick{background:var(--red-darker);color:var(--red);}
+.badge-live{background:var(--green-glow);color:var(--green-light);animation:blink 0.8s infinite;}
+.log-strip{padding:4px 20px;background:var(--bg3);border-top:1px solid var(--border);font-size:9px;font-family:var(--mono);color:var(--text4);flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:0.04em;}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:200;display:none;align-items:center;justify-content:center;}
+.modal-bg.show{display:flex;}
+.green-modal{background:#041410;border:2px solid var(--green);border-radius:8px;width:480px;padding:28px;text-align:center;box-shadow:0 0 60px rgba(0,200,122,0.2);}
+.gm-icon{font-size:40px;color:var(--green);margin-bottom:12px;}
+.gm-title{font-family:var(--display);font-size:28px;font-weight:400;color:var(--green-light);margin-bottom:6px;letter-spacing:0.1em;}
+.gm-sub{font-size:12px;color:#5DCAA5;line-height:1.6;margin-bottom:18px;}
+.gm-connects{display:flex;justify-content:center;gap:14px;margin-bottom:20px;}
+.gm-conn{text-align:center;background:rgba(0,200,122,0.08);border:1px solid var(--green-dark);border-radius:6px;padding:8px 16px;}
+.gm-conn-name{font-size:11px;color:#5DCAA5;font-family:var(--mono);margin-bottom:2px;}
+.gm-conn-talk{font-size:12px;color:var(--green-light);font-weight:500;}
+.gm-question{font-family:var(--display);font-size:18px;font-weight:400;color:#fff;margin-bottom:18px;line-height:1.4;letter-spacing:0.06em;}
+.gm-zoho-note{font-size:10px;color:#5DCAA5;font-family:var(--mono);margin-bottom:20px;padding:6px 12px;background:rgba(0,200,122,0.06);border-radius:4px;border:1px solid var(--green-dark);}
+.gm-btns{display:flex;gap:10px;justify-content:center;}
+.gm-btn{padding:10px 24px;border-radius:4px;font-family:var(--display);font-size:15px;font-weight:400;cursor:pointer;border:none;transition:all 0.15s;letter-spacing:0.08em;}
+.gm-btn.yes{background:var(--green);color:#000;}
+.gm-btn.yes:hover{background:var(--green-mid);}
+.gm-btn.no{background:transparent;border:1px solid var(--green);color:var(--green-light);}
+.gm-btn.no:hover{background:var(--green-glow);}
+.crm-modal{background:var(--bg2);border:1px solid var(--green);border-radius:8px;width:400px;padding:22px;}
+.crm-modal-title{font-family:var(--display);font-size:18px;font-weight:400;color:var(--green-light);margin-bottom:4px;display:flex;align-items:center;gap:8px;letter-spacing:0.08em;}
+.crm-modal-sub{font-size:10px;color:var(--text3);margin-bottom:16px;font-family:var(--mono);}
+.crm-modal-note{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:9px 11px;font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:16px;}
+.crm-modal-btns{display:flex;gap:8px;justify-content:flex-end;}
+.crm-modal-btn{padding:6px 16px;border-radius:3px;font-size:10px;font-family:var(--mono);cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--text2);transition:all 0.15s;letter-spacing:0.04em;}
+.crm-modal-btn.confirm{background:#0A1A0A;border-color:#166534;color:#4ADE80;}
+.crm-modal-btn.confirm:hover{background:#14532D;}
+.crm-notes-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:420px;max-height:480px;display:flex;flex-direction:column;}
+.cnm-hdr{padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.cnm-title{font-family:var(--display);font-size:16px;color:var(--text);font-weight:400;letter-spacing:0.08em;}
+.cnm-close{background:transparent;border:none;color:var(--text3);cursor:pointer;font-size:16px;font-family:var(--mono);}
+.cnm-close:hover{color:var(--text);}
+.cnm-body{padding:10px 18px;overflow-y:auto;}
+.cnm-entry{padding:8px 0;border-bottom:1px solid var(--border);}
+.cnm-entry:last-child{border-bottom:none;}
+.cnm-ts{font-size:9px;font-family:var(--mono);color:var(--text4);margin-bottom:2px;}
+.cnm-text{font-size:12px;color:var(--text2);line-height:1.5;}
+.twin-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:2px;font-size:8px;font-family:var(--mono);letter-spacing:0.08em;background:rgba(255,59,48,0.08);border:1px solid var(--border3);color:var(--text3);}
+.twin-badge.high{background:rgba(0,200,122,0.08);border-color:var(--green-dark);color:var(--green);}
+@keyframes ring-pulse{0%{transform:scale(1);opacity:0.6}100%{transform:scale(1.6);opacity:0}}
+.avatar.live::after{content:'';position:absolute;inset:-6px;border-radius:6px;border:1px solid var(--green);animation:ring-pulse 1.2s infinite;}
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+  <div class="topbar">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div>
+        <span class="logo" id="logo">SALES TWIN</span>
+        <span class="logo-sub">red panther · module 1</span>
+      </div>
+      <div class="state-pill" id="statePill"><div class="pulse-dot" id="pillDot"></div><span id="pillLabel">RED · AUTO-DIAL</span></div>
+      <div class="rep-wrap"><div class="rep-avatar" id="repAvatar">JM</div><span class="rep-name">Jordan Malik</span></div>
+    </div>
+    <div class="topbar-stats">
+      <span class="stat">Dials&nbsp;<span id="tDials">0</span></span>
+      <span class="stat">Connects&nbsp;<span id="tConnects">0</span>/3</span>
+      <span class="stat">Talk&nbsp;<span id="tTalk">0m</span></span>
+      <span class="stat">No ans&nbsp;<span id="tNA">0</span></span>
+    </div>
+    <span class="clock-el" id="clkEl">--:--</span>
+  </div>
+  <div class="main">
+    <div class="panel">
+      <div class="ph"><div class="ph-dot off" id="listenDot"></div><span id="listenLbl">listening</span></div>
+      <div class="coach-scroll">
+        <div class="tc-card"><div class="tc-label">live transcript</div><div id="transcriptLines"><div class="tc-empty">Waiting for call...</div></div></div>
+        <div class="sug-card" id="sugCard">
+          <div class="sug-lbl"><i class="ti ti-sparkles" style="font-size:11px;" aria-hidden="true"></i> what to say <span class="sug-tag" id="sugTag">objection</span></div>
+          <div class="sug-text" id="sugText"></div>
+          <div class="sug-btns">
+            <button class="sug-btn" onclick="markUsed(this)"><i class="ti ti-check" style="font-size:10px;" aria-hidden="true"></i> used</button>
+            <button class="sug-btn" onclick="nextSug()">next <i class="ti ti-arrow-right" style="font-size:10px;" aria-hidden="true"></i></button>
+            <button class="sug-btn" onclick="hideSug()">clear</button>
+          </div>
+        </div>
+        <div class="preq-card"><div class="tc-label">prequalification</div>
+          <div class="pq-grid" id="pqGrid">
+            <label class="pq-item"><input type="checkbox" onchange="tPQ(this)"> Use of funds</label>
+            <label class="pq-item"><input type="checkbox" onchange="tPQ(this)"> Amount</label>
+            <label class="pq-item"><input type="checkbox" onchange="tPQ(this)"> Monthly rev</label>
+            <label class="pq-item"><input type="checkbox" onchange="tPQ(this)"> Time in biz</label>
+            <label class="pq-item"><input type="checkbox" onchange="tPQ(this)"> Credit</label>
+            <label class="pq-item"><input type="checkbox" onchange="tPQ(this)"> Timeline</label>
+          </div>
+        </div>
+        <div class="notes-side-card"><div class="nsc-hdr"><span class="nsc-lbl">merchant notes</span><button class="nsc-clear" onclick="document.getElementById('sideTa').value=''">clear</button></div><textarea class="nsc-ta" id="sideTa" rows="3" placeholder="Notes during call..."></textarea></div>
+      </div>
+    </div>
+    <div class="center-panel">
+      <div class="call-hero">
+        <div class="ch-top">
+          <div class="caller-wrap"><div class="avatar" id="callerAvatar">—</div><div><div class="cn-name" id="callerName">Ready to dial</div><div class="cn-sub" id="callerSub">Press Start Auto-Dial</div></div></div>
+          <div class="timer-big" id="timerBig">0:00</div>
+        </div>
+        <div class="dial-bar-wrap"><div class="dial-bar" id="dialBar"></div></div>
+        <div class="disp-row" id="dispRow">
+          <span class="disp-row-lbl">Disposition</span>
+          <button class="dr-btn connected" id="dConnected" onclick="logDisp('connected')" disabled><i class="ti ti-phone-check" style="font-size:11px;" aria-hidden="true"></i> Connected</button>
+          <button class="dr-btn noans" id="dNA" onclick="logDisp('no-answer')" disabled>No answer</button>
+          <button class="dr-btn" id="dCB" onclick="logDisp('callback')" disabled>Callback</button>
+          <button class="dr-btn" id="dNI" onclick="logDisp('not-interested')" disabled>Not interested</button>
+          <button class="dr-btn" id="dBN" onclick="logDisp('bad-number')" disabled>Bad number</button>
+          <button class="dr-btn vm" id="dVM" onclick="logDisp('voicemail')" disabled><i class="ti ti-voicemail" style="font-size:11px;" aria-hidden="true"></i> Voicemail — skip</button>
+        </div>
+      </div>
+      <div class="status-strip"><div class="ss-dot" id="ssDot"></div><span id="ssText">idle — press Start Auto-Dial</span></div>
+      <div class="ai-sum" onclick="openCRMNotes()">
+        <div class="ai-sum-hdr"><span class="ai-sum-lbl"><i class="ti ti-sparkles" style="font-size:10px;" aria-hidden="true"></i> AI SUMMARY · CLICK FOR ALL CRM NOTES</span><span id="noteCount" style="font-size:9px;color:var(--text4);font-family:var(--mono);">0 notes</span></div>
+        <div class="ai-sum-text" id="aiSumText">No active lead.</div>
+      </div>
+      <div class="fields-row">
+        <div class="fld"><div class="fld-l">Funding ask</div><div class="fld-v" id="fFund">—</div></div>
+        <div class="fld"><div class="fld-l">Monthly rev</div><div class="fld-v" id="fRev">—</div></div>
+        <div class="fld"><div class="fld-l">Stage</div><div class="fld-v" id="fStage">—</div></div>
+        <div class="fld" style="border-top:1px solid var(--border);"><div class="fld-l">Time in biz</div><div class="fld-v" id="fBiz">—</div></div>
+        <div class="fld" style="border-top:1px solid var(--border);"><div class="fld-l">Score</div><div class="fld-v" id="fScore">—</div></div>
+        <div class="fld" style="border-top:1px solid var(--border);"><div class="fld-l">Last touch</div><div class="fld-v" id="fTouch">—</div></div>
+      </div>
+      <div class="center-body">
+        <div class="slack-area">
+          <div class="slack-hdr"><i class="ti ti-message-2" style="font-size:12px;color:var(--purple);" aria-hidden="true"></i> SLACK SMS DRAFTS · APPROVAL QUEUE <span id="queueCountBadge" style="margin-left:auto;background:var(--red-darker);color:var(--red);padding:1px 6px;border-radius:2px;font-size:7px;display:none;">0 pending</span></div>
+          <div id="slackCards"></div>
+        </div>
+        <div class="crm-note-section" id="crmNoteSection">
+          <div class="crm-note-hdr"><span class="crm-note-lbl"><i class="ti ti-notebook" style="font-size:11px;" aria-hidden="true"></i> CALL NOTE <span class="zoho-badge">→ ZOHO CRM</span></span><span style="font-size:9px;color:var(--text4);font-family:var(--mono);" id="crmLeadRef">no lead selected</span></div>
+          <div class="crm-note-wrap"><textarea class="crm-ta" id="crmTa" rows="3" placeholder="Type your call note here — this will be saved directly to Zoho CRM under this lead..."></textarea>
+            <div class="crm-note-footer"><span class="crm-note-meta" id="crmNoteMeta">Will save as: [Sales Twin] Call note · Jordan Malik</span><button class="crm-save-btn" id="crmSaveBtn" onclick="saveCRMNote()"><i class="ti ti-cloud-upload" style="font-size:11px;" aria-hidden="true"></i> Save to Zoho</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="log-strip" id="logStrip">System ready — Zoho connected.</div>
+    </div>
+    <div class="panel panel-right">
+      <div class="ph"><div class="ph-dot off" id="dialDot"></div><span id="dialLbl">idle</span></div>
+      <div class="momentum-blk">
+        <div class="big-dot-wrap"><div class="big-dot" id="bigDot"></div></div>
+        <div class="mode-lbl" id="modeLbl">RED MODE</div>
+        <div class="mode-sub" id="modeSub">no contact · auto-hang 22s</div>
+        <div class="connects-bar"><div class="cb-lbl"><span>connects to green</span><span id="connProg">0 / 3</span></div><div class="cb-track"><div class="cb-fill" id="connFill" style="width:0%;"></div></div></div>
+      </div>
+      <div class="goals-blk">
+        <div class="g-row"><div class="g-meta"><span class="g-name">Dials</span><span class="g-val" id="gDials">0/30</span></div><div class="g-bar"><div class="g-fill" id="gDialF" style="width:0%;"></div></div></div>
+        <div class="g-row"><div class="g-meta"><span class="g-name">Connects</span><span class="g-val" id="gConns">0</span></div><div class="g-bar"><div class="g-fill" id="gConnF" style="width:0%;"></div></div></div>
+        <div class="g-row" style="margin-bottom:0;"><div class="g-meta"><span class="g-name">Talk time</span><span class="g-val" id="gTalk">0m</span></div><div class="g-bar"><div class="g-fill" id="gTalkF" style="width:0%;"></div></div></div>
+      </div>
+      <div class="auto-btn-wrap"><button class="auto-btn" id="autoBtn" onclick="toggleDialer()"><i class="ti ti-player-play" style="font-size:14px;" aria-hidden="true" id="autoBtnIcon"></i><span id="autoBtnLbl">Start Auto-Dial</span></button></div>
+      <div class="queue-blk"><div class="q-lbl"><span id="qTitle">queue</span><span style="color:var(--text4);font-family:var(--mono);font-size:8px;" id="qCount">0 leads</span></div><div id="queueList"></div></div>
+    </div>
+  </div>
+</div>
+<div class="modal-bg" id="greenModal"><div class="green-modal"><div class="gm-icon"><i class="ti ti-trending-up" aria-hidden="true"></i></div><div class="gm-title">FLOOR IS HOT — 3 CONNECTS</div><div class="gm-sub">3 connects in under 5 minutes. Momentum is real.<br>Zoho follow-up queue is ready.</div><div class="gm-connects" id="gmConnects"></div><div class="gm-question">Stop cold calling and switch to<br>follow-up on your working files?</div><div class="gm-zoho-note"><i class="ti ti-database" style="font-size:10px;margin-right:4px;" aria-hidden="true"></i> Zoho will load your follow-up queue sorted by task due date — overdue first</div><div class="gm-btns"><button class="gm-btn yes" onclick="goGreen()"><i class="ti ti-check" style="font-size:13px;margin-right:4px;" aria-hidden="true"></i>Yes — switch to follow-ups</button><button class="gm-btn no" onclick="stayRed()">No — keep cold dialing</button></div></div></div>
+<div class="modal-bg" id="crmSaveModal"><div class="crm-modal"><div class="crm-modal-title"><i class="ti ti-cloud-check" style="font-size:16px;" aria-hidden="true"></i> Save to Zoho CRM</div><div class="crm-modal-sub" id="crmSaveSubtitle">Saving note for — lead name</div><div class="crm-modal-note" id="crmSavePreview"></div><div class="crm-modal-btns"><button class="crm-modal-btn" onclick="closeCRMSave()">Cancel</button><button class="crm-modal-btn confirm" onclick="confirmCRMSave()"><i class="ti ti-check" style="font-size:11px;" aria-hidden="true"></i> Confirm save</button></div></div></div>
+<div class="modal-bg" id="crmNotesModal"><div class="crm-notes-modal"><div class="cnm-hdr"><span class="cnm-title" id="cnmTitle">CRM Notes</span><button class="cnm-close" onclick="closeCRMNotes()"><i class="ti ti-x" aria-hidden="true"></i></button></div><div class="cnm-body" id="cnmBody"></div></div></div>
+<script>
+var redLeads=[
+ {id:0,initials:'MD',name:'Marcus Delgado',co:'Delgado Auto Parts · (312) 555-0174',fund:'$85,000',rev:'$100k+',stage:'No Contact',biz:'3 yrs',score:'74/100',touch:'Never',sum:'<strong>No contact yet.</strong> Inbound web lead. $85k ask, $1.2M gross revenue, 3yr business. Never answered a call.',notes:['14d ago · Inbound web form. $85k ask, 3yr biz, $1.2M gross.'],slack:'#marcus-delgado',drafts:['Hey Marcus, this is Jordan with Sales Twin Funding. Tried reaching you — we have a strong MCA offer. Worth 2 mins this week?','Marcus — Jordan here. You filled out our form a couple weeks back for $85k. Rates are moving, wanted to connect before they change.','Hi Marcus! Jordan from Sales Twin. We can fund your $85k request quickly — just need 5 min to walk you through it. When works?'],outcome:'connect',talkSec:187},
+ {id:1,initials:'DO',name:'Dana Okonkwo',co:'Okonkwo Logistics · (718) 555-0291',fund:'$42,000',rev:'$65k+',stage:'No Contact',biz:'2 yrs',score:'61/100',touch:'Never',sum:'<strong>No contact yet.</strong> Cold list pull. $42k ask, logistics business.',notes:['7d ago · Added from cold list. $42k ask.'],slack:'#dana-okonkwo',drafts:['Hi Dana, Jordan with Sales Twin Funding — tried reaching you about working capital for Okonkwo Logistics. Got 5 min this week?','Dana — quick question. Are you open to funding options for your logistics business? We have something that might fit perfectly.','Hey Dana! This is Jordan. We help logistics companies like yours get funded fast. $42k could be yours by end of week — interested?'],outcome:'connect',talkSec:143},
+ {id:2,initials:'RV',name:'Renee Villanueva',co:'Villa Clean Services · (305) 555-0138',fund:'$120,000',rev:'$180k+',stage:'No Contact',biz:'5 yrs',score:'82/100',touch:'Never',sum:'<strong>High-value no-contact.</strong> 5yr business, strong revenue, large ask. Never picked up.',notes:['10d ago · Inbound referral from existing client.'],slack:'#renee-villanueva',drafts:['Renee, Jordan here from Sales Twin Funding. You were referred to us — we may have a $120k offer that fits perfectly. When can we talk?','Hi Renee! Tried calling you today. Your business profile qualifies for our best rate. Quick call this week?','Renee — Jordan from Sales Twin. $120k, fast funding, flexible payback. Worth a 3-min call to see if it fits?'],outcome:'connect',talkSec:224}
+];
+var greenLeads=[
+ {id:10,initials:'TB',name:'Tom Brewer',co:'Brewer HVAC · (614) 555-0447',fund:'$55,000',rev:'$90k+',stage:'Warm',biz:'4 yrs',score:'69/100',touch:'1d · Call',sum:'<strong>Due TODAY — high intent.</strong> Spoke yesterday, requested callback. 3 follow-up attempts total.',notes:['1d ago · Called back, asked for follow up today. Very interested.','3d ago · First contact, explained offer.','5d ago · Initial dial, callback requested.'],slack:'#tom-brewer',drafts:['Tom, Jordan here — following up from yesterday. Ready to walk you through the $55k offer whenever you are!','Hey Tom! Just circling back as promised. Do you have 10 min today to go over the terms?','Tom — Jordan from Sales Twin. I want to make sure we get your $55k sorted before end of week. When works?'],taskDue:'today',attempts:3,outcome:'no-answer'},
+ {id:11,initials:'LP',name:'Liz Park',co:'Park Wellness · (213) 555-0066',fund:'$30,000',rev:'$40k+',stage:'Warm',biz:'1 yr',score:'45/100',touch:'3d · SMS',sum:'<strong>Due TODAY — 5 attempts, now every 7 days.</strong> Has replied to texts but never picks up calls.',notes:['3d ago · SMS reply: "I\'ll call you back".','7d ago · Call attempt 5, no answer.','14d ago · Call attempt 4, no answer.'],slack:'#liz-park',drafts:['Hi Liz! Jordan from Sales Twin. Just checking in on the $30k — our 7-day follow-up. Still interested?','Liz — Jordan here. This is our monthly check-in. $30k offer still available. 2-min call worth it?','Hey Liz, still thinking of you for that $30k. No pressure — just keeping the door open. Let me know!'],taskDue:'today',attempts:5,outcome:'connect',talkSec:98},
+ {id:12,initials:'AK',name:'Andre Kim',co:'Kim Auto Repair · (404) 555-0302',fund:'$65,000',rev:'$110k+',stage:'Warm',biz:'6 yrs',score:'77/100',touch:'7d · Call',sum:'<strong>Overdue by 2 days — stacked tasks.</strong> 4 attempts, said to call back "next week" twice.',notes:['7d ago · 4th attempt. Said call back next week.','14d ago · 3rd attempt. Said call back next week.'],slack:'#andre-kim',drafts:['Andre, Jordan here — I know I keep catching you at a bad time. 60 seconds, I promise. Is now okay?','Hey Andre! Just the 60-second version: we can fund your $65k at a great rate this week. Quick call?','Andre — Jordan from Sales Twin. Final follow-up this cycle. Worth a quick chat before I close out your file?'],taskDue:'2d overdue',attempts:4,outcome:'no-answer'},
+ {id:13,initials:'SS',name:'Sandra Scott',co:'Scott Catering · (617) 555-0521',fund:'$90,000',rev:'$150k+',stage:'Lukewarm',biz:'8 yrs',score:'71/100',touch:'5d · Email',sum:'<strong>Follow-up due tomorrow.</strong> Responded to email but no call yet. Strong business profile.',notes:['5d ago · Replied to email: "Send me more info".','10d ago · Email sent.'],slack:'#sandra-scott',drafts:['Sandra, Jordan from Sales Twin! I sent over the info you asked for — following up to make sure you got it. Do you have 5 min?','Hey Sandra! Jordan here. Did you get a chance to look at the $90k offer details I sent? Happy to answer any questions.','Sandra — just wanted to circle back on the catering biz funding. $90k, fast close. Worth a quick call?'],taskDue:'tomorrow',attempts:2,outcome:'connect',talkSec:167}
+];
+var running=false,isGreen=false,currentIdx=-1,connects=0,totalDials=0,totalNA=0,totalTalkSec=0;
+var dialSec=0,callSec=0,dialInt=null,callInt=null,barInt=null;
+var connectTimes=[],connectNames=[],activeLead=null,allLeads=redLeads,pendingCards=0;
+var suggestions=[{tag:'rate objection',text:'"Our rate is 1.26 — and our payback is daily or weekly, your choice. Want me to show you a side-by-side?"'},{tag:'urgency',text:'"Rates are moving this week — this offer window closes Friday. Worth locking in now?"'},{tag:'closing',text:'"You\'re already approved. We just need a start date. What works for you?"'},{tag:'competitor',text:'"What rate are they offering? And are they flexible on payback frequency? That\'s where we usually win."'},{tag:'stall',text:'"Totally get it — what\'s the one thing that needs to happen before you feel ready to move forward?"'}];
+var sugIdx=0;
+var transcriptLines=['Lead: Hello?','You: Hey, is this {name}? This is Jordan with Sales Twin Funding — how are you doing?','Lead: Yeah, yeah — go ahead.','You: Perfect. I\'ll keep it quick — we have a strong working capital offer for {biz}. What\'s your current funding situation?','Lead: We\'ve been looking actually. What rate are you guys at?','You: We\'re at 1.26 with flexible daily or weekly payback. Given your revenue, you\'d qualify for the full ask.','Lead: That\'s... actually not bad. The other guy quoted me 1.32.','You: Yeah we hear that a lot. And we close faster too — usually 48 hours. Want me to walk you through the terms?'];
+setInterval(function(){var n=new Date();document.getElementById('clkEl').textContent=n.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});},1000);
+function buildQueue(){var list=document.getElementById('queueList');list.innerHTML='';document.getElementById('qCount').textContent=allLeads.length+' leads';if(isGreen){document.getElementById('qTitle').textContent='follow-up queue';var t=document.createElement('div');t.className='q-section-lbl green-sec';t.innerHTML='<i class="ti ti-calendar-check" style="font-size:9px;margin-right:3px;"></i>due today — zoho tasks';list.appendChild(t);allLeads.filter(function(l){return l.taskDue==='today';}).forEach(function(l){addQItem(l,list);});var o=document.createElement('div');o.className='q-section-lbl';o.style.cssText='background:var(--amber-bg);color:var(--amber);font-size:7px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.1em;padding:3px 7px;border-radius:2px;margin-bottom:4px;margin-top:8px;';o.innerHTML='<i class="ti ti-alert-triangle" style="font-size:9px;margin-right:3px;"></i>overdue — stacked tasks';list.appendChild(o);allLeads.filter(function(l){return l.taskDue&&l.taskDue.indexOf('overdue')>-1;}).forEach(function(l){addQItem(l,list);});var w=document.createElement('div');w.className='q-section-lbl';w.style.cssText='background:var(--bg4);color:var(--text4);font-size:7px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.1em;padding:3px 7px;border-radius:2px;margin-bottom:4px;margin-top:8px;';w.textContent='due tomorrow';list.appendChild(w);allLeads.filter(function(l){return l.taskDue==='tomorrow';}).forEach(function(l){addQItem(l,list);});}else{document.getElementById('qTitle').textContent='no-contact queue';allLeads.forEach(function(l){addQItem(l,list);});}}
+function addQItem(l,list){var div=document.createElement('div');div.className='q-item';div.id='qi-'+l.id;var badge='';if(l.taskDue==='today')badge='<span class="qi-badge badge-due">today</span>';else if(l.taskDue&&l.taskDue.indexOf('overdue')>-1)badge='<span class="qi-badge badge-tasks">'+l.taskDue+'</span>';if(l.attempts>=5)badge+='<span class="qi-badge badge-kick" style="margin-left:2px;">7-day</span>';div.innerHTML='<div class="qi-name">'+l.name+'&nbsp;<span class="qi-badge badge-na" id="qbadge-'+l.id+'" style="display:none;"></span>'+badge+'</div><div class="qi-meta">'+l.fund+' · '+(l.taskDue||l.stage)+'</div>';list.appendChild(div);}
+buildQueue();
+function fmt(s){return Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60);}
+function log(m){document.getElementById('logStrip').textContent=m;}
+function setStatus(m){document.getElementById('ssText').textContent=m;}
+function dispBtns(on){['dConnected','dNA','dCB','dNI','dBN','dVM'].forEach(function(id){document.getElementById(id).disabled=!on;});}
+function applyState(){var c=isGreen?'#00C87A':'#FF3B30';var g=isGreen?'#007A4A':'#7A1515';var sb=isGreen?'#003D25':'#3D0A0A';document.documentElement.style.setProperty('--state-color',c);document.documentElement.style.setProperty('--state-glow',g);document.documentElement.style.setProperty('--state-bg',sb);var bigDot=document.getElementById('bigDot');if(isGreen){bigDot.style.background='radial-gradient(circle at 35% 35%, #00A562, #00C87A)';bigDot.style.borderColor='#007A4A';bigDot.style.boxShadow='0 0 20px rgba(0,200,122,0.4), inset 0 1px 0 rgba(255,255,255,0.1)';}else{bigDot.style.background='radial-gradient(circle at 35% 35%, #CC2222, #FF3B30)';bigDot.style.borderColor='#7A1515';bigDot.style.boxShadow='0 0 20px rgba(255,59,48,0.4), inset 0 1px 0 rgba(255,255,255,0.1)';}document.getElementById('modeLbl').textContent=isGreen?'GREEN MODE':'RED MODE';document.getElementById('modeSub').textContent=isGreen?'working deals · task-due first':'no contact · auto-hang 22s';document.getElementById('pillLabel').textContent=isGreen?'GREEN · FOLLOW-UP':'RED · AUTO-DIAL';document.getElementById('autoBtn').style.boxShadow=isGreen?'0 0 20px rgba(0,200,122,0.35)':'0 0 20px rgba(255,59,48,0.35)';}
+function updateGoals(){var dp=Math.min(Math.round(totalDials/30*100),100);var cp=Math.min(Math.round(connects/3*100),100);var tp=Math.min(Math.round(totalTalkSec/7200*100),100);document.getElementById('gDials').textContent=totalDials+'/30';document.getElementById('gDialF').style.width=dp+'%';document.getElementById('gConns').textContent=connects;document.getElementById('gConnF').style.width=cp+'%';document.getElementById('gTalk').textContent=Math.floor(totalTalkSec/60)+'m';document.getElementById('gTalkF').style.width=tp+'%';document.getElementById('tDials').textContent=totalDials;document.getElementById('tConnects').textContent=connects;document.getElementById('tNA').textContent=totalNA;document.getElementById('tTalk').textContent=Math.floor(totalTalkSec/60)+'m';document.getElementById('connProg').textContent=connects+' / 3';document.getElementById('connFill').style.width=Math.min(Math.round(connects/3*100),100)+'%';}
+function showLead(l){activeLead=l;document.getElementById('callerAvatar').textContent=l.initials;document.getElementById('callerName').textContent=l.name;document.getElementById('callerSub').textContent=l.co;document.getElementById('aiSumText').innerHTML=l.sum;document.getElementById('noteCount').textContent=l.notes.length+' notes';document.getElementById('fFund').textContent=l.fund;document.getElementById('fRev').textContent=l.rev;document.getElementById('fStage').textContent=l.stage;document.getElementById('fBiz').textContent=l.biz;document.getElementById('fScore').textContent=l.score;document.getElementById('fTouch').textContent=l.touch;document.getElementById('crmLeadRef').textContent=l.name+' · Zoho ID #'+(1000+l.id);document.getElementById('crmTa').value='';document.getElementById('sideTa').value='';document.getElementById('transcriptLines').innerHTML='<div class="tc-empty">Dialing...</div>';document.querySelectorAll('.pq-item input').forEach(function(cb){cb.checked=false;cb.closest('.pq-item').classList.remove('done');});hideSug();resetSaveBtn();document.getElementById('callerAvatar').classList.remove('live');}
+function clearLead(){activeLead=null;document.getElementById('callerAvatar').textContent='—';document.getElementById('callerAvatar').classList.remove('live');document.getElementById('callerName').textContent='Ready to dial';document.getElementById('callerSub').textContent='';document.getElementById('aiSumText').textContent='No active lead.';document.getElementById('noteCount').textContent='0 notes';['fFund','fRev','fStage','fBiz','fScore','fTouch'].forEach(function(id){document.getElementById(id).textContent='—';});document.getElementById('transcriptLines').innerHTML='<div class="tc-empty">Waiting for call...</div>';document.getElementById('crmLeadRef').textContent='no lead selected';hideSug();}
+function toggleDialer(){if(running)stopDialer();else startDialer();}
+function startDialer(){running=true;currentIdx=0;document.getElementById('autoBtnLbl').textContent='Stop Dialing';document.getElementById('autoBtnIcon').className='ti ti-player-stop';log('Auto-dialer started. '+allLeads.length+' leads in queue.');dialNext();}
+function stopDialer(){running=false;clearInterval(dialInt);clearInterval(callInt);clearInterval(barInt);document.getElementById('autoBtnLbl').textContent='Start Auto-Dial';document.getElementById('autoBtnIcon').className='ti ti-player-play';document.getElementById('dialBar').style.width='0%';document.getElementById('dialDot').className='ph-dot off';document.getElementById('dialLbl').textContent='idle';document.getElementById('listenDot').className='ph-dot off';document.getElementById('listenLbl').textContent='idle';document.getElementById('timerBig').textContent='0:00';dispBtns(false);setStatus('Dialer stopped.');clearLead();log('Dialer stopped.');}
+function dialNext(){if(!running)return;if(currentIdx>=allLeads.length){setStatus('Queue complete — all leads dialed.');log('Queue complete. '+totalDials+' dials, '+connects+' connects.');stopDialer();return;}var l=allLeads[currentIdx];dialSec=0;callSec=0;clearInterval(callInt);clearInterval(barInt);allLeads.forEach(function(x){var qi=document.getElementById('qi-'+x.id);if(qi)qi.className='q-item'+(x.id===l.id?' active':(qi.classList.contains('done')?' done':''));});showLead(l);dispBtns(false);document.getElementById('dialDot').className='ph-dot amber';document.getElementById('dialLbl').textContent='dialing...';document.getElementById('listenDot').className='ph-dot amber';document.getElementById('listenLbl').textContent='ringing';totalDials++;updateGoals();var maxSec=l.outcome==='no-answer'?22:(l.outcome==='voicemail'?Math.floor(7+Math.random()*5):Math.floor(4+Math.random()*7));setStatus('Dialing '+l.name+' — auto-hang at 22s');log('[Dial #'+totalDials+'] → '+l.name+' ('+l.co+')');barInt=setInterval(function(){dialSec++;document.getElementById('dialBar').style.width=Math.min(Math.round(dialSec/22*100),100)+'%';document.getElementById('timerBig').textContent=fmt(dialSec);if(dialSec>=maxSec){clearInterval(barInt);if(l.outcome==='voicemail')onVM(l);else if(l.outcome==='connect')onConnect(l);else onNA(l);}},1000);}
+function onNA(l){if(!running)return;document.getElementById('dialBar').style.width='0%';document.getElementById('timerBig').textContent='0:00';document.getElementById('dialDot').className='ph-dot off';document.getElementById('dialLbl').textContent='no answer';document.getElementById('listenDot').className='ph-dot off';document.getElementById('listenLbl').textContent='idle';totalNA++;updateGoals();var b=document.getElementById('qbadge-'+l.id);if(b){b.style.display='inline-block';b.textContent='N/A';b.className='qi-badge badge-na';}var qi=document.getElementById('qi-'+l.id);if(qi)qi.className='q-item done';setStatus('No answer — '+l.name+' — auto-hung at 22s');log('[No answer] '+l.name+' — hung up at 22s');currentIdx++;setTimeout(function(){if(running)dialNext();},1400);}
+function onVM(l){if(!running)return;clearInterval(barInt);document.getElementById('dialDot').className='ph-dot amber';document.getElementById('dialLbl').textContent='voicemail';document.getElementById('listenDot').className='ph-dot amber';document.getElementById('listenLbl').textContent='voicemail';document.getElementById('transcriptLines').innerHTML='<div class="tc-line lead-line" style="color:var(--amber);"><span class="tc-speaker" style="color:var(--amber);">VM:</span>Automated voicemail greeting detected...</div>';document.getElementById('dVM').disabled=false;setStatus('Voicemail — click "Voicemail — skip" to continue');log('[Voicemail] '+l.name+' — waiting for manual skip');}
+function onConnect(l){if(!running)return;clearInterval(barInt);document.getElementById('dialBar').style.width='0%';document.getElementById('dialDot').className='ph-dot green-dot';document.getElementById('dialLbl').textContent='on call';document.getElementById('listenDot').className='ph-dot green-dot';document.getElementById('listenLbl').textContent='listening live';document.getElementById('dConnected').disabled=false;document.getElementById('dNI').disabled=false;document.getElementById('dCB').disabled=false;document.getElementById('callerAvatar').classList.add('live');connects++;connectTimes.push(new Date());connectNames.push({name:l.name,talk:l.talkSec||120});updateGoals();var b=document.getElementById('qbadge-'+l.id);if(b){b.style.display='inline-block';b.textContent='LIVE';b.className='qi-badge badge-live';}var qi=document.getElementById('qi-'+l.id);if(qi)qi.className='q-item connected-item';setStatus('Connected — '+l.name+' — call coach active');log('[CONNECT] '+l.name+' answered. Coach active.');callSec=0;clearInterval(callInt);callInt=setInterval(function(){callSec++;totalTalkSec++;document.getElementById('timerBig').textContent=fmt(callSec);document.getElementById('gTalk').textContent=Math.floor(totalTalkSec/60)+'m';},1000);loadTranscript(l);showSug();if(connects>=3&&!isGreen){var diffMin=(connectTimes[connectTimes.length-1]-connectTimes[0])/60000;if(diffMin<5||connects>=3){setTimeout(function(){triggerGreenModal();},3500);}}}
+function logDisp(d){clearInterval(callInt);clearInterval(barInt);var l=activeLead||allLeads[currentIdx];document.getElementById('dialBar').style.width='0%';document.getElementById('timerBig').textContent='0:00';document.getElementById('dialDot').className='ph-dot off';document.getElementById('dialLbl').textContent='idle';document.getElementById('listenDot').className='ph-dot off';document.getElementById('listenLbl').textContent='idle';document.getElementById('callerAvatar').classList.remove('live');dispBtns(false);if(d==='connected'||d==='callback'){addApprovalCard(l);}var qi=document.getElementById('qi-'+l.id);if(qi)qi.className='q-item done';if(d==='voicemail'){var b=document.getElementById('qbadge-'+l.id);if(b){b.style.display='inline-block';b.textContent='VM';b.className='qi-badge badge-vm';}}log('[Disposition] '+l.name+': '+d+'.');setStatus('Logged: '+d+'. Moving to next...');updateGoals();currentIdx++;setTimeout(function(){if(running)dialNext();},1400);}
+function loadTranscript(l){var lines=transcriptLines.map(function(line){return line.replace('{name}',l.name.split(' ')[0]).replace('{biz}',l.co.split('·')[0].trim());});var cont=document.getElementById('transcriptLines');cont.innerHTML='';var i=0;function addLine(){if(!document.getElementById('transcriptLines'))return;if(i>=lines.length)return;var raw=lines[i];var isRep=raw.startsWith('You:');var div=document.createElement('div');div.className='tc-line '+(isRep?'rep-line':'lead-line');div.innerHTML='<span class="tc-speaker">'+(isRep?'You:':'Lead:')+'</span>'+raw.replace(/^(You:|Lead:)/,'');cont.appendChild(div);cont.scrollTop=cont.scrollHeight;i++;if(i<lines.length)setTimeout(addLine,isRep?1800:1200);}setTimeout(addLine,600);}
+function showSug(){var s=suggestions[sugIdx%suggestions.length];document.getElementById('sugCard').style.display='block';document.getElementById('sugText').textContent=s.text;document.getElementById('sugTag').textContent=s.tag;}
+function hideSug(){document.getElementById('sugCard').style.display='none';}
+function nextSug(){sugIdx++;showSug();}
+function markUsed(btn){btn.textContent='used ✓';btn.disabled=true;setTimeout(nextSug,700);}
+function tPQ(cb){var item=cb.closest('.pq-item');if(cb.checked)item.classList.add('done');else item.classList.remove('done');}
+function addApprovalCard(l){var cont=document.getElementById('slackCards');var id='sc-'+l.id+'-'+Date.now();var card=document.createElement('div');card.className='ap-card';card.id=id;card.dataset.draftIdx='0';card.dataset.drafts=JSON.stringify(l.drafts);card.innerHTML='<div class="ap-top"><span class="ch-badge'+(isGreen?' green':'')+'">'+(isGreen?'WARM':'SMS')+'</span><span style="font-size:9px;color:var(--text3);font-family:var(--mono);">'+l.name+'</span><span class="ap-sub">post-call draft</span></div><div class="ap-body" id="body-'+id+'" contenteditable="false">'+l.drafts[0]+'</div><div class="ap-btns"><button class="ap-btn send" onclick="sendDraft(\''+id+'\',\''+l.slack+'\')"><i class="ti ti-send" style="font-size:10px;"></i> Approve & send</button><button class="ap-btn remix" onclick="remixDraft(\''+id+'\')"><i class="ti ti-refresh" style="font-size:10px;"></i> Remix</button><button class="ap-btn" onclick="editCard(\'body-'+id+'\',this)" style="flex:0 0 48px;">edit</button><button class="ap-btn" onclick="dismissCard(\''+id+'\')" style="flex:0 0 44px;color:var(--text4);">skip</button></div>';cont.insertBefore(card,cont.firstChild);pendingCards++;updateQueueBadge();}
+function remixDraft(cardId){var card=document.getElementById(cardId);if(!card)return;var drafts=JSON.parse(card.dataset.drafts);var idx=(parseInt(card.dataset.draftIdx)+1)%drafts.length;card.dataset.draftIdx=idx;var body=card.querySelector('.ap-body');body.style.opacity='0';body.style.transition='opacity 0.2s';setTimeout(function(){body.textContent=drafts[idx];body.style.opacity='1';},200);}
+function sendDraft(cardId,channel){var card=document.getElementById(cardId);if(!card)return;card.style.borderColor='var(--green)';var btn=card.querySelector('.ap-btn.send');btn.innerHTML='<i class="ti ti-check" style="font-size:10px;"></i> Sent to '+channel;btn.disabled=true;log('[Twin] Draft sent to '+channel);setTimeout(function(){dismissCard(cardId);},1400);}
+function dismissCard(cardId){var card=document.getElementById(cardId);if(!card)return;card.style.opacity='0';card.style.transition='opacity 0.3s';setTimeout(function(){if(card.parentNode)card.parentNode.removeChild(card);pendingCards=Math.max(0,pendingCards-1);updateQueueBadge();},300);}
+function editCard(bodyId,btn){var el=document.getElementById(bodyId);if(!el)return;if(el.contentEditable==='true'){el.contentEditable='false';btn.textContent='edit';}else{el.contentEditable='true';el.focus();btn.textContent='done';var r=document.createRange();r.selectNodeContents(el);var s=window.getSelection();s.removeAllRanges();s.addRange(r);}}
+function updateQueueBadge(){var badge=document.getElementById('queueCountBadge');if(pendingCards>0){badge.style.display='inline-block';badge.textContent=pendingCards+' pending';}else{badge.style.display='none';}}
+function saveCRMNote(){var note=document.getElementById('crmTa').value.trim();if(!note){log('[CRM] No note to save.');return;}if(!activeLead){log('[CRM] No active lead selected.');return;}document.getElementById('crmSaveSubtitle').textContent='Saving to Zoho CRM — '+activeLead.name;document.getElementById('crmSavePreview').innerHTML='<strong>[Sales Twin] Call note · Jordan Malik</strong><br><br>'+note+'<br><br><span style="font-size:9px;color:var(--text3);">Will appear under '+activeLead.name+'\'s activity in Zoho — Notes tab</span>';document.getElementById('crmSaveModal').classList.add('show');}
+function closeCRMSave(){document.getElementById('crmSaveModal').classList.remove('show');}
+function confirmCRMSave(){var note=document.getElementById('crmTa').value.trim();var l=activeLead;document.getElementById('crmSaveModal').classList.remove('show');if(l){var ts='Just now · Call note (Jordan)';l.notes.unshift(ts+'·'+note);document.getElementById('noteCount').textContent=l.notes.length+' notes';}var btn=document.getElementById('crmSaveBtn');btn.className='crm-save-btn saved';btn.innerHTML='<i class="ti ti-check" style="font-size:11px;"></i> Saved to Zoho';log('[Zoho CRM] Note saved for '+(l?l.name:'lead')+' — syncing...');setStatus('Note saved to Zoho CRM for '+(l?l.name:'lead'));}
+function resetSaveBtn(){var btn=document.getElementById('crmSaveBtn');btn.className='crm-save-btn';btn.innerHTML='<i class="ti ti-cloud-upload" style="font-size:11px;"></i> Save to Zoho';}
+function openCRMNotes(){if(!activeLead)return;var l=activeLead;document.getElementById('cnmTitle').textContent='CRM Notes — '+l.name;var html='';l.notes.forEach(function(n){var parts=n.split('·');html+='<div class="cnm-entry"><div class="cnm-ts">'+parts[0]+'</div><div class="cnm-text">'+parts.slice(1).join('·')+'</div></div>';});document.getElementById('cnmBody').innerHTML=html;document.getElementById('crmNotesModal').classList.add('show');}
+function closeCRMNotes(){document.getElementById('crmNotesModal').classList.remove('show');}
+function triggerGreenModal(){if(isGreen)return;var html='';connectNames.slice(-3).forEach(function(c){html+='<div class="gm-conn"><div class="gm-conn-name">'+c.name.split(' ')[0]+'</div><div class="gm-conn-talk">'+fmt(c.talk)+' talk</div></div>';});document.getElementById('gmConnects').innerHTML=html;document.getElementById('greenModal').classList.add('show');}
+function goGreen(){isGreen=true;applyState();document.getElementById('greenModal').classList.remove('show');allLeads=greenLeads;currentIdx=0;connects=0;buildQueue();updateGoals();clearLead();setStatus('GREEN MODE — working follow-up queue from Zoho. Task-due leads first.');log('[GREEN] Switched to follow-up queue. '+greenLeads.length+' leads loaded from Zoho.');}
+function stayRed(){document.getElementById('greenModal').classList.remove('show');log('[RED] Staying on cold dial queue.');setStatus('Staying red — continuing no-contact dials.');}
+updateGoals();applyState();
+</script>
+</body>
+</html>

@@ -67,6 +67,7 @@ interface SlackInteractivePayload {
 
 async function handleBlockAction(payload: SlackInteractivePayload): Promise<NextResponse> {
   const action = payload.actions?.[0];
+  console.log("[slack/actions] hit", { type: payload.type, action: action?.action_id });
   if (!action) return NextResponse.json({ ok: true });
 
   const slackTs = payload.container?.message_ts ?? payload.message?.ts ?? "";

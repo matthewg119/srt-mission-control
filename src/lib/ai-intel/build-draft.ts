@@ -5,10 +5,22 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { microsoft } from "@/lib/microsoft";
-import { findDealByName, addNoteResilient } from "@/lib/zoho";
+import { findDealByName, addNoteResilient, updateLead } from "@/lib/zoho";
 import { analyzeBankStatements } from "@/lib/ai-intel/bank-statement-analyzer";
-import { callClaudeJSON } from "@/lib/claude-calls";
+import { callClaudeJSON, callClaudeText } from "@/lib/claude-calls";
 import { fillBtfApplication, type BtfValues } from "@/lib/btf/overlay";
+import { resolveSubmissionSignature } from "@/config/email-signature";
+import {
+  createStatementDrop,
+  updateStatementDrop,
+  getStatementDropByThread,
+  type StatementFileRef,
+  type AppFileRef,
+  type StatementDropRow,
+} from "./statement-drops";
+
+/** Zoho Lead_Status picklist value used when a deal is disqualified. */
+const ZOHO_DNQ_STATUS = "DNQ";
 
 export interface LeadMatch {
   query: string;
@@ -130,6 +142,7 @@ export function parseBuildBusiness(text: string): string {
 interface RevenueRow { month: string; deposits: number | null; avg_daily_ledger: number | null; deposit_count: number | null; nsf_count: number | null; }
 interface BankMetrics {
   account_holder: string | null;
+  account_type: "business" | "personal" | null;
   avg_monthly_deposits: number | null;
   avg_daily_balance: number | null;
   total_nsfs: number | null;
@@ -143,11 +156,11 @@ interface BankMetrics {
   revenue_table: RevenueRow[];
 }
 const METRICS_SYSTEM = `Extract structured underwriting metrics from a bank-statement analysis report. Output JSON only:
-{"account_holder":string|null,"avg_monthly_deposits":number|null,"avg_daily_balance":number|null,"total_nsfs":number|null,"existing_mca_positions":number|null,"existing_mca_monthly_burden":number|null,"revenue_trend":"growing"|"stable"|"declining"|null,"top_mca_lenders":string[],"red_flags":string[],"qualification_signal":"strong"|"moderate"|"weak"|null,"statement_months_covered":string[],"revenue_table":Array<{"month":string,"deposits":number|null,"avg_daily_ledger":number|null,"deposit_count":number|null,"nsf_count":number|null}>}
-Rules: dollar values as plain numbers; statement_months_covered in YYYY-MM; revenue_table one row per month with the report's short month label; daily/weekly MCA paybacks → existing_mca_positions + top_mca_lenders; null when absent.`;
+{"account_holder":string|null,"account_type":"business"|"personal"|null,"avg_monthly_deposits":number|null,"avg_daily_balance":number|null,"total_nsfs":number|null,"existing_mca_positions":number|null,"existing_mca_monthly_burden":number|null,"revenue_trend":"growing"|"stable"|"declining"|null,"top_mca_lenders":string[],"red_flags":string[],"qualification_signal":"strong"|"moderate"|"weak"|null,"statement_months_covered":string[],"revenue_table":Array<{"month":string,"deposits":number|null,"avg_daily_ledger":number|null,"deposit_count":number|null,"nsf_count":number|null}>}
+Rules: dollar values as plain numbers; statement_months_covered in YYYY-MM; revenue_table one row per month with the report's short month label; daily/weekly MCA paybacks → existing_mca_positions + top_mca_lenders; null when absent. account_type: "personal" if the account holder is an individual person's name (no business/LLC/Inc/Corp/DBA) and the activity looks like personal banking; "business" if it's a company account; null if unclear.`;
 
 async function extractMetrics(report: string): Promise<BankMetrics> {
-  const empty: BankMetrics = { account_holder: null, avg_monthly_deposits: null, avg_daily_balance: null, total_nsfs: null, existing_mca_positions: null, existing_mca_monthly_burden: null, revenue_trend: null, top_mca_lenders: [], red_flags: [], qualification_signal: null, statement_months_covered: [], revenue_table: [] };
+  const empty: BankMetrics = { account_holder: null, account_type: null, avg_monthly_deposits: null, avg_daily_balance: null, total_nsfs: null, existing_mca_positions: null, existing_mca_monthly_burden: null, revenue_trend: null, top_mca_lenders: [], red_flags: [], qualification_signal: null, statement_months_covered: [], revenue_table: [] };
   try {
     const r = await callClaudeJSON<BankMetrics>({ model: "claude-sonnet-4-6", system: METRICS_SYSTEM, user: report, maxTokens: 1800, temperature: 0.1 });
     return { ...empty, ...r.data };
@@ -196,26 +209,83 @@ function formatReport(business: string, m: BankMetrics): string {
   return lines.join("\n");
 }
 
-// ── §5 deal email (Matthew's template, deposit table pre-filled) ──────────────
-function buildDealEmailHtml(business: string, m: BankMetrics | null): string {
-  const rows = (m?.revenue_table ?? []).map((r) =>
+// Two-decimal money for the email deposit table ($55,100.00). The Slack report
+// table keeps the rounded fmtUsd above.
+const fmtUsd2 = (n: number | null | undefined) =>
+  n == null ? "" : `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// ── §5 deal email — matches Matthew's target format exactly.
+// Body: "Hello Team," → deposit table (2-decimal) → editable "Merchant is looking
+// for…" line (filled manually before shopping) → "Best regards," → branded
+// SRT Submissions signature.
+function buildDealEmailHtml(rows: RevenueRow[]): string {
+  const trows = rows.map((r) =>
     `<tr><td style="border:1px solid #ccc;padding:4px 8px">${r.month ?? ""}</td>` +
-    `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${fmtUsd(r.deposits)}</td>` +
-    `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${fmtUsd(r.avg_daily_ledger)}</td>` +
+    `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${fmtUsd2(r.deposits)}</td>` +
+    `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${fmtUsd2(r.avg_daily_ledger)}</td>` +
     `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${r.deposit_count ?? ""}</td>` +
     `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${r.nsf_count ?? ""}</td></tr>`
   ).join("");
-  const table = rows
+  const table = trows
     ? `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">
-<tr><th style="border:1px solid #ccc;padding:4px 8px"></th><th style="border:1px solid #ccc;padding:4px 8px">Deposits</th><th style="border:1px solid #ccc;padding:4px 8px">AVG daily ledger</th><th style="border:1px solid #ccc;padding:4px 8px"># of deposits</th><th style="border:1px solid #ccc;padding:4px 8px">NSF</th></tr>${rows}</table>`
+<tr><th style="border:1px solid #ccc;padding:4px 8px"></th><th style="border:1px solid #ccc;padding:4px 8px">Deposits</th><th style="border:1px solid #ccc;padding:4px 8px">AVG daily ledger</th><th style="border:1px solid #ccc;padding:4px 8px"># of deposits</th><th style="border:1px solid #ccc;padding:4px 8px">NSF</th></tr>${trows}</table>`
     : "";
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">
 <p>Hello Team,</p>
 ${table}
-<p><i>Merchant is looking for $[AMOUNT] for [use of funds]. [Add notes here]</i></p>
+<p><i>Merchant is looking for $______ for ______. ASAP</i></p>
 <p>Best regards,</p>
-<p style="color:#e07a2f;font-weight:bold;font-size:16px">SRT Submissions</p>
+${resolveSubmissionSignature()}
 </div>`;
+}
+
+/**
+ * Best-effort detection of the statement's primary month (YYYY-MM) so statements
+ * can be sorted newest→oldest and trimmed to the most-recent N. Cheap Haiku call;
+ * returns null on any failure (caller treats null as "unknown / oldest").
+ */
+async function detectStatementMonth(buffer: Buffer): Promise<string | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 20,
+        system: "You are given one bank statement PDF. Reply with ONLY its primary statement month as YYYY-MM (the month the statement period mostly covers). No other text.",
+        messages: [{ role: "user", content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") } },
+          { type: "text", text: "Statement month?" },
+        ] }],
+      }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+    const raw = json.content?.find((b) => b.type === "text")?.text ?? "";
+    return raw.match(/\d{4}-\d{2}/)?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sort statement refs newest→oldest by detected month (nulls last), trim to N. */
+function pickStatements<T extends { month: string | null }>(items: T[], monthsLimit: number | null): T[] {
+  const sorted = [...items].sort((a, b) => {
+    if (a.month && b.month) return b.month.localeCompare(a.month);
+    if (a.month) return -1;
+    if (b.month) return 1;
+    return 0;
+  });
+  const trimmed = monthsLimit && monthsLimit > 0 ? sorted.slice(0, monthsLimit) : sorted;
+  // Re-sort ascending for natural chronological order in the email.
+  return [...trimmed].sort((a, b) => {
+    if (a.month && b.month) return a.month.localeCompare(b.month);
+    if (a.month) return 1;
+    if (b.month) return -1;
+    return 0;
+  });
 }
 
 // ── §4 SRT app → BTF values ──────────────────────────────────────────────────
@@ -269,10 +339,12 @@ export async function handleStatementDrop(args: {
   }
   await slack.postThreadReply(args.channel, args.threadTs, `📥 Got ${pdfs.length} PDF(s) — downloading…`);
 
-  const downloaded: Array<{ name: string; buffer: Buffer }> = [];
+  // Track the Slack download URL per file so the draft can be rebuilt later
+  // (e.g. "3 months") by re-downloading from Slack.
+  const downloaded: Array<{ name: string; buffer: Buffer; slack_url: string }> = [];
   for (const f of pdfs) {
     if (!f.url_private_download) continue;
-    try { downloaded.push({ name: f.name ?? `doc-${Date.now()}.pdf`, buffer: await slack.downloadFile(f.url_private_download) }); }
+    try { downloaded.push({ name: f.name ?? `doc-${Date.now()}.pdf`, buffer: await slack.downloadFile(f.url_private_download), slack_url: f.url_private_download }); }
     catch (e) { console.warn("[build-draft] download failed:", (e as Error).message); }
   }
   if (downloaded.length === 0) {
@@ -281,15 +353,15 @@ export async function handleStatementDrop(args: {
     return;
   }
 
-  const appDoc = downloaded.find((d) => isAppFile(d.name));
-  const statements = downloaded.filter((d) => !isAppFile(d.name));
-  await slack.postThreadReply(args.channel, args.threadTs, `Analyzing ${statements.length} statement(s)${appDoc ? " + application" : ""}…`);
+  const appDoc = downloaded.find((d) => isAppFile(d.name)) ?? null;
+  const statementDocs = downloaded.filter((d) => !isAppFile(d.name));
+  await slack.postThreadReply(args.channel, args.threadTs, `Analyzing ${statementDocs.length} statement(s)${appDoc ? " + application" : ""}…`);
 
   // §3 analyze
   let metrics: BankMetrics | null = null;
-  if (statements.length > 0) {
+  if (statementDocs.length > 0) {
     try {
-      const analysis = await analyzeBankStatements(statements.map((s) => ({ name: s.name, buffer: s.buffer })));
+      const analysis = await analyzeBankStatements(statementDocs.map((s) => ({ name: s.name, buffer: s.buffer })));
       metrics = await extractMetrics(analysis.report);
     } catch (e) {
       await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Statement analysis failed: ${(e as Error).message}`);
@@ -300,11 +372,13 @@ export async function handleStatementDrop(args: {
   const guess = parseBuildBusiness(args.text ?? "") || metrics?.account_holder || "";
   const match = guess ? await resolveLead(guess) : null;
   const business = (match?.businessName || guess || "Unknown Merchant").trim();
+  // Subject uses the name exactly as it appears on the statements.
+  const accountHolder = (metrics?.account_holder || business).trim();
 
   // §2 OneDrive routing → the deal's folder
   try {
     await microsoft.createDriveFolder("Bank Statements", `Deals/${business}`).catch(() => {});
-    for (const s of statements) await microsoft.uploadDriveFile(`Deals/${business}/Bank Statements`, s.name, s.buffer, "application/pdf");
+    for (const s of statementDocs) await microsoft.uploadDriveFile(`Deals/${business}/Bank Statements`, s.name, s.buffer, "application/pdf");
     if (appDoc) {
       await microsoft.createDriveFolder("Completed Package", `Deals/${business}`).catch(() => {});
       await microsoft.uploadDriveFile(`Deals/${business}/Completed Package`, appDoc.name, appDoc.buffer, "application/pdf");
@@ -316,11 +390,32 @@ export async function handleStatementDrop(args: {
   // §3 report
   if (metrics) await slack.postThreadReply(args.channel, args.threadTs, formatReport(business, metrics));
 
-  // §4 BTF fill
+  // Detect the month each statement covers (for newest→oldest sorting + month-trim).
+  const statementsWithMonth = await Promise.all(
+    statementDocs.map(async (s) => ({ name: s.name, buffer: s.buffer, slack_url: s.slack_url, month: await detectStatementMonth(s.buffer) }))
+  );
+  const statementRefs: StatementFileRef[] = statementsWithMonth.map((s) => ({ name: s.name, slack_url: s.slack_url, month: s.month }));
+  const appRef: AppFileRef | null = appDoc ? { name: appDoc.name, slack_url: appDoc.slack_url } : null;
+  const metricsJson = (metrics as unknown as Record<string, unknown> | null) ?? null;
+
+  // ── Gate 1: personal bank statements → auto-DNQ, no drafts ──────────────────
+  if (metrics?.account_type === "personal") {
+    await dnqDeal({ channel: args.channel, threadTs: args.threadTs, accountHolder, business, match });
+    await createStatementDrop({
+      slackChannel: args.channel, slackThreadTs: args.threadTs, businessName: business, accountHolder,
+      subject: `New Deal - ${accountHolder}`, status: "dnq", metricsJson, statementsJson: statementRefs,
+      appJson: appRef, monthsLimit: null, zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
+    });
+    return;
+  }
+
+  // §4 BTF fill (+ capture the application's business name for the mismatch gate)
   let btfPdf: Buffer | null = null;
+  let appBusinessName: string | null = null;
   if (appDoc) {
     try {
       const vals = await extractBtfValues(appDoc.buffer);
+      appBusinessName = vals.legal_business_name ?? null;
       if (!vals.legal_business_name && business !== "Unknown Merchant") vals.legal_business_name = business;
       btfPdf = await fillBtfApplication(vals);
       await microsoft.uploadDriveFile(`Deals/${business}/Completed Package`, `BTF_App_${business}.pdf`, btfPdf, "application/pdf").catch(() => {});
@@ -329,40 +424,177 @@ export async function handleStatementDrop(args: {
     }
   }
 
-  // §5 two Outlook drafts in matthew@ (the connected mailbox → /me)
-  const emailHtml = buildDealEmailHtml(business, metrics);
-  const subject = `New Deal — ${business}`;
-  const created: string[] = [];
-  try {
-    await microsoft.createDraft({
-      subject,
-      body: emailHtml,
-      attachments: appDoc ? [{ name: appDoc.name, contentType: "application/pdf", contentBytes: appDoc.buffer.toString("base64") }] : [],
+  // ── Gate 2: statements name ≠ application name → hold for a thread override ──
+  if (appBusinessName && metrics?.account_holder && !namesMatch(metrics.account_holder, appBusinessName)) {
+    await createStatementDrop({
+      slackChannel: args.channel, slackThreadTs: args.threadTs, businessName: business, accountHolder,
+      subject: `New Deal - ${accountHolder}`, status: "awaiting_name_confirm", metricsJson,
+      statementsJson: statementRefs, appJson: appRef, monthsLimit: null,
+      zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
     });
-    created.push("Submissions (father email)" + (appDoc ? " + application" : ""));
-  } catch (e) { console.warn("[build-draft] submissions draft failed:", (e as Error).message); }
-  if (btfPdf) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      `⚠️ *Name mismatch* — statements: *${metrics.account_holder}* vs application: *${appBusinessName}*.\nNo drafts built. Reply \`override\` to use the statement name, or \`use <name>\` to set the correct one.`
+    );
+    return;
+  }
+
+  // ── Build the two drafts (shared path with thread rebuilds) ─────────────────
+  await buildAndPostDrafts({
+    channel: args.channel, threadTs: args.threadTs, accountHolder, business, metrics,
+    statements: statementsWithMonth, app: appDoc ? { name: appDoc.name, buffer: appDoc.buffer } : null,
+    btfPdf, monthsLimit: null, match,
+  });
+
+  // Persist for thread controls (N-months trim, conversation).
+  await createStatementDrop({
+    slackChannel: args.channel, slackThreadTs: args.threadTs, businessName: business, accountHolder,
+    subject: `New Deal - ${accountHolder}`, status: "built", metricsJson, statementsJson: statementRefs,
+    appJson: appRef, monthsLimit: null, zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
+  });
+}
+
+/** True if two business names plausibly refer to the same entity. */
+function namesMatch(a: string, b: string): boolean {
+  const x = a.toLowerCase().trim();
+  const y = b.toLowerCase().trim();
+  if (!x || !y) return false;
+  if (x.includes(y) || y.includes(x)) return true;
+  return similarity(a, b) >= 0.5 || similarity(b, a) >= 0.5;
+}
+
+/** Personal statements → post DNQ, set Zoho Lead_Status + note. */
+async function dnqDeal(args: { channel: string; threadTs: string; accountHolder: string; business: string; match: LeadMatch | null }): Promise<void> {
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    `🚫 *DNQ — personal bank statements.* This looks like a personal account (${args.accountHolder}), not a business account. Need business statements to shop this deal.`
+  );
+  if (args.match?.zohoLeadId) {
+    await updateLead(args.match.zohoLeadId, { Lead_Status: ZOHO_DNQ_STATUS }).catch((e) => console.warn("[build-draft] DNQ updateLead failed:", (e as Error).message));
+  }
+  await addNoteResilient({
+    zohoLeadId: args.match?.zohoLeadId ?? null,
+    businessName: args.business,
+    title: `SRT — DNQ (personal statements)`,
+    content: `Auto-DNQ: the statements submitted are a personal bank account, not a business account.`,
+  }).catch(() => {});
+}
+
+interface StatementBuf { name: string; buffer: Buffer; month: string | null }
+
+/** Create the Submissions (father email) draft: statements (trimmed to N) + application. */
+async function createSubmissionDraft(args: {
+  subject: string;
+  metrics: BankMetrics | null;
+  statements: StatementBuf[];
+  app: { name: string; buffer: Buffer } | null;
+  monthsLimit: number | null;
+}): Promise<{ ok: boolean; statementsAttached: number }> {
+  const picked = pickStatements(args.statements, args.monthsLimit);
+  const allRows = args.metrics?.revenue_table ?? [];
+  const rows = args.monthsLimit && args.monthsLimit > 0 ? allRows.slice(-args.monthsLimit) : allRows;
+  const body = buildDealEmailHtml(rows);
+  const attachments = [
+    ...picked.map((s) => ({ name: s.name, contentType: "application/pdf", contentBytes: s.buffer.toString("base64") })),
+    ...(args.app ? [{ name: args.app.name, contentType: "application/pdf", contentBytes: args.app.buffer.toString("base64") }] : []),
+  ];
+  try {
+    await microsoft.createDraft({ subject: args.subject, body, attachments });
+    return { ok: true, statementsAttached: picked.length };
+  } catch (e) {
+    console.warn("[build-draft] submissions draft failed:", (e as Error).message);
+    return { ok: false, statementsAttached: 0 };
+  }
+}
+
+/** Create both Outlook drafts (Submissions + BTF), note Zoho, post the receipt. */
+async function buildAndPostDrafts(args: {
+  channel: string;
+  threadTs: string;
+  accountHolder: string;
+  business: string;
+  metrics: BankMetrics | null;
+  statements: StatementBuf[];
+  app: { name: string; buffer: Buffer } | null;
+  btfPdf: Buffer | null;
+  monthsLimit: number | null;
+  match: LeadMatch | null;
+}): Promise<void> {
+  const subject = `New Deal - ${args.accountHolder}`;
+  const created: string[] = [];
+
+  const sub = await createSubmissionDraft({ subject, metrics: args.metrics, statements: args.statements, app: args.app, monthsLimit: args.monthsLimit });
+  if (sub.ok) created.push(`Submissions (father email) — ${sub.statementsAttached} statement(s)${args.app ? " + application" : ""}`);
+
+  if (args.btfPdf) {
     try {
       await microsoft.createDraft({
         subject,
-        body: emailHtml,
-        attachments: [{ name: `BTF_App_${business}.pdf`, contentType: "application/pdf", contentBytes: btfPdf.toString("base64") }],
+        body: buildDealEmailHtml(args.metrics?.revenue_table ?? []),
+        attachments: [{ name: `BTF_App_${args.business}.pdf`, contentType: "application/pdf", contentBytes: args.btfPdf.toString("base64") }],
       });
       created.push("BTF application");
     } catch (e) { console.warn("[build-draft] BTF draft failed:", (e as Error).message); }
   }
 
-  // §6 track: note on the Zoho deal that drafts were built
-  if (match?.zohoDealId || match?.zohoLeadId || business) {
-    await addNoteResilient({ zohoLeadId: match?.zohoLeadId ?? null, businessName: business, title: `SRT — Drafts built`, content: `• Built ${created.join(" + ") || "drafts"}\n• ${statements.length} statement(s) analyzed\n• Saved to OneDrive` }).catch(() => {});
+  if (args.match?.zohoDealId || args.match?.zohoLeadId || args.business) {
+    await addNoteResilient({
+      zohoLeadId: args.match?.zohoLeadId ?? null,
+      businessName: args.business,
+      title: `SRT — Drafts built`,
+      content: `• Built ${created.join(" + ") || "drafts"}\n• ${args.statements.length} statement(s) analyzed\n• Saved to OneDrive`,
+    }).catch(() => {});
   }
 
   await slack.postThreadReply(
     args.channel,
     args.threadTs,
     created.length
-      ? `✅ Drafts ready in your Outlook *Drafts* folder (edit + send):\n• ${created.join("\n• ")}\nMatched: *${business}*${match?.zohoDealId ? ` · Zoho Deal \`${match.zohoDealId}\`` : ""}`
-      : `⚠️ Couldn't create drafts. Files saved to OneDrive under *${business}*.`
+      ? `✅ Drafts ready in your Outlook *Drafts* folder (edit + send):\n• ${created.join("\n• ")}\nSubject: \`${subject}\`${args.match?.zohoDealId ? ` · Zoho Deal \`${args.match.zohoDealId}\`` : ""}`
+      : `⚠️ Couldn't create drafts. Files saved to OneDrive under *${args.business}*.`
+  );
+}
+
+/**
+ * Thread-triggered rebuild of the Submissions draft (e.g. "3 months" or after a
+ * name override): re-download the stored files from Slack and create a NEW draft
+ * with the statements trimmed to `monthsLimit`. BTF draft is not re-created.
+ */
+export async function rebuildSubmissionDraftFromRow(args: {
+  channel: string;
+  threadTs: string;
+  drop: StatementDropRow;
+  monthsLimit: number | null;
+  overrideAccountHolder?: string;
+}): Promise<void> {
+  const statements: StatementBuf[] = [];
+  for (const s of args.drop.statements_json ?? []) {
+    try { statements.push({ name: s.name, buffer: await slack.downloadFile(s.slack_url), month: s.month }); }
+    catch (e) { console.warn("[build-draft] rebuild re-download failed:", (e as Error).message); }
+  }
+  let app: { name: string; buffer: Buffer } | null = null;
+  if (args.drop.app_json) {
+    try { app = { name: args.drop.app_json.name, buffer: await slack.downloadFile(args.drop.app_json.slack_url) }; }
+    catch (e) { console.warn("[build-draft] rebuild app re-download failed:", (e as Error).message); }
+  }
+  if (statements.length === 0 && !app) {
+    await slack.postThreadReply(args.channel, args.threadTs, "⚠️ Couldn't re-download the original files from Slack to rebuild — re-drop them in this thread.");
+    return;
+  }
+
+  const accountHolder = (args.overrideAccountHolder || args.drop.account_holder || args.drop.business_name || "Merchant").trim();
+  const subject = `New Deal - ${accountHolder}`;
+  const metrics = (args.drop.metrics_json as unknown as BankMetrics | null) ?? null;
+
+  const sub = await createSubmissionDraft({ subject, metrics, statements, app, monthsLimit: args.monthsLimit });
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    sub.ok
+      ? `✅ New Submissions draft ready — ${sub.statementsAttached} statement(s)${app ? " + application" : ""}\nSubject: \`${subject}\``
+      : `⚠️ Couldn't create the new draft.`
   );
 }
 
@@ -402,5 +634,89 @@ export async function handleBuildCommand(args: {
   }
   lines.push("_Building the report + drafts next…_");
   await slack.postThreadReply(args.channel, args.threadTs, lines.join("\n"));
+  return true;
+}
+
+/** Short, factual Vektor answer about a statement drop, grounded in stored context. */
+async function vektorAnswerStatementQuestion(drop: StatementDropRow, question: string): Promise<string> {
+  try {
+    const context = JSON.stringify({
+      account_holder: drop.account_holder,
+      business: drop.business_name,
+      status: drop.status,
+      months_limit: drop.months_limit,
+      statement_months: (drop.statements_json ?? []).map((s) => s.month),
+      metrics: drop.metrics_json ?? {},
+    }).slice(0, 6000);
+    const { text } = await callClaudeText({
+      model: "claude-sonnet-4-6",
+      system:
+        "You are Vektor, SRT Agency's submissions assistant, replying in a Slack thread about ONE merchant's bank statements. Answer using ONLY the provided deal context. Be short, direct, factual — no emotion, no filler, no greeting. State the fact and the action. If the context doesn't contain the answer, say so in one line. Useful thread commands you can mention when relevant: `3 months` (rebuild the draft with the most-recent N months), `override` / `use <name>` (resolve a name mismatch), `rebuild` (regenerate the draft).",
+      user: `Deal context:\n${context}\n\nQuestion: ${question}`,
+      maxTokens: 400,
+      temperature: 0.2,
+    });
+    return text.trim() || "No answer from context.";
+  } catch (e) {
+    return `⚠️ Couldn't answer: ${(e as Error).message}`;
+  }
+}
+
+/**
+ * Thread reply under a #srt-sub statement drop. Handles, in order:
+ *  - name override (`override` / `same business` / `use <name>`) while awaiting confirm
+ *  - `N months` → rebuild the Submissions draft with the most-recent N statements
+ *  - `rebuild` / `regenerate` → rebuild the current draft
+ *  - anything else → conversational Vektor answer
+ * Returns false (so the caller can fall through) only when this thread isn't a
+ * tracked statement drop.
+ */
+export async function handleStatementDropThreadReply(args: {
+  channel: string;
+  threadTs: string;
+  userId: string;
+  replyText: string;
+}): Promise<boolean> {
+  const drop = await getStatementDropByThread(args.threadTs);
+  if (!drop) return false;
+
+  const text = args.replyText.trim();
+  const lower = text.toLowerCase();
+
+  // Name-mismatch resolution (only while held)
+  if (drop.status === "awaiting_name_confirm") {
+    const useMatch = text.match(/^use\s+(.+)$/i);
+    if (useMatch) {
+      const name = useMatch[1].trim();
+      await updateStatementDrop(args.threadTs, { account_holder: name, business_name: name, subject: `New Deal - ${name}`, status: "built" });
+      await rebuildSubmissionDraftFromRow({ channel: args.channel, threadTs: args.threadTs, drop, monthsLimit: drop.months_limit, overrideAccountHolder: name });
+      return true;
+    }
+    if (/\b(override|same business|same|proceed|confirm|go ahead|build it)\b/i.test(lower)) {
+      await updateStatementDrop(args.threadTs, { status: "built" });
+      await rebuildSubmissionDraftFromRow({ channel: args.channel, threadTs: args.threadTs, drop, monthsLimit: drop.months_limit });
+      return true;
+    }
+    // otherwise fall through to a conversational answer
+  }
+
+  // "N months" / "only 3 months" / "use 3 months" → trim + rebuild
+  const monthsMatch = lower.match(/(\d+)\s*month/);
+  if (monthsMatch) {
+    const n = Math.max(1, parseInt(monthsMatch[1], 10));
+    await updateStatementDrop(args.threadTs, { months_limit: n });
+    await rebuildSubmissionDraftFromRow({ channel: args.channel, threadTs: args.threadTs, drop, monthsLimit: n });
+    return true;
+  }
+
+  // "rebuild" / "regenerate" → re-create with the current month limit
+  if (/\b(rebuild|regenerate|re-?do|recreate)\b/i.test(lower)) {
+    await rebuildSubmissionDraftFromRow({ channel: args.channel, threadTs: args.threadTs, drop, monthsLimit: drop.months_limit });
+    return true;
+  }
+
+  // Conversation
+  const reply = await vektorAnswerStatementQuestion(drop, text);
+  await slack.postThreadReply(args.channel, args.threadTs, reply);
   return true;
 }
