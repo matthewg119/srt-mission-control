@@ -222,13 +222,19 @@ export const AI_TOOLS = [
   {
     name: "get_lenders",
     description:
-      "Look up lenders in the database. Use when asked about lenders, 'who funds equipment deals', 'find a lender for [situation]', 'what lenders do we have', 'show me Tier 1 lenders', or 'which lenders accept portal submissions'. Can filter by product type, keyword, tier, or submission method.",
+      "Look up funders/lenders in the database, including their UNDERWRITING criteria. Each funder carries an `underwriting_box` (min monthly deposits/revenue, time-in-business, max amount, positions funded, blocked industries, NSF/negative-day tolerance, factor/buy-sell rate range) plus the email(s) we submit to (To + CC) and a link to their full guideline PDF when on file. " +
+      "Use this for: 'who funds equipment deals', 'find a lender for [situation]', 'what lenders do we have', 'show me Tier 1 lenders', 'which lenders accept portal submissions', AND for underwriting questions like 'what's the box / underwriting for Legend?', 'what does VOX require?', 'which funders take a 3rd position under $30k/mo?', 'who accepts trucking?', or 'pull up Hunter's guidelines' (return the guideline_pdf_url link). " +
+      "Pass `name` for a specific funder, or `filter`/`tier`/`submission_method` to narrow a list.",
     input_schema: {
       type: "object" as const,
       properties: {
+        name: {
+          type: "string",
+          description: "Optional: a specific funder/lender name (or part of it) to look up, e.g. 'Legend', 'VOX', 'Hunter'.",
+        },
         filter: {
           type: "string",
-          description: "Optional: product type, minimum credit score, or keyword to filter lenders",
+          description: "Optional: product type, industry, minimum credit score, or keyword to filter lenders (matches name, notes, underwriting box, blocked industries, and products)",
         },
         tier: {
           type: "number",
@@ -381,7 +387,7 @@ export async function executeTool(
       case "get_deal_notes":
         content = await getDealNotes(input.contact_id as string, (input.deal_id || input.opportunity_id) as string | undefined); break;
       case "get_lenders":
-        content = await getLenders(input.filter as string | undefined, input.tier as number | undefined, input.submission_method as string | undefined); break;
+        content = await getLenders(input.filter as string | undefined, input.tier as number | undefined, input.submission_method as string | undefined, input.name as string | undefined); break;
       case "underwrite_deal":
         content = await underwriteDeal(dealId as string, input.additional_context as string | undefined); break;
       case "match_lenders":
@@ -879,10 +885,11 @@ async function getDealNotes(contactId: string, dealId?: string): Promise<string>
   }
 }
 
-async function getLenders(filter?: string, tier?: number, submissionMethod?: string): Promise<string> {
+async function getLenders(filter?: string, tier?: number, submissionMethod?: string, name?: string): Promise<string> {
   let query = supabaseAdmin.from("lenders").select("*").eq("is_active", true).order("tier").order("name");
   if (tier) query = query.eq("tier", tier);
   if (submissionMethod) query = query.eq("submission_method", submissionMethod);
+  if (name) query = query.ilike("name", `%${name}%`);
 
   const { data, error } = await query;
   if (error) return JSON.stringify({ error: "Failed to query lenders database" });
@@ -892,18 +899,41 @@ async function getLenders(filter?: string, tier?: number, submissionMethod?: str
     const lf = filter.toLowerCase();
     lenders = lenders.filter((l: Record<string, unknown>) => {
       const text = [
-        l.name, l.notes,
+        l.name, l.notes, l.underwriting_box, l.positions_funded, l.factor_rate_range,
         ...(Array.isArray(l.products) ? l.products : []),
+        ...(Array.isArray(l.blocked_industries) ? l.blocked_industries : []),
       ].filter(Boolean).join(" ").toLowerCase();
       return text.includes(lf);
     });
   }
 
   const TIER_LABELS: Record<number, string> = { 1: "A Paper", 2: "B Paper", 3: "High Risk" };
+  // Focused projection — the fields Vektor needs to answer UW + routing questions
+  // (rather than dumping every column). underwriting_box is the headline.
   return JSON.stringify({
     lenders: lenders.map((l: Record<string, unknown>) => ({
-      ...l,
+      id: l.id,
+      name: l.name,
+      tier: l.tier,
       tier_label: TIER_LABELS[(l.tier as number) || 2] || "B Paper",
+      submission_method: l.submission_method,
+      submission_email: l.submission_email,
+      to_emails: l.to_emails,
+      cc_emails: l.cc_emails,
+      portal_url: l.portal_url,
+      underwriting_box: l.underwriting_box,
+      min_monthly_revenue: l.min_monthly_revenue,
+      max_amount: l.max_amount,
+      min_credit_score: l.min_credit_score,
+      min_time_in_business_months: l.min_time_in_business_months,
+      max_negative_days: l.max_negative_days,
+      positions_funded: l.positions_funded,
+      factor_rate_range: l.factor_rate_range,
+      blocked_industries: l.blocked_industries,
+      products: l.products,
+      guideline_pdf_url: l.guideline_pdf_url,
+      guideline_pdf_name: l.guideline_pdf_name,
+      notes: l.notes,
     })),
     count: lenders.length,
     tier_breakdown: {
