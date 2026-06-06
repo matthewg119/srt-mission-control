@@ -235,6 +235,12 @@ function toGraphRecipients(
 // ── Public Methods ──
 
 export const microsoft = {
+  /** Stored Microsoft access token, refreshed (5-min buffer) if expired. Use this anywhere
+   *  a raw Graph bearer token is needed so callers never hit a stale-token 401. */
+  getAccessToken(): Promise<string> {
+    return getValidAccessToken();
+  },
+
   /** Get the signed-in user's profile */
   async getProfile(): Promise<Record<string, unknown>> {
     return graphRequest("/me");

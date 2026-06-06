@@ -57,24 +57,32 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
   }
 
-  await supabaseAdmin
-    .from("integrations")
-    .upsert(
-      {
-        name: integrationName,
-        config: {
-          subscription_id: sub.id,
-          resource: sub.resource,
-          mailbox,
-          notification_path: notificationPath,
-          client_state: clientState,
-          expires_at: sub.expirationDateTime,
-        },
-        status: "connected",
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "name" }
+  // Persist the CURRENT subscription so the renew cron tracks the live id. We reuse the row we
+  // already looked up (existing) and update-by-name, because integrations.name has no unique
+  // constraint — an onConflict:"name" upsert silently no-ops and leaves a stale subscription id.
+  const row = {
+    name: integrationName,
+    config: {
+      subscription_id: sub.id,
+      resource: sub.resource,
+      mailbox,
+      notification_path: notificationPath,
+      client_state: clientState,
+      expires_at: sub.expirationDateTime,
+    },
+    status: "connected",
+    updated_at: new Date().toISOString(),
+  };
+  const persist = existing
+    ? await supabaseAdmin.from("integrations").update(row).eq("name", integrationName)
+    : await supabaseAdmin.from("integrations").insert(row);
+  if (persist.error) {
+    console.error("[subscribe] failed to persist subscription row:", persist.error.message);
+    return NextResponse.json(
+      { ok: false, error: `subscription created but DB write failed: ${persist.error.message}`, subscription: { id: sub.id } },
+      { status: 500 }
     );
+  }
 
   return NextResponse.json({ ok: true, subscription: { id: sub.id, expires_at: sub.expirationDateTime, mailbox } });
 }

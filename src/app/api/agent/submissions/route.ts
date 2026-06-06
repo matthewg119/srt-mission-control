@@ -128,6 +128,15 @@ export async function POST(req: NextRequest) {
       results.push(result);
     } catch (e) {
       console.error("[agent/submissions] notification error:", (e as Error).message);
+      try {
+        await supabaseAdmin.from("system_logs").insert({
+          event_type: "submissions_webhook_error",
+          description: `Notification handling threw: ${(e as Error).message}`,
+          metadata: { subscription: notification.subscriptionId, resource: notification.resource },
+        });
+      } catch {
+        /* logging is best-effort */
+      }
       results.push({ error: (e as Error).message });
     }
   }
@@ -136,12 +145,23 @@ export async function POST(req: NextRequest) {
 }
 
 async function processMessage(mailbox: string, messageId: string): Promise<Record<string, unknown>> {
-  const token = await getUserAccessToken();
+  const token = await microsoft.getAccessToken();
   const res = await fetch(`https://graph.microsoft.com/v1.0/users/${mailbox}/messages/${messageId}?$select=id,subject,from,body,bodyPreview,receivedDateTime,conversationId`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
     const err = await res.text();
+    // Surface the failure — a silent early return here is exactly what hid the
+    // expired-token webhook failures (no log, no Slack post).
+    try {
+      await supabaseAdmin.from("system_logs").insert({
+        event_type: "submissions_webhook_error",
+        description: `Graph fetch failed (${res.status}) for ${mailbox}/${messageId}`,
+        metadata: { mailbox, message_id: messageId, status: res.status, error: err.slice(0, 300) },
+      });
+    } catch {
+      /* logging is best-effort */
+    }
     return { error: `graph_fetch_failed: ${err.slice(0, 200)}` };
   }
   const msg = (await res.json()) as {
@@ -790,17 +810,6 @@ function describeFunderReply(
     default:
       return { emoji: "📨", label: "REPLY", detail: c.summary, status: "sent", draftReply: false };
   }
-}
-
-async function getUserAccessToken(): Promise<string> {
-  const { data } = await supabaseAdmin
-    .from("integrations")
-    .select("config")
-    .eq("name", "Microsoft 365")
-    .single();
-  const cfg = data?.config as { access_token?: string; refresh_token?: string; expires_at?: string } | undefined;
-  if (!cfg?.access_token) throw new Error("Microsoft 365 not connected");
-  return cfg.access_token;
 }
 
 function pickOfferFields(c: import("@/lib/ai-intel/inbound-classifier").InboundClassification): Record<string, number | string | null> {
