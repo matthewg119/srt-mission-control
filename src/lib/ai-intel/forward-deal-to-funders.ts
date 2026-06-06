@@ -13,6 +13,37 @@ import { slack } from "@/lib/slack-bot";
 import { DEFAULTS } from "@/config/defaults";
 import { getEmailSubmissionById, recordFunderSends, setEmailSubmissionStatus } from "./email-submissions";
 
+type ForwardAttachment = {
+  name: string;
+  contentType: string;
+  contentBytes: string;
+  isInline?: boolean;
+  contentId?: string | null;
+};
+
+/**
+ * Re-download the original New-Deal email's attachments from the submissions@ mailbox.
+ * Never throws — some funders accept a body-only pitch, so a download failure returns []
+ * and the caller surfaces "no attachments" in the receipt. Shared by both forward paths.
+ */
+async function downloadOriginalAttachments(messageId: string, mailbox: string): Promise<ForwardAttachment[]> {
+  try {
+    const raw = await microsoft.getMessageAttachments(messageId, mailbox);
+    return raw
+      .filter((a) => a.contentBytes) // skip item/reference attachments with no bytes
+      .map((a) => ({
+        name: a.name,
+        contentType: a.contentType || "application/octet-stream",
+        contentBytes: a.contentBytes,
+        isInline: a.isInline,       // keep the signature image inline (cid) rather than as a stray file
+        contentId: a.contentId,
+      }));
+  } catch (e) {
+    console.warn("[forward-deal] attachment re-download failed:", (e as Error).message);
+    return [];
+  }
+}
+
 export interface ForwardDealOpts {
   emailSubmissionId: string;
   lenderIds: string[];
@@ -65,22 +96,7 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
   }
 
   // Re-download the original attachments once, from the submissions@ mailbox.
-  let attachments: Array<{ name: string; contentType: string; contentBytes: string; isInline?: boolean; contentId?: string | null }> = [];
-  try {
-    const raw = await microsoft.getMessageAttachments(submission.original_message_id, submission.mailbox);
-    attachments = raw
-      .filter((a) => a.contentBytes) // skip item/reference attachments with no bytes
-      .map((a) => ({
-        name: a.name,
-        contentType: a.contentType || "application/octet-stream",
-        contentBytes: a.contentBytes,
-        isInline: a.isInline,       // keep the signature image inline (cid) rather than as a stray file
-        contentId: a.contentId,
-      }));
-  } catch (e) {
-    // Don't abort — some funders accept the body-only pitch; surface the issue in the receipt.
-    console.warn("[forward-deal] attachment re-download failed:", (e as Error).message);
-  }
+  const attachments = await downloadOriginalAttachments(submission.original_message_id, submission.mailbox);
 
   const subject = submission.subject || `New Deal — ${submission.business_name}`;
   // Forward the original email body byte-for-byte — NO signature appended.
@@ -140,6 +156,80 @@ export async function forwardDealToFunders(opts: ForwardDealOpts): Promise<Forwa
   }
 
   return result;
+}
+
+export interface ForwardAddressesOpts {
+  emailSubmissionId: string;
+  to: string[];
+  cc: string[];
+}
+
+export interface ForwardAddressesResult {
+  ok: boolean;
+  sentTo: string[];
+  cc: string[];
+  attachmentCount: number;
+  error?: string;
+}
+
+/**
+ * Ad-hoc verbatim forward to raw addresses Matthew typed in the thread (not known lenders).
+ * Same package as forwardDealToFunders — original HTML body byte-for-byte + original
+ * attachments, sent FROM submissions@ — but to one To-list (+ optional CC) of free-text
+ * addresses. Records each To address as a lender-less email_submission_funders row so funder
+ * replies still match back, and posts a single thread receipt.
+ */
+export async function forwardDealToAddresses(opts: ForwardAddressesOpts): Promise<ForwardAddressesResult> {
+  const to = opts.to.map((e) => e.trim()).filter(Boolean);
+  const cc = opts.cc.map((e) => e.trim()).filter(Boolean);
+  if (to.length === 0) {
+    return { ok: false, sentTo: [], cc, attachmentCount: 0, error: "no_recipients" };
+  }
+
+  const submission = await getEmailSubmissionById(opts.emailSubmissionId);
+  if (!submission) {
+    return { ok: false, sentTo: [], cc, attachmentCount: 0, error: "email_submission_not_found" };
+  }
+
+  const attachments = await downloadOriginalAttachments(submission.original_message_id, submission.mailbox);
+  const fileCount = attachments.filter((a) => !a.isInline).length;
+  const subject = submission.subject || `New Deal — ${submission.business_name}`;
+  const body = submission.html_body ?? "";
+
+  try {
+    await microsoft.sendMail({
+      to,
+      cc,
+      subject,
+      body,
+      isHtml: true,
+      attachments,
+      fromMailbox: DEFAULTS.submissionsFromAddress,
+    });
+  } catch (e) {
+    const error = (e as Error).message;
+    await recordFunderSends(
+      submission.id,
+      to.map((email) => ({ lenderId: null, name: email, email, status: "failed" as const, notes: error })),
+    );
+    return { ok: false, sentTo: [], cc, attachmentCount: fileCount, error };
+  }
+
+  await recordFunderSends(
+    submission.id,
+    to.map((email) => ({ lenderId: null, name: email, email, status: "sent" as const })),
+  );
+  await setEmailSubmissionStatus(submission.id, "forwarded");
+
+  const channel = submission.slack_channel || process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
+  const threadTs = submission.slack_thread_ts;
+  if (threadTs) {
+    const attachNote = fileCount > 0 ? ` (${fileCount} attachment${fileCount === 1 ? "" : "s"})` : " (no attachments)";
+    const ccNote = cc.length ? ` · CC ${cc.join(", ")}` : "";
+    await safeThreadReply(channel, threadTs, `✅ Forwarded to *${to.join(", ")}*${ccNote}${attachNote}`);
+  }
+
+  return { ok: true, sentTo: to, cc, attachmentCount: fileCount };
 }
 
 async function safeThreadReply(channel: string, threadTs: string, text: string): Promise<void> {

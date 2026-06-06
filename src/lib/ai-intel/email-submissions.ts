@@ -22,10 +22,13 @@ export interface EmailSubmissionRow {
   slack_channel: string | null;
   slack_thread_ts: string | null;
   status: string;
+  suggested_lender_ids: string[] | null;
+  pending_adhoc_to: string[] | null;
+  pending_adhoc_cc: string[] | null;
 }
 
 const ROW_COLS =
-  "id, business_name, original_message_id, conversation_id, mailbox, subject, html_body, from_address, slack_channel, slack_thread_ts, status";
+  "id, business_name, original_message_id, conversation_id, mailbox, subject, html_body, from_address, slack_channel, slack_thread_ts, status, suggested_lender_ids, pending_adhoc_to, pending_adhoc_cc";
 
 /** lowercase domain part of an email address, or null. */
 export function emailDomain(address: string | null | undefined): string | null {
@@ -88,6 +91,33 @@ export async function setEmailSubmissionThread(id: string, channel: string, thre
   await supabaseAdmin
     .from("email_submissions")
     .update({ slack_channel: channel, slack_thread_ts: threadTs, updated_at: new Date().toISOString() })
+    .eq("id", id);
+}
+
+/** Persist the AI-suggested funder set so a later `go`/`all` reply knows who to send to. */
+export async function setSuggestedLenderIds(id: string, lenderIds: string[]): Promise<void> {
+  await supabaseAdmin
+    .from("email_submissions")
+    .update({ suggested_lender_ids: lenderIds, updated_at: new Date().toISOString() })
+    .eq("id", id);
+}
+
+/**
+ * Stage a confirm-first ad-hoc forward target (raw To/CC addresses Matthew typed in the thread).
+ * A later `go` reads these and sends; takes precedence over suggested funders until cleared.
+ */
+export async function setPendingAdhocForward(id: string, to: string[], cc: string[]): Promise<void> {
+  await supabaseAdmin
+    .from("email_submissions")
+    .update({ pending_adhoc_to: to, pending_adhoc_cc: cc, updated_at: new Date().toISOString() })
+    .eq("id", id);
+}
+
+/** Clear the staged ad-hoc forward target after it's been sent (or superseded). */
+export async function clearPendingAdhocForward(id: string): Promise<void> {
+  await supabaseAdmin
+    .from("email_submissions")
+    .update({ pending_adhoc_to: null, pending_adhoc_cc: null, updated_at: new Date().toISOString() })
     .eq("id", id);
 }
 

@@ -316,7 +316,7 @@ async function extractBtfValues(buffer: Buffer): Promise<BtfValues> {
   return v;
 }
 
-function isAppFile(name: string): boolean {
+export function isAppFile(name: string): boolean {
   return /\b(application|merchant[\s_-]?app|mca[\s_-]?app|srt[\s_-]?app)\b/i.test(name) || /^application[\s_-]/i.test(name);
 }
 
@@ -530,12 +530,16 @@ async function buildAndPostDrafts(args: {
 
   if (args.btfPdf) {
     try {
+      const pickedBtf = pickStatements(args.statements, args.monthsLimit);
       await microsoft.createDraft({
         subject,
         body: buildDealEmailHtml(args.metrics?.revenue_table ?? []),
-        attachments: [{ name: `BTF_App_${args.business}.pdf`, contentType: "application/pdf", contentBytes: args.btfPdf.toString("base64") }],
+        attachments: [
+          { name: `BTF_App_${args.business}.pdf`, contentType: "application/pdf", contentBytes: args.btfPdf.toString("base64") },
+          ...pickedBtf.map((s) => ({ name: s.name, contentType: "application/pdf", contentBytes: s.buffer.toString("base64") })),
+        ],
       });
-      created.push("BTF application");
+      created.push(`BTF application — ${pickedBtf.length} statement(s)`);
     } catch (e) { console.warn("[build-draft] BTF draft failed:", (e as Error).message); }
   }
 

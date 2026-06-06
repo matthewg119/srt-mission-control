@@ -8,8 +8,8 @@ import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execu
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
-import { getEmailSubmissionByThread } from "@/lib/ai-intel/email-submissions";
-import { forwardDealToFunders } from "@/lib/ai-intel/forward-deal-to-funders";
+import { getEmailSubmissionByThread, setPendingAdhocForward, clearPendingAdhocForward } from "@/lib/ai-intel/email-submissions";
+import { forwardDealToFunders, forwardDealToAddresses } from "@/lib/ai-intel/forward-deal-to-funders";
 import { isBuildCommand, handleBuildCommand, handleStatementDropThreadReply } from "@/lib/ai-intel/build-draft";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
@@ -48,6 +48,7 @@ const AGENT_PROMPTS: Record<string, string> = {
   brainheart: `You are BrainHeart — the CEO's AI partner at SRT Agency. You have full context of all operations. You create tasks, monitor deals, send reports, and give strategic advice. Be direct, proactive, and action-oriented. When asked about status, always check real data with your tools.`,
   underwriting: `You are the Deal Processing AI for SRT Agency. You are PICKY and THOROUGH. When analyzing deals, you must understand: what does the business actually DO, how do they make money, what are the funds for, are there red flags. You MUST have complete information before moving a deal forward. If information is missing, say exactly what you need.`,
   submissions: `You are the Submissions AI for SRT Agency. You handle lender submissions, track submission status, follow up with lenders, and flag issues with files. You are organized and detail-oriented. When something is out of place in a deal file, you immediately flag it.
+
 You also answer funder UNDERWRITING questions in this channel. Every funder has an \`underwriting_box\` (min deposits/revenue, time-in-business, max amount, positions, blocked industries, NSF/negative-day tolerance, factor range) and may have a full guideline PDF on file. Use the get_lenders tool to look funders up: pass a specific name (e.g. "Legend", "VOX") or a filter (e.g. "trucking", "3rd position") to find fits. When asked "what's the box for X" or "what does X require", recite the box/criteria. When asked to "pull up the guidelines" for a funder, return its guideline_pdf_url link. If a funder has no box on file, say so plainly — do not invent criteria. Keep answers short, direct, and factual: lead with the answer, no filler.`,
 };
 
@@ -1099,6 +1100,23 @@ async function handleDealThreadReply(args: {
 // Reply under a "New Deal" parent message in #srt-sub: parse funder names and
 // forward the verbatim package to each. Returns true if this thread is a tracked
 // email_submissions deal (so the caller stops before the AI agent answers).
+/**
+ * Pull raw email addresses out of a thread reply, splitting To vs CC: everything after a
+ * `cc` marker (e.g. "… and cc jane@lender.com") goes to CC. Used for the ad-hoc "email this
+ * to X" flow so Matthew can forward a deal to addresses that aren't seeded lenders.
+ */
+function parseAddressesFromText(text: string): { to: string[]; cc: string[] } {
+  const emailRe = /[^\s,;<>()"]+@[^\s,;<>()"]+\.[^\s,;<>()"]+/g;
+  const norm = (arr: string[]) =>
+    Array.from(new Set(arr.map((e) => e.replace(/[.,;:]+$/, "").toLowerCase()).filter(Boolean)));
+  const ccIdx = text.search(/\bcc\b[:\s]/i);
+  const toPart = ccIdx >= 0 ? text.slice(0, ccIdx) : text;
+  const ccPart = ccIdx >= 0 ? text.slice(ccIdx) : "";
+  const to = norm(toPart.match(emailRe) ?? []);
+  const cc = norm(ccPart.match(emailRe) ?? []).filter((e) => !to.includes(e));
+  return { to, cc };
+}
+
 async function handleSubDealThreadReply(args: {
   channel: string;
   threadTs: string;
@@ -1108,12 +1126,52 @@ async function handleSubDealThreadReply(args: {
   const submission = await getEmailSubmissionByThread(args.threadTs);
   if (!submission) return false;
 
+  const affirmative = /^\s*(go|yes|all|send(\s+(it|them))?(\s+all)?|ship\s+it)\s*$/i.test(args.replyText.trim());
+
+  // Ad-hoc "email this to bob@lender.com and cc jane@lender.com" → stage + confirm, don't send yet.
+  const { to: adhocTo, cc: adhocCc } = parseAddressesFromText(args.replyText);
+  if (adhocTo.length > 0) {
+    await setPendingAdhocForward(submission.id, adhocTo, adhocCc);
+    const ccNote = adhocCc.length ? ` · CC ${adhocCc.join(", ")}` : "";
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      `📧 Send *${submission.business_name}* to: ${adhocTo.join(", ")}${ccNote}?\nReply \`go\` to send.`,
+    );
+    return true;
+  }
+
+  // `go` with a staged ad-hoc target → forward to those raw addresses (takes precedence over suggested funders).
+  if (affirmative && (submission.pending_adhoc_to?.length ?? 0) > 0) {
+    const to = submission.pending_adhoc_to!;
+    const cc = submission.pending_adhoc_cc ?? [];
+    const ccNote = cc.length ? ` · CC ${cc.join(", ")}` : "";
+    await slack.postThreadReply(args.channel, args.threadTs, `📤 Forwarding *${submission.business_name}* to: ${to.join(", ")}${ccNote}`);
+    const result = await forwardDealToAddresses({ emailSubmissionId: submission.id, to, cc });
+    await clearPendingAdhocForward(submission.id);
+    if (!result.ok) {
+      await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Forward failed: ${result.error ?? "unknown"}`);
+    }
+    return true;
+  }
+
   const choice = await parseLenderChoicesFromReply(args.replyText);
-  if (choice.lender_ids.length === 0) {
+  let lenderIds = choice.lender_ids;
+  let forwardLabel = `${choice.matched_names.join(", ")}${
+    choice.unmatched.length ? ` _(unmatched: ${choice.unmatched.join(", ")})_` : ""
+  }`;
+
+  // `go` / `all` / `yes` with no explicit funders → forward to the funders the bot suggested.
+  if (lenderIds.length === 0 && affirmative && (submission.suggested_lender_ids?.length ?? 0) > 0) {
+    lenderIds = submission.suggested_lender_ids!;
+    forwardLabel = `${lenderIds.length} suggested funder(s)`;
+  }
+
+  if (lenderIds.length === 0) {
     await slack.postEphemeral(
       args.channel,
       args.userId,
-      `Couldn't match any funder from "${args.replyText.slice(0, 120)}". Try: \`Legend, Fundbox\` or \`Tier 1 only\`.`,
+      `Couldn't match any funder from "${args.replyText.slice(0, 120)}". Reply \`go\` to send all suggested, name funders like \`Legend, Fundbox\` / \`Tier 1 only\`, or email a raw address like \`email this to bob@lender.com and cc jane@lender.com\`.`,
     );
     return true;
   }
@@ -1121,14 +1179,12 @@ async function handleSubDealThreadReply(args: {
   await slack.postThreadReply(
     args.channel,
     args.threadTs,
-    `📤 Forwarding *${submission.business_name}* to: ${choice.matched_names.join(", ")}${
-      choice.unmatched.length ? ` _(unmatched: ${choice.unmatched.join(", ")})_` : ""
-    }`,
+    `📤 Forwarding *${submission.business_name}* to: ${forwardLabel}`,
   );
 
   const result = await forwardDealToFunders({
     emailSubmissionId: submission.id,
-    lenderIds: choice.lender_ids,
+    lenderIds,
   });
 
   if (!result.ok && result.sent.length === 0) {

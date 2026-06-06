@@ -18,10 +18,14 @@ import {
   createEmailSubmission,
   setEmailSubmissionThread,
   setEmailSubmissionStatus,
+  setSuggestedLenderIds,
   findEmailSubmissionForFunderReply,
   updateFunderReplyStatus,
   type EmailSubmissionRow,
 } from "@/lib/ai-intel/email-submissions";
+import { analyzeBankStatements } from "@/lib/ai-intel/bank-statement-analyzer";
+import { suggestFundersForDeal } from "@/lib/ai-intel/suggest-funders";
+import { isAppFile } from "@/lib/ai-intel/build-draft";
 
 /**
  * True when this is Matthew's own "New Deal — {Business}" intake email (the trigger
@@ -592,17 +596,74 @@ async function handleNewDealEmail(
     "(e.g. `Lexio, CFG, Bitty`) and I'll forward this exact package to each.";
 
   let threadTs: string | null = null;
+  let postedChannel = channel;
   try {
     const resp = (await slack.postMessage(channel, text)) as { ok?: boolean; ts?: string; channel?: string };
     if (resp?.ts) {
       threadTs = resp.ts;
-      await setEmailSubmissionThread(id, resp.channel || channel, resp.ts);
+      postedChannel = resp.channel || channel;
+      await setEmailSubmissionThread(id, postedChannel, resp.ts);
     }
   } catch (e) {
     console.error("[handleNewDealEmail] Slack post failed:", (e as Error).message);
   }
 
+  // Read the attached statements and suggest which funders to shop. Best-effort: any
+  // failure leaves the parent message (which already explains how to name funders) intact.
+  if (threadTs) {
+    await postReadyToShop({
+      emailSubmissionId: id,
+      business,
+      channel: postedChannel,
+      threadTs,
+      messageId: msg.id,
+      mailbox,
+    }).catch((e) => console.warn("[handleNewDealEmail] ready-to-shop failed:", (e as Error).message));
+  }
+
   return { intent: "new_deal", business, email_submission_id: id, slack_thread_ts: threadTs };
+}
+
+/**
+ * Analyze the New-Deal email's bank statements, ask the AI matcher which funders fit, and
+ * post a "🎯 Ready to shop" reply with the suggestions. Stores the suggested funder ids so a
+ * later `go`/`all` reply knows who to forward to. Silent no-op if there are no statements to
+ * read or no funders fit — the parent message still tells Matthew he can name funders.
+ */
+async function postReadyToShop(args: {
+  emailSubmissionId: string;
+  business: string;
+  channel: string;
+  threadTs: string;
+  messageId: string;
+  mailbox: string;
+}): Promise<void> {
+  const raw = await microsoft.getMessageAttachments(args.messageId, args.mailbox);
+  const pdfs = raw.filter(
+    (a) => a.contentBytes && (a.contentType === "application/pdf" || /\.pdf$/i.test(a.name)),
+  );
+  const statements = pdfs
+    .filter((a) => !isAppFile(a.name))
+    .map((a) => ({ name: a.name, buffer: Buffer.from(a.contentBytes, "base64") }));
+  if (statements.length === 0) return;
+
+  const analysis = await analyzeBankStatements(statements);
+  const { suggested, avoid } = await suggestFundersForDeal(analysis.report, args.business);
+  if (suggested.length === 0) return;
+
+  await setSuggestedLenderIds(args.emailSubmissionId, suggested.map((s) => s.id));
+
+  const lines = [
+    `🎯 *Ready to shop — ${args.business}*`,
+    `Suggested (${suggested.length}):`,
+    ...suggested.map((s) => `• *${s.name}*${s.reason ? ` — ${s.reason}` : ""}`),
+  ];
+  if (avoid.length > 0) {
+    lines.push(`⚠️ Skip: ${avoid.map((a) => `${a.name}${a.reason ? ` (${a.reason})` : ""}`).join(", ")}`);
+  }
+  lines.push("Reply `go`/`all` to send to all suggested, or name funders (e.g. `Velocity, CFG, Lexio`).");
+
+  await slack.postThreadReply(args.channel, args.threadTs, lines.join("\n"));
 }
 
 async function handleFunderReplyForEmailSubmission(args: {
@@ -758,13 +819,18 @@ function buildNotes(label: "Approved" | "Counter", c: import("@/lib/ai-intel/inb
 }
 
 /**
- * Up to 3 concise bullets summarizing a funder's reply. Used for BOTH the Slack post and the
- * Zoho note so messages stay short and uncluttered. Built from the structured classification
- * (no extra LLM call); falls back to a trimmed summary line to fill remaining bullets.
+ * 3-6 concise bullets summarizing a funder's reply. Used for BOTH the Slack post and the Zoho
+ * note. Prefers the model's `bullets` (from the same classification call — no extra LLM round-trip),
+ * falling back to structured lines + a trimmed summary when the model didn't return any.
  */
 function replyBullets(c: import("@/lib/ai-intel/inbound-classifier").InboundClassification): string {
+  const fmt = (arr: string[]) => arr.slice(0, 6).map((x) => `• ${x.replace(/^[•\-\s]+/, "")}`).join("\n");
+
+  const fromModel = (c.bullets ?? []).map((x) => x.trim()).filter(Boolean);
+  if (fromModel.length >= 3) return fmt(fromModel);
+
   const money = (n: number | null) => (n ? `$${n.toLocaleString()}` : null);
-  const b: string[] = [];
+  const b: string[] = [...fromModel];
   switch (c.intent) {
     case "approved": {
       const rate = c.buy_rate ?? c.sell_rate;
@@ -795,7 +861,7 @@ function replyBullets(c: import("@/lib/ai-intel/inbound-classifier").InboundClas
     const s = c.summary.trim();
     b.push(s.length > 160 ? `${s.slice(0, 157)}…` : s);
   }
-  return b.slice(0, 3).map((x) => `• ${x}`).join("\n");
+  return fmt(b);
 }
 
 async function zohoSubformSync(merchantId: string, caller: string): Promise<void> {

@@ -20,6 +20,7 @@ export interface InboundClassification {
   declined_reason: string | null;
   stips_required: string[];
   summary: string;
+  bullets: string[];
 }
 
 const SCHEMA_HINT = `{
@@ -32,7 +33,8 @@ const SCHEMA_HINT = `{
   "term": string | null,
   "declined_reason": string | null,
   "stips_required": string[],
-  "summary": string
+  "summary": string,
+  "bullets": string[]
 }`;
 
 const SYSTEM_PROMPT = `You classify inbound emails from MCA funders/lenders responding to SRT Agency deal submissions. You extract structured data.
@@ -56,7 +58,12 @@ When the funder quotes an offer (approved or counter), extract:
 - term: free text exactly as the funder wrote it (e.g. "40 weeks", "12 months", "90 days", "6 mo"). Preserve the unit.
 
 If a value isn't stated, leave it null — do NOT guess.
-summary is one sentence.`;
+summary is one sentence.
+
+bullets: 3 to 6 short bullets summarizing this reply for the team — lead with the decision
+(approved/declined/counter/stips/docs), then amount/rate/term if quoted, what's needed next, and any
+notable condition or deadline. Keep each bullet a terse fragment, no leading "•", no fluff. Always
+return at least 3 bullets and never more than 6.`;
 
 export async function classifyInboundEmail(email: { subject: string; from: string; body: string }): Promise<{
   classification: InboundClassification;
