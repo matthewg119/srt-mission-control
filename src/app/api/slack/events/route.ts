@@ -1106,12 +1106,16 @@ async function handleDealThreadReply(args: {
  * to X" flow so Matthew can forward a deal to addresses that aren't seeded lenders.
  */
 function parseAddressesFromText(text: string): { to: string[]; cc: string[] } {
-  const emailRe = /[^\s,;<>()"]+@[^\s,;<>()"]+\.[^\s,;<>()"]+/g;
+  // Slack auto-linkifies emails to <mailto:addr|display>. Unwrap those first so we capture the
+  // bare address, not the whole "mailto:addr|display" blob (which Graph rejects as invalid).
+  const unwrapped = text.replace(/<mailto:([^|>]+)(?:\|[^>]*)?>/gi, "$1");
+  // Exclude : and | too, so any stray "mailto:" prefix or "|display" suffix can't bleed in.
+  const emailRe = /[^\s,;<>()"|:]+@[^\s,;<>()"|:]+\.[^\s,;<>()"|:]+/g;
   const norm = (arr: string[]) =>
-    Array.from(new Set(arr.map((e) => e.replace(/[.,;:]+$/, "").toLowerCase()).filter(Boolean)));
-  const ccIdx = text.search(/\bcc\b[:\s]/i);
-  const toPart = ccIdx >= 0 ? text.slice(0, ccIdx) : text;
-  const ccPart = ccIdx >= 0 ? text.slice(ccIdx) : "";
+    Array.from(new Set(arr.map((e) => e.replace(/^mailto:/i, "").replace(/[.,;:]+$/, "").toLowerCase()).filter(Boolean)));
+  const ccIdx = unwrapped.search(/\bcc\b[:\s]/i);
+  const toPart = ccIdx >= 0 ? unwrapped.slice(0, ccIdx) : unwrapped;
+  const ccPart = ccIdx >= 0 ? unwrapped.slice(ccIdx) : "";
   const to = norm(toPart.match(emailRe) ?? []);
   const cc = norm(ccPart.match(emailRe) ?? []).filter((e) => !to.includes(e));
   return { to, cc };

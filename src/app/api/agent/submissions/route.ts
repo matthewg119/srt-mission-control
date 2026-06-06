@@ -47,7 +47,9 @@ function parseBusinessFromNewDealSubject(subject: string): string {
 }
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// New-Deal emails trigger bank-statement analysis + funder matching (postReadyToShop),
+// which can exceed 60s for deals with several statements. Match the other analysis routes.
+export const maxDuration = 300;
 
 async function lookupLenderName(lenderId: string | null): Promise<string> {
   if (!lenderId) return "—";
