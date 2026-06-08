@@ -208,11 +208,27 @@ async function doctor() {
   add("secret set", !!SECRET, SECRET ? "present" : "IMESSAGE_WEBHOOK_SECRET missing");
 
   // Connectivity + secret match: harmless empty batch.
+  let serverOk = false;
   try {
     await post({ messages: [] });
     add("server reachable + secret OK", true, API_URL);
+    serverOk = true;
   } catch (e) {
     add("server reachable + secret OK", false, `${e.message} (401 ⇒ secret mismatch with Vercel)`);
+  }
+
+  // Schema readiness — asks the server whether the contact-matching columns exist.
+  // This is the check that catches a silent 0-count backfill: if the Supabase
+  // migrations weren't applied, every message is discarded server-side. Only
+  // meaningful once the server is reachable + the secret matches.
+  if (serverOk) {
+    try {
+      const probe = await post({ probe: "db" });
+      add("server DB migrated (contact matching)", probe.ok === true,
+        probe.ok ? (probe.detail || "ready") : (probe.detail || "migrations missing — backfill would import 0"));
+    } catch (e) {
+      add("server DB migrated (contact matching)", false, e.message);
+    }
   }
 
   // Try to surface the report in Slack (only works if secret+connectivity pass).

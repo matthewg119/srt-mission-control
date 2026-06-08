@@ -37,19 +37,57 @@ chat.db ──(sqlite3 read-only snapshot)──▶ imessage-bridge.mjs
 
 ## Setup
 
+### 0. Prerequisites (do these ONCE, before touching the Mac)
+
+**a) Apply the two Supabase migrations.** Contact matching and dedupe depend on
+columns that are added manually in the Supabase SQL editor. If they're missing,
+every message is discarded server-side and `--backfill` silently imports **0**.
+Run both in the SQL editor (safe to re-run):
+
+- `docs/2026-05-30-imessage-transport.sql` → `sms_messages.imessage_guid`
+- `docs/2026-06-04-contacts-phone-last10.sql` → `contacts.phone_last10` / `mobile_last10`
+
+Verify they took (expect 2 rows, then 1 row):
+
+```sql
+select column_name from information_schema.columns
+where table_name='contacts' and column_name in ('phone_last10','mobile_last10');
+
+select column_name from information_schema.columns
+where table_name='sms_messages' and column_name='imessage_guid';
+```
+
+The `--doctor` step below also reports this as **"server DB migrated (contact
+matching)"**, so you'll see it confirmed in `#srt-sub`.
+
+**b) Set the shared secret in Vercel.** `IMESSAGE_WEBHOOK_SECRET` is a secret you
+*generate*, not one you look up — it just has to be identical on both ends.
+Generate it once, set it in Vercel, redeploy, then reuse the same value on the Mac:
+
+```sh
+openssl rand -hex 32     # generate once; this is THE secret
+```
+
+Vercel → Project → Settings → Environment Variables → `IMESSAGE_WEBHOOK_SECRET` =
+that value (Production) → **redeploy** so the serverless functions pick it up.
+
+### On the Mac
+
 1. Copy this `mac-bridge/` folder onto the Mac (e.g. `~/srt/mac-bridge`).
-2. Set the shared secret (must match `IMESSAGE_WEBHOOK_SECRET` in Vercel):
+2. Set the shared secret (the **same** value you put in Vercel in step 0b):
    ```sh
    export IMESSAGE_WEBHOOK_SECRET='…'   # same value as the server
    ```
 3. **Run the doctor first** — checks Node, sqlite3, chat.db readability (Full Disk
-   Access), the secret, and server connectivity, and posts a PASS/FAIL report to
-   Slack `#srt-sub` (so you can see the result without reading the terminal):
+   Access), the secret, server connectivity, and whether the server DB is migrated,
+   and posts a PASS/FAIL report to Slack `#srt-sub` (so you can see the result
+   without reading the terminal):
    ```sh
    node imessage-bridge.mjs --doctor
    ```
    Fix any `FAIL` lines before continuing. The most common one is "read chat.db
-   (Full Disk Access)" — it prints the exact `node` binary that needs access.
+   (Full Disk Access)" — it prints the exact `node` binary that needs access. If
+   "server DB migrated" FAILs, go back to step 0a.
 4. **Backfill existing history** (CRM contacts only; no Slack spam — history is
    imported silently, then one summary is posted to `#srt-sub`):
    ```sh

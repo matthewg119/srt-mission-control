@@ -43,6 +43,7 @@ interface InboundPayload {
   backfill?: boolean;
   finalizeBackfill?: boolean;
   diagnostics?: { checks?: DoctorCheck[]; host?: string };
+  probe?: "db";
   messages?: InboundMessage[];
 }
 
@@ -66,13 +67,42 @@ export async function POST(req: NextRequest) {
     return relayDiagnostics(payload.diagnostics);
   }
 
+  // Bridge --doctor schema probe — answers "will contact matching work?" so the
+  // doctor card flags an un-migrated DB BEFORE a backfill silently imports 0.
+  // Returns 200 even when not ready, so the doctor renders a clean FAIL line.
+  if (payload.probe === "db") {
+    const ready = await assertSchemaReady();
+    return NextResponse.json(ready);
+  }
+
   // One-time backfill finalizer — posts a single summary to #srt-sub.
   if (payload.finalizeBackfill) {
+    const ready = await assertSchemaReady();
+    if (!ready.ok) {
+      return NextResponse.json(
+        { error: "schema_not_migrated", detail: ready.detail },
+        { status: 503 }
+      );
+    }
     return finalizeBackfill();
   }
 
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const backfill = payload.backfill === true;
+
+  // Fail LOUD on an un-migrated schema. Without phone_last10/mobile_last10 every
+  // contact lookup misses and without imessage_guid every insert/dedupe breaks —
+  // either way a backfill would silently import 0 (the exact failure we hit).
+  // A 503 here turns that into an actionable error the bridge surfaces verbatim.
+  if (messages.length > 0) {
+    const ready = await assertSchemaReady();
+    if (!ready.ok) {
+      return NextResponse.json(
+        { error: "schema_not_migrated", detail: ready.detail },
+        { status: 503 }
+      );
+    }
+  }
 
   let imported = 0;
   let discarded = 0;
@@ -174,6 +204,36 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, imported, duplicates, discarded });
 }
 
+// Schema readiness — the two iMessage migrations are applied manually in the
+// Supabase SQL editor, so a fresh/forgotten environment can be missing them.
+// Probe the columns the inbound path depends on and report exactly what's
+// missing, so the bridge --doctor and --backfill surface it instead of a silent
+// 0-count import. Migrations: docs/2026-05-30-imessage-transport.sql (imessage_guid)
+// and docs/2026-06-04-contacts-phone-last10.sql (phone_last10 / mobile_last10).
+async function assertSchemaReady(): Promise<{ ok: boolean; missing: string[]; detail: string }> {
+  const missing: string[] = [];
+
+  const { error: contactsErr } = await supabaseAdmin
+    .from("contacts")
+    .select("phone_last10, mobile_last10")
+    .limit(1);
+  if (contactsErr) missing.push("contacts.phone_last10/mobile_last10 (docs/2026-06-04-contacts-phone-last10.sql)");
+
+  const { error: smsErr } = await supabaseAdmin
+    .from("sms_messages")
+    .select("imessage_guid")
+    .limit(1);
+  if (smsErr) missing.push("sms_messages.imessage_guid (docs/2026-05-30-imessage-transport.sql)");
+
+  return missing.length === 0
+    ? { ok: true, missing, detail: "contact-matching columns present" }
+    : {
+        ok: false,
+        missing,
+        detail: `Apply in the Supabase SQL editor: ${missing.join("; ")}`,
+      };
+}
+
 // Match by the last 10 digits, format-agnostic. Contacts store phones in mixed
 // formats ("7865909616", "(684) 984-6516", "+1…") — an exact compare misses most.
 // `phone_last10` / `mobile_last10` are STORED generated columns (see
@@ -187,12 +247,16 @@ async function findContactByPhone(phone: string): Promise<{
 } | null> {
   const last10 = phone.replace(/\D/g, "").slice(-10);
   if (last10.length < 10) return null;
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("contacts")
     .select("id, first_name, last_name, business_name, zoho_lead_id")
     .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
     .limit(1)
     .maybeSingle();
+  // Never fail silently: a query error here (e.g. the phone_last10 columns were
+  // never migrated) would otherwise look identical to "no such contact" and
+  // discard every message. assertSchemaReady() gates the batch, but log anyway.
+  if (error) console.error("[imessage/inbound] contact lookup failed:", error.message);
   return (data as {
     id: string;
     first_name: string | null;
