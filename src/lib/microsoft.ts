@@ -26,6 +26,43 @@ const SCOPES = [
   "MailboxSettings.ReadWrite",
 ].join(" ");
 
+// ── App-only (client-credentials) auth ──
+// When MICROSOFT_GRAPH_APP_AUTH=1, Graph calls that DON'T need a user context
+// (subscription lifecycle + reads against an explicit /users/{mailbox}) use an
+// application-permission token instead of the delegated user token. App-permission
+// subscriptions are NOT silently dropped when the signed-in user's token lapses,
+// which is the whole point of the migration (see graph-subscription gotcha).
+//
+// /me-relative calls can never use app auth (no user), so this is opt-in per call —
+// only the mailbox/subscription paths pass appAuth, everything else stays delegated.
+export const USE_APP_AUTH = process.env.MICROSOFT_GRAPH_APP_AUTH === "1";
+let _appToken: { token: string; expiresAt: number } | null = null;
+
+async function getAppAccessToken(): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (_appToken && _appToken.expiresAt > now + 300) return _appToken.token;
+  if (!TENANT_ID || TENANT_ID === "common") {
+    throw new Error("MICROSOFT_TENANT_ID must be a specific tenant id for app-only (client_credentials) auth");
+  }
+  const body = new URLSearchParams({
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    grant_type: "client_credentials",
+    scope: "https://graph.microsoft.com/.default",
+  });
+  const res = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!res.ok) {
+    throw new Error(`App-only token request failed: ${await res.text()}`);
+  }
+  const json = (await res.json()) as { access_token: string; expires_in: number };
+  _appToken = { token: json.access_token, expiresAt: now + json.expires_in };
+  return json.access_token;
+}
+
 // ── Signature cache ──
 let _signatureCache: { html: string; fetchedAt: number } | null = null;
 
@@ -175,10 +212,10 @@ async function getValidAccessToken(): Promise<string> {
 
 async function graphRequest(
   endpoint: string,
-  options: RequestInit & { rawResponse?: boolean; skipContentType?: boolean } = {}
+  options: RequestInit & { rawResponse?: boolean; skipContentType?: boolean; appAuth?: boolean } = {}
 ): Promise<Record<string, unknown>> {
-  const token = await getValidAccessToken();
-  const { rawResponse, skipContentType, ...fetchOptions } = options;
+  const { rawResponse, skipContentType, appAuth, ...fetchOptions } = options;
+  const token = appAuth ? await getAppAccessToken() : await getValidAccessToken();
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -241,6 +278,13 @@ export const microsoft = {
     return getValidAccessToken();
   },
 
+  /** Token for reading an explicit shared mailbox (e.g. submissions@): app-only when
+   *  MICROSOFT_GRAPH_APP_AUTH=1, else the delegated user token. Use for /users/{mailbox}
+   *  Graph calls so the webhook keeps working through a delegated-token lapse. */
+  getMailboxToken(): Promise<string> {
+    return USE_APP_AUTH ? getAppAccessToken() : getValidAccessToken();
+  },
+
   /** Get the signed-in user's profile */
   async getProfile(): Promise<Record<string, unknown>> {
     return graphRequest("/me");
@@ -293,9 +337,10 @@ export const microsoft = {
     if (opts.filter) params.set("$filter", opts.filter);
 
     let endpoint: string | null = `${mailboxPath}/mailFolders/${folder}/messages?${params.toString()}`;
+    const appAuth = USE_APP_AUTH && !!opts.mailbox;
 
     while (endpoint) {
-      const page: Record<string, unknown> = await graphRequest(endpoint);
+      const page: Record<string, unknown> = await graphRequest(endpoint, { appAuth });
       const value = (page.value as GraphMessage[] | undefined) ?? [];
       for (const msg of value) yield msg;
       endpoint = (page["@odata.nextLink"] as string | undefined) ?? null;
@@ -336,7 +381,8 @@ export const microsoft = {
     // microsoft.graph.attachment, so $select-ing it 400s. Fetching without $select returns
     // the full fileAttachment incl. contentBytes, isInline, and contentId.
     const result = await graphRequest(
-      `${mailboxPath}/messages/${messageId}/attachments?$top=20`
+      `${mailboxPath}/messages/${messageId}/attachments?$top=20`,
+      { appAuth: USE_APP_AUTH && !!mailbox }
     );
     const raw = (result.value as Array<{
       id: string; name: string; size: number; contentBytes?: string; contentType: string; isInline?: boolean; contentId?: string | null;
@@ -813,6 +859,7 @@ export const microsoft = {
 
     const result = await graphRequest("/subscriptions", {
       method: "POST",
+      appAuth: USE_APP_AUTH,
       body: JSON.stringify({
         changeType: params.changeType,
         notificationUrl: params.notificationUrl,
@@ -834,6 +881,7 @@ export const microsoft = {
     const expirationDateTime = new Date(Date.now() + expirationMinutes * 60 * 1000).toISOString();
     const result = await graphRequest(`/subscriptions/${subscriptionId}`, {
       method: "PATCH",
+      appAuth: USE_APP_AUTH,
       body: JSON.stringify({ expirationDateTime }),
     });
     return { id: result.id as string, expirationDateTime: result.expirationDateTime as string };
@@ -841,13 +889,13 @@ export const microsoft = {
 
   /** List all Graph subscriptions for this tenant's signed-in app. */
   async listSubscriptions(): Promise<Array<{ id: string; resource: string; expirationDateTime: string; notificationUrl: string }>> {
-    const result = await graphRequest("/subscriptions");
+    const result = await graphRequest("/subscriptions", { appAuth: USE_APP_AUTH });
     return (result.value ?? []) as Array<{ id: string; resource: string; expirationDateTime: string; notificationUrl: string }>;
   },
 
   /** Delete a Graph subscription. */
   async deleteSubscription(subscriptionId: string): Promise<void> {
-    await graphRequest(`/subscriptions/${subscriptionId}`, { method: "DELETE" });
+    await graphRequest(`/subscriptions/${subscriptionId}`, { method: "DELETE", appAuth: USE_APP_AUTH });
   },
 
   /**
@@ -859,7 +907,7 @@ export const microsoft = {
    */
   async getSubscription(subscriptionId: string): Promise<{ id: string; expirationDateTime: string } | null> {
     try {
-      const result = await graphRequest(`/subscriptions/${subscriptionId}`);
+      const result = await graphRequest(`/subscriptions/${subscriptionId}`, { appAuth: USE_APP_AUTH });
       return { id: result.id as string, expirationDateTime: result.expirationDateTime as string };
     } catch (e) {
       const msg = (e as Error).message || "";

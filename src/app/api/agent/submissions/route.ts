@@ -85,6 +85,50 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
     }
   }
+
+  // Bulk replay of every inbox message since a timestamp — recovery after a dead
+  // Graph subscription window (Microsoft silently drops the delegated sub, so mail
+  // arrives but no webhook fires). processMessage is idempotent: createEmailSubmission
+  // dedupes the New-Deal intake email, and funder-reply handling just upserts the
+  // funder row + threads the post, so re-running is safe.
+  const replaySince = url.searchParams.get("replay_since");
+  if (replaySince) {
+    const secret = process.env.CRON_SECRET;
+    const auth = req.headers.get("authorization") ?? "";
+    const qsecret = url.searchParams.get("secret") ?? "";
+    if (secret && auth !== `Bearer ${secret}` && qsecret !== secret) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const since = new Date(replaySince);
+    if (Number.isNaN(since.getTime())) {
+      return NextResponse.json({ error: "bad replay_since (use ISO 8601, e.g. 2026-06-08T14:51:00Z)" }, { status: 400 });
+    }
+    const mailbox = url.searchParams.get("mailbox") || "submissions@srtagency.com";
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 250);
+    const replayed: Array<Record<string, unknown>> = [];
+    try {
+      for await (const m of microsoft.listMessages({
+        mailbox,
+        folder: "inbox",
+        filter: `receivedDateTime ge ${since.toISOString()}`,
+        select: ["id", "subject", "from", "receivedDateTime", "isDraft"],
+      })) {
+        if (m.isDraft) continue;
+        let result: Record<string, unknown>;
+        try {
+          result = await processMessage(mailbox, m.id);
+        } catch (e) {
+          result = { error: (e as Error).message };
+        }
+        replayed.push({ id: m.id, subject: m.subject, received: m.receivedDateTime, result });
+        if (replayed.length >= limit) break;
+      }
+      return NextResponse.json({ ok: true, since: since.toISOString(), count: replayed.length, replayed });
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: (e as Error).message, count: replayed.length, replayed }, { status: 500 });
+    }
+  }
+
   return NextResponse.json({ ok: true, endpoint: "agent/submissions" });
 }
 
@@ -147,7 +191,7 @@ export async function POST(req: NextRequest) {
 }
 
 async function processMessage(mailbox: string, messageId: string): Promise<Record<string, unknown>> {
-  const token = await microsoft.getAccessToken();
+  const token = await microsoft.getMailboxToken();
   const res = await fetch(`https://graph.microsoft.com/v1.0/users/${mailbox}/messages/${messageId}?$select=id,subject,from,body,bodyPreview,receivedDateTime,conversationId`, {
     headers: { Authorization: `Bearer ${token}` },
   });
