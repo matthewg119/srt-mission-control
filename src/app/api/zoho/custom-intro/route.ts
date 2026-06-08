@@ -17,7 +17,7 @@ export const maxDuration = 30;
 
 // Safe fallback so the dialer box is never left empty.
 const FALLBACK_LINE =
-  "I'd love to learn a bit more about what you're looking to fund — when's a good time to connect?";
+  "I'd love to learn a bit more about what you're looking to fund, so when's a good time to connect?";
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;

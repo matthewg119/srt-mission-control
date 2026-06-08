@@ -15,6 +15,7 @@ const SYSTEM_PROMPT = `You are Matthew Garcia, a Senior Capital Strategist at SR
 
 Hard rules:
 - Exactly ONE sentence. No greeting, no sign-off, no signature, no markdown, no quotes around it.
+- NEVER use em dashes ("—") or en dashes ("–"). Use commas, periods, or a plain hyphen ("-") instead.
 - Make it specific to THIS lead using their funding amount, use of funds, industry, or revenue when known.
 - If you know the amount they want, ask about urgency/timeline (e.g. "How soon are you looking to get the $100k for the business?").
 - If you know the use of funds, reference it naturally.
@@ -43,12 +44,12 @@ export async function draftCustomIntroLine(ctx: MerchantContext): Promise<string
   const user = [
     `Business: ${c.business_name ?? "unknown"}`,
     `Contact: ${[c.first_name, c.last_name].filter(Boolean).join(" ") || "unknown"}`,
-    `Industry: ${c.industry ?? "—"}`,
-    `Amount needed: ${amount ?? "—"}`,
-    `Monthly revenue: ${revenue ?? "—"}`,
-    `Use of funds: ${c.use_of_funds ?? "—"}`,
-    `Credit score: ${c.credit_score ?? "—"}`,
-    `Lead status: ${ctx.zoho?.lead_status ?? "—"}`,
+    `Industry: ${c.industry ?? "(unknown)"}`,
+    `Amount needed: ${amount ?? "(unknown)"}`,
+    `Monthly revenue: ${revenue ?? "(unknown)"}`,
+    `Use of funds: ${c.use_of_funds ?? "(unknown)"}`,
+    `Credit score: ${c.credit_score ?? "(unknown)"}`,
+    `Lead status: ${ctx.zoho?.lead_status ?? "(unknown)"}`,
     ``,
     `Recent Zoho notes:`,
     notesBlock,

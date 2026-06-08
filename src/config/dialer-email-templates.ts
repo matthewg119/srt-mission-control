@@ -68,12 +68,12 @@ ${SIG_S}`,
     <li ${liStyle}>Business funding application</li>
     <li ${liStyle}>Last 2 years of business tax returns (unredacted)</li>
     <li ${liStyle}>Last 3 months of business bank statements</li>
-    <li ${liStyle}>Debt schedule (list of all current business loans/obligations — I can help you build this inside our portal)</li>
+    <li ${liStyle}>Debt schedule (list of all current business loans/obligations, and I can help you build this inside our portal)</li>
   </ol>
   <p style="margin:0 0 16px 0;text-align:left;">If you didn't file for the most recent tax period, please send proof of extension + the prior year's return.</p>
   <p style="margin:0 0 16px 0;text-align:left;">You can reply to this email with the documents attached.</p>
   <p style="margin:0 0 16px 0;text-align:left;">Once I have everything, I'll get your application submitted and keep you posted every step of the way.</p>
-  <p style="margin:0 0 16px 0;text-align:left;">The SBA process takes a bit longer than a quick working capital advance, but the terms are worth it — lower rates, longer repayment, and no daily/weekly pulls on your account.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">The SBA process takes a bit longer than a quick working capital advance, but the terms are worth it: lower rates, longer repayment, and no daily/weekly pulls on your account.</p>
   <p style="margin:0 0 16px 0;text-align:left;">Let me know if you have any questions.</p>
   <p style="margin:0 0 16px 0;text-align:left;">Happy to jump on a quick call after 5 if easier.</p>
   <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
@@ -125,6 +125,28 @@ ${SIG_S}`,
 ${SIG_S}`,
   },
 
+  // ── Equipment Financing (equipment-only path) ───────────────────────────────
+  "equipment-financing": {
+    subject: "Business Funding (Equipment Financing)",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Hi {{firstName}},</p>
+  <p style="margin:0 0 16px 0;text-align:left;">It was a pleasure speaking with you today.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">As we discussed, given your credit profile and time in business, you're in a great position to explore a solid funding path:</p>
+  <p style="margin:0 0 16px 0;text-align:left;"><strong>- Equipment Financing is ideal (avg 6-12% interest rates).</strong></p>
+  <p style="margin:0 0 16px 0;text-align:left;">To get started, here's what I'll need from you:</p>
+  <p style="margin:0 0 16px 0;text-align:left;">${hl("&rarr; 2-minute application")}</p>
+  ${START_NOW_BTN}
+  <p style="margin:0 0 8px 0;text-align:left;"><strong>Equipment Financing:</strong></p>
+  <p style="margin:0 0 8px 0;text-align:left;">${hl("- Invoice or quote for the equipment")}</p>
+  <p style="margin:0 0 20px 0;text-align:left;">${hl("- Last 3 months of business bank statements")}</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Feel free to send these over whenever you're ready, even if it's piece by piece.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">The sooner we have the docs, the sooner I can get you real numbers to work with.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Don't hesitate to reach out with any questions in the meantime.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
+</div>
+${SIG_S}`,
+  },
+
   // ── 4. SBA (Español) ────────────────────────────────────────────────────────
   "sba-es": {
     subject: "Opciones de Préstamo SBA (Documentos Requeridos)",
@@ -136,12 +158,12 @@ ${SIG_S}`,
   <ol ${olStyle}>
     <li ${liStyle}>Declaraciones de impuestos comerciales de los últimos 2 años (sin redactar)</li>
     <li ${liStyle}>Estados de cuenta bancarios de los últimos 3 meses</li>
-    <li ${liStyle}>Calendario de deudas (lista de todos los préstamos/obligaciones comerciales actuales — puedo ayudarte a elaborarlo dentro de nuestro portal)</li>
+    <li ${liStyle}>Calendario de deudas (lista de todos los préstamos/obligaciones comerciales actuales, y puedo ayudarte a elaborarlo dentro de nuestro portal)</li>
   </ol>
   <p style="margin:0 0 16px 0;text-align:left;">Si no presentaste tu declaración del período fiscal más reciente, por favor envía el comprobante de prórroga + la declaración del año anterior.</p>
   <p style="margin:0 0 16px 0;text-align:left;">Puedes responder a este correo con los documentos adjuntos.</p>
   <p style="margin:0 0 16px 0;text-align:left;">Una vez que tenga todo, enviaré tu solicitud y te mantendré informado en cada paso del proceso.</p>
-  <p style="margin:0 0 16px 0;text-align:left;">El proceso del SBA tarda un poco más que un adelanto rápido de capital de trabajo, pero las condiciones valen la pena — tasas más bajas, plazos más largos y sin retiros diarios/semanales de tu cuenta.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">El proceso del SBA tarda un poco más que un adelanto rápido de capital de trabajo, pero las condiciones valen la pena: tasas más bajas, plazos más largos y sin retiros diarios/semanales de tu cuenta.</p>
   <p style="margin:0 0 24px 0;text-align:left;">Saludos cordiales,</p>
 </div>
 ${SIG_S}`,
@@ -152,7 +174,7 @@ ${SIG_S}`,
     subject: "Here's a Little More About Us",
     html: `${WRAP_OPEN}
   <p style="margin:0 0 16px 0;text-align:left;">We would like to share more about who we are and how we operate; we're a little different from what most people expect.</p>
-  <p style="margin:0 0 16px 0;text-align:left;">We're not a big corporate broker.<br>We work more like a funding consulting partner.<br>That means when you come to us with a goal — whether it's equipment, expansion, cash flow, or anything else —</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We're not a big corporate broker.<br>We work more like a funding consulting partner.<br>That means when you come to us with a goal, whether it's equipment, expansion, cash flow, or anything else.</p>
   <p style="margin:0 0 16px 0;text-align:left;">We go out and find the best rates, the best terms, and the right program for that specific purpose.</p>
   <p style="margin:0 0 16px 0;text-align:left;">You'd have someone in your corner ${hl("who understands your full picture")} and helps you structure it strategically.</p>
   <p style="margin:0 0 16px 0;text-align:left;"><strong>We're also AI-integrated with credit repair options &amp; strategic planning, which helps us move faster and smarter than a traditional brokerage, and position you in better shape for your Long Term plans.</strong></p>
@@ -175,7 +197,7 @@ ${SIG_S}`,
     <li ${liStyle}>Business funding application</li>
     <li ${liStyle}>Last 2 years of business tax returns (unredacted)</li>
     <li ${liStyle}>Last 3 months of business bank statements</li>
-    <li ${liStyle}>Debt schedule (list of all current business loans/obligations — I can help you build this inside our portal)</li>
+    <li ${liStyle}>Debt schedule (list of all current business loans/obligations, and I can help you build this inside our portal)</li>
   </ol>
   <p style="margin:0 0 8px 0;text-align:left;"><strong>Pending docs for bank pre-qualification:</strong></p>
   <ul ${ulStyle}>
@@ -185,7 +207,7 @@ ${SIG_S}`,
   <p style="margin:0 0 16px 0;text-align:left;">If you didn't file for the most recent tax period, please send proof of extension + the prior year's return.</p>
   <p style="margin:0 0 16px 0;text-align:left;">You can reply to this email with the documents attached.</p>
   <p style="margin:0 0 16px 0;text-align:left;">Once I have everything, I'll get your application submitted and keep you posted every step of the way.</p>
-  <p style="margin:0 0 24px 0;text-align:left;">The SBA process takes a bit longer than a quick working capital advance, but the terms are worth it — lower rates, longer repayment, and no daily/weekly pulls on your account.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">The SBA process takes a bit longer than a quick working capital advance, but the terms are worth it: lower rates, longer repayment, and no daily/weekly pulls on your account.</p>
 </div>
 ${SIG_S}`,
   },
@@ -195,7 +217,7 @@ ${SIG_S}`,
     subject: "(HELOC) Next Steps for Your Business Funding - Documents Needed",
     html: `${WRAP_OPEN}
   <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Nice speaking with you.</p>
-  <p style="margin:0 0 16px 0;text-align:left;">Based on what you shared, it sounds like a <strong>HELOC (Home Equity Line of Credit)</strong> could be a strong fit — flexible access to capital using the equity you've already built, with much better rates than most business funding options.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Based on what you shared, it sounds like a <strong>HELOC (Home Equity Line of Credit)</strong> could be a strong fit, with flexible access to capital using the equity you've already built and much better rates than most business funding options.</p>
   <p style="margin:0 0 12px 0;text-align:left;"><strong>DOCUMENTS NEEDED:</strong> <a href="${PORTAL_URL}">(click here to submit all 4 in our portal)</a></p>
   <ol ${olStyle}>
     <li ${liStyle}>Most recent mortgage statement</li>
