@@ -6,6 +6,11 @@
 // builds the approval-card payload with is_html:true and omits signature_name,
 // so buildHtmlBody() (src/lib/ai-intel/execute-action.ts) returns the HTML
 // untouched. The email is mailed exactly as defined here.
+//
+// TOKENS: the compose-email-approval route fills two placeholders before send:
+//   {{firstName}}  → the lead's Zoho first name (falls back to "there")
+//   {{customLine}} → the AI-generated / edited custom line for "scaling-intro"
+// Templates without those tokens are unaffected.
 
 import { SIGNATURE_S_HTML } from "@/config/email-signature";
 
@@ -17,15 +22,23 @@ export interface FullHtmlEmailTemplate {
 // Resolve the Outlook "S" signature, preferring a runtime env override.
 const SIG_S = process.env.SIGNATURE_S_HTML || SIGNATURE_S_HTML;
 
-// The "Business loan Inquire (Next Steps)" email Matthew sends after a call:
-// skyline banner → "Nice speaking with you!" → 2-minute application (Start Now,
-// linking to srtagency.com/capital) → last 3 months of bank statements to
-// matthew@srtagency.com → "funded in less than 24 hours" → "Best regards,".
-// Sent verbatim — no greeting, no signature.
-//
-// NOTE: the skyline banner image was removed for now (per request). Add it back
-// as an <img> at the top of the html when a hosted URL is available.
+// Shared style primitives so every template renders identically to the
+// original "Next Steps" design.
+const WRAP_OPEN = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;font-size:15px;line-height:1.5;max-width:640px;text-align:left;">`;
+const PORTAL_URL = "https://srtagency.com/capital";
+// Inline yellow highlight (matches the original drafts' highlighter).
+const hl = (inner: string) =>
+  `<span style="background:#fff200;padding:2px 4px;line-height:1.8;">${inner}</span>`;
+// Green "Start Now →" button paragraph.
+const START_NOW_BTN = `<p style="margin:0 0 28px 0;text-align:left;">
+    <a href="${PORTAL_URL}" style="display:inline-block;background:#2ee6a8;color:#0d1b2a;text-decoration:none;font-weight:700;padding:10px 28px;border-radius:6px;">Start Now &#8594;</a>
+  </p>`;
+const olStyle = `style="margin:0 0 20px 0;padding-left:22px;"`;
+const ulStyle = `style="margin:0 0 20px 0;padding-left:22px;list-style-type:disc;"`;
+const liStyle = `style="margin:0 0 6px 0;"`;
+
 export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = {
+  // ── Original post-call "Next Steps" email (verbatim, no greeting/signature) ──
   "next-steps": {
     subject: "(Next Steps) Business loan Inquire",
     html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;font-size:15px;line-height:1.5;max-width:640px;text-align:left;">
@@ -38,6 +51,184 @@ export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = 
   <p style="margin:0 0 32px 0;text-align:left;"><span style="background:#fff200;padding:2px 4px;line-height:1.8;">&rarr; Last 3 months of <strong>business bank statements</strong> sent to <a href="mailto:matthew@srtagency.com">matthew@srtagency.com</a></span></p>
   <p style="margin:0 0 24px 0;text-align:left;">Once you send that over to me,<br>I will get you an approval and have you funded in less than 24 hours.</p>
   <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 1. SBA 7(a) — Documents Needed ──────────────────────────────────────────
+  "sba": {
+    subject: "Next Steps for Your Business Funding - Documents Needed",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Hey {{firstName}},</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Appreciate you taking a minute while on the job site.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Based on what you shared, it sounds like your business may be a strong fit for an <strong>SBA 7(a) loan</strong>, which offers significantly better rates and terms than working capital options.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">To get your application moving, I need:</p>
+  <p style="margin:0 0 12px 0;text-align:left;"><strong>DOCUMENTS NEEDED:</strong> <a href="${PORTAL_URL}">(click here to submit all 4 in our portal)</a></p>
+  <ol ${olStyle}>
+    <li ${liStyle}>Business funding application</li>
+    <li ${liStyle}>Last 2 years of business tax returns (unredacted)</li>
+    <li ${liStyle}>Last 3 months of business bank statements</li>
+    <li ${liStyle}>Debt schedule (list of all current business loans/obligations — I can help you build this inside our portal)</li>
+  </ol>
+  <p style="margin:0 0 16px 0;text-align:left;">If you didn't file for the most recent tax period, please send proof of extension + the prior year's return.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">You can reply to this email with the documents attached.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Once I have everything, I'll get your application submitted and keep you posted every step of the way.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">The SBA process takes a bit longer than a quick working capital advance, but the terms are worth it — lower rates, longer repayment, and no daily/weekly pulls on your account.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Let me know if you have any questions.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Happy to jump on a quick call after 5 if easier.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 2. Money for the Business (cold opener) ─────────────────────────────────
+  "money-business": {
+    subject: "Money for the business",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Good afternoon,</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Are you currently looking to get any type of funding for your business?</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We work with SBA, equipment financing, and working capital.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">It takes 2 minutes to fill out our online application.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">${hl("&rarr; 2-minute application")}</p>
+  ${START_NOW_BTN}
+  <p style="margin:0 0 24px 0;text-align:left;">Kind regards,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 3. SBA + Equipment Financing ────────────────────────────────────────────
+  "sba-equipment": {
+    subject: "Business Funding (SBA & Equipment Financing)",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Nice speaking with you,</p>
+  <p style="margin:0 0 16px 0;text-align:left;">As we discussed, given your strong credit profile and time in business, you're in a great position to explore two solid funding paths:</p>
+  <p style="margin:0 0 12px 0;text-align:left;">- <strong>SBA</strong> is best for larger capital needs with longer terms and lower payments. The approval process takes time, which is exactly why we want to get the ball rolling now.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">- <strong>Equipment Financing</strong> is a faster, more targeted option for any equipment you're bringing in.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">To get started, here's what I'll need from you:</p>
+  <p style="margin:0 0 16px 0;text-align:left;">${hl("&rarr; 2-minute application")}</p>
+  ${START_NOW_BTN}
+  <p style="margin:0 0 8px 0;text-align:left;"><strong>SBA:</strong></p>
+  <ul ${ulStyle}>
+    <li ${liStyle}>Last 2 years of business tax returns</li>
+    <li ${liStyle}>Last 3 months of business bank statements</li>
+    <li ${liStyle}>Business debt schedule (if any existing loans)</li>
+    <li ${liStyle}>2025 P&amp;L if taxes haven't been filed</li>
+  </ul>
+  <p style="margin:0 0 8px 0;text-align:left;"><strong>Equipment Financing:</strong></p>
+  <ul ${ulStyle}>
+    <li ${liStyle}>Invoice or quote for the equipment</li>
+    <li ${liStyle}>Last 3 months of business bank statements</li>
+  </ul>
+  <p style="margin:0 0 16px 0;text-align:left;">Feel free to send these over whenever you're ready, even if it's piece by piece.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 4. SBA (Español) ────────────────────────────────────────────────────────
+  "sba-es": {
+    subject: "Opciones de Préstamo SBA (Documentos Requeridos)",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Un placer hablar contigo,</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Según lo que compartiste, tu negocio podría ser un excelente candidato para un préstamo <strong>SBA 7(a)</strong>, el cual ofrece tasas y condiciones significativamente mejores que las opciones de capital de trabajo.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Para poner en marcha tu solicitud, necesito lo siguiente:</p>
+  <p style="margin:0 0 12px 0;text-align:left;"><strong>DOCUMENTOS NECESARIOS:</strong> <a href="${PORTAL_URL}">(haz clic aquí para enviar los 4 en nuestro portal)</a></p>
+  <ol ${olStyle}>
+    <li ${liStyle}>Declaraciones de impuestos comerciales de los últimos 2 años (sin redactar)</li>
+    <li ${liStyle}>Estados de cuenta bancarios de los últimos 3 meses</li>
+    <li ${liStyle}>Calendario de deudas (lista de todos los préstamos/obligaciones comerciales actuales — puedo ayudarte a elaborarlo dentro de nuestro portal)</li>
+  </ol>
+  <p style="margin:0 0 16px 0;text-align:left;">Si no presentaste tu declaración del período fiscal más reciente, por favor envía el comprobante de prórroga + la declaración del año anterior.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Puedes responder a este correo con los documentos adjuntos.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Una vez que tenga todo, enviaré tu solicitud y te mantendré informado en cada paso del proceso.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">El proceso del SBA tarda un poco más que un adelanto rápido de capital de trabajo, pero las condiciones valen la pena — tasas más bajas, plazos más largos y sin retiros diarios/semanales de tu cuenta.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Saludos cordiales,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 5. About Us ─────────────────────────────────────────────────────────────
+  "about-us": {
+    subject: "Here's a Little More About Us",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 16px 0;text-align:left;">We would like to share more about who we are and how we operate; we're a little different from what most people expect.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We're not a big corporate broker.<br>We work more like a funding consulting partner.<br>That means when you come to us with a goal — whether it's equipment, expansion, cash flow, or anything else —</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We go out and find the best rates, the best terms, and the right program for that specific purpose.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">You'd have someone in your corner ${hl("who understands your full picture")} and helps you structure it strategically.</p>
+  <p style="margin:0 0 16px 0;text-align:left;"><strong>We're also AI-integrated with credit repair options &amp; strategic planning, which helps us move faster and smarter than a traditional brokerage, and position you in better shape for your Long Term plans.</strong></p>
+  <p style="margin:0 0 16px 0;text-align:left;">Our primary offices are in Tampa (currently expanding a new location in NC).</p>
+  <p style="margin:0 0 16px 0;text-align:left;">At the end of the day, we're looking to build long-term relationships with our clients, not just close a deal and move on.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Best Regards,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 6. Commercial Construction (SBA 504) ────────────────────────────────────
+  "commercial-construction": {
+    subject: "Commercial Construction Financing (Next Steps)",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Nice speaking with you,</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Based on what you shared, it sounds like your business may be a strong fit for an <strong>SBA 504 loan</strong>, which offers significantly better rates and terms than working capital options.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">To get your application moving, I need:</p>
+  <p style="margin:0 0 12px 0;text-align:left;"><strong>DOCUMENTS NEEDED:</strong> <a href="${PORTAL_URL}">(click here to submit all 4 in our portal)</a></p>
+  <ol ${olStyle}>
+    <li ${liStyle}>Business funding application</li>
+    <li ${liStyle}>Last 2 years of business tax returns (unredacted)</li>
+    <li ${liStyle}>Last 3 months of business bank statements</li>
+    <li ${liStyle}>Debt schedule (list of all current business loans/obligations — I can help you build this inside our portal)</li>
+  </ol>
+  <p style="margin:0 0 8px 0;text-align:left;"><strong>Pending docs for bank pre-qualification:</strong></p>
+  <ul ${ulStyle}>
+    <li ${liStyle}>Deed or title showing land ownership</li>
+    <li ${liStyle}>Official building plans</li>
+  </ul>
+  <p style="margin:0 0 16px 0;text-align:left;">If you didn't file for the most recent tax period, please send proof of extension + the prior year's return.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">You can reply to this email with the documents attached.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Once I have everything, I'll get your application submitted and keep you posted every step of the way.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">The SBA process takes a bit longer than a quick working capital advance, but the terms are worth it — lower rates, longer repayment, and no daily/weekly pulls on your account.</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 7. HELOC — Documents Needed ─────────────────────────────────────────────
+  "heloc": {
+    subject: "(HELOC) Next Steps for Your Business Funding - Documents Needed",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Nice speaking with you.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Based on what you shared, it sounds like a <strong>HELOC (Home Equity Line of Credit)</strong> could be a strong fit — flexible access to capital using the equity you've already built, with much better rates than most business funding options.</p>
+  <p style="margin:0 0 12px 0;text-align:left;"><strong>DOCUMENTS NEEDED:</strong> <a href="${PORTAL_URL}">(click here to submit all 4 in our portal)</a></p>
+  <ol ${olStyle}>
+    <li ${liStyle}>Most recent mortgage statement</li>
+    <li ${liStyle}>Last 2 years of tax returns (unredacted)</li>
+    <li ${liStyle}>Last 3 months of business bank statements</li>
+    <li ${liStyle}>Government-issued ID</li>
+  </ol>
+  <p style="margin:0 0 8px 0;text-align:left;"><strong>(if available)</strong></p>
+  <ul ${ulStyle}>
+    <li ${liStyle}>Deed or title showing property ownership</li>
+    <li ${liStyle}>Recent property appraisal or tax assessment</li>
+  </ul>
+  <p style="margin:0 0 16px 0;text-align:left;">You can reply to this email with everything attached.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Once I have the docs, I'll get your application submitted and keep you posted every step of the way.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Happy to jump on a quick call if you have questions.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Talk soon.</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── 8. Scaling Revenue Together (AI custom intro) ───────────────────────────
+  // {{customLine}} is the AI-generated / edited line from the dialer box.
+  "scaling-intro": {
+    subject: "Scaling Revenue Together (Business Funding)",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Hello {{firstName}},</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We saw your inquiry come through,</p>
+  <p style="margin:0 0 16px 0;text-align:left;">To get you pre-qualified we just need you to complete:</p>
+  <p style="margin:0 0 10px 0;text-align:left;">${hl("- Our 2-minute application")}</p>
+  <p style="margin:0 0 20px 0;text-align:left;">${hl("- Last 3 months of business bank statements")}</p>
+  <p style="margin:0 0 16px 0;text-align:left;">{{customLine}}</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Feel free to call me if you have any questions.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Kind regards,</p>
 </div>
 ${SIG_S}`,
   },

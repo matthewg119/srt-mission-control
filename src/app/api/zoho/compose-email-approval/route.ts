@@ -28,6 +28,17 @@ function isAuthorized(req: NextRequest): boolean {
   return header === `Bearer ${secret}`;
 }
 
+// Fill the {{firstName}} / {{customLine}} placeholders in a verbatim full-HTML
+// template. {{customLine}} is the dialer's edited custom-intro copy (scaling-intro);
+// templates without these tokens pass through unchanged.
+function fillTokens(html: string, firstName: string, customLine?: string): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return html
+    .replace(/\{\{\s*firstName\s*\}\}/g, esc(firstName))
+    .replace(/\{\{\s*customLine\s*\}\}/g, customLine ? esc(customLine) : "");
+}
+
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -73,7 +84,9 @@ export async function POST(req: NextRequest) {
   // signature is appended at send time by buildHtmlBody (signature_name: "S").
   // Full-HTML templates skip both — they're sent exactly as stored.
   const emailSubject = fullHtmlTemplate ? fullHtmlTemplate.subject : (subject as string);
-  const emailBody = fullHtmlTemplate ? fullHtmlTemplate.html : `Hello ${firstName},\n\n${copy}`;
+  const emailBody = fullHtmlTemplate
+    ? fillTokens(fullHtmlTemplate.html, firstName, copy)
+    : `Hello ${firstName},\n\n${copy}`;
 
   // Everything past Zoho is wrapped so any Supabase/Slack failure returns a
   // readable JSON error instead of a 500 HTML page (which the extension can
