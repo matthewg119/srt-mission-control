@@ -138,6 +138,26 @@ export function parseBuildBusiness(text: string): string {
   return (text || "").replace(/^\s*build\s*(draft|deal)?\s*/i, "").trim();
 }
 
+/**
+ * The merchant note typed alongside a statement drop (e.g. "Looking for 5-10k
+ * working capital"), to render under the deposit table in the email draft.
+ * A "build <name>" message is a lookup command, not a note → null. Strips an
+ * optional "(note for email)" marker the user may add. Empty → null.
+ */
+export function parseDropNote(text: string | undefined | null): string | null {
+  const raw = (text || "").trim();
+  if (!raw || isBuildCommand(raw)) return null;
+  const cleaned = raw
+    .replace(/\(?\s*note\s+for\s+email\s*\)?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return cleaned || null;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // ── §3 metrics (mirrors agent/bank-statements) ───────────────────────────────
 interface RevenueRow { month: string; deposits: number | null; avg_daily_ledger: number | null; deposit_count: number | null; nsf_count: number | null; }
 interface BankMetrics {
@@ -215,10 +235,11 @@ const fmtUsd2 = (n: number | null | undefined) =>
   n == null ? "" : `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // ── §5 deal email — matches Matthew's target format exactly.
-// Body: "Hello Team," → deposit table (2-decimal) → editable "Merchant is looking
-// for…" line (filled manually before shopping) → "Best regards," → branded
-// SRT Submissions signature.
-function buildDealEmailHtml(rows: RevenueRow[]): string {
+// Body: "Hello Team," → deposit table (2-decimal) → the merchant ask line → "Best
+// regards," → branded SRT Submissions signature. The ask line is the note typed
+// with the drop (rendered verbatim); with no note it falls back to the blank
+// "Merchant is looking for $___ for ___" placeholder to fill manually.
+function buildDealEmailHtml(rows: RevenueRow[], note?: string | null): string {
   const trows = rows.map((r) =>
     `<tr><td style="border:1px solid #ccc;padding:4px 8px">${r.month ?? ""}</td>` +
     `<td style="border:1px solid #ccc;padding:4px 8px;text-align:right">${fmtUsd2(r.deposits)}</td>` +
@@ -230,10 +251,13 @@ function buildDealEmailHtml(rows: RevenueRow[]): string {
     ? `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">
 <tr><th style="border:1px solid #ccc;padding:4px 8px"></th><th style="border:1px solid #ccc;padding:4px 8px">Deposits</th><th style="border:1px solid #ccc;padding:4px 8px">AVG daily ledger</th><th style="border:1px solid #ccc;padding:4px 8px"># of deposits</th><th style="border:1px solid #ccc;padding:4px 8px">NSF</th></tr>${trows}</table>`
     : "";
+  const askLine = note && note.trim()
+    ? `<p><i>${escapeHtml(note.trim())}</i></p>`
+    : `<p><i>Merchant is looking for $______ for ______. ASAP</i></p>`;
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">
 <p>Hello Team,</p>
 ${table}
-<p><i>Merchant is looking for $______ for ______. ASAP</i></p>
+${askLine}
 <p>Best regards,</p>
 ${resolveSubmissionSignature()}
 </div>`;
@@ -368,8 +392,14 @@ export async function handleStatementDrop(args: {
     }
   }
 
-  // §1 resolve business (explicit "build X" text → else account holder from analysis)
-  const guess = parseBuildBusiness(args.text ?? "") || metrics?.account_holder || "";
+  // The drop's message text is a merchant note (rendered under the deposit table),
+  // unless it's an explicit "build <name>" lookup command.
+  const note = parseDropNote(args.text);
+
+  // §1 resolve business — only treat the text as a name when it's a "build X"
+  // command; otherwise a free-form note must NOT be used as the business guess.
+  const explicitName = isBuildCommand(args.text ?? "") ? parseBuildBusiness(args.text ?? "") : "";
+  const guess = explicitName || metrics?.account_holder || "";
   const match = guess ? await resolveLead(guess) : null;
   const business = (match?.businessName || guess || "Unknown Merchant").trim();
   // Subject uses the name exactly as it appears on the statements.
@@ -404,7 +434,7 @@ export async function handleStatementDrop(args: {
     await createStatementDrop({
       slackChannel: args.channel, slackThreadTs: args.threadTs, businessName: business, accountHolder,
       subject: `New Deal - ${accountHolder}`, status: "dnq", metricsJson, statementsJson: statementRefs,
-      appJson: appRef, monthsLimit: null, zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
+      appJson: appRef, monthsLimit: null, emailNote: note, zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
     });
     return;
   }
@@ -429,7 +459,7 @@ export async function handleStatementDrop(args: {
     await createStatementDrop({
       slackChannel: args.channel, slackThreadTs: args.threadTs, businessName: business, accountHolder,
       subject: `New Deal - ${accountHolder}`, status: "awaiting_name_confirm", metricsJson,
-      statementsJson: statementRefs, appJson: appRef, monthsLimit: null,
+      statementsJson: statementRefs, appJson: appRef, monthsLimit: null, emailNote: note,
       zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
     });
     await slack.postThreadReply(
@@ -444,14 +474,14 @@ export async function handleStatementDrop(args: {
   await buildAndPostDrafts({
     channel: args.channel, threadTs: args.threadTs, accountHolder, business, metrics,
     statements: statementsWithMonth, app: appDoc ? { name: appDoc.name, buffer: appDoc.buffer } : null,
-    btfPdf, monthsLimit: null, match,
+    btfPdf, monthsLimit: null, note, match,
   });
 
   // Persist for thread controls (N-months trim, conversation).
   await createStatementDrop({
     slackChannel: args.channel, slackThreadTs: args.threadTs, businessName: business, accountHolder,
     subject: `New Deal - ${accountHolder}`, status: "built", metricsJson, statementsJson: statementRefs,
-    appJson: appRef, monthsLimit: null, zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
+    appJson: appRef, monthsLimit: null, emailNote: note, zohoLeadId: match?.zohoLeadId ?? null, zohoDealId: match?.zohoDealId ?? null,
   });
 }
 
@@ -491,11 +521,12 @@ async function createSubmissionDraft(args: {
   statements: StatementBuf[];
   app: { name: string; buffer: Buffer } | null;
   monthsLimit: number | null;
+  note: string | null;
 }): Promise<{ ok: boolean; statementsAttached: number }> {
   const picked = pickStatements(args.statements, args.monthsLimit);
   const allRows = args.metrics?.revenue_table ?? [];
   const rows = args.monthsLimit && args.monthsLimit > 0 ? allRows.slice(-args.monthsLimit) : allRows;
-  const body = buildDealEmailHtml(rows);
+  const body = buildDealEmailHtml(rows, args.note);
   const attachments = [
     ...picked.map((s) => ({ name: s.name, contentType: "application/pdf", contentBytes: s.buffer.toString("base64") })),
     ...(args.app ? [{ name: args.app.name, contentType: "application/pdf", contentBytes: args.app.buffer.toString("base64") }] : []),
@@ -520,12 +551,13 @@ async function buildAndPostDrafts(args: {
   app: { name: string; buffer: Buffer } | null;
   btfPdf: Buffer | null;
   monthsLimit: number | null;
+  note: string | null;
   match: LeadMatch | null;
 }): Promise<void> {
   const subject = `New Deal - ${args.accountHolder}`;
   const created: string[] = [];
 
-  const sub = await createSubmissionDraft({ subject, metrics: args.metrics, statements: args.statements, app: args.app, monthsLimit: args.monthsLimit });
+  const sub = await createSubmissionDraft({ subject, metrics: args.metrics, statements: args.statements, app: args.app, monthsLimit: args.monthsLimit, note: args.note });
   if (sub.ok) created.push(`Submissions (father email) — ${sub.statementsAttached} statement(s)${args.app ? " + application" : ""}`);
 
   if (args.btfPdf) {
@@ -533,7 +565,7 @@ async function buildAndPostDrafts(args: {
       const pickedBtf = pickStatements(args.statements, args.monthsLimit);
       await microsoft.createDraft({
         subject,
-        body: buildDealEmailHtml(args.metrics?.revenue_table ?? []),
+        body: buildDealEmailHtml(args.metrics?.revenue_table ?? [], args.note),
         attachments: [
           { name: `BTF_App_${args.business}.pdf`, contentType: "application/pdf", contentBytes: args.btfPdf.toString("base64") },
           ...pickedBtf.map((s) => ({ name: s.name, contentType: "application/pdf", contentBytes: s.buffer.toString("base64") })),
@@ -592,7 +624,7 @@ export async function rebuildSubmissionDraftFromRow(args: {
   const subject = `New Deal - ${accountHolder}`;
   const metrics = (args.drop.metrics_json as unknown as BankMetrics | null) ?? null;
 
-  const sub = await createSubmissionDraft({ subject, metrics, statements, app, monthsLimit: args.monthsLimit });
+  const sub = await createSubmissionDraft({ subject, metrics, statements, app, monthsLimit: args.monthsLimit, note: args.drop.email_note ?? null });
   await slack.postThreadReply(
     args.channel,
     args.threadTs,

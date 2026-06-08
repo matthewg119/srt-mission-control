@@ -36,12 +36,13 @@ export interface StatementDropRow {
   statements_json: StatementFileRef[] | null;
   app_json: AppFileRef | null;
   months_limit: number | null;
+  email_note: string | null;        // merchant note rendered under the deposit table
   zoho_lead_id: string | null;
   zoho_deal_id: string | null;
 }
 
 const ROW_COLS =
-  "id, slack_channel, slack_thread_ts, business_name, account_holder, subject, status, metrics_json, statements_json, app_json, months_limit, zoho_lead_id, zoho_deal_id";
+  "id, slack_channel, slack_thread_ts, business_name, account_holder, subject, status, metrics_json, statements_json, app_json, months_limit, email_note, zoho_lead_id, zoho_deal_id";
 
 /**
  * Upsert the drop row for a thread. Idempotent on slack_thread_ts — a re-drop in
@@ -58,6 +59,7 @@ export async function createStatementDrop(input: {
   statementsJson: StatementFileRef[];
   appJson: AppFileRef | null;
   monthsLimit: number | null;
+  emailNote: string | null;
   zohoLeadId: string | null;
   zohoDealId: string | null;
 }): Promise<string | null> {
@@ -75,6 +77,7 @@ export async function createStatementDrop(input: {
         statements_json: input.statementsJson,
         app_json: input.appJson,
         months_limit: input.monthsLimit,
+        email_note: input.emailNote,
         zoho_lead_id: input.zohoLeadId,
         zoho_deal_id: input.zohoDealId,
         updated_at: new Date().toISOString(),
@@ -108,6 +111,7 @@ export async function updateStatementDrop(
     subject: string | null;
     status: StatementDropStatus;
     months_limit: number | null;
+    email_note: string | null;
   }>
 ): Promise<void> {
   await supabaseAdmin

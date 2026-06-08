@@ -850,6 +850,26 @@ export const microsoft = {
     await graphRequest(`/subscriptions/${subscriptionId}`, { method: "DELETE" });
   },
 
+  /**
+   * Fetch one subscription by id. Returns null when Microsoft no longer has it
+   * (404/410, or the 403 "ExtensionError/access denied" Graph returns once a
+   * subscription's resource is no longer resolvable) — i.e. it was silently
+   * dropped and must be re-created. Re-throws transient errors (token/5xx) so a
+   * caller doesn't churn-recreate over a blip.
+   */
+  async getSubscription(subscriptionId: string): Promise<{ id: string; expirationDateTime: string } | null> {
+    try {
+      const result = await graphRequest(`/subscriptions/${subscriptionId}`);
+      return { id: result.id as string, expirationDateTime: result.expirationDateTime as string };
+    } catch (e) {
+      const msg = (e as Error).message || "";
+      if (/error (404|410)\b|error 403\b|ResourceNotFound|ExtensionError|does not exist|not found/i.test(msg)) {
+        return null;
+      }
+      throw e;
+    }
+  },
+
   /** Search inbox for emails matching a keyword (merchant name, lender, deal ref).
    *  mailbox defaults to submissions@srtagency.com (shared mailbox with lender replies).
    *  Falls back to /me/messages if the shared mailbox isn't accessible. */
