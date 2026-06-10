@@ -55,6 +55,21 @@ export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = 
 ${SIG_S}`,
   },
 
+  // ── App submitted, awaiting Income Verification (Plaid OR statements) ──
+  "app-no-statements": {
+    subject: "Business Financing next steps (Income Verification)",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Hello {{firstName}}!</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We have received your <strong>application &amp; Awaiting on</strong> <span style="color:#c0392b;font-weight:700;">Income Verification</span>:</p>
+  <p style="margin:0 0 16px 0;text-align:left;">${hl("&rarr; Connect Through Plaid <strong>(API Encrypted)</strong>")}</p>
+  <p style="margin:0 0 28px 0;text-align:left;">
+    <a href="https://srtagency.com/fullapp" style="display:inline-block;background:#2ee6a8;color:#0d1b2a;text-decoration:none;font-weight:700;padding:10px 28px;border-radius:6px;">Start Now &#8594;</a>
+  </p>
+  <p style="margin:0 0 28px 0;text-align:left;">${hl("&rarr; or you can attach to this email the last 3 months of <strong>business bank statements</strong>")}</p>
+  <p style="margin:0 0 24px 0;text-align:left;"><a href="mailto:matthew@srtagency.com">matthew@srtagency.com</a></p>
+</div>`,
+  },
+
   // ── 1. SBA 7(a) — Documents Needed ──────────────────────────────────────────
   "sba": {
     subject: "Next Steps for Your Business Funding - Documents Needed",
@@ -251,6 +266,22 @@ ${SIG_S}`,
   <p style="margin:0 0 16px 0;text-align:left;">{{customLine}}</p>
   <p style="margin:0 0 16px 0;text-align:left;">Feel free to call me if you have any questions.</p>
   <p style="margin:0 0 24px 0;text-align:left;">Kind regards,</p>
+</div>
+${SIG_S}`,
+  },
+
+  // ── Decline / "Update on Your Funding Application" ───────────────────────────
+  // {{customLine}} is the decline reason typed in the dialer box per lead
+  // (e.g. "time in business and low cashflow"). It renders bold in the sentence.
+  "decline": {
+    subject: "Update on Your Funding Application",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 16px 0;text-align:left;">Hi {{firstName}},</p>
+  <p style="margin:0 0 16px 0;text-align:left;">Thank you for submitting your application and taking the time to go through our review process.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">After reviewing your file, we are unable to move forward at this time due to <strong>{{customLine}}</strong>.</p>
+  <p style="margin:0 0 16px 0;text-align:left;">If your situation changes or you'd like to explore options down the road, don't hesitate to reach out,</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We're happy to take another look.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
 </div>
 ${SIG_S}`,
   },
