@@ -78,6 +78,12 @@ export async function POST(request: NextRequest) {
           // Accept hasCheckingAccount (v6 sends "Yes"/"No") as alias for hasBusinessChecking
           const hasBusinessCheckingResolved = hasBusinessChecking !== undefined ? hasBusinessChecking : hasCheckingAccount;
 
+          // The businessfunding funnel captures monthly revenue under `monthlyRevenue`
+          // (bucket midpoint) and never sends `monthlyDeposits`. The PDF "Avg Monthly
+          // Revenue" cell and Zoho "Monthly Deposits" both read monthlyDeposits, so fall
+          // back to monthlyRevenue to keep those from rendering blank.
+          const monthlyDepositsResolved = monthlyDeposits || monthlyRevenue;
+
           // SSN normalization: prefer full SSN when provided. Always keep ssn4
           // populated (derived from last 4 of ssn_full) so downstream readers
           // (Zoho SSN_Last_4, PDF, admin views) keep working.
@@ -426,7 +432,7 @@ export async function POST(request: NextRequest) {
                                                               ownership,
                                                               amount_needed: amountNeeded,
                                                               use_of_funds: useOfFunds,
-                                                              monthly_deposits: monthlyDeposits,
+                                                              monthly_deposits: monthlyDepositsResolved,
                                                               monthly_revenue: monthlyRevenue || null,
                                                               checking_account: checkingAccount || null,
                                                               has_business_checking: hasBusinessCheckingResolved !== undefined ? hasBusinessCheckingResolved : null,
@@ -539,6 +545,55 @@ export async function POST(request: NextRequest) {
                                   (e) => console.error("[sms-schedule] failed:", (e as Error).message)
                                 );
                               }
+
+                              // Meta CAPI "Lead" — fire here ONLY because this is a
+                              // brand-new contact, meaning the 10% block never ran for it
+                              // (e.g. a resumed session that re-entered at 25%+). The Lead
+                              // event must fire exactly once per contact; for the normal
+                              // flow it already fired (and deduped against the browser
+                              // pixel) in the 10% block, and the existing-contact branch
+                              // above deliberately does NOT re-fire it at 50%/80%.
+                              if (hasMetaAttributionServer({ fbc: _fbc })) {
+                                try {
+                                  const capiResult = await sendEvent({
+                                    eventName: "Lead",
+                                    eventId: serverEventId,
+                                    eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
+                                    actionSource: "website",
+                                    userData: {
+                                      email: email || undefined,
+                                      phone: mobilePhone || businessPhone || undefined,
+                                      firstName: firstName || undefined,
+                                      lastName: lastName || undefined,
+                                      city: bizCity || undefined,
+                                      state: bizState || undefined,
+                                      zip: bizZip || undefined,
+                                      fbc: _fbc || undefined,
+                                      fbp: _fbp || undefined,
+                                      clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+                                      clientUserAgent,
+                                      externalId: contactId || undefined,
+                                    },
+                                    customData: {
+                                      content_name: "Business Funding Application",
+                                      value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
+                                      currency: "USD",
+                                    },
+                                  });
+                                  if (!capiResult.success) {
+                                    console.error("[Meta CAPI 25%-new] Lead event failed:", capiResult.error);
+                                    try {
+                                      await supabaseAdmin.from("system_logs").insert({
+                                        event_type: "meta_capi_error",
+                                        description: `Meta CAPI Lead event failed (25%-new): ${capiResult.error}`,
+                                        metadata: { email, eventName: "Lead", stage: "25%-new" },
+                                      });
+                                    } catch { /* ignore */ }
+                                  }
+                                } catch (err) {
+                                  console.error("[Meta CAPI 25%-new] Lead event error:", err);
+                                }
+                              }
                         }
 
               } catch (error) {
@@ -573,48 +628,13 @@ export async function POST(request: NextRequest) {
                             } catch { /* ignore deal creation errors */ }
               }
 
-              // Send lead capture event to Meta CAPI — only for real Meta ad clicks.
-              if (hasMetaAttributionServer({ fbc: _fbc })) {
-                try {
-                  const capiResult = await sendEvent({
-                    eventName: "Lead",
-                    eventId: serverEventId,
-                    eventSourceUrl: sourceUrl || "https://srtagency.com/apply",
-                    actionSource: "website",
-                    userData: {
-                      email: email || undefined,
-                      phone: mobilePhone || businessPhone || undefined,
-                      firstName: firstName || undefined,
-                      lastName: lastName || undefined,
-                      city: bizCity || undefined,
-                      state: bizState || undefined,
-                      zip: bizZip || undefined,
-                      fbc: _fbc || undefined,
-                      fbp: _fbp || undefined,
-                      clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
-                      clientUserAgent,
-                      externalId: contactId || undefined,
-                    },
-                    customData: {
-                      content_name: "Business Funding Application",
-                      value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
-                      currency: "USD",
-                    },
-                  });
-                  if (!capiResult.success) {
-                    console.error("[Meta CAPI] Lead event failed:", capiResult.error);
-                    try {
-                      await supabaseAdmin.from("system_logs").insert({
-                        event_type: "meta_capi_error",
-                        description: `Meta CAPI Lead event failed: ${capiResult.error}`,
-                        metadata: { email, eventName: "Lead" },
-                      });
-                    } catch { /* ignore */ }
-                  }
-                } catch (err) {
-                  console.error("[Meta CAPI] Lead event error:", err);
-                }
-              }
+              // NOTE: The Meta CAPI "Lead" event is intentionally NOT fired here.
+              // This 25%+ block runs at 25%, 50%, AND 80% — firing Lead at each one
+              // (every call carries a fresh eventId with no browser-pixel dedup
+              // partner) inflated Ads Manager to up to 4 Leads per single funnel.
+              // Lead now fires exactly once per contact: in the 10% block (deduped
+              // with the browser pixel), or — only if 10% never ran — in the
+              // new-contact insert branch above.
 
               return NextResponse.json(
                     { success: true, message: "Lead captured", contactId },
@@ -668,7 +688,7 @@ export async function POST(request: NextRequest) {
                                                               ownership,
                                                               amount_needed: amountNeeded,
                                                               use_of_funds: useOfFunds,
-                                                              monthly_deposits: monthlyDeposits,
+                                                              monthly_deposits: monthlyDepositsResolved,
                                                               monthly_revenue: monthlyRevenue || null,
                                                               checking_account: checkingAccount || null,
                                                               existing_loans: existingLoans,
@@ -956,7 +976,7 @@ export async function POST(request: NextRequest) {
                                                           businessName, legalName, dba, industry, ein,
                                                           bizAddress, bizCity, bizState, bizZip, incDate, dob,
                                                           creditScore, ownership, amountNeeded, useOfFunds,
-                                                          monthlyDeposits, existingLoans, notes: pdfNotes,
+                                                          monthlyDeposits: monthlyDepositsResolved, existingLoans, notes: pdfNotes,
                                                           ssn4, ssnFull,
                                                           signature: signature || undefined,
                                                           signatureName: signatureName || contactName,
