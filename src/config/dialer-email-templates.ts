@@ -57,7 +57,7 @@ ${SIG_S}`,
 
   // ── App submitted, awaiting Income Verification (Plaid OR statements) ──
   "app-no-statements": {
-    subject: "Business Financing next steps (Income Verification)",
+    subject: "Business Funding (INCOME VERIFICATION)",
     html: `${WRAP_OPEN}
   <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Hello {{firstName}}!</p>
   <p style="margin:0 0 16px 0;text-align:left;">We have received your <strong>application &amp; Awaiting on</strong> <span style="color:#c0392b;font-weight:700;">Income Verification</span>:</p>
@@ -67,7 +67,9 @@ ${SIG_S}`,
   </p>
   <p style="margin:0 0 28px 0;text-align:left;">${hl("&rarr; or you can attach to this email the last 3 months of <strong>business bank statements</strong>")}</p>
   <p style="margin:0 0 24px 0;text-align:left;"><a href="mailto:matthew@srtagency.com">matthew@srtagency.com</a></p>
-</div>`,
+  <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
+</div>
+${SIG_S}`,
   },
 
   // ── 1. SBA 7(a) — Documents Needed ──────────────────────────────────────────
