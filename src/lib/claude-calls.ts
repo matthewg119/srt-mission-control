@@ -5,6 +5,11 @@ export type ClaudeModel =
   | "claude-sonnet-4-6"
   | "claude-haiku-4-5-20251001";
 
+export interface ClaudeImageInput {
+  media_type: string; // e.g. "image/png"
+  data: string; // base64, no data: prefix
+}
+
 export interface ClaudeJSONOptions<T> {
   model: ClaudeModel;
   system: string;
@@ -12,6 +17,8 @@ export interface ClaudeJSONOptions<T> {
   maxTokens?: number;
   temperature?: number;
   schemaHint?: string;
+  /** Optional images to send alongside the user text (vision). */
+  images?: ClaudeImageInput[];
   validate?: (parsed: unknown) => parsed is T;
 }
 
@@ -33,6 +40,16 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
 
   const start = Date.now();
 
+  const userContent = opts.images && opts.images.length > 0
+    ? [
+        { type: "text", text: opts.user },
+        ...opts.images.map((img) => ({
+          type: "image",
+          source: { type: "base64", media_type: img.media_type, data: img.data },
+        })),
+      ]
+    : opts.user;
+
   const res = await fetch(ANTHROPIC_URL, {
     method: "POST",
     headers: {
@@ -45,7 +62,7 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
       max_tokens: opts.maxTokens ?? 2048,
       temperature: opts.temperature ?? 0.2,
       system: systemWithHint,
-      messages: [{ role: "user", content: opts.user }],
+      messages: [{ role: "user", content: userContent }],
     }),
   });
 

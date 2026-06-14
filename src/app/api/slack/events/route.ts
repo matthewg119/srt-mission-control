@@ -26,6 +26,7 @@ import {
   regenerateAllStills,
 } from "@/lib/content-scene-runner";
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
+import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
 
 interface SlackEventFile {
   id: string;
@@ -111,6 +112,14 @@ export async function POST(request: NextRequest) {
           userId: event.user as string,
         });
         if (guardianHandled) return NextResponse.json({ ok: true });
+
+        // Reel drop: 1/2/3 reaction on a headline-options message (self-routes by DB)
+        const reelHandled = await handleReelReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (reelHandled) return NextResponse.json({ ok: true });
 
         // Try content reaction handler (self-routes by DB lookup)
         const contentHandled = await handleContentReaction({
@@ -321,6 +330,13 @@ export async function POST(request: NextRequest) {
           text: userText.trim(),
         });
         return NextResponse.json({ ok: true });
+      }
+
+      // Reel drop: an image uploaded into a known reel-drop thread takes over the
+      // headline flow (scoped by reel_drops lookup) before the content decoder runs.
+      if (parentThreadTs && attachedFiles.length > 0) {
+        const reelImg = await handleReelImage({ channel, threadTs: parentThreadTs, files: attachedFiles });
+        if (reelImg) return NextResponse.json({ ok: true });
       }
 
       // #content / #content-full: fork to the Viral Video Decoder. Accepts any
