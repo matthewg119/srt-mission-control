@@ -1,8 +1,27 @@
 // SMS AI Draft Engine — generates stage-appropriate reply suggestions.
 // Called after every inbound message. Draft is posted to Slack for Matthew's approval.
+//
+// The draft logic is split into two pieces:
+//   - generateDraft(input)  — pure builder: takes stage + inbound + history and
+//                             produces a draft. No DB conversation required, so the
+//                             simulator can reuse it in a sandbox.
+//   - draftSmsReply(convId) — back-compat wrapper: loads the real conversation,
+//                             contact, and history, then delegates to generateDraft.
+//
+// Persona prompts now come from the bot_persona table when present (live-editable),
+// and real (incoming -> reply) voice examples are retrieved via pg_trgm and injected
+// as few-shot examples. If the DB has no persona/voice rows, the hardcoded prompts
+// below are used so behavior is unchanged until the tables are populated.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { supabaseAdmin } from "@/lib/db";
+import {
+  resolveTenantId,
+  loadPersona,
+  matchVoiceExamples,
+  renderStyleProfile,
+  renderVoiceExamples,
+} from "@/lib/persona";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -45,13 +64,179 @@ Read the conversation and reply naturally in Matthew's voice: casual, first-name
 Move the relationship forward — answer their question, qualify, or push toward the next step (application, statements, or an offer) based on where the thread is.
 Keep it short (1-3 sentences). Max 1-2 emojis. Never say "unfortunately" or "I apologize". If qualified and not yet sent, the apply link is https://srtagency.com/bfunding`;
 
+export interface DraftHistoryMessage {
+  direction: "inbound" | "outbound";
+  body: string;
+}
+
+export interface GenerateDraftInput {
+  tenantId: string;
+  stage: number | null;
+  inboundMessage: string;
+  history: DraftHistoryMessage[];
+  contact?: {
+    firstName?: string | null;
+    businessName?: string | null;
+    monthlyRevenue?: number | null;
+  } | null;
+  paymentFlexibility?: string | null;
+  remixInstruction?: string;
+  // Set false to skip the Spanish auto-translate (e.g. simulator clarity).
+  translateSpanish?: boolean;
+}
+
+export interface SuggestedFollowup {
+  days: number;
+  reason: string;
+}
+
+export interface GenerateDraftResult {
+  draft: string | null;
+  // Few-shot examples that were injected, surfaced for the simulator debug panel.
+  voiceExamples: { incoming: string; reply: string }[];
+  // Where the system prompt came from, for observability.
+  personaSource: "db" | "hardcoded";
+  // Set when the model decided a proactive follow-up is warranted (future decision
+  // date / soft objection). Parsed out of a machine-readable trailer the lead never
+  // sees. Null when no follow-up is warranted.
+  suggestedFollowup: SuggestedFollowup | null;
+}
+
+// Product-agnostic steer: when a lead pushes a decision into the future or soft-
+// objects, do not just agree and wait — acknowledge, offer to prep now, say what's
+// needed + rough timeline, and propose a follow-up. The specific pitch comes from
+// the persona/stage guidance so it stays trainable in the simulator. The trailer
+// is parsed out and stripped before the lead ever sees the reply.
+const FOLLOWUP_INSTRUCTION = `\n\nIf the lead gives a future decision date, a "not yet" / "thinking about it", or asks to be contacted later: do NOT just agree and wait. Acknowledge their timeline, offer to start preparing their options now, briefly state what you would need from them and the rough timeline, and propose a specific follow-up. Use the program and offer framing from your persona/stage guidance (do not invent a product that is not in your guidance).
+When (and only when) a follow-up is warranted, after your reply add a final line EXACTLY in this format (the lead never sees it, it is stripped before sending): <<FOLLOWUP days=N reason="short reason">> where N is a whole number of days until the follow-up and the reason is a short phrase. Omit this line entirely when no follow-up is warranted.`;
+
+// Parse + strip the <<FOLLOWUP days=N reason="...">> trailer from a model reply.
+// Robust to it being absent, malformed, or on its own line. Returns the cleaned
+// draft text plus the parsed follow-up (null when absent/malformed).
+function extractFollowup(text: string): { draft: string; followup: SuggestedFollowup | null } {
+  const re = /<<\s*FOLLOWUP\s+days\s*=\s*(\d+)\s+reason\s*=\s*"([^"]*)"\s*>>/i;
+  const match = text.match(re);
+  // Always strip any trailer-looking token so the lead never sees it.
+  const draft = text.replace(/<<\s*FOLLOWUP[^>]*>>/gi, "").trim();
+  if (!match) return { draft, followup: null };
+  const days = parseInt(match[1], 10);
+  const reason = (match[2] || "").trim();
+  if (!Number.isFinite(days) || days <= 0 || !reason) return { draft, followup: null };
+  return { draft, followup: { days, reason } };
+}
+
+/**
+ * Pure draft builder. Loads persona + voice examples for the tenant, assembles
+ * the prompt, and calls Claude. Does NOT touch sms_conversations/sms_messages.
+ */
+export async function generateDraft(input: GenerateDraftInput): Promise<GenerateDraftResult> {
+  const {
+    tenantId,
+    stage,
+    inboundMessage,
+    history,
+    contact,
+    paymentFlexibility,
+    remixInstruction,
+    translateSpanish = true,
+  } = input;
+
+  try {
+    // Persona (DB) with hardcoded fallback.
+    const persona = await loadPersona(tenantId);
+    let personaSource: "db" | "hardcoded" = "hardcoded";
+    let systemPrompt: string;
+    if (persona) {
+      const fromDb =
+        stage != null ? persona.byStage[stage] ?? persona.base : persona.base;
+      if (fromDb) {
+        systemPrompt = fromDb;
+        personaSource = "db";
+      } else {
+        systemPrompt = stage != null ? STAGE_PROMPTS[stage] ?? ADAPTIVE_PROMPT : ADAPTIVE_PROMPT;
+      }
+      systemPrompt += renderStyleProfile(persona.styleProfile);
+    } else {
+      systemPrompt = stage != null ? STAGE_PROMPTS[stage] ?? ADAPTIVE_PROMPT : ADAPTIVE_PROMPT;
+    }
+
+    // Voice few-shot retrieval.
+    const voiceExamples = await matchVoiceExamples(tenantId, inboundMessage, 6);
+    systemPrompt += renderVoiceExamples(voiceExamples);
+
+    // Proactive follow-up steer (product-agnostic; specifics come from persona).
+    systemPrompt += FOLLOWUP_INSTRUCTION;
+
+    // Hard style rule enforced for every persona (built-in or live-edited).
+    systemPrompt += "\n\nNever use em dashes or en dashes (—, –). Use commas, periods, or hyphens instead.";
+
+    const merchantName = contact?.firstName ?? "there";
+    const historyText = history
+      .map((m) => `${m.direction === "inbound" ? "Merchant" : "Matthew"}: ${m.body}`)
+      .join("\n");
+
+    const userPrompt = [
+      `Merchant first name: ${merchantName}`,
+      contact?.businessName ? `Business: ${contact.businessName}` : null,
+      contact?.monthlyRevenue ? `Monthly revenue: $${contact.monthlyRevenue.toLocaleString()}` : null,
+      paymentFlexibility ? `Payment flexibility answer: ${paymentFlexibility}` : null,
+      ``,
+      `Recent conversation:`,
+      historyText || "(no prior messages)",
+      ``,
+      `Latest inbound message: "${inboundMessage}"`,
+      remixInstruction ? `\nAdjust the draft per this instruction: ${remixInstruction}` : null,
+      ``,
+      `Reply with ONLY the text message body — no quotes, no prefix, no explanation.`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 300,
+      // Slightly high so 🔄 Regenerate yields a genuinely different variation.
+      temperature: 0.8,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    const rawText = response.content[0]?.type === "text" ? response.content[0].text.trim() : null;
+
+    // Parse + strip the FOLLOWUP trailer BEFORE any translation so the lead-facing
+    // body never contains it and the suggestion survives the translate step.
+    let suggestedFollowup: SuggestedFollowup | null = null;
+    let draft: string | null = null;
+    if (rawText != null) {
+      const parsed = extractFollowup(rawText);
+      draft = parsed.draft || null;
+      suggestedFollowup = parsed.followup;
+    }
+
+    // If merchant wrote in Spanish, detect and re-draft in Spanish
+    if (draft && translateSpanish && isSpanish(inboundMessage) && !isSpanish(draft)) {
+      draft = await translateToSpanish(draft);
+    }
+
+    return { draft, voiceExamples, personaSource, suggestedFollowup };
+  } catch (err) {
+    console.error("[sms-ai-engine] generateDraft error:", err);
+    return { draft: null, voiceExamples: [], personaSource: "hardcoded", suggestedFollowup: null };
+  }
+}
+
+export interface DraftSmsReplyResult {
+  draft: string | null;
+  suggestedFollowup: SuggestedFollowup | null;
+}
+
 export async function draftSmsReply(
   conversationId: string,
   inboundMessage: string,
   // Optional free-text steer from the Slack "🎛 Remix" modal, e.g. "make it
   // shorter", "more urgent", "answer their pricing question directly".
   remixInstruction?: string
-): Promise<string | null> {
+): Promise<DraftSmsReplyResult> {
   try {
     // Load conversation state
     const { data: conv } = await supabaseAdmin
@@ -60,7 +245,7 @@ export async function draftSmsReply(
       .eq("id", conversationId)
       .maybeSingle();
 
-    if (!conv) return null;
+    if (!conv) return { draft: null, suggestedFollowup: null };
 
     const stage = (conv.close_stage as number | null) ?? null;
 
@@ -81,52 +266,32 @@ export async function draftSmsReply(
       .order("sent_at", { ascending: false })
       .limit(10);
 
-    const history = (messages ?? [])
+    const history: DraftHistoryMessage[] = (messages ?? [])
       .reverse()
-      .map((m) => `${m.direction === "inbound" ? "Merchant" : "Matthew"}: ${m.body}`)
-      .join("\n");
+      .map((m) => ({ direction: m.direction as "inbound" | "outbound", body: m.body as string }));
 
-    const merchantName = contact?.first_name ?? "there";
-    // No funnel stage (typical for personal iMessage threads) → adaptive prompt.
-    const systemPrompt = stage != null ? (STAGE_PROMPTS[stage] ?? ADAPTIVE_PROMPT) : ADAPTIVE_PROMPT;
+    const tenantId = (await resolveTenantId()) ?? "";
 
-    const userPrompt = [
-      `Merchant first name: ${merchantName}`,
-      contact?.business_name ? `Business: ${contact.business_name}` : null,
-      contact?.monthly_revenue ? `Monthly revenue: $${contact.monthly_revenue.toLocaleString()}` : null,
-      conv.payment_flexibility ? `Payment flexibility answer: ${conv.payment_flexibility}` : null,
-      ``,
-      `Recent conversation:`,
-      history || "(no prior messages)",
-      ``,
-      `Latest inbound message: "${inboundMessage}"`,
-      remixInstruction ? `\nAdjust the draft per this instruction: ${remixInstruction}` : null,
-      ``,
-      `Reply with ONLY the text message body — no quotes, no prefix, no explanation.`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 300,
-      // Slightly high so 🔄 Regenerate yields a genuinely different variation.
-      temperature: 0.8,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
+    const { draft, suggestedFollowup } = await generateDraft({
+      tenantId,
+      stage,
+      inboundMessage,
+      history,
+      contact: contact
+        ? {
+            firstName: contact.first_name,
+            businessName: contact.business_name,
+            monthlyRevenue: contact.monthly_revenue,
+          }
+        : null,
+      paymentFlexibility: conv.payment_flexibility ?? null,
+      remixInstruction,
     });
 
-    const draft = response.content[0]?.type === "text" ? response.content[0].text.trim() : null;
-
-    // If merchant wrote in Spanish, detect and re-draft in Spanish
-    if (draft && isSpanish(inboundMessage) && !isSpanish(draft)) {
-      return await translateToSpanish(draft);
-    }
-
-    return draft;
+    return { draft, suggestedFollowup };
   } catch (err) {
     console.error("[sms-ai-engine] draftSmsReply error:", err);
-    return null;
+    return { draft: null, suggestedFollowup: null };
   }
 }
 

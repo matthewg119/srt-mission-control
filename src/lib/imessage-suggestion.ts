@@ -13,6 +13,7 @@
 
 import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
+import type { SuggestedFollowup } from "@/lib/sms-ai-engine";
 
 // Whether the 2-minute auto-send is enabled (default true).
 export function autoSendEnabled(): boolean {
@@ -26,8 +27,45 @@ export function autoSendMinutes(): number {
 }
 
 // Block Kit for a suggestion. Draft goes in a code block for one-tap copy.
-export function buildSuggestionBlocks(draft: string, regenerateCount = 0): SlackBlock[] {
+// When a proactive follow-up is suggested, an extra "📅 Follow-up in Nd" button +
+// a context line are added. The follow-up is auto-scheduled on send regardless, so
+// the button is a one-click way to schedule it NOW without sending the reply.
+export function buildSuggestionBlocks(
+  draft: string,
+  regenerateCount = 0,
+  followup?: SuggestedFollowup | null
+): SlackBlock[] {
   const mins = autoSendMinutes();
+  const actionElements: Record<string, unknown>[] = [
+    {
+      type: "button",
+      style: "primary",
+      text: { type: "plain_text", text: "✅ Send", emoji: true },
+      action_id: "imsg_send",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: "🔄 Regenerate", emoji: true },
+      action_id: "imsg_regenerate",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: "🎛 Remix", emoji: true },
+      action_id: "imsg_remix",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: "✋ Hold", emoji: true },
+      action_id: "imsg_hold",
+    },
+  ];
+  if (followup && followup.days > 0) {
+    actionElements.push({
+      type: "button",
+      text: { type: "plain_text", text: `📅 Follow-up in ${followup.days}d`, emoji: true },
+      action_id: "imsg_followup",
+    });
+  }
   const blocks: SlackBlock[] = [
     {
       type: "section",
@@ -39,31 +77,15 @@ export function buildSuggestionBlocks(draft: string, regenerateCount = 0): Slack
     },
     {
       type: "actions",
-      elements: [
-        {
-          type: "button",
-          style: "primary",
-          text: { type: "plain_text", text: "✅ Send", emoji: true },
-          action_id: "imsg_send",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "🔄 Regenerate", emoji: true },
-          action_id: "imsg_regenerate",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "🎛 Remix", emoji: true },
-          action_id: "imsg_remix",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "✋ Hold", emoji: true },
-          action_id: "imsg_hold",
-        },
-      ],
-    },
+      elements: actionElements,
+    } as SlackBlock,
   ];
+  if (followup && followup.days > 0) {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `📅 Proposed follow-up in ${followup.days} day(s): ${followup.reason}` }],
+    } as SlackBlock);
+  }
   if (autoSendEnabled()) {
     blocks.push({
       type: "context",
@@ -85,13 +107,15 @@ export async function postImessageSuggestion(args: {
   channelId: string;
   conversationId: string;
   draft: string;
+  suggestedFollowup?: SuggestedFollowup | null;
 }): Promise<void> {
-  const { channelId, conversationId, draft } = args;
+  const { channelId, conversationId, draft, suggestedFollowup } = args;
+  const followup = suggestedFollowup ?? null;
 
   const res = await slack.postMessage(
     channelId,
     `💬 Suggested reply: ${draft}`, // fallback text for notifications
-    buildSuggestionBlocks(draft)
+    buildSuggestionBlocks(draft, 0, followup)
   );
 
   if (res.ok && res.ts) {
@@ -109,6 +133,8 @@ export async function postImessageSuggestion(args: {
         created_at: new Date().toISOString(),
         auto_send_at: autoSendAt,
         auto_send_status: armed ? "pending" : "cancelled",
+        suggested_followup_days: followup?.days ?? null,
+        suggested_followup_reason: followup?.reason ?? null,
       },
       { onConflict: "conversation_id" }
     );

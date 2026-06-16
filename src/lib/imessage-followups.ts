@@ -159,6 +159,44 @@ export async function scheduleFollowup(args: ScheduleFollowupArgs): Promise<Sche
   return { ok: true, followupId: inserted.id as string };
 }
 
+// Auto-schedule on send. Called from the shared outbound path (manual ✅ Send AND
+// the 2-min auto-send sweep) right after a successful dispatchOutbound. If the
+// conversation's pending draft carried a suggested follow-up (and the user did NOT
+// already schedule it via 📅 Follow-up, which clears these fields), create it now so
+// it lands in sms_followups + the CRM. Best-effort — never throws, never blocks the
+// send. Returns true when a follow-up was scheduled.
+export async function autoScheduleFollowupOnSend(conversationId: string): Promise<boolean> {
+  try {
+    const { data: draftRow } = await supabaseAdmin
+      .from("sms_pending_drafts")
+      .select("suggested_followup_days, suggested_followup_reason")
+      .eq("conversation_id", conversationId)
+      .maybeSingle();
+
+    const days = (draftRow?.suggested_followup_days as number | null) ?? null;
+    const reason = (draftRow?.suggested_followup_reason as string | null) ?? null;
+    if (!days || !reason) return false;
+
+    const { data: conv } = await supabaseAdmin
+      .from("sms_conversations")
+      .select("contact_id")
+      .eq("id", conversationId)
+      .maybeSingle();
+    if (!conv?.contact_id) return false;
+
+    const res = await scheduleFollowup({
+      contactId: conv.contact_id as string,
+      reason,
+      dueDate: `in ${days} days`,
+      createZohoTask: true,
+    });
+    return res.ok;
+  } catch (e) {
+    console.error("[imessage-followups] auto-schedule on send failed:", (e as Error).message);
+    return false;
+  }
+}
+
 interface DueFollowupRow {
   id: string;
   conversation_id: string | null;
@@ -193,9 +231,9 @@ export async function runDueFollowups(): Promise<{ posted: number }> {
 
       // Draft a check-in via the adaptive prompt (handles stale/stage-less threads).
       if (row.conversation_id && channelId) {
-        const draft = await draftSmsReply(row.conversation_id, `<follow-up: ${row.reason}>`);
+        const { draft, suggestedFollowup } = await draftSmsReply(row.conversation_id, `<follow-up: ${row.reason}>`);
         if (draft) {
-          await postImessageSuggestion({ channelId, conversationId: row.conversation_id, draft });
+          await postImessageSuggestion({ channelId, conversationId: row.conversation_id, draft, suggestedFollowup });
         }
       }
 

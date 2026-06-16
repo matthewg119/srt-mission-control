@@ -18,6 +18,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel, postInboundMessage } from "@/lib/sms-channel";
 import { draftSmsReply } from "@/lib/sms-ai-engine";
+import { appendApprovedReplyToVoice } from "@/lib/voice-ingest";
 import { postImessageSuggestion, cancelPendingSuggestion } from "@/lib/imessage-suggestion";
 import { markZohoHotLead } from "@/lib/zoho";
 import { slack } from "@/lib/slack-bot";
@@ -149,15 +150,29 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
     if (dupe) { duplicates++; continue; }
 
-    await supabaseAdmin.from("sms_messages").insert({
-      conversation_id: conv.id,
-      direction: isOutbound ? "outbound" : "inbound",
-      body,
-      close_stage: conv.close_stage,
-      imessage_guid: msg.guid,
-      metadata: { source: isOutbound ? "imessage_self" : "imessage" },
-    });
+    const { data: insertedMsg } = await supabaseAdmin
+      .from("sms_messages")
+      .insert({
+        conversation_id: conv.id,
+        direction: isOutbound ? "outbound" : "inbound",
+        body,
+        close_stage: conv.close_stage,
+        imessage_guid: msg.guid,
+        metadata: { source: isOutbound ? "imessage_self" : "imessage" },
+      })
+      .select("id")
+      .single();
     imported++;
+
+    // Learn from Matthew's real sent replies — pair with the inbound it answered.
+    if (isOutbound && insertedMsg?.id) {
+      appendApprovedReplyToVoice({
+        conversationId: conv.id as string,
+        outboundMessageId: insertedMsg.id as string,
+        reply: body,
+        stage: conv.close_stage,
+      }).catch((e) => console.error("[imessage/inbound] voice append failed:", e));
+    }
 
     // Ensure the per-lead Slack channel exists (also stores slack_channel_id).
     const displayName =
@@ -195,8 +210,8 @@ export async function POST(req: NextRequest) {
     }
 
     draftSmsReply(conv.id as string, body)
-      .then((draft) => {
-        if (draft) return postImessageSuggestion({ channelId, conversationId: conv.id as string, draft });
+      .then(({ draft, suggestedFollowup }) => {
+        if (draft) return postImessageSuggestion({ channelId, conversationId: conv.id as string, draft, suggestedFollowup });
       })
       .catch((err) => console.error("[imessage/inbound] suggestion failed:", err));
   }

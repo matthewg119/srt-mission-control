@@ -175,9 +175,9 @@ export async function POST(req: NextRequest) {
   // Suggestion drafting can be slow — fire it but await so the function (and the
   // serverless runtime) does not get torn down mid-draft. Always 200 after.
   try {
-    const draft = await draftSmsReply(conv.id as string, body);
+    const { draft, suggestedFollowup } = await draftSmsReply(conv.id as string, body);
     if (draft) {
-      await postImessageSuggestion({ channelId, conversationId: conv.id as string, draft });
+      await postImessageSuggestion({ channelId, conversationId: conv.id as string, draft, suggestedFollowup });
     }
   } catch (err) {
     console.error("[loopmessage/inbound] suggestion failed:", err);

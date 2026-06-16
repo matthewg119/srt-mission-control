@@ -5,9 +5,10 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel } from "@/lib/ai-intel/execute-action";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { ensureSmsChannel } from "@/lib/sms-channel";
-import { draftSmsReply } from "@/lib/sms-ai-engine";
+import { draftSmsReply, type SuggestedFollowup } from "@/lib/sms-ai-engine";
 import { buildSuggestionBlocks, cancelPendingSuggestion, autoSendEnabled, autoSendMinutes } from "@/lib/imessage-suggestion";
 import { dispatchOutbound } from "@/lib/imessage-transport";
+import { scheduleFollowup, autoScheduleFollowupOnSend } from "@/lib/imessage-followups";
 import { normalizePhone } from "@/lib/phone";
 
 export const runtime = "nodejs";
@@ -95,6 +96,8 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return openRemixModal({ slackTs, channel, triggerId: payload.trigger_id ?? "" });
     case "imsg_hold":
       return holdSuggestion({ slackTs, channel, userId });
+    case "imsg_followup":
+      return scheduleSuggestedFollowup({ slackTs, channel, userId });
     case "sequence_cancel":
       return sequenceCancel({ channel, userId, slackTs, actionValue: action.value });
     case "sequence_cat_mca":
@@ -358,11 +361,19 @@ async function getLastInbound(conversationId: string): Promise<string | null> {
   return (data?.body as string | undefined) ?? null;
 }
 
-async function applyNewDraft(channel: string, slackTs: string, draft: string, prevCount: number): Promise<void> {
+async function applyNewDraft(
+  channel: string,
+  slackTs: string,
+  draft: string,
+  prevCount: number,
+  followup?: SuggestedFollowup | null
+): Promise<void> {
   const count = prevCount + 1;
-  await slack.updateMessage(channel, slackTs, `💬 Suggested reply: ${draft}`, buildSuggestionBlocks(draft, count));
+  const fu = followup ?? null;
+  await slack.updateMessage(channel, slackTs, `💬 Suggested reply: ${draft}`, buildSuggestionBlocks(draft, count, fu));
   // A new draft gets a fresh auto-send window (created_at reset too, so the
-  // "lead replied again" guard compares against this regeneration).
+  // "lead replied again" guard compares against this regeneration). The follow-up
+  // suggestion is refreshed to match the new draft (cleared when none).
   const armed = autoSendEnabled();
   const autoSendAt = armed
     ? new Date(Date.now() + autoSendMinutes() * 60 * 1000).toISOString()
@@ -375,6 +386,8 @@ async function applyNewDraft(channel: string, slackTs: string, draft: string, pr
       created_at: new Date().toISOString(),
       auto_send_at: autoSendAt,
       auto_send_status: armed ? "pending" : "cancelled",
+      suggested_followup_days: fu?.days ?? null,
+      suggested_followup_reason: fu?.reason ?? null,
     })
     .eq("slack_ts", slackTs);
 }
@@ -402,17 +415,70 @@ async function holdSuggestion(args: { slackTs: string; channel: string; userId: 
   return NextResponse.json({ ok: true });
 }
 
+// 📅 Follow-up — one-click schedule the proposed follow-up NOW (without sending the
+// reply). Loads the pending draft for its conversation + suggested_followup_*,
+// resolves the contact, schedules via the shared follow-up system, then clears the
+// suggested_followup_* fields so the send path does NOT also auto-create it.
+async function scheduleSuggestedFollowup(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
+  const { data: draftRow } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("conversation_id, suggested_followup_days, suggested_followup_reason")
+    .eq("slack_ts", args.slackTs)
+    .maybeSingle();
+
+  const days = (draftRow?.suggested_followup_days as number | null) ?? null;
+  const reason = (draftRow?.suggested_followup_reason as string | null) ?? null;
+  if (!draftRow?.conversation_id || !days || !reason) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ No suggested follow-up to schedule.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const { data: conv } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("contact_id")
+    .eq("id", draftRow.conversation_id as string)
+    .maybeSingle();
+
+  if (!conv?.contact_id) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ No contact on this conversation — cannot schedule a follow-up.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const res = await scheduleFollowup({
+    contactId: conv.contact_id as string,
+    reason,
+    dueDate: `in ${days} days`,
+    createZohoTask: true,
+  });
+
+  if (!res.ok) {
+    await slack.postThreadReply(args.channel, args.slackTs, `⚠️ Could not schedule follow-up: ${res.error ?? "unknown"}`);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Clear the suggestion so the send path won't double-schedule it.
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ suggested_followup_days: null, suggested_followup_reason: null })
+    .eq("slack_ts", args.slackTs);
+
+  const due = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const when = due.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  await slack.postThreadReply(args.channel, args.slackTs, `📅 Follow-up scheduled for ${when} by <@${args.userId}>: ${reason}`);
+  return NextResponse.json({ ok: true });
+}
+
 async function regenerateSuggestion(args: { slackTs: string; channel: string }): Promise<NextResponse> {
   const s = await loadSuggestion(args.slackTs);
   if (!s) return NextResponse.json({ ok: true });
   const lastInbound = await getLastInbound(s.conversation_id);
   if (!lastInbound) return NextResponse.json({ ok: true });
-  const draft = await draftSmsReply(s.conversation_id, lastInbound);
+  const { draft, suggestedFollowup } = await draftSmsReply(s.conversation_id, lastInbound);
   if (!draft) {
     await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Couldn't regenerate a reply.");
     return NextResponse.json({ ok: true });
   }
-  await applyNewDraft(args.channel, args.slackTs, draft, (s.regenerate_count ?? 0));
+  await applyNewDraft(args.channel, args.slackTs, draft, (s.regenerate_count ?? 0), suggestedFollowup);
   return NextResponse.json({ ok: true });
 }
 
@@ -472,6 +538,9 @@ async function sendSuggestion(args: { slackTs: string; channel: string; userId: 
     ? `📨 Queued by <@${args.userId}> — the Mac will send it: ${body}`
     : `✅ Sent by <@${args.userId}>: ${body}`;
   await slack.updateMessage(args.channel, args.slackTs, confirm);
+  // Auto-schedule the proposed follow-up (best-effort) BEFORE retiring the draft,
+  // since cancelPendingSuggestion deletes the row we read it from.
+  await autoScheduleFollowupOnSend(conversationId);
   await cancelPendingSuggestion(conversationId);
 
   return NextResponse.json({ ok: true });
@@ -523,12 +592,12 @@ async function handleRemixSubmit(payload: SlackInteractivePayload): Promise<Next
   const lastInbound = await getLastInbound(s.conversation_id);
   if (!lastInbound) return NextResponse.json({ ok: true });
 
-  const draft = await draftSmsReply(s.conversation_id, lastInbound, instruction || undefined);
+  const { draft, suggestedFollowup } = await draftSmsReply(s.conversation_id, lastInbound, instruction || undefined);
   if (!draft) {
     await slack.postThreadReply(meta.channel, meta.slackTs, "⚠️ Couldn't remix a reply.");
     return NextResponse.json({ ok: true });
   }
-  await applyNewDraft(meta.channel, meta.slackTs, draft, (s.regenerate_count ?? 0));
+  await applyNewDraft(meta.channel, meta.slackTs, draft, (s.regenerate_count ?? 0), suggestedFollowup);
   return NextResponse.json({ response_action: "clear" });
 }
 

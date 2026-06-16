@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { dispatchOutbound, getTransport } from "@/lib/imessage-transport";
 import { autoSendMinutes } from "@/lib/imessage-suggestion";
+import { autoScheduleFollowupOnSend } from "@/lib/imessage-followups";
 import { normalizePhone } from "@/lib/phone";
 
 interface PendingDraftRow {
@@ -108,6 +109,11 @@ export async function sweepAutoSends(): Promise<{ sent: number }> {
         }
         continue;
       }
+
+      // Auto-schedule the proposed follow-up (best-effort) before marking sent.
+      // (If the user already clicked 📅 Follow-up, those fields were cleared so
+      // this is a no-op and we don't double-schedule.)
+      await autoScheduleFollowupOnSend(row.conversation_id);
 
       await setStatus(row.conversation_id, "sent");
       sent++;
