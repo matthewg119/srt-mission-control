@@ -28,6 +28,21 @@ export const SCENE_VARIATIONS: string[] = [
   "sitting in the driver seat of his truck, hand on the wheel, looking ahead.",
   "treating a green lawn with a handheld pest-control sprayer, mid-action.",
   "crouched inspecting the foundation of a home with a flashlight, focused.",
+  "loading a backpack sprayer into the bed of his service truck, mid-lift.",
+  "up on a residential roof checking the gutters, balanced and focused.",
+  "shaking hands with a homeowner on the doorstep, friendly smile.",
+  "reviewing his route on a tablet in the truck cab, mid-tap.",
+  "spraying along an indoor baseboard with a precision sprayer, crouched.",
+  "setting a rodent trap in a garage corner, hands working carefully.",
+  "power-spraying the perimeter of a lawn, mist catching the light.",
+  "writing on a clipboard beside the open truck door, pen in hand.",
+  "showing a junior tech how to inspect, pointing something out.",
+  "on the phone walking through a backyard, gesturing as he talks.",
+  "inspecting an attic with a flashlight, beam cutting the dark.",
+  "closing a deal with a firm handshake outside a home, confident.",
+  "pulling equipment from the truck at sunrise, first job of the day.",
+  "sealing a foundation gap with a caulk gun, kneeling and precise.",
+  "reviewing an invoice on a tablet at a kitchen counter with a client.",
 ];
 
 // Belief weighting per slot. Morning + midday push cold / top-of-funnel beliefs

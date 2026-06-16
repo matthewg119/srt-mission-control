@@ -9,6 +9,9 @@ import { slack } from "@/lib/slack-bot";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import type { SlackBlock } from "@/lib/slack-bot";
 
+const SUB_CHANNEL = () => process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
+const REQUIRED_BANK_STMTS = 3; // mirror src/lib/ai-intel/pre-approved-handler.ts
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -35,6 +38,10 @@ interface RevenueTableRow {
 
 interface BankMetrics {
   account_holder: string | null;
+  business_address: string | null;
+  business_city: string | null;
+  business_state: string | null;
+  business_zip: string | null;
   avg_monthly_deposits: number | null;
   avg_daily_balance: number | null;
   total_nsfs: number | null;
@@ -54,6 +61,10 @@ const METRICS_SYSTEM = `You extract structured underwriting metrics from a bank-
 Output JSON only, matching this shape:
 {
   "account_holder": string | null,
+  "business_address": string | null,
+  "business_city": string | null,
+  "business_state": string | null,
+  "business_zip": string | null,
   "avg_monthly_deposits": number | null,
   "avg_daily_balance": number | null,
   "total_nsfs": number | null,
@@ -76,6 +87,8 @@ Output JSON only, matching this shape:
 
 Rules:
 - account_holder: business or individual name from the Account Summary "Account Holder" field.
+- business_address / business_city / business_state / business_zip: the mailing
+  address printed on the statement header, split into parts. null when not shown.
 - null when the report doesn't state the value.
 - Dollar values as plain numbers (no $/commas).
 - red_flags: max 6 concise items from the report's Red Flags section.
@@ -88,6 +101,12 @@ Rules:
 
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as RequestBody;
+
+  // Mark the contact as "processing" as early as possible so the portal overlay
+  // (Part D) can start polling while the analyzer runs. Guarded — never throws.
+  if (body.contact_id) {
+    await setAnalysisStatus(body.contact_id, "processing");
+  }
 
   const fetched: Array<{ name: string; buffer: Buffer; drive_item_id?: string; source_url?: string }> = [];
 
@@ -121,6 +140,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (fetched.length === 0) {
+    if (body.contact_id) await setAnalysisStatus(body.contact_id, "error");
     return NextResponse.json({ error: "no PDFs to analyze (pass pdf_urls or drive_item_ids)" }, { status: 400 });
   }
 
@@ -188,12 +208,17 @@ export async function POST(req: NextRequest) {
   try {
     analysis = await analyzeBankStatements(fetched.map((f) => ({ name: f.name, buffer: f.buffer })));
   } catch (e) {
+    if (contactId) await setAnalysisStatus(contactId, "error");
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
   // Extract structured metrics (includes account_holder for deal lookup)
   let metrics: BankMetrics = {
     account_holder: null,
+    business_address: null,
+    business_city: null,
+    business_state: null,
+    business_zip: null,
     avg_monthly_deposits: null,
     avg_daily_balance: null,
     total_nsfs: null,
@@ -258,6 +283,12 @@ export async function POST(req: NextRequest) {
 
   // No deal found — post a Slack ask instead of a hard error
   if (!dealId) {
+    // Still backfill what we extracted onto the contact (if we resolved one) so the
+    // portal can pre-fill, and clear the processing overlay.
+    if (contactId) {
+      await backfillContactFromMetrics(contactId, metrics);
+      await setAnalysisStatus(contactId, "analyzed");
+    }
     const displayName = extractedName ?? merchantName ?? "Unknown Merchant";
     if (slackChannel && slackThreadTs) {
       await slack.postThreadReply(
@@ -442,6 +473,23 @@ export async function POST(req: NextRequest) {
     console.warn("[bank-statements] no deal thread yet — skipping approval card", { dealId });
   }
 
+  // ── Supabase contacts backfill + digestion pipeline ──
+  // Backfill extracted business data onto the contact so the portal can pre-fill the
+  // application (and skip re-asking), then mark the analysis complete so the portal
+  // processing overlay clears.
+  let completeness: CompletenessSummary | null = null;
+  if (contactId) {
+    await backfillContactFromMetrics(contactId, metrics);
+    completeness = await postCompletenessCheck({
+      contactId,
+      dealId,
+      businessName: merchantName,
+      monthsCovered: metrics.statement_months_covered,
+      statementsAnalyzed: fetched.length,
+    });
+    await setAnalysisStatus(contactId, "analyzed");
+  }
+
   return NextResponse.json({
     ok: true,
     deal_id: dealId,
@@ -454,7 +502,150 @@ export async function POST(req: NextRequest) {
     proposed_zoho_fields: zoho_fields,
     slack_thread_ts: dealAfter?.slack_thread_ts ?? null,
     approval_ts: approvalTs,
+    completeness,
   });
+}
+
+// ── Supabase contacts backfill + digestion helpers ──
+
+type AnalysisStatus = "processing" | "analyzed" | "error";
+
+async function setAnalysisStatus(contactId: string, status: AnalysisStatus): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("contacts")
+      .update({ bank_statement_analysis_status: status })
+      .eq("id", contactId);
+  } catch (e) {
+    console.warn("[bank-statements] setAnalysisStatus failed:", (e as Error).message);
+  }
+}
+
+/**
+ * Backfill extracted business data onto contacts WITHOUT clobbering good data:
+ * business_name + address parts only fill when currently blank; monthly_revenue /
+ * monthly_deposits + statement_months_covered always refresh from the latest analysis
+ * (these are derived numbers, not user-entered, so newer wins).
+ */
+async function backfillContactFromMetrics(contactId: string, metrics: BankMetrics): Promise<void> {
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from("contacts")
+      .select("business_name, biz_address, biz_city, biz_state, biz_zip")
+      .eq("id", contactId)
+      .maybeSingle();
+
+    const update: Record<string, unknown> = {};
+
+    const extractedName = metrics.account_holder?.trim();
+    if (extractedName && !existing?.business_name) update.business_name = extractedName;
+
+    if (metrics.business_address && !existing?.biz_address) update.biz_address = metrics.business_address;
+    if (metrics.business_city && !existing?.biz_city) update.biz_city = metrics.business_city;
+    if (metrics.business_state && !existing?.biz_state) update.biz_state = metrics.business_state;
+    if (metrics.business_zip && !existing?.biz_zip) update.biz_zip = metrics.business_zip;
+
+    if (metrics.avg_monthly_deposits != null) {
+      update.monthly_revenue = Math.round(metrics.avg_monthly_deposits);
+      update.monthly_deposits = Math.round(metrics.avg_monthly_deposits);
+    }
+    if (metrics.statement_months_covered.length > 0) {
+      update.statement_months_covered = metrics.statement_months_covered;
+    }
+
+    if (Object.keys(update).length > 0) {
+      await supabaseAdmin.from("contacts").update(update).eq("id", contactId);
+    }
+  } catch (e) {
+    console.warn("[bank-statements] backfillContactFromMetrics failed:", (e as Error).message);
+  }
+}
+
+interface CompletenessSummary {
+  ready: boolean;
+  statementsAnalyzed: number;
+  monthsCovered: number;
+  bankStmtsOnFile: number;
+  missing: string[];
+}
+
+/**
+ * Post a Vektor completeness check to #srt-sub summarizing what's present vs missing
+ * for shopping the deal. Reuses the ≥3-statements gate (REQUIRED_BANK_STMTS) by
+ * counting PDFs in the deal's OneDrive Bank Statements folder.
+ *
+ * TODO(digestion): this currently posts the completeness summary only. When ready,
+ * hook the full package builder here — call buildSubmissionPackage() from
+ * src/lib/ai-intel/deal-submission-builder.ts (it builds the revenue table, drafts the
+ * funder email, generates the Application PDF, uploads to Deals/{business}/Completed
+ * Package, inserts deal_submissions, and posts the approval card to #srt-sub). It is
+ * gated behind lender selection (lenderIds), which is chosen by a human reply in the
+ * #srt-sub thread today — so wiring it unconditionally here would auto-submit without
+ * funder selection. Left as a deliberate stub pending that lender-selection decision.
+ */
+async function postCompletenessCheck(args: {
+  contactId: string;
+  dealId: string;
+  businessName: string | null;
+  monthsCovered: string[];
+  statementsAnalyzed: number;
+}): Promise<CompletenessSummary> {
+  const business = args.businessName ?? "Merchant";
+
+  // ≥3-statements gate — count PDFs in Deals/{business}/Bank Statements (same as
+  // pre-approved-handler). Best-effort; falls back to the analyzed count.
+  let bankStmtsOnFile = args.statementsAnalyzed;
+  try {
+    const children = await microsoft.listFolderChildren(`Deals/${business}/Bank Statements`);
+    const pdfCount = children.filter((c) => c.isFile && /\.pdf$/i.test(c.name)).length;
+    if (pdfCount > 0) bankStmtsOnFile = pdfCount;
+  } catch (e) {
+    console.warn("[bank-statements] bank-stmt count failed:", (e as Error).message);
+  }
+
+  // Pull application fields from the contact to report what's still missing.
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select("business_name, biz_address, use_of_funds, amount_needed, signature")
+    .eq("id", args.contactId)
+    .maybeSingle();
+
+  const missing: string[] = [];
+  if (bankStmtsOnFile < REQUIRED_BANK_STMTS) missing.push(`${REQUIRED_BANK_STMTS - bankStmtsOnFile} more bank statement(s)`);
+  // MTD is pulled separately from Plaid (see TODO below) — flag when absent.
+  // NOTE(MTD): current-month-to-date deposits require Plaid /transactions data, which
+  // this analyzer route does not receive (it only gets statement PDFs / drive items).
+  // The Plaid path (exchangePlaidPublicToken in srt-portal) is the integration point
+  // that can feed MTD in. Until that path calls this route with MTD, we flag it as a
+  // gap rather than fabricate a number.
+  missing.push("MTD deposits (pull via Plaid)");
+  if (!contact?.use_of_funds) missing.push("use of funds");
+  if (!contact?.amount_needed) missing.push("requested amount");
+  if (!contact?.signature) missing.push("application signature");
+
+  const ready = missing.length === 0;
+  const summary: CompletenessSummary = {
+    ready,
+    statementsAnalyzed: args.statementsAnalyzed,
+    monthsCovered: args.monthsCovered.length,
+    bankStmtsOnFile,
+    missing,
+  };
+
+  const channel = SUB_CHANNEL();
+  if (channel) {
+    const monthsStr = args.monthsCovered.length > 0 ? args.monthsCovered.join(", ") : "unspecified";
+    const text = ready
+      ? `✅ *${business}* — ${bankStmtsOnFile} months + MTD + application fields → ready to shop.\nMonths: ${monthsStr}`
+      : `🟡 *${business}* — statements analyzed (${args.statementsAnalyzed}; months: ${monthsStr}).\nMissing before we can shop: ${missing.join(", ")}.`;
+    try {
+      await slack.postMessage(channel, text);
+    } catch (e) {
+      console.warn("[bank-statements] completeness post failed:", (e as Error).message);
+    }
+  }
+
+  return summary;
 }
 
 function chunkText(text: string, max: number): string[] {

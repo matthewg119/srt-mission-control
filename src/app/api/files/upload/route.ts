@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     }
 
     const folderName = (businessName || "Unknown Business").replace(/[<>:"/\\|?*]/g, "_");
-    const results: Array<{ fileName: string; oneDrive?: string; error?: string }> = [];
+    const results: Array<{ fileName: string; oneDrive?: string; driveItemId?: string; error?: string }> = [];
 
     let folderCreated = false;
     try {
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     for (const file of files) {
-      const result: { fileName: string; oneDrive?: string; error?: string } = {
+      const result: { fileName: string; oneDrive?: string; driveItemId?: string; error?: string } = {
         fileName: file.name,
       };
 
@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
             file.type || "application/octet-stream"
           );
           result.oneDrive = driveResult.webUrl;
+          result.driveItemId = driveResult.id;
         } catch (err) {
           console.error("OneDrive upload failed:", err instanceof Error ? err.message : err);
         }
@@ -99,6 +100,31 @@ export async function POST(request: NextRequest) {
         `${businessName || "Applicant"} uploaded ${files.length} document(s). Ready for review.`,
         "files/upload",
         "info"
+      );
+    }
+
+    // Kick off the bank-statement analyzer (digestion pipeline) once files have
+    // landed in OneDrive. Non-blocking — never delays the upload response. The
+    // analyzer backfills extracted business data onto the contact, posts a
+    // completeness check to #srt-sub, and sets bank_statement_analysis_status so the
+    // portal processing overlay can poll it. Pass the OneDrive drive item ids so the
+    // analyzer can re-download the stored PDFs with an authed Graph call (webUrls
+    // aren't directly downloadable). Fires even without a contactId — the analyzer
+    // resolves the deal by merchant_name in that case.
+    const driveItemIds = results.map((r) => r.driveItemId).filter((id): id is string => Boolean(id));
+    if (driveItemIds.length > 0 && (contactId || businessName)) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+      fetch(`${appUrl}/api/agent/bank-statements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "portal",
+          contact_id: contactId || undefined,
+          merchant_name: businessName || undefined,
+          drive_item_ids: driveItemIds,
+        }),
+      }).catch((err) =>
+        console.error("[files/upload] analyzer trigger failed:", err instanceof Error ? err.message : err)
       );
     }
 

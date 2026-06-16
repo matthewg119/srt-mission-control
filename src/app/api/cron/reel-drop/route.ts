@@ -7,6 +7,7 @@ import {
   STYLE_VERSION,
   SOUL_SIZE,
   SOUL_QUALITY,
+  IMAGES_PER_DROP,
   buildImagePrompt,
   slotFromEtHour,
   type ReelSlot,
@@ -49,8 +50,16 @@ function resolveSlot(req: NextRequest): ReelSlot {
   return slotFromEtHour(etHour());
 }
 
-function pickScene(): string {
-  return SCENE_VARIATIONS[Math.floor(Math.random() * SCENE_VARIATIONS.length)];
+// Sample `n` DISTINCT scenes (without replacement) so the images in a single drop
+// never repeat the same scene. Shuffles a copy of SCENE_VARIATIONS (Fisher-Yates)
+// and takes the first `n`; caps at the list length if asked for more than exist.
+function pickDistinctScenes(n: number): string[] {
+  const pool = [...SCENE_VARIATIONS];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, Math.min(n, pool.length));
 }
 
 async function handle(req: NextRequest) {
@@ -67,7 +76,12 @@ async function handle(req: NextRequest) {
 
   const date = todayLabel();
   const belief = await selectBeliefForSlot(slot);
-  const scene = pickScene();
+  // One drop = IMAGES_PER_DROP distinct scenes (sampled without replacement) so the
+  // operator renders varied b-roll, never the same scene twice in one drop. The first
+  // scene is the canonical one recorded against the drop thread; the rest are posted
+  // as additional prompt variants in the same thread reply.
+  const scenes = pickDistinctScenes(IMAGES_PER_DROP);
+  const scene = scenes[0];
   const imagePrompt = buildImagePrompt(scene);
   const soulId = process.env.HIGGSFIELD_SOUL_ID || "(set HIGGSFIELD_SOUL_ID)";
 
@@ -86,19 +100,19 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "slack_post_failed" }, { status: 502 });
   }
 
+  const promptBlocks = scenes
+    .map((s, i) => [`*Prompt ${i + 1} of ${scenes.length}:*`, "```", buildImagePrompt(s), "```"].join("\n"))
+    .join("\n");
   await slack.postThreadReply(
     channel,
     threadTs,
     [
-      "🖼️ *Generate this image* in Higgsfield (Soul V2 / `text2image_soul`):",
+      `🖼️ *Generate ${scenes.length} image${scenes.length > 1 ? "s" : ""}* in Higgsfield (Soul V2 / \`text2image_soul\`) — distinct scenes, same character:`,
       `• character *Vargas* (soul_id \`${soulId}\`) · ${SOUL_SIZE} · quality ${SOUL_QUALITY}`,
       "",
-      "*Prompt:*",
-      "```",
-      imagePrompt,
-      "```",
+      promptBlocks,
       "",
-      "Then upload the picture in this thread and I'll give you 3 headline options.",
+      "Then upload the picture you like best in this thread and I'll give you 3 headline options.",
     ].join("\n")
   );
 
@@ -122,6 +136,7 @@ async function handle(req: NextRequest) {
       belief: belief.number,
       belief_title: belief.title,
       scene,
+      scenes,
       style_version: STYLE_VERSION,
       duration_ms: Date.now() - start,
     },
