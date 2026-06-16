@@ -6,11 +6,26 @@
 // mirroring all happen server-side; this script just ships rows.
 //
 // Pure Node + the system sqlite3 CLI (/usr/bin/sqlite3, ships with macOS). No
-// native modules, no BlueBubbles. Outbound is NOT handled here — replies are
-// manual copy/paste from the Messages app.
+// native modules, no BlueBubbles.
+//
+// OUTBOUND (Option A — no LoopMessage): in live mode, after each inbound poll the
+// bridge also drains the server's outbox. It GETs /api/imessage/outbox, sends each
+// queued message via AppleScript to Messages, then POSTs an ack. The sent message
+// then shows up as is_from_me=1 in chat.db, so the SAME inbound poll mirrors it
+// into Slack + logs sms_messages — outbound needs no extra server write here.
+//
+// AppleScript send (iMessage ONLY — green-bubble SMS is not supported):
+//   on run {targetBuddy, targetText}
+//     tell application "Messages"
+//       send targetText to participant targetBuddy of (1st account whose service type = iMessage)
+//     end tell
+//   end run
+// Args are passed via osascript argv (NOT string-interpolated) so quotes/newlines
+// in the body can't break the script. A buddy-of-service fallback is tried if the
+// participant form fails.
 //
 // Usage:
-//   node imessage-bridge.mjs            # live: poll every POLL_MS, ship new rows
+//   node imessage-bridge.mjs            # live: poll every POLL_MS, ship + drain outbox
 //   node imessage-bridge.mjs --once     # one poll, then exit
 //   node imessage-bridge.mjs --backfill # ship ALL history once, then finalize
 //   node imessage-bridge.mjs --doctor   # preflight checks; report PASS/FAIL to #srt-sub
@@ -18,6 +33,7 @@
 // Env:
 //   IMESSAGE_WEBHOOK_SECRET   (required) shared secret, must match the server
 //   IMESSAGE_API_URL          default https://mission.srtagency.com/api/imessage/inbound
+//   IMESSAGE_OUTBOX_URL       default = IMESSAGE_API_URL with /inbound → /outbox
 //   IMESSAGE_POLL_MS          default 10000
 //   IMESSAGE_CHAT_DB          default ~/Library/Messages/chat.db
 //   IMESSAGE_STATE_FILE       default ~/.srt-imessage-bridge-state.json
@@ -29,6 +45,7 @@ import { join } from "node:path";
 
 const SECRET = process.env.IMESSAGE_WEBHOOK_SECRET;
 const API_URL = process.env.IMESSAGE_API_URL || "https://mission.srtagency.com/api/imessage/inbound";
+const OUTBOX_URL = process.env.IMESSAGE_OUTBOX_URL || API_URL.replace("/inbound", "/outbox");
 const POLL_MS = parseInt(process.env.IMESSAGE_POLL_MS || "10000", 10);
 const CHAT_DB = process.env.IMESSAGE_CHAT_DB || join(homedir(), "Library", "Messages", "chat.db");
 const STATE_FILE = process.env.IMESSAGE_STATE_FILE || join(homedir(), ".srt-imessage-bridge-state.json");
@@ -179,6 +196,71 @@ async function poll({ backfill = false } = {}) {
   return total;
 }
 
+// ── Outbound (outbox drain) ─────────────────────────────────────────────────
+// Send one message via Messages.app over iMessage. Args go through osascript argv
+// (NOT string-interpolated) so quotes/newlines in the body can't break the script.
+// iMessage ONLY — green-bubble SMS via the SMS service is not handled here.
+function sendViaMessages(phone, text) {
+  const script =
+    'on run {targetBuddy, targetText}\n' +
+    '  tell application "Messages"\n' +
+    '    try\n' +
+    '      set targetService to 1st account whose service type = iMessage\n' +
+    '      send targetText to participant targetBuddy of targetService\n' +
+    '    on error\n' +
+    '      send targetText to buddy targetBuddy of service "iMessage"\n' +
+    '    end try\n' +
+    '  end tell\n' +
+    'end run';
+  // osascript -e <script> -- <arg1> <arg2> passes args to the `on run` handler.
+  execFileSync("/usr/bin/osascript", ["-e", script, phone, text], { timeout: 30000 });
+}
+
+// GET the server outbox, send each queued message, and ack the result. Resilient:
+// a failure on one message never crashes the loop — it's acked as failed and the
+// drain continues.
+async function pollOutbox() {
+  if (!SECRET) return;
+  let messages = [];
+  try {
+    const res = await fetch(OUTBOX_URL, {
+      method: "GET",
+      headers: { "X-Imessage-Secret": SECRET },
+    });
+    if (!res.ok) { console.error(`[bridge] outbox GET ${res.status}`); return; }
+    const json = await res.json().catch(() => ({}));
+    messages = Array.isArray(json.messages) ? json.messages : [];
+  } catch (e) {
+    console.error("[bridge] outbox GET failed:", e.message);
+    return;
+  }
+
+  for (const m of messages) {
+    if (!m?.id || !m?.phone || !m?.body) continue;
+    try {
+      sendViaMessages(m.phone, m.body);
+      await ackOutbox(m.id, true);
+      console.log(`[bridge] outbox sent ${m.id} → ${m.phone}`);
+    } catch (e) {
+      const err = (e && e.message) ? e.message : String(e);
+      console.error(`[bridge] outbox send failed ${m.id}:`, err);
+      await ackOutbox(m.id, false, err);
+    }
+  }
+}
+
+async function ackOutbox(id, ok, error) {
+  try {
+    await fetch(OUTBOX_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Imessage-Secret": SECRET },
+      body: JSON.stringify(error ? { id, ok, error } : { id, ok }),
+    });
+  } catch (e) {
+    console.error(`[bridge] outbox ack failed ${id}:`, e.message);
+  }
+}
+
 // Preflight: run checks, print locally, and POST the report so it lands in #srt-sub.
 async function doctor() {
   const checks = [];
@@ -250,9 +332,10 @@ async function main() {
   } else if (args.includes("--once")) {
     await poll();
   } else {
-    console.log(`[bridge] live mode — polling ${CHAT_DB} every ${POLL_MS}ms`);
+    console.log(`[bridge] live mode — polling ${CHAT_DB} every ${POLL_MS}ms (inbound + outbox)`);
     for (;;) {
       try { await poll(); } catch (e) { console.error("[bridge] poll error:", e.message); }
+      try { await pollOutbox(); } catch (e) { console.error("[bridge] outbox error:", e.message); }
       await new Promise((r) => setTimeout(r, POLL_MS));
     }
   }

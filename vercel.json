@@ -55,6 +55,14 @@
     {
       "path": "/api/cron/reel-drop?slot=evening",
       "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/cron/sms-autosend",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/sms-followups",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

@@ -4,10 +4,11 @@ import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { STAGE_PIPELINES } from "@/config/stage-display";
 import { sendEvent } from "./meta-capi";
 import { analyzeBankStatements } from "./ai-intel/bank-statement-analyzer";
-import { sendImessage } from "./loopmessage";
 import { normalizePhone } from "./phone";
 import { slack } from "./slack-bot";
 import { cancelPendingSuggestion } from "./imessage-suggestion";
+import { dispatchOutbound } from "./imessage-transport";
+import { scheduleFollowup } from "./imessage-followups";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
 export interface ToolExecutionResult {
@@ -98,6 +99,33 @@ export const AI_TOOLS = [
         },
       },
       required: ["contact_id", "message"],
+    },
+  },
+  {
+    name: "schedule_followup",
+    description:
+      "Schedule a follow-up reminder for a contact on a future date. On the due date this auto-posts a reminder header AND a Vektor-drafted check-in suggestion card into the lead's OWN Slack channel (which then arms the 2-minute auto-send), and it is logged as a Zoho task tied to the lead. Use when asked to 'follow up with [contact] tomorrow', 'remind me to check on [name] in 3 days', or 'set a follow-up for [date]'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_id: {
+          type: "string",
+          description: "The contact ID to schedule the follow-up for",
+        },
+        reason: {
+          type: "string",
+          description: "Short reason / context for the follow-up, e.g. 'check if they sent statements'",
+        },
+        due_date: {
+          type: "string",
+          description: "When to follow up. Accepts ISO datetime, YYYY-MM-DD, or relative phrases like 'tomorrow', 'in 3 days', 'next week'.",
+        },
+        create_zoho_task: {
+          type: "boolean",
+          description: "Whether to also log a Zoho task. Default true.",
+        },
+      },
+      required: ["contact_id", "reason", "due_date"],
     },
   },
   {
@@ -376,6 +404,8 @@ export async function executeTool(
         content = await moveDeal(dealId as string, input.new_stage as string); break;
       case "send_sms":
         content = await sendSms(input.contact_id as string, input.message as string); break;
+      case "schedule_followup":
+        content = await scheduleFollowupTool(input.contact_id as string, input.reason as string, input.due_date as string, input.create_zoho_task as boolean | undefined); break;
       case "send_email":
         content = await sendEmail(input.contact_id as string, input.subject as string, input.message as string); break;
       case "get_templates":
@@ -630,7 +660,7 @@ async function sendSms(contactId: string, message: string): Promise<string> {
 
     const { data: conv } = await supabaseAdmin
       .from("sms_conversations")
-      .select("id, outcome, close_stage, slack_channel_id")
+      .select("id, contact_id, outcome, close_stage, slack_channel_id")
       .eq("contact_id", contactId)
       .maybeSingle();
 
@@ -644,48 +674,65 @@ async function sendSms(contactId: string, message: string): Promise<string> {
       return JSON.stringify({ error: "This conversation is marked dead — cannot send." });
     }
 
-    // 24/7 outbound via LoopMessage (cloud iMessage — no Mac needed). This tool
-    // is only reached on an explicit instruction/approval through the AI tool
-    // loop (the same gate as before — Vektor never auto-texts unattended), so
-    // re-enabling the transport does not change WHO triggers a send, only HOW it
-    // is delivered.
+    // Outbound via the active transport (Mac outbox by default, or LoopMessage).
+    // This tool is only reached on an explicit instruction/approval through the AI
+    // tool loop (Vektor never auto-texts unattended), so the transport switch
+    // changes only HOW it is delivered, not WHO triggers a send.
     const phone = normalizePhone(rawPhone);
     if (!phone) {
       return JSON.stringify({ error: "Contact phone is not a valid number." });
     }
 
-    const send = await sendImessage({ to: phone, text: message });
-    if (!send.ok) {
-      return JSON.stringify({ error: `LoopMessage send failed: ${send.error ?? "unknown"}` });
+    const result = await dispatchOutbound({
+      conversationId: conv.id as string,
+      contactId: (conv.contact_id as string | null) ?? contactId,
+      phone,
+      body: message,
+      source: "ai_tool",
+    });
+    if (!result.ok) {
+      return JSON.stringify({ error: `Send failed: ${result.error ?? "unknown"}` });
     }
 
-    // Log the outbound into sms_messages (LoopMessage sends go through our API,
-    // so we record our own outbound here — there is no inbound is_from_me echo).
-    await supabaseAdmin.from("sms_messages").insert({
-      conversation_id: conv.id,
-      direction: "outbound",
-      body: message,
-      close_stage: conv.close_stage,
-      imessage_guid: send.messageId ?? null,
-      metadata: { source: "loopmessage_send", message_id: send.messageId ?? null },
-    });
-
-    await supabaseAdmin
-      .from("sms_conversations")
-      .update({ last_outbound_at: new Date().toISOString() })
-      .eq("id", conv.id);
-
-    // Mirror the sent message into the lead's Slack channel (same model the
-    // imessage route used for an outbound/is_from_me reply).
-    if (conv.slack_channel_id) {
+    // On the Mac transport the bridge's is_from_me read loop mirrors the sent
+    // message into Slack + logs sms_messages, so we don't post here (avoids a
+    // double-mirror). On LoopMessage dispatchOutbound already logged sms_messages;
+    // mirror the confirmation + retire any live suggestion.
+    if (!result.queued && conv.slack_channel_id) {
       const preview = message.length > 200 ? message.slice(0, 200) + "…" : message;
-      await slack.postMessage(conv.slack_channel_id as string, `✅ Sent (LoopMessage): "${preview}"`);
+      await slack.postMessage(conv.slack_channel_id as string, `✅ Sent (iMessage): "${preview}"`);
       await cancelPendingSuggestion(conv.id as string);
     }
 
-    return JSON.stringify({ success: true, message: `Text sent to ${phone} via LoopMessage.` });
+    return JSON.stringify({
+      success: true,
+      message: result.queued
+        ? `Text queued for ${phone} — the Mac will deliver it.`
+        : `Text sent to ${phone}.`,
+    });
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "SMS send failed" });
+  }
+}
+
+async function scheduleFollowupTool(
+  contactId: string,
+  reason: string,
+  dueDate: string,
+  createZohoTask?: boolean
+): Promise<string> {
+  try {
+    const result = await scheduleFollowup({ contactId, reason, dueDate, createZohoTask });
+    if (!result.ok) {
+      return JSON.stringify({ error: result.error ?? "Failed to schedule follow-up." });
+    }
+    return JSON.stringify({
+      success: true,
+      followup_id: result.followupId,
+      message: `Follow-up scheduled. On the due date a reminder + check-in draft will post in the lead's Slack channel${createZohoTask === false ? "" : " and a Zoho task was logged"}.`,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to schedule follow-up" });
   }
 }
 

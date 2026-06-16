@@ -639,3 +639,51 @@ export async function markZohoHotLead(
     console.error("[markZohoHotLead] unexpected error:", err);
   }
 }
+
+/**
+ * Create a Zoho Task associated with a Lead. Used by the iMessage follow-up
+ * scheduler so a scheduled reminder is also visible in the CRM. Never throws —
+ * returns the new task id, or null + logs on failure.
+ */
+export async function createZohoTask(opts: {
+  leadId: string;
+  subject: string;
+  dueDate: string;        // YYYY-MM-DD
+  description?: string;
+  priority?: string;      // High | Highest | Normal | Low | Lowest
+}): Promise<string | null> {
+  try {
+    const task: Record<string, unknown> = {
+      Subject: opts.subject,
+      Due_Date: opts.dueDate,
+      Status: "Not Started",
+      Priority: opts.priority || "Normal",
+      What_Id: opts.leadId,
+      $se_module: "Leads",
+    };
+    if (opts.description) task.Description = opts.description;
+
+    const result = (await zohoRequest("POST", "/Tasks", { data: [task] })) as {
+      data?: Array<{ code?: string; status?: string; message?: string; details?: { id?: string } }>;
+    };
+    const created = result.data?.[0];
+    if (created?.status === "success" && created.details?.id) {
+      return created.details.id;
+    }
+    console.error("[createZohoTask] non-success:", JSON.stringify(created));
+    return null;
+  } catch (e) {
+    console.error("[createZohoTask] failed:", (e as Error).message);
+    return null;
+  }
+}
+
+/** Mark a Zoho Task Completed. Best-effort — never throws. */
+export async function closeZohoTask(taskId: string): Promise<void> {
+  if (!taskId) return;
+  try {
+    await zohoRequest("PUT", "/Tasks", { data: [{ id: taskId, Status: "Completed" }] });
+  } catch (e) {
+    console.error("[closeZohoTask] failed:", (e as Error).message);
+  }
+}

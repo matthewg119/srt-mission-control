@@ -6,8 +6,8 @@ import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel 
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 import { draftSmsReply } from "@/lib/sms-ai-engine";
-import { buildSuggestionBlocks, cancelPendingSuggestion } from "@/lib/imessage-suggestion";
-import { sendImessage } from "@/lib/loopmessage";
+import { buildSuggestionBlocks, cancelPendingSuggestion, autoSendEnabled, autoSendMinutes } from "@/lib/imessage-suggestion";
+import { dispatchOutbound } from "@/lib/imessage-transport";
 import { normalizePhone } from "@/lib/phone";
 
 export const runtime = "nodejs";
@@ -93,6 +93,8 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return regenerateSuggestion({ slackTs, channel });
     case "imsg_remix":
       return openRemixModal({ slackTs, channel, triggerId: payload.trigger_id ?? "" });
+    case "imsg_hold":
+      return holdSuggestion({ slackTs, channel, userId });
     case "sequence_cancel":
       return sequenceCancel({ channel, userId, slackTs, actionValue: action.value });
     case "sequence_cat_mca":
@@ -359,10 +361,45 @@ async function getLastInbound(conversationId: string): Promise<string | null> {
 async function applyNewDraft(channel: string, slackTs: string, draft: string, prevCount: number): Promise<void> {
   const count = prevCount + 1;
   await slack.updateMessage(channel, slackTs, `💬 Suggested reply: ${draft}`, buildSuggestionBlocks(draft, count));
+  // A new draft gets a fresh auto-send window (created_at reset too, so the
+  // "lead replied again" guard compares against this regeneration).
+  const armed = autoSendEnabled();
+  const autoSendAt = armed
+    ? new Date(Date.now() + autoSendMinutes() * 60 * 1000).toISOString()
+    : null;
   await supabaseAdmin
     .from("sms_pending_drafts")
-    .update({ draft_body: draft, regenerate_count: count })
+    .update({
+      draft_body: draft,
+      regenerate_count: count,
+      created_at: new Date().toISOString(),
+      auto_send_at: autoSendAt,
+      auto_send_status: armed ? "pending" : "cancelled",
+    })
     .eq("slack_ts", slackTs);
+}
+
+// ✋ Hold — cancel the auto-send timer for this draft and update the card.
+// The suggestion stays available; it just won't fire on its own.
+async function holdSuggestion(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
+  const { data: draftRow } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("draft_body")
+    .eq("slack_ts", args.slackTs)
+    .maybeSingle();
+
+  await supabaseAdmin
+    .from("sms_pending_drafts")
+    .update({ auto_send_status: "cancelled" })
+    .eq("slack_ts", args.slackTs);
+
+  const body = (draftRow?.draft_body as string | undefined) ?? "";
+  await slack.updateMessage(
+    args.channel,
+    args.slackTs,
+    `✋ Auto-send held by <@${args.userId}>.${body ? `\n\`\`\`${body}\`\`\`` : ""}`
+  );
+  return NextResponse.json({ ok: true });
 }
 
 async function regenerateSuggestion(args: { slackTs: string; channel: string }): Promise<NextResponse> {
@@ -379,10 +416,12 @@ async function regenerateSuggestion(args: { slackTs: string; channel: string }):
   return NextResponse.json({ ok: true });
 }
 
-// ✅ Send — deliver the current suggested reply via LoopMessage (24/7 cloud
-// iMessage, no Mac). Gated by this explicit human click; Vektor never auto-sends.
-// Logs the outbound into sms_messages, updates the card to a sent state, and
-// retires the pending suggestion.
+// ✅ Send — deliver the current suggested reply via the active transport.
+// Gated by this explicit human click. With IMESSAGE_TRANSPORT='mac' (default) the
+// reply is queued into sms_outbox and the Mac bridge delivers it (the bridge's
+// is_from_me read loop then mirrors it into Slack + logs sms_messages, so we don't
+// log here). With 'loopmessage' it sends immediately and dispatchOutbound logs the
+// outbound. Either way the card is retired and the live suggestion cancelled.
 async function sendSuggestion(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
   const { data: draftRow } = await supabaseAdmin
     .from("sms_pending_drafts")
@@ -400,7 +439,7 @@ async function sendSuggestion(args: { slackTs: string; channel: string; userId: 
 
   const { data: conv } = await supabaseAdmin
     .from("sms_conversations")
-    .select("id, phone, outcome, close_stage")
+    .select("id, phone, contact_id, outcome, close_stage")
     .eq("id", conversationId)
     .maybeSingle();
 
@@ -414,28 +453,25 @@ async function sendSuggestion(args: { slackTs: string; channel: string; userId: 
   }
 
   const phone = normalizePhone(conv.phone as string) ?? (conv.phone as string);
-  const send = await sendImessage({ to: phone, text: body });
-  if (!send.ok) {
-    await slack.postThreadReply(args.channel, args.slackTs, `⚠️ LoopMessage send failed: ${send.error ?? "unknown"}`);
+  const result = await dispatchOutbound({
+    conversationId,
+    contactId: (conv.contact_id as string | null) ?? null,
+    phone,
+    body,
+    source: "manual_send",
+  });
+  if (!result.ok) {
+    await slack.postThreadReply(args.channel, args.slackTs, `⚠️ Send failed: ${result.error ?? "unknown"}`);
     return NextResponse.json({ ok: true });
   }
 
-  await supabaseAdmin.from("sms_messages").insert({
-    conversation_id: conversationId,
-    direction: "outbound",
-    body,
-    close_stage: conv.close_stage,
-    imessage_guid: send.messageId ?? null,
-    metadata: { source: "loopmessage_send", sent_by: args.userId, message_id: send.messageId ?? null },
-  });
-
-  await supabaseAdmin
-    .from("sms_conversations")
-    .update({ last_outbound_at: new Date().toISOString() })
-    .eq("id", conversationId);
-
   // Replace the card with a sent confirmation and retire the live suggestion.
-  await slack.updateMessage(args.channel, args.slackTs, `✅ Sent by <@${args.userId}>: ${body}`);
+  // On the Mac transport delivery is async (the bridge confirms via its read
+  // loop), so the card reflects "queued".
+  const confirm = result.queued
+    ? `📨 Queued by <@${args.userId}> — the Mac will send it: ${body}`
+    : `✅ Sent by <@${args.userId}>: ${body}`;
+  await slack.updateMessage(args.channel, args.slackTs, confirm);
   await cancelPendingSuggestion(conversationId);
 
   return NextResponse.json({ ok: true });
