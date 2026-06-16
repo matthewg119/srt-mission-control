@@ -6,7 +6,9 @@ import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel 
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 import { draftSmsReply } from "@/lib/sms-ai-engine";
-import { buildSuggestionBlocks } from "@/lib/imessage-suggestion";
+import { buildSuggestionBlocks, cancelPendingSuggestion } from "@/lib/imessage-suggestion";
+import { sendImessage } from "@/lib/loopmessage";
+import { normalizePhone } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,6 +87,8 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return openEditModal({ slackTs, channel, userId, triggerId: payload.trigger_id ?? "" });
     case "sms_create_channel":
       return createSmsChannelFromSlack({ slackTs, channel, userId, contactId: action.value });
+    case "imsg_send":
+      return sendSuggestion({ slackTs, channel, userId });
     case "imsg_regenerate":
       return regenerateSuggestion({ slackTs, channel });
     case "imsg_remix":
@@ -372,6 +376,68 @@ async function regenerateSuggestion(args: { slackTs: string; channel: string }):
     return NextResponse.json({ ok: true });
   }
   await applyNewDraft(args.channel, args.slackTs, draft, (s.regenerate_count ?? 0));
+  return NextResponse.json({ ok: true });
+}
+
+// ✅ Send — deliver the current suggested reply via LoopMessage (24/7 cloud
+// iMessage, no Mac). Gated by this explicit human click; Vektor never auto-sends.
+// Logs the outbound into sms_messages, updates the card to a sent state, and
+// retires the pending suggestion.
+async function sendSuggestion(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
+  const { data: draftRow } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("conversation_id, draft_body")
+    .eq("slack_ts", args.slackTs)
+    .maybeSingle();
+
+  if (!draftRow?.conversation_id || !draftRow.draft_body) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ No suggestion found to send.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const conversationId = draftRow.conversation_id as string;
+  const body = draftRow.draft_body as string;
+
+  const { data: conv } = await supabaseAdmin
+    .from("sms_conversations")
+    .select("id, phone, outcome, close_stage")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (!conv?.phone) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ No phone on this conversation — cannot send.");
+    return NextResponse.json({ ok: true });
+  }
+  if (conv.outcome === "dead") {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Conversation is marked dead — not sending.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const phone = normalizePhone(conv.phone as string) ?? (conv.phone as string);
+  const send = await sendImessage({ to: phone, text: body });
+  if (!send.ok) {
+    await slack.postThreadReply(args.channel, args.slackTs, `⚠️ LoopMessage send failed: ${send.error ?? "unknown"}`);
+    return NextResponse.json({ ok: true });
+  }
+
+  await supabaseAdmin.from("sms_messages").insert({
+    conversation_id: conversationId,
+    direction: "outbound",
+    body,
+    close_stage: conv.close_stage,
+    imessage_guid: send.messageId ?? null,
+    metadata: { source: "loopmessage_send", sent_by: args.userId, message_id: send.messageId ?? null },
+  });
+
+  await supabaseAdmin
+    .from("sms_conversations")
+    .update({ last_outbound_at: new Date().toISOString() })
+    .eq("id", conversationId);
+
+  // Replace the card with a sent confirmation and retire the live suggestion.
+  await slack.updateMessage(args.channel, args.slackTs, `✅ Sent by <@${args.userId}>: ${body}`);
+  await cancelPendingSuggestion(conversationId);
+
   return NextResponse.json({ ok: true });
 }
 

@@ -4,6 +4,10 @@ import { renderTemplate, type TemplateContext } from "./template-renderer";
 import { STAGE_PIPELINES } from "@/config/stage-display";
 import { sendEvent } from "./meta-capi";
 import { analyzeBankStatements } from "./ai-intel/bank-statement-analyzer";
+import { sendImessage } from "./loopmessage";
+import { normalizePhone } from "./phone";
+import { slack } from "./slack-bot";
+import { cancelPendingSuggestion } from "./imessage-suggestion";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
 export interface ToolExecutionResult {
@@ -615,17 +619,18 @@ async function sendSms(contactId: string, message: string): Promise<string> {
   try {
     const { data: contact } = await supabaseAdmin
       .from("contacts")
-      .select("phone, first_name, last_name")
+      .select("phone, mobile_phone, first_name, last_name")
       .eq("id", contactId)
       .maybeSingle();
 
-    if (!contact?.phone) {
+    const rawPhone = contact?.phone || contact?.mobile_phone || null;
+    if (!rawPhone) {
       return JSON.stringify({ error: "Contact not found or has no phone number on file." });
     }
 
     const { data: conv } = await supabaseAdmin
       .from("sms_conversations")
-      .select("id, outcome")
+      .select("id, outcome, close_stage, slack_channel_id")
       .eq("contact_id", contactId)
       .maybeSingle();
 
@@ -639,14 +644,46 @@ async function sendSms(contactId: string, message: string): Promise<string> {
       return JSON.stringify({ error: "This conversation is marked dead — cannot send." });
     }
 
-    // Outbound is manual now: there is no programmatic send transport (LoopMessage
-    // was removed). Texting happens in the Mac's Messages app; the iMessage bridge
-    // mirrors both sides into the lead's Slack channel. Tell the caller to reply there.
-    return JSON.stringify({
-      error:
-        "Programmatic SMS send is disabled — reply to this merchant from the Messages app on the Mac. " +
-        "Their conversation is mirrored in the lead's Slack channel with a suggested reply you can copy.",
+    // 24/7 outbound via LoopMessage (cloud iMessage — no Mac needed). This tool
+    // is only reached on an explicit instruction/approval through the AI tool
+    // loop (the same gate as before — Vektor never auto-texts unattended), so
+    // re-enabling the transport does not change WHO triggers a send, only HOW it
+    // is delivered.
+    const phone = normalizePhone(rawPhone);
+    if (!phone) {
+      return JSON.stringify({ error: "Contact phone is not a valid number." });
+    }
+
+    const send = await sendImessage({ to: phone, text: message });
+    if (!send.ok) {
+      return JSON.stringify({ error: `LoopMessage send failed: ${send.error ?? "unknown"}` });
+    }
+
+    // Log the outbound into sms_messages (LoopMessage sends go through our API,
+    // so we record our own outbound here — there is no inbound is_from_me echo).
+    await supabaseAdmin.from("sms_messages").insert({
+      conversation_id: conv.id,
+      direction: "outbound",
+      body: message,
+      close_stage: conv.close_stage,
+      imessage_guid: send.messageId ?? null,
+      metadata: { source: "loopmessage_send", message_id: send.messageId ?? null },
     });
+
+    await supabaseAdmin
+      .from("sms_conversations")
+      .update({ last_outbound_at: new Date().toISOString() })
+      .eq("id", conv.id);
+
+    // Mirror the sent message into the lead's Slack channel (same model the
+    // imessage route used for an outbound/is_from_me reply).
+    if (conv.slack_channel_id) {
+      const preview = message.length > 200 ? message.slice(0, 200) + "…" : message;
+      await slack.postMessage(conv.slack_channel_id as string, `✅ Sent (LoopMessage): "${preview}"`);
+      await cancelPendingSuggestion(conv.id as string);
+    }
+
+    return JSON.stringify({ success: true, message: `Text sent to ${phone} via LoopMessage.` });
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "SMS send failed" });
   }

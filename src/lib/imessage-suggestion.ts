@@ -1,8 +1,9 @@
 // iMessage reply-suggestion card. After an inbound merchant iMessage, we post a
-// Vektor-drafted reply into the lead's Slack channel with 🔄 Regenerate / 🎛 Remix
-// buttons. There is NO send button — outbound is manual: Matthew copies the
-// suggestion and pastes it into the Messages app on his Mac. The bridge then
-// re-ingests his sent message and mirrors it back here.
+// Vektor-drafted reply into the lead's Slack channel with ✅ Send / 🔄 Regenerate
+// / 🎛 Remix buttons. With the LoopMessage transport live, ✅ Send delivers the
+// suggested reply directly via LoopMessage (24/7, no Mac) — gated by the explicit
+// human click (Vektor never auto-sends). Matthew can still copy the draft and
+// paste it into Messages on his Mac if he prefers; the bridge then mirrors it.
 //
 // The live suggestion is stored one-per-conversation in sms_pending_drafts so the
 // button handlers (src/app/api/slack/actions/route.ts) can find + update it.
@@ -15,7 +16,7 @@ export function buildSuggestionBlocks(draft: string, regenerateCount = 0): Slack
   const blocks: SlackBlock[] = [
     {
       type: "section",
-      text: { type: "mrkdwn", text: "*💬 Suggested reply* — copy into Messages on your Mac" },
+      text: { type: "mrkdwn", text: "*💬 Suggested reply* — ✅ Send via LoopMessage, or copy into Messages on your Mac" },
     },
     {
       type: "section",
@@ -24,6 +25,12 @@ export function buildSuggestionBlocks(draft: string, regenerateCount = 0): Slack
     {
       type: "actions",
       elements: [
+        {
+          type: "button",
+          style: "primary",
+          text: { type: "plain_text", text: "✅ Send", emoji: true },
+          action_id: "imsg_send",
+        },
         {
           type: "button",
           text: { type: "plain_text", text: "🔄 Regenerate", emoji: true },
