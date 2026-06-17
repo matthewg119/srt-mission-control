@@ -13,6 +13,7 @@ import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
+import { sendPdfGuideEmail } from "@/lib/pdf-guide-email";
 
 import {
         createLead as zohoCreateLead,
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
                         businessStartDate, hasCheckingAccount,
-                        deferMetaLead, fireMetaLead, leadQuality, timeInBusiness, knownContactId,
+                        deferMetaLead, timeInBusiness,
             } = body;
 
           // Accept incDate, incorporatedDate, or businessStartDate (v6 sends businessStartDate as "YYYY-MM")
@@ -95,57 +96,6 @@ export async function POST(request: NextRequest) {
 
           // Normalize email for consistent lookups
           const normalizedEmail = email ? email.trim().toLowerCase() : email;
-
-          // ── Deferred Lead fire (PDF funnel: Lead fires at Step 2 / DNQ, not on first capture) ──
-          // The contact was already created by an earlier deferMetaLead push, so this
-          // request only fires the Meta Lead event. eventId matches the browser pixel for dedup.
-          if (fireMetaLead) {
-            if (hasMetaAttributionServer({ fbc: _fbc })) {
-              let leadContactId: string | undefined = knownContactId || undefined;
-              if (!leadContactId && normalizedEmail) {
-                const { data: leadContact } = await supabaseAdmin
-                  .from("contacts").select("id").ilike("email", normalizedEmail).limit(1).maybeSingle();
-                leadContactId = leadContact?.id || undefined;
-              }
-              try {
-                const capiResult = await sendEvent({
-                  eventName: "Lead",
-                  eventId: serverEventId,
-                  eventSourceUrl: sourceUrl || "https://srtagency.com/PDF",
-                  actionSource: "website",
-                  userData: {
-                    email: normalizedEmail || undefined,
-                    phone: (mobilePhone || businessPhone) || undefined,
-                    firstName: firstName || undefined,
-                    lastName: lastName || undefined,
-                    fbc: _fbc || undefined,
-                    fbp: _fbp || undefined,
-                    clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
-                    clientUserAgent,
-                    externalId: leadContactId,
-                  },
-                  customData: {
-                    content_name: "Business Funding Funnel",
-                    currency: "USD",
-                    lead_quality: leadQuality || "qualified",
-                  },
-                });
-                if (!capiResult.success) {
-                  console.error("[Meta CAPI deferred] Lead event failed:", capiResult.error);
-                  try {
-                    await supabaseAdmin.from("system_logs").insert({
-                      event_type: "meta_capi_error",
-                      description: `Meta CAPI Lead event failed (deferred ${leadQuality || "qualified"}): ${capiResult.error}`,
-                      metadata: { email: normalizedEmail, eventName: "Lead", stage: "deferred", leadQuality: leadQuality || "qualified" },
-                    });
-                  } catch { /* ignore */ }
-                }
-              } catch (err) {
-                console.error("[Meta CAPI deferred] Lead event error:", err);
-              }
-            }
-            return NextResponse.json({ success: true, message: "Lead event processed" }, { headers: corsHeaders });
-          }
 
           // ── 10% block: create minimal contact on email capture ──
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
@@ -1266,46 +1216,6 @@ async function scheduleFirstSms(phone: string, contactId: string, template: stri
   );
 }
 
-
-// PDF-landing free-guide email. Sent from matthew@srtagency.com on first capture
-// (10% block) when source === "pdf-landing". Links to the static-hosted guide PDF
-// rather than attaching bytes (cleaner for a file served from srtagency.com).
-//
-// TODO(pdf-guide): final PDF + body copy pending from the user (they will email the
-// final guide + body to matthew@srtagency.com, subject "PDF"). Until then this uses
-// the placeholder guide URL + the short body below.
-const PDF_GUIDE_URL = "https://srtagency.com/freeguide/Business_Owners_Guide_to_Funding_Without_a_Bank.pdf";
-
-async function sendPdfGuideEmail(to: string, firstName?: string): Promise<void> {
-  const body = `
-<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
-  <div style="background:#0d1b2a;padding:28px 24px;text-align:center">
-    <span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:0.5px">SRT Agency</span>
-  </div>
-  <div style="padding:32px 24px">
-    <h2 style="color:#0d1b2a;margin:0 0 16px">Your Free Funding Guide</h2>
-    <p style="margin:0 0 16px">Hi ${firstName || "there"},</p>
-    <p style="margin:0 0 16px">Thanks for your interest in business funding. As promised, here is your free guide:</p>
-    <p style="margin:0 0 24px">
-      <a href="${PDF_GUIDE_URL}" style="display:inline-block;background:#2ee6a8;color:#0d1b2a;font-weight:700;text-decoration:none;padding:14px 28px;border-radius:6px">Download the Guide (PDF)</a>
-    </p>
-    <p style="margin:0 0 16px">If the button does not work, copy and paste this link into your browser:<br><a href="${PDF_GUIDE_URL}">${PDF_GUIDE_URL}</a></p>
-    <p style="margin:0">Best regards,<br><strong>Matthew, SRT Agency</strong></p>
-  </div>
-  <div style="background:#f5f5f5;padding:16px 24px;text-align:center;font-size:12px;color:#888888">
-    <p style="margin:0">SRT Agency &mdash; Business Funding Solutions</p>
-  </div>
-</div>
-  `;
-
-  await microsoft.sendMail({
-    to,
-    subject: "(FREE PDF GUIDE) Business funding Inquire",
-    body,
-    isHtml: true,
-    fromMailbox: "matthew@srtagency.com",
-  });
-}
 
 function buildApplicationSummaryEmail(data: { firstName?: string }): string {
   return `
