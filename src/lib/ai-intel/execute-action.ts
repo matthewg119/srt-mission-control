@@ -32,7 +32,7 @@ async function buildHtmlBody(body: string, isHtml: boolean, signatureName?: stri
 import { substituteMagicLinkInBody } from "@/lib/portal-magic-link";
 import { recordSend } from "./cadence-scheduler";
 import type { CadenceTrack } from "./types";
-import { postDraftSubmissionCard } from "./draft-submission-card";
+import { maybePostSubmissionReady } from "./submission-ready";
 import { submitToLenders } from "./submit-to-lenders";
 
 export interface ExecuteResult {
@@ -148,22 +148,22 @@ async function updateZoho(payload: PendingActionPayload): Promise<ExecuteResult>
     await addNoteToLead(payload.zoho_id, payload.note.title, payload.note.content);
   }
 
-  // Follow-up chaining: bank-statement approvals set followup="draft_submission"
-  // so the next card (draft email) posts into the same deal thread once the
-  // Zoho write is confirmed. Best-effort — a failed card doesn't fail the
-  // underlying Zoho update.
+  // Follow-up chaining: bank-statement approvals set followup="draft_submission".
+  // The pick-lenders card is now gated on the application being complete too, so
+  // route through maybePostSubmissionReady (idempotent). It posts now if the app
+  // is already done, otherwise the app-completion signal posts it later. We still
+  // pass the OneDrive folder + statement attachment ids for the lender email.
   if (payload.followup === "draft_submission" && payload.deal_id && payload.contact_id) {
     try {
-      await postDraftSubmissionCard({
+      await maybePostSubmissionReady(payload.contact_id, {
         dealId: payload.deal_id,
-        contactId: payload.contact_id,
         zohoId: payload.zoho_id,
-        revenueTable: payload.revenue_table ?? [],
+        revenueTable: payload.revenue_table,
         onedriveFolderUrl: payload.onedrive_folder_url,
         bankStmtDriveItemIds: payload.bank_stmt_drive_item_ids,
       });
     } catch (e) {
-      console.error("[execute-action] draft-submission card failed:", (e as Error).message);
+      console.error("[execute-action] submission-ready failed:", (e as Error).message);
     }
   }
 

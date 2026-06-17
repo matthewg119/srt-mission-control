@@ -4,6 +4,7 @@ import { analyzeBankStatements } from "@/lib/ai-intel/bank-statement-analyzer";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postDealThreadUpdate } from "@/lib/ai-intel/deal-thread";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
+import { maybePostSubmissionReady } from "@/lib/ai-intel/submission-ready";
 import { microsoft } from "@/lib/microsoft";
 import { slack } from "@/lib/slack-bot";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
@@ -488,6 +489,11 @@ export async function POST(req: NextRequest) {
       statementsAnalyzed: fetched.length,
     });
     await setAnalysisStatus(contactId, "analyzed");
+    // If the application is already complete, post the pick-lenders card now.
+    // (Gated + idempotent inside the helper; no-op until the app is done.)
+    await maybePostSubmissionReady(contactId).catch((e) =>
+      console.warn("[bank-statements] maybePostSubmissionReady failed:", (e as Error).message)
+    );
   }
 
   return NextResponse.json({
