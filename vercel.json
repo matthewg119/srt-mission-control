@@ -59,6 +59,10 @@
     {
       "path": "/api/cron/sms-followups",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/income-verification-followup",
+      "schedule": "0 13 * * *"
     }
   ]
 }

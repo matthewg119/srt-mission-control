@@ -160,7 +160,8 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
 function formatUpdateBlocks(
   action: LeadThreadAction,
   diff: DiffEntry[],
-  contact: ContactRow
+  contact: ContactRow,
+  note?: string
 ): { headline: string; blocks: SlackBlock[] } {
   let headline: string;
   let icon: string;
@@ -230,6 +231,11 @@ function formatUpdateBlocks(
     blocks.push({ type: "section", text: { type: "mrkdwn", text: lines } });
   }
 
+  // Optional free-text note (e.g. a name-change flag on a /capital login).
+  if (note && note.trim()) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `⚠️ ${note.trim()}` } });
+  }
+
   if (action === "complete") {
     const vcardId = (contact.zoho_lead_id as string | null) ?? contact.id;
     blocks.push({
@@ -271,8 +277,9 @@ function formatUpdateBlocks(
 export async function postOrThreadLeadUpdate(opts: {
   contactId: string;
   action: LeadThreadAction;
+  note?: string;
 }): Promise<void> {
-  const { contactId, action } = opts;
+  const { contactId, action, note } = opts;
   if (!contactId) return;
 
   const channel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
@@ -355,7 +362,7 @@ export async function postOrThreadLeadUpdate(opts: {
     // even if no field diffs exist, since the action itself is the news.
     if (action === "update" && diff.length === 0) return;
 
-    const { headline, blocks } = formatUpdateBlocks(action, diff, contact as ContactRow);
+    const { headline, blocks } = formatUpdateBlocks(action, diff, contact as ContactRow, note);
 
     try {
       await slack.postThreadReply(

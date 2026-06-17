@@ -34,14 +34,14 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  let body: { contactId?: string; action?: string };
+  let body: { contactId?: string; action?: string; note?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { contactId, action } = body;
+  const { contactId, action, note } = body;
   if (!contactId || !action) {
     return NextResponse.json(
       { error: "contactId and action are required" },
@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
     await postOrThreadLeadUpdate({
       contactId,
       action: action as LeadThreadAction,
+      note: typeof note === "string" ? note : undefined,
     });
     return NextResponse.json({ ok: true });
   } catch (err) {

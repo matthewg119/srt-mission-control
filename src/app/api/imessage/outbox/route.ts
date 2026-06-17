@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sweepAutoSends } from "@/lib/imessage-autosend";
 import { runDueFollowups } from "@/lib/imessage-followups";
+import { runDueIncomeVerificationFollowups } from "@/lib/income-verification-followup";
 
 export const runtime = "nodejs";
 
@@ -45,6 +46,16 @@ export async function GET(req: NextRequest) {
     await runDueFollowups();
   } catch (e) {
     console.error("[imessage/outbox] due-followups run failed:", (e as Error).message);
+  }
+
+  // Same Hobby-cron limitation applies to the 7-minute income-verification email
+  // follow-up — drive it from this ~10s poll so the window stays tight. The email
+  // sends via Microsoft Graph (independent of the Mac), and /api/cron/income-verification-followup
+  // is the daily backup / external-pinger entry point.
+  try {
+    await runDueIncomeVerificationFollowups();
+  } catch (e) {
+    console.error("[imessage/outbox] income-verification followups failed:", (e as Error).message);
   }
 
   const { data, error } = await supabaseAdmin
