@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sweepAutoSends } from "@/lib/imessage-autosend";
+import { runDueFollowups } from "@/lib/imessage-followups";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,15 @@ export async function GET(req: NextRequest) {
     await sweepAutoSends();
   } catch (e) {
     console.error("[imessage/outbox] auto-send sweep failed:", (e as Error).message);
+  }
+
+  // Also post any due follow-up cards here. The Vercel account is on Hobby (crons
+  // are daily-only), so the Mac's ~10s outbox poll is the real-time trigger for
+  // due follow-ups; the once-daily /api/cron/sms-followups is just a backup.
+  try {
+    await runDueFollowups();
+  } catch (e) {
+    console.error("[imessage/outbox] due-followups run failed:", (e as Error).message);
   }
 
   const { data, error } = await supabaseAdmin
