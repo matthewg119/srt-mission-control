@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
                         businessStartDate, hasCheckingAccount,
+                        deferMetaLead, fireMetaLead, leadQuality, timeInBusiness, knownContactId,
             } = body;
 
           // Accept incDate, incorporatedDate, or businessStartDate (v6 sends businessStartDate as "YYYY-MM")
@@ -94,6 +95,57 @@ export async function POST(request: NextRequest) {
 
           // Normalize email for consistent lookups
           const normalizedEmail = email ? email.trim().toLowerCase() : email;
+
+          // ── Deferred Lead fire (PDF funnel: Lead fires at Step 2 / DNQ, not on first capture) ──
+          // The contact was already created by an earlier deferMetaLead push, so this
+          // request only fires the Meta Lead event. eventId matches the browser pixel for dedup.
+          if (fireMetaLead) {
+            if (hasMetaAttributionServer({ fbc: _fbc })) {
+              let leadContactId: string | undefined = knownContactId || undefined;
+              if (!leadContactId && normalizedEmail) {
+                const { data: leadContact } = await supabaseAdmin
+                  .from("contacts").select("id").ilike("email", normalizedEmail).limit(1).maybeSingle();
+                leadContactId = leadContact?.id || undefined;
+              }
+              try {
+                const capiResult = await sendEvent({
+                  eventName: "Lead",
+                  eventId: serverEventId,
+                  eventSourceUrl: sourceUrl || "https://srtagency.com/PDF",
+                  actionSource: "website",
+                  userData: {
+                    email: normalizedEmail || undefined,
+                    phone: (mobilePhone || businessPhone) || undefined,
+                    firstName: firstName || undefined,
+                    lastName: lastName || undefined,
+                    fbc: _fbc || undefined,
+                    fbp: _fbp || undefined,
+                    clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+                    clientUserAgent,
+                    externalId: leadContactId,
+                  },
+                  customData: {
+                    content_name: "Business Funding Funnel",
+                    currency: "USD",
+                    lead_quality: leadQuality || "qualified",
+                  },
+                });
+                if (!capiResult.success) {
+                  console.error("[Meta CAPI deferred] Lead event failed:", capiResult.error);
+                  try {
+                    await supabaseAdmin.from("system_logs").insert({
+                      event_type: "meta_capi_error",
+                      description: `Meta CAPI Lead event failed (deferred ${leadQuality || "qualified"}): ${capiResult.error}`,
+                      metadata: { email: normalizedEmail, eventName: "Lead", stage: "deferred", leadQuality: leadQuality || "qualified" },
+                    });
+                  } catch { /* ignore */ }
+                }
+              } catch (err) {
+                console.error("[Meta CAPI deferred] Lead event error:", err);
+              }
+            }
+            return NextResponse.json({ success: true, message: "Lead event processed" }, { headers: corsHeaders });
+          }
 
           // ── 10% block: create minimal contact on email capture ──
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
@@ -170,7 +222,8 @@ export async function POST(request: NextRequest) {
                 });
 
                 // Meta CAPI: fire Lead event only when the visitor came from a Meta ad click.
-                if (hasMetaAttributionServer({ fbc: _fbc })) {
+                // Skip when deferMetaLead is set (PDF funnel fires Lead later, at Step 2 / DNQ).
+                if (!deferMetaLead && hasMetaAttributionServer({ fbc: _fbc })) {
                   try {
                     const capiResult = await sendEvent({
                       eventName: "Lead",

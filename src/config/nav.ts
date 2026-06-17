@@ -13,6 +13,7 @@ import {
   TrendingUp,
   MessageSquare,
   Users,
+  Smartphone,
 } from "lucide-react";
 
 export interface NavSection {
@@ -50,6 +51,12 @@ export const navSections: NavSection[] = [
     label: "Coaching",
     items: [
       { label: "Coaching Studio", href: "/dashboard/coaching-studio", icon: GraduationCap },
+    ],
+  },
+  {
+    label: "Voice",
+    items: [
+      { label: "SMS Simulator", href: "/dashboard/simulator", icon: Smartphone },
     ],
   },
   {

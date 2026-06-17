@@ -77,14 +77,9 @@ async function notifySlack(status: string, leadName: string, leadPhone: string, 
 
   switch (status) {
     case "agent_ringing":
-      message = [
-        `:bell: *Speed to Lead — Calling Now!*`,
-        `*Lead:* ${leadName}`,
-        `*Phone:* ${leadPhone}`,
-        `*Source:* ${leadSource}`,
-        `Ringing agent — pick up and press 1 to connect.`,
-      ].join("\n");
-      break;
+      // Notification intentionally suppressed — the call still fires, we just
+      // don't post the "Calling Now" message to Slack.
+      return;
 
     case "connected":
       message = [
