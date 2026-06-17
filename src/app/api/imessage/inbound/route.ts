@@ -55,6 +55,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // Heartbeat — the bridge POSTs here ~every 10s even when idle, so every
+  // authenticated hit refreshes last_sync. integrations.name has no unique
+  // constraint (an onConflict upsert would no-op), so update-by-name or insert.
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from("integrations")
+      .select("id")
+      .eq("name", "Mac iMessage Bridge")
+      .maybeSingle();
+    const heartbeat = { name: "Mac iMessage Bridge", last_sync: new Date().toISOString() };
+    if (existing) {
+      await supabaseAdmin.from("integrations").update(heartbeat).eq("name", "Mac iMessage Bridge");
+    } else {
+      await supabaseAdmin
+        .from("integrations")
+        .insert({ ...heartbeat, type: "Communication", status: "connected" });
+    }
+  } catch (e) {
+    console.error("[imessage/inbound] heartbeat failed", e);
+  }
+
   let payload: InboundPayload;
   try {
     payload = (await req.json()) as InboundPayload;

@@ -9,7 +9,7 @@
 // TRAIN mode: see/curate the real example pairs ("the other side"), teach the bot by
 //             editing its last draft into a golden example, and edit the persona live.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Smartphone,
   Send,
@@ -22,6 +22,8 @@ import {
   Sparkles,
   ImagePlus,
   Check,
+  Radio,
+  ExternalLink,
 } from "lucide-react";
 
 type Stage = number | null;
@@ -65,6 +67,7 @@ const STAGE_LABELS: Record<string, string> = {
 const teal = "#00C9A7";
 
 export default function SimulatorPage() {
+  const [dataMode, setDataMode] = useState<"demo" | "real">("demo");
   const [phones, setPhones] = useState<Phone[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalVoice, setTotalVoice] = useState<number | null>(null);
@@ -97,30 +100,51 @@ export default function SimulatorPage() {
     load();
   };
 
+  const isReal = dataMode === "real";
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[rgba(0,201,167,0.1)] border border-[rgba(0,201,167,0.2)]">
-            <Smartphone size={20} className="text-[#00C9A7]" />
-          </div>
+          <HeaderLogo />
           <div>
-            <h1 className="text-xl font-semibold text-white">SMS Simulator</h1>
+            <h1 className="text-xl font-semibold text-white">SalesTwin 3.0</h1>
             <p className="text-xs text-[rgba(255,255,255,0.4)]">
-              Sandbox · nothing is sent
-              {totalVoice != null && ` · ${totalVoice.toLocaleString()} voice examples in training data`}
+              {isReal ? (
+                "Live conversations · replies send straight to the lead"
+              ) : (
+                <>
+                  Sandbox · nothing is sent
+                  {totalVoice != null && ` · ${totalVoice.toLocaleString()} voice examples in training data`}
+                </>
+              )}
             </p>
           </div>
         </div>
-        <button
-          onClick={resetBoard}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg text-[rgba(255,255,255,0.6)] hover:text-white hover:bg-[rgba(255,255,255,0.1)]"
-        >
-          <RotateCcw size={13} /> Reset all
-        </button>
+        <div className="flex items-center gap-2">
+          <MacBridgeStatus />
+          <button
+            onClick={() => setDataMode(isReal ? "demo" : "real")}
+            title={isReal ? "Switch to the demo sandbox" : "Switch to live conversations"}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg text-[rgba(255,255,255,0.6)] hover:text-white hover:bg-[rgba(255,255,255,0.1)]"
+          >
+            <Radio size={13} className={isReal ? "text-[#00C9A7]" : ""} />
+            {isReal ? "Real" : "Demo"}
+          </button>
+          {!isReal && (
+            <button
+              onClick={resetBoard}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg text-[rgba(255,255,255,0.6)] hover:text-white hover:bg-[rgba(255,255,255,0.1)]"
+            >
+              <RotateCcw size={13} /> Reset all
+            </button>
+          )}
+        </div>
       </div>
 
-      {loading ? (
+      {isReal ? (
+        <RealMode />
+      ) : loading ? (
         <p className="text-sm text-[rgba(255,255,255,0.4)]">Loading phones…</p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -789,6 +813,295 @@ function TuneTab({ stage }: { stage: Stage }) {
             <Send size={14} />
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Header logo (falls back to the phone glyph if the asset is missing) ─────────
+
+function HeaderLogo() {
+  const [ok, setOk] = useState(true);
+  return (
+    <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[rgba(0,201,167,0.1)] border border-[rgba(0,201,167,0.2)] overflow-hidden">
+      {ok ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src="/srt-logo.png" alt="SRT" className="w-6 h-6 object-contain" onError={() => setOk(false)} />
+      ) : (
+        <Smartphone size={20} className="text-[#00C9A7]" />
+      )}
+    </div>
+  );
+}
+
+// ─── Mac bridge status pill ──────────────────────────────────────────────────────
+
+function MacBridgeStatus() {
+  const [state, setState] = useState<{ status: string; seconds_since: number | null } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/imessage/status");
+        const data = await res.json();
+        if (alive) setState({ status: data.status ?? "offline", seconds_since: data.seconds_since ?? null });
+      } catch {
+        if (alive) setState({ status: "offline", seconds_since: null });
+      }
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  const online = state?.status === "online";
+  const color = online ? "#00C9A7" : "#E74C3C";
+  const label = online
+    ? `Mac bridge: Online${state?.seconds_since != null ? ` (${state.seconds_since}s ago)` : ""}`
+    : "Mac bridge: Offline";
+
+  return (
+    <span
+      title={label}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg text-[rgba(255,255,255,0.6)]"
+    >
+      <span className="w-2 h-2 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
+// ─── Real mode (live conversations) ──────────────────────────────────────────────
+
+interface RealConversation {
+  id: string;
+  phone: string;
+  display_name: string;
+  first_name: string | null;
+  last_name: string | null;
+  business_name: string | null;
+  zoho_lead_id: string | null;
+  outcome: string;
+  has_reply: boolean;
+  last_message: { body: string; direction: string; created_at: string } | null;
+}
+
+function RealMode() {
+  const [convs, setConvs] = useState<RealConversation[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/sms/conversations");
+        const data = await res.json();
+        if (alive) setConvs(data.conversations ?? []);
+      } catch {
+        // keep the prior list on a transient failure
+      }
+      if (alive) setLoading(false);
+    };
+    load();
+    const t = setInterval(load, 6000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  if (loading) {
+    return <p className="text-sm text-[rgba(255,255,255,0.4)]">Loading conversations…</p>;
+  }
+  if (convs.length === 0) {
+    return (
+      <p className="text-sm text-[rgba(255,255,255,0.4)]">
+        No live conversations yet. They appear here as leads text in.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {convs.map((conv) => (
+        <RealConversationCard key={conv.id} conv={conv} />
+      ))}
+    </div>
+  );
+}
+
+interface RealMessage {
+  id: string;
+  direction: "inbound" | "outbound";
+  body: string;
+  created_at: string;
+}
+
+interface PendingBubble {
+  id: string;
+  body: string;
+}
+
+function RealConversationCard({ conv }: { conv: RealConversation }) {
+  const [messages, setMessages] = useState<RealMessage[]>([]);
+  const [pending, setPending] = useState<PendingBubble[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isDead = conv.outcome === "dead";
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/sms/conversations/${conv.id}/messages`);
+        const data = await res.json();
+        const msgs: RealMessage[] = data.messages ?? [];
+        if (!alive) return;
+        setMessages(msgs);
+        // Drop optimistic bubbles once a real outbound row with the same body lands.
+        setPending((prev) =>
+          prev.filter((p) => !msgs.some((m) => m.direction === "outbound" && m.body.trim() === p.body.trim()))
+        );
+      } catch {
+        // keep prior thread on a transient failure
+      }
+    };
+    load();
+    const t = setInterval(load, 6000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [conv.id]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messages, pending]);
+
+  const send = async () => {
+    const body = input.trim();
+    if (!body || sending || isDead) return;
+    setSending(true);
+    setError(null);
+    setInput("");
+    const tempId = `pending-${Date.now()}`;
+    setPending((prev) => [...prev, { id: tempId, body }]);
+    try {
+      const res = await fetch(`/api/sms/conversations/${conv.id}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setPending((prev) => prev.filter((p) => p.id !== tempId));
+        setError(data.error ?? "Send failed");
+      }
+    } catch {
+      setPending((prev) => prev.filter((p) => p.id !== tempId));
+      setError("Send failed");
+    }
+    setSending(false);
+  };
+
+  return (
+    <div
+      className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] flex flex-col overflow-hidden"
+      style={{ height: "560px" }}
+    >
+      {/* Header: lead name (Zoho link if available), read-only */}
+      <div className="px-3 py-2.5 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-2">
+        {conv.zoho_lead_id ? (
+          <a
+            href={`https://crm.zoho.com/crm/tab/Leads/${conv.zoho_lead_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-semibold text-white hover:text-[#00C9A7]"
+          >
+            {conv.display_name}
+            <ExternalLink size={11} className="opacity-60" />
+          </a>
+        ) : (
+          <span className="text-xs font-semibold text-white">{conv.display_name}</span>
+        )}
+        {isDead && (
+          <span className="ml-auto text-[9px] uppercase tracking-wider text-[#E74C3C]">Dead</span>
+        )}
+      </div>
+
+      {/* Thread (read-only) */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-2">
+        {messages.length === 0 && pending.length === 0 ? (
+          <p className="text-[11px] text-[rgba(255,255,255,0.3)] text-center pt-6">No messages yet.</p>
+        ) : (
+          <>
+            {messages.map((m) => (
+              <div key={m.id} className={`flex ${m.direction === "outbound" ? "justify-start" : "justify-end"}`}>
+                <div
+                  className="rounded-xl px-3 py-2 text-[12px] whitespace-pre-wrap"
+                  style={{
+                    maxWidth: "82%",
+                    background: m.direction === "outbound" ? teal : "rgba(255,255,255,0.08)",
+                    color: m.direction === "outbound" ? "#0B1426" : "#fff",
+                  }}
+                >
+                  {m.body}
+                </div>
+              </div>
+            ))}
+            {pending.map((p) => (
+              <div key={p.id} className="flex justify-start">
+                <div
+                  className="rounded-xl px-3 py-2 text-[12px] whitespace-pre-wrap opacity-60"
+                  style={{ maxWidth: "82%", background: teal, color: "#0B1426" }}
+                >
+                  {p.body}
+                  <span className="block text-[9px] mt-0.5 opacity-70">sending…</span>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* Composer (real send) */}
+      <div className="p-2.5 border-t border-[rgba(255,255,255,0.06)]">
+        {error && <p className="text-[10px] text-[#E74C3C] mb-1.5">{error}</p>}
+        {isDead ? (
+          <p className="text-[11px] text-[rgba(255,255,255,0.4)] text-center py-1">
+            Conversation is marked dead. Replies are off.
+          </p>
+        ) : (
+          <div className="flex gap-1.5 items-end">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              rows={1}
+              placeholder="Reply to the lead…"
+              className="flex-1 bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-3 py-2 text-[12px] text-white placeholder-[rgba(255,255,255,0.3)] focus:outline-none focus:border-[#00C9A7] resize-none"
+              style={{ maxHeight: "80px" }}
+            />
+            <button
+              onClick={send}
+              disabled={!input.trim() || sending}
+              className="p-2 bg-[#00C9A7] text-[#0B1426] rounded-lg hover:opacity-90 disabled:opacity-40"
+            >
+              <Send size={14} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
