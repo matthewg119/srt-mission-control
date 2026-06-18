@@ -19,12 +19,15 @@ Response:
 
 import json
 import os
+import sys
 import tempfile
 import uuid
 import base64
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
+# Make the vendored engine importable regardless of Vercel's cwd/sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from srt_reel import engine
 
 

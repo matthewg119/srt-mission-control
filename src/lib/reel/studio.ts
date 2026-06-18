@@ -289,10 +289,15 @@ async function finalizeStudio(job: StudioJobRow, script: ReelScript): Promise<vo
   }
 }
 
-/** Call the Vercel Python render function and return the MP4 bytes. */
+/** Call the Python render service and return the MP4 bytes. */
 async function renderReel(script: ReelScript, img: ClaudeImageInput): Promise<Buffer> {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-  const res = await fetch(`${baseUrl}/api/render-reel`, {
+  // The renderer runs as its OWN Vercel project (render-service/) because a
+  // Next.js app cannot host a root /api/*.py function — Next owns the /api
+  // namespace. REEL_RENDER_URL is the full endpoint of that project, e.g.
+  // https://srt-reel-render.vercel.app/api/render-reel
+  const endpoint =
+    process.env.REEL_RENDER_URL || `${process.env.NEXT_PUBLIC_APP_URL || ""}/api/render-reel`;
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
