@@ -1,4 +1,11 @@
 {
+  "functions": {
+    "api/render-reel.py": {
+      "memory": 2048,
+      "maxDuration": 120,
+      "includeFiles": "api/srt_reel/**"
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/stale-deals",

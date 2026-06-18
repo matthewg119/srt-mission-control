@@ -27,6 +27,7 @@ import {
 } from "@/lib/content-scene-runner";
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
+import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
 
 interface SlackEventFile {
   id: string;
@@ -120,6 +121,14 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (reelHandled) return NextResponse.json({ ok: true });
+
+        // Reel Studio: 1/2/3/4 reaction on a variations message (self-routes by DB)
+        const studioHandled = await handleStudioReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (studioHandled) return NextResponse.json({ ok: true });
 
         // Try content reaction handler (self-routes by DB lookup)
         const contentHandled = await handleContentReaction({
@@ -369,6 +378,33 @@ export async function POST(request: NextRequest) {
             console.error("[slack/events] animate thread error:", (e as Error).message);
           });
           return NextResponse.json({ ok: true });
+        }
+
+        // SRT Reel Studio (#content-full): a fresh image post → 4 reel-copy variations;
+        // a thread reply → the operator's final 4 boxes → render the branded MP4.
+        // Falls back to the Viral Video Decoder when the copy names it (decoder/viral/package).
+        const decoderKeyword = /\b(decoder|viral|package)\b/i.test(userText);
+        const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
+        if (isContentFullChannel && !decoderKeyword) {
+          if (!isThreadReply && hasImageFiles) {
+            void handleStudioImage({
+              channel,
+              threadTs: contentThreadTs,
+              files: attachedFiles,
+              brief: userText,
+            }).catch((e) => {
+              console.error("[slack/events] studio image error:", (e as Error).message);
+            });
+            return NextResponse.json({ ok: true });
+          }
+          if (isThreadReply && !hasImageFiles && userText.trim().length > 0) {
+            const studioReplyHandled = await handleStudioReply({
+              channel,
+              threadTs: contentThreadTs,
+              text: userText,
+            });
+            if (studioReplyHandled) return NextResponse.json({ ok: true });
+          }
         }
 
         void handleContentDrop({

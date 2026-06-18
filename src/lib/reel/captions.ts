@@ -73,3 +73,40 @@ export async function generateCaptionForHeadline(
 
   return stripEmDashes(data.caption).trim();
 }
+
+/**
+ * Write ONE Instagram caption that pairs with a full SRT Reel Studio script
+ * (label + 2 hooks + cta). Used by the #content-full studio flow. Same template
+ * + house rules as generateCaptionForHeadline; no belief context is required.
+ */
+export async function generateCaptionForScript(
+  script: { label: string; line1: string; line2: string; cta: string },
+  image?: ClaudeImageInput
+): Promise<string> {
+  const user = [
+    "TEMPLATE FILE (style + rules + the only stats you may use):",
+    IG_CAPTION_TEMPLATES,
+    "",
+    "----",
+    "The reel's on-screen text boxes (the caption must pair with these):",
+    `LABEL: ${script.label}`,
+    `HOOK: ${script.line1}`,
+    `PAYOFF: ${script.line2}`,
+    `CTA: ${script.cta}`,
+    "",
+    "Write ONE Instagram caption that pairs with this reel.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<CaptionResponse>({
+    model: model(),
+    system: SYSTEM,
+    user,
+    images: image ? [image] : undefined,
+    maxTokens: 1024,
+    temperature: 0.6,
+    schemaHint: '{ "caption": string }',
+    validate: isCaptionResponse,
+  });
+
+  return stripEmDashes(data.caption).trim();
+}
