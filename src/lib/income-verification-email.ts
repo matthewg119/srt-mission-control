@@ -26,6 +26,22 @@ export interface IncomeVerificationEmailResult {
 }
 
 /**
+ * Returns the ready-to-send income-verification email content (subject + filled
+ * HTML, signature already embedded). Shared by the auto-sender below and by the
+ * inbound-bank-statements flow, which posts it as a GATED suggestion (Slack +
+ * textwin.ai) rather than sending it directly. Returns null if the template is
+ * missing.
+ */
+export function buildIncomeVerificationEmailContent(firstName?: string | null):
+  | { subject: string; html: string }
+  | null {
+  const template = FULL_HTML_EMAIL_TEMPLATES[TEMPLATE_KEY];
+  if (!template) return null;
+  const name = (firstName ?? "").trim() || "there";
+  return { subject: template.subject, html: fillFirstName(template.html, name) };
+}
+
+/**
  * Sends the income-verification email to `to`. Best-effort Zoho note when a
  * lead id is supplied. Never throws — returns { ok:false, error } on failure so
  * callers (cron loop / test endpoint) can record and continue.
@@ -37,11 +53,12 @@ export async function sendIncomeVerificationEmail(opts: {
 }): Promise<IncomeVerificationEmailResult> {
   if (!opts.to) return { ok: false, error: "missing_to" };
 
-  const template = FULL_HTML_EMAIL_TEMPLATES[TEMPLATE_KEY];
-  if (!template) return { ok: false, error: `template_missing:${TEMPLATE_KEY}` };
+  const content = buildIncomeVerificationEmailContent(opts.firstName);
+  if (!content) return { ok: false, error: `template_missing:${TEMPLATE_KEY}` };
 
   const firstName = (opts.firstName ?? "").trim() || "there";
-  const html = fillFirstName(template.html, firstName);
+  const template = { subject: content.subject };
+  const html = content.html;
 
   try {
     await microsoft.sendMail({
