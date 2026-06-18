@@ -469,6 +469,49 @@ export const microsoft = {
     }
   },
 
+  /**
+   * Send a threaded HTML reply to an existing message so it lands in the same
+   * conversation as the original (Re: subject + In-Reply-To headers handled by
+   * Graph). Uses createReply → PATCH body → send. When `mailbox` is set the reply
+   * originates from that shared mailbox (the message must live in that mailbox).
+   * Recipients default to the original sender; pass `to` to override.
+   */
+  async sendReplyHtml(params: {
+    messageId: string;
+    html: string;
+    mailbox?: string;
+    to?: string | string[];
+  }): Promise<void> {
+    const token = await getValidAccessToken();
+    const base = params.mailbox
+      ? `${GRAPH_URL}/users/${encodeURIComponent(params.mailbox)}`
+      : `${GRAPH_URL}/me`;
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    // 1) Create a draft reply (auto-populates recipients + threading metadata).
+    const createRes = await fetch(`${base}/messages/${params.messageId}/createReply`, {
+      method: "POST",
+      headers,
+    });
+    if (!createRes.ok) throw new Error(`createReply failed: ${await createRes.text()}`);
+    const draft = (await createRes.json()) as { id?: string };
+    if (!draft.id) throw new Error("createReply returned no draft id");
+
+    // 2) Set our HTML body (and optionally override recipients).
+    const patch: Record<string, unknown> = { body: { contentType: "HTML", content: params.html } };
+    if (params.to) patch.toRecipients = toGraphRecipients(params.to);
+    const patchRes = await fetch(`${base}/messages/${draft.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(patch),
+    });
+    if (!patchRes.ok) throw new Error(`reply draft patch failed: ${await patchRes.text()}`);
+
+    // 3) Send it.
+    const sendRes = await fetch(`${base}/messages/${draft.id}/send`, { method: "POST", headers });
+    if (!sendRes.ok) throw new Error(`reply send failed: ${await sendRes.text()}`);
+  },
+
   /** Reply to an email */
   async replyToMessage(messageId: string, comment: string): Promise<void> {
     const token = await getValidAccessToken();

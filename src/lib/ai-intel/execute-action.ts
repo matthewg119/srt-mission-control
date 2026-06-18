@@ -79,13 +79,25 @@ async function sendEmail(payload: PendingActionPayload): Promise<ExecuteResult> 
     return { ok: false, error: "missing_email_fields" };
   }
   const htmlBody = await buildHtmlBody(payload.body, !!payload.is_html, payload.signature_name);
-  await microsoft.sendMail({
-    to: payload.to,
-    subject: payload.subject,
-    body: htmlBody,
-    isHtml: true,
-    fromMailbox: payload.from_mailbox as string | undefined,
-  });
+  const replyToId = payload.reply_to_graph_message_id as string | undefined;
+  if (replyToId) {
+    // Threaded reply (e.g. statements received by email) — lands in the lead's
+    // original conversation instead of a fresh message.
+    await microsoft.sendReplyHtml({
+      messageId: replyToId,
+      html: htmlBody,
+      mailbox: payload.from_mailbox as string | undefined,
+      to: payload.to,
+    });
+  } else {
+    await microsoft.sendMail({
+      to: payload.to,
+      subject: payload.subject,
+      body: htmlBody,
+      isHtml: true,
+      fromMailbox: payload.from_mailbox as string | undefined,
+    });
+  }
 
   // Log the send back to the Zoho lead (e.g. "Email sent successfully …").
   // Best-effort — a note failure must not mark the send as failed.

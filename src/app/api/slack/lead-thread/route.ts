@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { postOrThreadLeadUpdate, LeadThreadAction } from "@/lib/lead-thread";
 import { maybePostSubmissionReady } from "@/lib/ai-intel/submission-ready";
+import { ensureDealForContact } from "@/lib/ai-intel/ensure-deal";
 
 // Cross-origin endpoint called by the portal (and internally by Mission Control)
 // to post or thread-reply Slack notifications for a lead.
@@ -62,9 +63,13 @@ export async function POST(request: NextRequest) {
       action: action as LeadThreadAction,
       note: typeof note === "string" ? note : undefined,
     });
-    // On application completion, post the pick-lenders card if statements are
-    // already analyzed (gated + idempotent inside the helper).
+    // On application completion: guarantee the lead is converted into a deal
+    // (with a Slack thread), then auto-draft the lender submissions if the bank
+    // statements are already analyzed (gated + idempotent inside the helper).
     if (action === "complete") {
+      await ensureDealForContact(contactId).catch((err) =>
+        console.error("[lead-thread route] ensureDealForContact failed:", err)
+      );
       await maybePostSubmissionReady(contactId).catch((err) =>
         console.error("[lead-thread route] submission-ready failed:", err)
       );

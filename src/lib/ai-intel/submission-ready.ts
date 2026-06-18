@@ -1,13 +1,21 @@
-// Posts the "reply with lender names" submission card exactly once, and ONLY when
-// BOTH are true: the bank statements have been analyzed AND the application is
-// complete. Safe to call from multiple triggers (the bank-statement analyzer, the
-// app-completion signal, and the 👍 approval path) — it is idempotent via the
-// existing pending_slack_actions row, so whichever event lands last posts the card
-// and the others no-op. The human lender-selection reply → buildSubmissionPackage
-// flow downstream is unchanged.
+// Auto-drafts the lender submissions exactly once, and ONLY when BOTH are true:
+// the bank statements have been analyzed AND the application is complete. Safe to
+// call from multiple triggers (the bank-statement analyzer, the app-completion
+// signal, and the 👍 approval path) — it is idempotent via the deal_submissions
+// rows buildSubmissionPackage creates, so whichever event lands last drafts the
+// submissions and the others no-op.
+//
+// Instead of asking the operator to reply with lender names, we auto-draft to a
+// fixed default lender set (Matthew's choice: "SRT submissions" + "BTF"). Each
+// drafted lender email is still GATED — buildSubmissionPackage posts a per-lender
+// approval card; nothing is sent until 👍.
 
 import { supabaseAdmin } from "@/lib/db";
-import { postDraftSubmissionCard } from "./draft-submission-card";
+import { buildSubmissionPackage } from "./deal-submission-builder";
+
+// Default lenders to auto-draft to on a full package. Resolved to lenders.id by
+// name (case-insensitive). Adjust here if the default set changes.
+const DEFAULT_SUBMISSION_LENDERS = ["SRT submissions", "BTF"];
 
 interface RevenueRow {
   month: string;
@@ -33,7 +41,7 @@ export async function maybePostSubmissionReady(
   // 1) Gate on contact state: app complete AND statements analyzed.
   const { data: contact } = await supabaseAdmin
     .from("contacts")
-    .select("portal_app_completed, application_stage, bank_statement_analysis_status, zoho_lead_id")
+    .select("portal_app_completed, application_stage, bank_statement_analysis_status, zoho_lead_id, amount_needed, portal_funding_range")
     .eq("id", contactId)
     .maybeSingle();
   if (!contact) return { posted: false, reason: "no_contact" };
@@ -44,20 +52,22 @@ export async function maybePostSubmissionReady(
   if (!appComplete) return { posted: false, reason: "app_incomplete" };
   if (!stmtsAnalyzed) return { posted: false, reason: "statements_not_analyzed" };
 
-  // 2) Resolve the deal and require a Slack thread (the analyzer creates it).
+  // 2) Resolve the deal and require a Slack thread (the analyzer / ensure-deal creates it).
   let dealId = opts.dealId;
   let dealThreadOk = false;
+  let dealAmount = 0;
   if (dealId) {
     const { data: d } = await supabaseAdmin
       .from("deals")
-      .select("id, slack_thread_ts, slack_channel")
+      .select("id, amount, slack_thread_ts, slack_channel")
       .eq("id", dealId)
       .maybeSingle();
     dealThreadOk = !!(d?.slack_thread_ts && d?.slack_channel);
+    dealAmount = Number(d?.amount) || 0;
   } else {
     const { data: d } = await supabaseAdmin
       .from("deals")
-      .select("id, slack_thread_ts, slack_channel")
+      .select("id, amount, slack_thread_ts, slack_channel")
       .eq("contact_id", contactId)
       .order("updated_at", { ascending: false })
       .limit(1)
@@ -65,46 +75,41 @@ export async function maybePostSubmissionReady(
     if (d) {
       dealId = d.id as string;
       dealThreadOk = !!(d.slack_thread_ts && d.slack_channel);
+      dealAmount = Number(d.amount) || 0;
     }
   }
   if (!dealId) return { posted: false, reason: "no_deal" };
   if (!dealThreadOk) return { posted: false, reason: "no_thread" };
 
-  // 3) Idempotency: skip if a pick-lenders card is already pending for this deal.
+  // 3) Idempotency: skip if submissions were already drafted for this deal.
   const { data: existing } = await supabaseAdmin
-    .from("pending_slack_actions")
+    .from("deal_submissions")
     .select("id")
-    .eq("action_type", "send_submission")
-    .eq("status", "pending")
-    .eq("payload->>deal_id", dealId)
+    .eq("deal_id", dealId)
     .limit(1)
     .maybeSingle();
-  if (existing) return { posted: false, reason: "already_posted" };
+  if (existing) return { posted: false, reason: "already_drafted" };
 
-  // 4) Revenue table — prefer the caller's, else reconstruct from the latest analysis.
-  let revenueTable: RevenueRow[] = opts.revenueTable && opts.revenueTable.length > 0 ? opts.revenueTable : [];
-  if (revenueTable.length === 0) {
-    const { data: decision } = await supabaseAdmin
-      .from("ai_decisions")
-      .select("raw_response")
-      .eq("merchant_id", contactId)
-      .eq("state_classified", "bank_statement_analysis")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const raw = decision?.raw_response as { metrics?: { revenue_table?: RevenueRow[] } } | null;
-    revenueTable = raw?.metrics?.revenue_table ?? [];
-  }
+  // 4) Resolve the default lender set → lenders.id[].
+  const orFilter = DEFAULT_SUBMISSION_LENDERS.map((n) => `name.ilike.%${n}%`).join(",");
+  const { data: lenderRows } = await supabaseAdmin
+    .from("lenders")
+    .select("id, name")
+    .or(orFilter)
+    .eq("is_active", true);
+  const lenderIds = (lenderRows ?? []).map((l) => l.id as string);
+  if (lenderIds.length === 0) return { posted: false, reason: "no_default_lenders" };
 
-  // 5) Post the card into the deal thread.
-  const res = await postDraftSubmissionCard({
+  // 5) Auto-draft the gated lender submissions (per-lender approval cards).
+  const requestedAmount =
+    dealAmount ||
+    parseFloat(String(contact.amount_needed ?? contact.portal_funding_range ?? "0").replace(/[^0-9.]/g, "")) ||
+    0;
+  const res = await buildSubmissionPackage({
     dealId,
-    contactId,
-    zohoId: opts.zohoId ?? (contact.zoho_lead_id as string | null) ?? null,
-    revenueTable,
-    onedriveFolderUrl: opts.onedriveFolderUrl,
-    bankStmtDriveItemIds: opts.bankStmtDriveItemIds,
-    aiDecisionId: opts.aiDecisionId,
+    lenderIds,
+    requestedAmount,
+    requestedBy: "cron",
   });
   return { posted: !!res.ok, reason: res.error };
 }

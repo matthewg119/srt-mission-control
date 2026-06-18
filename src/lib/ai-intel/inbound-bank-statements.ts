@@ -170,6 +170,8 @@ async function registerSuggestedFollowup(contact: {
     body: content.html,
     is_html: true,
     from_mailbox: process.env.LEADS_MAILBOX || "matthew@srtagency.com",
+    // Thread the reply under the email the lead sent the statements in.
+    reply_to_graph_message_id: messageId,
     zoho_id: contact.zoho_lead_id ?? undefined,
     contact_id: contact.id,
     note: {
@@ -201,6 +203,7 @@ async function registerSuggestedFollowup(contact: {
       body: content.html,
       is_html: true, // the app-no-statements template is full HTML with the "S" sig embedded
       signature_name: "S",
+      reply_to_graph_message_id: messageId, // thread under the lead's statements email
       status: "suggested",
       ai_reason: "Bank statements received — ask the merchant to finish the application at srtagency.com/fullapp.",
       draft_key: draftKey,

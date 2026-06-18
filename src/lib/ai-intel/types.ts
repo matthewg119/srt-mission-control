@@ -73,6 +73,9 @@ export interface PendingActionPayload {
   // When set, the email is sent FROM this shared mailbox (POST /users/{mailbox}/sendMail)
   // instead of the connected account. Used so funder replies go out from submissions@.
   from_mailbox?: string;
+  // When set, the email is sent as a threaded reply to this Graph message id
+  // (createReply → send) so it lands in the lead's original conversation.
+  reply_to_graph_message_id?: string;
   attachments?: Array<{ name: string; url: string; contentType: string }>;
   deal_id?: string;
   lender_id?: string;

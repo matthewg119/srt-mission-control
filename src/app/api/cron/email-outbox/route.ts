@@ -72,13 +72,24 @@ async function handle(req: NextRequest) {
   for (const row of rows ?? []) {
     try {
       const html = toHtml(row.body as string, !!row.is_html);
-      await microsoft.sendMail({
-        to: row.to_address as string,
-        subject: row.subject as string,
-        body: html,
-        isHtml: true,
-        fromMailbox: LEADS_MAILBOX,
-      });
+      const replyToId = row.reply_to_graph_message_id as string | null;
+      if (replyToId) {
+        // Threaded reply — lands in the lead's original conversation.
+        await microsoft.sendReplyHtml({
+          messageId: replyToId,
+          html,
+          mailbox: LEADS_MAILBOX,
+          to: row.to_address as string,
+        });
+      } else {
+        await microsoft.sendMail({
+          to: row.to_address as string,
+          subject: row.subject as string,
+          body: html,
+          isHtml: true,
+          fromMailbox: LEADS_MAILBOX,
+        });
+      }
 
       const nowIso = new Date().toISOString();
       await supabaseAdmin.from("email_outbox").update({ status: "sent", sent_at: nowIso }).eq("id", row.id);

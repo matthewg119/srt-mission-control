@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
 import { supabaseAdmin } from "@/lib/db";
 import { systemAlert } from "@/lib/notify";
+import { slack } from "@/lib/slack-bot";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -19,6 +20,11 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const contactId = formData.get("contactId") as string | null;
     const businessName = formData.get("businessName") as string | null;
+    // "bank_statement" (default) | "application". Application PDFs are NOT run
+    // through the bank-statement analyzer (it would try to read an app form as a
+    // statement) and post a different #srt-sub card.
+    const docType = (formData.get("docType") as string | null) || "bank_statement";
+    const isApplication = docType === "application";
 
     if (!contactId && !businessName) {
       return NextResponse.json(
@@ -43,6 +49,8 @@ export async function POST(request: NextRequest) {
 
     const folderName = (businessName || "Unknown Business").replace(/[<>:"/\\|?*]/g, "_");
     const results: Array<{ fileName: string; oneDrive?: string; driveItemId?: string; error?: string }> = [];
+    // Keep the raw buffers so the application path can attach the PDF to Slack.
+    const fileBuffers: Array<{ name: string; buffer: Buffer }> = [];
 
     let folderCreated = false;
     try {
@@ -59,6 +67,7 @@ export async function POST(request: NextRequest) {
       };
 
       const buffer = Buffer.from(await file.arrayBuffer());
+      fileBuffers.push({ name: file.name, buffer });
 
       if (folderCreated) {
         try {
@@ -78,14 +87,17 @@ export async function POST(request: NextRequest) {
       results.push(result);
     }
 
+    const fileNames = results.map(r => r.fileName).join(", ");
+    const oneDriveLinks = results
+      .filter(r => r.oneDrive)
+      .map(r => `• ${r.fileName}: ${r.oneDrive}`)
+      .join("\n");
+    const docLabel = isApplication ? "Application" : "Bank statements";
+    const bizDisplay = businessName || "Applicant";
+
     // Add note to deal_notes
     if (contactId && files.length > 0) {
-      const fileNames = results.map(r => r.fileName).join(", ");
-      const oneDriveLinks = results
-        .filter(r => r.oneDrive)
-        .map(r => `• ${r.fileName}: ${r.oneDrive}`)
-        .join("\n");
-      const noteBody = `Bank statements received (${files.length} file${files.length > 1 ? "s" : ""}): ${fileNames}.${oneDriveLinks ? `\n\nOneDrive:\n${oneDriveLinks}` : ""}\n\nReady for underwriting review.`;
+      const noteBody = `${docLabel} received (${files.length} file${files.length > 1 ? "s" : ""}): ${fileNames}.${oneDriveLinks ? `\n\nOneDrive:\n${oneDriveLinks}` : ""}\n\nReady for underwriting review.`;
 
       try {
         await supabaseAdmin.from("deal_notes").insert({
@@ -96,11 +108,44 @@ export async function POST(request: NextRequest) {
       } catch { /* ignore */ }
 
       systemAlert(
-        "Bank Statements Received",
-        `${businessName || "Applicant"} uploaded ${files.length} document(s). Ready for review.`,
+        isApplication ? "Application Received" : "Bank Statements Received",
+        `${bizDisplay} uploaded ${files.length} document(s). Ready for review.`,
         "files/upload",
         "info"
       );
+    }
+
+    // Surface in #srt-sub right away so underwriting can start without waiting on
+    // the analyzer. Statements → a "received" card; a completed application → a
+    // "ready for underwriting" card with the lender PDF attached.
+    const subChannel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
+    if (files.length > 0 && slack.isConfigured()) {
+      try {
+        if (isApplication) {
+          const headerText =
+            `📄 *Application completed — ${bizDisplay}.* Ready for underwriting.` +
+            (oneDriveLinks ? `\n\n*OneDrive:*\n${oneDriveLinks}` : "");
+          const posted = await slack.postMessage(subChannel, headerText) as { ok?: boolean; ts?: string };
+          // Attach the lender (phone-censored) copy if present, else the first PDF.
+          const lender = fileBuffers.find((f) => /lender\.pdf$/i.test(f.name)) || fileBuffers[0];
+          if (lender) {
+            await slack.uploadFilePDF(
+              subChannel,
+              lender.name,
+              lender.buffer,
+              (posted?.ok && posted.ts) ? posted.ts : undefined,
+            );
+          }
+        } else {
+          const headerText =
+            `📑 *Bank statements received — ${bizDisplay}* (${files.length} file${files.length > 1 ? "s" : ""}).` +
+            (oneDriveLinks ? `\n\n*OneDrive:*\n${oneDriveLinks}` : "") +
+            `\n\n_Analyzing…_`;
+          await slack.postMessage(subChannel, headerText);
+        }
+      } catch (err) {
+        console.error("[files/upload] #srt-sub post failed:", err instanceof Error ? err.message : err);
+      }
     }
 
     // Kick off the bank-statement analyzer (digestion pipeline) once files have
@@ -112,7 +157,7 @@ export async function POST(request: NextRequest) {
     // aren't directly downloadable). Fires even without a contactId — the analyzer
     // resolves the deal by merchant_name in that case.
     const driveItemIds = results.map((r) => r.driveItemId).filter((id): id is string => Boolean(id));
-    if (driveItemIds.length > 0 && (contactId || businessName)) {
+    if (!isApplication && driveItemIds.length > 0 && (contactId || businessName)) {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
       fetch(`${appUrl}/api/agent/bank-statements`, {
         method: "POST",
