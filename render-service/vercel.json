@@ -1,4 +1,5 @@
 {
+  "framework": null,
   "functions": {
     "api/render-reel.py": {
       "memory": 2048,
