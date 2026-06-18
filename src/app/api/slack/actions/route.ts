@@ -6,10 +6,9 @@ import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel 
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 import { draftSmsReply, type SuggestedFollowup } from "@/lib/sms-ai-engine";
-import { buildSuggestionBlocks, cancelPendingSuggestion, autoSendEnabled, autoSendMinutes } from "@/lib/imessage-suggestion";
-import { dispatchOutbound } from "@/lib/imessage-transport";
-import { scheduleFollowup, autoScheduleFollowupOnSend } from "@/lib/imessage-followups";
-import { normalizePhone } from "@/lib/phone";
+import { buildSuggestionBlocks, autoSendEnabled, autoSendMinutes } from "@/lib/imessage-suggestion";
+import { deliverPendingDraft } from "@/lib/imessage-send";
+import { scheduleFollowup } from "@/lib/imessage-followups";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -489,60 +488,7 @@ async function regenerateSuggestion(args: { slackTs: string; channel: string }):
 // log here). With 'loopmessage' it sends immediately and dispatchOutbound logs the
 // outbound. Either way the card is retired and the live suggestion cancelled.
 async function sendSuggestion(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
-  const { data: draftRow } = await supabaseAdmin
-    .from("sms_pending_drafts")
-    .select("conversation_id, draft_body")
-    .eq("slack_ts", args.slackTs)
-    .maybeSingle();
-
-  if (!draftRow?.conversation_id || !draftRow.draft_body) {
-    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ No suggestion found to send.");
-    return NextResponse.json({ ok: true });
-  }
-
-  const conversationId = draftRow.conversation_id as string;
-  const body = draftRow.draft_body as string;
-
-  const { data: conv } = await supabaseAdmin
-    .from("sms_conversations")
-    .select("id, phone, contact_id, outcome, close_stage")
-    .eq("id", conversationId)
-    .maybeSingle();
-
-  if (!conv?.phone) {
-    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ No phone on this conversation — cannot send.");
-    return NextResponse.json({ ok: true });
-  }
-  if (conv.outcome === "dead") {
-    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ Conversation is marked dead — not sending.");
-    return NextResponse.json({ ok: true });
-  }
-
-  const phone = normalizePhone(conv.phone as string) ?? (conv.phone as string);
-  const result = await dispatchOutbound({
-    conversationId,
-    contactId: (conv.contact_id as string | null) ?? null,
-    phone,
-    body,
-    source: "manual_send",
-  });
-  if (!result.ok) {
-    await slack.postThreadReply(args.channel, args.slackTs, `⚠️ Send failed: ${result.error ?? "unknown"}`);
-    return NextResponse.json({ ok: true });
-  }
-
-  // Replace the card with a sent confirmation and retire the live suggestion.
-  // On the Mac transport delivery is async (the bridge confirms via its read
-  // loop), so the card reflects "queued".
-  const confirm = result.queued
-    ? `📨 Queued by <@${args.userId}> — the Mac will send it: ${body}`
-    : `✅ Sent by <@${args.userId}>: ${body}`;
-  await slack.updateMessage(args.channel, args.slackTs, confirm);
-  // Auto-schedule the proposed follow-up (best-effort) BEFORE retiring the draft,
-  // since cancelPendingSuggestion deletes the row we read it from.
-  await autoScheduleFollowupOnSend(conversationId);
-  await cancelPendingSuggestion(conversationId);
-
+  await deliverPendingDraft(args);
   return NextResponse.json({ ok: true });
 }
 

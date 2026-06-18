@@ -28,6 +28,7 @@ import {
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
 import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
+import { deliverPendingDraft } from "@/lib/imessage-send";
 
 interface SlackEventFile {
   id: string;
@@ -319,6 +320,32 @@ export async function POST(request: NextRequest) {
           replyText: userText,
         });
         if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // Thread reply under a suggestion card → send the stored draft. A send-command
+      // ("send", "send now", "send it", "go", "yes", 👍) delivers the live draft via
+      // the shared send path. This runs through the Events API, so it works even when
+      // the app's interactivity (button) URL isn't configured. Any other reply is left
+      // alone (falls through to the swallow below) so stray notes typed into the thread
+      // never reach the customer.
+      if (
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        /^(?:✅\s*)?(?:send(?:\s+(?:it|now))?|go|yes|y|👍)$/i.test(userText.trim())
+      ) {
+        const { data: pendingDraft } = await supabaseAdmin
+          .from("sms_pending_drafts")
+          .select("slack_ts")
+          .eq("slack_ts", parentThreadTs)
+          .maybeSingle();
+        if (pendingDraft) {
+          await deliverPendingDraft({
+            channel,
+            slackTs: parentThreadTs,
+            userId: event.user as string,
+          });
+          return NextResponse.json({ ok: true });
+        }
       }
 
       // Messages typed in a lead conversation channel are no longer sent (there is
