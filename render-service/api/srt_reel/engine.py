@@ -35,9 +35,11 @@ FFMPEG = _ffmpeg_bin()
 # ---------------------------------------------------------------- LOCKED LOOK
 W, H, FPS = 720, 1280, 30
 SONG = os.path.join(ASSETS, "song_master.m4a")     # the one song, every time
-BPM = 117
-BEAT0 = 0.234                                       # first downbeat (detected)
-BEAT = 60.0 / BPM                                   # 0.513s per beat
+# Cards drop on the real beat hits of song_master.m4a (measured, not BPM-derived).
+# Cue order = [label, body0, body1, ..., cta]. Every reel is a fixed 5.0s.
+CUES = [0.0, 0.2, 1.2, 3.3]   # seconds; index = card's appearance order
+CUE_GAP = 1.0                  # fallback spacing if a reel has more cards than cues
+CLIP_SECONDS = 5.0
 
 # The palette you've been using. White is reserved for the top label.
 # Each accent has a background + the text color that reads on it.
@@ -214,8 +216,10 @@ def cover(img_path):
     x = (im.width - W)//2; y = (im.height - H)//2
     return im.crop((x, y, x+W, y+H))
 
-def beat_time(k):
-    return BEAT0 + k * BEAT
+def cue_time(i):
+    if i < len(CUES):
+        return CUES[i]
+    return CUES[-1] + (i - (len(CUES) - 1)) * CUE_GAP
 
 def ease_pop(p):
     """0..1 -> scale factor with a little overshoot (CapCut-style pop)."""
@@ -240,10 +244,12 @@ def build_layout(headlines, colors, cta_color):
     def build(scale):
         items = []
         chips = []
+        base = 0
         if headlines.get("label"):
-            chips.append(("label", headlines["label"], "white", beat_time(0)))
+            chips.append(("label", headlines["label"], "white", cue_time(0)))
+            base = 1
         for i, txt in enumerate(body_lines):
-            chips.append(("body", txt, colors[i], beat_time(1 + 2*i)))
+            chips.append(("body", txt, colors[i], cue_time(base + i)))
         rendered = [(k, render_chip(t, c, k, scale), tin) for k, t, c, tin in chips]
         total = sum(vis_h(ch) for _, ch, _ in rendered) + GAP*(len(rendered)-1)
         cta_chip = None
@@ -270,8 +276,8 @@ def build_layout(headlines, colors, cta_color):
         last_bottom = y - GAP - bump + (GAP if kind!="label" else 0)
         last_bottom = y
 
-    last_beat = 1 + 2*(len(body_lines)-1)
-    cta_t = beat_time(last_beat + 2)
+    base = 1 if headlines.get("label") else 0
+    cta_t = cue_time(base + len(body_lines))
     if cta_chip is not None:
         h = vis_h(cta_chip)
         cta_cy = max(int(H * 0.74), last_bottom + h//2)
@@ -290,7 +296,7 @@ def render(image, headlines, out, seed=None, locked=None, zoom=0.0, quiet=False)
         print(f"  colors -> lines={colors}  cta={cta_color}")
     bg = cover(image)
     items, end = build_layout(headlines, colors, cta_color)
-    total = max(end, beat_time(2))
+    total = max(CLIP_SECONDS, end)
     nframes = int(math.ceil(total * FPS))
 
     # ffmpeg: receive raw frames on stdin, mux the fixed song (looped/trimmed)
