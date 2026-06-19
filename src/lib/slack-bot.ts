@@ -91,11 +91,15 @@ export const slack = {
                             return { ok: false, error: "get_upload_url_failed" };
                   }
 
-                  await fetch(urlData.upload_url, {
+                  const put = await fetch(urlData.upload_url, {
                             method: "POST",
                             headers: { "Content-Type": mimetype },
                             body: new Uint8Array(buffer),
                   });
+                  if (!put.ok) {
+                            console.error("[Slack] file byte-upload failed:", put.status);
+                            return { ok: false, error: `upload_bytes_${put.status}` };
+                  }
 
                   const completeBody: Record<string, unknown> = {
                             files: [{ id: urlData.file_id, title: fileName }],
@@ -123,11 +127,15 @@ export const slack = {
                   }
 
                   // Step 2: Upload raw bytes to the pre-signed URL
-                  await fetch(urlData.upload_url, {
+                  const put = await fetch(urlData.upload_url, {
                             method: "POST",
                             headers: { "Content-Type": "application/octet-stream" },
                             body: new Uint8Array(buffer),
                   });
+                  if (!put.ok) {
+                            console.error("[Slack] file byte-upload failed:", put.status);
+                            return { ok: false, error: `upload_bytes_${put.status}` };
+                  }
 
                   // Step 3: Complete upload and share to channel
                   const completeBody: Record<string, unknown> = {

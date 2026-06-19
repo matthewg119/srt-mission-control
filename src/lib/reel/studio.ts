@@ -153,6 +153,39 @@ export async function handleStudioImage(args: {
   const url = imageFile.url_private ?? imageFile.url_private_download ?? null;
   const img = url ? await downloadImage(url, imageFile.mimetype) : null;
 
+  // If the operator posted the FULL copy (title + hook + payoff + cta), render it
+  // right away — skip the variation step. Anything less falls through to suggestions.
+  const directScript = parseBoxes(args.brief);
+  const isComplete = !!(
+    directScript &&
+    directScript.label &&
+    directScript.line1 &&
+    directScript.line2 &&
+    directScript.cta
+  );
+  if (isComplete && directScript) {
+    const { data: jobRow } = await supabaseAdmin
+      .from("reel_studio_jobs")
+      .insert({
+        slack_channel: args.channel,
+        slack_thread_ts: args.threadTs,
+        options_msg_ts: null,
+        brief: args.brief || null,
+        image_url: url,
+        image_mimetype: imageFile.mimetype ?? null,
+        variations: null,
+        status: "rendering",
+      })
+      .select(JOB_COLS)
+      .single();
+    if (jobRow) {
+      void finalizeStudio(jobRow as StudioJobRow, directScript).catch((e) =>
+        console.error("[studio] finalize (direct) error:", (e as Error).message)
+      );
+    }
+    return true;
+  }
+
   let variations: ReelScript[];
   try {
     variations = await generateStudioVariations({ brief: args.brief, image: img ?? undefined });
@@ -250,9 +283,25 @@ async function finalizeStudio(job: StudioJobRow, script: ReelScript): Promise<vo
     const img = job.image_url ? await downloadImage(job.image_url, job.image_mimetype ?? undefined) : null;
     if (!img) throw new Error("could not read the source image");
 
-    const mp4 = await renderReel(script, img);
+    const { mp4, url } = await renderReel(script, img);
 
-    await slack.uploadFile(job.slack_channel, "reel.mp4", mp4, "video/mp4", job.slack_thread_ts);
+    const up = (await slack.uploadFile(
+      job.slack_channel,
+      "reel.mp4",
+      mp4,
+      "video/mp4",
+      job.slack_thread_ts
+    )) as { ok?: boolean; error?: string };
+    if (up.ok === false) {
+      console.error("[studio] reel upload failed:", JSON.stringify(up));
+      await slack.postThreadReply(
+        job.slack_channel,
+        job.slack_thread_ts,
+        url
+          ? `⚠️ Couldn't attach the video to Slack (${up.error ?? "unknown"}). Download it here: ${url}`
+          : `🚫 Reel rendered but the Slack upload failed (${up.error ?? "unknown"}).`
+      );
+    }
 
     let caption = "";
     try {
@@ -289,8 +338,11 @@ async function finalizeStudio(job: StudioJobRow, script: ReelScript): Promise<vo
   }
 }
 
-/** Call the Python render service and return the MP4 bytes. */
-async function renderReel(script: ReelScript, img: ClaudeImageInput): Promise<Buffer> {
+/** Call the Python render service and return the MP4 bytes + its public URL (when stored). */
+async function renderReel(
+  script: ReelScript,
+  img: ClaudeImageInput
+): Promise<{ mp4: Buffer; url: string | null }> {
   // The renderer runs as its OWN Vercel project (render-service/) because a
   // Next.js app cannot host a root /api/*.py function — Next owns the /api
   // namespace. REEL_RENDER_URL is the full endpoint of that project, e.g.
@@ -323,8 +375,8 @@ async function renderReel(script: ReelScript, img: ClaudeImageInput): Promise<Bu
   if (data.url) {
     const r = await fetch(data.url);
     if (!r.ok) throw new Error(`fetch rendered mp4 ${r.status}`);
-    return Buffer.from(await r.arrayBuffer());
+    return { mp4: Buffer.from(await r.arrayBuffer()), url: data.url };
   }
-  if (data.mp4_b64) return Buffer.from(data.mp4_b64, "base64");
+  if (data.mp4_b64) return { mp4: Buffer.from(data.mp4_b64, "base64"), url: null };
   throw new Error("render-reel returned no url or mp4");
 }
