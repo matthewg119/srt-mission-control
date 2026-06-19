@@ -25,6 +25,11 @@ export async function POST(request: NextRequest) {
     // statement) and post a different #srt-sub card.
     const docType = (formData.get("docType") as string | null) || "bank_statement";
     const isApplication = docType === "application";
+    // When set, this upload belongs to a standalone /apply submission. The AI
+    // ingest endpoint posts the richer #srt-sub card (with the Check button), so
+    // we suppress the default "ready for underwriting" card here to avoid a
+    // duplicate post for the same application.
+    const applicationId = formData.get("applicationId") as string | null;
 
     if (!contactId && !businessName) {
       return NextResponse.json(
@@ -119,7 +124,7 @@ export async function POST(request: NextRequest) {
     // the analyzer. Statements → a "received" card; a completed application → a
     // "ready for underwriting" card with the lender PDF attached.
     const subChannel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM";
-    if (files.length > 0 && slack.isConfigured()) {
+    if (files.length > 0 && slack.isConfigured() && !(isApplication && applicationId)) {
       try {
         if (isApplication) {
           const headerText =

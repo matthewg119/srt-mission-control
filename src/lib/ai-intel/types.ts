@@ -25,7 +25,22 @@ export type ActionType =
   | "send_submission"
   | "clear_lead_amounts"
   | "add_lender"
-  | "seed_lenders";
+  | "seed_lenders"
+  | "apply_followup";
+
+/** Suggested next action for a standalone /apply submission. */
+export interface ApplySuggestedAction {
+  kind: "ensure_deal" | "create_zoho_lead" | "add_note" | "flag_duplicate";
+  detail: string;
+}
+
+export interface ApplyDedup {
+  matched: boolean;
+  confidence: "exact" | "fuzzy" | "none";
+  existing_name?: string | null;
+  existing_zoho_id?: string | null;
+  prior_apply_count?: number;
+}
 
 export type CadenceTrack =
   | "new_lead"
@@ -111,5 +126,10 @@ export interface PendingActionPayload {
   magic_link_redirect?: string;
   // links back to sequence_enrollments so the runner can advance the step after send
   enrollment_id?: string;
+  // apply_followup specific — standalone /apply submission processing
+  application_id?: string;
+  business_name?: string;
+  suggested_actions?: ApplySuggestedAction[];
+  dedup?: ApplyDedup;
   [key: string]: unknown;
 }

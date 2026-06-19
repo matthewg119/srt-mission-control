@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft } from "@/lib/microsoft";
 import { slack } from "@/lib/slack-bot";
-import { addNoteToLead, updateLead } from "@/lib/zoho";
+import { addNoteToLead, updateLead, createLead } from "@/lib/zoho";
 import type { PendingActionPayload } from "./types";
 import { DEFAULTS } from "@/config/defaults";
 import { EMAIL_SIGNATURE_HTML, SIGNATURE_S_HTML, resolveSubmissionSignature } from "@/config/email-signature";
@@ -66,6 +66,8 @@ export async function executePendingAction(opts: {
         return await addLender(opts.payload);
       case "seed_lenders":
         return await seedLenders(opts.payload);
+      case "apply_followup":
+        return await runApplyFollowup(opts.payload);
       default:
         return { ok: false, error: `unknown_action_type:${opts.actionType}` };
     }
@@ -419,4 +421,115 @@ async function clearLeadAmounts(payload: PendingActionPayload): Promise<ExecuteR
   }
   const succeeded = results.filter((r) => r.ok).length;
   return { ok: true, details: { cleared: succeeded, total: targets.length, results } };
+}
+
+// "Check" on a standalone /apply card — run the suggested actions and report
+// exactly what was done. Best-effort per action: one failing action does not
+// abort the rest. Reads the application row by application_id for the detail.
+type StandaloneApp = {
+  id: string;
+  first_name: string | null; last_name: string | null; email: string | null; phone: string | null;
+  business_name: string | null; industry: string | null; biz_type: string | null; ein: string | null;
+  inc_date: string | null; ownership: string | null; biz_address: string | null; biz_city: string | null;
+  biz_state: string | null; biz_zip: string | null; monthly_revenue: string | null; amount_needed: string | null;
+  use_of_funds: string | null; existing_loans: string | null; funding_urgency: string | null; zoho_lead_id: string | null;
+};
+
+function applicationNote(app: StandaloneApp): string {
+  const v = (val: unknown) => (val && val !== "" ? String(val) : "—");
+  const addr = [app.biz_address, app.biz_city, app.biz_state, app.biz_zip].filter(Boolean).join(", ");
+  return [
+    "=== /apply SUBMISSION ===",
+    `Business: ${v(app.business_name)} (${v(app.biz_type)}, ${v(app.industry)})`,
+    `Contact: ${v(app.first_name)} ${v(app.last_name)} | ${v(app.email)} | ${v(app.phone)}`,
+    `Started: ${v(app.inc_date)} | Ownership: ${v(app.ownership)} | EIN: ${v(app.ein)}`,
+    `Address: ${addr || "—"}`,
+    `Monthly revenue: ${v(app.monthly_revenue)} | Requesting: ${v(app.amount_needed)} | Use: ${v(app.use_of_funds)}`,
+    `Existing loans: ${v(app.existing_loans)} | Urgency: ${v(app.funding_urgency)}`,
+  ].join("\n");
+}
+
+async function runApplyFollowup(payload: PendingActionPayload): Promise<ExecuteResult> {
+  const applicationId = payload.application_id;
+  if (!applicationId) return { ok: false, error: "missing_application_id" };
+
+  const { data: app } = await supabaseAdmin
+    .from("standalone_applications")
+    .select("*")
+    .eq("id", applicationId)
+    .maybeSingle();
+  if (!app) return { ok: false, error: "application_not_found" };
+
+  const a = app as StandaloneApp;
+  const did: string[] = [];
+  let zohoId = a.zoho_lead_id || payload.dedup?.existing_zoho_id || payload.zoho_id || null;
+  const actions = payload.suggested_actions ?? [];
+
+  for (const action of actions) {
+    try {
+      switch (action.kind) {
+        case "create_zoho_lead": {
+          const newId = await createLead({
+            firstName: a.first_name || undefined,
+            lastName: a.last_name || undefined,
+            email: a.email || undefined,
+            phone: a.phone || undefined,
+            businessName: a.business_name || undefined,
+            source: "Apply Link",
+            Lead_Status: "Application Complete",
+            fundingAmount: a.amount_needed || undefined,
+            monthlyRevenue: a.monthly_revenue || undefined,
+            industry: a.industry || undefined,
+            ein: a.ein || undefined,
+            useOfFunds: a.use_of_funds || undefined,
+            existingLoans: a.existing_loans || undefined,
+            bizAddress: a.biz_address || undefined,
+            bizCity: a.biz_city || undefined,
+          });
+          if (newId) {
+            zohoId = newId;
+            await supabaseAdmin.from("standalone_applications").update({ zoho_lead_id: newId }).eq("id", a.id);
+            did.push(`Created Zoho lead for ${a.business_name || "applicant"} (${newId}).`);
+          } else {
+            did.push("Zoho lead creation returned no id.");
+          }
+          break;
+        }
+        case "add_note": {
+          if (zohoId) {
+            await addNoteToLead(zohoId, "Application from /apply", `${action.detail}\n\n${applicationNote(a)}`);
+            did.push(`Logged note on Zoho record ${zohoId}.`);
+          } else {
+            did.push("No Zoho record to note yet (skipped add_note).");
+          }
+          break;
+        }
+        case "flag_duplicate": {
+          const existing = payload.dedup?.existing_name || "an existing record";
+          if (zohoId) {
+            await addNoteToLead(zohoId, "Possible duplicate from /apply", `${action.detail}\n\nMatches ${existing}. Review before creating a new lead.\n\n${applicationNote(a)}`).catch(() => {});
+          }
+          did.push(`Flagged possible duplicate of ${existing} (no new lead created).`);
+          break;
+        }
+        case "ensure_deal": {
+          // Standalone /apply rows have no MC contact; record the intent on the
+          // Zoho record so a deal can be opened from the CRM.
+          if (zohoId) {
+            await addNoteToLead(zohoId, "Ensure deal", action.detail).catch(() => {});
+            did.push("Noted deal/thread to open on the Zoho record.");
+          } else {
+            did.push("No record yet to attach a deal (skipped ensure_deal).");
+          }
+          break;
+        }
+        default:
+          did.push(`Unknown action: ${(action as { kind?: string }).kind ?? "?"}`);
+      }
+    } catch (e) {
+      did.push(`Failed ${action.kind}: ${(e as Error).message}`);
+    }
+  }
+
+  return { ok: true, details: { did, zoho_id: zohoId } };
 }
