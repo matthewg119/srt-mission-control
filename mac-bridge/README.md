@@ -1,8 +1,9 @@
 # SRT iMessage Bridge (Mac)
 
 Pulls inbound merchant iMessages (and Matthew's own replies) from the Mac's
-`~/Library/Messages/chat.db` into Mission Control, where they're filtered to
-**CRM contacts only** and mirrored into each lead's Slack channel with a
+`~/Library/Messages/chat.db` into Mission Control, where each sender is matched
+to a CRM contact (resolving unknown numbers against Zoho live and seeding a
+contact on the fly) and mirrored into the lead's Slack channel with a
 Vektor-drafted reply suggestion.
 
 **Outbound is manual.** Matthew copies the suggested reply from Slack and pastes
@@ -16,8 +17,9 @@ chat.db ──(sqlite3 read-only snapshot)──▶ imessage-bridge.mjs
         ──POST {messages:[…]}── X-Imessage-Secret ──▶ /api/imessage/inbound
                                                           │
                             normalizePhone → match contacts.phone/mobile_phone
-                                  no match → DISCARD (no DB, no Slack)
-                                  match    → sms_conversations + sms_messages
+                                  no match → searchLeads in Zoho → seed contact
+                                  still unknown → thread stored under the phone #
+                                  matched/resolved → sms_conversations + sms_messages
                                              → lead Slack channel + suggestion card
 ```
 
@@ -41,7 +43,7 @@ chat.db ──(sqlite3 read-only snapshot)──▶ imessage-bridge.mjs
 
 **a) Apply the two Supabase migrations.** Contact matching and dedupe depend on
 columns that are added manually in the Supabase SQL editor. If they're missing,
-every message is discarded server-side and `--backfill` silently imports **0**.
+contact matching errors out server-side and `--backfill` silently imports **0**.
 Run both in the SQL editor (safe to re-run):
 
 - `docs/2026-05-30-imessage-transport.sql` → `sms_messages.imessage_guid`
