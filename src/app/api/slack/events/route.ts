@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import type { HookOption } from "@/lib/content-types";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
@@ -414,14 +415,18 @@ export async function POST(request: NextRequest) {
         const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
         if (isContentFullChannel && !decoderKeyword) {
           if (!isThreadReply && hasImageFiles) {
-            void handleStudioImage({
-              channel,
-              threadTs: contentThreadTs,
-              files: attachedFiles,
-              brief: userText,
-            }).catch((e) => {
-              console.error("[slack/events] studio image error:", (e as Error).message);
-            });
+            // waitUntil so Vercel keeps the function alive until the variations
+            // post — a bare fire-and-forget gets frozen right after the 200.
+            waitUntil(
+              handleStudioImage({
+                channel,
+                threadTs: contentThreadTs,
+                files: attachedFiles,
+                brief: userText,
+              }).catch((e) => {
+                console.error("[slack/events] studio image error:", (e as Error).message);
+              })
+            );
             return NextResponse.json({ ok: true });
           }
           if (isThreadReply && !hasImageFiles && userText.trim().length > 0) {

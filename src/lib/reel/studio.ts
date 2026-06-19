@@ -10,6 +10,7 @@
 // All handlers self-route by DB lookup and return false when the event is not a
 // studio event, so the Slack events route can fall through to its other handlers.
 
+import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import type { ClaudeImageInput } from "@/lib/claude-calls";
@@ -150,6 +151,9 @@ export async function handleStudioImage(args: {
   const imageFile = args.files.find((f) => (f.mimetype ?? "").startsWith("image/"));
   if (!imageFile) return false;
 
+  // Instant ack so the operator gets feedback before the multi-second vision call.
+  await slack.postThreadReply(args.channel, args.threadTs, "🎬 Reading your photo, building 4 headline options…");
+
   const url = imageFile.url_private ?? imageFile.url_private_download ?? null;
   const img = url ? await downloadImage(url, imageFile.mimetype) : null;
 
@@ -179,8 +183,10 @@ export async function handleStudioImage(args: {
       .select(JOB_COLS)
       .single();
     if (jobRow) {
-      void finalizeStudio(jobRow as StudioJobRow, directScript).catch((e) =>
-        console.error("[studio] finalize (direct) error:", (e as Error).message)
+      waitUntil(
+        finalizeStudio(jobRow as StudioJobRow, directScript).catch((e) =>
+          console.error("[studio] finalize (direct) error:", (e as Error).message)
+        )
       );
     }
     return true;
@@ -235,8 +241,10 @@ export async function handleStudioReaction(args: {
   const chosen = (job.variations ?? [])[idx];
   if (!chosen) return false;
 
-  void finalizeStudio(job, chosen).catch((e) =>
-    console.error("[studio] finalize (reaction) error:", (e as Error).message)
+  waitUntil(
+    finalizeStudio(job, chosen).catch((e) =>
+      console.error("[studio] finalize (reaction) error:", (e as Error).message)
+    )
   );
   return true;
 }
@@ -264,8 +272,10 @@ export async function handleStudioReply(args: {
     return true; // claimed: this is a studio thread, don't fall through to other handlers
   }
 
-  void finalizeStudio(job, script).catch((e) =>
-    console.error("[studio] finalize (reply) error:", (e as Error).message)
+  waitUntil(
+    finalizeStudio(job, script).catch((e) =>
+      console.error("[studio] finalize (reply) error:", (e as Error).message)
+    )
   );
   return true;
 }
