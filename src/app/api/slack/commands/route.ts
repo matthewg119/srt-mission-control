@@ -4,6 +4,13 @@ import { supabaseAdmin } from "@/lib/db";
 import { buildSubmissionPackage } from "@/lib/ai-intel/deal-submission-builder";
 import { sendLenderRoutingRequest } from "@/lib/ai-intel/request-lender-routing";
 import { microsoft } from "@/lib/microsoft";
+import {
+  enqueueBridgeCommand,
+  getBridgeStatus,
+  formatBridgeStatusLine,
+  bridgeActionElements,
+  type BridgeCommandType,
+} from "@/lib/imessage-control";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,8 +57,10 @@ export async function POST(req: NextRequest) {
       return handleActivity();
     case "doc":
       return handleDoc({ arg });
+    case "bridge":
+      return handleBridge({ action: arg, userId });
     default:
-      return respond(`Unknown subcommand. Try: \`/srt route [merchant]\` (ask where to send), \`/srt submit [merchant]\` (auto submit to T1), \`/srt status [merchant]\`, \`/srt doc [merchant] [filename]\`, \`/srt followups\`, \`/srt emails\`, \`/srt activity\`.`);
+      return respond(`Unknown subcommand. Try: \`/srt route [merchant]\` (ask where to send), \`/srt submit [merchant]\` (auto submit to T1), \`/srt status [merchant]\`, \`/srt doc [merchant] [filename]\`, \`/srt followups\`, \`/srt emails\`, \`/srt activity\`, \`/srt bridge [status|restart|doctor|resync]\`.`);
   }
 }
 
@@ -217,6 +226,34 @@ async function handleStatus(args: { merchantQuery: string }): Promise<NextRespon
   ].filter(Boolean).join("\n");
 
   return respond(lines);
+}
+
+// /srt bridge [status|restart|doctor|resync] — control the Mac iMessage bridge.
+// status is answered server-side from the heartbeat (works even when the Mac is
+// dead). restart/doctor/resync are queued; the bridge picks them up within ~10s
+// on its next outbox poll.
+async function handleBridge(args: { action: string; userId: string }): Promise<NextResponse> {
+  const action = (args.action || "status").toLowerCase().trim();
+
+  if (action === "status") {
+    const s = await getBridgeStatus();
+    const line = formatBridgeStatusLine(s);
+    // Also drop a control card into the bridge channel so the buttons are at hand.
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: `*iMessage bridge control*\n${line}` } },
+      { type: "actions", elements: bridgeActionElements() },
+    ] as unknown as Parameters<typeof slack.postMessage>[2];
+    await slack.postMessage(slack.channels.bridge, line, blocks);
+    return respond(line);
+  }
+
+  if (action === "restart" || action === "doctor" || action === "resync") {
+    const res = await enqueueBridgeCommand(action as BridgeCommandType, args.userId);
+    if (!res.ok) return respond(`⚠️ Could not queue *${action}*: ${res.error}`);
+    return respond(`🛰️ Queued *${action}* — the bridge will pick it up within ~10s.`);
+  }
+
+  return respond("Usage: `/srt bridge [status|restart|doctor|resync]`");
 }
 
 async function handleFollowups(): Promise<NextResponse> {

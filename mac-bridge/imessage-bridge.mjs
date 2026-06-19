@@ -222,6 +222,7 @@ function sendViaMessages(phone, text) {
 async function pollOutbox() {
   if (!SECRET) return;
   let messages = [];
+  let commands = [];
   try {
     const res = await fetch(OUTBOX_URL, {
       method: "GET",
@@ -230,6 +231,7 @@ async function pollOutbox() {
     if (!res.ok) { console.error(`[bridge] outbox GET ${res.status}`); return; }
     const json = await res.json().catch(() => ({}));
     messages = Array.isArray(json.messages) ? json.messages : [];
+    commands = Array.isArray(json.commands) ? json.commands : [];
   } catch (e) {
     console.error("[bridge] outbox GET failed:", e.message);
     return;
@@ -246,6 +248,53 @@ async function pollOutbox() {
       console.error(`[bridge] outbox send failed ${m.id}:`, err);
       await ackOutbox(m.id, false, err);
     }
+  }
+
+  // Remote-control commands queued from Slack (restart / doctor / resync). Each
+  // is isolated in handleCommand so one bad command never crashes the loop.
+  for (const c of commands) {
+    if (!c?.id || !c?.type) continue;
+    await handleCommand(c);
+  }
+}
+
+// Execute a control command from the server. restart exits (launchd KeepAlive
+// respawns it); doctor re-runs the health report; resync forces a catch-up poll.
+async function handleCommand(cmd) {
+  console.log(`[bridge] command received: ${cmd.type} (${cmd.id})`);
+  try {
+    if (cmd.type === "restart") {
+      await ackCommand(cmd.id, true, "restart");
+      console.log("[bridge] restarting now — launchd KeepAlive will respawn");
+      process.exit(0);
+    } else if (cmd.type === "doctor") {
+      await doctor(); // posts its own report to the bridge channel
+      await ackCommand(cmd.id, true, "doctor");
+    } else if (cmd.type === "resync") {
+      const n = await poll();
+      await ackCommand(cmd.id, true, `resync (${n} shipped)`);
+    } else {
+      await ackCommand(cmd.id, false, null, `unknown command: ${cmd.type}`);
+    }
+  } catch (e) {
+    const err = (e && e.message) ? e.message : String(e);
+    console.error(`[bridge] command ${cmd.type} failed:`, err);
+    await ackCommand(cmd.id, false, null, err);
+  }
+}
+
+async function ackCommand(commandId, ok, result, error) {
+  try {
+    const body = { commandId, ok };
+    if (result) body.result = result;
+    if (error) body.error = error;
+    await fetch(OUTBOX_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Imessage-Secret": SECRET },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error(`[bridge] command ack failed ${commandId}:`, e.message);
   }
 }
 

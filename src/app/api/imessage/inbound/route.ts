@@ -26,6 +26,7 @@ import { appendApprovedReplyToVoice } from "@/lib/voice-ingest";
 import { postImessageSuggestion, cancelPendingSuggestion } from "@/lib/imessage-suggestion";
 import { markZohoHotLead, searchLeads, type ZohoApiRecord } from "@/lib/zoho";
 import { slack } from "@/lib/slack-bot";
+import { bridgeActionElements } from "@/lib/imessage-control";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -374,15 +375,17 @@ async function relayDiagnostics(diag: { checks?: DoctorCheck[]; host?: string })
   const checks = diag.checks ?? [];
   const allOk = checks.length > 0 && checks.every((c) => c.ok);
   const lines = checks.map((c) => `${c.ok ? "✅" : "❌"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
-  const channel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM"; // #srt-sub
-  await slack.postMessage(
-    channel,
-    [
-      `${allOk ? "🩺 *iMessage bridge doctor — ALL PASS*" : "🩺 *iMessage bridge doctor — ISSUES FOUND*"}` +
-        (diag.host ? ` _(host: ${diag.host})_` : ""),
-      ...lines,
-    ].join("\n")
-  );
+  const header =
+    `${allOk ? "🩺 *iMessage bridge doctor — ALL PASS*" : "🩺 *iMessage bridge doctor — ISSUES FOUND*"}` +
+    (diag.host ? ` _(host: ${diag.host})_` : "");
+  const text = [header, ...lines].join("\n");
+  // Control buttons live right on the report so the bridge can be restarted /
+  // re-doctored / resynced without leaving Slack.
+  const blocks = [
+    { type: "section", text: { type: "mrkdwn", text } },
+    { type: "actions", elements: bridgeActionElements() },
+  ] as unknown as Parameters<typeof slack.postMessage>[2];
+  await slack.postMessage(slack.channels.bridge, text, blocks);
   return NextResponse.json({ ok: true, allOk });
 }
 

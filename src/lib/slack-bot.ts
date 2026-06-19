@@ -244,6 +244,9 @@ export const slack = {
                   get ceo() { return process.env.SLACK_CEO_CHANNEL || ""; },
                   get uw() { return process.env.SLACK_UW_CHANNEL || ""; },
                   get sub() { return process.env.SLACK_SUB_CHANNEL || ""; },
+		  // iMessage-bridge control + doctor reports. Falls back to #srt-sub so
+		  // nothing breaks before SLACK_BRIDGE_CHANNEL is set in Vercel.
+		  get bridge() { return process.env.SLACK_BRIDGE_CHANNEL || process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM"; },
         },
 
         /** Verify Slack request signature */

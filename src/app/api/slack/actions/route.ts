@@ -9,6 +9,7 @@ import { draftSmsReply, type SuggestedFollowup } from "@/lib/sms-ai-engine";
 import { buildSuggestionBlocks, autoSendEnabled, autoSendMinutes } from "@/lib/imessage-suggestion";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { scheduleFollowup } from "@/lib/imessage-followups";
+import { enqueueBridgeCommand, getBridgeStatus, formatBridgeStatusLine, type BridgeCommandType } from "@/lib/imessage-control";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,6 +81,9 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
 
   switch (action.action_id) {
     case "ai_approve":
+    case "apply_check":
+      // "Check" on a standalone /apply card resolves + executes the pending
+      // apply_followup action, exactly like Approve on a normal AI card.
       return approveAction({ slackTs, channel, userId });
     case "ai_cancel":
       return cancelAction({ slackTs, channel, userId });
@@ -104,6 +108,12 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
     case "sequence_cat_loc":
     case "sequence_cat_cre":
       return sequenceUpdateCategory({ channel, userId, slackTs, actionValue: action.value });
+    case "bridge_restart":
+    case "bridge_doctor":
+    case "bridge_resync":
+      return bridgeCommandAction({ actionId: action.action_id, channel, slackTs, userId });
+    case "bridge_status":
+      return bridgeStatusAction({ channel, slackTs });
     default:
       return NextResponse.json({ ok: true });
   }
@@ -680,6 +690,25 @@ async function sequenceUpdateCategory(args: {
   return NextResponse.json({ ok: true });
 }
 
+// ── iMessage bridge control buttons (🔄 Restart / 🩺 Doctor / ♻️ Resync / 📡 Status) ──
+// Restart/Doctor/Resync queue a command the Mac bridge drains on its next ~10s
+// outbox poll. Status reads the heartbeat server-side (works even if the Mac is down).
+async function bridgeCommandAction(args: { actionId: string; channel: string; slackTs: string; userId: string }): Promise<NextResponse> {
+  const type = args.actionId.replace("bridge_", "") as BridgeCommandType;
+  const res = await enqueueBridgeCommand(type, args.userId);
+  const msg = res.ok
+    ? `🛰️ <@${args.userId}> queued *${type}* — bridge will pick it up within ~10s.`
+    : `⚠️ Could not queue *${type}*: ${res.error}`;
+  await slack.postThreadReply(args.channel, args.slackTs, msg);
+  return NextResponse.json({ ok: true });
+}
+
+async function bridgeStatusAction(args: { channel: string; slackTs: string }): Promise<NextResponse> {
+  const s = await getBridgeStatus();
+  await slack.postThreadReply(args.channel, args.slackTs, formatBridgeStatusLine(s));
+  return NextResponse.json({ ok: true });
+}
+
 function isMatthew(slackUserId: string): boolean {
   const matthewId = process.env.MATTHEW_SLACK_USER_ID ?? "";
   return matthewId !== "" && slackUserId === matthewId;
@@ -700,6 +729,10 @@ function summarizeResult(actionType: string, details?: Record<string, unknown>):
   }
   if (actionType === "update_zoho") {
     return `Zoho updated (stage → ${details.stage ?? "n/a"}).`;
+  }
+  if (actionType === "apply_followup") {
+    const did = Array.isArray(details.did) ? (details.did as string[]) : [];
+    return did.length ? `Done:\n${did.map((d) => `• ${d}`).join("\n")}` : "Nothing to do.";
   }
   return "";
 }

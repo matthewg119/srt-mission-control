@@ -16,6 +16,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { sweepAutoSends } from "@/lib/imessage-autosend";
 import { runDueFollowups } from "@/lib/imessage-followups";
 import { runDueIncomeVerificationFollowups } from "@/lib/income-verification-followup";
+import { takePendingCommands } from "@/lib/imessage-control";
+import { slack } from "@/lib/slack-bot";
 
 export const runtime = "nodejs";
 
@@ -65,18 +67,31 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: true })
     .limit(20);
 
+  // Remote-control commands (restart / doctor / resync) queued from Slack. We
+  // take + clear them here so the bridge picks them up on the same ~10s poll it
+  // already does for outbound texts.
+  let commands: Array<{ id: string; type: string }> = [];
+  try {
+    commands = (await takePendingCommands()).map((c) => ({ id: c.id, type: c.type }));
+  } catch (e) {
+    console.error("[imessage/outbox] command fetch failed:", (e as Error).message);
+  }
+
   if (error) {
     console.error("[imessage/outbox] query failed:", error.message);
-    return NextResponse.json({ messages: [] });
+    return NextResponse.json({ messages: [], commands });
   }
 
   return NextResponse.json({
     messages: (data ?? []).map((m) => ({ id: m.id, phone: m.phone, body: m.body })),
+    commands,
   });
 }
 
 interface AckBody {
   id?: string;
+  commandId?: string;
+  result?: string;
   ok?: boolean;
   error?: string;
 }
@@ -91,6 +106,21 @@ export async function POST(req: NextRequest) {
     body = (await req.json()) as AckBody;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+  }
+
+  // Command ack (restart / doctor / resync) — post a one-line confirmation to the
+  // bridge channel. Restart never acks (the process is gone before it can), so a
+  // missing ack there is expected.
+  if (body.commandId) {
+    const note = body.ok
+      ? `✅ Bridge command done: *${body.result ?? "ok"}*`
+      : `⚠️ Bridge command failed: ${body.error ?? "unknown"}`;
+    try {
+      await slack.postMessage(slack.channels.bridge, note);
+    } catch (e) {
+      console.error("[imessage/outbox] command ack post failed:", (e as Error).message);
+    }
+    return NextResponse.json({ ok: true });
   }
 
   if (!body.id) {
