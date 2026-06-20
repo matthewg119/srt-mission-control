@@ -563,7 +563,11 @@ export async function POST(request: NextRequest) {
                               // flow it already fired (and deduped against the browser
                               // pixel) in the 10% block, and the existing-contact branch
                               // above deliberately does NOT re-fire it at 50%/80%.
-                              if (hasMetaAttributionServer({ fbc: _fbc })) {
+                              // Honor deferMetaLead so DNQ (under-1-year) leads stay
+                              // suppressed here too, matching the 10% block and the
+                              // browser pixel — otherwise CAPI would inflate the Lead
+                              // count for junk leads that resumed at 25%+.
+                              if (!deferMetaLead && hasMetaAttributionServer({ fbc: _fbc })) {
                                 try {
                                   const capiResult = await sendEvent({
                                     eventName: "Lead",
