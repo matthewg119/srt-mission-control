@@ -80,10 +80,11 @@ export const slack = {
                   const token = getToken();
                   if (!token) return { ok: false, error: "no_token" };
 
+                  // files.getUploadURLExternal only reads form-encoded params, NOT JSON.
                   const urlRes = await fetch(`${SLACK_API}/files.getUploadURLExternal`, {
                             method: "POST",
-                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
-                            body: JSON.stringify({ filename: fileName, length: buffer.length }),
+                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" },
+                            body: new URLSearchParams({ filename: fileName, length: String(buffer.length) }).toString(),
                   });
                   const urlData = await urlRes.json() as { ok: boolean; upload_url?: string; file_id?: string };
                   if (!urlData.ok || !urlData.upload_url || !urlData.file_id) {
@@ -115,10 +116,11 @@ export const slack = {
                   if (!token) return { ok: false, error: "no_token" };
 
                   // Step 1: Get pre-signed upload URL + file_id
+                  // files.getUploadURLExternal only reads form-encoded params, NOT JSON.
                   const urlRes = await fetch(`${SLACK_API}/files.getUploadURLExternal`, {
                             method: "POST",
-                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
-                            body: JSON.stringify({ filename: fileName, length: buffer.length }),
+                            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" },
+                            body: new URLSearchParams({ filename: fileName, length: String(buffer.length) }).toString(),
                   });
                   const urlData = await urlRes.json() as { ok: boolean; upload_url?: string; file_id?: string };
                   if (!urlData.ok || !urlData.upload_url || !urlData.file_id) {
