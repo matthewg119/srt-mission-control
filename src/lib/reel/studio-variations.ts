@@ -42,12 +42,16 @@ function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
 }
 
+// Strip leading/trailing markdown emphasis (*, _) that leaks in from pasted
+// Slack-bold copy, so "*Business owners*" renders as "Business owners".
+const stripMd = (s: string) => stripEmDashes(s).replace(/^[\*_\s]+/, "").replace(/[\*_\s]+$/, "");
+
 export function cleanScript(s: ReelScript): ReelScript {
   return {
-    label: stripEmDashes(s.label).trim(),
-    line1: stripEmDashes(s.line1).trim(),
-    line2: stripEmDashes(s.line2).trim(),
-    cta: stripEmDashes(s.cta).trim(),
+    label: stripMd(s.label),
+    line1: stripMd(s.line1),
+    line2: stripMd(s.line2),
+    cta: stripMd(s.cta),
   };
 }
 

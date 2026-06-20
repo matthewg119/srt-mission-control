@@ -139,7 +139,7 @@ def render_chip(text, color, kind="body", scale=1.0):
     `scale` shrinks the whole chip (font + padding) for auto-fit."""
     bg = PALETTE[color]["bg"]; fg = PALETTE[color]["fg"]
     if kind == "label":
-        font_path, base, max_w, max_lines = FONT_LABEL, 46, int(W*0.80), 1
+        font_path, base, max_w, max_lines = FONT_LABEL, 36, int(W*0.80), 1
         padx, pady, radius = 26, 14, 14
     elif kind == "cta":
         font_path, base, max_w, max_lines = FONT_BODY, 46, int(W*0.62), 2
@@ -271,7 +271,7 @@ def build_layout(headlines, colors, cta_color):
     for idx, (kind, chip, tin) in enumerate(rendered):
         h = vis_h(chip)
         bump = 10 if kind == "label" else 0
-        items.append(dict(chip=chip, cx=W//2, cy=y + h//2, t_in=tin))
+        items.append(dict(chip=chip, cx=W//2, cy=y + h//2, t_in=tin, is_label=(kind == "label")))
         y += h + GAP + bump
         last_bottom = y - GAP - bump + (GAP if kind!="label" else 0)
         last_bottom = y
@@ -322,9 +322,13 @@ def render(image, headlines, out, seed=None, locked=None, zoom=0.0, quiet=False)
         for it in items:
             if t < it["t_in"]:
                 continue
-            p = min(1.0, (t - it["t_in"]) / POP)
-            scale = ease_pop(p)
-            alpha = min(1.0, (t - it["t_in"]) / (POP*0.6))
+            if it.get("is_label"):
+                # Title is always-on: fully sized + opaque from frame 0, no pop.
+                scale, alpha = 1.0, 1.0
+            else:
+                p = min(1.0, (t - it["t_in"]) / POP)
+                scale = ease_pop(p)
+                alpha = min(1.0, (t - it["t_in"]) / (POP*0.6))
             chip = it["chip"]
             cw, ch = chip.size
             sw, sh = max(1, int(cw*scale)), max(1, int(ch*scale))
