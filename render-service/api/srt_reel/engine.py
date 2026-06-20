@@ -39,7 +39,7 @@ SONG = os.path.join(ASSETS, "song_master.m4a")     # the one song, every time
 # Cue order = [label, body0, body1, ..., cta]. Every reel is a fixed 5.0s.
 CUES = [0.0, 0.2, 1.2, 3.3]   # seconds; index = card's appearance order
 CUE_GAP = 1.0                  # fallback spacing if a reel has more cards than cues
-CLIP_SECONDS = 5.0
+CLIP_SECONDS = 6.0   # floor; players never round a 6.0s clip down to 0:04, CTA breathes
 
 # The palette you've been using. White is reserved for the top label.
 # Each accent has a background + the text color that reads on it.
