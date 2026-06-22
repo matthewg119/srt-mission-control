@@ -72,6 +72,7 @@ export async function POST(request: NextRequest) {
                         utmCampaign, utmContent, utmMedium, adId,
                         businessStartDate, hasCheckingAccount,
                         deferMetaLead, timeInBusiness,
+                        threadMilestone,
             } = body;
 
           // Accept incDate, incorporatedDate, or businessStartDate (v6 sends businessStartDate as "YYYY-MM")
@@ -96,6 +97,36 @@ export async function POST(request: NextRequest) {
 
           // Normalize email for consistent lookups
           const normalizedEmail = email ? email.trim().toLowerCase() : email;
+
+          // ── PDF-funnel progressive thread pings ──
+          // The PDF funnel posts `threadMilestone` at step 2 (funding amount) and
+          // after Plaid connects so the lead's Slack thread shows live progress.
+          // Notification-only: no Zoho / Speed-to-Lead / persistence happens here
+          // (those live in the percentage blocks). The "income" milestone (step 3)
+          // is posted from the 25% block instead, so it lands AFTER the revenue /
+          // credit fields are saved and shows up in the thread diff.
+          if ((threadMilestone === "funding" || threadMilestone === "plaid") && normalizedEmail) {
+            try {
+              const { data: milestoneContact } = await supabaseAdmin
+                .from("contacts")
+                .select("id")
+                .ilike("email", normalizedEmail)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (milestoneContact?.id) {
+                const action = threadMilestone === "funding" ? "milestone_50" : "plaid";
+                const note = threadMilestone === "funding"
+                  ? (amountNeeded ? `Funding amount: ${amountNeeded}` : undefined)
+                  : "Bank connected via Plaid (read-only)";
+                await postOrThreadLeadUpdate({ contactId: milestoneContact.id, action, note })
+                  .catch(err => console.error("[lead-thread pdf-milestone] failed:", err instanceof Error ? err.message : err));
+              }
+            } catch (err) {
+              console.warn("[pdf-milestone] failed:", err instanceof Error ? err.message : err);
+            }
+            return NextResponse.json({ success: true, message: "Milestone noted" }, { headers: corsHeaders });
+          }
 
           // ── 10% block: create minimal contact on email capture ──
           if (applicationCompletionPct < 25 && applicationCompletionPct >= 10 && email) {
@@ -214,7 +245,7 @@ export async function POST(request: NextRequest) {
                 // PDF landing funnel: email the free guide on first capture.
                 // Non-blocking — never breaks lead capture.
                 if (source === "pdf-landing" && normalizedEmail) {
-                  sendPdfGuideEmail(normalizedEmail, firstName)
+                  sendPdfGuideEmail(normalizedEmail, firstName, amountNeeded)
                     .catch(err => console.error("[pdf-guide email] failed:", err instanceof Error ? err.message : err));
                 }
 
@@ -390,8 +421,9 @@ export async function POST(request: NextRequest) {
                                 // (per user request — 25% updates are quietly synced to
                                 // Supabase + Zoho but don't post to the lead thread).
                                 if (contactId) {
-                                  let milestoneAction: "milestone_50" | "milestone_80" | null = null;
-                                  if (applicationCompletionPct >= 80) milestoneAction = "milestone_80";
+                                  let milestoneAction: "milestone_50" | "milestone_75" | "milestone_80" | null = null;
+                                  if (threadMilestone === "income") milestoneAction = "milestone_75"; // PDF funnel step 3
+                                  else if (applicationCompletionPct >= 80) milestoneAction = "milestone_80";
                                   else if (applicationCompletionPct >= 50) milestoneAction = "milestone_50";
                                   if (milestoneAction) {
                                     await postOrThreadLeadUpdate({ contactId, action: milestoneAction })
@@ -531,8 +563,9 @@ export async function POST(request: NextRequest) {
                                 await postOrThreadLeadUpdate({ contactId, action: "create" })
                                   .catch(err => console.error("[lead-thread 25% new] failed:", err instanceof Error ? err.message : err));
 
-                                let milestoneActionNew: "milestone_50" | "milestone_80" | null = null;
-                                if (applicationCompletionPct >= 80) milestoneActionNew = "milestone_80";
+                                let milestoneActionNew: "milestone_50" | "milestone_75" | "milestone_80" | null = null;
+                                if (threadMilestone === "income") milestoneActionNew = "milestone_75"; // PDF funnel step 3
+                                else if (applicationCompletionPct >= 80) milestoneActionNew = "milestone_80";
                                 else if (applicationCompletionPct >= 50) milestoneActionNew = "milestone_50";
                                 if (milestoneActionNew) {
                                   await postOrThreadLeadUpdate({ contactId, action: milestoneActionNew })

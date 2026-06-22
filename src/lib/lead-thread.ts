@@ -16,7 +16,9 @@ export type LeadThreadAction =
   | "login"
   | "statements"
   | "milestone_50"
+  | "milestone_75"
   | "milestone_80"
+  | "plaid"
   | "complete"
   | "auto_dnq";
 
@@ -182,9 +184,17 @@ function formatUpdateBlocks(
       headline = "Application 50% complete";
       icon = "🟡";
       break;
+    case "milestone_75":
+      headline = "Application 75% complete — income info in";
+      icon = "🟠";
+      break;
     case "milestone_80":
       headline = "Application 80% complete — almost done";
       icon = "🟠";
+      break;
+    case "plaid":
+      headline = "Bank connected via Plaid — verifying income";
+      icon = "🏦";
       break;
     case "complete":
       headline = "Application completed";
