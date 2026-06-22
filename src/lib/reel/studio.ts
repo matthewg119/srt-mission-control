@@ -10,6 +10,7 @@
 // All handlers self-route by DB lookup and return false when the event is not a
 // studio event, so the Slack events route can fall through to its other handlers.
 
+import { randomUUID } from "crypto";
 import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
@@ -359,6 +360,32 @@ async function renderReel(
   // https://srt-reel-render.vercel.app/api/render-reel
   const endpoint =
     process.env.REEL_RENDER_URL || `${process.env.NEXT_PUBLIC_APP_URL || ""}/api/render-reel`;
+
+  // Upload the source image to Supabase and send a URL — NOT inline base64.
+  // Vercel serverless functions hard-cap the request body at ~4.5 MB; a high-res
+  // photo (base64 inflates it ~33%) trips that limit and Vercel returns 413
+  // FUNCTION_PAYLOAD_TOO_LARGE at the edge before the renderer ever runs. A URL
+  // keeps the payload at a few hundred bytes. Fall back to inline b64 if the
+  // upload fails so we degrade gracefully instead of hard-failing.
+  let imageUrl: string | null = null;
+  try {
+    const ext = (img.media_type.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
+    const key = `src/${randomUUID()}.${ext}`;
+    const up = await supabaseAdmin.storage
+      .from("reels")
+      .upload(key, Buffer.from(img.data, "base64"), {
+        contentType: img.media_type,
+        upsert: true,
+      });
+    if (!up.error) {
+      imageUrl = supabaseAdmin.storage.from("reels").getPublicUrl(key).data.publicUrl;
+    } else {
+      console.error("[studio] source image upload failed:", up.error.message);
+    }
+  } catch (e) {
+    console.error("[studio] source image upload threw:", (e as Error).message);
+  }
+
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -369,7 +396,8 @@ async function renderReel(
       label: script.label || null,
       lines: [script.line1, script.line2].filter((l) => l && l.trim().length > 0),
       cta: script.cta || null,
-      image_b64: img.data,
+      // Prefer the URL; only inline base64 when the upload failed (rare fallback).
+      ...(imageUrl ? { image_url: imageUrl } : { image_b64: img.data }),
       image_mime: img.media_type,
     }),
   });

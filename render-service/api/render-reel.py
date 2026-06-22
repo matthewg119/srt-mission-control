@@ -10,8 +10,15 @@ All Slack posting + DB writes stay in TypeScript; this function ONLY renders.
 
 Request  (POST, header `x-reel-secret: $REEL_RENDER_SECRET`):
   { "label": str|null, "lines": [str, ...], "cta": str|null,
-    "image_b64": str, "image_mime": str, "seed": int|null,
+    "image_url": str,                                 # preferred: renderer downloads it
+    "image_b64": str,                                 # fallback when no URL (small images)
+    "image_mime": str, "seed": int|null,
     "locks": { "0": "blue", "cta": "red" }|null }     # optional color locks
+
+NOTE: the caller sends `image_url` (a Supabase public URL) rather than inline base64 —
+Vercel rejects request bodies over ~4.5 MB with 413 FUNCTION_PAYLOAD_TOO_LARGE, so a
+high-res photo's base64 would never reach this function. `image_b64` stays supported as
+a backward-compatible fallback.
 Response:
   { "url": "https://.../reels/<id>.mp4" }              # when Supabase is configured
   { "mp4_b64": "<base64>" }                            # fallback for short reels
@@ -88,16 +95,22 @@ class handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": f"bad json: {e}"})
 
         lines = [str(x) for x in (body.get("lines") or []) if str(x).strip()]
+        image_url = body.get("image_url")
         image_b64 = body.get("image_b64")
-        if not image_b64 or not lines:
-            return self._send(400, {"error": "need image_b64 and at least one line"})
+        if not (image_url or image_b64) or not lines:
+            return self._send(400, {"error": "need image_url or image_b64, and at least one line"})
 
         tmpdir = tempfile.mkdtemp(prefix="reel_")
         img_path = os.path.join(tmpdir, "bg")
         out_path = os.path.join(tmpdir, "reel.mp4")
         try:
+            if image_url:
+                with urllib.request.urlopen(image_url, timeout=60) as resp:
+                    img_bytes = resp.read()
+            else:
+                img_bytes = base64.b64decode(image_b64)
             with open(img_path, "wb") as fh:
-                fh.write(base64.b64decode(image_b64))
+                fh.write(img_bytes)
 
             headlines = {
                 "label": (body.get("label") or None),
