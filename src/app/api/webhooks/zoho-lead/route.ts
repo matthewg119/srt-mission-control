@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { sendEvent } from "@/lib/meta-capi";
 import { getLead } from "@/lib/zoho";
+import { supabaseAdmin } from "@/lib/db";
 
 // Allow up to 60s for RingOut polling on Vercel
 export const maxDuration = 60;
@@ -115,18 +116,55 @@ export async function POST(request: NextRequest) {
         console.log(`[Zoho Webhook] Skipped DNQ — no email or phone for ${leadName}`);
         return NextResponse.json({ success: true, skipped: "no_user_data" });
       }
+      // Pull the click-id back off the contact so Meta can attribute the DNQ to
+      // the originating ad. fbc/fbp were captured at lead-capture time but are
+      // gone from this webhook payload — without them Meta can't bind the event
+      // to a specific ad and the per-ad DNQ column stays empty. Look up by email
+      // first (normalized lowercase in Supabase), fall back to phone. The
+      // deterministic event_id (`dnq_<contactId>`) matches the browser pixel's so
+      // Meta dedups the two DNQ signals. No attribution gate — manual Zoho DNQs
+      // without fbc still fire (just unattributed), for negative-audience training.
+      type DnqContact = { id: string; fbc: string | null; fbp: string | null };
+      let dnqContact: DnqContact | null = null;
+      try {
+        if (email) {
+          const { data } = await supabaseAdmin
+            .from("contacts")
+            .select("id, fbc, fbp")
+            .ilike("email", email.trim().toLowerCase())
+            .limit(1)
+            .maybeSingle();
+          dnqContact = (data as DnqContact | null) ?? null;
+        }
+        if (!dnqContact && phone) {
+          const { data } = await supabaseAdmin
+            .from("contacts")
+            .select("id, fbc, fbp")
+            .eq("phone", phone)
+            .limit(1)
+            .maybeSingle();
+          dnqContact = (data as DnqContact | null) ?? null;
+        }
+      } catch (lookupErr) {
+        console.error("[Zoho Webhook] DNQ contact lookup failed:",
+          lookupErr instanceof Error ? lookupErr.message : lookupErr);
+      }
       await sendEvent({
         eventName: "DNQ",
         actionSource: "system_generated",
+        eventId: dnqContact?.id ? `dnq_${dnqContact.id}` : undefined,
         userData: {
           email: email || undefined,
           phone: phone || undefined,
           firstName: firstName || undefined,
           lastName: lastName || undefined,
+          fbc: dnqContact?.fbc ?? undefined,
+          fbp: dnqContact?.fbp ?? undefined,
+          externalId: dnqContact?.id ?? undefined,
         },
         customData: { content_name: "Did Not Qualify" },
       });
-      console.log(`[Zoho Webhook] DNQ Meta event fired for ${leadName} (${email || phone})`);
+      console.log(`[Zoho Webhook] DNQ Meta event fired for ${leadName} (${email || phone}) fbc=${dnqContact?.fbc ? "yes" : "no"}`);
       return NextResponse.json({ success: true, event: "DNQ" });
     }
 
