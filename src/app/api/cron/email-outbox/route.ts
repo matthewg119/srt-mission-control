@@ -94,6 +94,22 @@ async function handle(req: NextRequest) {
       const nowIso = new Date().toISOString();
       await supabaseAdmin.from("email_outbox").update({ status: "sent", sent_at: nowIso }).eq("id", row.id);
 
+      // Train on send: every email actually mailed from here (desktop-/extension-
+      // approved follow-ups, Vektor drafts, textwin composes) feeds the email
+      // language model. Slack-approved sends train in slack/actions instead, so
+      // they never reach this cron — no double-training.
+      await supabaseAdmin
+        .from("fine_tune_examples")
+        .insert({
+          trigger_type: "send_email",
+          input_context: { source: "email_outbox_drain", outbox_id: row.id, subject: row.subject },
+          ai_draft: row.body as string,
+          human_correction: null,
+          rep_id: "email_outbox",
+          was_approved_as_is: true,
+        })
+        .then(undefined, (e) => console.warn("[cron/email-outbox] fine_tune insert failed:", e?.message));
+
       // Log the outbound echo into the lead's email thread.
       const conversationId = await resolveConversationId({
         conversation_id: (row.conversation_id as string | null) ?? null,

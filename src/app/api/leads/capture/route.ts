@@ -12,6 +12,7 @@ import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel } from "@/lib/sms-channel";
+import { suggestIntroText } from "@/lib/intro-suggestion";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -272,6 +273,15 @@ export async function POST(request: NextRequest) {
           console.error("[leads/capture] SMS channel setup error:", (err as Error).message);
         }
       }
+    } else if (phone) {
+      // 8b. Non-bfunding lead with a phone: draft a first-touch intro text and post
+      // it to the lead's SMS Slack channel with a ✅ Send button (suggestion-only,
+      // no auto-send). Best-effort — never block the capture response.
+      suggestIntroText({
+        contactId,
+        phone,
+        displayName: `${firstName} ${lastName}`.trim() || firstName,
+      }).catch((err) => console.error("[leads/capture] suggestIntroText error:", (err as Error).message));
     }
 
     return NextResponse.json(

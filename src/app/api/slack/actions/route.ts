@@ -157,6 +157,19 @@ async function approveAction(args: { slackTs: string; channel: string; userId: s
     });
   }
 
+  // Dual-surface reconcile: an email approved here may also be sitting in
+  // textwin.ai as a 'suggested' email_outbox bubble (shared draft_key). Cancel
+  // the twin so it can't be re-sent from the desktop / extension.
+  const draftKey = (action.payload as { draft_key?: string }).draft_key;
+  if (result.ok && draftKey) {
+    await supabaseAdmin
+      .from("email_outbox")
+      .update({ status: "cancelled" })
+      .eq("draft_key", draftKey)
+      .in("status", ["suggested", "pending"])
+      .then(undefined, (e) => console.warn("[slack/actions] twin email_outbox cancel failed:", e?.message));
+  }
+
   await supabaseAdmin
     .from("ai_decisions")
     .update({ was_approved: result.ok, approved_by: args.userId, slack_ts: args.slackTs })
