@@ -414,6 +414,18 @@ export async function getLead(zohoLeadId: string): Promise<ZohoApiRecord> {
             return lead;
 }
 
+/** Fetch a single Deal record by id (Deal_Name, Stage, Amount, Contact_Name lookup, …). */
+export async function getDeal(zohoDealId: string): Promise<ZohoApiRecord> {
+  const result = (await zohoRequest("GET", `/Deals/${zohoDealId}`)) as {
+    data?: ZohoApiRecord[];
+  };
+  const deal = result.data?.[0];
+  if (!deal) {
+    throw new Error(`Zoho deal not found: ${zohoDealId}`);
+  }
+  return deal;
+}
+
 export async function searchLeads(
             criteria: ZohoSearchCriteria
           ): Promise<ZohoApiRecord[]> {
@@ -566,12 +578,16 @@ export async function testConnection(): Promise<boolean> {
             }
 }
 
-// Mark a lead as Hot Lead when they reply to an SMS. Fire-and-forget safe — never throws.
+// Mark a lead as Hot Lead when they reply to an SMS. Fire-and-forget safe — never
+// throws. Returns `becameHot` = true only on the transition into Hot Lead (was not
+// hot before), so the caller can post a one-tap personalized suggestion exactly
+// once. Returns false when already hot or on any failure.
 export async function markZohoHotLead(
   zohoLeadId: string,
   replyText: string,
   slackChannelId: string | null
-): Promise<void> {
+): Promise<boolean> {
+  let becameHot = false;
   try {
     const { slack } = await import("@/lib/slack-bot");
 
@@ -601,7 +617,7 @@ export async function markZohoHotLead(
             `⚠️ Zoho stage 'Hot Lead' not found in picklist — add it manually.`
           );
         }
-        return;
+        return false;
       }
 
       // Add note
@@ -622,6 +638,9 @@ export async function markZohoHotLead(
           .update({ outcome: "hot_lead" })
           .eq("slack_channel_id", slackChannelId);
       }
+
+      // Newly transitioned into Hot Lead — caller posts a one-tap personalized card.
+      becameHot = true;
     }
 
     // Post 🔥 notification to Slack channel
@@ -637,7 +656,9 @@ export async function markZohoHotLead(
     }
   } catch (err) {
     console.error("[markZohoHotLead] unexpected error:", err);
+    return false;
   }
+  return becameHot;
 }
 
 /**

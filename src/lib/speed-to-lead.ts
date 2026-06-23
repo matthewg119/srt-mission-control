@@ -12,6 +12,10 @@ interface SpeedToLeadParams {
   leadPhone: string;
   leadName: string;
   leadSource: string;
+  // Manual "Call now" click (e.g. the dialer Call button). Bypasses the
+  // business-hours + cooldown gates — the user is explicitly choosing to call.
+  // The kill-switch (isEnabled) and DNC gates are still honored.
+  manual?: boolean;
 }
 
 // ── Safety gates ──
@@ -133,10 +137,10 @@ async function notifySlack(status: string, leadName: string, leadPhone: string, 
 // ── Main trigger function ──
 
 export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<void> {
-  const { leadId, leadPhone, leadName, leadSource } = params;
+  const { leadId, leadPhone, leadName, leadSource, manual } = params;
 
   try {
-    // Gate 1: Kill switch
+    // Gate 1: Kill switch (honored even for manual calls)
     if (!isEnabled()) {
       console.log("[Speed to Lead] Disabled via SPEED_TO_LEAD_ENABLED");
       return;
@@ -149,14 +153,14 @@ export async function triggerSpeedToLead(params: SpeedToLeadParams): Promise<voi
       return;
     }
 
-    // Gate 3: Business hours
-    if (!isBusinessHours()) {
+    // Gate 3: Business hours (skipped for an explicit manual "Call now")
+    if (!manual && !isBusinessHours()) {
       console.log("[Speed to Lead] Outside business hours — skipping");
       return;
     }
 
-    // Gate 4: Duplicate prevention
-    if (await isDuplicate(formattedPhone)) {
+    // Gate 4: Duplicate prevention (skipped for an explicit manual "Call now")
+    if (!manual && (await isDuplicate(formattedPhone))) {
       console.log("[Speed to Lead] Duplicate — same phone called recently:", formattedPhone);
       return;
     }

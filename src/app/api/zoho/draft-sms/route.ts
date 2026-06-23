@@ -12,6 +12,22 @@ import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel, postAIDraft } from "@/lib/sms-channel";
 import { buildVCard, sanitizeFilename } from "@/lib/vcard";
 import { slack } from "@/lib/slack-bot";
+import { generateDraft } from "@/lib/sms-ai-engine";
+import { resolveTenantId } from "@/lib/persona";
+
+// Map each template to the funnel stage that best frames its rewrite. Openers +
+// app link are Stage 1 (soft pitch); the follow-ups keep a warm Stage 2 tone.
+const TEMPLATE_STAGE: Record<string, number> = {
+  "nice-speaking": 1,
+  "app-link": 1,
+  "tuesday-opener": 1,
+  "fu1-guide": 2,
+  "fu2-authorized": 2,
+  "fu3-worth-reply": 2,
+  "fu4-black-hole": 2,
+  "fu5-last-ping": 2,
+  "fu6-say-anything": 2,
+};
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -163,6 +179,9 @@ export async function POST(req: NextRequest) {
         contact_id: contactId,
         outcome: "open",
         first_sms_sent: false,
+        // Stamp activity so a freshly-drafted lead (no inbound yet) surfaces in
+        // textwin's "Recent" list instead of sinking under inbound-only ordering.
+        last_outbound_at: new Date().toISOString(),
       },
       { onConflict: "phone", ignoreDuplicates: false }
     )
@@ -195,8 +214,44 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Render template
-  const draft = templateRaw.replace(/\{\{firstName\}\}/g, firstName || "there");
+  // Deterministic template render — kept verbatim as the copy-paste reference block
+  // and as the fallback if the AI personalization fails.
+  const templateRendered = templateRaw.replace(/\{\{firstName\}\}/g, firstName || "there");
+
+  // Personalize the template in Matthew's voice for this lead. The template is the
+  // INTENT/seed (same CTA), the engine rewrites it personalized to name/business/
+  // revenue. Falls back to the raw template so the card is never empty.
+  let draft = templateRendered;
+  try {
+    const { data: contactRow } = contactId
+      ? await supabaseAdmin
+          .from("contacts")
+          .select("monthly_revenue")
+          .eq("id", contactId)
+          .maybeSingle()
+      : { data: null };
+    const monthlyRevenue =
+      (contactRow?.monthly_revenue as number | null) ??
+      (typeof zohoLead.Monthly_Revenue === "number" ? (zohoLead.Monthly_Revenue as number) : null);
+
+    const tenantId = (await resolveTenantId()) ?? "";
+    const seed =
+      `[Outbound template "${SMS_TEMPLATES_LABELS[template_name] ?? template_name}". ` +
+      `Rewrite it in Matthew's voice, personalized to this lead, keeping the SAME intent and call-to-action. ` +
+      `This is a cold/outbound first-touch or follow-up, NOT a reply to an inbound message. ` +
+      `Template: ${templateRendered}]`;
+    const gen = await generateDraft({
+      tenantId,
+      stage: TEMPLATE_STAGE[template_name] ?? 1,
+      inboundMessage: seed,
+      history: [],
+      contact: { firstName: firstName || null, businessName: businessName || null, monthlyRevenue },
+      translateSpanish: false,
+    });
+    if (gen.draft) draft = gen.draft;
+  } catch (e) {
+    console.warn("[draft-sms] personalization failed, using raw template:", (e as Error).message);
+  }
 
   // Upload vCard so Matthew can tap to add contact to his phone
   const email = (zohoLead.Email ?? "") as string;
@@ -217,7 +272,7 @@ export async function POST(req: NextRequest) {
   // Post the template text as a preformatted block so Matthew can copy + paste it
   const templateLabel = SMS_TEMPLATES_LABELS[template_name] ?? template_name;
   try {
-    await slack.postMessage(channelId, `*📋 SMS Template: ${templateLabel}*\n\`\`\`${draft}\`\`\``);
+    await slack.postMessage(channelId, `*📋 SMS Template: ${templateLabel}*\n\`\`\`${templateRendered}\`\`\``);
   } catch (e) {
     console.warn("[draft-sms] Template text post failed (non-fatal):", (e as Error).message);
   }

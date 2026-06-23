@@ -231,16 +231,28 @@ export async function POST(req: NextRequest) {
     // Inbound merchant message → mirror, flag hot lead, draft a suggestion.
     await postInboundMessage(channelId, displayName, body, conv.id as string);
 
+    // Mark hot + learn whether THIS reply is the transition into Hot Lead. We await
+    // so the suggestion below can be posted as a never-auto-fire card on the exact
+    // moment a lead turns hot (one tap to send), instead of the usual auto-armed one.
     const zohoLeadId = contact?.zoho_lead_id ?? null;
-    if (zohoLeadId) {
-      markZohoHotLead(zohoLeadId, body, channelId).catch((e) =>
-        console.error("[imessage/inbound] hot lead failed:", e)
-      );
-    }
+    const becameHot = zohoLeadId
+      ? await markZohoHotLead(zohoLeadId, body, channelId).catch((e) => {
+          console.error("[imessage/inbound] hot lead failed:", e);
+          return false;
+        })
+      : false;
 
     draftSmsReply(conv.id as string, body)
       .then(({ draft, suggestedFollowup }) => {
-        if (draft) return postImessageSuggestion({ channelId, conversationId: conv.id as string, draft, suggestedFollowup });
+        if (draft)
+          return postImessageSuggestion({
+            channelId,
+            conversationId: conv.id as string,
+            draft,
+            suggestedFollowup,
+            // On the hot-lead transition, never auto-send — leave it ready for one tap.
+            armAutoSend: !becameHot,
+          });
       })
       .catch((err) => console.error("[imessage/inbound] suggestion failed:", err));
   }
