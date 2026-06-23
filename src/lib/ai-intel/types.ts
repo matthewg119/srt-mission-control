@@ -26,7 +26,8 @@ export type ActionType =
   | "clear_lead_amounts"
   | "add_lender"
   | "seed_lenders"
-  | "apply_followup";
+  | "apply_followup"
+  | "file_to_onedrive";
 
 /** Suggested next action for a standalone /apply submission. */
 export interface ApplySuggestedAction {
@@ -92,6 +93,11 @@ export interface PendingActionPayload {
   // (createReply → send) so it lands in the lead's original conversation.
   reply_to_graph_message_id?: string;
   attachments?: Array<{ name: string; url: string; contentType: string }>;
+  // file_to_onedrive specific — re-download the original email's attachments at
+  // approval time and file them into Deals/{business}/Bank Statements.
+  onedrive_business_name?: string;
+  source_message_id?: string;
+  source_mailbox?: string;
   deal_id?: string;
   lender_id?: string;
   zoho_id?: string;

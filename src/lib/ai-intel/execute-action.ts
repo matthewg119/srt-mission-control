@@ -68,6 +68,8 @@ export async function executePendingAction(opts: {
         return await seedLenders(opts.payload);
       case "apply_followup":
         return await runApplyFollowup(opts.payload);
+      case "file_to_onedrive":
+        return await fileToOneDrive(opts.payload);
       default:
         return { ok: false, error: `unknown_action_type:${opts.actionType}` };
     }
@@ -112,6 +114,47 @@ async function sendEmail(payload: PendingActionPayload): Promise<ExecuteResult> 
   }
 
   return { ok: true, details: { to: payload.to, subject: payload.subject } };
+}
+
+/**
+ * Gated OneDrive filing for an inbound statements email whose deal match wasn't
+ * confident enough to auto-file. Re-downloads the ORIGINAL message attachments at
+ * approval time (so we don't bloat pending_slack_actions with base64 buffers) and
+ * uploads the PDFs into Deals/{business}/Bank Statements — the same convention the
+ * Slack-drop path (build-draft.ts) and the auto-file path use.
+ */
+async function fileToOneDrive(payload: PendingActionPayload): Promise<ExecuteResult> {
+  const messageId = payload.source_message_id;
+  if (!messageId) return { ok: false, error: "missing_source_message_id" };
+  const mailbox = payload.source_mailbox || process.env.LEADS_MAILBOX || "matthew@srtagency.com";
+  const biz = (payload.onedrive_business_name || "Applicant").replace(/[<>:"/\\|?*]/g, "_");
+
+  const attachments = await microsoft.getMessageAttachments(messageId, mailbox);
+  const pdfs = attachments.filter(
+    (a) =>
+      !a.isInline &&
+      !!a.contentBytes &&
+      (a.contentType === "application/pdf" || (a.name || "").toLowerCase().endsWith(".pdf"))
+  );
+  if (pdfs.length === 0) return { ok: false, error: "attachments_gone" };
+
+  await microsoft.createDriveFolder("Bank Statements", `Deals/${biz}`).catch(() => {});
+  let filed = 0;
+  for (const p of pdfs) {
+    try {
+      await microsoft.uploadDriveFile(
+        `Deals/${biz}/Bank Statements`,
+        p.name || `statement-${filed + 1}.pdf`,
+        Buffer.from(p.contentBytes, "base64"),
+        "application/pdf"
+      );
+      filed++;
+    } catch (e) {
+      console.error("[execute-action] file_to_onedrive upload failed:", (e as Error).message);
+    }
+  }
+  if (filed === 0) return { ok: false, error: "upload_failed" };
+  return { ok: true, details: { filed, folder: `Deals/${biz}/Bank Statements` } };
 }
 
 async function submitDeal(payload: PendingActionPayload): Promise<ExecuteResult> {

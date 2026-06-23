@@ -159,8 +159,8 @@ function escapeHtml(s: string): string {
 }
 
 // ── §3 metrics (mirrors agent/bank-statements) ───────────────────────────────
-interface RevenueRow { month: string; deposits: number | null; avg_daily_ledger: number | null; deposit_count: number | null; nsf_count: number | null; }
-interface BankMetrics {
+export interface RevenueRow { month: string; deposits: number | null; avg_daily_ledger: number | null; deposit_count: number | null; nsf_count: number | null; }
+export interface BankMetrics {
   account_holder: string | null;
   account_type: "business" | "personal" | null;
   avg_monthly_deposits: number | null;
@@ -179,7 +179,7 @@ const METRICS_SYSTEM = `Extract structured underwriting metrics from a bank-stat
 {"account_holder":string|null,"account_type":"business"|"personal"|null,"avg_monthly_deposits":number|null,"avg_daily_balance":number|null,"total_nsfs":number|null,"existing_mca_positions":number|null,"existing_mca_monthly_burden":number|null,"revenue_trend":"growing"|"stable"|"declining"|null,"top_mca_lenders":string[],"red_flags":string[],"qualification_signal":"strong"|"moderate"|"weak"|null,"statement_months_covered":string[],"revenue_table":Array<{"month":string,"deposits":number|null,"avg_daily_ledger":number|null,"deposit_count":number|null,"nsf_count":number|null}>}
 Rules: dollar values as plain numbers; statement_months_covered in YYYY-MM; revenue_table one row per month with the report's short month label; daily/weekly MCA paybacks → existing_mca_positions + top_mca_lenders; null when absent. account_type: "personal" if the account holder is an individual person's name (no business/LLC/Inc/Corp/DBA) and the activity looks like personal banking; "business" if it's a company account; null if unclear.`;
 
-async function extractMetrics(report: string): Promise<BankMetrics> {
+export async function extractMetrics(report: string): Promise<BankMetrics> {
   const empty: BankMetrics = { account_holder: null, account_type: null, avg_monthly_deposits: null, avg_daily_balance: null, total_nsfs: null, existing_mca_positions: null, existing_mca_monthly_burden: null, revenue_trend: null, top_mca_lenders: [], red_flags: [], qualification_signal: null, statement_months_covered: [], revenue_table: [] };
   try {
     const r = await callClaudeJSON<BankMetrics>({ model: "claude-sonnet-4-6", system: METRICS_SYSTEM, user: report, maxTokens: 1800, temperature: 0.1 });
@@ -209,7 +209,7 @@ function missingMonths(covered: string[]): string[] {
 const fmtUsd = (n: number | null | undefined) => (n == null ? "—" : `$${Math.round(n).toLocaleString()}`);
 
 /** Concise Slack report: calculator table + missing months + draws + patterns. */
-function formatReport(business: string, m: BankMetrics): string {
+export function formatReport(business: string, m: BankMetrics): string {
   const rows = m.revenue_table.map((r) =>
     `${(r.month || "").padEnd(6)} ${fmtUsd(r.deposits).padStart(10)} ${fmtUsd(r.avg_daily_ledger).padStart(10)} ${String(r.deposit_count ?? "—").padStart(4)} ${String(r.nsf_count ?? "—").padStart(4)}`
   );
@@ -268,7 +268,7 @@ ${resolveSubmissionSignature()}
  * can be sorted newest→oldest and trimmed to the most-recent N. Cheap Haiku call;
  * returns null on any failure (caller treats null as "unknown / oldest").
  */
-async function detectStatementMonth(buffer: Buffer): Promise<string | null> {
+export async function detectStatementMonth(buffer: Buffer): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   try {
