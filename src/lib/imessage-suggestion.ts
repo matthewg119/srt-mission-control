@@ -33,7 +33,8 @@ export function autoSendMinutes(): number {
 export function buildSuggestionBlocks(
   draft: string,
   regenerateCount = 0,
-  followup?: SuggestedFollowup | null
+  followup?: SuggestedFollowup | null,
+  armAutoSend = true
 ): SlackBlock[] {
   const mins = autoSendMinutes();
   const actionElements: Record<string, unknown>[] = [
@@ -86,7 +87,7 @@ export function buildSuggestionBlocks(
       elements: [{ type: "mrkdwn", text: `📅 Proposed follow-up in ${followup.days} day(s): ${followup.reason}` }],
     } as SlackBlock);
   }
-  if (autoSendEnabled()) {
+  if (armAutoSend && autoSendEnabled()) {
     blocks.push({
       type: "context",
       elements: [{ type: "mrkdwn", text: `Auto-sends in ~${mins} min unless you Send, Edit, or Hold.` }],
@@ -103,23 +104,27 @@ export function buildSuggestionBlocks(
 
 // Post a fresh suggestion card and persist it as the live draft for this convo.
 // Also arms the auto-send timer (auto_send_at = now + N min) unless disabled.
+// Pass armAutoSend:false for proactive/cold suggestions (intro texts, stale-reply
+// nudges, digest follow-ups) that must NEVER fire without an explicit ✅ Send click.
 export async function postImessageSuggestion(args: {
   channelId: string;
   conversationId: string;
   draft: string;
   suggestedFollowup?: SuggestedFollowup | null;
+  armAutoSend?: boolean;
 }): Promise<void> {
   const { channelId, conversationId, draft, suggestedFollowup } = args;
   const followup = suggestedFollowup ?? null;
+  const armAutoSend = args.armAutoSend ?? true;
 
   const res = await slack.postMessage(
     channelId,
     `💬 Suggested reply: ${draft}`, // fallback text for notifications
-    buildSuggestionBlocks(draft, 0, followup)
+    buildSuggestionBlocks(draft, 0, followup, armAutoSend)
   );
 
   if (res.ok && res.ts) {
-    const armed = autoSendEnabled();
+    const armed = armAutoSend && autoSendEnabled();
     const autoSendAt = armed
       ? new Date(Date.now() + autoSendMinutes() * 60 * 1000).toISOString()
       : null;
@@ -144,4 +149,69 @@ export async function postImessageSuggestion(args: {
 // Matthew replied from his Mac (is_from_me=1 ingested) → the suggestion is moot.
 export async function cancelPendingSuggestion(conversationId: string): Promise<void> {
   await supabaseAdmin.from("sms_pending_drafts").delete().eq("conversation_id", conversationId);
+}
+
+// Matthew typed his OWN reply into the lead's #sms-* channel. Instead of swallowing
+// it, post a one-tap confirm card with his exact text and a ✅ Send / ✋ Cancel pair.
+// Stored as the live draft (same sms_pending_drafts row the AI suggestions use) so the
+// existing ✅ Send (imsg_send) handler + thread "yes"/"send" fallback deliver it
+// VERBATIM via the shared send path. Auto-send is NEVER armed here — a manual reply
+// only goes out on an explicit click. Because drafts are one-per-conversation
+// (onConflict: conversation_id), this supersedes any live AI suggestion draft for the
+// same conversation; that older AI card's Send button goes inert, which is intended —
+// the human's own words win.
+export async function postManualSendConfirm(args: {
+  channelId: string;
+  conversationId: string;
+  draft: string;
+  leadName: string;
+}): Promise<void> {
+  const { channelId, conversationId, draft, leadName } = args;
+
+  const blocks: SlackBlock[] = [
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `*📤 Send this to ${leadName}?*` },
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: "```" + draft + "```" },
+    },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          style: "primary",
+          text: { type: "plain_text", text: "✅ Send", emoji: true },
+          action_id: "imsg_send",
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "✋ Cancel", emoji: true },
+          action_id: "imsg_cancel",
+        },
+      ],
+    } as SlackBlock,
+  ];
+
+  const res = await slack.postMessage(channelId, `📤 Send this to ${leadName}? ${draft}`, blocks);
+
+  if (res.ok && res.ts) {
+    await supabaseAdmin.from("sms_pending_drafts").upsert(
+      {
+        conversation_id: conversationId,
+        slack_channel_id: channelId,
+        slack_ts: res.ts as string,
+        draft_body: draft,
+        regenerate_count: 0,
+        created_at: new Date().toISOString(),
+        auto_send_at: null,
+        auto_send_status: "cancelled",
+        suggested_followup_days: null,
+        suggested_followup_reason: null,
+      },
+      { onConflict: "conversation_id" }
+    );
+  }
 }

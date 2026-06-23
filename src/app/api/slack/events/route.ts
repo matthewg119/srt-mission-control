@@ -30,6 +30,7 @@ import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
 import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
 import { deliverPendingDraft } from "@/lib/imessage-send";
+import { postManualSendConfirm } from "@/lib/imessage-suggestion";
 
 interface SlackEventFile {
   id: string;
@@ -349,12 +350,24 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Messages typed in a lead conversation channel are no longer sent (there is
-      // no outbound transport — Matthew replies from the Mac's Messages app, which
-      // the iMessage bridge mirrors back here). Swallow them so they don't fall
+      // Matthew typed his OWN reply into a lead conversation channel. A top-level,
+      // text-only message becomes a one-tap "Send this?" confirm card (verbatim) so he
+      // can reply straight from Slack. Notes (prefixed // or note:), thread replies, and
+      // file uploads are still swallowed — they never reach the customer, and never fall
       // through to the AI office manager.
-      const isSmsChannel = await isSmsConversationChannel(channel);
-      if (isSmsChannel && userText.trim().length > 0) {
+      const smsConv = await lookupSmsConversation(channel);
+      if (smsConv && userText.trim().length > 0) {
+        const text = userText.trim();
+        const isNote = /^(\/\/|note:)/i.test(text);
+        const isThreadReply = Boolean(parentThreadTs) && parentThreadTs !== event.ts;
+        if (!isNote && !isThreadReply && attachedFiles.length === 0) {
+          await postManualSendConfirm({
+            channelId: channel,
+            conversationId: smsConv.id,
+            draft: text,
+            leadName: smsConv.leadName,
+          });
+        }
         return NextResponse.json({ ok: true });
       }
 
@@ -1626,13 +1639,34 @@ async function handleSofiaVoiceConversion(file: SlackFileInfo): Promise<void> {
 
 // ── SMS Channel Helpers ───────────────────────────────────────────────────
 
-async function isSmsConversationChannel(channelId: string): Promise<boolean> {
-  const { data } = await supabaseAdmin
+// Resolve an #sms-* channel to its conversation id + lead display name, or null if
+// the channel isn't a lead SMS conversation. Name resolution mirrors the inbound
+// handler: "First Last" → business name → fallback.
+async function lookupSmsConversation(
+  channelId: string
+): Promise<{ id: string; leadName: string } | null> {
+  const { data: conv } = await supabaseAdmin
     .from("sms_conversations")
-    .select("id")
+    .select("id, contact_id")
     .eq("slack_channel_id", channelId)
     .maybeSingle();
-  return !!data;
+  if (!conv?.id) return null;
+
+  let leadName = "this lead";
+  if (conv.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("first_name, last_name, business_name")
+      .eq("id", conv.contact_id as string)
+      .maybeSingle();
+    if (contact) {
+      leadName =
+        [contact.first_name, contact.last_name].filter(Boolean).join(" ") ||
+        (contact.business_name as string | null) ||
+        leadName;
+    }
+  }
+  return { id: conv.id as string, leadName };
 }
 
 // Matthew replied in a message thread → look up the originating channel

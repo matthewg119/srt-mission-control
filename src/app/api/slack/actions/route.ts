@@ -99,6 +99,8 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return openRemixModal({ slackTs, channel, triggerId: payload.trigger_id ?? "" });
     case "imsg_hold":
       return holdSuggestion({ slackTs, channel, userId });
+    case "imsg_cancel":
+      return cancelManualSend({ slackTs, channel, userId });
     case "imsg_followup":
       return scheduleSuggestedFollowup({ slackTs, channel, userId });
     case "sequence_cancel":
@@ -420,6 +422,26 @@ async function holdSuggestion(args: { slackTs: string; channel: string; userId: 
     args.channel,
     args.slackTs,
     `✋ Auto-send held by <@${args.userId}>.${body ? `\n\`\`\`${body}\`\`\`` : ""}`
+  );
+  return NextResponse.json({ ok: true });
+}
+
+// ✋ Cancel — Matthew dismissed the "Send this?" confirm for a reply he typed into the
+// channel. Drop the live draft and retire the card so nothing goes out.
+async function cancelManualSend(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {
+  const { data: draftRow } = await supabaseAdmin
+    .from("sms_pending_drafts")
+    .select("draft_body")
+    .eq("slack_ts", args.slackTs)
+    .maybeSingle();
+
+  await supabaseAdmin.from("sms_pending_drafts").delete().eq("slack_ts", args.slackTs);
+
+  const body = (draftRow?.draft_body as string | undefined) ?? "";
+  await slack.updateMessage(
+    args.channel,
+    args.slackTs,
+    `✋ Not sent — held by <@${args.userId}>.${body ? `\n\`\`\`${body}\`\`\`` : ""}`
   );
   return NextResponse.json({ ok: true });
 }
