@@ -318,7 +318,16 @@ async function finalizeStudio(job: StudioJobRow, script: ReelScript): Promise<vo
     try {
       caption = await generateCaptionForScript(script, img);
     } catch (e) {
-      console.error("[studio] caption failed:", (e as Error).message);
+      // The shared Claude helper already retries transient overloads, but the
+      // render has succeeded by now so one more explicit attempt after a short
+      // pause is cheap insurance against a busy moment dropping the caption.
+      console.error("[studio] caption failed, retrying once:", (e as Error).message);
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        caption = await generateCaptionForScript(script, img);
+      } catch (e2) {
+        console.error("[studio] caption retry failed:", (e2 as Error).message);
+      }
     }
 
     await slack.postThreadReply(
