@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
                         source, _fbc, _fbp, eventId, sourceUrl, signature, signatureName,
                         utmCampaign, utmContent, utmMedium, adId,
                         businessStartDate, hasCheckingAccount,
-                        deferMetaLead, timeInBusiness,
+                        deferMetaLead, fireMetaLead, timeInBusiness,
                         threadMilestone,
             } = body;
 
@@ -121,6 +121,53 @@ export async function POST(request: NextRequest) {
                   : "Bank connected via Plaid (read-only)";
                 await postOrThreadLeadUpdate({ contactId: milestoneContact.id, action, note })
                   .catch(err => console.error("[lead-thread pdf-milestone] failed:", err instanceof Error ? err.message : err));
+
+                // Meta CAPI "Lead" — the PDF funnel defers the Lead to Step 2 and
+                // fires it here (threadMilestone "funding" + fireMetaLead) once the
+                // visitor clears the revenue gate (Step 1) AND picks ASAP (Step 2).
+                // The contact already exists (10% block created it), so the 25%
+                // block's new-contact Lead branch never runs for this flow — this
+                // is the single CAPI Lead fire. The browser pixel shares serverEventId
+                // so Meta dedups the two into one ad-attributed Lead. Gated on
+                // attribution, same as everywhere else.
+                if (fireMetaLead && hasMetaAttributionServer({ fbc: _fbc })) {
+                  try {
+                    const capiResult = await sendEvent({
+                      eventName: "Lead",
+                      eventId: serverEventId,
+                      eventSourceUrl: sourceUrl || "https://srtagency.com/pdf",
+                      actionSource: "website",
+                      userData: {
+                        email: normalizedEmail || undefined,
+                        phone: mobilePhone || businessPhone || undefined,
+                        firstName: firstName || undefined,
+                        lastName: lastName || undefined,
+                        fbc: _fbc || undefined,
+                        fbp: _fbp || undefined,
+                        clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+                        clientUserAgent,
+                        externalId: milestoneContact.id || undefined,
+                      },
+                      customData: {
+                        content_name: "Business Funding Application",
+                        value: parseFloat((amountNeeded || "0").replace(/[^0-9.]/g, "")) || undefined,
+                        currency: "USD",
+                      },
+                    });
+                    if (!capiResult.success) {
+                      console.error("[Meta CAPI pdf-step2] Lead event failed:", capiResult.error);
+                      try {
+                        await supabaseAdmin.from("system_logs").insert({
+                          event_type: "meta_capi_error",
+                          description: `Meta CAPI Lead event failed (pdf-step2): ${capiResult.error}`,
+                          metadata: { email: normalizedEmail, eventName: "Lead", stage: "pdf-step2" },
+                        });
+                      } catch { /* ignore */ }
+                    }
+                  } catch (err) {
+                    console.error("[Meta CAPI pdf-step2] Lead event error:", err);
+                  }
+                }
               }
             } catch (err) {
               console.warn("[pdf-milestone] failed:", err instanceof Error ? err.message : err);

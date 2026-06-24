@@ -4,6 +4,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { getCorsHeaders } from "@/lib/lead-validation";
 import { updateLead as zohoUpdateLead, addNoteToLead as zohoAddNote } from "@/lib/zoho";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
+import { sendEvent } from "@/lib/meta-capi";
+import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -33,6 +35,8 @@ export async function POST(request: NextRequest) {
       amountNeeded,
       reason,
       source,
+      _fbc,
+      _fbp,
     } = body as {
       contactId?: string;
       email?: string;
@@ -40,6 +44,8 @@ export async function POST(request: NextRequest) {
       amountNeeded?: string;
       reason?: string;
       source?: string;
+      _fbc?: string;
+      _fbp?: string;
     };
 
     if (!contactId && !email) {
@@ -53,12 +59,12 @@ export async function POST(request: NextRequest) {
     const lookup = contactId
       ? await supabaseAdmin
           .from("contacts")
-          .select("id, email, first_name, last_name, zoho_lead_id, application_stage")
+          .select("id, email, first_name, last_name, zoho_lead_id, application_stage, phone, mobile_phone, fbc, fbp")
           .eq("id", contactId)
           .maybeSingle()
       : await supabaseAdmin
           .from("contacts")
-          .select("id, email, first_name, last_name, zoho_lead_id, application_stage")
+          .select("id, email, first_name, last_name, zoho_lead_id, application_stage, phone, mobile_phone, fbc, fbp")
           .ilike("email", (email as string).trim())
           .limit(1)
           .maybeSingle();
@@ -245,6 +251,40 @@ export async function POST(request: NextRequest) {
     // 5. Slack thread reply — piggyback on the existing lead thread.
     postOrThreadLeadUpdate({ contactId: contact.id, action: "auto_dnq" })
       .catch(err => console.error("[disqualify] slack thread reply failed:", err instanceof Error ? err.message : err));
+
+    // 6. Meta CAPI DNQ — fire directly (don't rely solely on the Zoho-webhook
+    //    path, which silently drops the event whenever zoho_lead_id is missing,
+    //    Lead_Status fails to land, or the webhook doesn't fire). Deterministic
+    //    eventId `dnq_<contactId>` means the browser DNQ pixel, this CAPI fire,
+    //    and the Zoho-webhook DNQ all dedup to a single Meta event — redundant
+    //    paths, one count. Gated on attribution (body _fbc, or the contact's
+    //    stored fbc), same as every other funnel event.
+    const dnqFbc = _fbc || contact.fbc || undefined;
+    const dnqFbp = _fbp || contact.fbp || undefined;
+    if (hasMetaAttributionServer({ fbc: dnqFbc })) {
+      try {
+        const capiResult = await sendEvent({
+          eventName: "DNQ",
+          actionSource: "system_generated",
+          eventId: `dnq_${contact.id}`,
+          userData: {
+            email: contact.email || undefined,
+            phone: contact.mobile_phone || contact.phone || undefined,
+            firstName: contact.first_name || undefined,
+            lastName: contact.last_name || undefined,
+            fbc: dnqFbc,
+            fbp: dnqFbp,
+            externalId: contact.id || undefined,
+          },
+          customData: { content_name: "Did Not Qualify" },
+        });
+        if (!capiResult.success) {
+          console.error("[disqualify] Meta CAPI DNQ event failed:", capiResult.error);
+        }
+      } catch (err) {
+        console.error("[disqualify] Meta CAPI DNQ event error:", err instanceof Error ? err.message : err);
+      }
+    }
 
     return NextResponse.json(
       { success: true, disqualified: true },
