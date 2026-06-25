@@ -81,6 +81,20 @@ export interface GraphMessage {
   isDraft?: boolean;
 }
 
+// Lightweight shape returned by $search (includes sentDateTime so Sent Items
+// can be ordered alongside received mail). `from` may be absent on drafts.
+export interface GraphMessageSummary {
+  id: string;
+  conversationId: string;
+  subject: string;
+  from: { emailAddress?: { address?: string; name?: string } } | null;
+  toRecipients?: Array<{ emailAddress?: { address?: string; name?: string } }>;
+  receivedDateTime?: string;
+  sentDateTime?: string;
+  bodyPreview?: string;
+  isDraft?: boolean;
+}
+
 // ── OAuth Helpers ──
 
 export function getAuthUrl(state?: string): string {
@@ -366,6 +380,38 @@ export const microsoft = {
       conversationId: (result.conversationId as string) ?? "",
       internetMessageHeaders: (result.internetMessageHeaders as Array<{ name: string; value: string }> | undefined) ?? [],
     };
+  },
+
+  /**
+   * All messages across the mailbox (incl. Sent Items) that involve `address`.
+   * Uses Graph $search, which scans from/to/cc across all folders. $search can't be
+   * combined with $orderby, so callers sort the returned list themselves. Drafts filtered out.
+   */
+  async searchMessagesWithAddress(address: string, top = 50): Promise<GraphMessageSummary[]> {
+    const search = encodeURIComponent(`"${address}"`);
+    const select = [
+      "id",
+      "conversationId",
+      "subject",
+      "from",
+      "toRecipients",
+      "receivedDateTime",
+      "sentDateTime",
+      "bodyPreview",
+      "isDraft",
+    ].join(",");
+    const result = await graphRequest(`/me/messages?$search=${search}&$top=${top}&$select=${select}`);
+    return ((result.value as GraphMessageSummary[] | undefined) ?? []).filter((m) => !m.isDraft);
+  },
+
+  /** Full HTML body of one message (for the email-history popup's expanded view). */
+  async getMessageHtml(messageId: string): Promise<{ html: string; conversationId: string }> {
+    const result = await graphRequest(
+      `/me/messages/${messageId}?$select=body,conversationId`,
+      { headers: { Prefer: 'outlook.body-content-type="html"' } }
+    );
+    const html = (result.body as { content?: string } | undefined)?.content ?? "";
+    return { html, conversationId: (result.conversationId as string) ?? "" };
   },
 
   /**
