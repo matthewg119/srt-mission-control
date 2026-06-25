@@ -13,6 +13,7 @@ import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { dispatchOutbound } from "@/lib/imessage-transport";
 import { normalizePhone } from "@/lib/phone";
+import { appendApprovedReplyToVoice } from "@/lib/voice-ingest";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -54,6 +55,10 @@ export async function POST(
   if (!result.ok) {
     return NextResponse.json({ error: result.error ?? "send failed" }, { status: 500 });
   }
+
+  // Train the voice model on exactly what the human sent (paired with the inbound it
+  // answered). Fire-and-forget; content-deduped against the later is_from_me echo.
+  void appendApprovedReplyToVoice({ conversationId: id, reply: body, origin: "live_send" });
 
   return NextResponse.json({
     ok: true,

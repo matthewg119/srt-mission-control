@@ -383,7 +383,14 @@ async function main() {
   } else {
     console.log(`[bridge] live mode — polling ${CHAT_DB} every ${POLL_MS}ms (inbound + outbox)`);
     for (;;) {
-      try { await poll(); } catch (e) { console.error("[bridge] poll error:", e.message); }
+      let shipped = 0;
+      try { shipped = await poll(); } catch (e) { console.error("[bridge] poll error:", e.message); }
+      // Heartbeat: a poll that shipped messages already refreshed last_sync on the
+      // server. A quiet poll did not, so send an empty ping to keep the "synced"
+      // pill truthful and prove liveness without the user kicking the bridge.
+      if (!shipped) {
+        try { await post({ messages: [] }); } catch (e) { console.error("[bridge] heartbeat error:", e.message); }
+      }
       try { await pollOutbox(); } catch (e) { console.error("[bridge] outbox error:", e.message); }
       await new Promise((r) => setTimeout(r, POLL_MS));
     }

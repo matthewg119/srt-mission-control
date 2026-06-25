@@ -32,13 +32,19 @@
         <key>IMESSAGE_API_URL</key>
         <string>https://mission.srtagency.com/api/imessage/inbound</string>
         <key>IMESSAGE_POLL_MS</key>
-        <string>10000</string>
+        <string>5000</string>
     </dict>
 
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+
+    <!-- Interactive process type keeps macOS App Nap from suspending the agent
+         between polls when the Mac is idle, which would otherwise stall inbound
+         pickup + outbox drain until something woke it (the manual kick). -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
 
     <key>StandardOutPath</key>
     <string>/tmp/srt-imessage-bridge.out.log</string>

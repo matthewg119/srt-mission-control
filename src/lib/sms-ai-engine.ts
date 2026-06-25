@@ -25,6 +25,45 @@ import {
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// A transient error is one worth retrying once: Anthropic overload/rate-limit/5xx,
+// or a network/timeout blip. Permanent errors (bad request, 401) surface immediately.
+function isTransientError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (typeof status === "number" && (status === 429 || status >= 500)) return true;
+  const name = (err as { name?: string })?.name ?? "";
+  if (name === "AbortError") return true;
+  const msg = String((err as { message?: string })?.message ?? err ?? "").toLowerCase();
+  return /overloaded|rate.?limit|timeout|timed out|econnreset|etimedout|enotfound|socket hang up|fetch failed|network/.test(
+    msg
+  );
+}
+
+// Call Claude with a hard timeout and a single retry on transient failure. Throws
+// the real error on permanent failure or after the retry is exhausted.
+async function createMessageWithRetry(
+  params: Anthropic.MessageCreateParamsNonStreaming,
+  timeoutMs = 20000
+): Promise<Anthropic.Message> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      return await anthropic.messages.create(params, { signal: ctrl.signal });
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0 && isTransientError(err)) {
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr;
+}
+
 const STAGE_PROMPTS: Record<number, string> = {
   1: `You are texting on behalf of Matthew at SRT Agency, a business funding broker.
 Stage 1: Soft Pitch. Goals: qualify the merchant, build rapport, and get them to fill out an application.
@@ -100,6 +139,8 @@ export interface GenerateDraftResult {
   // date / soft objection). Parsed out of a machine-readable trailer the lead never
   // sees. Null when no follow-up is warranted.
   suggestedFollowup: SuggestedFollowup | null;
+  // The real failure reason when draft is null (LLM error, missing key, etc.).
+  error?: string;
 }
 
 // Product-agnostic steer: when a lead pushes a decision into the future or soft-
@@ -140,6 +181,12 @@ export async function generateDraft(input: GenerateDraftInput): Promise<Generate
     remixInstruction,
     translateSpanish = true,
   } = input;
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const error = "ANTHROPIC_API_KEY missing at runtime";
+    console.error("[sms-ai-engine]", error);
+    return { draft: null, voiceExamples: [], personaSource: "hardcoded", suggestedFollowup: null, error };
+  }
 
   try {
     // Persona (DB) with hardcoded fallback.
@@ -192,7 +239,7 @@ export async function generateDraft(input: GenerateDraftInput): Promise<Generate
       .filter(Boolean)
       .join("\n");
 
-    const response = await anthropic.messages.create({
+    const response = await createMessageWithRetry({
       model: "claude-sonnet-4-6",
       max_tokens: 300,
       // Slightly high so 🔄 Regenerate yields a genuinely different variation.
@@ -221,13 +268,18 @@ export async function generateDraft(input: GenerateDraftInput): Promise<Generate
     return { draft, voiceExamples, personaSource, suggestedFollowup };
   } catch (err) {
     console.error("[sms-ai-engine] generateDraft error:", err);
-    return { draft: null, voiceExamples: [], personaSource: "hardcoded", suggestedFollowup: null };
+    const error =
+      (err as { error?: { message?: string } })?.error?.message ??
+      (err as { message?: string })?.message ??
+      String(err);
+    return { draft: null, voiceExamples: [], personaSource: "hardcoded", suggestedFollowup: null, error };
   }
 }
 
 export interface DraftSmsReplyResult {
   draft: string | null;
   suggestedFollowup: SuggestedFollowup | null;
+  error?: string;
 }
 
 export async function draftSmsReply(
@@ -245,7 +297,7 @@ export async function draftSmsReply(
       .eq("id", conversationId)
       .maybeSingle();
 
-    if (!conv) return { draft: null, suggestedFollowup: null };
+    if (!conv) return { draft: null, suggestedFollowup: null, error: "conversation not found" };
 
     const stage = (conv.close_stage as number | null) ?? null;
 
@@ -272,7 +324,7 @@ export async function draftSmsReply(
 
     const tenantId = (await resolveTenantId()) ?? "";
 
-    const { draft, suggestedFollowup } = await generateDraft({
+    const { draft, suggestedFollowup, error } = await generateDraft({
       tenantId,
       stage,
       inboundMessage,
@@ -288,10 +340,10 @@ export async function draftSmsReply(
       remixInstruction,
     });
 
-    return { draft, suggestedFollowup };
+    return { draft, suggestedFollowup, error };
   } catch (err) {
     console.error("[sms-ai-engine] draftSmsReply error:", err);
-    return { draft: null, suggestedFollowup: null };
+    return { draft: null, suggestedFollowup: null, error: (err as { message?: string })?.message ?? String(err) };
   }
 }
 
@@ -303,7 +355,7 @@ function isSpanish(text: string): boolean {
 
 async function translateToSpanish(englishDraft: string): Promise<string> {
   try {
-    const response = await anthropic.messages.create({
+    const response = await createMessageWithRetry({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 300,
       messages: [

@@ -20,12 +20,21 @@ function usable(incoming: string, reply: string): boolean {
  * Pair an outbound (human) reply with the inbound it answered and store it as a
  * voice example. Looks up the most recent inbound in the conversation that arrived
  * before this outbound.
+ *
+ * Called from two places that must not double-insert:
+ *   - send time (no outboundMessageId yet) — captures the exact text the human sent
+ *     and the inbound it was replying to, immediately.
+ *   - echo time (is_from_me=1 ingest, with outboundMessageId) — the fallback for
+ *     messages sent outside TextWin (e.g. from the phone).
+ * A content-level guard (same tenant + incoming + reply) makes whichever runs first
+ * win and the second a no-op.
  */
 export async function appendApprovedReplyToVoice(opts: {
   conversationId: string;
-  outboundMessageId: string;
+  outboundMessageId?: string;
   reply: string;
   stage?: number | null;
+  origin?: string;
 }): Promise<void> {
   try {
     const reply = opts.reply.trim();
@@ -47,6 +56,19 @@ export async function appendApprovedReplyToVoice(opts: {
     const incoming = (inbound?.body as string | undefined)?.trim();
     if (!incoming || !usable(incoming, reply)) return;
 
+    // Content-level dedupe: skip if this exact (incoming -> reply) pair is already
+    // stored. Covers the send-time vs echo-time race (different source_message_id,
+    // identical content) so we never train on the same reply twice.
+    const { data: dup } = await supabaseAdmin
+      .from("voice_examples")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("incoming", incoming)
+      .eq("reply", reply)
+      .limit(1)
+      .maybeSingle();
+    if (dup) return;
+
     // Insert; ignore the unique-violation when this message was already ingested.
     const { error } = await supabaseAdmin.from("voice_examples").insert({
       tenant_id: tenantId,
@@ -55,8 +77,8 @@ export async function appendApprovedReplyToVoice(opts: {
       reply,
       char_len: reply.length,
       stage: opts.stage ?? null,
-      source_message_id: opts.outboundMessageId,
-      metadata: { origin: "live_reply" },
+      source_message_id: opts.outboundMessageId ?? null,
+      metadata: { origin: opts.origin ?? "live_reply" },
     });
     if (error && !/duplicate key|unique/i.test(error.message)) {
       console.error("[voice-ingest] insert error:", error.message);
