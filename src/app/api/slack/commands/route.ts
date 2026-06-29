@@ -11,6 +11,7 @@ import {
   bridgeActionElements,
   type BridgeCommandType,
 } from "@/lib/imessage-control";
+import { CONTENT_WORKFLOWS } from "@/config/content-workflows";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,11 +34,15 @@ export async function POST(req: NextRequest) {
   }
 
   const params = new URLSearchParams(rawBody);
+  const command = (params.get("command") ?? "").trim().toLowerCase();
   const text = (params.get("text") ?? "").trim();
   const userId = params.get("user_id") ?? "";
   const channelId = params.get("channel_id") ?? "";
   const responseUrl = params.get("response_url") ?? "";
   void channelId;
+
+  // Standalone /workflows command (if registered in the Slack app).
+  if (command === "/workflows") return handleWorkflows();
 
   const [subcommand, ...rest] = text.split(/\s+/);
   const arg = rest.join(" ").trim();
@@ -59,9 +64,34 @@ export async function POST(req: NextRequest) {
       return handleDoc({ arg });
     case "bridge":
       return handleBridge({ action: arg, userId });
+    case "workflows":
+      return handleWorkflows();
     default:
-      return respond(`Unknown subcommand. Try: \`/srt route [merchant]\` (ask where to send), \`/srt submit [merchant]\` (auto submit to T1), \`/srt status [merchant]\`, \`/srt doc [merchant] [filename]\`, \`/srt followups\`, \`/srt emails\`, \`/srt activity\`, \`/srt bridge [status|restart|doctor|resync]\`.`);
+      return respond(`Unknown subcommand. Try: \`/srt route [merchant]\` (ask where to send), \`/srt submit [merchant]\` (auto submit to T1), \`/srt status [merchant]\`, \`/srt doc [merchant] [filename]\`, \`/srt followups\`, \`/srt emails\`, \`/srt activity\`, \`/srt bridge [status|restart|doctor|resync]\`, \`/srt workflows\`.`);
   }
+}
+
+// /srt workflows (or /workflows) — list the #content-full content workflows, what each
+// needs, and how to trigger it. Generated from the registry (config/content-workflows.ts).
+function handleWorkflows(): NextResponse {
+  const blocks = CONTENT_WORKFLOWS.map((w) =>
+    [
+      `${w.emoji} *${w.name}* — ${w.blurb}`,
+      `   _Needs:_ ${w.requirements.join(" ")}`,
+      `   _Trigger:_ react ${w.emoji} on the picker, or caption your upload with a word like the ones it matches (e.g. "${w.id}").`,
+    ].join("\n")
+  ).join("\n\n");
+
+  const text = [
+    "*#content-full workflows*",
+    "Drop an image or video in #content-full. With no caption I ask which workflow; with a caption I run the one you name (ambiguous caption → I still ask).",
+    "",
+    blocks,
+    "",
+    "_Add a new format in `src/config/content-workflows.ts` (+ a runner in `pov-studio.ts`). The #content-analyzer will also suggest new ones._",
+  ].join("\n");
+
+  return respond(text);
 }
 
 function respond(text: string, ephemeral = true): NextResponse {

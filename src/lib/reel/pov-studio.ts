@@ -25,8 +25,15 @@ import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage } from "@/lib/reel/pov";
-import { handleStudioImage } from "@/lib/reel/studio";
+import { handleStudioImage, parseBoxes } from "@/lib/reel/studio";
 import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
+import {
+  CONTENT_WORKFLOWS,
+  REACTION_TO_WORKFLOW,
+  getWorkflow,
+  classifyByKeywords,
+  type ContentWorkflowId,
+} from "@/config/content-workflows";
 
 interface SlackFileLike {
   id?: string;
@@ -35,7 +42,7 @@ interface SlackFileLike {
   url_private_download?: string;
 }
 
-type PovWorkflow = "render" | "animate" | "recreate";
+type PovWorkflow = ContentWorkflowId;
 
 interface PovImageOption {
   index: number;
@@ -60,31 +67,27 @@ interface PovStudioJobRow {
 const JOB_COLS =
   "id,slack_channel,slack_thread_ts,picker_msg_ts,image_url,image_mimetype,source_kind,images,workflow,status";
 
-// Picker reactions -> workflow (Render is #1).
-const REACTION_TO_WORKFLOW: Record<string, PovWorkflow> = {
-  one: "render",
-  two: "animate",
-  three: "recreate",
-};
-
+// Picker reactions -> workflow + the daily-drop "pick the best of 3" mapping. The
+// reaction->workflow map is derived from the registry (config/content-workflows.ts).
 // Image-pick reactions (daily drop "pick the best of 3") -> 1-based option number.
 const REACTION_TO_OPTION: Record<string, number> = { one: 1, two: 2, three: 3 };
 
-/** Post the 3-workflow breakdown and return its message ts (the reaction target). */
+/** Post the workflow breakdown (from the registry) and return its message ts. */
 async function postWorkflowBreakdown(channel: string, threadTs: string, fromVideo: boolean): Promise<string | null> {
   const videoNote = fromVideo ? " _(read from a frame of your video)_" : "";
-  const res = (await slack.postThreadReply(
-    channel,
-    threadTs,
-    [
-      `🧠 *What should I do with this?*${videoNote} React to pick a workflow:`,
-      "",
-      "1️⃣  *Render Reel* — I'll write 4 on-screen text lines (label, hook, payoff, cta). Pick or edit them and I render this frame with the text + our 6-second audio into a finished reel.",
-      "2️⃣  *Animate* — I'll give you an animation prompt, a few headline options, and captions to turn this still into a moving clip.",
-      "3️⃣  *Recreate* — treat this as fire inspiration; I'll break down why it works and rebuild it as our pest-control POV with a fresh first frame.",
-    ].join("\n")
-  )) as { ts?: string };
+  const lines = [
+    `🧠 *What should I do with this?*${videoNote} React to pick a workflow:`,
+    "",
+    ...CONTENT_WORKFLOWS.map((w) => `${w.emoji}  *${w.name}* — ${w.blurb}`),
+  ];
+  const res = (await slack.postThreadReply(channel, threadTs, lines.join("\n"))) as { ts?: string };
   return res?.ts ?? null;
+}
+
+/** "What this workflow needs" line, posted right when a workflow is selected. */
+function requirementsLine(id: ContentWorkflowId): string {
+  const w = getWorkflow(id);
+  return `*${w.name}* needs: ${w.requirements.join(" ")}`;
 }
 
 // Resolve any posted file to a still-image URL Claude/render can use: a real image's
@@ -175,6 +178,93 @@ export async function handlePovImagePost(args: {
   return true;
 }
 
+// ---- Entry: media posted WITH a caption -------------------------------------------
+
+/**
+ * Classify a caption into a workflow. A complete 4-box script always means Render and
+ * runs immediately; otherwise fall back to the registry keyword router. null = the
+ * caption doesn't clearly name a workflow, so the caller should ask via the picker.
+ */
+export function classifyCaptionIntent(brief: string): ContentWorkflowId | null {
+  const script = parseBoxes(brief);
+  if (script && script.label && script.line1 && script.line2 && script.cta) return "render";
+  return classifyByKeywords(brief);
+}
+
+/**
+ * A media post (image OR video) WITH a caption in #content-full. If the caption names a
+ * workflow, run it straight away (stating its requirements first); if it's ambiguous,
+ * fall back to the picker so the operator is always asked before we do anything.
+ * Returns true if handled.
+ */
+export async function handlePovMediaWithBrief(args: {
+  channel: string;
+  threadTs: string;
+  files: SlackFileLike[];
+  brief: string;
+}): Promise<boolean> {
+  const intent = classifyCaptionIntent(args.brief);
+
+  // Ambiguous caption -> ask (the picker). Echo the caption so it isn't lost.
+  if (!intent) {
+    const handled = await handlePovImagePost({ channel: args.channel, threadTs: args.threadTs, files: args.files });
+    if (handled && args.brief.trim()) {
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        `_Caption noted: "${args.brief.trim().slice(0, 280)}". React above to pick a workflow._`
+      );
+    }
+    return handled;
+  }
+
+  const mediaFile = args.files.find(
+    (f) => (f.mimetype ?? "").startsWith("image/") || (f.mimetype ?? "").startsWith("video/")
+  );
+  if (!mediaFile) return false;
+
+  const frame = await resolveStillFrame(mediaFile);
+  if (!frame) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      "⚠️ I couldn't pull a still frame from that file. Send an image (or a video with a thumbnail) and I'll run the workflow."
+    );
+    return true;
+  }
+
+  await slack.postThreadReply(args.channel, args.threadTs, requirementsLine(intent));
+
+  // Render hands to the classic Studio flow (it renders immediately on a complete
+  // script, else posts the 4 variation options). Build a still-image file-like so a
+  // video's thumbnail works the same as an image.
+  if (intent === "render") {
+    const handled = await handleStudioImage({
+      channel: args.channel,
+      threadTs: args.threadTs,
+      files: [{ mimetype: frame.mimetype, url_private: frame.url }],
+      brief: args.brief,
+    });
+    if (!handled) {
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        "⚠️ Couldn't start the render flow for this frame. Try posting the still image directly."
+      );
+    }
+    return true;
+  }
+
+  const img = await downloadImage(frame.url, frame.mimetype);
+  if (!img) {
+    await slack.postThreadReply(args.channel, args.threadTs, "⚠️ Couldn't read the image to run that workflow.");
+    return true;
+  }
+  if (intent === "animate") await runAnimate(args.channel, args.threadTs, img);
+  else await runRecreate(args.channel, args.threadTs, img);
+  return true;
+}
+
 // ---- Reaction: pick the best of the daily drop's 3 image options ------------------
 
 /**
@@ -260,6 +350,9 @@ export async function handlePovWorkflowReaction(args: {
 }
 
 async function runWorkflow(job: PovStudioJobRow, workflow: PovWorkflow): Promise<void> {
+  // State what this workflow needs the moment it's selected.
+  await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, requirementsLine(workflow));
+
   // Render hands off to the classic Studio flow (4 text lines -> render the frame with
   // the text + 6-sec audio). It downloads the image itself and runs its own state
   // machine (reel_studio_jobs), so we don't need the base64 here.
@@ -275,8 +368,8 @@ async function runWorkflow(job: PovStudioJobRow, workflow: PovWorkflow): Promise
   const img = job.image_url ? await downloadImage(job.image_url, job.image_mimetype ?? undefined) : null;
   if (!img) throw new Error("could not read the source image");
 
-  if (workflow === "animate") await runAnimate(job, img);
-  else await runRecreate(job, img);
+  if (workflow === "animate") await runAnimate(job.slack_channel, job.slack_thread_ts, img);
+  else await runRecreate(job.slack_channel, job.slack_thread_ts, img);
 
   await supabaseAdmin
     .from("pov_studio_jobs")
@@ -349,8 +442,8 @@ const ANIMATE_SYSTEM = [
   JSON.stringify(POV_GOLD_EXAMPLES, null, 2),
 ].join("\n");
 
-async function runAnimate(job: PovStudioJobRow, img: ClaudeImageInput): Promise<void> {
-  await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, "🎬 Reading your photo and building the animate package…");
+async function runAnimate(channel: string, threadTs: string, img: ClaudeImageInput): Promise<void> {
+  await slack.postThreadReply(channel, threadTs, "🎬 Reading your photo and building the animate package…");
 
   const { data } = await callClaudeJSON<AnimatePackage>({
     model: model(),
@@ -366,8 +459,8 @@ async function runAnimate(job: PovStudioJobRow, img: ClaudeImageInput): Promise<
 
   const titles = data.titles.slice(0, 6).map((t, i) => `${i + 1}. ${stripEmDashes(t)}`).join("\n");
   await slack.postThreadReply(
-    job.slack_channel,
-    job.slack_thread_ts,
+    channel,
+    threadTs,
     [
       `*What I see:* ${stripEmDashes(data.scene_read)}`,
       "",
@@ -505,10 +598,10 @@ async function postRecreate(channel: string, threadTs: string, data: RecreatePac
   );
 }
 
-async function runRecreate(job: PovStudioJobRow, img: ClaudeImageInput): Promise<void> {
-  await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, "🔥 Breaking down what makes this work and building our remake…");
+async function runRecreate(channel: string, threadTs: string, img: ClaudeImageInput): Promise<void> {
+  await slack.postThreadReply(channel, threadTs, "🔥 Breaking down what makes this work and building our remake…");
   const data = await requestRecreatePackage([img]);
-  await postRecreate(job.slack_channel, job.slack_thread_ts, data);
+  await postRecreate(channel, threadTs, data);
 }
 
 // ---- Instagram link -> download reel -> sample frames -> recreate -----------------

@@ -28,9 +28,10 @@ import {
 } from "@/lib/content-scene-runner";
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
-import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
+import { handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
 import {
   handlePovImagePost,
+  handlePovMediaWithBrief,
   handlePovWorkflowReaction,
   handlePovDropPick,
   handleInstagramLink,
@@ -462,32 +463,18 @@ export async function POST(request: NextRequest) {
         const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
         const hasVideoFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("video/"));
         if (isContentFullChannel && !decoderKeyword) {
-          // A BARE media post (image OR video, no copy) → show the workflow breakdown
-          // (Render / Animate / Recreate) instead of defaulting to the Studio flow.
-          if (!isThreadReply && (hasImageFiles || hasVideoFiles) && userText.trim().length === 0) {
+          // A top-level media post (image OR video) in #content-full. With NO caption we
+          // ask via the workflow picker; WITH a caption we route to the named workflow
+          // (or back to the picker if the caption is ambiguous). waitUntil so Vercel
+          // keeps the function alive until the reply posts.
+          if (!isThreadReply && (hasImageFiles || hasVideoFiles)) {
+            const brief = userText.trim();
             waitUntil(
-              handlePovImagePost({
-                channel,
-                threadTs: contentThreadTs,
-                files: attachedFiles,
-              }).catch((e) => {
-                console.error("[slack/events] pov image post error:", (e as Error).message);
-              })
-            );
-            return NextResponse.json({ ok: true });
-          }
-          if (!isThreadReply && hasImageFiles) {
-            // An image posted WITH copy still goes straight to Studio (classic titles+boxes).
-            // waitUntil so Vercel keeps the function alive until the variations
-            // post — a bare fire-and-forget gets frozen right after the 200.
-            waitUntil(
-              handleStudioImage({
-                channel,
-                threadTs: contentThreadTs,
-                files: attachedFiles,
-                brief: userText,
-              }).catch((e) => {
-                console.error("[slack/events] studio image error:", (e as Error).message);
+              (brief.length === 0
+                ? handlePovImagePost({ channel, threadTs: contentThreadTs, files: attachedFiles })
+                : handlePovMediaWithBrief({ channel, threadTs: contentThreadTs, files: attachedFiles, brief })
+              ).catch((e) => {
+                console.error("[slack/events] pov media error:", (e as Error).message);
               })
             );
             return NextResponse.json({ ok: true });
