@@ -29,7 +29,13 @@ import {
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
 import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
-import { handlePovImagePost, handlePovWorkflowReaction, handlePovDropPick } from "@/lib/reel/pov-studio";
+import {
+  handlePovImagePost,
+  handlePovWorkflowReaction,
+  handlePovDropPick,
+  handleInstagramLink,
+  INSTAGRAM_URL_RE,
+} from "@/lib/reel/pov-studio";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
 
@@ -411,6 +417,17 @@ export async function POST(request: NextRequest) {
       if (isContentChannel || isContentFullChannel) {
         const isThreadReply = Boolean(event.thread_ts) && event.thread_ts !== event.ts;
         const contentThreadTs = (event.thread_ts as string) || (event.ts as string);
+
+        // Instagram reel link (top-level, #content-full) → download, sample frames, Recreate.
+        const igMatch = isContentFullChannel && !isThreadReply ? userText.match(INSTAGRAM_URL_RE) : null;
+        if (igMatch) {
+          waitUntil(
+            handleInstagramLink({ channel, threadTs: contentThreadTs, url: igMatch[0] }).catch((e) => {
+              console.error("[slack/events] instagram link error:", (e as Error).message);
+            })
+          );
+          return NextResponse.json({ ok: true });
+        }
 
         // "generate this / generate images / generate only images" → Stage 1 stills
         const genThisMatch = userText.match(/generate\s+(this|images?|only\s+images?)/i);

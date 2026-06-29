@@ -414,9 +414,10 @@ function isRecreatePackage(v: unknown): v is RecreatePackage {
 }
 
 const RECREATE_SYSTEM = [
-  "You are the content engine for a pest control business. The operator is showing you a",
-  "screenshot of OTHER creators' content (a viral video frame, a thumbnail, or a caption)",
-  "they think is 'fire' and want to learn from and recreate for our brand.",
+  "You are the content engine for a pest control business. The operator is showing you",
+  "OTHER creators' content they think is 'fire' and want to learn from and recreate for",
+  "our brand. The input is either a single screenshot/thumbnail, OR several frames sampled",
+  "across a video plus its original caption. Read all frames together as one piece.",
   "",
   "Our brand format is a first-person personal account of a pest control technician,",
   "styled to look like real footage captured on Ray-Ban Meta smart glasses:",
@@ -436,31 +437,44 @@ const RECREATE_SYSTEM = [
   JSON.stringify(POV_GOLD_EXAMPLES, null, 2),
 ].join("\n");
 
-async function runRecreate(job: PovStudioJobRow, img: ClaudeImageInput): Promise<void> {
-  await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, "🔥 Breaking down what makes this work and building our remake…");
+/** One Claude vision call over 1+ frames (+ optional caption) -> the recreate package. */
+async function requestRecreatePackage(
+  images: ClaudeImageInput[],
+  captionText?: string
+): Promise<RecreatePackage> {
+  const userParts = [
+    images.length > 1
+      ? `Look at these ${images.length} frames sampled across the video and return the recreate package as JSON.`
+      : "Look at the attached inspiration frame and return the recreate package as JSON.",
+  ];
+  if (captionText && captionText.trim()) {
+    userParts.push("", "The original caption was:", captionText.trim().slice(0, 1200));
+  }
 
   const { data } = await callClaudeJSON<RecreatePackage>({
     model: model(),
     system: RECREATE_SYSTEM,
-    user:
-      "Look at the attached inspiration frame (a screenshot, or a still frame from a video) and return the recreate package as JSON.",
-    images: [img],
+    user: userParts.join("\n"),
+    images,
     maxTokens: 1600,
     temperature: 0.7,
     schemaHint:
       '{ "why_it_works": string, "our_version": { "idea": string, "image_prompt": string, "animation_prompt": string, "captions": { "authority": string, "relatable": string, "curiosity": string }, "titles": [string] } }',
     validate: isRecreatePackage,
   });
+  return data;
+}
 
+/** Generate our recreated first frame (best-effort) and post the recreate package. */
+async function postRecreate(channel: string, threadTs: string, data: RecreatePackage): Promise<void> {
   const ov = data.our_version;
   const titles = ov.titles.slice(0, 6).map((t, i) => `${i + 1}. ${stripEmDashes(t)}`).join("\n");
 
-  // Best-effort: auto-generate the recreated first frame with the POV image model.
   let imageOk = false;
   try {
     const remake = await generatePovImage(stripEmDashes(ov.image_prompt));
     if (remake) {
-      await slack.uploadFile(job.slack_channel, "recreate.png", remake.buffer, remake.mimetype, job.slack_thread_ts);
+      await slack.uploadFile(channel, "recreate.png", remake.buffer, remake.mimetype, threadTs);
       imageOk = true;
     }
   } catch (e) {
@@ -468,8 +482,8 @@ async function runRecreate(job: PovStudioJobRow, img: ClaudeImageInput): Promise
   }
 
   await slack.postThreadReply(
-    job.slack_channel,
-    job.slack_thread_ts,
+    channel,
+    threadTs,
     [
       `*Why it works:* ${stripEmDashes(data.why_it_works)}`,
       "",
@@ -489,4 +503,88 @@ async function runRecreate(job: PovStudioJobRow, img: ClaudeImageInput): Promise
       ...(imageOk ? [] : ["```", stripEmDashes(ov.image_prompt), "```"]),
     ].join("\n")
   );
+}
+
+async function runRecreate(job: PovStudioJobRow, img: ClaudeImageInput): Promise<void> {
+  await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, "🔥 Breaking down what makes this work and building our remake…");
+  const data = await requestRecreatePackage([img]);
+  await postRecreate(job.slack_channel, job.slack_thread_ts, data);
+}
+
+// ---- Instagram link -> download reel -> sample frames -> recreate -----------------
+
+interface IgFramesResult {
+  ok: boolean;
+  frames?: string[];
+  caption?: string;
+  error?: string;
+}
+
+/** Match a public Instagram reel/post/tv URL. */
+export const INSTAGRAM_URL_RE =
+  /https?:\/\/(?:www\.)?instagram\.com\/(?:reel|reels|p|tv)\/[A-Za-z0-9_\-]+/i;
+
+async function fetchIgFrames(url: string, count: number): Promise<IgFramesResult> {
+  // The Python render-service extracts frames (yt-dlp + ffmpeg). Derive the endpoint
+  // from REEL_RENDER_URL if IG_FRAMES_URL isn't set (same project, sibling function).
+  const endpoint =
+    process.env.IG_FRAMES_URL ||
+    (process.env.REEL_RENDER_URL ? process.env.REEL_RENDER_URL.replace(/render-reel\/?$/, "ig-frames") : "");
+  if (!endpoint) return { ok: false, error: "IG_FRAMES_URL not set" };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-reel-secret": process.env.REEL_RENDER_SECRET || "" },
+      body: JSON.stringify({ url, count }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      return { ok: false, error: `frames ${res.status} ${t.slice(0, 200)}` };
+    }
+    const j = (await res.json()) as { frames?: string[]; caption?: string; error?: string };
+    if (!Array.isArray(j.frames) || j.frames.length === 0) {
+      return { ok: false, error: j.error || "no frames returned" };
+    }
+    return { ok: true, frames: j.frames, caption: j.caption || "" };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * An Instagram link posted in #content-full: download the reel, sample frames, and run
+ * the Recreate workflow (multi-frame vision + caption) on it. Posts everything in-thread.
+ */
+export async function handleInstagramLink(args: {
+  channel: string;
+  threadTs: string;
+  url: string;
+}): Promise<void> {
+  await slack.postThreadReply(args.channel, args.threadTs, "🔎 Pulling frames from that reel and breaking it down…");
+
+  const res = await fetchIgFrames(args.url, 5);
+  if (!res.ok) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      [
+        `⚠️ Couldn't pull that reel (${(res.error || "unknown").slice(0, 160)}).`,
+        "Instagram often blocks anonymous downloads. You can screenshot a frame and drop it here, then pick *Recreate*.",
+      ].join("\n")
+    );
+    return;
+  }
+
+  const frames = (
+    await Promise.all((res.frames ?? []).map((f) => downloadImage(f, "image/jpeg")))
+  ).filter((f): f is ClaudeImageInput => f !== null);
+
+  if (frames.length === 0) {
+    await slack.postThreadReply(args.channel, args.threadTs, "⚠️ Pulled the reel but couldn't read the frames. Try a screenshot + *Recreate*.");
+    return;
+  }
+
+  const data = await requestRecreatePackage(frames, res.caption);
+  await postRecreate(args.channel, args.threadTs, data);
 }
