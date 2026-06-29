@@ -15,6 +15,7 @@ import {
 import { selectBeliefForSlot, recordBeliefUsed } from "@/lib/reel/beliefs";
 import { recordDrop } from "@/lib/reel/interactive";
 import { stripEmDashes } from "@/lib/reel/text";
+import { runPovDrop, type PovDropResult } from "@/lib/reel/pov";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -142,11 +143,24 @@ async function handle(req: NextRequest) {
     },
   });
 
+  // Second format: a Meta Glasses POV drop posted as its OWN top-level message in the
+  // same channel. Fully isolated in try/catch so a POV failure never breaks the belief
+  // drop above. (Step 1/2: auto-generated image + animation prompt + captions + titles.)
+  let pov: PovDropResult | null = null;
+  try {
+    pov = await runPovDrop({ channel, date, slot });
+  } catch (e) {
+    console.error("[reel-drop] POV section failed:", (e as Error).message);
+  }
+
   return NextResponse.json({
     ok: true,
     slot,
     belief: belief.number,
     thread_ts: threadTs,
+    pov_thread_ts: pov?.thread_ts ?? null,
+    pov_scene: pov?.scene ?? null,
+    pov_image_ok: pov?.image_ok ?? false,
     duration_ms: Date.now() - start,
   });
 }

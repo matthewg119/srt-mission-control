@@ -22,7 +22,10 @@ import {
   SOUL_QUALITY,
   SOUL_REFERENCE_STRENGTH,
 } from "@/config/reel-style";
+import { POV_IMAGE_SIZE } from "@/config/pov-style";
 import { generateImage as elevenLabsImage } from "@/lib/elevenlabs-media";
+
+export type ImageProvider = "higgsfield" | "elevenlabs" | "openai";
 
 export interface ImageResult {
   buffer: Buffer;
@@ -35,13 +38,19 @@ export interface GenerateImagesOpts {
   soulId?: string;
   /** "reel" (9:16) — reserved for future sizing variants; sizing currently from config. */
   aspect?: string;
+  /**
+   * Override the provider for this call only (the global IMAGE_PROVIDER default is
+   * unchanged). The Meta Glasses POV drop passes "openai" to use gpt-image-2 while
+   * the rest of the system stays on Higgsfield.
+   */
+  provider?: ImageProvider;
 }
 
 const POLL_INTERVAL_MS = 4_000;
 const POLL_TIMEOUT_MS = 120_000;
 
-function provider(): string {
-  return (process.env.IMAGE_PROVIDER || "higgsfield").toLowerCase();
+function provider(): ImageProvider {
+  return (process.env.IMAGE_PROVIDER || "higgsfield").toLowerCase() as ImageProvider;
 }
 
 async function downloadToBuffer(url: string): Promise<ImageResult> {
@@ -160,8 +169,48 @@ async function elevenLabsGenerateOne(prompt: string): Promise<ImageResult> {
   return downloadToBuffer(out);
 }
 
-async function generateOne(prompt: string, soulId?: string): Promise<ImageResult> {
-  if (provider() === "elevenlabs") return elevenLabsGenerateOne(prompt);
+// ---- OpenAI gpt-image-2 (the Meta Glasses POV format's auto-generated image) ------
+// Synchronous images endpoint — no Soul, no polling. gpt-image-2 returns base64 in
+// data[0].b64_json (there is no URL response_format for this model); a url is handled
+// defensively in case the account returns one.
+async function openaiGenerateOne(prompt: string): Promise<ImageResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  const res = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-image-2",
+      prompt,
+      size: POV_IMAGE_SIZE,
+      n: 1,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`openai gpt-image-2 failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
+
+  const json = (await res.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+  const first = json.data?.[0];
+  if (first?.b64_json) {
+    return { buffer: Buffer.from(first.b64_json, "base64"), mimetype: "image/png" };
+  }
+  if (first?.url) return downloadToBuffer(first.url);
+  throw new Error(`openai gpt-image-2: no image in response: ${JSON.stringify(json).slice(0, 200)}`);
+}
+
+async function generateOne(
+  prompt: string,
+  soulId: string | undefined,
+  prov: ImageProvider
+): Promise<ImageResult> {
+  if (prov === "openai") return openaiGenerateOne(prompt);
+  if (prov === "elevenlabs") return elevenLabsGenerateOne(prompt);
   return higgsfieldGenerateOne(prompt, soulId);
 }
 
@@ -170,16 +219,17 @@ async function generateOne(prompt: string, soulId?: string): Promise<ImageResult
  * yields null at that index so the drop continues with whatever succeeded.
  */
 export async function generateImages(opts: GenerateImagesOpts): Promise<(ImageResult | null)[]> {
+  const prov = opts.provider ?? provider();
   const results: (ImageResult | null)[] = [];
   for (let i = 0; i < opts.prompts.length; i++) {
     const prompt = opts.prompts[i];
     let result: ImageResult | null = null;
     for (let attempt = 0; attempt < 2 && !result; attempt++) {
       try {
-        result = await generateOne(prompt, opts.soulId);
+        result = await generateOne(prompt, opts.soulId, prov);
       } catch (e) {
         console.error(
-          `[reel] image ${i + 1} attempt ${attempt + 1} failed (${provider()}):`,
+          `[reel] image ${i + 1} attempt ${attempt + 1} failed (${prov}):`,
           (e as Error).message
         );
       }

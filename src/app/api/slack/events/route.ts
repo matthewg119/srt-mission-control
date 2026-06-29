@@ -29,6 +29,7 @@ import {
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
 import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
+import { handlePovImagePost, handlePovWorkflowReaction } from "@/lib/reel/pov-studio";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
 
@@ -124,6 +125,14 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (reelHandled) return NextResponse.json({ ok: true });
+
+        // POV workflow picker: 1️⃣/2️⃣ reaction on a "what workflow?" message (self-routes by DB)
+        const povWorkflowHandled = await handlePovWorkflowReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (povWorkflowHandled) return NextResponse.json({ ok: true });
 
         // Reel Studio: 1/2/3/4 reaction on a variations message (self-routes by DB)
         const studioHandled = await handleStudioReaction({
@@ -428,6 +437,21 @@ export async function POST(request: NextRequest) {
         const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
         if (isContentFullChannel && !decoderKeyword) {
           if (!isThreadReply && hasImageFiles) {
+            // A BARE image (no copy) → ask which workflow to run (animate vs learn/recreate)
+            // instead of defaulting to the Studio 4-variation flow. An image posted WITH
+            // copy still goes straight to Studio below (the classic titles+boxes path).
+            if (userText.trim().length === 0) {
+              waitUntil(
+                handlePovImagePost({
+                  channel,
+                  threadTs: contentThreadTs,
+                  files: attachedFiles,
+                }).catch((e) => {
+                  console.error("[slack/events] pov image post error:", (e as Error).message);
+                })
+              );
+              return NextResponse.json({ ok: true });
+            }
             // waitUntil so Vercel keeps the function alive until the variations
             // post — a bare fire-and-forget gets frozen right after the 200.
             waitUntil(
