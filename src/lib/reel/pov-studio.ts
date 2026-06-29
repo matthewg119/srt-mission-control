@@ -1,18 +1,21 @@
-// Workflow picker for #content-full image posts.
+// Workflow picker for #content-full media posts (images AND videos).
 //
-// When the operator drops a BARE image (no copy) in #content-full, the bot replies
-// asking which workflow to run for that image, instead of auto-running the Reel Studio
-// 4-variation flow. State is scoped by the pov_studio_jobs table (one row per image),
-// and the reaction handler self-routes by the picker message ts.
+// When the operator drops a BARE image/video (no copy) in #content-full, the bot replies
+// with a breakdown of the workflows so the operator decides what to do, instead of
+// auto-running the Reel Studio flow. State is scoped by the pov_studio_jobs table (one
+// row per post), and the reaction handler self-routes by the picker message ts.
 //
-// Workflows (v1):
-//   1️⃣ Animate this image  -> Claude vision reads the picture and returns an animation
-//                              prompt + a few headline/title examples + 3 captions.
-//                              (Step 1/2: prompts + copy. Actual animation is manual for now.)
-//   2️⃣ Learn / recreate     -> the image is "fire" inspiration (a screenshot of content or
-//                              a caption). Claude analyses why it works, then produces a
-//                              pest-control POV remake package and (best-effort) auto-
-//                              generates the recreated first frame with the POV image model.
+// Every input is resolved to a STILL FRAME first (a real image's url, or a video's
+// thumbnail via files.info) so all three workflows operate uniformly.
+//
+// Workflows:
+//   1️⃣ Render Reel   -> the classic Studio flow: write 4 on-screen text lines (label,
+//                        hook, payoff, cta); operator picks/edits, then the frame is
+//                        rendered with the text + our 6-sec audio into a finished MP4.
+//   2️⃣ Animate       -> Claude vision returns an animation prompt + headline options +
+//                        captions to turn this still into a moving clip.
+//   3️⃣ Recreate      -> treat it as "fire" inspiration; Claude breaks down why it works
+//                        and rebuilds it as our pest-control POV (with a fresh first frame).
 //
 // Future (not built): full storyboard — needs the hook/title up front to assemble scenes.
 
@@ -22,15 +25,17 @@ import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage } from "@/lib/reel/pov";
+import { handleStudioImage } from "@/lib/reel/studio";
 import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
 
 interface SlackFileLike {
+  id?: string;
   mimetype?: string;
   url_private?: string;
   url_private_download?: string;
 }
 
-type PovWorkflow = "animate" | "recreate";
+type PovWorkflow = "render" | "animate" | "recreate";
 
 interface PovStudioJobRow {
   id: string;
@@ -39,15 +44,48 @@ interface PovStudioJobRow {
   picker_msg_ts: string | null;
   image_url: string | null;
   image_mimetype: string | null;
+  source_kind: "image" | "video" | null;
   workflow: PovWorkflow | null;
   status: "awaiting_workflow" | "running" | "done" | "error";
 }
 
 const JOB_COLS =
-  "id,slack_channel,slack_thread_ts,picker_msg_ts,image_url,image_mimetype,workflow,status";
+  "id,slack_channel,slack_thread_ts,picker_msg_ts,image_url,image_mimetype,source_kind,workflow,status";
 
-// Picker reactions -> workflow.
-const REACTION_TO_WORKFLOW: Record<string, PovWorkflow> = { one: "animate", two: "recreate" };
+// Picker reactions -> workflow (Render is #1).
+const REACTION_TO_WORKFLOW: Record<string, PovWorkflow> = {
+  one: "render",
+  two: "animate",
+  three: "recreate",
+};
+
+// Resolve any posted file to a still-image URL Claude/render can use: a real image's
+// url_private, or a video's poster thumbnail (via files.info). Returns null if neither.
+async function resolveStillFrame(
+  file: SlackFileLike
+): Promise<{ url: string; mimetype: string; kind: "image" | "video" } | null> {
+  const mime = file.mimetype ?? "";
+  if (mime.startsWith("image/")) {
+    const url = file.url_private ?? file.url_private_download ?? null;
+    return url ? { url, mimetype: mime, kind: "image" } : null;
+  }
+  if (mime.startsWith("video/") && file.id) {
+    try {
+      const info = (await slack.filesInfo(file.id)) as { ok?: boolean; file?: Record<string, unknown> };
+      const f = info.file ?? {};
+      // Slack video files expose a poster image under thumb_video / sized thumbs.
+      for (const key of ["thumb_video", "thumb_1024", "thumb_960", "thumb_720", "thumb_480", "thumb_360"]) {
+        const u = f[key];
+        if (typeof u === "string" && u.startsWith("http")) {
+          return { url: u, mimetype: "image/jpeg", kind: "video" };
+        }
+      }
+    } catch (e) {
+      console.error("[pov-studio] files.info for video failed:", (e as Error).message);
+    }
+  }
+  return null;
+}
 
 function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
@@ -69,28 +107,40 @@ async function downloadImage(url: string, mimetypeHint?: string): Promise<Claude
 // ---- Entry: a bare image post in #content-full ------------------------------------
 
 /**
- * Post the workflow picker for a fresh bare image and record the job. Returns true if
- * handled (so the events route stops before the Studio default). The caller should only
- * invoke this for a top-level image post with NO copy.
+ * Post the workflow breakdown for a fresh bare image/video and record the job. Returns
+ * true if handled (so the events route stops before the Studio default). The caller
+ * should only invoke this for a top-level media post with NO copy.
  */
 export async function handlePovImagePost(args: {
   channel: string;
   threadTs: string;
   files: SlackFileLike[];
 }): Promise<boolean> {
-  const imageFile = args.files.find((f) => (f.mimetype ?? "").startsWith("image/"));
-  if (!imageFile) return false;
+  const mediaFile = args.files.find(
+    (f) => (f.mimetype ?? "").startsWith("image/") || (f.mimetype ?? "").startsWith("video/")
+  );
+  if (!mediaFile) return false;
 
-  const url = imageFile.url_private ?? imageFile.url_private_download ?? null;
+  const frame = await resolveStillFrame(mediaFile);
+  if (!frame) {
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      "⚠️ I couldn't pull a still frame from that file. Send an image (or a video with a thumbnail) and I'll show you the workflows."
+    );
+    return true;
+  }
 
+  const videoNote = frame.kind === "video" ? " _(read from a frame of your video)_" : "";
   const picker = (await slack.postThreadReply(
     args.channel,
     args.threadTs,
     [
-      "🧠 *What should I do with this image?* React to pick a workflow:",
+      `🧠 *What should I do with this?*${videoNote} React to pick a workflow:`,
       "",
-      "1️⃣  *Animate this* — I will read the picture and give you an animation prompt, a few headline options, and captions to turn it into a reel.",
-      "2️⃣  *Learn / recreate* — treat this as fire inspiration (a screenshot of content or a caption). I will break down why it works and build our own pest-control POV remake.",
+      "1️⃣  *Render Reel* — I'll write 4 on-screen text lines (label, hook, payoff, cta). Pick or edit them and I render this frame with the text + our 6-second audio into a finished reel.",
+      "2️⃣  *Animate* — I'll give you an animation prompt, a few headline options, and captions to turn this still into a moving clip.",
+      "3️⃣  *Recreate* — treat this as fire inspiration; I'll break down why it works and rebuild it as our pest-control POV with a fresh first frame.",
     ].join("\n")
   )) as { ts?: string };
 
@@ -98,8 +148,9 @@ export async function handlePovImagePost(args: {
     slack_channel: args.channel,
     slack_thread_ts: args.threadTs,
     picker_msg_ts: picker?.ts ?? null,
-    image_url: url,
-    image_mimetype: imageFile.mimetype ?? null,
+    image_url: frame.url,
+    image_mimetype: frame.mimetype,
+    source_kind: frame.kind,
     workflow: null,
     status: "awaiting_workflow",
   });
@@ -149,6 +200,18 @@ export async function handlePovWorkflowReaction(args: {
 }
 
 async function runWorkflow(job: PovStudioJobRow, workflow: PovWorkflow): Promise<void> {
+  // Render hands off to the classic Studio flow (4 text lines -> render the frame with
+  // the text + 6-sec audio). It downloads the image itself and runs its own state
+  // machine (reel_studio_jobs), so we don't need the base64 here.
+  if (workflow === "render") {
+    await runRender(job);
+    await supabaseAdmin
+      .from("pov_studio_jobs")
+      .update({ status: "done", updated_at: new Date().toISOString() })
+      .eq("id", job.id);
+    return;
+  }
+
   const img = job.image_url ? await downloadImage(job.image_url, job.image_mimetype ?? undefined) : null;
   if (!img) throw new Error("could not read the source image");
 
@@ -159,6 +222,29 @@ async function runWorkflow(job: PovStudioJobRow, workflow: PovWorkflow): Promise
     .from("pov_studio_jobs")
     .update({ status: "done", updated_at: new Date().toISOString() })
     .eq("id", job.id);
+}
+
+// ---- Workflow 1: render reel (classic Studio 4-line -> MP4 with 6-sec audio) -------
+
+async function runRender(job: PovStudioJobRow): Promise<void> {
+  // Reconstruct a Studio file-like from the resolved still frame (image, or a video's
+  // thumbnail) and hand off. handleStudioImage posts the 4 text-line variations and
+  // creates the reel_studio_jobs row; the existing handleStudioReaction (react 1-4) and
+  // handleStudioReply (reply with the 4 boxes) then render the MP4 with the 6-sec audio.
+  if (!job.image_url) throw new Error("no still frame to render");
+  const handled = await handleStudioImage({
+    channel: job.slack_channel,
+    threadTs: job.slack_thread_ts,
+    files: [{ mimetype: job.image_mimetype ?? "image/jpeg", url_private: job.image_url }],
+    brief: "",
+  });
+  if (!handled) {
+    await slack.postThreadReply(
+      job.slack_channel,
+      job.slack_thread_ts,
+      "⚠️ Couldn't start the render flow for this frame. Try posting the still image directly."
+    );
+  }
 }
 
 // ---- Workflow 1: animate this image -----------------------------------------------
@@ -296,7 +382,8 @@ async function runRecreate(job: PovStudioJobRow, img: ClaudeImageInput): Promise
   const { data } = await callClaudeJSON<RecreatePackage>({
     model: model(),
     system: RECREATE_SYSTEM,
-    user: "Look at the attached inspiration screenshot and return the recreate package as JSON.",
+    user:
+      "Look at the attached inspiration frame (a screenshot, or a still frame from a video) and return the recreate package as JSON.",
     images: [img],
     maxTokens: 1600,
     temperature: 0.7,

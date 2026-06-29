@@ -435,23 +435,24 @@ export async function POST(request: NextRequest) {
         // Falls back to the Viral Video Decoder when the copy names it (decoder/viral/package).
         const decoderKeyword = /\b(decoder|viral|package)\b/i.test(userText);
         const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
+        const hasVideoFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("video/"));
         if (isContentFullChannel && !decoderKeyword) {
+          // A BARE media post (image OR video, no copy) → show the workflow breakdown
+          // (Render / Animate / Recreate) instead of defaulting to the Studio flow.
+          if (!isThreadReply && (hasImageFiles || hasVideoFiles) && userText.trim().length === 0) {
+            waitUntil(
+              handlePovImagePost({
+                channel,
+                threadTs: contentThreadTs,
+                files: attachedFiles,
+              }).catch((e) => {
+                console.error("[slack/events] pov image post error:", (e as Error).message);
+              })
+            );
+            return NextResponse.json({ ok: true });
+          }
           if (!isThreadReply && hasImageFiles) {
-            // A BARE image (no copy) → ask which workflow to run (animate vs learn/recreate)
-            // instead of defaulting to the Studio 4-variation flow. An image posted WITH
-            // copy still goes straight to Studio below (the classic titles+boxes path).
-            if (userText.trim().length === 0) {
-              waitUntil(
-                handlePovImagePost({
-                  channel,
-                  threadTs: contentThreadTs,
-                  files: attachedFiles,
-                }).catch((e) => {
-                  console.error("[slack/events] pov image post error:", (e as Error).message);
-                })
-              );
-              return NextResponse.json({ ok: true });
-            }
+            // An image posted WITH copy still goes straight to Studio (classic titles+boxes).
             // waitUntil so Vercel keeps the function alive until the variations
             // post — a bare fire-and-forget gets frozen right after the 200.
             waitUntil(

@@ -3,9 +3,10 @@
 -- pov_rotation: a single row (id = 'pov') holding the recently-used POV_SCENES indices
 --   so the 3 daily POV drops rotate through scenes instead of repeating. (Per-drop
 --   audit lives in system_logs, event_type = 'cron_pov_drop'.)
--- pov_studio_jobs: one row per bare image posted to #content-full. The bot posts a
---   "what workflow?" picker; the operator's reaction (1=animate, 2=learn/recreate) is
---   mapped back to the image by picker_msg_ts.
+-- pov_studio_jobs: one row per bare image/video posted to #content-full. The bot posts
+--   a "what workflow?" breakdown; the operator's reaction (1=render, 2=animate,
+--   3=recreate) is mapped back to the post by picker_msg_ts. Videos are resolved to a
+--   still frame (thumbnail) so source_kind records whether the original was image/video.
 --
 -- Run in: Supabase SQL Editor. Safe to re-run.
 
@@ -20,9 +21,10 @@ CREATE TABLE IF NOT EXISTS public.pov_studio_jobs (
   slack_channel   TEXT NOT NULL,
   slack_thread_ts TEXT NOT NULL,           -- the image message ts (becomes the thread)
   picker_msg_ts   TEXT,                    -- the "what workflow?" message ts (reaction maps here)
-  image_url       TEXT,                    -- url_private of the posted image
+  image_url       TEXT,                    -- still-frame url (image url_private, or video thumbnail)
   image_mimetype  TEXT,
-  workflow        TEXT CHECK (workflow IN ('animate', 'recreate')),
+  source_kind     TEXT CHECK (source_kind IN ('image', 'video')),
+  workflow        TEXT CHECK (workflow IN ('render', 'animate', 'recreate')),
   status          TEXT NOT NULL DEFAULT 'awaiting_workflow'
                   CHECK (status IN ('awaiting_workflow', 'running', 'done', 'error')),
   created_at      timestamptz NOT NULL DEFAULT now(),
