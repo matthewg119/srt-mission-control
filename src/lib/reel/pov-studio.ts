@@ -37,6 +37,13 @@ interface SlackFileLike {
 
 type PovWorkflow = "render" | "animate" | "recreate";
 
+interface PovImageOption {
+  index: number;
+  scene?: string;
+  url: string;
+  mimetype: string;
+}
+
 interface PovStudioJobRow {
   id: string;
   slack_channel: string;
@@ -45,12 +52,13 @@ interface PovStudioJobRow {
   image_url: string | null;
   image_mimetype: string | null;
   source_kind: "image" | "video" | null;
+  images: PovImageOption[] | null;
   workflow: PovWorkflow | null;
-  status: "awaiting_workflow" | "running" | "done" | "error";
+  status: "awaiting_pick" | "awaiting_workflow" | "running" | "done" | "error";
 }
 
 const JOB_COLS =
-  "id,slack_channel,slack_thread_ts,picker_msg_ts,image_url,image_mimetype,source_kind,workflow,status";
+  "id,slack_channel,slack_thread_ts,picker_msg_ts,image_url,image_mimetype,source_kind,images,workflow,status";
 
 // Picker reactions -> workflow (Render is #1).
 const REACTION_TO_WORKFLOW: Record<string, PovWorkflow> = {
@@ -58,6 +66,26 @@ const REACTION_TO_WORKFLOW: Record<string, PovWorkflow> = {
   two: "animate",
   three: "recreate",
 };
+
+// Image-pick reactions (daily drop "pick the best of 3") -> 1-based option number.
+const REACTION_TO_OPTION: Record<string, number> = { one: 1, two: 2, three: 3 };
+
+/** Post the 3-workflow breakdown and return its message ts (the reaction target). */
+async function postWorkflowBreakdown(channel: string, threadTs: string, fromVideo: boolean): Promise<string | null> {
+  const videoNote = fromVideo ? " _(read from a frame of your video)_" : "";
+  const res = (await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `🧠 *What should I do with this?*${videoNote} React to pick a workflow:`,
+      "",
+      "1️⃣  *Render Reel* — I'll write 4 on-screen text lines (label, hook, payoff, cta). Pick or edit them and I render this frame with the text + our 6-second audio into a finished reel.",
+      "2️⃣  *Animate* — I'll give you an animation prompt, a few headline options, and captions to turn this still into a moving clip.",
+      "3️⃣  *Recreate* — treat this as fire inspiration; I'll break down why it works and rebuild it as our pest-control POV with a fresh first frame.",
+    ].join("\n")
+  )) as { ts?: string };
+  return res?.ts ?? null;
+}
 
 // Resolve any posted file to a still-image URL Claude/render can use: a real image's
 // url_private, or a video's poster thumbnail (via files.info). Returns null if neither.
@@ -131,23 +159,12 @@ export async function handlePovImagePost(args: {
     return true;
   }
 
-  const videoNote = frame.kind === "video" ? " _(read from a frame of your video)_" : "";
-  const picker = (await slack.postThreadReply(
-    args.channel,
-    args.threadTs,
-    [
-      `🧠 *What should I do with this?*${videoNote} React to pick a workflow:`,
-      "",
-      "1️⃣  *Render Reel* — I'll write 4 on-screen text lines (label, hook, payoff, cta). Pick or edit them and I render this frame with the text + our 6-second audio into a finished reel.",
-      "2️⃣  *Animate* — I'll give you an animation prompt, a few headline options, and captions to turn this still into a moving clip.",
-      "3️⃣  *Recreate* — treat this as fire inspiration; I'll break down why it works and rebuild it as our pest-control POV with a fresh first frame.",
-    ].join("\n")
-  )) as { ts?: string };
+  const pickerTs = await postWorkflowBreakdown(args.channel, args.threadTs, frame.kind === "video");
 
   await supabaseAdmin.from("pov_studio_jobs").insert({
     slack_channel: args.channel,
     slack_thread_ts: args.threadTs,
-    picker_msg_ts: picker?.ts ?? null,
+    picker_msg_ts: pickerTs,
     image_url: frame.url,
     image_mimetype: frame.mimetype,
     source_kind: frame.kind,
@@ -155,6 +172,49 @@ export async function handlePovImagePost(args: {
     status: "awaiting_workflow",
   });
 
+  return true;
+}
+
+// ---- Reaction: pick the best of the daily drop's 3 image options ------------------
+
+/**
+ * The daily POV drop posts 3 image options + a "react 1/2/3 to pick the best" message.
+ * On that reaction, set the chosen image on the job and open the workflow breakdown.
+ */
+export async function handlePovDropPick(args: {
+  reaction: string;
+  slackTs: string;
+  channel: string;
+}): Promise<boolean> {
+  const optNum = REACTION_TO_OPTION[args.reaction];
+  if (!optNum) return false;
+
+  const { data } = await supabaseAdmin
+    .from("pov_studio_jobs")
+    .select(JOB_COLS)
+    .eq("picker_msg_ts", args.slackTs)
+    .limit(1)
+    .maybeSingle();
+  const job = data as PovStudioJobRow | null;
+  if (!job || job.status !== "awaiting_pick") return false;
+
+  const chosen = (job.images ?? []).find((o) => o.index === optNum);
+  if (!chosen) return false;
+
+  const pickerTs = await postWorkflowBreakdown(job.slack_channel, job.slack_thread_ts, false);
+
+  await supabaseAdmin
+    .from("pov_studio_jobs")
+    .update({
+      image_url: chosen.url,
+      image_mimetype: chosen.mimetype,
+      picker_msg_ts: pickerTs,
+      status: "awaiting_workflow",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", job.id);
+
+  await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, `✅ Option ${optNum} chosen.`);
   return true;
 }
 

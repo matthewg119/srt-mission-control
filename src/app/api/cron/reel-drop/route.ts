@@ -159,8 +159,8 @@ async function handle(req: NextRequest) {
     belief: belief.number,
     thread_ts: threadTs,
     pov_thread_ts: pov?.thread_ts ?? null,
-    pov_scene: pov?.scene ?? null,
-    pov_image_ok: pov?.image_ok ?? false,
+    pov_scenes: pov?.scenes ?? null,
+    pov_images_ok: pov?.images_ok ?? 0,
     duration_ms: Date.now() - start,
   });
 }

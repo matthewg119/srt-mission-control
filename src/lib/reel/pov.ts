@@ -9,6 +9,7 @@
 //
 // Scene rotation lives in the Supabase `pov_rotation` table (docs/2026-06-29-pov-rotation.sql).
 
+import { randomUUID } from "crypto";
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
@@ -161,11 +162,47 @@ export async function pickDistinctPovScene(_slot: ReelSlot): Promise<string> {
   return POV_SCENES[idx];
 }
 
+/** Pick `n` distinct POV scenes not recently used (falls back to fill if the pool is short). */
+export async function pickDistinctPovScenes(n: number): Promise<string[]> {
+  let recent: number[] = [];
+  try {
+    const { data } = await supabaseAdmin
+      .from("pov_rotation")
+      .select("id,recent")
+      .eq("id", "pov")
+      .maybeSingle();
+    const row = data as PovRotationRow | null;
+    recent = Array.isArray(row?.recent) ? row!.recent : [];
+  } catch {
+    recent = [];
+  }
+
+  const shuffle = (arr: number[]) => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
+  const all = POV_SCENES.map((_, i) => i);
+  const fresh = shuffle(all.filter((i) => !recent.includes(i)));
+  const rest = shuffle(all.filter((i) => recent.includes(i)));
+  const ordered = [...fresh, ...rest].slice(0, Math.min(n, all.length));
+  return ordered.map((i) => POV_SCENES[i]);
+}
+
 /** Persist that `scene` was just used, capping the recent list so rotation keeps moving. */
 export async function recordPovScene(scene: string): Promise<void> {
-  const idx = POV_SCENES.indexOf(scene);
-  if (idx === -1) return;
-  const cap = Math.min(8, Math.max(1, POV_SCENES.length - 1));
+  await recordPovScenes([scene]);
+}
+
+/** Persist that several scenes were just used (drop of 3), capping the recent list. */
+export async function recordPovScenes(scenes: string[]): Promise<void> {
+  const idxs = scenes.map((s) => POV_SCENES.indexOf(s)).filter((i) => i !== -1);
+  if (idxs.length === 0) return;
+  const cap = Math.min(9, Math.max(idxs.length, POV_SCENES.length - 1));
   try {
     const { data } = await supabaseAdmin
       .from("pov_rotation")
@@ -173,12 +210,29 @@ export async function recordPovScene(scene: string): Promise<void> {
       .eq("id", "pov")
       .maybeSingle();
     const prev = (data as PovRotationRow | null)?.recent ?? [];
-    const recent = [...prev.filter((i) => i !== idx), idx].slice(-cap);
+    const recent = [...prev.filter((i) => !idxs.includes(i)), ...idxs].slice(-cap);
     await supabaseAdmin
       .from("pov_rotation")
       .upsert({ id: "pov", recent, updated_at: new Date().toISOString() }, { onConflict: "id" });
   } catch (e) {
-    console.error("[pov] recordPovScene failed:", (e as Error).message);
+    console.error("[pov] recordPovScenes failed:", (e as Error).message);
+  }
+}
+
+/** Upload a generated image to the Supabase `reels` bucket; returns a public URL or null. */
+async function uploadToReels(buffer: Buffer, mimetype: string): Promise<string | null> {
+  try {
+    const ext = (mimetype.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
+    const key = `pov/${randomUUID()}.${ext}`;
+    const up = await supabaseAdmin.storage.from("reels").upload(key, buffer, { contentType: mimetype, upsert: true });
+    if (up.error) {
+      console.error("[pov] reels upload failed:", up.error.message);
+      return null;
+    }
+    return supabaseAdmin.storage.from("reels").getPublicUrl(key).data.publicUrl;
+  } catch (e) {
+    console.error("[pov] reels upload threw:", (e as Error).message);
+    return null;
   }
 }
 
@@ -192,81 +246,92 @@ export interface RunPovDropArgs {
 
 export interface PovDropResult {
   thread_ts?: string;
-  scene: string;
-  image_ok: boolean;
+  scenes: string[];
+  images_ok: number;
 }
+
+/** How many image options the daily drop generates for the operator to pick from. */
+const POV_OPTIONS_PER_DROP = 3;
 
 /**
  * Post one Meta Glasses POV drop as its OWN top-level message in #content-full:
- * generate the image (gpt-image-2) -> post header + image -> post the creative copy.
- * Step 1/2 only (no animation/render). Throws are caught by the cron caller so a POV
- * failure can never break the belief drop.
+ * generate POV_OPTIONS_PER_DROP images -> post them as labeled options -> ask the
+ * operator to react 1/2/3 to pick the best, which then opens the workflow breakdown
+ * (handled in pov-studio.ts). Throws are caught by the cron caller so a POV failure
+ * never breaks the belief drop.
  */
 export async function runPovDrop(args: RunPovDropArgs): Promise<PovDropResult> {
   const start = Date.now();
   const { channel, date, slot } = args;
+  const provider = povImageProvider();
 
-  const scene = await pickDistinctPovScene(slot);
-  const imagePrompt = buildPovImagePrompt(scene);
+  const scenes = await pickDistinctPovScenes(POV_OPTIONS_PER_DROP);
+  const prompts = scenes.map(buildPovImagePrompt);
+  const soulId = provider === "higgsfield" ? process.env.HIGGSFIELD_SOUL_ID : undefined;
+  const imgs = await generateImages({ prompts, provider, soulId });
 
-  const img = await generatePovImage(imagePrompt);
-
-  const header = `🕶️ *Meta Glasses POV, ${date}* (${slot})\n_First-person personal account, auto-generated image (${povImageProvider()})._`;
+  const header = `🕶️ *Meta Glasses POV, ${date}* (${slot})\n_First-person personal account. ${POV_OPTIONS_PER_DROP} options, generated with ${provider}._`;
   const main = (await slack.postMessage(channel, header)) as { ok?: boolean; ts?: string };
   const threadTs = main?.ts;
+  if (!threadTs) throw new Error("failed to post POV header to #content-full");
 
-  if (!threadTs) {
-    throw new Error("failed to post POV header to #content-full");
+  // Post each successful image as a labeled, re-numbered option. Store a public URL
+  // (Supabase) so the chosen one can be downloaded later without a Slack token.
+  const options: Array<{ index: number; scene: string; url: string; mimetype: string }> = [];
+  for (let i = 0; i < imgs.length; i++) {
+    const img = imgs[i];
+    if (!img) {
+      await slack.postThreadReply(
+        channel,
+        threadTs,
+        [`⚠️ Option ${i + 1} failed (${provider}). Prompt:`, "```", prompts[i], "```"].join("\n")
+      );
+      continue;
+    }
+    const url = await uploadToReels(img.buffer, img.mimetype);
+    if (!url) {
+      await slack.postThreadReply(channel, threadTs, `⚠️ Option ${i + 1} generated but could not be stored. Skipping.`);
+      continue;
+    }
+    const index = options.length + 1;
+    await slack.postThreadReply(channel, threadTs, `*Option ${index}*`);
+    await slack.uploadFile(channel, `pov-${slot}-${index}.png`, img.buffer, img.mimetype, threadTs);
+    options.push({ index, scene: scenes[i], url, mimetype: img.mimetype });
   }
 
-  if (img) {
-    await slack.uploadFile(channel, `pov-${slot}.png`, img.buffer, img.mimetype, threadTs);
-  } else {
-    await slack.postThreadReply(
-      channel,
-      threadTs,
-      [`⚠️ Image generation failed (${povImageProvider()}). Prompt to render manually:`, "```", imagePrompt, "```"].join("\n")
-    );
+  await recordPovScenes(scenes);
+
+  if (options.length === 0) {
+    await slack.postThreadReply(channel, threadTs, "🚫 All image options failed. Check the image provider credentials/credits.");
+    await supabaseAdmin.from("system_logs").insert({
+      event_type: "cron_pov_drop",
+      description: `POV drop ${slot}: all ${imgs.length} options failed`,
+      metadata: { slot, scenes, provider, style_version: POV_STYLE_VERSION, images_ok: 0, duration_ms: Date.now() - start },
+    });
+    return { thread_ts: threadTs, scenes, images_ok: 0 };
   }
 
-  const concept = await generatePovConcept(scene);
-  const titles = concept.titles.map((t, i) => `${i + 1}. ${t}`).join("\n");
-  await slack.postThreadReply(
+  const nums = options.map((o) => `${o.index}️⃣`).join(" ");
+  const pick = (await slack.postThreadReply(
     channel,
     threadTs,
-    [
-      `*Idea:* ${concept.idea}`,
-      "",
-      `*Animation (motion only):* ${concept.animation_prompt}`,
-      "",
-      "*Captions*",
-      `• *Authority:* ${concept.captions.authority}`,
-      `• *Relatable:* ${concept.captions.relatable}`,
-      `• *Curiosity:* ${concept.captions.curiosity}`,
-      "",
-      "*POV titles* (pick one):",
-      titles,
-      "",
-      "_Reference image prompt:_",
-      "```",
-      concept.image_prompt,
-      "```",
-    ].join("\n")
-  );
+    `React ${nums} to pick the best option. I'll then show you what we can do with it (Render / Animate / Recreate).`
+  )) as { ts?: string };
 
-  await recordPovScene(scene);
+  await supabaseAdmin.from("pov_studio_jobs").insert({
+    slack_channel: channel,
+    slack_thread_ts: threadTs,
+    picker_msg_ts: pick?.ts ?? null,
+    images: options,
+    source_kind: "image",
+    status: "awaiting_pick",
+  });
 
   await supabaseAdmin.from("system_logs").insert({
     event_type: "cron_pov_drop",
-    description: `POV drop ${slot}: ${scene.slice(0, 60)}`,
-    metadata: {
-      slot,
-      scene,
-      style_version: POV_STYLE_VERSION,
-      image_ok: !!img,
-      duration_ms: Date.now() - start,
-    },
+    description: `POV drop ${slot}: ${options.length}/${imgs.length} options posted`,
+    metadata: { slot, scenes, provider, style_version: POV_STYLE_VERSION, images_ok: options.length, duration_ms: Date.now() - start },
   });
 
-  return { thread_ts: threadTs, scene, image_ok: !!img };
+  return { thread_ts: threadTs, scenes, images_ok: options.length };
 }

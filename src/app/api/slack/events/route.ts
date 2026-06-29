@@ -29,7 +29,7 @@ import {
 import { stripSilence, sofiaVoiceConvert } from "@/lib/elevenlabs-media";
 import { handleReelImage, handleReelReaction } from "@/lib/reel/interactive";
 import { handleStudioImage, handleStudioReply, handleStudioReaction } from "@/lib/reel/studio";
-import { handlePovImagePost, handlePovWorkflowReaction } from "@/lib/reel/pov-studio";
+import { handlePovImagePost, handlePovWorkflowReaction, handlePovDropPick } from "@/lib/reel/pov-studio";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
 
@@ -126,7 +126,15 @@ export async function POST(request: NextRequest) {
         });
         if (reelHandled) return NextResponse.json({ ok: true });
 
-        // POV workflow picker: 1️⃣/2️⃣ reaction on a "what workflow?" message (self-routes by DB)
+        // POV daily drop: 1️⃣/2️⃣/3️⃣ to pick the best of 3 image options (self-routes by DB)
+        const povPickHandled = await handlePovDropPick({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (povPickHandled) return NextResponse.json({ ok: true });
+
+        // POV workflow picker: 1️⃣/2️⃣/3️⃣ reaction on a "what workflow?" message (self-routes by DB)
         const povWorkflowHandled = await handlePovWorkflowReaction({
           reaction: event.reaction as string,
           slackTs: event.item.ts as string,

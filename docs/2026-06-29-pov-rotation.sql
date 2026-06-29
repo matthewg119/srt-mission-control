@@ -21,12 +21,13 @@ CREATE TABLE IF NOT EXISTS public.pov_studio_jobs (
   slack_channel   TEXT NOT NULL,
   slack_thread_ts TEXT NOT NULL,           -- the image message ts (becomes the thread)
   picker_msg_ts   TEXT,                    -- the "what workflow?" message ts (reaction maps here)
-  image_url       TEXT,                    -- still-frame url (image url_private, or video thumbnail)
+  image_url       TEXT,                    -- chosen still-frame url (image url_private, or video thumbnail)
   image_mimetype  TEXT,
   source_kind     TEXT CHECK (source_kind IN ('image', 'video')),
+  images          JSONB,                   -- daily-drop candidates [{index,scene,url,mimetype}] for the pick step
   workflow        TEXT CHECK (workflow IN ('render', 'animate', 'recreate')),
   status          TEXT NOT NULL DEFAULT 'awaiting_workflow'
-                  CHECK (status IN ('awaiting_workflow', 'running', 'done', 'error')),
+                  CHECK (status IN ('awaiting_pick', 'awaiting_workflow', 'running', 'done', 'error')),
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
