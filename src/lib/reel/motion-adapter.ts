@@ -109,12 +109,15 @@ class SeedanceAdapter implements MotionAdapter {
     // ---- SEEDANCE_REQUEST -------------------------------------------------------
     // EVERYTHING Seedance-specific is in this block. If a live call rejects a field,
     // fix it here only. Best-guess shape mirrors the Higgsfield text2image contract.
+    // Verified live against platform.higgsfield.ai (2026-06-30): model enum is
+    // seedance_lite | seedance_pro; input_image is an object {type,image_url}; the
+    // body below clears validation (the only failure left is account credits).
     const SUBMIT_URL = `${HIGGSFIELD_HOST}/v1/image2video/seedance`;
     const submitBody = {
       params: {
-        model: "seedance-v2.0-i2v",
+        model: process.env.SEEDANCE_MODEL || "seedance_lite", // seedance_pro for higher quality
         prompt,
-        input_image_url: imageUrl,
+        input_image: { type: "image_url", image_url: imageUrl },
         reference_image_urls: refs,
         duration: 5,
         aspect_ratio: "9:16",
