@@ -6,12 +6,12 @@
 //
 // See plan: finish the #content-full media → workflow flow.
 
-export type ContentWorkflowId = "render" | "animate" | "recreate";
+export type ContentWorkflowId = "render" | "animate" | "recreate" | "caption";
 
 export interface ContentWorkflow {
   id: ContentWorkflowId;
   /** Slack reaction name (emoji shortcode) that selects this workflow on the picker. */
-  keycap: "one" | "two" | "three";
+  keycap: "one" | "two" | "three" | "four";
   /** Rendered keycap emoji for messages. */
   emoji: string;
   /** Short display name. */
@@ -34,7 +34,7 @@ export const CONTENT_WORKFLOWS: ContentWorkflow[] = [
     name: "Render Reel",
     blurb:
       "I'll write 4 on-screen text lines (label, hook, payoff, cta). Pick or edit them and I render this frame with the text + our 6-second audio into a finished reel.",
-    keywords: /\b(render|reel|caption|titles?|on.?screen)\b/i,
+    keywords: /\b(render|reel|on.?screen)\b/i,
     requirements: [
       "the 4 on-screen text lines — label, hook, payoff, cta (reply with them one per line, or pick/edit one of the options I post).",
     ],
@@ -62,6 +62,17 @@ export const CONTENT_WORKFLOWS: ContentWorkflow[] = [
     requirements: ["the inspiration image/video — I break down why it works and rebuild it as our POV."],
     acceptsStillFrame: true,
   },
+  {
+    id: "caption",
+    keycap: "four",
+    emoji: "4️⃣",
+    name: "Caption",
+    blurb:
+      "Copy only: I'll write headline options + 3 captions (authority, relatable, curiosity) for this still. No animation, no render.",
+    keywords: /\b(caption|title|hook|copy)\b/i,
+    requirements: ["just this still frame — I output headline options and captions, no video."],
+    acceptsStillFrame: true,
+  },
 ];
 
 /** Reaction name (e.g. "one") → workflow id, derived from the registry. */
@@ -85,6 +96,7 @@ export function classifyByKeywords(brief: string): ContentWorkflowId | null {
   if (!text) return null;
   if (getWorkflow("recreate").keywords.test(text)) return "recreate";
   if (getWorkflow("animate").keywords.test(text)) return "animate";
+  if (getWorkflow("caption").keywords.test(text)) return "caption";
   if (getWorkflow("render").keywords.test(text)) return "render";
   return null;
 }

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { generateVideo, pollVideo } from "@/lib/elevenlabs-media";
+import { uploadToReels } from "@/lib/reel/pov";
+import { getMotionAdapter } from "@/lib/reel/motion-adapter";
+import { checkAndFinishAutoReel } from "@/lib/reel/auto-reel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,10 +18,47 @@ interface PollerBody {
   image_url: string;
   channel: string;
   thread_ts: string;
+  /** "auto" = autonomous auto-reel shot: animate via the motion adapter, no approval gate. */
+  mode?: "auto";
+}
+
+// Autonomous auto-reel shot: animate ONE shot via the swappable motion adapter, store a
+// durable clip URL, and post NO per-shot approval prompt. When every shot of the package
+// is terminal, checkAndFinishAutoReel stitches + posts the final reel (atomic, idempotent).
+async function handleAutoShot(body: PollerBody): Promise<NextResponse> {
+  const { scene_id, package_id, slide_number, animation_prompt, image_url } = body;
+  console.log(`[video-poller] auto shot start scene=${scene_id} slide=${slide_number}`);
+
+  try {
+    const clip = await getMotionAdapter().animate(image_url, animation_prompt || "");
+    const videoUrl = await uploadToReels(clip, "video/mp4");
+    if (!videoUrl) throw new Error("clip upload to reels bucket failed");
+    await supabaseAdmin
+      .from("content_scenes")
+      .update({ video_url: videoUrl, video_approved: true, video_error: null })
+      .eq("id", scene_id);
+    console.log(`[video-poller] auto shot done slide=${slide_number}`);
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    console.error(`[video-poller] auto shot error slide=${slide_number}:`, errMsg);
+    await supabaseAdmin.from("content_scenes").update({ video_error: errMsg }).eq("id", scene_id);
+  }
+
+  // Fan-in: trigger the stitch when this was the last outstanding shot (success or fail).
+  try {
+    await checkAndFinishAutoReel(package_id);
+  } catch (err) {
+    console.error(`[video-poller] auto finish check failed pkg=${package_id}:`, (err as Error).message);
+  }
+
+  return NextResponse.json({ ok: true });
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = (await request.json()) as PollerBody;
+
+  if (body.mode === "auto") return handleAutoShot(body);
+
   const { scene_id, package_id, slide_number, animation_prompt, image_url, channel, thread_ts } = body;
 
   console.log(`[video-poller] start scene=${scene_id} slide=${slide_number}`);

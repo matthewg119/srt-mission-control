@@ -37,6 +37,9 @@ import {
   handleInstagramLink,
   INSTAGRAM_URL_RE,
 } from "@/lib/reel/pov-studio";
+import { analyzeVideo } from "@/lib/reel/content-analyzer";
+import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
+import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
 
@@ -430,6 +433,20 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: true });
         }
 
+        // "generate POV Pest Control 5 ideas" → rotation-aware numbered format options.
+        const ideasMatch = userText.match(/generate\s+pov\s+(.+?)\s+(\d+)\s+ideas?/i);
+        if (ideasMatch) {
+          const verticalName = ideasMatch[1].trim();
+          const count = Math.min(9, Math.max(1, parseInt(ideasMatch[2], 10)));
+          waitUntil(
+            (async () => {
+              const verticalId = await resolveVerticalId(verticalName);
+              await handleGenerateIdeas({ channel, threadTs: contentThreadTs, verticalId, count });
+            })().catch((e) => console.error("[slack/events] generate ideas error:", (e as Error).message))
+          );
+          return NextResponse.json({ ok: true });
+        }
+
         // "generate this / generate images / generate only images" → Stage 1 stills
         const genThisMatch = userText.match(/generate\s+(this|images?|only\s+images?)/i);
         if (genThisMatch && isThreadReply) {
@@ -459,6 +476,12 @@ export async function POST(request: NextRequest) {
         // SRT Reel Studio (#content-full): a fresh image post → 4 reel-copy variations;
         // a thread reply → the operator's final 4 boxes → render the branded MP4.
         // Falls back to the Viral Video Decoder when the copy names it (decoder/viral/package).
+        // Single front door: the registry keyword router decides intent for ALL
+        // #content-full media. Auto-render (decoder image gen) fires ONLY when the
+        // operator explicitly asks for a full reel render; everything else either
+        // routes to pov-studio (animate/caption/recreate) or builds a package that
+        // waits for 👍. This stops a stray reply (e.g. "2") triggering an MCA render.
+        const frontDoorIntent = classifyByKeywords(userText);
         const decoderKeyword = /\b(decoder|viral|package)\b/i.test(userText);
         const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
         const hasVideoFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("video/"));
@@ -495,7 +518,7 @@ export async function POST(request: NextRequest) {
           userId: event.user as string,
           brief: userText,
           files: attachedFiles,
-          fullVideo: isContentFullChannel,
+          fullVideo: isContentFullChannel && frontDoorIntent === "render",
           isThreadReply,
         }).catch((e) => {
           console.error("[slack/events] content drop handler error:", (e as Error).message);
@@ -804,6 +827,8 @@ async function handleContentReaction(args: {
     .from("content_packages")
     .select("id, status, slack_channel, slack_thread_ts, package_json")
     .eq("slack_package_ts", args.slackTs)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (!pkg) return false;
@@ -1091,7 +1116,7 @@ async function handleContentDrop(args: {
     await slack.postThreadReply(
       args.channel,
       args.threadTs,
-      "👋 Drop reference screenshots + a one-line brief (e.g. `MCA denial → SRT approval, dental vertical, $150K in 24hr`) and I'll build the full package."
+      "👋 Just drop the image or video you want to work from. I'll read it and suggest the formats and workflows that fit, no brief needed. Add a note only if you want to steer it."
     );
     return;
   }
@@ -1102,8 +1127,8 @@ async function handleContentDrop(args: {
     parentPackageId
       ? `✏️ Rebuilding with your feedback…`
       : args.fullVideo
-      ? `🎬 Got it — decoding now, then auto-generating images with ElevenLabs. ~20–30s.`
-      : `📝 Got it — writing the production package (caption, VO, 9 image/animation prompts, timeline, music). ~20s.`
+      ? `🎬 Got it. Decoding the script and auto-generating the full reel now (~20-30s).`
+      : `📝 Got it. Writing the production package (caption, VO, 9 image/animation prompts, timeline, music) (~20s).`
   );
 
   const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -1372,6 +1397,63 @@ async function handleFileShared(fileId: string): Promise<void> {
       console.error("[slack/events] sofia voice conversion error:", (e as Error).message)
     );
     return;
+  }
+
+  // Video dropped in #content-analyzer → read it shot-by-shot (storyboard + pest remake).
+  const analyzerChannel = VEKTOR_CHANNELS.contentAnalyzer;
+  const isVideo =
+    mimeType.startsWith("video/") || file.filetype === "mp4" || file.filetype === "mov";
+  if (analyzerChannel && isVideo) {
+    const shares: Record<string, Array<{ thread_ts?: string; ts?: string }>> = {
+      ...(file.shares?.public ?? {}),
+      ...(file.shares?.private ?? {}),
+    };
+    const share = (shares[analyzerChannel] ?? [])[0];
+    if (share) {
+      // A top-level video post has no thread_ts; reply under the post itself (ts).
+      const threadTs = share.thread_ts ?? share.ts;
+      if (threadTs && file.url_private_download) {
+        void analyzeVideo({ channel: analyzerChannel, threadTs, file }).catch((e) =>
+          console.error("[slack/events] content-analyzer video error:", (e as Error).message)
+        );
+      }
+      return;
+    }
+  }
+
+  // Avatar kit (PDF or .docx) dropped in #content-analyzer → distill it into a vertical and
+  // build its content calendar. Fire a non-blocking POST to the ingest endpoint (its own 300s
+  // timeout) so the slow distill/generate work doesn't run in this short-lived function.
+  const isDocx =
+    mimeType.includes("wordprocessingml") || file.filetype === "docx" || /\.docx$/i.test(file.name ?? "");
+  if (analyzerChannel && (mimeType === "application/pdf" || isDocx)) {
+    const shares: Record<string, Array<{ thread_ts?: string; ts?: string }>> = {
+      ...(file.shares?.public ?? {}),
+      ...(file.shares?.private ?? {}),
+    };
+    const share = (shares[analyzerChannel] ?? [])[0];
+    if (share && file.url_private_download) {
+      const threadTs = share.thread_ts ?? share.ts;
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      try {
+        await fetch(`${appUrl}/api/content/ingest-avatar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slack_file: {
+              url_private_download: file.url_private_download,
+              name: file.name,
+              mimetype: file.mimetype,
+              channel: analyzerChannel,
+              thread_ts: threadTs,
+            },
+          }),
+        });
+      } catch (e) {
+        console.error("[slack/events] ingest-avatar dispatch error:", (e as Error).message);
+      }
+      return;
+    }
   }
 
   if (mimeType !== "application/pdf") {

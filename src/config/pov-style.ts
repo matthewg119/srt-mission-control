@@ -1,5 +1,10 @@
 // Meta Glasses POV format — single editable place for the look + scene list.
 //
+// NOTE: As of Content Engine v2 these constants are the `pest_control` vertical SEED.
+// The generators (pov.ts / pov-studio.ts) read from the active vertical via
+// src/config/verticals.ts; these values populate PEST_CONTROL_SEED there. Edit a
+// vertical row in the DB to override per vertical; edit here to change the seed default.
+//
 // This is the POV analog of reel-style.ts. The Daily Creative Drop's belief format
 // stays untouched; this drives a SECOND, first-person "personal account of a pest
 // control specialist" drop, styled to look like real Ray-Ban Meta smart-glasses
@@ -23,6 +28,11 @@ export const POV_GLASSES_TOKEN =
 // Format 1 b-roll ideas rewritten to first-person POV (the wearer's own hands do the
 // task). The style token carries the look; each scene only describes the action.
 export const POV_SCENES: string[] = [
+  // Satisfying "bugs flee after the spray" payoff scenes (the format we lean on most).
+  "the wearer's gloved hand sweeping a spray nozzle along a kitchen baseboard as a cluster of roaches breaks apart and scurries out of frame.",
+  "crouched at a garage corner, the wearer's gloved hand hitting a marching line of ants with a burst of spray as they scatter in every direction.",
+  "the wearer's gloved hand spraying into a dark under-sink cabinet as silverfish and a spider dart out and scramble across the shelf.",
+  "aiming the sprayer into a wall crack, the wearer's gloved hand triggering a puff as roaches pour out and flee down the baseboard.",
   "walking out across a green suburban backyard at golden hour, the wearer's gloved hand raising a backpack-fogger wand as the first puff of mist leaves the nozzle.",
   "crouched indoors, the wearer's gloved hand drawing one clean even line of treatment along the wall-floor baseboard seam.",
   "reaching up into a shaded porch ceiling corner, the wearer's gloved hand sweeping a web-duster pole through thick cobwebs.",

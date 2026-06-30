@@ -26,7 +26,9 @@ import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/c
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage } from "@/lib/reel/pov";
 import { handleStudioImage, parseBoxes } from "@/lib/reel/studio";
-import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
+import { loadExampleFewShot } from "@/lib/reel/content-examples";
+import { suggestFormatsForFrame } from "@/lib/reel/format-suggest";
+import { getActiveVertical, type Vertical } from "@/config/verticals";
 import {
   CONTENT_WORKFLOWS,
   REACTION_TO_WORKFLOW,
@@ -175,6 +177,17 @@ export async function handlePovImagePost(args: {
     status: "awaiting_workflow",
   });
 
+  // Proactively suggest 2-3 matching formats from the calendar based on what's in the frame
+  // (in addition to the workflow picker). Silent no-op until the format calendar is seeded.
+  waitUntil(
+    suggestFormatsForFrame({
+      channel: args.channel,
+      threadTs: args.threadTs,
+      frameUrl: frame.url,
+      mimetype: frame.mimetype,
+    }).catch(() => {})
+  );
+
   return true;
 }
 
@@ -261,6 +274,7 @@ export async function handlePovMediaWithBrief(args: {
     return true;
   }
   if (intent === "animate") await runAnimate(args.channel, args.threadTs, img);
+  else if (intent === "caption") await runCaption(args.channel, args.threadTs, img);
   else await runRecreate(args.channel, args.threadTs, img);
   return true;
 }
@@ -369,6 +383,7 @@ async function runWorkflow(job: PovStudioJobRow, workflow: PovWorkflow): Promise
   if (!img) throw new Error("could not read the source image");
 
   if (workflow === "animate") await runAnimate(job.slack_channel, job.slack_thread_ts, img);
+  else if (workflow === "caption") await runCaption(job.slack_channel, job.slack_thread_ts, img);
   else await runRecreate(job.slack_channel, job.slack_thread_ts, img);
 
   await supabaseAdmin
@@ -422,32 +437,35 @@ function isAnimatePackage(v: unknown): v is AnimatePackage {
   );
 }
 
-const ANIMATE_SYSTEM = [
-  "You are the content engine for a pest control business. You are shown ONE real photo",
-  "the operator wants to animate into a short reel that looks like real footage captured",
-  "on Ray-Ban Meta smart glasses (a first-person personal account of the technician).",
-  "",
-  "GLOBAL VISUAL STYLE the clip should read as:",
-  POV_GLASSES_TOKEN,
-  "",
-  "From the photo, return:",
-  "- scene_read: one line describing what is happening in the photo.",
-  "- animation_prompt: motion only (head/camera movement + the hands' action), ONE sentence, that animates THIS exact photo from first frame to last frame with no cuts.",
-  "- captions: exactly three — authority (calm, expert), relatable (homeowner POV, light humor), curiosity (scroll-stopping tease).",
-  "- titles: exactly six on-screen headline options, lead with 'POV:' style, each 7 words or fewer; title #1 is the default.",
-  "",
-  "HARD RULES: never invent funding numbers/rates/terms; never use em dashes or en dashes.",
-  "",
-  "Match the quality and voice of these gold examples:",
-  JSON.stringify(POV_GOLD_EXAMPLES, null, 2),
-].join("\n");
+function buildAnimateSystem(v: Vertical): string {
+  return [
+    `You are the content engine for a ${v.business_descriptor}. You are shown ONE real photo`,
+    "the operator wants to animate into a short reel that looks like real footage captured",
+    "on Ray-Ban Meta smart glasses (a first-person personal account of the technician).",
+    "",
+    "GLOBAL VISUAL STYLE the clip should read as:",
+    v.style_token,
+    "",
+    "From the photo, return:",
+    "- scene_read: one line describing what is happening in the photo.",
+    "- animation_prompt: motion only (head/camera movement + the hands' action), ONE sentence, that animates THIS exact photo from first frame to last frame with no cuts.",
+    "- captions: exactly three — authority (calm, expert), relatable (homeowner POV, light humor), curiosity (scroll-stopping tease).",
+    "- titles: exactly six on-screen headline options, lead with 'POV:' style, each 7 words or fewer; title #1 is the default.",
+    "",
+    "HARD RULES: never invent funding numbers/rates/terms; never use em dashes or en dashes.",
+    "",
+    "Match the quality and voice of these gold examples:",
+    JSON.stringify(v.gold_examples, null, 2),
+  ].join("\n");
+}
 
 async function runAnimate(channel: string, threadTs: string, img: ClaudeImageInput): Promise<void> {
   await slack.postThreadReply(channel, threadTs, "🎬 Reading your photo and building the animate package…");
 
+  const vertical = await getActiveVertical();
   const { data } = await callClaudeJSON<AnimatePackage>({
     model: model(),
-    system: ANIMATE_SYSTEM,
+    system: buildAnimateSystem(vertical),
     user: "Look at the attached photo and return the animate package as JSON.",
     images: [img],
     maxTokens: 1200,
@@ -465,6 +483,80 @@ async function runAnimate(channel: string, threadTs: string, img: ClaudeImageInp
       `*What I see:* ${stripEmDashes(data.scene_read)}`,
       "",
       `*Animation prompt (motion only):* ${stripEmDashes(data.animation_prompt)}`,
+      "",
+      "*Headline options* (pick one):",
+      titles,
+      "",
+      "*Captions*",
+      `• *Authority:* ${stripEmDashes(data.captions.authority)}`,
+      `• *Relatable:* ${stripEmDashes(data.captions.relatable)}`,
+      `• *Curiosity:* ${stripEmDashes(data.captions.curiosity)}`,
+    ].join("\n")
+  );
+}
+
+// ---- Workflow: caption only (copy, no motion, no render) --------------------------
+
+interface CaptionPackage {
+  scene_read: string;
+  captions: { authority: string; relatable: string; curiosity: string };
+  titles: string[];
+}
+
+function isCaptionPackage(v: unknown): v is CaptionPackage {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as CaptionPackage;
+  const c = p.captions;
+  return (
+    typeof p.scene_read === "string" &&
+    typeof c === "object" && c !== null &&
+    typeof c.authority === "string" && typeof c.relatable === "string" && typeof c.curiosity === "string" &&
+    Array.isArray(p.titles) && p.titles.length > 0 && p.titles.every((t) => typeof t === "string")
+  );
+}
+
+function buildCaptionSystem(v: Vertical): string {
+  return [
+    `You are the content engine for a ${v.business_descriptor}. You are shown ONE real photo`,
+    "the operator wants copy for: on-screen headlines + captions only. No animation, no render.",
+    "",
+    "GLOBAL VOICE the copy should read as (first-person Ray-Ban Meta glasses POV of the technician):",
+    v.style_token,
+    "",
+    "From the photo, return:",
+    "- scene_read: one line describing what is happening in the photo.",
+    "- captions: exactly three — authority (calm, expert), relatable (homeowner POV, light humor), curiosity (scroll-stopping tease).",
+    "- titles: exactly six on-screen headline options, lead with 'POV:' style, each 7 words or fewer; title #1 is the default.",
+    "",
+    "HARD RULES: never invent funding numbers/rates/terms; never use em dashes or en dashes.",
+    "",
+    "Match the quality and voice of these gold examples:",
+    JSON.stringify(v.gold_examples, null, 2),
+  ].join("\n");
+}
+
+async function runCaption(channel: string, threadTs: string, img: ClaudeImageInput): Promise<void> {
+  await slack.postThreadReply(channel, threadTs, "✍️ Writing headline options and captions…");
+
+  const vertical = await getActiveVertical();
+  const { data } = await callClaudeJSON<CaptionPackage>({
+    model: model(),
+    system: buildCaptionSystem(vertical),
+    user: "Look at the attached photo and return the caption package as JSON.",
+    images: [img],
+    maxTokens: 700,
+    temperature: 0.7,
+    schemaHint:
+      '{ "scene_read": string, "captions": { "authority": string, "relatable": string, "curiosity": string }, "titles": [string] }',
+    validate: isCaptionPackage,
+  });
+
+  const titles = data.titles.slice(0, 6).map((t, i) => `${i + 1}. ${stripEmDashes(t)}`).join("\n");
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `*What I see:* ${stripEmDashes(data.scene_read)}`,
       "",
       "*Headline options* (pick one):",
       titles,
@@ -506,29 +598,31 @@ function isRecreatePackage(v: unknown): v is RecreatePackage {
   );
 }
 
-const RECREATE_SYSTEM = [
-  "You are the content engine for a pest control business. The operator is showing you",
-  "OTHER creators' content they think is 'fire' and want to learn from and recreate for",
-  "our brand. The input is either a single screenshot/thumbnail, OR several frames sampled",
-  "across a video plus its original caption. Read all frames together as one piece.",
-  "",
-  "Our brand format is a first-person personal account of a pest control technician,",
-  "styled to look like real footage captured on Ray-Ban Meta smart glasses:",
-  POV_GLASSES_TOKEN,
-  "",
-  "Return:",
-  "- why_it_works: 2-3 sentences breaking down the hook, format, and why it grabs attention.",
-  "- our_version: a pest-control POV remake of the SAME idea, with:",
-  "    idea (one line), image_prompt (a first-frame prompt in our Meta-glasses POV style, NO on-screen text),",
-  "    animation_prompt (motion only, one sentence), captions (authority/relatable/curiosity),",
-  "    titles (exactly six 'POV:' style on-screen options, each 7 words or fewer).",
-  "",
-  "HARD RULES: never invent funding numbers/rates/terms; never use em dashes or en dashes;",
-  "image_prompt must contain no text overlay (text is added in post).",
-  "",
-  "Match the quality and voice of these gold examples:",
-  JSON.stringify(POV_GOLD_EXAMPLES, null, 2),
-].join("\n");
+function buildRecreateSystem(v: Vertical): string {
+  return [
+    `You are the content engine for a ${v.business_descriptor}. The operator is showing you`,
+    "OTHER creators' content they think is 'fire' and want to learn from and recreate for",
+    "our brand. The input is either a single screenshot/thumbnail, OR several frames sampled",
+    "across a video plus its original caption. Read all frames together as one piece.",
+    "",
+    `Our brand format is a first-person personal account of a ${v.wearer_role},`,
+    "styled to look like real footage captured on Ray-Ban Meta smart glasses:",
+    v.style_token,
+    "",
+    "Return:",
+    "- why_it_works: 2-3 sentences breaking down the hook, format, and why it grabs attention.",
+    "- our_version: a pest-control POV remake of the SAME idea, with:",
+    "    idea (one line), image_prompt (a first-frame prompt in our Meta-glasses POV style, NO on-screen text),",
+    "    animation_prompt (motion only, one sentence), captions (authority/relatable/curiosity),",
+    "    titles (exactly six 'POV:' style on-screen options, each 7 words or fewer).",
+    "",
+    "HARD RULES: never invent funding numbers/rates/terms; never use em dashes or en dashes;",
+    "image_prompt must contain no text overlay (text is added in post).",
+    "",
+    "Match the quality and voice of these gold examples:",
+    JSON.stringify(v.gold_examples, null, 2),
+  ].join("\n");
+}
 
 /** One Claude vision call over 1+ frames (+ optional caption) -> the recreate package. */
 async function requestRecreatePackage(
@@ -544,9 +638,15 @@ async function requestRecreatePackage(
     userParts.push("", "The original caption was:", captionText.trim().slice(0, 1200));
   }
 
+  const vertical = await getActiveVertical();
+  // Inject the labeled example library as extra few-shot context (empty -> behavior-neutral).
+  const examples = await loadExampleFewShot(vertical.id);
+  const system = examples
+    ? `${buildRecreateSystem(vertical)}\n\nLABELED EXAMPLES FROM OUR LIBRARY (study their hooks, format, and difficulty):\n${examples}`
+    : buildRecreateSystem(vertical);
   const { data } = await callClaudeJSON<RecreatePackage>({
     model: model(),
-    system: RECREATE_SYSTEM,
+    system,
     user: userParts.join("\n"),
     images,
     maxTokens: 1600,

@@ -4,7 +4,12 @@ import { randomUUID } from "crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { generateImage, generateVideo, pollVideo } from "@/lib/elevenlabs-media";
+import { generateImage } from "@/lib/elevenlabs-media";
+import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
+import { getMotionAdapter } from "@/lib/reel/motion-adapter";
+import { stitchClipsRemote } from "@/lib/reel/auto-reel";
+import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
+import { stripEmDashes } from "@/lib/reel/text";
 import type { HookOption } from "@/lib/content-types";
 
 interface Slide {
@@ -23,6 +28,11 @@ interface PackageJson {
   voiceover_script?: Array<{ t: string; emotion: string; line: string }>;
   assembly_timeline_markdown?: string;
   music?: { mood?: string; elevenlabs_prompt?: string; sfx?: string[] | string };
+  // Multi-shot POV reel fields (additive; live in jsonb, no migration):
+  shot_count?: number;        // how many shots to assemble (overrides slides.length)
+  format_scene?: string;      // a single POV task to decompose into shot_count sub-shots
+  scene?: string;             // alias for format_scene
+  format_hook?: string;       // shot 1's open-loop hook, persisted after decomposition
 }
 
 // Entry point after hook selection. Applies the chosen hook to slides 1+2,
@@ -479,28 +489,120 @@ async function getSlideCount(pkgId: string): Promise<number> {
 
 // ─── 2-Stage Pipeline ─────────────────────────────────────────────────────────
 
-const SHOT_LABELS = ["Shot 1 — Hook", "Shot 2 — Problem Setup", "Shot 3 — Problem Amplified"];
-
+// Shot 1 is always the open-loop "wtf" pattern-interrupt hook; the rest are
+// numbered angles/b-roll of the same task.
 function getShotLabel(slideNumber: number): string {
-  return SHOT_LABELS[slideNumber - 1] ?? `Shot ${slideNumber}`;
+  return slideNumber === 1 ? "Shot 1, Hook" : `Shot ${slideNumber}`;
 }
 
-// Converts an image URL (HTTPS or data:) to a raw buffer for Slack file upload.
-async function imageUrlToBuffer(imageUrl: string): Promise<{ buffer: Buffer; mimetype: string }> {
-  if (imageUrl.startsWith("data:")) {
-    const [header, b64] = imageUrl.split(",");
-    const mimetype = header.split(":")[1].split(";")[0];
-    return { buffer: Buffer.from(b64, "base64"), mimetype };
+// ─── POV shot decomposition ───────────────────────────────────────────────────
+// One Claude call turns a single POV task ("spray a wasp nest") into shot_count
+// distinct shots of that SAME task (varied angle / framing / b-roll) so the reel
+// looks like real footage. Shot 1 is ALWAYS an open-loop pattern-interrupt hook.
+
+interface ShotPlan {
+  image_prompt: string;
+  animation_prompt: string;
+  role?: string;
+}
+
+interface DecomposeResult {
+  hook: string;
+  shots: ShotPlan[];
+}
+
+function isDecomposeResult(v: unknown): v is DecomposeResult {
+  if (typeof v !== "object" || v === null) return false;
+  const d = v as DecomposeResult;
+  return (
+    typeof d.hook === "string" &&
+    Array.isArray(d.shots) &&
+    d.shots.length > 0 &&
+    d.shots.every(
+      (s) =>
+        s &&
+        typeof s.image_prompt === "string" &&
+        typeof s.animation_prompt === "string"
+    )
+  );
+}
+
+function decomposeModel(): ClaudeModel {
+  return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
+}
+
+const DECOMPOSE_SYSTEM = [
+  "You are the shot planner for a pest control business's short-form POV reels.",
+  "Each reel is first-person footage styled like real Ray-Ban Meta smart glasses:",
+  "the wearer is the pest control technician, so we only ever see their own gloved",
+  "hands and forearms in the lower frame performing the task. No faces.",
+  "",
+  "You receive ONE task and break it into a sequence of distinct shots of the SAME",
+  "task, each from a different angle / framing / piece of b-roll, so the final",
+  "stitched reel looks like real, varied footage of one continuous job.",
+  "",
+  "HARD RULES:",
+  "- Shot 1 MUST be an open-loop pattern-interrupt: a 'wtf' first frame that stops the",
+  "  scroll and makes the viewer need to watch to understand what is happening.",
+  "- 'hook' = one short sentence describing that open-loop first shot.",
+  "- Every shot is ONE continuous first-person POV shot; image_prompt contains NO",
+  "  on-screen text (text is added later in post).",
+  "- animation_prompt = motion only (head/camera movement + the hands' action), ONE sentence.",
+  "- 'role' = a 2 to 4 word label for the shot (e.g. 'extreme close-up', 'wide reveal').",
+  "- Keep the same technician, same location, same task across every shot.",
+  "- Never invent funding numbers, rates, terms, or guarantees.",
+  "- Never use em dashes or en dashes. Use commas, periods, or hyphens.",
+].join("\n");
+
+/**
+ * Decompose one POV task into exactly `shotCount` sub-shots. Returns the open-loop
+ * hook (shot 1) plus the shot list. Pads by repeating the last shot if Claude
+ * returns fewer than requested.
+ */
+async function decomposePovScene(scene: string, shotCount: number): Promise<DecomposeResult> {
+  const schemaHint =
+    '{ "hook": string, "shots": [{ "image_prompt": string, "animation_prompt": string, "role": string }] }';
+
+  const user = [
+    `POV task: ${scene || "a pest control technician performing a routine job"}`,
+    "",
+    `Return EXACTLY ${shotCount} shots of this one task. Shot 1 is the open-loop hook.`,
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<DecomposeResult>({
+    model: decomposeModel(),
+    system: DECOMPOSE_SYSTEM,
+    user,
+    maxTokens: 4000,
+    temperature: 0.7,
+    schemaHint,
+    validate: isDecomposeResult,
+  });
+
+  const clean = (s: string) => stripEmDashes(s);
+  const shots: ShotPlan[] = data.shots.slice(0, shotCount).map((s) => ({
+    image_prompt: clean(s.image_prompt),
+    animation_prompt: clean(s.animation_prompt),
+    role: s.role ? clean(s.role) : undefined,
+  }));
+
+  // Pad to the requested count by repeating the last valid shot (defensive).
+  while (shots.length < shotCount && shots.length > 0) {
+    shots.push({ ...shots[shots.length - 1] });
   }
-  const res = await fetch(imageUrl);
-  if (!res.ok) throw new Error(`Image download failed (${res.status})`);
-  const mimetype = (res.headers.get("content-type") ?? "image/png").split(";")[0];
-  return { buffer: Buffer.from(await res.arrayBuffer()), mimetype };
+
+  return { hook: clean(data.hook), shots };
 }
 
-// Stage 1: Generate 3 still images via OpenAI, upload as Slack files, post a
+// Stage 1: Generate `shot_count` POV still images, upload as Slack files, post a
 // single approval gate message. Set package status to 'stills_pending'.
 // Does NOT kick off video. Triggered by "generate this [N]" in the thread.
+//
+// Shot list source (in priority order):
+//   1. An already-seeded content_scenes set (idempotent re-runs reuse it).
+//   2. package_json.slides[] when it already has >= shot_count entries (decoder flow).
+//   3. Otherwise a Claude decomposition of a single POV task into shot_count sub-shots,
+//      where shot 1 is the open-loop hook (stored back as package_json.format_hook).
 export async function startStillsGeneration(
   pkgId: string,
   channel: string,
@@ -510,7 +612,7 @@ export async function startStillsGeneration(
 
   const { data: pkg } = await supabaseAdmin
     .from("content_packages")
-    .select("id, package_json")
+    .select("id, brief, package_json")
     .eq("id", pkgId)
     .maybeSingle();
 
@@ -519,49 +621,115 @@ export async function startStillsGeneration(
     return;
   }
 
-  const packageJson = pkg.package_json as {
-    slides: Array<{ n: number; image_prompt: string; animation_prompt?: string; duration_seconds?: number }>;
-  };
+  const pj = (pkg.package_json ?? {}) as PackageJson;
+  const slides = pj.slides ?? [];
 
-  // Seed content_scenes rows if not already seeded (hook flow was skipped)
+  const shotCount =
+    Number.isInteger(pj.shot_count) && (pj.shot_count as number) > 0
+      ? (pj.shot_count as number)
+      : slides.length > 0
+        ? slides.length
+        : 11;
+
+  // Seed content_scenes rows if not already seeded.
   const { count: existing } = await supabaseAdmin
     .from("content_scenes")
     .select("id", { count: "exact", head: true })
     .eq("content_package_id", pkgId);
 
   if (!existing || existing === 0) {
-    const rows = (packageJson.slides ?? []).map((slide) => ({
-      content_package_id: pkgId,
-      slide_number: slide.n,
-      image_prompt: slide.image_prompt,
-      animation_prompt: slide.animation_prompt ?? "",
-      duration_seconds: slide.duration_seconds ?? 2,
-    }));
+    let rows: Array<{
+      content_package_id: string;
+      slide_number: number;
+      image_prompt: string;
+      animation_prompt: string;
+      duration_seconds: number;
+    }>;
+
+    if (slides.length >= shotCount) {
+      // Decoder / manual flow: the package already carries enough shots.
+      rows = slides.slice(0, shotCount).map((slide) => ({
+        content_package_id: pkgId,
+        slide_number: slide.n,
+        image_prompt: slide.image_prompt,
+        animation_prompt: slide.animation_prompt ?? "",
+        duration_seconds: slide.duration_seconds ?? 2,
+      }));
+    } else {
+      // POV flow: decompose one task into shot_count varied sub-shots.
+      const sceneText =
+        pj.format_scene ?? pj.scene ?? pj.concept_summary ?? (pkg.brief as string | null) ?? "";
+      await slack.postThreadReply(
+        channel,
+        threadTs,
+        `🧠 Planning ${shotCount} POV shots (shot 1 = open-loop hook)…`
+      );
+      let decomposed: DecomposeResult;
+      try {
+        decomposed = await decomposePovScene(sceneText, shotCount);
+      } catch (err) {
+        await slack.postThreadReply(
+          channel,
+          threadTs,
+          `⚠️ Shot planning failed: ${(err as Error).message.slice(0, 200)}`
+        );
+        return;
+      }
+
+      rows = decomposed.shots.map((shot, i) => ({
+        content_package_id: pkgId,
+        slide_number: i + 1,
+        image_prompt: shot.image_prompt,
+        animation_prompt: shot.animation_prompt,
+        duration_seconds: 2,
+      }));
+
+      // Persist the open-loop hook on the package (additive jsonb update).
+      await supabaseAdmin
+        .from("content_packages")
+        .update({ package_json: { ...pj, format_hook: decomposed.hook } })
+        .eq("id", pkgId);
+    }
+
     await supabaseAdmin
       .from("content_scenes")
       .upsert(rows, { onConflict: "content_package_id,slide_number" });
   }
 
-  // Generate shots 1, 2, 3 in parallel via OpenAI
-  await slack.postThreadReply(channel, threadTs, "🎨 Generating 3 stills with OpenAI…");
+  // Load the seeded shot numbers so generation count is driven by the scenes.
+  const { data: scenes } = await supabaseAdmin
+    .from("content_scenes")
+    .select("slide_number")
+    .eq("content_package_id", pkgId)
+    .order("slide_number");
 
-  const results = await Promise.allSettled([
-    generateAndPostStill(pkgId, 1, channel, threadTs),
-    generateAndPostStill(pkgId, 2, channel, threadTs),
-    generateAndPostStill(pkgId, 3, channel, threadTs),
-  ]);
+  const shotNumbers = (scenes ?? []).map((s) => s.slide_number as number);
+  if (shotNumbers.length === 0) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ No shots to generate.");
+    return;
+  }
+
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    `🎨 Generating ${shotNumbers.length} POV stills (same task, varied angles)…`
+  );
+
+  const results = await Promise.allSettled(
+    shotNumbers.map((n) => generateAndPostStill(pkgId, n, channel, threadTs))
+  );
 
   const failed = results.filter((r) => r.status === "rejected").length;
-  if (failed === 3) {
-    await slack.postThreadReply(channel, threadTs, "⚠️ All 3 stills failed — check OPENAI_API_KEY.");
+  if (failed === shotNumbers.length) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ All stills failed — check image provider config.");
     return;
   }
 
   // Post the approval gate message and save its ts to hooks_message_ts so
   // a ✅ reaction on it can be detected by handleContentReaction.
   const gateText = [
-    `🖼️ *3 stills generated${failed ? ` (${failed} failed)` : ""}.* Review above.`,
-    `React ✅ on this message *or* reply \`animate\` to animate all shots with Seedance + stitch final video.`,
+    `🖼️ *${shotNumbers.length} stills generated${failed ? ` (${failed} failed)` : ""}.* Shot 1 is the open-loop hook. Review above.`,
+    `React ✅ on this message *or* reply \`animate\` to animate all shots + stitch the final video.`,
     `React 🔄 on this message to regenerate all stills.`,
   ].join("\n");
 
@@ -573,11 +741,13 @@ export async function startStillsGeneration(
     .update({ status: "stills_pending", hooks_message_ts: gateTs ?? null })
     .eq("id", pkgId);
 
-  console.log(`[scene-runner] stills gate posted pkg=${pkgId} ts=${gateTs}`);
+  console.log(`[scene-runner] stills gate posted pkg=${pkgId} ts=${gateTs} shots=${shotNumbers.length}`);
 }
 
-// Generates one still image via ElevenLabs Seedream and uploads it to the
-// Slack thread as a file. Saves image_url to content_scenes for Seedance Stage 2.
+// Generates one POV still via the POV image path (generatePovImage — Soul only if
+// POV_IMAGE_PROVIDER=higgsfield, otherwise gpt-image-2/Seedream; no character
+// consistency is required for first-person POV). Uploads it to the Slack thread as
+// a file AND to the `reels` bucket so Stage 2 has a fetchable image_url.
 async function generateAndPostStill(
   pkgId: string,
   slideNumber: number,
@@ -597,49 +767,51 @@ async function generateAndPostStill(
   }
 
   const label = getShotLabel(slideNumber);
-  let imageUrl: string;
 
+  let img: { buffer: Buffer; mimetype: string; sourceUrl?: string } | null;
   try {
-    imageUrl = await generateImage(scene.image_prompt as string);
-    console.log(`[scene-runner] still ${slideNumber} generated (ElevenLabs Seedream)`);
+    img = await generatePovImage(scene.image_prompt as string);
   } catch (err) {
-    const errMsg = (err as Error).message;
-    console.error(`[scene-runner] still ${slideNumber} generation failed:`, errMsg);
-    await supabaseAdmin
-      .from("content_scenes")
-      .update({ image_error: errMsg })
-      .eq("id", scene.id);
-    await slack.postThreadReply(
-      channel, threadTs,
-      `⚠️ *${label}* failed.\n_${errMsg.slice(0, 200)}_`
-    );
+    img = null;
+    console.error(`[scene-runner] still ${slideNumber} threw:`, (err as Error).message);
+  }
+
+  if (!img) {
+    const errMsg = "image generation returned no image";
+    await supabaseAdmin.from("content_scenes").update({ image_error: errMsg }).eq("id", scene.id);
+    await slack.postThreadReply(channel, threadTs, `⚠️ *${label}* failed.\n_${errMsg}_`);
     return;
   }
 
-  // Convert URL / data URL to a buffer and upload as a Slack file
+  console.log(`[scene-runner] still ${slideNumber} generated (POV provider)`);
+
+  // Stable public URL for the motion step (gpt-image-2 returns no URL of its own).
+  const reelsUrl = await uploadToReels(img.buffer, img.mimetype);
+  const imageUrl = reelsUrl ?? img.sourceUrl ?? null;
+
+  // Upload as a Slack file so the operator can review each shot.
   try {
-    const { buffer, mimetype } = await imageUrlToBuffer(imageUrl);
-    await slack.uploadFile(channel, `${label}.png`, buffer, mimetype, threadTs);
+    await slack.uploadFile(channel, `${label}.png`, img.buffer, img.mimetype, threadTs);
   } catch (err) {
     console.error(`[scene-runner] still ${slideNumber} Slack upload failed:`, (err as Error).message);
-    // Fall back: post as an image block so the user can still see it
-    await slack.postThreadReply(channel, threadTs, `🖼️ *${label}*`, [
-      { type: "image", image_url: imageUrl, alt_text: label },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ] as any);
+    if (imageUrl) {
+      await slack.postThreadReply(channel, threadTs, `🖼️ *${label}*`, [
+        { type: "image", image_url: imageUrl, alt_text: label },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ] as any);
+    }
   }
 
-  // Save URL to content_scenes so Seedance can use it as image_url in Stage 2
   await supabaseAdmin
     .from("content_scenes")
     .update({ image_url: imageUrl, image_error: null })
     .eq("id", scene.id);
 
-  console.log(`[scene-runner] still ${slideNumber} posted to Slack`);
+  console.log(`[scene-runner] still ${slideNumber} posted to Slack (image_url=${imageUrl ? "set" : "none"})`);
 }
 
-// Regenerate a single still (used when 🔄 is reacted to the stills gate).
-// Resets ALL 3 stills and restarts Stage 1.
+// Regenerate the stills (used when 🔄 is reacted to the stills gate).
+// Resets ALL stills and restarts Stage 1.
 export async function regenerateAllStills(
   pkgId: string,
   channel: string,
@@ -653,7 +825,7 @@ export async function regenerateAllStills(
     .update({ image_url: null, image_error: null, slack_image_ts: null })
     .eq("content_package_id", pkgId);
 
-  await slack.postThreadReply(channel, threadTs, "🔄 Regenerating all 3 stills…");
+  await slack.postThreadReply(channel, threadTs, "🔄 Regenerating all stills…");
   await startStillsGeneration(pkgId, channel, threadTs);
 }
 
@@ -677,17 +849,18 @@ export async function animateAndStitch(
     .select("id, slide_number, image_url, animation_prompt")
     .eq("content_package_id", pkgId)
     .not("image_url", "is", null)
-    .order("slide_number")
-    .limit(3);
+    .order("slide_number");
 
   if (!scenes || scenes.length === 0) {
     await slack.postThreadReply(channel, threadTs, "⚠️ No stills found — run Stage 1 first (generate this).");
     return;
   }
 
+  const motion = getMotionAdapter();
+
   await slack.postThreadReply(
     channel, threadTs,
-    `🎬 Animating ${scenes.length} shots with Seedance… (~4 min, running in parallel)`
+    `🎬 Animating ${scenes.length} shots… (running in parallel)`
   );
 
   // Animate all clips in parallel; collect MP4 buffers in slide order
@@ -696,19 +869,16 @@ export async function animateAndStitch(
       const label = getShotLabel(scene.slide_number as number);
       try {
         console.log(`[scene-runner] animating ${label}`);
-        const jobId = await generateVideo(
-          (scene.animation_prompt as string) || "Slow cinematic drift. Photorealistic.",
-          scene.image_url as string
+        const buffer = await motion.animate(
+          scene.image_url as string,
+          (scene.animation_prompt as string) || ""
         );
-        const videoUrl = await pollVideo(jobId, 300_000);
-
-        const res = await fetch(videoUrl);
-        if (!res.ok) throw new Error(`download failed (${res.status})`);
-        const buffer = Buffer.from(await res.arrayBuffer());
 
         // Upload individual clip so the user can see each shot
         await slack.uploadFile(channel, `${label}.mp4`, buffer, "video/mp4", threadTs);
 
+        // Persist a durable URL for the clip (adapter returns bytes, not a URL).
+        const videoUrl = await uploadToReels(buffer, "video/mp4");
         await supabaseAdmin
           .from("content_scenes")
           .update({ video_url: videoUrl, video_approved: true })
@@ -740,7 +910,19 @@ export async function animateAndStitch(
   if (validClips.length > 1) {
     await slack.postThreadReply(channel, threadTs, "🎞️ Stitching final video…");
     try {
-      const finalMp4 = await stitchClips(validClips);
+      let finalMp4: Buffer;
+      if (process.env.REEL_STITCH_REMOTE === "1") {
+        // Remote stitch (render-service) lays the song bed + a beat-synced hook chip.
+        const { data: pkg } = await supabaseAdmin
+          .from("content_packages")
+          .select("package_json")
+          .eq("id", pkgId)
+          .maybeSingle();
+        const hook = (pkg?.package_json as PackageJson | null)?.format_hook;
+        finalMp4 = await stitchClipsRemote(validClips, hook);
+      } else {
+        finalMp4 = await stitchClips(validClips);
+      }
       await slack.uploadFile(channel, "final-video.mp4", finalMp4, "video/mp4", threadTs);
       await slack.postThreadReply(channel, threadTs, "✅ Final video ready — download above!");
     } catch (err) {

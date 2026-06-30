@@ -15,14 +15,9 @@ import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generateImages, type ImageProvider } from "@/lib/providers/image-gen";
-import {
-  POV_SCENES,
-  POV_STYLE_VERSION,
-  POV_GLASSES_TOKEN,
-  POV_GOLD_EXAMPLES,
-  buildPovImagePrompt,
-} from "@/config/pov-style";
+import { POV_SCENES, POV_STYLE_VERSION } from "@/config/pov-style";
 import type { ReelSlot } from "@/config/reel-style";
+import { getActiveVertical, type Vertical } from "@/config/verticals";
 
 // Image provider for the POV format only (the rest of the system keeps IMAGE_PROVIDER).
 // Default gpt-image-2; set POV_IMAGE_PROVIDER=higgsfield to reuse the Vargas Soul / HF
@@ -32,11 +27,18 @@ export function povImageProvider(): ImageProvider {
   return (p === "higgsfield" || p === "elevenlabs" ? p : "openai") as ImageProvider;
 }
 
+/** Build the POV image prompt: the vertical's style token + the scene (no text overlay). */
+export async function buildPovImagePrompt(scene: string, vertical?: Vertical): Promise<string> {
+  const v = vertical ?? (await getActiveVertical());
+  return `${v.style_token}\n\nScene: ${scene}\n\nNo text, captions, logos, or watermark in the image.`;
+}
+
 /** Generate the single POV image with the configured POV provider (Soul id only used by higgsfield). */
-export async function generatePovImage(prompt: string) {
+export async function generatePovImage(prompt: string, vertical?: Vertical) {
   const provider = povImageProvider();
-  const soulId = provider === "higgsfield" ? process.env.HIGGSFIELD_SOUL_ID : undefined;
-  const [img] = await generateImages({ prompts: [prompt], provider, soulId });
+  const v = vertical ?? (await getActiveVertical());
+  const soulId = provider === "higgsfield" ? v.soul_id ?? process.env.HIGGSFIELD_SOUL_ID : undefined;
+  const [img] = await generateImages({ prompts: [prompt], provider, soulId: soulId ?? undefined });
   return img;
 }
 
@@ -71,31 +73,36 @@ function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
 }
 
-const SYSTEM = [
-  "You are the content engine for a pest control business. You write short-form video",
-  "concepts produced as ONE continuous AI clip animated from a first frame to a last",
-  "frame, styled to look like real footage captured on Ray-Ban Meta smart glasses.",
-  "",
-  "The wearer is the pest control technician. This is a first-person personal account:",
-  "we see their own gloved hands and forearms in the lower frame performing the task.",
-  "",
-  "GLOBAL VISUAL STYLE (already applied to the rendered image, keep it in mind):",
-  POV_GLASSES_TOKEN,
-  "",
-  "HARD RULES:",
-  "- image_prompt describes ONE continuous shot; it contains NO on-screen text (text is added in post).",
-  "- animation_prompt = motion only (head/camera movement + the hands' action), ONE sentence.",
-  "- captions: return exactly three, one per style:",
-  "    authority  = positions the business as the expert; calm, factual.",
-  "    relatable  = homeowner POV, light humor, conversational.",
-  "    curiosity  = a scroll-stopping tease that makes them watch to the end.",
-  "- titles: return exactly six on-screen title options; lead with 'POV:' style; #1 is the default; each 7 words or fewer.",
-  "- Never invent funding numbers, rates, terms, or guarantees.",
-  "- Never use em dashes or en dashes. Use commas, periods, or hyphens.",
-  "",
-  "Match the quality and style of these gold examples exactly:",
-  JSON.stringify(POV_GOLD_EXAMPLES, null, 2),
-].join("\n");
+function buildPovSystem(v: Vertical): string {
+  const lines = [
+    `You are the content engine for a ${v.business_descriptor}. You write short-form video`,
+    "concepts produced as ONE continuous AI clip animated from a first frame to a last",
+    "frame, styled to look like real footage captured on Ray-Ban Meta smart glasses.",
+    "",
+    `The wearer is the ${v.wearer_role}. This is a first-person personal account:`,
+    "we see their own gloved hands and forearms in the lower frame performing the task.",
+    "",
+    "GLOBAL VISUAL STYLE (already applied to the rendered image, keep it in mind):",
+    v.style_token,
+    "",
+    "HARD RULES:",
+    "- image_prompt describes ONE continuous shot; it contains NO on-screen text (text is added in post).",
+    "- animation_prompt = motion only (head/camera movement + the hands' action), ONE sentence.",
+    "- captions: return exactly three, one per style:",
+    "    authority  = positions the business as the expert; calm, factual.",
+    "    relatable  = homeowner POV, light humor, conversational.",
+    "    curiosity  = a scroll-stopping tease that makes them watch to the end.",
+    "- titles: return exactly six on-screen title options; lead with 'POV:' style; #1 is the default; each 7 words or fewer.",
+    "- Never invent funding numbers, rates, terms, or guarantees.",
+    "- Never use em dashes or en dashes. Use commas, periods, or hyphens.",
+    "",
+    "Match the quality and style of these gold examples exactly:",
+    JSON.stringify(v.gold_examples, null, 2),
+  ];
+  // POV videos stay hook-driven: no offer/sales block, per operator direction. The
+  // open-loop hook + the gold examples carry the concept; offer-weaving lives elsewhere.
+  return lines.join("\n");
+}
 
 const SCHEMA_HINT =
   '{ "idea": string, "image_prompt": string, "animation_prompt": string, ' +
@@ -103,7 +110,8 @@ const SCHEMA_HINT =
   '"titles": [string] }';
 
 /** One Claude call: scene -> idea + image_prompt + animation_prompt + 3 captions + 6 titles. */
-export async function generatePovConcept(scene: string): Promise<PovConcept> {
+export async function generatePovConcept(scene: string, vertical?: Vertical): Promise<PovConcept> {
+  const v = vertical ?? (await getActiveVertical());
   const user = [
     `Scene: ${scene}`,
     "Hook direction: a candid, first-person personal account of the technician doing this task.",
@@ -113,7 +121,7 @@ export async function generatePovConcept(scene: string): Promise<PovConcept> {
 
   const { data } = await callClaudeJSON<PovConcept>({
     model: model(),
-    system: SYSTEM,
+    system: buildPovSystem(v),
     user,
     maxTokens: 1400,
     temperature: 0.7,
@@ -142,7 +150,7 @@ interface PovRotationRow {
 }
 
 /** Pick a POV_SCENES index not in the recent list (fall back to any if all recently used). */
-export async function pickDistinctPovScene(_slot: ReelSlot): Promise<string> {
+export async function pickDistinctPovScene(_slot: ReelSlot, scenes: string[] = POV_SCENES): Promise<string> {
   let recent: number[] = [];
   try {
     const { data } = await supabaseAdmin
@@ -156,14 +164,14 @@ export async function pickDistinctPovScene(_slot: ReelSlot): Promise<string> {
     recent = [];
   }
 
-  const available = POV_SCENES.map((_, i) => i).filter((i) => !recent.includes(i));
-  const pool = available.length > 0 ? available : POV_SCENES.map((_, i) => i);
+  const available = scenes.map((_, i) => i).filter((i) => !recent.includes(i));
+  const pool = available.length > 0 ? available : scenes.map((_, i) => i);
   const idx = pool[Math.floor(Math.random() * pool.length)];
-  return POV_SCENES[idx];
+  return scenes[idx];
 }
 
 /** Pick `n` distinct POV scenes not recently used (falls back to fill if the pool is short). */
-export async function pickDistinctPovScenes(n: number): Promise<string[]> {
+export async function pickDistinctPovScenes(n: number, scenes: string[] = POV_SCENES): Promise<string[]> {
   let recent: number[] = [];
   try {
     const { data } = await supabaseAdmin
@@ -186,23 +194,23 @@ export async function pickDistinctPovScenes(n: number): Promise<string[]> {
     return a;
   };
 
-  const all = POV_SCENES.map((_, i) => i);
+  const all = scenes.map((_, i) => i);
   const fresh = shuffle(all.filter((i) => !recent.includes(i)));
   const rest = shuffle(all.filter((i) => recent.includes(i)));
   const ordered = [...fresh, ...rest].slice(0, Math.min(n, all.length));
-  return ordered.map((i) => POV_SCENES[i]);
+  return ordered.map((i) => scenes[i]);
 }
 
 /** Persist that `scene` was just used, capping the recent list so rotation keeps moving. */
-export async function recordPovScene(scene: string): Promise<void> {
-  await recordPovScenes([scene]);
+export async function recordPovScene(scene: string, pool: string[] = POV_SCENES): Promise<void> {
+  await recordPovScenes([scene], pool);
 }
 
 /** Persist that several scenes were just used (drop of 3), capping the recent list. */
-export async function recordPovScenes(scenes: string[]): Promise<void> {
-  const idxs = scenes.map((s) => POV_SCENES.indexOf(s)).filter((i) => i !== -1);
+export async function recordPovScenes(scenes: string[], pool: string[] = POV_SCENES): Promise<void> {
+  const idxs = scenes.map((s) => pool.indexOf(s)).filter((i) => i !== -1);
   if (idxs.length === 0) return;
-  const cap = Math.min(9, Math.max(idxs.length, POV_SCENES.length - 1));
+  const cap = Math.min(9, Math.max(idxs.length, pool.length - 1));
   try {
     const { data } = await supabaseAdmin
       .from("pov_rotation")
@@ -220,7 +228,7 @@ export async function recordPovScenes(scenes: string[]): Promise<void> {
 }
 
 /** Upload a generated image to the Supabase `reels` bucket; returns a public URL or null. */
-async function uploadToReels(buffer: Buffer, mimetype: string): Promise<string | null> {
+export async function uploadToReels(buffer: Buffer, mimetype: string): Promise<string | null> {
   try {
     const ext = (mimetype.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
     const key = `pov/${randomUUID()}.${ext}`;
@@ -242,6 +250,7 @@ export interface RunPovDropArgs {
   channel: string;
   date: string;
   slot: ReelSlot;
+  vertical?: Vertical;
 }
 
 export interface PovDropResult {
@@ -264,11 +273,13 @@ export async function runPovDrop(args: RunPovDropArgs): Promise<PovDropResult> {
   const start = Date.now();
   const { channel, date, slot } = args;
   const provider = povImageProvider();
+  const vertical = args.vertical ?? (await getActiveVertical());
+  const scenePool = vertical.scenes ?? POV_SCENES;
 
-  const scenes = await pickDistinctPovScenes(POV_OPTIONS_PER_DROP);
-  const prompts = scenes.map(buildPovImagePrompt);
-  const soulId = provider === "higgsfield" ? process.env.HIGGSFIELD_SOUL_ID : undefined;
-  const imgs = await generateImages({ prompts, provider, soulId });
+  const scenes = await pickDistinctPovScenes(POV_OPTIONS_PER_DROP, scenePool);
+  const prompts = await Promise.all(scenes.map((s) => buildPovImagePrompt(s, vertical)));
+  const soulId = provider === "higgsfield" ? vertical.soul_id ?? process.env.HIGGSFIELD_SOUL_ID : undefined;
+  const imgs = await generateImages({ prompts, provider, soulId: soulId ?? undefined });
 
   const header = `🕶️ *Meta Glasses POV, ${date}* (${slot})\n_First-person personal account. ${POV_OPTIONS_PER_DROP} options, generated with ${provider}._`;
   const main = (await slack.postMessage(channel, header)) as { ok?: boolean; ts?: string };
@@ -299,7 +310,7 @@ export async function runPovDrop(args: RunPovDropArgs): Promise<PovDropResult> {
     options.push({ index, scene: scenes[i], url, mimetype: img.mimetype });
   }
 
-  await recordPovScenes(scenes);
+  await recordPovScenes(scenes, scenePool);
 
   if (options.length === 0) {
     await slack.postThreadReply(channel, threadTs, "🚫 All image options failed. Check the image provider credentials/credits.");

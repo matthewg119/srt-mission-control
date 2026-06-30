@@ -10,6 +10,12 @@ export interface ClaudeImageInput {
   data: string; // base64, no data: prefix
 }
 
+export interface ClaudeDocumentInput {
+  media_type: string; // currently only "application/pdf"
+  data: string; // base64, no data: prefix
+  title?: string;
+}
+
 export interface ClaudeJSONOptions<T> {
   model: ClaudeModel;
   system: string;
@@ -19,6 +25,8 @@ export interface ClaudeJSONOptions<T> {
   schemaHint?: string;
   /** Optional images to send alongside the user text (vision). */
   images?: ClaudeImageInput[];
+  /** Optional PDF document blocks read natively by Claude (e.g. uploaded kits). */
+  documents?: ClaudeDocumentInput[];
   validate?: (parsed: unknown) => parsed is T;
   /**
    * Ordered list of models to try. The primary `model` is always tried first;
@@ -156,10 +164,18 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
 
   const start = Date.now();
 
-  const userContent = opts.images && opts.images.length > 0
+  const hasDocs = Boolean(opts.documents && opts.documents.length > 0);
+  const hasImages = Boolean(opts.images && opts.images.length > 0);
+  const userContent = hasDocs || hasImages
     ? [
+        // Document blocks first (Claude reads them as context), then the text, then images.
+        ...(opts.documents ?? []).map((doc) => ({
+          type: "document",
+          source: { type: "base64", media_type: doc.media_type, data: doc.data },
+          ...(doc.title ? { title: doc.title } : {}),
+        })),
         { type: "text", text: opts.user },
-        ...opts.images.map((img) => ({
+        ...(opts.images ?? []).map((img) => ({
           type: "image",
           source: { type: "base64", media_type: img.media_type, data: img.data },
         })),

@@ -105,7 +105,9 @@ function statusOf(json: Record<string, unknown>): string {
 async function higgsfieldGenerateOne(prompt: string, soulId?: string): Promise<ImageResult> {
   const creds = process.env.HF_CREDENTIALS;
   if (!creds) throw new Error("HF_CREDENTIALS not set");
-  if (!soulId) throw new Error("HIGGSFIELD_SOUL_ID not set");
+  // Prefer the per-vertical Soul id passed by the caller; fall back to the global env.
+  const sid = soulId ?? process.env.HIGGSFIELD_SOUL_ID;
+  if (!sid) throw new Error("HIGGSFIELD_SOUL_ID not set");
 
   const headers = {
     Authorization: `Key ${creds}`,
@@ -118,7 +120,7 @@ async function higgsfieldGenerateOne(prompt: string, soulId?: string): Promise<I
     body: JSON.stringify({
       params: {
         prompt,
-        custom_reference_id: soulId,
+        custom_reference_id: sid,
         custom_reference_strength: SOUL_REFERENCE_STRENGTH,
         width_and_height: SOUL_SIZE,
         quality: SOUL_QUALITY,

@@ -16,9 +16,14 @@ import { selectBeliefForSlot, recordBeliefUsed } from "@/lib/reel/beliefs";
 import { recordDrop } from "@/lib/reel/interactive";
 import { stripEmDashes } from "@/lib/reel/text";
 import { runPovDrop, type PovDropResult } from "@/lib/reel/pov";
+import { getActiveVertical } from "@/config/verticals";
+import { runAutoReel, type VerticalFormat } from "@/lib/reel/auto-reel";
+import { waitUntil } from "@vercel/functions";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Headroom for the parallel Soul-stills phase of up to 3 background runAutoReel calls;
+// the long motion polls themselves run in separate /api/agent/video-poller functions.
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -113,7 +118,7 @@ async function handle(req: NextRequest) {
       "",
       promptBlocks,
       "",
-      "Then upload the picture you like best in this thread and I'll give you 3 headline options.",
+      "Then drop whichever image you like in this thread. I'll read it and suggest the formats and workflow that fit (headlines, animate, or recreate).",
     ].join("\n")
   );
 
@@ -153,6 +158,51 @@ async function handle(req: NextRequest) {
     console.error("[reel-drop] POV section failed:", (e as Error).message);
   }
 
+  // Third format: fully-autonomous multi-shot reels. Off by default (AUTO_REEL_ENABLED).
+  // Picks up to 3 unused vertical_formats for the active vertical and renders each in the
+  // background (waitUntil). Each runAutoReel fans the long motion polls out to the
+  // video-poller, so the cron only carries the shot-list + Soul-stills phase here.
+  // Fully isolated: a failure never breaks the belief or POV drops above.
+  let autoReelFormats: string[] = [];
+  if (process.env.AUTO_REEL_ENABLED === "1") {
+    try {
+      const vertical = await getActiveVertical(); // beliefs available via vertical.beliefs
+      const selectUnused = () =>
+        supabaseAdmin
+          .from("vertical_formats")
+          .select("*")
+          .eq("vertical_id", vertical.id)
+          .is("used_at", null)
+          .order("created_at", { ascending: true })
+          .limit(3);
+
+      let { data: picked } = await selectUnused();
+      if (!picked || picked.length === 0) {
+        // Rotation exhausted: recycle this vertical's formats and re-pick.
+        await supabaseAdmin.from("vertical_formats").update({ used_at: null }).eq("vertical_id", vertical.id);
+        ({ data: picked } = await selectUnused());
+      }
+
+      const formats = (picked ?? []) as VerticalFormat[];
+      if (formats.length > 0) {
+        await supabaseAdmin
+          .from("vertical_formats")
+          .update({ used_at: new Date().toISOString() })
+          .in("id", formats.map((f) => f.id));
+        autoReelFormats = formats.map((f) => f.id);
+        for (const f of formats) {
+          waitUntil(
+            runAutoReel(vertical, f).catch((e) =>
+              console.error("[reel-drop] auto-reel failed", f.id, (e as Error).message)
+            )
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[reel-drop] auto-reel section failed:", (e as Error).message);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     slot,
@@ -161,6 +211,7 @@ async function handle(req: NextRequest) {
     pov_thread_ts: pov?.thread_ts ?? null,
     pov_scenes: pov?.scenes ?? null,
     pov_images_ok: pov?.images_ok ?? 0,
+    auto_reel_formats: autoReelFormats,
     duration_ms: Date.now() - start,
   });
 }

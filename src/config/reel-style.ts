@@ -1,6 +1,9 @@
 // SRT Daily Creative Drop — single editable place for the look + rotation tuning.
 // Change the house style, scene list, belief weighting, or Higgsfield sizing here
 // without touching any logic.
+//
+// NOTE: As of Content Engine v2, HOUSE_STYLE_PROMPT + SCENE_VARIATIONS also serve as
+// the `pest_control` vertical SEED (see src/config/verticals.ts PEST_CONTROL_SEED).
 
 export type ReelSlot = "morning" | "midday" | "evening";
 
