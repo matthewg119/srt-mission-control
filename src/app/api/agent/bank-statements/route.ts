@@ -4,7 +4,7 @@ import { analyzeBankStatements } from "@/lib/ai-intel/bank-statement-analyzer";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postDealThreadUpdate } from "@/lib/ai-intel/deal-thread";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
-import { maybePostSubmissionReady } from "@/lib/ai-intel/submission-ready";
+import { maybePostSubmissionReady, maybeDraftPackageOnStatements } from "@/lib/ai-intel/submission-ready";
 import { microsoft } from "@/lib/microsoft";
 import { slack } from "@/lib/slack-bot";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
@@ -100,6 +100,105 @@ Rules:
   deposits (total deposits for month), avg_daily_ledger, deposit_count, and
   nsf_count from the Monthly Breakdown. Leave individual fields null if absent.`;
 
+/**
+ * Resolve a contact from a name read off a bank statement. The account holder is
+ * frequently the OWNER (a person, e.g. "MARIO VALENZUELA") while the deal lives
+ * under the business ("MVR INVESTMENTS LLC"), so we match business_name / legal_name /
+ * dba AND the owner's first+last name. Owner-name matches (both tokens aligned) win
+ * to avoid attaching to every contact who merely shares a first name. Returns null
+ * when nothing matches.
+ */
+async function resolveContactByName(
+  rawName: string,
+): Promise<{ contactId: string; businessName: string | null } | null> {
+  const name = rawName.trim();
+  if (!name) return null;
+  const tokens = name.split(/\s+/).filter(Boolean);
+  const first = tokens[0];
+  const last = tokens.length > 1 ? tokens[tokens.length - 1] : null;
+
+  const orParts = [
+    `business_name.ilike.%${name}%`,
+    `legal_name.ilike.%${name}%`,
+    `dba.ilike.%${name}%`,
+    `business_name.ilike.%${first}%`,
+  ];
+  if (last) {
+    orParts.push(`first_name.ilike.%${first}%`);
+    orParts.push(`last_name.ilike.%${last}%`);
+  }
+
+  const { data } = await supabaseAdmin
+    .from("contacts")
+    .select("id, business_name, legal_name, dba, first_name, last_name")
+    .or(orParts.join(","))
+    .order("updated_at", { ascending: false })
+    .limit(10);
+  const rows = (data ?? []) as Array<{
+    id: string;
+    business_name: string | null;
+    legal_name: string | null;
+    dba: string | null;
+    first_name: string | null;
+    last_name: string | null;
+  }>;
+  if (rows.length === 0) return null;
+
+  if (last) {
+    const owner = rows.find(
+      (c) =>
+        (c.first_name ?? "").toLowerCase().includes(first.toLowerCase()) &&
+        (c.last_name ?? "").toLowerCase().includes(last.toLowerCase()),
+    );
+    if (owner) return { contactId: owner.id, businessName: owner.business_name };
+  }
+  const lc = name.toLowerCase();
+  const biz = rows.find((c) =>
+    [c.business_name, c.legal_name, c.dba].some((v) => (v ?? "").toLowerCase().includes(lc)),
+  );
+  const pick = biz ?? rows[0];
+  return { contactId: pick.id, businessName: pick.business_name };
+}
+
+/** Latest deal for a contact (id + zoho lead id). */
+async function latestDealForContact(
+  contactId: string,
+): Promise<{ dealId: string | null; zohoId: string | null }> {
+  const { data: deal } = await supabaseAdmin
+    .from("deals")
+    .select("id, zoho_lead_id")
+    .eq("contact_id", contactId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return {
+    dealId: (deal?.id as string | undefined) ?? null,
+    zohoId: (deal?.zoho_lead_id as string | null | undefined) ?? null,
+  };
+}
+
+/**
+ * Best-effort list of contacts touched in the last `windowMin` minutes — used only
+ * to SUGGEST candidates in the no-deal #srt-sub card (never auto-linked, since
+ * proximity is too weak to attach statements + draft a funder package on).
+ */
+async function findRecentContactsNear(
+  windowMin = 30,
+): Promise<Array<{ business_name: string | null; first_name: string | null; email: string | null }>> {
+  try {
+    const since = new Date(Date.now() - windowMin * 60 * 1000).toISOString();
+    const { data } = await supabaseAdmin
+      .from("contacts")
+      .select("business_name, first_name, email, updated_at")
+      .gte("updated_at", since)
+      .order("updated_at", { ascending: false })
+      .limit(8);
+    return (data ?? []) as Array<{ business_name: string | null; first_name: string | null; email: string | null }>;
+  } catch {
+    return [];
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as RequestBody;
 
@@ -181,26 +280,13 @@ export async function POST(req: NextRequest) {
       merchantName = c?.business_name ?? merchantName;
     }
   } else if (body.merchant_name) {
-    const { data: contact } = await supabaseAdmin
-      .from("contacts")
-      .select("id, business_name")
-      .ilike("business_name", `%${body.merchant_name}%`)
-      .limit(1)
-      .maybeSingle();
-    if (contact) {
-      contactId = contact.id as string;
-      merchantName = (contact.business_name as string | null) ?? merchantName;
-      const { data: deal } = await supabaseAdmin
-        .from("deals")
-        .select("id, zoho_lead_id")
-        .eq("contact_id", contactId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (deal) {
-        dealId = deal.id as string;
-        zohoId = (deal.zoho_lead_id as string | null) ?? null;
-      }
+    const match = await resolveContactByName(body.merchant_name);
+    if (match) {
+      contactId = match.contactId;
+      merchantName = match.businessName ?? merchantName;
+      const d = await latestDealForContact(contactId);
+      dealId = d.dealId;
+      zohoId = d.zohoId;
     }
   }
 
@@ -250,28 +336,17 @@ export async function POST(req: NextRequest) {
   let nameAdjusted = false;
   const extractedName = metrics.account_holder?.trim() ?? null;
   if (!dealId && extractedName) {
-    const { data: contact } = await supabaseAdmin
-      .from("contacts")
-      .select("id, business_name")
-      .ilike("business_name", `%${extractedName.split(" ")[0]}%`)
-      .limit(1)
-      .maybeSingle();
-    if (contact) {
-      contactId = contact.id as string;
-      if ((contact.business_name as string | null)?.toLowerCase() !== extractedName.toLowerCase()) {
+    const match = await resolveContactByName(extractedName);
+    if (match) {
+      contactId = match.contactId;
+      if ((match.businessName ?? "").toLowerCase() !== extractedName.toLowerCase()) {
         nameAdjusted = true;
       }
       merchantName = extractedName; // use exact bank-statement name for subject
-      const { data: deal } = await supabaseAdmin
-        .from("deals")
-        .select("id, zoho_lead_id")
-        .eq("contact_id", contactId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (deal) {
-        dealId = deal.id as string;
-        zohoId = (deal.zoho_lead_id as string | null) ?? null;
+      const d = await latestDealForContact(contactId);
+      if (d.dealId) {
+        dealId = d.dealId;
+        zohoId = d.zohoId;
       }
     }
   }
@@ -282,7 +357,9 @@ export async function POST(req: NextRequest) {
     nameAdjusted = true;
   }
 
-  // No deal found — post a Slack ask instead of a hard error
+  // No deal found — ALWAYS surface in #srt-sub so statements never vanish (the
+  // old code only replied when a thread already existed, so portal/email uploads
+  // with no matching deal silently 400'd and the "Analyzing…" line hung forever).
   if (!dealId) {
     // Still backfill what we extracted onto the contact (if we resolved one) so the
     // portal can pre-fill, and clear the processing overlay.
@@ -291,15 +368,42 @@ export async function POST(req: NextRequest) {
       await setAnalysisStatus(contactId, "analyzed");
     }
     const displayName = extractedName ?? merchantName ?? "Unknown Merchant";
+
+    const channel = SUB_CHANNEL();
+    if (channel && slack.isConfigured()) {
+      const odLink = body.onedrive_folder_url ? `\n📁 <${body.onedrive_folder_url}|OneDrive folder>` : "";
+      const depo = metrics.avg_monthly_deposits != null
+        ? `~$${Math.round(metrics.avg_monthly_deposits).toLocaleString()}/mo deposits`
+        : "deposits n/a";
+      const months = metrics.statement_months_covered.length > 0
+        ? metrics.statement_months_covered.join(", ")
+        : "unspecified";
+      const qual = metrics.qualification_signal ?? "unknown";
+      const near = await findRecentContactsNear(30);
+      const nearList = near.length
+        ? "\n\n_Recent leads (possible match):_\n" +
+          near.slice(0, 6).map((n) => `• ${n.business_name || n.first_name || "—"}${n.email ? ` · ${n.email}` : ""}`).join("\n")
+        : "";
+      const text =
+        `📑 *Bank statements received — ${displayName}* (${fetched.length} file${fetched.length > 1 ? "s" : ""}) but *no matching deal* in the pipeline.${odLink}\n` +
+        `Months: ${months} · ${depo} · qualification: ${qual}\n\n` +
+        `Reply \`create deal\` to open one, or \`link to [deal name]\` to attach these to an existing deal.${nearList}`;
+      try {
+        await slack.postMessage(channel, text);
+      } catch (e) {
+        console.warn("[bank-statements] no-deal #srt-sub post failed:", (e as Error).message);
+      }
+    }
+
+    // Keep the in-thread reply too when a thread exists (the slack_drop path).
     if (slackChannel && slackThreadTs) {
       await slack.postThreadReply(
         slackChannel,
         slackThreadTs,
         `📄 Found bank statements for *${displayName}* but no deal exists in the pipeline.\n\nReply \`create deal\` to create one, or \`link to [deal name]\` if it's under a different name.`,
       );
-      return NextResponse.json({ ok: true, status: "no_deal_found", merchant: displayName });
     }
-    return NextResponse.json({ error: "could not resolve a deal", merchant: displayName }, { status: 400 });
+    return NextResponse.json({ ok: true, status: "no_deal_found", merchant: displayName });
   }
 
   // Build Zoho field patches (only non-null numerics — unknown fields fall into the Note)
@@ -489,8 +593,22 @@ export async function POST(req: NextRequest) {
       statementsAnalyzed: fetched.length,
     });
     await setAnalysisStatus(contactId, "analyzed");
-    // If the application is already complete, post the pick-lenders card now.
-    // (Gated + idempotent inside the helper; no-op until the app is done.)
+    // Auto-draft the gated lender package as soon as statements are analyzed and a
+    // deal with a Slack thread exists — to the default lender set (SRT submissions +
+    // BTF). Nothing sends without 👍; idempotent via deal_submissions rows. The app
+    // completing later only enriches the app PDF (and no-ops here).
+    await maybeDraftPackageOnStatements(contactId, {
+      dealId: dealId ?? undefined,
+      zohoId: zohoId ?? undefined,
+      revenueTable: metrics.revenue_table,
+      onedriveFolderUrl: body.onedrive_folder_url,
+      bankStmtDriveItemIds: fetched.map((f) => f.drive_item_id).filter(Boolean) as string[],
+      aiDecisionId: decision?.id as string | undefined,
+    }).catch((e) =>
+      console.warn("[bank-statements] maybeDraftPackageOnStatements failed:", (e as Error).message)
+    );
+    // App-complete path stays as the richer trigger; idempotency makes whichever
+    // event lands last a no-op.
     await maybePostSubmissionReady(contactId).catch((e) =>
       console.warn("[bank-statements] maybePostSubmissionReady failed:", (e as Error).message)
     );
@@ -518,10 +636,11 @@ type AnalysisStatus = "processing" | "analyzed" | "error";
 
 async function setAnalysisStatus(contactId: string, status: AnalysisStatus): Promise<void> {
   try {
-    await supabaseAdmin
-      .from("contacts")
-      .update({ bank_statement_analysis_status: status })
-      .eq("id", contactId);
+    const update: Record<string, unknown> = { bank_statement_analysis_status: status };
+    // Stamp when analysis completes so the 30-min "finish your application"
+    // follow-up cron has a clock to measure from.
+    if (status === "analyzed") update.statements_analyzed_at = new Date().toISOString();
+    await supabaseAdmin.from("contacts").update(update).eq("id", contactId);
   } catch (e) {
     console.warn("[bank-statements] setAnalysisStatus failed:", (e as Error).message);
   }

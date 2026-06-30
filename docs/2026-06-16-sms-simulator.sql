@@ -115,7 +115,10 @@ CREATE OR REPLACE FUNCTION match_voice_examples(
   match_count int DEFAULT 6
 )
 RETURNS TABLE (incoming text, reply text, sim real, is_golden boolean)
-LANGUAGE sql STABLE AS $$
+-- search_path includes `extensions` because pg_trgm was relocated there
+-- (mission-control/docs/2026-06-24-security-hardening.sql) so % / similarity()
+-- still resolve. Pinned search_path also closes the "search_path mutable" warning.
+LANGUAGE sql STABLE SET search_path = public, extensions AS $$
   SELECT ve.incoming, ve.reply, similarity(ve.incoming, query_text) AS sim, ve.is_golden
   FROM voice_examples ve
   WHERE ve.tenant_id = p_tenant_id

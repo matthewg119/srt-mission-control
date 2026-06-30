@@ -65,12 +65,20 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/cron/statements-finish-app-followup",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/stale-replies",
       "schedule": "30 13 * * *"
     },
     {
       "path": "/api/cron/hanging-leads",
       "schedule": "0 12 * * 1-5"
+    },
+    {
+      "path": "/api/cron/crm-exclusion-sync",
+      "schedule": "0 8 * * *"
     }
   ]
 }

@@ -72,6 +72,22 @@ ${SIG_S}`,
 ${SIG_S}`,
   },
 
+  // ── Statements received, application not finished → finish the app ──
+  "statements-no-app": {
+    subject: "Your bank statements are in — finish your application",
+    html: `${WRAP_OPEN}
+  <p style="margin:0 0 24px 0;text-align:left;font-size:16px;">Hello {{firstName}}!</p>
+  <p style="margin:0 0 16px 0;text-align:left;">We have your <strong>business bank statements</strong>. The last step is your quick ${hl("2-minute funding application")}:</p>
+  <p style="margin:0 0 28px 0;text-align:left;">
+    <a href="https://srtagency.com/fullapp" style="display:inline-block;background:#2ee6a8;color:#0d1b2a;text-decoration:none;font-weight:700;padding:10px 28px;border-radius:6px;">Finish Application &#8594;</a>
+  </p>
+  <p style="margin:0 0 24px 0;text-align:left;">Once that's in, I'll get your file underwritten and have you an approval, often within 24 hours.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Any questions, just reply here or reach me at <a href="mailto:matthew@srtagency.com">matthew@srtagency.com</a>.</p>
+  <p style="margin:0 0 24px 0;text-align:left;">Best regards,</p>
+</div>
+${SIG_S}`,
+  },
+
   // ── 1. SBA 7(a) — Documents Needed ──────────────────────────────────────────
   "sba": {
     subject: "Next Steps for Your Business Funding - Documents Needed",

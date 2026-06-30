@@ -182,6 +182,51 @@ export async function zohoRequest(
 }
 
 /**
+ * Full-table scan of a Zoho module (e.g. "Leads", "Contacts"), page-based v5
+ * pagination matching the convention in hanging-leads.ts. Accumulates records until
+ * `info.more_records` is false (a 204 yields an empty body -> {} -> no data -> stop).
+ *
+ * Safety: stops at MAX_PAGES so a runaway never loops forever. `truncated` is true if
+ * that ceiling was hit with more records still available, so callers can warn instead of
+ * silently reporting a partial pull as complete. Throttled to stay under Zoho's 10 req/s.
+ */
+export async function listAllRecords(
+  module: string,
+  fields: string,
+  opts: { perPage?: number; maxPages?: number; sleepMs?: number } = {}
+): Promise<{ records: ZohoApiRecord[]; truncated: boolean }> {
+  const perPage = opts.perPage ?? 200; // Zoho hard cap
+  const maxPages = opts.maxPages ?? 1000; // 1000 * 200 = 200k record ceiling
+  const sleepMs = opts.sleepMs ?? 150;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const records: ZohoApiRecord[] = [];
+  let page = 1;
+  let truncated = false;
+
+  while (page <= maxPages) {
+    const path = `/${module}?fields=${encodeURIComponent(fields)}&per_page=${perPage}&page=${page}`;
+    const result = (await zohoRequest("GET", path)) as {
+      data?: ZohoApiRecord[];
+      info?: { more_records?: boolean };
+    };
+    const batch = result.data ?? [];
+    if (batch.length === 0) break;
+    records.push(...batch);
+
+    if (!result.info?.more_records) break;
+    if (page === maxPages) {
+      truncated = true; // more_records still true but we have hit the ceiling
+      break;
+    }
+    page++;
+    await sleep(sleepMs);
+  }
+
+  return { records, truncated };
+}
+
+/**
  * Build a Description block from financial and owner details.
  * Used since these fields are not yet custom fields in Zoho.
  */

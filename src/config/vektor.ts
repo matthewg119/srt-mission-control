@@ -26,6 +26,8 @@ export const VEKTOR_CHANNELS = {
   // #content-full — same trigger as #content, but VeKtor runs the full
   // FAL.ai + ElevenLabs + ffmpeg pipeline and posts the finished MP4.
   contentFull: process.env.SLACK_CONTENT_FULL_CHANNEL || "",
+  // #content-analyzer — drop a video, get a shot-by-shot storyboard + pest remake.
+  contentAnalyzer: process.env.SLACK_CONTENT_ANALYZER_CHANNEL || "",
 };
 
 export type VektorCategory =

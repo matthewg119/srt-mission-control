@@ -34,6 +34,40 @@ export interface SubmissionReadyOpts {
   aiDecisionId?: string;
 }
 
+type ContactGateRow = {
+  portal_app_completed: boolean | null;
+  application_stage: string | null;
+  bank_statement_analysis_status: string | null;
+  zoho_lead_id: string | null;
+  amount_needed: string | number | null;
+  portal_funding_range: string | null;
+};
+
+const GATE_SELECT =
+  "portal_app_completed, application_stage, bank_statement_analysis_status, zoho_lead_id, amount_needed, portal_funding_range";
+
+/**
+ * Auto-draft to the default lender set the moment statements are analyzed and a
+ * deal with a Slack thread exists — regardless of whether the application is
+ * complete yet. Same idempotency + gating as the app-complete path, so whichever
+ * trigger lands last no-ops. Drafts are still GATED (per-lender 👍 Send card).
+ */
+export async function maybeDraftPackageOnStatements(
+  contactId: string,
+  opts: SubmissionReadyOpts = {}
+): Promise<{ posted: boolean; reason?: string }> {
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select(GATE_SELECT)
+    .eq("id", contactId)
+    .maybeSingle();
+  if (!contact) return { posted: false, reason: "no_contact" };
+  if ((contact as ContactGateRow).bank_statement_analysis_status !== "analyzed") {
+    return { posted: false, reason: "statements_not_analyzed" };
+  }
+  return draftDefaultPackage(contactId, contact as ContactGateRow, opts);
+}
+
 export async function maybePostSubmissionReady(
   contactId: string,
   opts: SubmissionReadyOpts = {}
@@ -41,17 +75,31 @@ export async function maybePostSubmissionReady(
   // 1) Gate on contact state: app complete AND statements analyzed.
   const { data: contact } = await supabaseAdmin
     .from("contacts")
-    .select("portal_app_completed, application_stage, bank_statement_analysis_status, zoho_lead_id, amount_needed, portal_funding_range")
+    .select(GATE_SELECT)
     .eq("id", contactId)
     .maybeSingle();
   if (!contact) return { posted: false, reason: "no_contact" };
 
+  const c = contact as ContactGateRow;
   const appComplete =
-    contact.portal_app_completed === true || contact.application_stage === "Application Complete";
-  const stmtsAnalyzed = contact.bank_statement_analysis_status === "analyzed";
+    c.portal_app_completed === true || c.application_stage === "Application Complete";
+  const stmtsAnalyzed = c.bank_statement_analysis_status === "analyzed";
   if (!appComplete) return { posted: false, reason: "app_incomplete" };
   if (!stmtsAnalyzed) return { posted: false, reason: "statements_not_analyzed" };
 
+  return draftDefaultPackage(contactId, c, opts);
+}
+
+/**
+ * Shared core: resolve the deal + thread, idempotency-check, resolve the default
+ * lender set, and build the gated package. Callers apply their own state gate
+ * (app-complete vs statements-analyzed) before invoking this.
+ */
+async function draftDefaultPackage(
+  contactId: string,
+  contact: ContactGateRow,
+  opts: SubmissionReadyOpts
+): Promise<{ posted: boolean; reason?: string }> {
   // 2) Resolve the deal and require a Slack thread (the analyzer / ensure-deal creates it).
   let dealId = opts.dealId;
   let dealThreadOk = false;

@@ -52,15 +52,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const folderName = (businessName || "Unknown Business").replace(/[<>:"/\\|?*]/g, "_");
+    // Resolve a canonical business name so every doc for this deal lands under one
+    // Deals/<biz> tree (prevents the owner-name vs LLC folder split, and matches
+    // the folder the completeness check + package builder key off). Prefer the
+    // matched contact's business_name; fall back to the passed name.
+    let canonicalBiz = businessName || "Unknown Business";
+    if (contactId) {
+      try {
+        const { data: c } = await supabaseAdmin
+          .from("contacts")
+          .select("business_name")
+          .eq("id", contactId)
+          .maybeSingle();
+        if (c?.business_name) canonicalBiz = c.business_name as string;
+      } catch { /* ignore — fall back to passed name */ }
+    }
+    const safeBiz = canonicalBiz.replace(/[<>:"/\\|?*]/g, "_");
+    const subFolder = isApplication ? "Application" : "Bank Statements";
+    const folderPath = `Deals/${safeBiz}/${subFolder}`;
+
     const results: Array<{ fileName: string; oneDrive?: string; driveItemId?: string; error?: string }> = [];
     // Keep the raw buffers so the application path can attach the PDF to Slack.
     const fileBuffers: Array<{ name: string; buffer: Buffer }> = [];
 
     let folderCreated = false;
     try {
-      await microsoft.createDriveFolder("Working Files");
-      await microsoft.createDriveFolder(folderName, "Working Files");
+      await microsoft.createDriveFolder("Deals");
+      await microsoft.createDriveFolder(safeBiz, "Deals");
+      await microsoft.createDriveFolder(subFolder, `Deals/${safeBiz}`);
       folderCreated = true;
     } catch (err) {
       console.warn("OneDrive folder creation failed:", err instanceof Error ? err.message : err);
@@ -77,7 +96,7 @@ export async function POST(request: NextRequest) {
       if (folderCreated) {
         try {
           const driveResult = await microsoft.uploadDriveFile(
-            `Working Files/${folderName}`,
+            folderPath,
             file.name,
             buffer,
             file.type || "application/octet-stream"

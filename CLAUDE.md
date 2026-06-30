@@ -76,7 +76,26 @@ SLACK_CEO_CHANNEL=         # Slack channel ID for CEO pulse reports
 TELEGRAM_BOT_TOKEN=        # Telegram bot (from @BotFather)
 TELEGRAM_USER_ID=          # Allowed Telegram user ID
 NEXT_PUBLIC_APP_URL=       # https://mission.srtagency.com
+META_ADS_TOKEN=            # System-user token with ads_management (Custom Audience sync). NOT META_CAPI_TOKEN.
+META_AD_ACCOUNT_ID=        # Numeric ad account id (route prefixes act_). Used to create the exclusion audience.
+META_AUDIENCE_ID=          # "SRT - CRM Master Exclusion" audience id (from /api/admin/create-exclusion-audience)
+META_ADS_API_VERSION=      # Optional, defaults to v21.0
 ```
+
+## CRM Master Exclusion Sync (Meta)
+Daily cron pushes every Zoho lead + contact (hashed email/phone/name/zip/city/state) into
+a Meta Customer List audience set as an EXCLUSION on acquisition ad sets, so Meta stops
+re-serving ads to people already in the CRM. Idempotent (add-only, no diffing).
+- `src/lib/meta-audience.ts` — Marketing API client (create audience + push users)
+- `src/app/api/cron/crm-exclusion-sync/route.ts` — daily sync (08:00 UTC)
+- `src/app/api/admin/create-exclusion-audience/route.ts` — one-time audience bootstrap
+- Zoho full-table scan: `listAllRecords()` in `src/lib/zoho.ts`
+
+One-time setup: (1) create a Meta System User, assign the ad account with Manage, generate
+a token with `ads_management` → `META_ADS_TOKEN`; (2) accept Custom Audience Terms at
+`business.facebook.com/ads/manage/customaudiences/tos/?act_<AD_ACCOUNT_ID>`; (3) hit
+`/api/admin/create-exclusion-audience` once → paste id into `META_AUDIENCE_ID`, redeploy;
+(4) in Ads Manager set the audience as an Exclude on each acquisition ad set.
 
 ## Channels Connected
 - **Web dashboard** — mission.srtagency.com/dashboard/chat
