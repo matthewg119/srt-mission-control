@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS public.pov_studio_jobs (
   image_mimetype  TEXT,
   source_kind     TEXT CHECK (source_kind IN ('image', 'video')),
   images          JSONB,                   -- daily-drop candidates [{index,scene,url,mimetype}] for the pick step
-  workflow        TEXT CHECK (workflow IN ('render', 'animate', 'recreate')),
+  workflow        TEXT CHECK (workflow IN ('render', 'animate', 'recreate', 'caption')),
   status          TEXT NOT NULL DEFAULT 'awaiting_workflow'
                   CHECK (status IN ('awaiting_pick', 'awaiting_workflow', 'running', 'done', 'error')),
   created_at      timestamptz NOT NULL DEFAULT now(),
@@ -45,3 +45,11 @@ CREATE POLICY pov_rotation_service_all ON public.pov_rotation
 DROP POLICY IF EXISTS pov_studio_jobs_service_all ON public.pov_studio_jobs;
 CREATE POLICY pov_studio_jobs_service_all ON public.pov_studio_jobs
   FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+-- If an earlier version of this table was already created, its workflow CHECK only
+-- allowed ('render','animate','recreate') and the 4th workflow 'caption' (react 4️⃣)
+-- would fail at write time. Re-add the constraint with 'caption' included.
+ALTER TABLE public.pov_studio_jobs DROP CONSTRAINT IF EXISTS pov_studio_jobs_workflow_check;
+ALTER TABLE public.pov_studio_jobs
+  ADD CONSTRAINT pov_studio_jobs_workflow_check
+  CHECK (workflow IN ('render', 'animate', 'recreate', 'caption'));
