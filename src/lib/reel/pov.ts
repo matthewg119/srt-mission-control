@@ -15,15 +15,18 @@ import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generateImages, type ImageProvider } from "@/lib/providers/image-gen";
-import { POV_SCENES, POV_STYLE_VERSION } from "@/config/pov-style";
+import { POV_SCENES, POV_SOUL_SIZE, POV_STYLE_VERSION } from "@/config/pov-style";
 import type { ReelSlot } from "@/config/reel-style";
 import { getActiveVertical, type Vertical } from "@/config/verticals";
 
 // Image provider for the POV format only (the rest of the system keeps IMAGE_PROVIDER).
-// Default gpt-image-2; set POV_IMAGE_PROVIDER=higgsfield to reuse the Vargas Soul / HF
-// credentials instead (no extra OpenAI key needed). Higgsfield needs HIGGSFIELD_SOUL_ID.
+// Prod runs "higgsfield" = Higgsfield Soul text2image WITHOUT a character (see
+// generatePovImage): reliable, true 3:4, reuses HF_CREDENTIALS, and never depends on a
+// Soul id living under this API key. "openai" (gpt-image-2) stays available as a fallback
+// if an OPENAI_API_KEY is ever set. Note: GPT Image 2 is not exposed to the Higgsfield
+// HTTP API, so "GPT Image 2 via Higgsfield" is served by the Soul-no-character path.
 export function povImageProvider(): ImageProvider {
-  const p = (process.env.POV_IMAGE_PROVIDER || "openai").toLowerCase();
+  const p = (process.env.POV_IMAGE_PROVIDER || "higgsfield").toLowerCase();
   return (p === "higgsfield" || p === "elevenlabs" ? p : "openai") as ImageProvider;
 }
 
@@ -33,12 +36,14 @@ export async function buildPovImagePrompt(scene: string, vertical?: Vertical): P
   return `${v.style_token}\n\nScene: ${scene}\n\nNo text, captions, logos, or watermark in the image.`;
 }
 
-/** Generate the single POV image with the configured POV provider (Soul id only used by higgsfield). */
-export async function generatePovImage(prompt: string, vertical?: Vertical) {
+/**
+ * Generate a single POV image. Runs plain Soul text2image with NO character (no soulId)
+ * so it never fails with character_not_found, at true 3:4 (POV_SOUL_SIZE) to match the
+ * Meta-glasses studio look.
+ */
+export async function generatePovImage(prompt: string) {
   const provider = povImageProvider();
-  const v = vertical ?? (await getActiveVertical());
-  const soulId = provider === "higgsfield" ? v.soul_id ?? process.env.HIGGSFIELD_SOUL_ID : undefined;
-  const [img] = await generateImages({ prompts: [prompt], provider, soulId: soulId ?? undefined });
+  const [img] = await generateImages({ prompts: [prompt], provider, size: POV_SOUL_SIZE });
   return img;
 }
 
@@ -86,6 +91,7 @@ function buildPovSystem(v: Vertical): string {
     v.style_token,
     "",
     "HARD RULES:",
+    "- WTF HOOK: the scene is a scroll-stopping reveal (an infestation, a swarm, a gross discovery). Treat the first frame as a 'wait, what is that' moment; the curiosity caption and title #1 must lean into that shock, not describe a calm routine task.",
     "- image_prompt describes ONE continuous shot; it contains NO on-screen text (text is added in post).",
     "- animation_prompt = motion only (head/camera movement + the hands' action), ONE sentence.",
     "- captions: return exactly three, one per style:",
@@ -257,37 +263,105 @@ export interface PovDropResult {
   thread_ts?: string;
   scenes: string[];
   images_ok: number;
+  /** "awaiting_approval" (ideas posted, no images yet) | "posted" | "all_failed". */
+  status?: string;
 }
 
 /** How many image options the daily drop generates for the operator to pick from. */
 const POV_OPTIONS_PER_DROP = 3;
 
+/** Sentence-case a scene string for the ideas list (scenes are stored lower-case). */
+function titleizeScene(s: string): string {
+  const t = s.trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 /**
- * Post one Meta Glasses POV drop as its OWN top-level message in #content-full:
- * generate POV_OPTIONS_PER_DROP images -> post them as labeled options -> ask the
- * operator to react 1/2/3 to pick the best, which then opens the workflow breakdown
- * (handled in pov-studio.ts). Throws are caught by the cron caller so a POV failure
+ * Post one Meta Glasses POV drop as its OWN top-level message in #content-full.
+ *
+ * IDEAS-FIRST GATE: this posts the 3 scene IDEAS as text and asks the operator to react
+ * ✅ to generate them (or 🚫 to skip), so image credits are only spent on approved ideas.
+ * The ✅ reaction is handled by handlePovIdeasApproval (pov-studio.ts) which calls
+ * generatePovImagesForJob below. Throws are caught by the cron caller so a POV failure
  * never breaks the belief drop.
  */
 export async function runPovDrop(args: RunPovDropArgs): Promise<PovDropResult> {
   const start = Date.now();
   const { channel, date, slot } = args;
-  const provider = povImageProvider();
   const vertical = args.vertical ?? (await getActiveVertical());
   const scenePool = vertical.scenes ?? POV_SCENES;
 
   const scenes = await pickDistinctPovScenes(POV_OPTIONS_PER_DROP, scenePool);
-  const prompts = await Promise.all(scenes.map((s) => buildPovImagePrompt(s, vertical)));
-  const soulId = provider === "higgsfield" ? vertical.soul_id ?? process.env.HIGGSFIELD_SOUL_ID : undefined;
-  const imgs = await generateImages({ prompts, provider, soulId: soulId ?? undefined });
 
-  const header = `🕶️ *Meta Glasses POV, ${date}* (${slot})\n_First-person personal account. ${POV_OPTIONS_PER_DROP} options, generated with ${provider}._`;
+  const header = `🕶️ *Meta Glasses POV, ${date}* (${slot})\n_First-person WTF-hook ideas. React ✅ to generate all ${scenes.length}, or 🚫 to skip._`;
   const main = (await slack.postMessage(channel, header)) as { ok?: boolean; ts?: string };
   const threadTs = main?.ts;
   if (!threadTs) throw new Error("failed to post POV header to #content-full");
 
-  // Post each successful image as a labeled, re-numbered option. Store a public URL
-  // (Supabase) so the chosen one can be downloaded later without a Slack token.
+  const ideasText = [
+    "*Scene ideas for this drop:*",
+    ...scenes.map((s, i) => `${i + 1}. ${titleizeScene(s)}`),
+    "",
+    "React ✅ on this message to generate all of them, or 🚫 to skip this drop.",
+  ].join("\n");
+  const gate = (await slack.postThreadReply(channel, threadTs, ideasText)) as { ts?: string };
+
+  // Record rotation now so the next drop doesn't repeat these scenes even if skipped.
+  await recordPovScenes(scenes, scenePool);
+
+  // Stash the chosen scenes on the job (as {index, scene}) so the ✅ handler can generate
+  // exactly these. No images/urls yet; the gate status keeps handlePovDropPick from firing.
+  await supabaseAdmin.from("pov_studio_jobs").insert({
+    slack_channel: channel,
+    slack_thread_ts: threadTs,
+    picker_msg_ts: gate?.ts ?? null,
+    images: scenes.map((scene, i) => ({ index: i + 1, scene })),
+    source_kind: "image",
+    status: "awaiting_ideas_approval",
+  });
+
+  await supabaseAdmin.from("system_logs").insert({
+    event_type: "cron_pov_drop",
+    description: `POV drop ${slot}: ${scenes.length} ideas posted, awaiting approval`,
+    metadata: { slot, scenes, style_version: POV_STYLE_VERSION, images_ok: 0, status: "awaiting_approval", duration_ms: Date.now() - start },
+  });
+
+  return { thread_ts: threadTs, scenes, images_ok: 0, status: "awaiting_approval" };
+}
+
+/** Minimal job shape generatePovImagesForJob needs (a pov_studio_jobs row). */
+export interface PovIdeasJob {
+  id: string;
+  slack_channel: string;
+  slack_thread_ts: string;
+  images: Array<{ index: number; scene?: string }> | null;
+}
+
+/**
+ * PHASE B — the operator approved the ideas (✅). Generate one image per stashed scene
+ * (plain Soul, no character, 3:4), post them as labeled options, and flip the job to
+ * awaiting_pick with the real image options + a "react 1/2/3 to pick" message (which
+ * handlePovDropPick then routes into the Render/Animate/Recreate workflow breakdown).
+ */
+export async function generatePovImagesForJob(job: PovIdeasJob): Promise<number> {
+  const start = Date.now();
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const provider = povImageProvider();
+  const vertical = await getActiveVertical();
+
+  const scenes = (job.images ?? []).map((o) => o.scene ?? "").filter(Boolean);
+  if (scenes.length === 0) {
+    await slack.postThreadReply(channel, threadTs, "🚫 No scenes stored for this drop; nothing to generate.");
+    await supabaseAdmin.from("pov_studio_jobs").update({ status: "error", updated_at: new Date().toISOString() }).eq("id", job.id);
+    return 0;
+  }
+
+  await slack.postThreadReply(channel, threadTs, `⏳ Generating ${scenes.length} images…`);
+
+  const prompts = await Promise.all(scenes.map((s) => buildPovImagePrompt(s, vertical)));
+  // Plain Soul text2image (no soulId) at true 3:4 — never fails on a missing character.
+  const imgs = await generateImages({ prompts, provider, size: POV_SOUL_SIZE });
+
   const options: Array<{ index: number; scene: string; url: string; mimetype: string }> = [];
   for (let i = 0; i < imgs.length; i++) {
     const img = imgs[i];
@@ -306,20 +380,19 @@ export async function runPovDrop(args: RunPovDropArgs): Promise<PovDropResult> {
     }
     const index = options.length + 1;
     await slack.postThreadReply(channel, threadTs, `*Option ${index}*`);
-    await slack.uploadFile(channel, `pov-${slot}-${index}.png`, img.buffer, img.mimetype, threadTs);
+    await slack.uploadFile(channel, `pov-${index}.png`, img.buffer, img.mimetype, threadTs);
     options.push({ index, scene: scenes[i], url, mimetype: img.mimetype });
   }
 
-  await recordPovScenes(scenes, scenePool);
-
   if (options.length === 0) {
     await slack.postThreadReply(channel, threadTs, "🚫 All image options failed. Check the image provider credentials/credits.");
+    await supabaseAdmin.from("pov_studio_jobs").update({ status: "error", updated_at: new Date().toISOString() }).eq("id", job.id);
     await supabaseAdmin.from("system_logs").insert({
       event_type: "cron_pov_drop",
-      description: `POV drop ${slot}: all ${imgs.length} options failed`,
-      metadata: { slot, scenes, provider, style_version: POV_STYLE_VERSION, images_ok: 0, duration_ms: Date.now() - start },
+      description: `POV drop generate: all ${imgs.length} options failed`,
+      metadata: { scenes, provider, style_version: POV_STYLE_VERSION, images_ok: 0, duration_ms: Date.now() - start },
     });
-    return { thread_ts: threadTs, scenes, images_ok: 0 };
+    return 0;
   }
 
   const nums = options.map((o) => `${o.index}️⃣`).join(" ");
@@ -329,20 +402,21 @@ export async function runPovDrop(args: RunPovDropArgs): Promise<PovDropResult> {
     `React ${nums} to pick the best option. I'll then show you what we can do with it (Render / Animate / Recreate).`
   )) as { ts?: string };
 
-  await supabaseAdmin.from("pov_studio_jobs").insert({
-    slack_channel: channel,
-    slack_thread_ts: threadTs,
-    picker_msg_ts: pick?.ts ?? null,
-    images: options,
-    source_kind: "image",
-    status: "awaiting_pick",
-  });
+  await supabaseAdmin
+    .from("pov_studio_jobs")
+    .update({
+      images: options,
+      picker_msg_ts: pick?.ts ?? null,
+      status: "awaiting_pick",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", job.id);
 
   await supabaseAdmin.from("system_logs").insert({
     event_type: "cron_pov_drop",
-    description: `POV drop ${slot}: ${options.length}/${imgs.length} options posted`,
-    metadata: { slot, scenes, provider, style_version: POV_STYLE_VERSION, images_ok: options.length, duration_ms: Date.now() - start },
+    description: `POV drop generate: ${options.length}/${imgs.length} options posted`,
+    metadata: { scenes, provider, style_version: POV_STYLE_VERSION, images_ok: options.length, duration_ms: Date.now() - start },
   });
 
-  return { thread_ts: threadTs, scenes, images_ok: options.length };
+  return options.length;
 }

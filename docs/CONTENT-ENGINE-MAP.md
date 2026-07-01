@@ -1,0 +1,136 @@
+# Content Engine — Blueprint / Mind-Map
+
+The whole SRT content-creation system as it runs through Slack today, mapped so we can see
+every workflow, its trigger, its variables, and its data model in one place. This is the
+**footprint for productizing** it into a standalone chat-UI app (see [Future App](#future-app-spec)).
+
+> All code lives in `srt-mission-control`. Slack is the current UI: three channels
+> (`#content`, `#content-full`, `#content-analyzer`) plus a 3x/day cron.
+
+---
+
+## Mind-map
+
+```mermaid
+mindmap
+  root((Content Engine))
+    #content-full
+      Bug-Reveal Spray)NEW · daily(
+        3 before ideas → ✅ → 3 before images
+        react 1/2/3 → add bugs + caption + titles + anim prompt
+        A/B: before+anim  vs  before+after
+      Daily Creative Drop)belief · cron(
+        belief prompt → operator renders in Higgsfield
+        upload image → 3 headlines → pick → caption
+      POV Picker)bare image/video(
+        Render · Animate · Recreate · Caption
+      Reel Studio)image + copy(
+        4 script variations → pick → MP4 render
+      IG-link Recreate)paste reel URL(
+        yt-dlp frames → storyboard + POV remake
+      Daily Content Ideas)cron(
+        10 ideas + 30 hooks
+    #content-analyzer
+      Video Analyzer
+        drop MP4 → 5 frames → storyboard + why + POV remake
+    #content
+      Viral Video Decoder)text only(
+    Avatars & Souls
+      Vargas Soul 8ef8...
+      verticals: pest_control · pest_owner_ai · mca
+      vertical_formats)30-format calendar(
+      providers: higgsfield · gpt-image-2 · elevenlabs
+    Future App
+      chat UI (Slack parity)
+      generate image → select region → do XYZ
+      workflow library + vertical switcher
+```
+
+---
+
+## Workflow catalog
+
+| Workflow | Channel | Trigger | Entry point | Produces | Key vars / tables |
+|---|---|---|---|---|---|
+| **Bug-Reveal Spray** *(NEW)* | #content-full | 3x/day cron (`DAILY_DROP_MODE=bug_reveal`) | `api/cron/reel-drop` → `lib/reel/bug-reveal.ts` | 3 before images → pick → after (bugs) + caption + 5 POV titles + animation prompt + after-image prompt | `bug-reveal-style.ts`, `editImage` (gpt-image-2), `POV_IMAGE_PROVIDER`, `OPENAI_API_KEY` · table `bug_reveal_jobs` |
+| Daily Creative Drop (belief) | #content-full | 3x/day cron (any other `DAILY_DROP_MODE`) | `api/cron/reel-drop` | belief prompt → operator renders → 3 headlines → caption | `reel-style.ts` beliefs, `HIGGSFIELD_SOUL_ID` · `reel_rotation`, `reel_drops` |
+| POV Picker | #content-full | bare image/video post | `lib/reel/pov-studio.ts` `handlePovImagePost` | picker → Render / Animate / Recreate / Caption | `content-workflows.ts` · `pov_studio_jobs`, `pov_rotation` |
+| Reel Studio | #content-full | image + copy post | `lib/reel/studio.ts` `handleStudioImage` | 4 script variations → MP4 | `REEL_RENDER_URL/SECRET` · `reel_studio_jobs` |
+| IG-link Recreate | #content-full | paste `instagram.com/reel/...` | `pov-studio.ts` `handleInstagramLink` | storyboard + why-it-works + POV remake + first frame | `IG_FRAMES_URL` (derives from `REEL_RENDER_URL`), `YTDLP_COOKIES` |
+| Daily Content Ideas | #content-full | cron | `api/cron/daily-content-ideas` | 10 ideas + 30 hooks (text) | `content-ideas-generator.ts` |
+| Video Analyzer | #content-analyzer | drop MP4 | `lib/reel/content-analyzer.ts` `analyzeVideo` | shot-by-shot storyboard + POV remake | `VIDEO_FRAMES_URL`, `SLACK_CONTENT_ANALYZER_CHANNEL` |
+| Avatar → 30-format calendar | #content-full / #content-analyzer | `generate POV <Vertical> <N> ideas` or kit upload | `api/content/ingest-avatar`, `lib/reel/format-generator.ts` | `verticals` row + ~30 `vertical_formats` | `callClaudeJSON({documents})`, web_search |
+
+---
+
+## Reaction routing (`api/slack/events`)
+
+Reactions self-route by the message ts against each workflow's own table, first match wins:
+
+1. Guardian (`👍/✏️/🚫`) → `handleGuardianReaction`
+2. Reel drop headlines (`1/2/3`) → `handleReelReaction`
+3. **Bug-Reveal ideas (`✅/🚫`) → `handleBugRevealIdeasApproval`** *(NEW)*
+4. **Bug-Reveal pick (`1/2/3`) → `handleBugRevealPick`** *(NEW)*
+5. POV ideas gate (`✅/🚫`) → `handlePovIdeasApproval`
+6. POV drop pick (`1/2/3`) → `handlePovDropPick`
+7. POV workflow (`1/2/3/4`) → `handlePovWorkflowReaction`
+8. Reel Studio variations (`1/2/3/4`) → `handleStudioReaction`
+9. Generic content → `handleContentReaction` → `handleReactionAdded`
+
+Each returns `false` when no row in its table matches, so the chain is collision-safe.
+
+---
+
+## Avatars, Souls & providers
+
+- **Vargas** — the pest-control POV persona. Trained Higgsfield Soul `8ef82825-7dab-4b87-b7ff-932fceb1fc34`.
+  (Known issue: this Soul lives under the Plus/MCP account and returns `character_not_found`
+  under the API-billing key. POV/bug-reveal images use the **no-character** path or gpt-image-2.)
+- **Image providers** (`lib/providers/image-gen.ts`): `higgsfield` (Soul text2image), `openai`
+  (gpt-image-2 text2image **and edits**), `elevenlabs` (fallback). POV/bug-reveal choose via
+  `POV_IMAGE_PROVIDER`; the directive is **gpt-image-2 in 3:4** for POV-style images.
+- **Sizes**: reels `1152x2048` (9:16), POV/bug-reveal `1536x2048` (Higgsfield) / `1024x1536` (gpt-image-2), both 3:4.
+- **Verticals** (`config/verticals.ts` + `verticals` table): `pest_control` (homeowner), `pest_owner_ai`
+  (B2B, sell owners on content), `mca` (SRT funding). A vertical carries avatar summary, 6 beliefs,
+  offer, `style_token`, `gold_examples`, `soul_id`.
+
+---
+
+## Data model (content tables)
+
+| Table | Purpose |
+|---|---|
+| `reel_rotation` | belief rotation per slot |
+| `reel_drops` | belief-drop thread state |
+| `reel_studio_jobs` | Reel Studio variations → MP4 |
+| `pov_rotation` | recently-used POV scene indices |
+| `pov_studio_jobs` | POV picker + daily POV drop state |
+| **`bug_reveal_jobs`** *(NEW)* | Bug-Reveal before-ideas → pick → after + copy |
+| `verticals` | avatar/belief/offer kit per vertical |
+| `vertical_formats` | ~30-format difficulty-tagged calendar |
+| `content_examples` | labeled storyboard few-shot library |
+
+---
+
+## Future app spec
+
+Goal: lift these workflows out of Slack into a **standalone chat-UI content app** that we own and
+can productize. The chat model stays (it is the simplest interface and mirrors Slack), but adds a
+canvas.
+
+- **Chat UI (Slack parity)** — same command grammar (`bug reveal`, `generate POV pest_control 5`,
+  drop an image, paste an IG link). Everything that works in Slack works here.
+- **Generate image → select a region → "do XYZ here"** — the core new capability. Backed by the
+  gpt-image-2 **edits + `mask`** endpoint already wired for Bug-Reveal (`editImage` in
+  `image-gen.ts`): the user draws a box on the image (like the red circle + arrow on the reference
+  photo), types an instruction ("make bugs pour out of here"), and the masked edit runs on that
+  region only. Bug-Reveal is the first hard-coded instance of this; the app generalizes it.
+- **Workflow library** — every row in the catalog above becomes a pickable card with an example,
+  so new formats are added as data, not code (extends the `vertical_formats` model).
+- **Vertical/avatar switcher** — pick `pest_control` / `pest_owner_ai` / a new vertical; the whole
+  app re-skins its style token, beliefs, gold examples, and Soul.
+- **Same Supabase backend** — reuse the existing job tables + `reels` bucket; the app is a new
+  front-end over the same engine, so Slack and the app stay in sync.
+
+Build order when we productize: (1) read-only viewer of the catalog + past jobs, (2) chat command
+parity, (3) the region-select edit canvas, (4) vertical switcher + workflow-as-data library.

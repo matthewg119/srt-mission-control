@@ -34,9 +34,11 @@ import {
   handlePovMediaWithBrief,
   handlePovWorkflowReaction,
   handlePovDropPick,
+  handlePovIdeasApproval,
   handleInstagramLink,
   INSTAGRAM_URL_RE,
 } from "@/lib/reel/pov-studio";
+import { handleBugRevealIdeasApproval, handleBugRevealPick } from "@/lib/reel/bug-reveal";
 import { analyzeVideo } from "@/lib/reel/content-analyzer";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
 import { classifyByKeywords } from "@/config/content-workflows";
@@ -135,6 +137,30 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (reelHandled) return NextResponse.json({ ok: true });
+
+        // Bug-Reveal ideas gate: ✅ generate / 🚫 skip on the before-shots message (self-routes by DB)
+        const bugIdeasHandled = await handleBugRevealIdeasApproval({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (bugIdeasHandled) return NextResponse.json({ ok: true });
+
+        // Bug-Reveal pick: 1️⃣/2️⃣/3️⃣ to pick the "before", then add bugs + copy (self-routes by DB)
+        const bugPickHandled = await handleBugRevealPick({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (bugPickHandled) return NextResponse.json({ ok: true });
+
+        // POV ideas-first gate: ✅ generate / 🚫 skip on a scene-ideas message (self-routes by DB)
+        const povIdeasHandled = await handlePovIdeasApproval({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (povIdeasHandled) return NextResponse.json({ ok: true });
 
         // POV daily drop: 1️⃣/2️⃣/3️⃣ to pick the best of 3 image options (self-routes by DB)
         const povPickHandled = await handlePovDropPick({

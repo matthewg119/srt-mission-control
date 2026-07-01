@@ -25,33 +25,34 @@ export const POV_GLASSES_TOKEN =
   "realistic natural daylight, true-to-life un-graded color, candid and authentic, " +
   "looks like real captured footage, not a studio or cinematic shot.";
 
-// Format 1 b-roll ideas rewritten to first-person POV (the wearer's own hands do the
-// task). The style token carries the look; each scene only describes the action.
+// WTF-hook scenes: each leads with a scroll-stopping REVEAL (an infestation, a swarm
+// eruption, a gross discovery) that the wearer's own gloved hands act on. The dry
+// "task only" scenes were removed because they render into flat, nothing-happening
+// images; every scene here has a clear visual payoff in frame. The style token carries
+// the Meta-glasses look; each scene only describes the reveal + the action.
 export const POV_SCENES: string[] = [
-  // Satisfying "bugs flee after the spray" payoff scenes (the format we lean on most).
+  "sliding a kitchen refrigerator out from the wall, the wearer's gloved hands gripping the sides as a dense cluster of cockroaches erupts from behind it and scatters across the tile floor.",
+  "prying the cover off an outdoor electrical meter box, the wearer's gloved hand lifting it away to reveal a thick crawling ball of wasps packed over a grey paper comb.",
+  "peeling a strip of baseboard away from a wall, the wearer's gloved hand pulling it back to expose a hollow termite gallery and crumbling mud tubes packed with pale termites.",
+  "tipping over a chewed-open bag of dog food in a pantry, the wearer's gloved hand lifting it as a nest of mice scatters and pink pups are exposed in the shredded lining.",
+  "opening an attic hatch and raising a flashlight, the wearer's gloved hand sweeping the beam across chewed insulation blanketed in rodent droppings.",
+  "lifting the corner of a mattress, the wearer's gloved hand peeling back the fabric to reveal a cluster of bed bugs and dark spotting crawling along the seam.",
+  "pulling a dryer vent duct off the wall, the wearer's gloved hands twisting it free as a wad of nesting material and scurrying insects tumbles out onto the floor.",
+  "cutting a flap of drywall open with a utility knife, the wearer's gloved hand folding it back to expose a basketball-size paper wasp nest packed inside the wall void.",
+  "reaching into a cluttered dim garage corner, the wearer's gloved hand freezing as a hand-size wolf spider darts across the glove and up the forearm.",
+  "lifting a heavy floor drain cover in a basement, the wearer's gloved hand raising it as a boil of drain flies and small roaches pours up out of the dark hole.",
+  "peeling back a layer of garden mulch against a house foundation, the wearer's gloved hand exposing a writhing mat of termites and eggs in the damp soil.",
+  "opening a tamper-proof rodent bait station on a garage floor, the wearer's gloved hand lifting the lid to reveal it gutted with droppings everywhere and one mouse frozen mid-scurry.",
   "the wearer's gloved hand sweeping a spray nozzle along a kitchen baseboard as a cluster of roaches breaks apart and scurries out of frame.",
-  "crouched at a garage corner, the wearer's gloved hand hitting a marching line of ants with a burst of spray as they scatter in every direction.",
-  "the wearer's gloved hand spraying into a dark under-sink cabinet as silverfish and a spider dart out and scramble across the shelf.",
-  "aiming the sprayer into a wall crack, the wearer's gloved hand triggering a puff as roaches pour out and flee down the baseboard.",
-  "walking out across a green suburban backyard at golden hour, the wearer's gloved hand raising a backpack-fogger wand as the first puff of mist leaves the nozzle.",
-  "crouched indoors, the wearer's gloved hand drawing one clean even line of treatment along the wall-floor baseboard seam.",
-  "reaching up into a shaded porch ceiling corner, the wearer's gloved hand sweeping a web-duster pole through thick cobwebs.",
-  "pouring granular bait into a hand spreader, the wearer's gloved hands tilting the bag as the granules scatter across the grass.",
-  "the wearer's gloved hand injecting dust from a crack-and-crevice tool into a thin gap along a wall.",
-  "tracing the sprayer wand around the concrete foundation perimeter of a house, the wearer's gloved hand keeping the band even.",
-  "the wearer's gloved hand feeding expanding foam into a floor drain to kill drain flies.",
-  "dragging a treatment hose around a wooden deck, the wearer's gloved hand laying down clean even coverage.",
-  "the wearer's gloved hands opening a tamper-proof rodent bait station on a garage floor to check the bait inside.",
-  "kneeling at a home's foundation, the wearer's gloved hand running a caulk gun along a gap to seal it.",
-  "the wearer's gloved hand sliding a glue board into the gap behind an oven and pulling back to check it.",
-  "stepping into a dim attic, the wearer's gloved hand sweeping a flashlight beam across the insulation.",
-  "the wearer's gloved hand peeling back garden mulch from the foundation to expose the soil and check for mud tubes.",
-  "the wearer's gloved hand tipping a plant saucer to dump standing water off a patio table.",
-  "fitting a rubber door sweep under a garage door, the wearer's gloved hands pressing it into the gap.",
+  "sliding a stove away from the wall, the wearer's gloved hands revealing a greasy gap where a swarm of German cockroaches pours out across the tile.",
 ];
 
-// gpt-image-2 portrait size for the Meta-glasses look (3:4). Both edges divisible by 16,
-// aspect within the model's 1:3..3:1 range. (Reels crop/letterbox to 9:16 in post.)
+// Higgsfield Soul portrait size for the Meta-glasses look — true 3:4 (1536x2048),
+// matching the studio setting that produced the good images. (Reels crop to 9:16 in post.)
+export const POV_SOUL_SIZE = "1536x2048";
+
+// (Legacy) gpt-image-2 portrait size, kept for the OpenAI fallback path. POV now runs on
+// Higgsfield Soul (no character), so POV_SOUL_SIZE above is the size actually used.
 export const POV_IMAGE_SIZE = "1024x1536";
 
 // One POV concept shape — matches src/lib/reel/pov.ts PovConcept and the gold examples.

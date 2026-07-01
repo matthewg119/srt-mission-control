@@ -115,8 +115,8 @@ class SeedanceAdapter implements MotionAdapter {
     const SUBMIT_URL = `${HIGGSFIELD_HOST}/v1/image2video/seedance`;
     const submitBody = {
       params: {
-        model: process.env.SEEDANCE_MODEL || "seedance_lite", // seedance_pro for higher quality
-        prompt,
+        model: process.env.SEEDANCE_MODEL || "seedance_pro", // seedance_lite live-fails ("Generation failed"); pro renders
+        prompts: [prompt], // API field is `prompts` (array); a singular `prompt` is dropped -> empty -> job fails
         input_image: { type: "image_url", image_url: imageUrl },
         reference_image_urls: refs,
         duration: 5,

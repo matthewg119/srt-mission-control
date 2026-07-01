@@ -24,7 +24,7 @@ import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
-import { generatePovImage } from "@/lib/reel/pov";
+import { generatePovImage, generatePovImagesForJob } from "@/lib/reel/pov";
 import { handleStudioImage, parseBoxes } from "@/lib/reel/studio";
 import { loadExampleFewShot } from "@/lib/reel/content-examples";
 import { suggestFormatsForFrame } from "@/lib/reel/format-suggest";
@@ -63,8 +63,20 @@ interface PovStudioJobRow {
   source_kind: "image" | "video" | null;
   images: PovImageOption[] | null;
   workflow: PovWorkflow | null;
-  status: "awaiting_pick" | "awaiting_workflow" | "running" | "done" | "error";
+  status:
+    | "awaiting_ideas_approval"
+    | "generating"
+    | "skipped"
+    | "awaiting_pick"
+    | "awaiting_workflow"
+    | "running"
+    | "done"
+    | "error";
 }
+
+// ✅ approve / 🚫 skip reactions for the ideas-first gate.
+const APPROVE_REACTIONS = new Set(["white_check_mark", "heavy_check_mark", "ballot_box_with_check"]);
+const SKIP_REACTIONS = new Set(["no_entry", "no_entry_sign", "x"]);
 
 const JOB_COLS =
   "id,slack_channel,slack_thread_ts,picker_msg_ts,image_url,image_mimetype,source_kind,images,workflow,status";
@@ -276,6 +288,68 @@ export async function handlePovMediaWithBrief(args: {
   if (intent === "animate") await runAnimate(args.channel, args.threadTs, img);
   else if (intent === "caption") await runCaption(args.channel, args.threadTs, img);
   else await runRecreate(args.channel, args.threadTs, img);
+  return true;
+}
+
+// ---- Reaction: ideas-first gate (✅ generate / 🚫 skip) ----------------------------
+
+/**
+ * The daily POV drop posts 3 scene IDEAS as text and waits. On ✅ we generate the images
+ * (generatePovImagesForJob, which flips the job to awaiting_pick); on 🚫 we skip the drop.
+ * Self-routes by the gate message ts; returns true only when it owns the reaction.
+ */
+export async function handlePovIdeasApproval(args: {
+  reaction: string;
+  slackTs: string;
+  channel: string;
+}): Promise<boolean> {
+  const approve = APPROVE_REACTIONS.has(args.reaction);
+  const skip = SKIP_REACTIONS.has(args.reaction);
+  if (!approve && !skip) return false;
+
+  const { data } = await supabaseAdmin
+    .from("pov_studio_jobs")
+    .select(JOB_COLS)
+    .eq("picker_msg_ts", args.slackTs)
+    .limit(1)
+    .maybeSingle();
+  const job = data as PovStudioJobRow | null;
+  if (!job || job.status !== "awaiting_ideas_approval") return false;
+
+  if (skip) {
+    await supabaseAdmin
+      .from("pov_studio_jobs")
+      .update({ status: "skipped", updated_at: new Date().toISOString() })
+      .eq("id", job.id);
+    await slack.postThreadReply(job.slack_channel, job.slack_thread_ts, "🚫 Skipped this drop. No images generated.");
+    return true;
+  }
+
+  // Approve: guard against a double-tap by claiming the job first, then generate async.
+  await supabaseAdmin
+    .from("pov_studio_jobs")
+    .update({ status: "generating", updated_at: new Date().toISOString() })
+    .eq("id", job.id);
+
+  waitUntil(
+    generatePovImagesForJob({
+      id: job.id,
+      slack_channel: job.slack_channel,
+      slack_thread_ts: job.slack_thread_ts,
+      images: job.images,
+    }).catch(async (e) => {
+      console.error("[pov-studio] ideas-approval generate error:", (e as Error).message);
+      await supabaseAdmin
+        .from("pov_studio_jobs")
+        .update({ status: "error", updated_at: new Date().toISOString() })
+        .eq("id", job.id);
+      await slack.postThreadReply(
+        job.slack_channel,
+        job.slack_thread_ts,
+        `🚫 Image generation failed (${(e as Error).message.slice(0, 160)}).`
+      );
+    })
+  );
   return true;
 }
 

@@ -44,6 +44,11 @@ export interface GenerateImagesOpts {
    * the rest of the system stays on Higgsfield.
    */
   provider?: ImageProvider;
+  /**
+   * Higgsfield width_and_height override (e.g. "1536x2048" for true 3:4). Defaults to
+   * SOUL_SIZE. The POV drop passes 3:4 so the Meta-glasses look matches the studio.
+   */
+  size?: string;
 }
 
 const POLL_INTERVAL_MS = 4_000;
@@ -102,12 +107,18 @@ function statusOf(json: Record<string, unknown>): string {
   return s.toLowerCase();
 }
 
-async function higgsfieldGenerateOne(prompt: string, soulId?: string): Promise<ImageResult> {
+async function higgsfieldGenerateOne(
+  prompt: string,
+  soulId?: string,
+  size?: string
+): Promise<ImageResult> {
   const creds = process.env.HF_CREDENTIALS;
   if (!creds) throw new Error("HF_CREDENTIALS not set");
-  // Prefer the per-vertical Soul id passed by the caller; fall back to the global env.
-  const sid = soulId ?? process.env.HIGGSFIELD_SOUL_ID;
-  if (!sid) throw new Error("HIGGSFIELD_SOUL_ID not set");
+  // A Soul id (custom reference) is OPTIONAL. When one is passed we bind the trained
+  // character for consistency; when it's omitted we run plain Soul text2image (no
+  // character). The POV drop uses the no-character path so it never depends on a Soul
+  // living under this API key (a missing/foreign Soul returns character_not_found).
+  const sid = soulId ?? undefined;
 
   const headers = {
     Authorization: `Key ${creds}`,
@@ -120,9 +131,8 @@ async function higgsfieldGenerateOne(prompt: string, soulId?: string): Promise<I
     body: JSON.stringify({
       params: {
         prompt,
-        custom_reference_id: sid,
-        custom_reference_strength: SOUL_REFERENCE_STRENGTH,
-        width_and_height: SOUL_SIZE,
+        ...(sid ? { custom_reference_id: sid, custom_reference_strength: SOUL_REFERENCE_STRENGTH } : {}),
+        width_and_height: size ?? SOUL_SIZE,
         quality: SOUL_QUALITY,
         batch_size: 1,
       },
@@ -209,11 +219,69 @@ async function openaiGenerateOne(prompt: string): Promise<ImageResult> {
 async function generateOne(
   prompt: string,
   soulId: string | undefined,
-  prov: ImageProvider
+  prov: ImageProvider,
+  size?: string
 ): Promise<ImageResult> {
   if (prov === "openai") return openaiGenerateOne(prompt);
   if (prov === "elevenlabs") return elevenLabsGenerateOne(prompt);
-  return higgsfieldGenerateOne(prompt, soulId);
+  return higgsfieldGenerateOne(prompt, soulId, size);
+}
+
+// ---- OpenAI gpt-image-2 EDIT (image + prompt -> edited image) ---------------------
+// Used by the Bug-Reveal format to add the swarm onto the CHOSEN "before" frame so the
+// two frames line up for a before->after animation. gpt-image-2's edits endpoint also
+// accepts a `mask` (a selected region), which is the hook for the future region-select
+// app ("select an area, do XYZ here"). Returns base64 in data[0].b64_json.
+export async function editImageOpenAI(
+  image: Buffer,
+  mimetype: string,
+  prompt: string,
+  size?: string
+): Promise<ImageResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  const ext = (mimetype.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
+  const form = new FormData();
+  form.append("model", "gpt-image-2");
+  form.append("prompt", prompt);
+  form.append("size", size ?? POV_IMAGE_SIZE);
+  form.append("n", "1");
+  form.append("image", new Blob([new Uint8Array(image)], { type: mimetype || "image/png" }), `source.${ext}`);
+
+  const res = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(`openai gpt-image-2 edit failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
+
+  const json = (await res.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+  const first = json.data?.[0];
+  if (first?.b64_json) return { buffer: Buffer.from(first.b64_json, "base64"), mimetype: "image/png" };
+  if (first?.url) return downloadToBuffer(first.url);
+  throw new Error(`openai gpt-image-2 edit: no image in response: ${JSON.stringify(json).slice(0, 200)}`);
+}
+
+/**
+ * Edit an existing image (add/replace content) via gpt-image-2. Returns null on any failure
+ * so the caller can fall back to a fresh text2image "after" frame. Only the openai provider
+ * supports edits today; other providers return null.
+ */
+export async function editImage(opts: {
+  image: Buffer;
+  mimetype: string;
+  prompt: string;
+  size?: string;
+}): Promise<ImageResult | null> {
+  try {
+    return await editImageOpenAI(opts.image, opts.mimetype, opts.prompt, opts.size);
+  } catch (e) {
+    console.error("[image-gen] editImage failed:", (e as Error).message);
+    return null;
+  }
 }
 
 /**
@@ -228,7 +296,7 @@ export async function generateImages(opts: GenerateImagesOpts): Promise<(ImageRe
     let result: ImageResult | null = null;
     for (let attempt = 0; attempt < 2 && !result; attempt++) {
       try {
-        result = await generateOne(prompt, opts.soulId, prov);
+        result = await generateOne(prompt, opts.soulId, prov, opts.size);
       } catch (e) {
         console.error(
           `[reel] image ${i + 1} attempt ${attempt + 1} failed (${prov}):`,

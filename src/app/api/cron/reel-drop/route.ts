@@ -16,6 +16,7 @@ import { selectBeliefForSlot, recordBeliefUsed } from "@/lib/reel/beliefs";
 import { recordDrop } from "@/lib/reel/interactive";
 import { stripEmDashes } from "@/lib/reel/text";
 import { runPovDrop, type PovDropResult } from "@/lib/reel/pov";
+import { runBugRevealDrop } from "@/lib/reel/bug-reveal";
 import { getActiveVertical } from "@/config/verticals";
 import { runAutoReel, type VerticalFormat } from "@/lib/reel/auto-reel";
 import { waitUntil } from "@vercel/functions";
@@ -81,6 +82,33 @@ async function handle(req: NextRequest) {
   }
 
   const date = todayLabel();
+
+  // DAILY_DROP_MODE gates what the 3x/day cron posts. Default "bug_reveal" makes the drop
+  // ONLY the Bug-Reveal Spray format (spray a seam, bugs pour out). Any other value keeps the
+  // original belief + POV + auto-reel flow below. Reversible, non-destructive.
+  const dropMode = (process.env.DAILY_DROP_MODE || "bug_reveal").toLowerCase();
+  if (dropMode === "bug_reveal") {
+    try {
+      const result = await runBugRevealDrop({ channel, date, slot });
+      return NextResponse.json({
+        ok: true,
+        mode: "bug_reveal",
+        slot,
+        thread_ts: result.thread_ts ?? null,
+        scenes: result.scenes,
+        duration_ms: Date.now() - start,
+      });
+    } catch (e) {
+      console.error("[reel-drop] bug-reveal drop failed:", (e as Error).message);
+      await supabaseAdmin.from("system_logs").insert({
+        event_type: "cron_bug_reveal_drop_error",
+        description: "bug-reveal drop failed",
+        metadata: { slot, error: (e as Error).message, duration_ms: Date.now() - start },
+      });
+      return NextResponse.json({ ok: false, mode: "bug_reveal", error: (e as Error).message }, { status: 502 });
+    }
+  }
+
   const belief = await selectBeliefForSlot(slot);
   // One drop = IMAGES_PER_DROP distinct scenes (sampled without replacement) so the
   // operator renders varied b-roll, never the same scene twice in one drop. The first
@@ -211,6 +239,7 @@ async function handle(req: NextRequest) {
     pov_thread_ts: pov?.thread_ts ?? null,
     pov_scenes: pov?.scenes ?? null,
     pov_images_ok: pov?.images_ok ?? 0,
+    pov_status: pov?.status ?? null,
     auto_reel_formats: autoReelFormats,
     duration_ms: Date.now() - start,
   });
