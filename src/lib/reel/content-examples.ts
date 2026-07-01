@@ -349,6 +349,8 @@ export async function saveContentExample(row: {
   labels: string[];
   difficulty: string;
   frameUrls: string[];
+  section?: string | null; // e.g. 'pov/modern_house' (requirement: max 30 per avatar per section)
+  zip?: string | null; // optional location tag (e.g. '27401')
 }): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
@@ -366,11 +368,62 @@ export async function saveContentExample(row: {
         labels: row.labels,
         difficulty: row.difficulty,
         frame_urls: row.frameUrls,
+        section: row.section ?? null,
+        zip: row.zip ?? null,
       },
       { onConflict: "source_path" }
     );
     if (error) console.error("[content-examples] saveContentExample upsert failed:", error.message);
   } catch (e) {
     console.error("[content-examples] saveContentExample threw:", (e as Error).message);
+  }
+}
+
+/** How many references an avatar has stored in a given section (e.g. 'pov/modern_house'). */
+export async function countReferencesInSection(verticalId: string, section: string): Promise<number> {
+  try {
+    const { count, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("id", { count: "exact", head: true })
+      .eq("vertical_id", verticalId)
+      .eq("section", section);
+    if (error) return 0;
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Enforce the per-section cap (default 30): keep the newest `cap` references for a vertical +
+ * section and archive the overflow by clearing their `section` (so they leave the section but
+ * remain usable as generic realism references). Best-effort. Returns how many were pruned.
+ */
+export async function pruneReferencesToCap(
+  verticalId: string,
+  section: string,
+  cap = 30
+): Promise<number> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("id")
+      .eq("vertical_id", verticalId)
+      .eq("section", section)
+      .order("created_at", { ascending: false });
+    if (error || !Array.isArray(data) || data.length <= cap) return 0;
+    const overflowIds = (data as Array<{ id: string }>).slice(cap).map((r) => r.id);
+    const { error: upErr } = await supabaseAdmin
+      .from("content_examples")
+      .update({ section: null })
+      .in("id", overflowIds);
+    if (upErr) {
+      console.error("[content-examples] pruneReferencesToCap failed:", upErr.message);
+      return 0;
+    }
+    return overflowIds.length;
+  } catch (e) {
+    console.error("[content-examples] pruneReferencesToCap threw:", (e as Error).message);
+    return 0;
   }
 }

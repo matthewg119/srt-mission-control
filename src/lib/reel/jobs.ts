@@ -29,9 +29,40 @@ export interface JobData {
   chosen?: ShotOption; // the picked shot
   after_image_url?: string | null; // before_after_edit only
   copy?: JobCopy;
+
+  // --- Content Engine v3: avatar-first, song-based workflow flow ---
+  workflow_ids?: string[]; // the avatar-session workflow list (ordering for `workflow N`)
+  workflow_id?: string; // the chosen workflow (real id lives here; format_id column = "workflow")
+  hooks?: string[]; // step A: 5 hook options
+  chosen_hook?: string; // the picked hook
+  bodies?: string[]; // step B: 3 body options for the chosen hook
+  chosen_body?: string; // the picked body
+  caption_storyboard?: { captions: Array<{ text: string; at_second: number }>; ig_caption: string };
+  song_ref?: string; // SONGS key or pasted audio URL
+
+  // --- #content-analyzer scrub-or-reference decision ---
+  video_url?: string; // the staged public video URL a scrub-or-ref card refers to
+  video_mimetype?: string;
+  section?: string; // e.g. 'pov/modern_house' (reference sectioning)
+  zip?: string;
+  analysis?: unknown; // the analyzer VideoAnalysis snapshot (for the scrub path)
 }
 
-export type JobStage = "ideate" | "shot" | "build" | "done" | "skipped" | "error";
+export type JobStage =
+  | "ideate"
+  | "shot"
+  | "build"
+  | "done"
+  | "skipped"
+  | "error"
+  // v3 avatar-first workflow + analyzer stages:
+  | "scrub_or_ref"
+  | "avatar"
+  | "hooks"
+  | "bodies"
+  | "storyboard"
+  | "await_song"
+  | "render";
 
 export interface ContentJob {
   id: string;

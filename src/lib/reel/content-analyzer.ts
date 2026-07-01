@@ -13,8 +13,15 @@ import { slack } from "@/lib/slack-bot";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
-import { saveContentExample } from "@/lib/reel/content-examples";
+import { saveContentExample, pruneReferencesToCap } from "@/lib/reel/content-examples";
 import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
+import { insertJob, getJobByPickerTs, updateJob } from "@/lib/reel/jobs";
+import { proposeWorkflowFromAnalysis } from "@/lib/reel/workflow-author";
+
+// The avatar all #content-analyzer drops attach to for now (pest_control is the only avatar
+// with a real Soul/look). Overridable via env once other avatars have looks.
+const ANALYZER_VERTICAL = process.env.CONTENT_VERTICAL || "pest_control";
+const REFERENCE_SECTION_CAP = 30;
 
 interface AnalyzerFileLike {
   url_private_download?: string;
@@ -215,12 +222,12 @@ export async function analyzeVideo(args: {
   channel: string;
   threadTs: string;
   file: AnalyzerFileLike;
-}): Promise<void> {
+}): Promise<{ publicUrl: string; analysis: VideoAnalysis } | null> {
   const { channel, threadTs, file } = args;
 
   if (!file.url_private_download) {
     await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't read that video (no download URL).");
-    return;
+    return null;
   }
 
   await slack.postThreadReply(channel, threadTs, "🔎 Reading your video shot-by-shot…");
@@ -235,7 +242,7 @@ export async function analyzeVideo(args: {
   }
   if (!publicUrl) {
     await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't stage that video for frame sampling. Try re-dropping it.");
-    return;
+    return null;
   }
 
   const res = await fetchVideoFrames(publicUrl, 8);
@@ -245,7 +252,7 @@ export async function analyzeVideo(args: {
       threadTs,
       `⚠️ Couldn't sample frames from that video (${(res.error || "unknown").slice(0, 160)}).`
     );
-    return;
+    return null;
   }
 
   const frames = (
@@ -254,7 +261,7 @@ export async function analyzeVideo(args: {
 
   if (frames.length === 0) {
     await slack.postThreadReply(channel, threadTs, "⚠️ Sampled the video but couldn't read the frames.");
-    return;
+    return null;
   }
 
   const data = await requestVideoAnalysis(frames);
@@ -290,6 +297,221 @@ export async function analyzeVideo(args: {
   } catch (e) {
     console.error("[content-analyzer] saveContentExample failed:", (e as Error).message);
   }
+
+  return { publicUrl, analysis: data };
+}
+
+// ---- Scrub-or-reference decision (asked on EVERY video drop) -----------------------
+//
+// Decision (2026-07-03): a dropped video is either a REFERENCE (image data for the library)
+// or a WORKFLOW source (scrub into a shot-by-shot storyboard + a draft recipe). We ASK first
+// via a 📚/🧪 card and route the reaction, instead of always analyzing.
+
+/** Post the "save as reference or scrub into a workflow?" card and seed a routing job. */
+export async function postVideoDecisionCard(args: {
+  channel: string;
+  threadTs: string;
+  file: AnalyzerFileLike;
+}): Promise<void> {
+  const { channel, threadTs, file } = args;
+  if (!file.url_private_download) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't read that video (no download URL).");
+    return;
+  }
+  const res = await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      "What should I do with this video?",
+      "📚 = save as a *reference* for the library (image data / realistic scenarios only).",
+      "🧪 = *scrub into a workflow* (shot-by-shot storyboard + a draft recipe to review).",
+      "",
+      "Optional: reply with a section like `pov/modern_house` or a 5-digit zip before you react.",
+    ].join("\n")
+  );
+  const cardTs = (res as { ts?: string }).ts;
+  if (!cardTs) return;
+  await insertJob({
+    formatId: "analyzer",
+    verticalId: ANALYZER_VERTICAL,
+    channel,
+    threadTs,
+    pickerTs: cardTs,
+    stage: "scrub_or_ref",
+    sourceKind: "analyzer",
+    data: { video_url: file.url_private_download, video_mimetype: file.mimetype },
+  });
+  await slack.addReaction(channel, cardTs, "books").catch(() => {});
+  await slack.addReaction(channel, cardTs, "test_tube").catch(() => {});
+}
+
+/** A thread reply on a scrub-or-ref card that sets the section (`pov/modern_house`) or zip. */
+export async function handleAnalyzerThreadReply(args: {
+  channel: string;
+  threadTs: string;
+  text: string;
+}): Promise<boolean> {
+  // The card is a thread reply, so replies to it share the same parent thread. Find the most
+  // recent scrub-or-ref job in this thread by scanning the card via getJobByPickerTs is not
+  // possible here (we only have the parent ts), so we match on the analyzer job for the thread.
+  const t = args.text.trim();
+  const sectionMatch = /^[a-z0-9_]+\/[a-z0-9_]+$/i.test(t);
+  const zipMatch = /^\d{5}$/.test(t);
+  if (!sectionMatch && !zipMatch) return false;
+  // Best-effort: attach to the newest analyzer job in this thread.
+  const { supabaseAdmin } = await import("@/lib/db");
+  const { data } = await supabaseAdmin
+    .from("content_jobs")
+    .select("id,data")
+    .eq("slack_thread_ts", args.threadTs)
+    .eq("format_id", "analyzer")
+    .eq("stage", "scrub_or_ref")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!data) return false;
+  const row = data as { id: string; data: Record<string, unknown> };
+  const patch = sectionMatch ? { section: t } : { zip: t };
+  await supabaseAdmin
+    .from("content_jobs")
+    .update({ data: { ...row.data, ...patch }, updated_at: new Date().toISOString() })
+    .eq("id", row.id);
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    sectionMatch ? `Section set: \`${t}\`. Now react 📚 or 🧪.` : `Zip set: ${t}. Now react 📚 or 🧪.`
+  );
+  return true;
+}
+
+/** Route the 📚 / 🧪 reaction on a scrub-or-ref card. Returns true when handled. */
+export async function handleAnalyzerReaction(args: {
+  reaction: string;
+  slackTs: string;
+  channel: string;
+}): Promise<boolean> {
+  const job = await getJobByPickerTs(args.slackTs);
+  if (!job || job.format_id !== "analyzer" || job.stage !== "scrub_or_ref") return false;
+
+  const isRef = ["books", "open_book", "bookmark_tabs", "blue_book"].includes(args.reaction);
+  const isScrub = ["test_tube", "alembic", "microscope"].includes(args.reaction);
+  if (!isRef && !isScrub) return false;
+
+  const file: AnalyzerFileLike = {
+    url_private_download: job.data.video_url,
+    mimetype: job.data.video_mimetype,
+  };
+  const threadTs = job.slack_thread_ts;
+  const section = job.data.section ?? null;
+  const zip = job.data.zip ?? null;
+
+  if (!file.url_private_download) {
+    await updateJob(job, { stage: "error" });
+    await slack.postThreadReply(args.channel, threadTs, "⚠️ Lost the video reference. Re-drop it.");
+    return true;
+  }
+
+  if (isRef) {
+    await updateJob(job, { stage: "done" });
+    await saveVideoReference({ channel: args.channel, threadTs, file, verticalId: job.vertical_id, section, zip });
+    return true;
+  }
+
+  // Scrub -> full analysis (posts storyboard + remake + feeds library) -> draft workflow.
+  await updateJob(job, { stage: "done" });
+  const result = await analyzeVideo({ channel: args.channel, threadTs, file });
+  if (!result) return true;
+  try {
+    const wf = await proposeWorkflowFromAnalysis({
+      verticalId: job.vertical_id,
+      name: (result.analysis.our_version.idea || "New workflow").slice(0, 60),
+      category: "pov",
+      subcategory: section ? section.split("/")[1] ?? null : null,
+      analysis: {
+        storyboard: result.analysis.storyboard,
+        our_version: result.analysis.our_version,
+        example_video_url: result.publicUrl,
+        example_storyboard: result.analysis.storyboard,
+        source_example_id: null,
+      },
+    });
+    if (wf) {
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        [
+          `🧪 Draft workflow created: *${wf.name}* (${wf.scenes.length} scenes, status draft).`,
+          "Review it, approve the scene images, add a song, then it can render.",
+          "Type `map` in #content-full to see the inventory.",
+        ].join("\n")
+      );
+    }
+  } catch (e) {
+    console.error("[content-analyzer] proposeWorkflowFromAnalysis failed:", (e as Error).message);
+  }
+  return true;
+}
+
+/**
+ * The 📚 reference path: stage the video, sample frames, and save them to the library scoped to
+ * the avatar + section (enforcing the per-section cap). No remake post; this is image data only.
+ */
+async function saveVideoReference(args: {
+  channel: string;
+  threadTs: string;
+  file: AnalyzerFileLike;
+  verticalId: string;
+  section: string | null;
+  zip: string | null;
+}): Promise<void> {
+  const { channel, threadTs, file, verticalId, section, zip } = args;
+  await slack.postThreadReply(channel, threadTs, "📚 Saving this to the reference library…");
+
+  let publicUrl: string | null = null;
+  try {
+    if (!file.url_private_download) throw new Error("no download url");
+    const buffer = await slack.downloadFile(file.url_private_download);
+    publicUrl = await uploadToReels(buffer, file.mimetype || "video/mp4");
+  } catch (e) {
+    console.error("[content-analyzer] reference video staging failed:", (e as Error).message);
+  }
+  if (!publicUrl) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't stage that video. Try re-dropping it.");
+    return;
+  }
+
+  const res = await fetchVideoFrames(publicUrl, 8);
+  const frameUrls = res.ok ? res.frames ?? [] : [];
+  const labels = ["reference_video", "realism_reference"];
+
+  await saveContentExample({
+    verticalId,
+    sourcePath: publicUrl,
+    storyboard: { hook: "reference video", labels, difficulty: "easy", shots: [] },
+    labels,
+    difficulty: "easy",
+    frameUrls,
+    section,
+    zip,
+  });
+
+  let capNote = "";
+  if (section) {
+    const pruned = await pruneReferencesToCap(verticalId, section, REFERENCE_SECTION_CAP);
+    if (pruned > 0) capNote = ` (section capped at ${REFERENCE_SECTION_CAP}, ${pruned} older moved to general)`;
+  }
+
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `✅ Saved to the reference library${section ? ` under \`${section}\`` : ""}${zip ? ` (zip ${zip})` : ""}.`,
+      frameUrls.length ? `${frameUrls.length} frames captured for grounding.` : "Saved the clip; frame sampling was unavailable.",
+      capNote,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
 }
 
 // ---- Reference IMAGE drop (real-house photos etc.) --------------------------------

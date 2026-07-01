@@ -41,7 +41,18 @@ import {
 import { handleBugRevealIdeasApproval, handleBugRevealPick, handleBugRevealReply, handleBugRevealFeedback } from "@/lib/reel/bug-reveal";
 import { handlePipelineReaction, handlePipelineThreadReply } from "@/lib/reel/pipeline";
 import { handleStyleRuleApproval, summarizeActiveRules } from "@/lib/reel/style-rules";
-import { analyzeVideo, analyzeReferenceImage } from "@/lib/reel/content-analyzer";
+import {
+  analyzeReferenceImage,
+  postVideoDecisionCard,
+  handleAnalyzerReaction,
+  handleAnalyzerThreadReply,
+} from "@/lib/reel/content-analyzer";
+import {
+  startAvatarSession,
+  handleVektorThreadReply,
+  parseAvatarCommand,
+} from "@/lib/reel/workflow-pipeline";
+import { buildWorkflowMapForSlack } from "@/lib/reel/workflow-map";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
 import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
@@ -145,6 +156,15 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (pipelineHandled) return NextResponse.json({ ok: true });
+
+        // Content Engine v3 scrub-or-reference: 📚 (save reference) / 🧪 (scrub into a workflow)
+        // on a #content-analyzer decision card. Self-routes by content_jobs; falls through otherwise.
+        const analyzerHandled = await handleAnalyzerReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (analyzerHandled) return NextResponse.json({ ok: true });
 
         // Reel drop: 1/2/3 reaction on a headline-options message (self-routes by DB)
         const reelHandled = await handleReelReaction({
@@ -293,6 +313,14 @@ export async function POST(request: NextRequest) {
           await slack.postThreadReply(channel, parentThreadTs, await summarizeActiveRules());
           return NextResponse.json({ ok: true });
         }
+        // v3 avatar session: `workflow N` -> hooks, `hook N` -> bodies, `body N` -> storyboard,
+        // `song X`. Self-routes by the content_jobs workflow session in this thread.
+        const vektorReply = await handleVektorThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          text: userText,
+        });
+        if (vektorReply) return NextResponse.json({ ok: true });
         // Unified pipeline thread reply (tuning feedback -> ✅-gated rules, or remix -> fresh
         // options) for any registry format. Self-routes by content_jobs; falls through if the
         // thread is a legacy (bug_reveal_jobs) drop.
@@ -303,6 +331,42 @@ export async function POST(request: NextRequest) {
         if (tuned) return NextResponse.json({ ok: true });
         const handled = await handleBugRevealReply({ channel, threadTs: parentThreadTs, text: userText });
         if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // #content-full TOP-LEVEL avatar-first grammar: `map`/`library` shows the inventory,
+      // `vektor <avatar>` / `avatar <avatar>` opens an avatar session.
+      if (
+        isContentFullChannel &&
+        (!parentThreadTs || parentThreadTs === event.ts) &&
+        attachedFiles.length === 0 &&
+        userText.trim().length > 0
+      ) {
+        if (/^\s*(map|library)\s*$/i.test(userText)) {
+          await slack.postMessage(channel, await buildWorkflowMapForSlack());
+          return NextResponse.json({ ok: true });
+        }
+        const avatar = parseAvatarCommand(userText);
+        if (avatar) {
+          await startAvatarSession({ channel, verticalId: avatar });
+          return NextResponse.json({ ok: true });
+        }
+      }
+
+      // #content-analyzer thread reply on a scrub-or-ref card: set section (`pov/modern_house`)
+      // or a 5-digit zip before reacting 📚/🧪.
+      if (
+        channel === VEKTOR_CHANNELS.contentAnalyzer &&
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        attachedFiles.length === 0 &&
+        userText.trim().length > 0
+      ) {
+        const analyzerReply = await handleAnalyzerThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          text: userText,
+        });
+        if (analyzerReply) return NextResponse.json({ ok: true });
       }
 
       // Code Guardian channel — thread replies become conversational Q&A with Claude
@@ -1492,8 +1556,9 @@ async function handleFileShared(fileId: string): Promise<void> {
       // A top-level video post has no thread_ts; reply under the post itself (ts).
       const threadTs = share.thread_ts ?? share.ts;
       if (threadTs && file.url_private_download) {
-        void analyzeVideo({ channel: analyzerChannel, threadTs, file }).catch((e) =>
-          console.error("[slack/events] content-analyzer video error:", (e as Error).message)
+        // v3: ask scrub-or-reference first (📚 save reference / 🧪 scrub into a workflow).
+        void postVideoDecisionCard({ channel: analyzerChannel, threadTs, file }).catch((e) =>
+          console.error("[slack/events] content-analyzer decision card error:", (e as Error).message)
         );
       }
       return;
