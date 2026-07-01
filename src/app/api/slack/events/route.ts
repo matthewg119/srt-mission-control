@@ -38,8 +38,9 @@ import {
   handleInstagramLink,
   INSTAGRAM_URL_RE,
 } from "@/lib/reel/pov-studio";
-import { handleBugRevealIdeasApproval, handleBugRevealPick, handleBugRevealReply } from "@/lib/reel/bug-reveal";
-import { analyzeVideo } from "@/lib/reel/content-analyzer";
+import { handleBugRevealIdeasApproval, handleBugRevealPick, handleBugRevealReply, handleBugRevealFeedback } from "@/lib/reel/bug-reveal";
+import { handleStyleRuleApproval, summarizeActiveRules } from "@/lib/reel/style-rules";
+import { analyzeVideo, analyzeReferenceImage } from "@/lib/reel/content-analyzer";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
 import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
@@ -158,6 +159,14 @@ export async function POST(request: NextRequest) {
         });
         if (bugPickHandled) return NextResponse.json({ ok: true });
 
+        // Style-rule proposal card: ✅ activates / 🚫 discards the pending rules (self-routes by DB)
+        const styleRuleHandled = await handleStyleRuleApproval({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (styleRuleHandled) return NextResponse.json({ ok: true });
+
         // POV ideas-first gate: ✅ generate / 🚫 skip on a scene-ideas message (self-routes by DB)
         const povIdeasHandled = await handlePovIdeasApproval({
           reaction: event.reaction as string,
@@ -256,8 +265,12 @@ export async function POST(request: NextRequest) {
 
       const parentThreadTs = (event.thread_ts as string | undefined) || null;
 
-      // #content-full thread reply on a Bug-Reveal drop: "remix / give me more / different"
-      // → regenerate 3 fresh before options. Text-only replies; falls through otherwise.
+      // #content-full thread reply on a drop. Three interpretations, in order:
+      //   1. "rules"        -> list the active style rules.
+      //   2. tuning feedback -> distill into ✅-gated style rules ("make the furnace older").
+      //   3. "remix/more"    -> regenerate 3 fresh before options.
+      // Text-only replies; falls through otherwise. Format group defaults to bug_reveal (the
+      // active daily-drop mode); brand-scope rules apply everywhere regardless.
       if (
         isContentFullChannel &&
         parentThreadTs &&
@@ -265,6 +278,13 @@ export async function POST(request: NextRequest) {
         attachedFiles.length === 0 &&
         userText.trim().length > 0
       ) {
+        if (/^\s*rules?\s*$/i.test(userText)) {
+          await slack.postThreadReply(channel, parentThreadTs, await summarizeActiveRules());
+          return NextResponse.json({ ok: true });
+        }
+        // Tuning feedback -> regenerate a live preview with the change, then ✅-gate the save.
+        const tuned = await handleBugRevealFeedback({ channel, threadTs: parentThreadTs, text: userText });
+        if (tuned) return NextResponse.json({ ok: true });
         const handled = await handleBugRevealReply({ channel, threadTs: parentThreadTs, text: userText });
         if (handled) return NextResponse.json({ ok: true });
       }
@@ -1458,6 +1478,25 @@ async function handleFileShared(fileId: string): Promise<void> {
       if (threadTs && file.url_private_download) {
         void analyzeVideo({ channel: analyzerChannel, threadTs, file }).catch((e) =>
           console.error("[slack/events] content-analyzer video error:", (e as Error).message)
+        );
+      }
+      return;
+    }
+  }
+
+  // Still image dropped in #content-analyzer → save it as a realism reference in the library.
+  const isImage = mimeType.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif"].includes(file.filetype ?? "");
+  if (analyzerChannel && isImage) {
+    const shares: Record<string, Array<{ thread_ts?: string; ts?: string }>> = {
+      ...(file.shares?.public ?? {}),
+      ...(file.shares?.private ?? {}),
+    };
+    const share = (shares[analyzerChannel] ?? [])[0];
+    if (share) {
+      const threadTs = share.thread_ts ?? share.ts;
+      if (threadTs && file.url_private_download) {
+        void analyzeReferenceImage({ channel: analyzerChannel, threadTs, file }).catch((e) =>
+          console.error("[slack/events] content-analyzer image error:", (e as Error).message)
         );
       }
       return;

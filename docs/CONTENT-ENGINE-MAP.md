@@ -48,6 +48,50 @@ mindmap
 
 ---
 
+## The learning flywheel *(NEW · 2026-07-01)*
+
+The two channels are not separate tools; they feed each other. **#content-analyzer** builds the
+reference library and **#content-full** captures the operator's taste as ✅-gated style rules.
+Both flow into one **prompt-enrichment** step so each new drop is more realistic than the last.
+
+```mermaid
+flowchart LR
+  subgraph learn["#content-analyzer  (LEARN)"]
+    V[drop video] --> VA[video-frames + storyboard]
+    I[drop real-house image] --> IL[Claude vision label]
+    VA --> CE[(content_examples\nreference library)]
+    IL --> CE
+    BATCH[scripts/ingest-example-mp4s.ts\n~100 images + videos] --> CE
+  end
+
+  subgraph generate["#content-full  (GENERATE)"]
+    DROP[Bug-Reveal / POV drop] --> FB[operator reply:\n'furnace older, add plates']
+    FB --> DIST[distill → candidate rules]
+    DIST --> CARD[✅-gated proposal card]
+    CARD -->|✅| SR[(style_rules\nbrand + per-format)]
+  end
+
+  CE --> ENRICH[[enrichScene\nprompt-enrich.ts]]
+  SR --> ENRICH
+  ENRICH --> GEN[buildPovImagePrompt → gpt-image-2 / Higgsfield]
+  GEN --> DROP
+```
+
+- **Reference library** (`content_examples`): fed by every analyzed video/image and the one-time
+  batch ingest. Read back as visual grounding by `loadReferenceFrames` (image blocks) and as text
+  by `loadExampleFewShot`. `reference_house` rows are preferred for realism.
+- **Style rules** (`style_rules`): natural-language feedback → distilled → **✅-gated** → active.
+  Two-tier: `scope='brand'` applies everywhere, `scope='format'` applies to one format group
+  (e.g. `bug_reveal`). Reply `rules` in a drop thread to list the active ones.
+- **Enrichment** (`enrichScene`, `prompt-enrich.ts`): the single payoff step. Combines reference
+  frames + active rules into a realism-grounded scene at the `buildPovImagePrompt` choke point.
+  Empty library + no rules ⇒ byte-identical to the pre-flywheel prompt.
+
+> A live Mission Control dashboard / Miro export of this flywheel (with data tabs for the library
+> and the rules) is the next step; today the source of truth is this diagram + the two tables.
+
+---
+
 ## Workflow catalog
 
 | Workflow | Channel | Trigger | Entry point | Produces | Key vars / tables |

@@ -13,6 +13,7 @@ import { slack } from "@/lib/slack-bot";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
+import { saveContentExample } from "@/lib/reel/content-examples";
 import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
 
 interface AnalyzerFileLike {
@@ -258,4 +259,134 @@ export async function analyzeVideo(args: {
 
   const data = await requestVideoAnalysis(frames);
   await postAnalysis(channel, threadTs, data);
+
+  // Feed the reference library: every analyzed video becomes a content_examples row so the
+  // generators can read it back (loadReferenceFrames / loadExampleFewShot). The sampled frames
+  // are already public reels URLs. Best-effort — a failure here never affects the Slack post.
+  try {
+    const storyboard = {
+      hook: data.storyboard[0]?.what || data.our_version.idea,
+      why_it_works: stripEmDashes(data.why_it_works),
+      shots: data.storyboard.map((s, i) => ({
+        t: `shot ${s.shot ?? i + 1}`,
+        what: stripEmDashes(s.what),
+        why: stripEmDashes(s.why),
+      })),
+      labels: ["reference_video"],
+      difficulty: "medium",
+      our_version: {
+        idea: stripEmDashes(data.our_version.idea),
+        image_prompt: stripEmDashes(data.our_version.image_prompt),
+        animation_prompt: stripEmDashes(data.our_version.animation_prompt),
+      },
+    };
+    await saveContentExample({
+      sourcePath: publicUrl,
+      storyboard,
+      labels: ["reference_video"],
+      difficulty: "medium",
+      frameUrls: res.frames ?? [],
+    });
+  } catch (e) {
+    console.error("[content-analyzer] saveContentExample failed:", (e as Error).message);
+  }
+}
+
+// ---- Reference IMAGE drop (real-house photos etc.) --------------------------------
+
+interface ImageLabel {
+  what: string;
+  labels: string[];
+  difficulty: string;
+}
+
+function isImageLabel(v: unknown): v is ImageLabel {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as ImageLabel;
+  return (
+    typeof p.what === "string" &&
+    Array.isArray(p.labels) &&
+    p.labels.every((l) => typeof l === "string") &&
+    typeof p.difficulty === "string"
+  );
+}
+
+const IMAGE_LABEL_SYSTEM = [
+  "You label a single reference photo an operator saved for a pest control content brand. The",
+  "photo is a real-world reference (often a real home interior/exterior) used to keep our AI",
+  "generations looking authentic and lived-in, not like clean new construction.",
+  "",
+  "Return JSON:",
+  "- what: one line describing what the photo shows and the realism cues worth copying (age, wear,",
+  "    clutter, materials, lighting).",
+  "- labels: 2-5 short snake_case tags. ALWAYS include 'reference_house' when it is a real home or",
+  "    room; add others like 'realism_reference', 'kitchen', 'exterior', 'clutter', 'aged' as they fit.",
+  "- difficulty: always 'easy' for a still reference photo.",
+  "",
+  "Never use em dashes or en dashes.",
+].join("\n");
+
+/**
+ * A still image dropped in #content-analyzer: stage it to the public reels bucket, label it with
+ * one Claude-vision call, and save it as a single-frame content_examples row (a realism
+ * reference). Posts a short confirmation in-thread. Best-effort throughout.
+ */
+export async function analyzeReferenceImage(args: {
+  channel: string;
+  threadTs: string;
+  file: AnalyzerFileLike;
+}): Promise<void> {
+  const { channel, threadTs, file } = args;
+  if (!file.url_private_download) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't read that image (no download URL).");
+    return;
+  }
+
+  await slack.postThreadReply(channel, threadTs, "📎 Saving this to the reference library…");
+
+  let publicUrl: string | null = null;
+  let claudeImg: ClaudeImageInput | null = null;
+  try {
+    const buffer = await slack.downloadFile(file.url_private_download);
+    publicUrl = await uploadToReels(buffer, file.mimetype || "image/jpeg");
+    claudeImg = { media_type: (file.mimetype || "image/jpeg").split(";")[0], data: buffer.toString("base64") };
+  } catch (e) {
+    console.error("[content-analyzer] reference image staging failed:", (e as Error).message);
+  }
+  if (!publicUrl || !claudeImg) {
+    await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't stage that image. Try re-dropping it.");
+    return;
+  }
+
+  let label: ImageLabel = { what: "Reference photo", labels: ["reference_house"], difficulty: "easy" };
+  try {
+    const { data } = await callClaudeJSON<ImageLabel>({
+      model: model(),
+      system: IMAGE_LABEL_SYSTEM,
+      user: "Label this reference photo as JSON.",
+      images: [claudeImg],
+      maxTokens: 400,
+      temperature: 0.3,
+      schemaHint: '{ "what": string, "labels": [string], "difficulty": string }',
+      validate: isImageLabel,
+    });
+    const labels = Array.from(new Set(["reference_house", ...data.labels.map((l) => l.trim()).filter(Boolean)]));
+    label = { what: stripEmDashes(data.what), labels, difficulty: "easy" };
+  } catch (e) {
+    console.error("[content-analyzer] reference image labeling failed, using defaults:", (e as Error).message);
+  }
+
+  await saveContentExample({
+    sourcePath: publicUrl,
+    storyboard: { hook: label.what, labels: label.labels, difficulty: label.difficulty, shots: [] },
+    labels: label.labels,
+    difficulty: label.difficulty,
+    frameUrls: [publicUrl],
+  });
+
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [`✅ Saved to the reference library.`, `_${label.what}_`, `Tags: ${label.labels.join(", ")}`].join("\n")
+  );
 }

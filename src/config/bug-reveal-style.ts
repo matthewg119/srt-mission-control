@@ -39,14 +39,17 @@ export const BUG_REVEAL_SCENES: string[] = [
  * The edit/after instruction: add the swarm pouring out of the SPRAYED seam onto the chosen
  * before frame. Keeps the framing/hands/sprayer identical so frame 2 lines up with frame 1.
  */
-export function buildBugAddInstruction(scene: string): string {
+export function buildBugAddInstruction(scene: string, styleGuidance?: string): string {
   return [
     "Keep the exact same framing, camera angle, lighting, gloved hand, and pump-sprayer wand.",
     "Add a dense swarm of German cockroaches erupting out of the exact seam the sprayer nozzle",
     "is aimed at, pouring out and scattering fast across the floor away from the spray.",
     "Photorealistic, same first-person Ray-Ban Meta glasses look, no text, no captions, no watermark.",
     `Original scene for reference: ${scene}`,
-  ].join(" ");
+    styleGuidance && styleGuidance.trim() ? styleGuidance.trim() : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 // One bug-reveal copy concept — matches generateBugRevealCopy() in src/lib/reel/bug-reveal.ts.
@@ -102,7 +105,11 @@ export const BUG_REVEAL_GOLD: BugRevealGold[] = [
 export const BUG_REVEAL_COPY_SCHEMA_HINT =
   '{ "caption": string, "titles": [string], "animation_prompt": string, "after_image_prompt": string }';
 
-export function buildBugRevealCopySystem(businessDescriptor: string): string {
+export function buildBugRevealCopySystem(businessDescriptor: string, styleGuidance?: string): string {
+  const guidanceBlock =
+    styleGuidance && styleGuidance.trim()
+      ? ["", styleGuidance.trim(), ""]
+      : [];
   return [
     `You are the content engine for a ${businessDescriptor}. You write copy for a short "bug reveal"`,
     "reel: a first-person Ray-Ban Meta smart-glasses shot where a pest control operator sprays a seam",
@@ -127,7 +134,7 @@ export function buildBugRevealCopySystem(businessDescriptor: string): string {
     "",
     "HARD RULES: never invent guarantees or numbers you were not given; never use em dashes or en dashes;",
     "use commas, periods, or hyphens instead.",
-    "",
+    ...guidanceBlock,
     "Match the quality and voice of these gold examples exactly:",
     JSON.stringify(BUG_REVEAL_GOLD, null, 2),
   ].join("\n");

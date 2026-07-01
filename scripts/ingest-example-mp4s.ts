@@ -1,21 +1,24 @@
-// CLI script: one-time ingest of reference MP4s into the content_examples style library.
+// CLI script: one-time ingest of reference MEDIA into the content_examples style library.
 //
-// Crawls the recent *.mp4 files in a folder (default the operator's Downloads), samples frames
-// from each with ffmpeg, runs analyzeVideoFile (one Claude-vision call -> labeled, difficulty-
-// tagged storyboard), uploads the sampled frames to the `reels` bucket, and upserts one
-// content_examples row per video. These rows become extra few-shot context for the recreate
-// flow and the format generator (loadExampleFewShot).
+// Crawls the recent *.mp4 videos AND *.jpg/.png/.webp images in a folder (default the operator's
+// Downloads). Videos are sampled frame-by-frame with ffmpeg; images are read as a single frame.
+// Each runs analyzeVideoFile (one Claude-vision call -> labeled, difficulty-tagged storyboard),
+// uploads its frame(s) to the `reels` bucket, and upserts one content_examples row. These rows
+// become the reference library the generators read back (loadReferenceFrames + loadExampleFewShot):
+// videos are tagged 'reference_video', images (real-house photos etc.) are tagged 'reference_house'
+// so the realism-grounding step prefers them.
 //
 // Idempotent: rows key on source_path, so re-running updates in place (stable id) rather than
-// duplicating. ffmpeg/ffprobe must be on PATH.
+// duplicating. ffmpeg/ffprobe must be on PATH for videos.
 //
 // Usage:
 //   bun run scripts/ingest-example-mp4s.ts --dry
 //   bun run scripts/ingest-example-mp4s.ts
-//   bun run scripts/ingest-example-mp4s.ts --dir="C:/Users/matth/Downloads" --since-days=3 --limit=20
+//   bun run scripts/ingest-example-mp4s.ts --dir="C:/Users/matth/Downloads" --since-days=3 --limit=200
+//   bun run scripts/ingest-example-mp4s.ts --dir="C:/Users/matth/Desktop/content-references" --since-days=3650
 //   bun run scripts/ingest-example-mp4s.ts --vertical=pest_control --force
 
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { supabaseAdmin } from "../src/lib/db";
@@ -25,6 +28,14 @@ import type { ClaudeImageInput } from "../src/lib/claude-calls";
 
 const DEFAULT_DIR = "C:/Users/matth/Downloads";
 const FRAME_COUNT = 6;
+const VIDEO_EXTS = [".mp4", ".mov", ".m4v"];
+const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".webp"];
+const IMAGE_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
 
 interface Args {
   dir: string;
@@ -51,44 +62,58 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
+type MediaKind = "video" | "image";
+
 interface Candidate {
   path: string;
   name: string;
   mtimeMs: number;
+  kind: MediaKind;
+  ext: string;
 }
 
-function pickRecentMp4s(args: Args): Candidate[] {
+function classify(name: string): { kind: MediaKind; ext: string } | null {
+  const lower = name.toLowerCase();
+  const ext = lower.slice(lower.lastIndexOf("."));
+  if (VIDEO_EXTS.includes(ext)) return { kind: "video", ext };
+  if (IMAGE_EXTS.includes(ext)) return { kind: "image", ext };
+  return null;
+}
+
+function pickRecentMedia(args: Args): Candidate[] {
   const cutoff = Date.now() - args.sinceDays * 24 * 60 * 60 * 1000;
   const entries = readdirSync(args.dir);
-  const mp4s: Candidate[] = [];
+  const media: Candidate[] = [];
   for (const name of entries) {
-    if (!name.toLowerCase().endsWith(".mp4")) continue;
+    const c = classify(name);
+    if (!c) continue;
     const path = join(args.dir, name);
     try {
       const st = statSync(path);
       if (!st.isFile()) continue;
-      if (st.mtimeMs >= cutoff) mp4s.push({ path, name, mtimeMs: st.mtimeMs });
+      if (st.mtimeMs >= cutoff) media.push({ path, name, mtimeMs: st.mtimeMs, kind: c.kind, ext: c.ext });
     } catch {
       // unreadable entry — skip
     }
   }
-  mp4s.sort((a, b) => b.mtimeMs - a.mtimeMs); // newest first
-  return mp4s.slice(0, args.limit);
+  media.sort((a, b) => b.mtimeMs - a.mtimeMs); // newest first
+  return media.slice(0, args.limit);
 }
 
-function toClaudeImage(buf: Buffer): ClaudeImageInput {
-  return { media_type: "image/jpeg", data: buf.toString("base64") };
+function toClaudeImage(buf: Buffer, mediaType = "image/jpeg"): ClaudeImageInput {
+  return { media_type: mediaType, data: buf.toString("base64") };
 }
 
-/** Upload sampled frames to the `reels` bucket; returns the public URLs (best-effort). */
-async function uploadFrames(buffers: Buffer[]): Promise<string[]> {
+/** Upload frame/image buffers to the `reels` bucket; returns the public URLs (best-effort). */
+async function uploadFrames(buffers: Buffer[], mimeType = "image/jpeg"): Promise<string[]> {
+  const ext = (mimeType.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
   const urls: string[] = [];
   for (const buf of buffers) {
     try {
-      const key = `examples/${randomUUID()}.jpg`;
+      const key = `examples/${randomUUID()}.${ext}`;
       const up = await supabaseAdmin.storage
         .from("reels")
-        .upload(key, buf, { contentType: "image/jpeg", upsert: true });
+        .upload(key, buf, { contentType: mimeType, upsert: true });
       if (up.error) {
         console.error("  frame upload failed:", up.error.message);
         continue;
@@ -108,13 +133,13 @@ async function main(): Promise<void> {
       `${args.dry ? " (DRY)" : ""}${args.force ? " (FORCE)" : ""}`
   );
 
-  const candidates = pickRecentMp4s(args);
+  const candidates = pickRecentMedia(args);
   if (candidates.length === 0) {
-    console.log("[ingest] no matching .mp4 files in the recency window. Nothing to do.");
+    console.log("[ingest] no matching video/image files in the recency window. Nothing to do.");
     return;
   }
   console.log(`[ingest] selected ${candidates.length} file(s):`);
-  candidates.forEach((c, i) => console.log(`  ${i + 1}. ${c.name} (${new Date(c.mtimeMs).toISOString()})`));
+  candidates.forEach((c, i) => console.log(`  ${i + 1}. [${c.kind}] ${c.name} (${new Date(c.mtimeMs).toISOString()})`));
 
   let inserted = 0;
   let skipped = 0;
@@ -135,19 +160,27 @@ async function main(): Promise<void> {
         continue;
       }
 
-      console.log(`[ingest] analyzing: ${c.name}`);
-      const buffers = extractFramesLocal(c.path, FRAME_COUNT);
-      const frames = buffers.map(toClaudeImage);
+      console.log(`[ingest] analyzing [${c.kind}]: ${c.name}`);
+      // Videos -> ffmpeg frame samples (jpeg). Images -> the single file as one frame.
+      const isImage = c.kind === "image";
+      const mime = isImage ? IMAGE_MIME[c.ext] ?? "image/jpeg" : "image/jpeg";
+      const buffers = isImage ? [readFileSync(c.path)] : extractFramesLocal(c.path, FRAME_COUNT);
+      const frames = buffers.map((b) => toClaudeImage(b, mime));
       const { storyboard } = await analyzeVideoFile({ frames, verticalId: args.vertical });
 
-      console.log(`  -> difficulty=${storyboard.difficulty} labels=[${storyboard.labels.join(", ")}] shots=${storyboard.shots.length}`);
+      // Images are real-world realism references; tag them so loadReferenceFrames prefers them.
+      const labels = isImage
+        ? Array.from(new Set(["reference_house", ...storyboard.labels]))
+        : Array.from(new Set(["reference_video", ...storyboard.labels]));
+
+      console.log(`  -> difficulty=${storyboard.difficulty} labels=[${labels.join(", ")}] shots=${storyboard.shots.length}`);
 
       if (args.dry) {
         console.log(`  (dry) hook: ${storyboard.hook}`);
         continue;
       }
 
-      const frameUrls = await uploadFrames(buffers);
+      const frameUrls = await uploadFrames(buffers, mime);
       const id = (existing?.id as string) ?? randomUUID();
       const { error } = await supabaseAdmin.from("content_examples").upsert(
         {
@@ -155,7 +188,7 @@ async function main(): Promise<void> {
           vertical_id: args.vertical,
           source_path: c.path,
           storyboard,
-          labels: storyboard.labels,
+          labels,
           difficulty: storyboard.difficulty,
           frame_urls: frameUrls,
         },

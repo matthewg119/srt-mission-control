@@ -20,6 +20,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generateImages, editImage } from "@/lib/providers/image-gen";
 import { povImageProvider, buildPovImagePrompt, uploadToReels } from "@/lib/reel/pov";
+import { enrichScene } from "@/lib/reel/prompt-enrich";
+import { loadStyleRulesText, distillFeedbackToRules, savePendingRules } from "@/lib/reel/style-rules";
 import { POV_SOUL_SIZE, POV_IMAGE_SIZE } from "@/config/pov-style";
 import {
   BUG_REVEAL_SCENES,
@@ -30,6 +32,9 @@ import {
 } from "@/config/bug-reveal-style";
 import { getActiveVertical } from "@/config/verticals";
 import type { ReelSlot } from "@/config/reel-style";
+
+// Format group tag for two-tier style rules + reference-grounded prompt enrichment.
+export const BUG_REVEAL_FORMAT_GROUP = "bug_reveal";
 
 function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
@@ -111,9 +116,10 @@ function isBugRevealCopy(v: unknown): v is BugRevealCopy {
 /** One Claude call: before-scene -> caption + 5 POV titles + animation_prompt + after_image_prompt. */
 export async function generateBugRevealCopy(scene: string): Promise<BugRevealCopy> {
   const vertical = await getActiveVertical();
+  const rulesText = await loadStyleRulesText(vertical.id, BUG_REVEAL_FORMAT_GROUP);
   const { data } = await callClaudeJSON<BugRevealCopy>({
     model: model(),
-    system: buildBugRevealCopySystem(vertical.business_descriptor),
+    system: buildBugRevealCopySystem(vertical.business_descriptor, rulesText),
     user: [
       `The before frame shows: ${scene}`,
       "The reel sprays that seam and cockroaches pour out of it.",
@@ -254,7 +260,12 @@ async function generateBeforeImagesForJob(job: BugRevealJobRow): Promise<number>
 
   await slack.postThreadReply(channel, threadTs, `⏳ Generating ${scenes.length} "before" shots…`);
 
-  const prompts = await Promise.all(scenes.map((s) => buildPovImagePrompt(s, vertical)));
+  // Ground each scene in the reference library + active style rules before prompting (byte-
+  // identical to raw scenes when the library and rules are empty).
+  const groundedScenes = await Promise.all(
+    scenes.map((s) => enrichScene(s, { vertical, formatGroup: BUG_REVEAL_FORMAT_GROUP }))
+  );
+  const prompts = await Promise.all(groundedScenes.map((s) => buildPovImagePrompt(s, vertical)));
   // Generate the 3 in PARALLEL so wall-time is ~one image, not the sum (Higgsfield polls slow).
   const imgs = await Promise.all(
     prompts.map((p) => generateImages({ prompts: [p], provider, size: POV_SOUL_SIZE }).then((r) => r[0] ?? null))
@@ -360,6 +371,132 @@ export async function handleBugRevealPick(args: {
   return true;
 }
 
+// ---- Thread reply: tuning feedback -> live preview, then ✅-gated save --------------
+
+const OPTION_WORDS: Record<string, number> = { first: 1, second: 2, third: 3 };
+
+/** Pull the option numbers the operator referenced ("option 2", "image 1", "the first one"). */
+function parseTargetOptions(text: string, available: number[]): number[] {
+  const found = new Set<number>();
+  const re = /\b(?:option|image|img|pic|photo|number|no\.?|#)?\s*([1-3])\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const n = Number(m[1]);
+    if (available.includes(n)) found.add(n);
+  }
+  for (const [word, n] of Object.entries(OPTION_WORDS)) {
+    if (new RegExp(`\\b${word}\\b`, "i").test(text) && available.includes(n)) found.add(n);
+  }
+  return [...found];
+}
+
+/**
+ * A tuning-feedback reply on a bug-reveal drop thread ("make the furnace older, add some plates").
+ * Distill it into candidate rules, regenerate a LIVE PREVIEW of the referenced before option(s)
+ * with those changes applied, then post a "keep these changes? ✅" card. The rules are only saved
+ * (pending) here; they go active when the operator reacts ✅ (handleStyleRuleApproval). Returns
+ * true when it took the reply (tuning), false for remix/other so the caller falls through to the
+ * remix handler. Best-effort.
+ */
+export async function handleBugRevealFeedback(args: {
+  channel: string;
+  threadTs: string;
+  text: string;
+}): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("bug_reveal_jobs")
+    .select(JOB_COLS)
+    .eq("slack_thread_ts", args.threadTs)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const job = data as BugRevealJobRow | null;
+  if (!job) return false; // not a bug-reveal thread — let other handlers take it
+  const opts = job.before_images ?? [];
+  if (opts.length === 0) return false;
+
+  const vertical = await getActiveVertical();
+  let distilled;
+  try {
+    distilled = await distillFeedbackToRules({ text: args.text, formatGroup: BUG_REVEAL_FORMAT_GROUP, verticalId: vertical.id });
+  } catch (e) {
+    console.error("[bug-reveal] feedback distill failed:", (e as Error).message);
+    return false;
+  }
+  if (distilled.intent !== "tune" || distilled.rules.length === 0) return false;
+
+  const available = opts.map((o) => o.index);
+  let targets = parseTargetOptions(args.text, available);
+  if (targets.length === 0) {
+    targets =
+      job.chosen_before?.index && available.includes(job.chosen_before.index)
+        ? [job.chosen_before.index]
+        : [available[0]];
+  }
+  targets = targets.slice(0, 3);
+
+  await slack.postThreadReply(
+    args.channel,
+    args.threadTs,
+    `🔁 Applying your changes to option ${targets.join(", ")} and regenerating a preview…`
+  );
+
+  const ruleStrings = distilled.rules.map((r) => r.rule);
+
+  waitUntil(
+    (async () => {
+      try {
+        const provider = povImageProvider();
+        let posted = 0;
+        for (const idx of targets) {
+          const opt = opts.find((o) => o.index === idx);
+          if (!opt) continue;
+          const grounded = await enrichScene(opt.scene, {
+            vertical,
+            formatGroup: BUG_REVEAL_FORMAT_GROUP,
+            extraRules: ruleStrings,
+          });
+          const prompt = await buildPovImagePrompt(grounded, vertical);
+          const [img] = await generateImages({ prompts: [prompt], provider, size: POV_SOUL_SIZE });
+          if (!img) {
+            await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Preview for option ${idx} failed.`);
+            continue;
+          }
+          await slack.postThreadReply(args.channel, args.threadTs, `*Option ${idx} with your changes (preview)*`);
+          await slack.uploadFile(args.channel, `preview-${idx}.png`, img.buffer, img.mimetype, args.threadTs);
+          posted++;
+        }
+
+        const lines = distilled.rules.map((r, i) => {
+          const tag = r.scope === "brand" ? "brand" : r.format_group ?? BUG_REVEAL_FORMAT_GROUP;
+          return `${i + 1}. [${tag}] ${r.rule}`;
+        });
+        const card = (await slack.postThreadReply(
+          args.channel,
+          args.threadTs,
+          [
+            posted > 0 ? "☝️ Preview above." : "Preview could not be generated, but you can still save the rule.",
+            "🎚️ *Keep these changes?* React ✅ to save them for future drops, or 🚫 to discard.",
+            ...lines,
+          ].join("\n")
+        )) as { ts?: string };
+        if (card?.ts) {
+          await savePendingRules(distilled.rules, {
+            verticalId: vertical.id,
+            channel: args.channel,
+            threadTs: args.threadTs,
+            proposalTs: card.ts,
+          });
+        }
+      } catch (e) {
+        console.error("[bug-reveal] feedback preview failed:", (e as Error).message);
+        await slack.postThreadReply(args.channel, args.threadTs, `🚫 Preview failed (${(e as Error).message.slice(0, 140)}).`);
+      }
+    })()
+  );
+  return true;
+}
+
 // ---- Thread reply: "remix / give me more examples" --------------------------------
 
 // Conversational control on a bug-reveal drop thread: reply with "remix", "give me more",
@@ -419,9 +556,11 @@ export async function handleBugRevealReply(args: {
 /** Add bugs to the chosen before frame, generate copy, post the after image + prompts + copy. */
 async function buildRevealForJob(job: BugRevealJobRow, chosen: BeforeOption): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const vertical = await getActiveVertical();
+  const rulesText = await loadStyleRulesText(vertical.id, BUG_REVEAL_FORMAT_GROUP);
 
-  // 1) After frame: add the swarm pouring from the sprayed seam.
-  const instruction = buildBugAddInstruction(chosen.scene);
+  // 1) After frame: add the swarm pouring from the sprayed seam (honoring active style rules).
+  const instruction = buildBugAddInstruction(chosen.scene, rulesText);
   let afterBuffer: Buffer | null = null;
   let afterMime = "image/png";
 
@@ -445,9 +584,10 @@ async function buildRevealForJob(job: BugRevealJobRow, chosen: BeforeOption): Pr
   // swarm). Not pixel-identical to the before, but that is fine for the single-frame animation
   // (A) and still gives an after frame for the two-frame test (B).
   if (!afterBuffer) {
+    const groundedBase = await enrichScene(chosen.scene, { vertical, formatGroup: BUG_REVEAL_FORMAT_GROUP });
     const afterPrompt = await buildPovImagePrompt(
-      `${chosen.scene} Now a dense swarm of German cockroaches is pouring out of that exact seam and scattering fast across the floor away from the spray.`,
-      await getActiveVertical()
+      `${groundedBase} Now a dense swarm of German cockroaches is pouring out of that exact seam and scattering fast across the floor away from the spray.`,
+      vertical
     );
     const [fresh] = await generateImages({ prompts: [afterPrompt], provider: povImageProvider(), size: POV_SOUL_SIZE });
     if (fresh) {

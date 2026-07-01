@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { callClaudeJSON, type ClaudeImageInput, type ClaudeModel } from "@/lib/claude-calls";
 import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
@@ -268,5 +269,108 @@ export async function loadExampleFewShot(
   } catch (e) {
     console.error("[content-examples] loadExampleFewShot fell back to empty:", (e as Error).message);
     return "";
+  }
+}
+
+// ---- Reference FRAMES (visual grounding for image generation) ----------------------------
+
+interface FrameRow {
+  frame_urls: string[] | null;
+  labels: string[] | null;
+}
+
+async function fetchFrame(url: string): Promise<ClaudeImageInput | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const media_type = (res.headers.get("content-type") || "image/jpeg").split(";")[0];
+    return { media_type, data: buf.toString("base64") };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load up to `limit` reference FRAMES for a vertical as base64 image blocks, to visually ground
+ * image generation (so houses look real and lived-in, not new/clean). Rows tagged
+ * `reference_house` / `realism_reference` are preferred, then the most recent examples. Frames
+ * are public `reels` URLs. Best-effort: returns [] when the table is empty/absent or on error.
+ */
+export async function loadReferenceFrames(
+  verticalId: string = DEFAULT_VERTICAL_ID,
+  opts: { limit?: number } = {}
+): Promise<ClaudeImageInput[]> {
+  const limit = opts.limit ?? 4;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("frame_urls,labels")
+      .eq("vertical_id", verticalId)
+      .order("created_at", { ascending: false })
+      .limit(40);
+    if (error || !Array.isArray(data) || data.length === 0) return [];
+
+    const rows = data as FrameRow[];
+    const isRealism = (r: FrameRow) =>
+      (r.labels ?? []).some((l) => l === "reference_house" || l === "realism_reference");
+    // Realism references first, then everything else, keeping recency order within each group.
+    const ordered = [...rows.filter(isRealism), ...rows.filter((r) => !isRealism(r))];
+
+    const urls: string[] = [];
+    for (const r of ordered) {
+      for (const u of r.frame_urls ?? []) {
+        if (typeof u === "string" && u && !urls.includes(u)) urls.push(u);
+        if (urls.length >= limit) break;
+      }
+      if (urls.length >= limit) break;
+    }
+    if (urls.length === 0) return [];
+
+    const frames = await Promise.all(urls.map((u) => fetchFrame(u)));
+    return frames.filter((f): f is ClaudeImageInput => f !== null);
+  } catch (e) {
+    console.error("[content-examples] loadReferenceFrames fell back to empty:", (e as Error).message);
+    return [];
+  }
+}
+
+// ---- Save an example (live #content-analyzer drops feed the library) ----------------------
+
+/**
+ * Upsert one row into `content_examples`, keyed on `sourcePath` so re-drops update in place.
+ * Used by the live #content-analyzer flow (video + reference image) to feed the library that
+ * loadReferenceFrames / loadExampleFewShot read back. Best-effort: never throws.
+ */
+export async function saveContentExample(row: {
+  verticalId?: string;
+  sourcePath: string;
+  storyboard: unknown;
+  labels: string[];
+  difficulty: string;
+  frameUrls: string[];
+}): Promise<void> {
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from("content_examples")
+      .select("id")
+      .eq("source_path", row.sourcePath)
+      .maybeSingle();
+    const id = (existing?.id as string) ?? randomUUID();
+    const { error } = await supabaseAdmin.from("content_examples").upsert(
+      {
+        id,
+        vertical_id: row.verticalId ?? DEFAULT_VERTICAL_ID,
+        source_path: row.sourcePath,
+        storyboard: row.storyboard ?? {},
+        labels: row.labels,
+        difficulty: row.difficulty,
+        frame_urls: row.frameUrls,
+      },
+      { onConflict: "source_path" }
+    );
+    if (error) console.error("[content-examples] saveContentExample upsert failed:", error.message);
+  } catch (e) {
+    console.error("[content-examples] saveContentExample threw:", (e as Error).message);
   }
 }
