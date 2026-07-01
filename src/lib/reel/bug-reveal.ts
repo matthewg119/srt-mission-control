@@ -255,7 +255,10 @@ async function generateBeforeImagesForJob(job: BugRevealJobRow): Promise<number>
   await slack.postThreadReply(channel, threadTs, `⏳ Generating ${scenes.length} "before" shots…`);
 
   const prompts = await Promise.all(scenes.map((s) => buildPovImagePrompt(s, vertical)));
-  const imgs = await generateImages({ prompts, provider, size: POV_SOUL_SIZE });
+  // Generate the 3 in PARALLEL so wall-time is ~one image, not the sum (Higgsfield polls slow).
+  const imgs = await Promise.all(
+    prompts.map((p) => generateImages({ prompts: [p], provider, size: POV_SOUL_SIZE }).then((r) => r[0] ?? null))
+  );
 
   const options: BeforeOption[] = [];
   for (let i = 0; i < imgs.length; i++) {
@@ -352,6 +355,62 @@ export async function handleBugRevealPick(args: {
         job.slack_thread_ts,
         `🚫 Bug-reveal build failed (${(e as Error).message.slice(0, 160)}).`
       );
+    })
+  );
+  return true;
+}
+
+// ---- Thread reply: "remix / give me more examples" --------------------------------
+
+// Conversational control on a bug-reveal drop thread: reply with "remix", "give me more",
+// "another", "different", etc. and we generate a fresh set of 3 before options in-thread.
+const REMIX_RE = /\b(remix|regenerate|regen|another|again|different|fresh|more|others?|examples|new options|not (that|these))\b/i;
+
+export async function handleBugRevealReply(args: {
+  channel: string;
+  threadTs: string;
+  text: string;
+}): Promise<boolean> {
+  if (!REMIX_RE.test(args.text)) return false;
+
+  const { data } = await supabaseAdmin
+    .from("bug_reveal_jobs")
+    .select(JOB_COLS)
+    .eq("slack_thread_ts", args.threadTs)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const job = data as BugRevealJobRow | null;
+  if (!job) return false;
+
+  if (job.status === "generating") {
+    await slack.postThreadReply(args.channel, args.threadTs, "⏳ Already working on a set, hang on.");
+    return true;
+  }
+
+  const scenes = pickBeforeScenes(OPTIONS_PER_DROP);
+  const seeded = scenes.map((s, i) => ({ index: i + 1, scene: s }));
+  await supabaseAdmin
+    .from("bug_reveal_jobs")
+    .update({
+      before_images: seeded,
+      chosen_before: null,
+      after_image_url: null,
+      status: "generating",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", job.id);
+
+  await slack.postThreadReply(args.channel, args.threadTs, "🔁 On it, generating 3 fresh before options…");
+
+  waitUntil(
+    generateBeforeImagesForJob({ ...job, before_images: seeded }).catch(async (e) => {
+      console.error("[bug-reveal] remix generate failed:", (e as Error).message);
+      await supabaseAdmin
+        .from("bug_reveal_jobs")
+        .update({ status: "error", updated_at: new Date().toISOString() })
+        .eq("id", job.id);
+      await slack.postThreadReply(args.channel, args.threadTs, `🚫 Regeneration failed (${(e as Error).message.slice(0, 160)}).`);
     })
   );
   return true;

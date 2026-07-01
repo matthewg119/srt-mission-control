@@ -38,7 +38,7 @@ import {
   handleInstagramLink,
   INSTAGRAM_URL_RE,
 } from "@/lib/reel/pov-studio";
-import { handleBugRevealIdeasApproval, handleBugRevealPick } from "@/lib/reel/bug-reveal";
+import { handleBugRevealIdeasApproval, handleBugRevealPick, handleBugRevealReply } from "@/lib/reel/bug-reveal";
 import { analyzeVideo } from "@/lib/reel/content-analyzer";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
 import { classifyByKeywords } from "@/config/content-workflows";
@@ -55,7 +55,11 @@ interface SlackEventFile {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Some reactions kick off image generation in a waitUntil background task (POV + Bug-Reveal
+// drops). Higgsfield polls up to ~2 min per image, so 60s killed those tasks mid-generation
+// (the drop got stuck on "Generating…"). 300s lets the background generation finish; normal
+// events still return in milliseconds.
+export const maxDuration = 300;
 
 // Dedup guard: prevent processing same event twice (Slack retries)
 const processedEvents = new Set<string>();
@@ -251,6 +255,19 @@ export async function POST(request: NextRequest) {
       const isContentFullChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.contentFull;
 
       const parentThreadTs = (event.thread_ts as string | undefined) || null;
+
+      // #content-full thread reply on a Bug-Reveal drop: "remix / give me more / different"
+      // → regenerate 3 fresh before options. Text-only replies; falls through otherwise.
+      if (
+        isContentFullChannel &&
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        attachedFiles.length === 0 &&
+        userText.trim().length > 0
+      ) {
+        const handled = await handleBugRevealReply({ channel, threadTs: parentThreadTs, text: userText });
+        if (handled) return NextResponse.json({ ok: true });
+      }
 
       // Code Guardian channel — thread replies become conversational Q&A with Claude
       const guardianChannelEnv = process.env.SLACK_CODE_GUARDIAN_CHANNEL || "";
