@@ -49,10 +49,17 @@ import {
 } from "@/lib/reel/content-analyzer";
 import {
   startAvatarSession,
+  startGo,
   handleVektorThreadReply,
   parseAvatarCommand,
 } from "@/lib/reel/workflow-pipeline";
 import { buildWorkflowMapForSlack } from "@/lib/reel/workflow-map";
+import {
+  startNewAvatar,
+  parseNewAvatar,
+  pendingNewAvatar,
+  consumePendingNewAvatar,
+} from "@/lib/reel/avatar-create";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
 import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
@@ -341,13 +348,37 @@ export async function POST(request: NextRequest) {
         attachedFiles.length === 0 &&
         userText.trim().length > 0
       ) {
+        if (/^\s*go\s*$/i.test(userText)) {
+          await startGo({ channel });
+          return NextResponse.json({ ok: true });
+        }
         if (/^\s*(map|library)\s*$/i.test(userText)) {
           await slack.postMessage(channel, await buildWorkflowMapForSlack());
+          return NextResponse.json({ ok: true });
+        }
+        const newAvatar = parseNewAvatar(userText);
+        if (newAvatar) {
+          await startNewAvatar({ channel, id: newAvatar.id, name: newAvatar.name });
           return NextResponse.json({ ok: true });
         }
         const avatar = parseAvatarCommand(userText);
         if (avatar) {
           await startAvatarSession({ channel, verticalId: avatar });
+          return NextResponse.json({ ok: true });
+        }
+      }
+
+      // #content-analyzer TOP-LEVEL `new avatar <id> <Name>`: name a new avatar before dropping
+      // its kit here (prevents a stray kit from overwriting an existing avatar).
+      if (
+        channel === VEKTOR_CHANNELS.contentAnalyzer &&
+        (!parentThreadTs || parentThreadTs === event.ts) &&
+        attachedFiles.length === 0 &&
+        userText.trim().length > 0
+      ) {
+        const na = parseNewAvatar(userText);
+        if (na) {
+          await startNewAvatar({ channel, id: na.id, name: na.name });
           return NextResponse.json({ ok: true });
         }
       }
@@ -1598,11 +1629,27 @@ async function handleFileShared(fileId: string): Promise<void> {
     if (share && file.url_private_download) {
       const threadTs = share.thread_ts ?? share.ts;
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      // v3: a kit only ingests when a NEW avatar has been named first, so a stray PDF never
+      // overwrites an existing avatar (ingest defaults to pest_control otherwise).
+      const pending = await pendingNewAvatar(analyzerChannel);
+      if (!pending) {
+        if (threadTs) {
+          await slack
+            .postThreadReply(
+              analyzerChannel,
+              threadTs,
+              "Type `new avatar <id> <Name>` here first so I know which avatar this kit builds. I will not overwrite an existing avatar."
+            )
+            .catch(() => {});
+        }
+        return;
+      }
       try {
         await fetch(`${appUrl}/api/content/ingest-avatar`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            vertical: { id: pending.id, name: pending.name },
             slack_file: {
               url_private_download: file.url_private_download,
               name: file.name,
@@ -1612,6 +1659,7 @@ async function handleFileShared(fileId: string): Promise<void> {
             },
           }),
         });
+        await consumePendingNewAvatar(pending.jobId);
       } catch (e) {
         console.error("[slack/events] ingest-avatar dispatch error:", (e as Error).message);
       }

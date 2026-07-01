@@ -639,3 +639,21 @@ export async function getActiveVertical(): Promise<Vertical> {
   const id = process.env.CONTENT_VERTICAL || DEFAULT_VERTICAL_ID;
   return loadVertical(id);
 }
+
+// List every avatar (DB rows merged over the in-code seeds), for the `go` picker. Best-effort:
+// falls back to the seeds when the table is empty/unreachable.
+export async function listVerticals(): Promise<Array<{ id: string; name: string; status: string }>> {
+  const byId = new Map<string, { id: string; name: string; status: string }>();
+  for (const v of Object.values(SEED_VERTICALS)) byId.set(v.id, { id: v.id, name: v.name, status: v.status });
+  try {
+    const { data } = await supabaseAdmin.from("verticals").select("id,name,status");
+    if (Array.isArray(data)) {
+      for (const r of data as Array<{ id: string; name?: string; status?: string }>) {
+        byId.set(r.id, { id: r.id, name: r.name || r.id, status: r.status || "active" });
+      }
+    }
+  } catch (e) {
+    console.error("[verticals] listVerticals fell back to seed:", (e as Error).message);
+  }
+  return Array.from(byId.values());
+}

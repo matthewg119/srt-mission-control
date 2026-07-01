@@ -18,13 +18,14 @@ import {
   type ContentJob,
 } from "@/lib/reel/jobs";
 import { listWorkflows, loadWorkflow, resolveSong, SONGS } from "@/config/workflows";
-import { loadVertical } from "@/config/verticals";
+import { loadVertical, listVerticals } from "@/config/verticals";
 import {
   generateHooks,
   generateBodies,
   generateCaptionStoryboard,
 } from "@/lib/reel/creative-director";
-import { setWorkflowSong } from "@/lib/reel/workflow-author";
+import { setWorkflowSong, addRenderSequence } from "@/lib/reel/workflow-author";
+import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
 
 function numbered(items: string[]): string {
   return items.map((t, i) => `${i + 1}. ${t}`).join("\n");
@@ -72,6 +73,36 @@ export async function startAvatarSession(args: {
   return true;
 }
 
+/**
+ * `go`: the simplest entry. Vektor asks which avatar first, listing every avatar we have, plus
+ * a `new` option to create one. A number reply routes into that avatar's session.
+ */
+export async function startGo(args: { channel: string }): Promise<boolean> {
+  const avatars = (await listVerticals()).filter((a) => a.status !== "archived");
+  const res = await slack.postMessage(
+    args.channel,
+    [
+      "*Vektor.* Which avatar are we creating for?",
+      numbered(avatars.map((a) => `${a.name}  (\`${a.id}\`)`)),
+      "",
+      "Reply with the number to start. Or `new` to create a new avatar.",
+    ].join("\n")
+  );
+  const ts = (res as { ts?: string }).ts;
+  if (!ts) return false;
+  await insertJob({
+    formatId: "avatar_pick",
+    verticalId: "_",
+    channel: args.channel,
+    threadTs: ts,
+    pickerTs: ts,
+    stage: "avatar",
+    sourceKind: "go",
+    data: { avatar_ids: avatars.map((a) => a.id) },
+  });
+  return true;
+}
+
 function idxFrom(text: string, verb: string): number | null {
   const m = new RegExp(`^\\s*${verb}\\s+(\\d{1,2})\\s*$`, "i").exec(text);
   if (!m) return null;
@@ -89,9 +120,26 @@ export async function handleVektorThreadReply(args: {
   text: string;
 }): Promise<boolean> {
   const job = await getLatestJobByThread(args.threadTs);
-  if (!job || job.format_id !== "workflow") return false;
+  if (!job) return false;
   const data = job.data;
   const text = args.text.trim();
+
+  // `go` avatar-picker session: a number picks an avatar; `new` starts avatar creation.
+  if (job.format_id === "avatar_pick") {
+    if (/^\s*new\b/i.test(text)) {
+      const na = parseNewAvatar(text) ?? {};
+      await updateJob(job, { stage: "done", status: "done" });
+      return startNewAvatar({ channel: args.channel, id: na.id, name: na.name });
+    }
+    const n = parseInt(text, 10);
+    if (Number.isInteger(n) && n > 0 && Array.isArray(data.avatar_ids) && data.avatar_ids[n - 1]) {
+      await updateJob(job, { stage: "done", status: "done" });
+      return startAvatarSession({ channel: args.channel, verticalId: data.avatar_ids[n - 1] });
+    }
+    return false;
+  }
+
+  if (job.format_id !== "workflow") return false;
 
   // song <key|url> — accepted at any point once a workflow is chosen.
   const songMatch = /^\s*song\s+(.+)\s*$/i.exec(text);
@@ -195,7 +243,43 @@ export async function handleVektorThreadReply(args: {
         `*IG caption:* ${sb.ig_caption}`,
         "",
         songHint,
+        "Save this as a render sequence (template variant): `sequence <song> [label]`. `sequences` lists them.",
       ].join("\n")
+    );
+    return true;
+  }
+
+  // sequences -> list the workflow's render sequences (template variants).
+  if (/^\s*sequences\s*$/i.test(text) && data.workflow_id) {
+    const workflow = await loadWorkflow(data.workflow_id);
+    const seqs = workflow?.render_sequences ?? [];
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      seqs.length
+        ? ["*Render sequences* (same scenes, different audio/timing):", numbered(seqs.map((s) => `${s.label} — ${resolveSong(s.song_ref).label}`))].join("\n")
+        : "No render sequences yet. Add one with `sequence <song> [label]`."
+    );
+    return true;
+  }
+
+  // sequence <song> [label] -> add a render sequence (template variant) reusing the same scenes
+  // + the current caption timing, with a different song/beat. (Audios/timing only for now.)
+  const seqMatch = /^\s*sequence\s+(\S+)\s*(.*)$/i.exec(text);
+  if (seqMatch && data.workflow_id) {
+    const songRef = seqMatch[1].trim();
+    const label = (seqMatch[2] || "").trim() || `Variant ${resolveSong(songRef).label}`;
+    const seq = await addRenderSequence(data.workflow_id, {
+      label,
+      song_ref: songRef,
+      captions: data.caption_storyboard?.captions,
+    });
+    await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      seq
+        ? `🎼 Added render sequence *${seq.label}* (${resolveSong(seq.song_ref).label}). Same scenes, this audio/timing. \`sequences\` to list.`
+        : "Could not add that render sequence."
     );
     return true;
   }

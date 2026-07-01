@@ -31,6 +31,7 @@ export interface JobData {
   copy?: JobCopy;
 
   // --- Content Engine v3: avatar-first, song-based workflow flow ---
+  avatar_ids?: string[]; // the `go` avatar-picker list (ordering for the number reply)
   workflow_ids?: string[]; // the avatar-session workflow list (ordering for `workflow N`)
   workflow_id?: string; // the chosen workflow (real id lives here; format_id column = "workflow")
   hooks?: string[]; // step A: 5 hook options
@@ -46,6 +47,10 @@ export interface JobData {
   section?: string; // e.g. 'pov/modern_house' (reference sectioning)
   zip?: string;
   analysis?: unknown; // the analyzer VideoAnalysis snapshot (for the scrub path)
+
+  // --- new-avatar creation (a kit drop is awaited for this new vertical) ---
+  new_vertical_id?: string;
+  new_vertical_name?: string;
 }
 
 export type JobStage =
@@ -62,7 +67,8 @@ export type JobStage =
   | "bodies"
   | "storyboard"
   | "await_song"
-  | "render";
+  | "render"
+  | "await_kit";
 
 export interface ContentJob {
   id: string;

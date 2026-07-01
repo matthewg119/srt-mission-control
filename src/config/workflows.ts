@@ -44,6 +44,17 @@ export interface WorkflowRenderOptions {
   provider?: string; // image provider override (else POV_IMAGE_PROVIDER)
 }
 
+// A RENDER SEQUENCE is a reusable rendering variant of the SAME workflow scenes: a different
+// song / beat, and (optionally) different caption timing or reward moment. One blueprint ->
+// many audio-driven variants. (Decision 2026-07-03: audios/timing only for now.)
+export interface RenderSequence {
+  id: string;
+  label: string;
+  song_ref: string; // SONGS key or a pasted audio URL
+  reward_at_second?: number; // when the payoff/reward lands (for beat sync)
+  captions?: WorkflowCaption[]; // optional override of the base caption timing
+}
+
 export type WorkflowStatus = "draft" | "active" | "archived";
 export type WorkflowCategory = "pov" | "broll" | "reveal" | "before_after";
 
@@ -57,6 +68,7 @@ export interface Workflow {
   scenes: WorkflowScene[];
   captions: WorkflowCaption[];
   song_ref?: string | null;
+  render_sequences: RenderSequence[]; // template variants (different song/beat/timing)
   render_options: WorkflowRenderOptions;
   example_video_url?: string | null;
   example_storyboard?: unknown | null;
@@ -145,6 +157,7 @@ const PEST_WASP_NEST: Workflow = {
     { text: "one bag, gone for good", at_second: 4 },
   ],
   song_ref: DEFAULT_SONG_REF,
+  render_sequences: [],
   render_options: { min_shots: 4, max_shots: 4, clip_seconds: 2, aspect: "9:16" },
   example_video_url: null,
   example_storyboard: null,
@@ -171,6 +184,7 @@ interface WorkflowRow {
   scenes?: WorkflowScene[] | null;
   captions?: WorkflowCaption[] | null;
   song_ref?: string | null;
+  render_sequences?: RenderSequence[] | null;
   render_options?: WorkflowRenderOptions | null;
   example_video_url?: string | null;
   example_storyboard?: unknown | null;
@@ -191,6 +205,7 @@ function normalizeRow(row: WorkflowRow): Workflow {
     scenes: Array.isArray(row.scenes) ? row.scenes : [],
     captions: Array.isArray(row.captions) ? row.captions : [],
     song_ref: row.song_ref ?? null,
+    render_sequences: Array.isArray(row.render_sequences) ? row.render_sequences : [],
     render_options: row.render_options ?? {},
     example_video_url: row.example_video_url ?? null,
     example_storyboard: row.example_storyboard ?? null,

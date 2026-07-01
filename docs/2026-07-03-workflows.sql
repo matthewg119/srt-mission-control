@@ -31,6 +31,9 @@ create table if not exists workflows (
 create index if not exists workflows_vertical_idx on workflows (vertical_id, status);
 create index if not exists workflows_category_idx on workflows (vertical_id, category, subcategory);
 
+-- Render sequences: template variants of the same workflow scenes (different song/beat/timing).
+alter table workflows add column if not exists render_sequences jsonb not null default '[]'::jsonb;
+
 -- Reference library sectioning (requirement: max 30 references per avatar per section,
 -- optionally tagged by zip so the creative director can ask for "houses in 27401").
 alter table content_examples add column if not exists section text;  -- e.g. 'pov/modern_house'
