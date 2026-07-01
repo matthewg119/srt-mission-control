@@ -9,42 +9,66 @@ every workflow, its trigger, its variables, and its data model in one place. Thi
 
 ---
 
-## Mind-map
+## The one pipeline *(Content Engine v2 · 2026-07-02)*
+
+The old mind-map was messy because the **code** was messy: every format was its own file, its
+own table, and its own branch in an 80KB Slack router, so a new style meant a new island. v2
+collapses that into ONE robotic pipeline that every single-image format flows through. A format
+is now a **row in a registry** ([`src/config/format-registry.ts`](../src/config/format-registry.ts)),
+not a new file. Adding "jumpscare", "attic B-roll", "wasp removal" = add a row.
 
 ```mermaid
-mindmap
-  root((Content Engine))
-    #content-full
-      Bug-Reveal Spray)NEW · daily(
-        3 before ideas → ✅ → 3 before images
-        react 1/2/3 → add bugs + caption + titles + anim prompt
-        A/B: before+anim  vs  before+after
-      Daily Creative Drop)belief · cron(
-        belief prompt → operator renders in Higgsfield
-        upload image → 3 headlines → pick → caption
-      POV Picker)bare image/video(
-        Render · Animate · Recreate · Caption
-      Reel Studio)image + copy(
-        4 script variations → pick → MP4 render
-      IG-link Recreate)paste reel URL(
-        yt-dlp frames → storyboard + POV remake
-      Daily Content Ideas)cron(
-        10 ideas + 30 hooks
-    #content-analyzer
-      Video Analyzer
-        drop MP4 → 5 frames → storyboard + why + POV remake
-    #content
-      Viral Video Decoder)text only(
-    Avatars & Souls
-      Vargas Soul 8ef8...
-      verticals: pest_control · pest_owner_ai · mca
-      vertical_formats)30-format calendar(
-      providers: higgsfield · gpt-image-2 · elevenlabs
-    Future App
-      chat UI (Slack parity)
-      generate image → select region → do XYZ
-      workflow library + vertical switcher
+flowchart TD
+  Plus([+ New content]) --> Src{Source}
+  Src -->|From scratch| Avatar[Pick avatar / vertical]
+  Src -->|From reference| Ref[Drop video / image / IG link]
+
+  Ref --> Analyze[Analyze: frames -> storyboard -> why it works]
+  Analyze --> Vary[10+ variation ideas -> adapt to avatar]
+  Vary --> Fmt
+
+  Avatar --> Fmt[Pick format · from Format Registry]
+  Fmt --> Ideate["IDEATE — pick scenes + style_rules + references (stage=ideate, gate ✅/🚫)"]
+  Ideate --> Shot["SHOT — generate hook images (stage=shot, gate 1/2/3)"]
+  Shot --> Approve{Approve?}
+  Approve -->|regen / edit| Shot
+  Approve -->|yes| Caption["CAPTION — 5 options, #1 is POV (stage=build)"]
+  Caption --> Rends{Format renders video?}
+  Rends -->|no · DEFAULT| Deliver[Deliver: hook image + 5 captions + animation prompt]
+  Rends -->|yes · deferred| Render[RENDER — script / N shots -> MP4 via render-service]
+  Render --> Deliver
 ```
+
+Slack, the daily cron, and the future app are all just **front-ends** onto this pipeline. The
+generation providers underneath (image-gen, prompt-enrich, style-rules, render-service) do not move.
+
+```mermaid
+flowchart LR
+  Reg[("Format Registry — one file<br/>format-registry.ts")]
+  Jobs[("content_jobs — one table<br/>2026-07-02-content-jobs.sql")]
+  Reg --> Pipe["Pipeline runner<br/>pipeline.ts"]
+  Pipe --> Jobs
+  Slack["Slack #content-full / #content-analyzer"] --> Pipe
+  Cron["Daily cron<br/>rotates registry (DAILY_DROP_MODE=pipeline)"] --> Pipe
+  App["Later: /dashboard/content-studio<br/>same APIs"] -. later .-> Pipe
+  Pipe --> Gen["image-gen · prompt-enrich · style-rules · render-service<br/>UNCHANGED"]
+```
+
+**Files:** registry [`src/config/format-registry.ts`](../src/config/format-registry.ts) ·
+jobs [`src/lib/reel/jobs.ts`](../src/lib/reel/jobs.ts) ·
+pipeline [`src/lib/reel/pipeline.ts`](../src/lib/reel/pipeline.ts) ·
+copy standard `generateHookCopy` in [`src/lib/reel/captions.ts`](../src/lib/reel/captions.ts) ·
+one reaction/thread dispatcher in [`src/app/api/slack/events/route.ts`](../src/app/api/slack/events/route.ts).
+
+**Reaction routing (one path, not ten):** a reaction is looked up in `content_jobs` by the
+reacted message ts; the job's `stage` decides what happens (`ideate` → ✅/🚫, `shot` → 1/2/3).
+
+**Formats today (all data):** `bug_reveal` (before/after edit), `attic_broll` (single shot),
+`attic_jumpscare` (single shot, animal lunges at camera). More = more rows.
+
+> Legacy note: the per-format modules (`bug-reveal.ts`, `pov.ts` drop, `pov-studio.ts`,
+> `studio.ts`) and their tables still exist and still work; they are ported onto the pipeline
+> one at a time, then removed. The daily cron already routes `bug_reveal` through the pipeline.
 
 ---
 

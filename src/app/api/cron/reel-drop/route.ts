@@ -16,7 +16,8 @@ import { selectBeliefForSlot, recordBeliefUsed } from "@/lib/reel/beliefs";
 import { recordDrop } from "@/lib/reel/interactive";
 import { stripEmDashes } from "@/lib/reel/text";
 import { runPovDrop, type PovDropResult } from "@/lib/reel/pov";
-import { runBugRevealDrop } from "@/lib/reel/bug-reveal";
+import { runDrop } from "@/lib/reel/pipeline";
+import { getFormat, rotationFormats } from "@/config/format-registry";
 import { getActiveVertical } from "@/config/verticals";
 import { runAutoReel, type VerticalFormat } from "@/lib/reel/auto-reel";
 import { waitUntil } from "@vercel/functions";
@@ -83,30 +84,49 @@ async function handle(req: NextRequest) {
 
   const date = todayLabel();
 
-  // DAILY_DROP_MODE gates what the 3x/day cron posts. Default "bug_reveal" makes the drop
-  // ONLY the Bug-Reveal Spray format (spray a seam, bugs pour out). Any other value keeps the
-  // original belief + POV + auto-reel flow below. Reversible, non-destructive.
+  // DAILY_DROP_MODE gates what the 3x/day cron posts. Both content-pipeline modes run through
+  // the ONE unified pipeline (src/lib/reel/pipeline.ts), which reads formats from the registry
+  // (src/config/format-registry.ts). Any other value keeps the original belief + POV + auto-reel
+  // flow below. Reversible, non-destructive.
+  //
+  //   "bug_reveal" (default) -> just the Bug-Reveal Spray format (back-compat).
+  //   "pipeline"             -> rotate over every in-rotation registry format (bug-reveal, attic
+  //                             B-roll, jumpscare, ...). Set CONTENT_PIPELINE_FORMATS=a,b to pin.
   const dropMode = (process.env.DAILY_DROP_MODE || "bug_reveal").toLowerCase();
-  if (dropMode === "bug_reveal") {
-    try {
-      const result = await runBugRevealDrop({ channel, date, slot });
-      return NextResponse.json({
-        ok: true,
-        mode: "bug_reveal",
-        slot,
-        thread_ts: result.thread_ts ?? null,
-        scenes: result.scenes,
-        duration_ms: Date.now() - start,
-      });
-    } catch (e) {
-      console.error("[reel-drop] bug-reveal drop failed:", (e as Error).message);
-      await supabaseAdmin.from("system_logs").insert({
-        event_type: "cron_bug_reveal_drop_error",
-        description: "bug-reveal drop failed",
-        metadata: { slot, error: (e as Error).message, duration_ms: Date.now() - start },
-      });
-      return NextResponse.json({ ok: false, mode: "bug_reveal", error: (e as Error).message }, { status: 502 });
+  if (dropMode === "bug_reveal" || dropMode === "pipeline") {
+    const pinned = (process.env.CONTENT_PIPELINE_FORMATS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const formats =
+      dropMode === "bug_reveal"
+        ? [getFormat("bug_reveal")].filter(Boolean)
+        : pinned.length
+          ? pinned.map(getFormat).filter(Boolean)
+          : rotationFormats();
+
+    const drops: Array<{ format_id: string; thread_ts: string | null; scenes: string[] }> = [];
+    for (const f of formats) {
+      if (!f) continue;
+      try {
+        const r = await runDrop(f, { channel, date, slot });
+        drops.push({ format_id: r.format_id, thread_ts: r.thread_ts ?? null, scenes: r.scenes });
+      } catch (e) {
+        console.error(`[reel-drop] pipeline drop ${f.id} failed:`, (e as Error).message);
+        await supabaseAdmin.from("system_logs").insert({
+          event_type: "cron_pipeline_drop_error",
+          description: `pipeline drop ${f.id} failed`,
+          metadata: { slot, format_id: f.id, error: (e as Error).message },
+        });
+      }
     }
+    return NextResponse.json({
+      ok: drops.length > 0,
+      mode: dropMode,
+      slot,
+      drops,
+      duration_ms: Date.now() - start,
+    });
   }
 
   const belief = await selectBeliefForSlot(slot);

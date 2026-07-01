@@ -39,6 +39,7 @@ import {
   INSTAGRAM_URL_RE,
 } from "@/lib/reel/pov-studio";
 import { handleBugRevealIdeasApproval, handleBugRevealPick, handleBugRevealReply, handleBugRevealFeedback } from "@/lib/reel/bug-reveal";
+import { handlePipelineReaction, handlePipelineThreadReply } from "@/lib/reel/pipeline";
 import { handleStyleRuleApproval, summarizeActiveRules } from "@/lib/reel/style-rules";
 import { analyzeVideo, analyzeReferenceImage } from "@/lib/reel/content-analyzer";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
@@ -134,6 +135,16 @@ export async function POST(request: NextRequest) {
           userId: event.user as string,
         });
         if (guardianHandled) return NextResponse.json({ ok: true });
+
+        // Unified content pipeline (Content Engine v2): ✅/🚫 ideate gate + 1️⃣/2️⃣/3️⃣ shot pick
+        // for ANY registry format (bug-reveal, attic B-roll, jumpscare, ...). Self-routes by the
+        // content_jobs table; returns false for non-pipeline messages so legacy handlers still run.
+        const pipelineHandled = await handlePipelineReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (pipelineHandled) return NextResponse.json({ ok: true });
 
         // Reel drop: 1/2/3 reaction on a headline-options message (self-routes by DB)
         const reelHandled = await handleReelReaction({
@@ -282,6 +293,11 @@ export async function POST(request: NextRequest) {
           await slack.postThreadReply(channel, parentThreadTs, await summarizeActiveRules());
           return NextResponse.json({ ok: true });
         }
+        // Unified pipeline thread reply (tuning feedback -> ✅-gated rules, or remix -> fresh
+        // options) for any registry format. Self-routes by content_jobs; falls through if the
+        // thread is a legacy (bug_reveal_jobs) drop.
+        const pipelineReply = await handlePipelineThreadReply({ channel, threadTs: parentThreadTs, text: userText });
+        if (pipelineReply) return NextResponse.json({ ok: true });
         // Tuning feedback -> regenerate a live preview with the change, then ✅-gate the save.
         const tuned = await handleBugRevealFeedback({ channel, threadTs: parentThreadTs, text: userText });
         if (tuned) return NextResponse.json({ ok: true });
