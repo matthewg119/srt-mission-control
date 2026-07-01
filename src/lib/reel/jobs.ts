@@ -34,12 +34,21 @@ export interface JobData {
   avatar_ids?: string[]; // the `go` avatar-picker list (ordering for the number reply)
   workflow_ids?: string[]; // the avatar-session workflow list (ordering for `workflow N`)
   workflow_id?: string; // the chosen workflow (real id lives here; format_id column = "workflow")
-  hooks?: string[]; // step A: 5 hook options
-  chosen_hook?: string; // the picked hook
-  bodies?: string[]; // step B: 3 body options for the chosen hook
+  hooks?: string[]; // (legacy) step A hook options
+  chosen_hook?: string; // the picked/typed final hook
+  bodies?: string[]; // (legacy) body options
   chosen_body?: string; // the picked body
   caption_storyboard?: { captions: Array<{ text: string; at_second: number }>; ig_caption: string };
   song_ref?: string; // SONGS key or pasted audio URL
+
+  // --- rich copy engine (headlines -> hookset -> captions/storyboards) ---
+  headlines?: string[]; // ~30 direct-response headline options
+  chosen_headline?: string; // the picked/typed headline the story builds on
+  hookset?: { verbal: string[]; title: string[]; pov?: string[] };
+  captions3?: string[]; // 3 caption options
+  storyboards3?: string[]; // 3 storyboard idea options
+  chosen_caption?: string;
+  chosen_storyboard?: string;
 
   // --- #content-analyzer scrub-or-reference decision ---
   video_url?: string; // the staged public video URL a scrub-or-ref card refers to
@@ -68,7 +77,12 @@ export type JobStage =
   | "storyboard"
   | "await_song"
   | "render"
-  | "await_kit";
+  | "await_kit"
+  // rich copy engine stages:
+  | "headlines"
+  | "hookset"
+  | "captions"
+  | "picture";
 
 export interface ContentJob {
   id: string;
@@ -135,6 +149,21 @@ export async function getJobByPickerTs(pickerTs: string): Promise<ContentJob | n
     .from("content_jobs")
     .select(COLS)
     .eq("picker_msg_ts", pickerTs)
+    .limit(1)
+    .maybeSingle();
+  return normalize(data as Record<string, unknown> | null);
+}
+
+/** The most-recent ACTIVE avatar-first session in a channel (avatar_pick or workflow). Lets
+ *  the operator drive the session from the channel (top-level) instead of only in-thread. */
+export async function getLatestSessionByChannel(channel: string): Promise<ContentJob | null> {
+  const { data } = await supabaseAdmin
+    .from("content_jobs")
+    .select(COLS)
+    .eq("slack_channel", channel)
+    .eq("status", "active")
+    .in("format_id", ["avatar_pick", "workflow"])
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   return normalize(data as Record<string, unknown> | null);

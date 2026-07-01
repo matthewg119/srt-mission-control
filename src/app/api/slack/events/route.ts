@@ -50,7 +50,8 @@ import {
 import {
   startAvatarSession,
   startGo,
-  handleVektorThreadReply,
+  handleVektorMessage,
+  handlePictureReaction,
   parseAvatarCommand,
 } from "@/lib/reel/workflow-pipeline";
 import { buildWorkflowMapForSlack } from "@/lib/reel/workflow-map";
@@ -172,6 +173,14 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (analyzerHandled) return NextResponse.json({ ok: true });
+
+        // v3 picture card: ✅ generates the real scene images for the mapped picture.
+        const pictureHandled = await handlePictureReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (pictureHandled) return NextResponse.json({ ok: true });
 
         // Reel drop: 1/2/3 reaction on a headline-options message (self-routes by DB)
         const reelHandled = await handleReelReaction({
@@ -322,7 +331,7 @@ export async function POST(request: NextRequest) {
         }
         // v3 avatar session: `workflow N` -> hooks, `hook N` -> bodies, `body N` -> storyboard,
         // `song X`. Self-routes by the content_jobs workflow session in this thread.
-        const vektorReply = await handleVektorThreadReply({
+        const vektorReply = await handleVektorMessage({
           channel,
           threadTs: parentThreadTs,
           text: userText,
@@ -366,6 +375,9 @@ export async function POST(request: NextRequest) {
           await startAvatarSession({ channel, verticalId: avatar });
           return NextResponse.json({ ok: true });
         }
+        // Channel-scoped session commands (number pick, headline N, title N, pick, redo, song...).
+        const vektorChannelReply = await handleVektorMessage({ channel, text: userText });
+        if (vektorChannelReply) return NextResponse.json({ ok: true });
       }
 
       // #content-analyzer TOP-LEVEL `new avatar <id> <Name>`: name a new avatar before dropping
