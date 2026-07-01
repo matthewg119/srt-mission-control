@@ -361,27 +361,36 @@ export async function handleBugRevealPick(args: {
 async function buildRevealForJob(job: BugRevealJobRow, chosen: BeforeOption): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
 
-  // 1) After frame: add the swarm onto the exact chosen before image (edit keeps frames aligned).
+  // 1) After frame: add the swarm pouring from the sprayed seam.
   const instruction = buildBugAddInstruction(chosen.scene);
   let afterBuffer: Buffer | null = null;
   let afterMime = "image/png";
 
-  const src = await fetch(chosen.url!);
-  if (src.ok) {
-    const srcBuf = Buffer.from(await src.arrayBuffer());
-    const srcMime = src.headers.get("content-type") || chosen.mimetype || "image/png";
-    const edited = await editImage({ image: srcBuf, mimetype: srcMime, prompt: instruction, size: POV_IMAGE_SIZE });
-    if (edited) {
-      afterBuffer = edited.buffer;
-      afterMime = edited.mimetype;
+  // Preferred (only when OPENAI_API_KEY is set): edit the exact chosen before image so the two
+  // frames line up pixel-for-pixel. We run on Higgsfield today (no OpenAI key), so this is
+  // skipped and the after frame is generated fresh below.
+  if (process.env.OPENAI_API_KEY) {
+    const src = await fetch(chosen.url!);
+    if (src.ok) {
+      const srcBuf = Buffer.from(await src.arrayBuffer());
+      const srcMime = src.headers.get("content-type") || chosen.mimetype || "image/png";
+      const edited = await editImage({ image: srcBuf, mimetype: srcMime, prompt: instruction, size: POV_IMAGE_SIZE });
+      if (edited) {
+        afterBuffer = edited.buffer;
+        afterMime = edited.mimetype;
+      }
     }
   }
 
-  // Fallback: no OPENAI_API_KEY (or edit failed) -> fresh text2image of the after scene. Less
-  // pixel-consistent with the before, but still gives an after frame for the two-frame test.
+  // Higgsfield path: fresh text2image of the after scene (a new frame of the same seam with the
+  // swarm). Not pixel-identical to the before, but that is fine for the single-frame animation
+  // (A) and still gives an after frame for the two-frame test (B).
   if (!afterBuffer) {
-    await slack.postThreadReply(channel, threadTs, "_Edit path unavailable, generating the after frame fresh (set OPENAI_API_KEY for a pixel-matched after)._");
-    const [fresh] = await generateImages({ prompts: [instruction], provider: povImageProvider(), size: POV_SOUL_SIZE });
+    const afterPrompt = await buildPovImagePrompt(
+      `${chosen.scene} Now a dense swarm of German cockroaches is pouring out of that exact seam and scattering fast across the floor away from the spray.`,
+      await getActiveVertical()
+    );
+    const [fresh] = await generateImages({ prompts: [afterPrompt], provider: povImageProvider(), size: POV_SOUL_SIZE });
     if (fresh) {
       afterBuffer = fresh.buffer;
       afterMime = fresh.mimetype;
@@ -422,7 +431,7 @@ async function buildRevealForJob(job: BugRevealJobRow, chosen: BeforeOption): Pr
       "• *A* = the *before* image + the animation prompt above.",
       afterUrl
         ? "• *B* = *before + after* images (first frame to last frame) + the animation prompt above."
-        : "• *B* = generate the after (needs OPENAI_API_KEY), then before + after interpolation.",
+        : "• *B* = needs the after frame (it failed this time); rerun to get before + after interpolation.",
     ].join("\n")
   );
 
