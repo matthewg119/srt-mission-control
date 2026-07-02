@@ -202,3 +202,27 @@ canvas.
 
 Build order when we productize: (1) read-only viewer of the catalog + past jobs, (2) chat command
 parity, (3) the region-select edit canvas, (4) vertical switcher + workflow-as-data library.
+
+---
+
+## Avatar-first session gate *(2026-07-04)*
+
+The `#content-full` session now asks **which workflow** right after the hooks (copy is asked once),
+and a pasted copy block is accepted at the hooks step and seeded into the workflow's labeled boxes.
+Full before/after SOP: [SOP-content-workflow-session.md](./SOP-content-workflow-session.md).
+
+```mermaid
+flowchart TD
+  A([go]) --> B[which avatar?]
+  B -->|number| C[30 headlines + story material]
+  C -->|headline N / paste| D[Hookset: verbal / title / POV]
+  D -->|pick a hook OR paste your own lines| W{Which workflow?}
+  W -->|draft| X[Claude Code config prompt]
+  W -->|no copy structure| F[Picture plan as before]
+  W -->|has copy structure| S[Labeled copy - seeded from your message]
+  S -->|line N / paste to re-slot| S
+  S -->|react ✅| P[Paint copy on the shot images]
+  P -->|react ✅| G[Generate shot images]
+  G -->|song| M{Static images or video?}
+  M -->|react ✅| R[Claude Code render prompt + video description]
+```

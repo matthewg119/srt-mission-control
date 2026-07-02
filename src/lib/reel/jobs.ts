@@ -49,6 +49,16 @@ export interface JobData {
   storyboards3?: string[]; // 3 storyboard idea options
   chosen_caption?: string;
   chosen_storyboard?: string;
+  pasted_copy?: string; // Matthew's own copy block pasted at the hooks step (seeds the labeled copy)
+
+  // --- workflow selection + labeled copy structure (Part 1) ---
+  workflow_menu?: Array<{ id: string; name: string; category: string; subcategory?: string | null; status: string; configured: boolean }>; // ordering for `workflow N`
+  structured_copy?: Array<{ key: string; label: string; text: string }>; // the labeled copy boxes, filled
+
+  // --- render-spec authoring (Part 2) ---
+  candidate_spec?: unknown; // a parsed RenderSpec awaiting the mismatch/validation gate
+  save_as_from?: string; // the workflow id whose settings a `save as` new draft carried
+  render_mode?: "static_images" | "animated"; // the mode confirmed for this render
 
   // --- #content-analyzer scrub-or-reference decision ---
   video_url?: string; // the staged public video URL a scrub-or-ref card refers to
@@ -82,7 +92,12 @@ export type JobStage =
   | "headlines"
   | "hookset"
   | "captions"
-  | "picture";
+  | "picture"
+  // workflow selection + copy structure + render-spec authoring stages:
+  | "workflow_pick"
+  | "structured_copy"
+  | "authoring"
+  | "await_example";
 
 export interface ContentJob {
   id: string;

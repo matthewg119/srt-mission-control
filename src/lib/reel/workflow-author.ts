@@ -97,6 +97,8 @@ export async function upsertWorkflow(w: Workflow): Promise<boolean> {
         status: w.status,
         scenes: w.scenes,
         captions: w.captions,
+        copy_structure: w.copy_structure ?? [],
+        render_spec: w.render_spec ?? null,
         song_ref: w.song_ref ?? null,
         render_sequences: w.render_sequences,
         render_options: w.render_options,

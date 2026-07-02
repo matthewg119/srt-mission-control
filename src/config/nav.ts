@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Users,
   Smartphone,
+  Clapperboard,
 } from "lucide-react";
 
 export interface NavSection {
@@ -45,6 +46,12 @@ export const navSections: NavSection[] = [
       { label: "Email Director", href: "/dashboard/email-sequences", icon: Users },
       { label: "Automations", href: "/dashboard/automations", icon: Zap },
       { label: "Campaigns", href: "/dashboard/campaigns", icon: MessageSquare },
+    ],
+  },
+  {
+    label: "Content",
+    items: [
+      { label: "Content Studio", href: "/dashboard/content-workflows", icon: Clapperboard },
     ],
   },
   {

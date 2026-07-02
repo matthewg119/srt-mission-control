@@ -12,7 +12,7 @@ import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/c
 import { stripEmDashes } from "@/lib/reel/text";
 import { loadHeadlineSwipe } from "@/data/reel/headline-swipe";
 import type { Vertical } from "@/config/verticals";
-import type { Workflow } from "@/config/workflows";
+import type { Workflow, RenderSpec, RenderMode } from "@/config/workflows";
 
 function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
@@ -559,4 +559,174 @@ export async function generatePicturePlan(args: {
       .filter((c) => c.text),
   ];
   return { scenes, captions };
+}
+
+// =======================================================================================
+// WORKFLOW COPY STRUCTURE (v3) — fill a workflow's labeled copy boxes, re-slot a pasted block
+// into them, and parse a pasted storyboard/timestamps into a RenderSpec.
+// =======================================================================================
+
+export interface StructuredCopyLine {
+  key: string;
+  label: string;
+  text: string;
+}
+interface CopyLinesResult {
+  lines: Array<{ key: string; text: string }>;
+}
+function isCopyLines(v: unknown): v is CopyLinesResult {
+  const p = v as CopyLinesResult;
+  return typeof v === "object" && v !== null && Array.isArray(p.lines) && p.lines.every((l) => l && typeof l.key === "string" && typeof l.text === "string");
+}
+
+function rolesBlock(workflow: Workflow): string {
+  return (workflow.copy_structure ?? [])
+    .map((r, i) => `${i + 1}. key="${r.key}" (${r.label}): ${r.guidance}`)
+    .join("\n");
+}
+
+/** Fill each of the workflow's copy-structure roles with one line of copy in the avatar's voice,
+ *  seeded by whatever copy Matthew already chose. Returns one line per role, in role order. */
+export async function generateStructuredCopy(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  seed?: { headline?: string; hook?: string; caption?: string; storyboard?: string };
+}): Promise<StructuredCopyLine[]> {
+  const roles = args.workflow.copy_structure ?? [];
+  if (!roles.length) return [];
+  const system = [
+    `You are Vektor, the direct-response creative director for a ${args.vertical.business_descriptor}.`,
+    `Write ONE short on-screen line for EACH labeled box below, in the customer's language. Return`,
+    `exactly ${roles.length} lines, one per box, using the box "key". Keep each line tight (10 words`,
+    "or fewer). The lines must read as one continuous piece of copy, box by box.",
+    "",
+    "COPY STRUCTURE (fill each box):",
+    rolesBlock(args.workflow),
+    "",
+    avatarBlock(args.vertical),
+    "",
+    "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<CopyLinesResult>({
+    model: model(),
+    system,
+    user: [
+      args.seed?.headline ? `Headline being built on: ${args.seed.headline}` : "",
+      args.seed?.hook ? `Chosen hook: ${args.seed.hook}` : "",
+      args.seed?.caption ? `Caption direction: ${args.seed.caption}` : "",
+      args.seed?.storyboard ? `Storyboard: ${args.seed.storyboard}` : "",
+      `Return JSON: lines, one per box, each { key, text }. Keys: ${roles.map((r) => r.key).join(", ")}.`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    maxTokens: 900,
+    temperature: 0.85,
+    schemaHint: '{ "lines": [{ "key": string, "text": string }] }',
+    validate: isCopyLines,
+  });
+
+  const byKey = new Map(data.lines.map((l) => [l.key, clean(l.text)]));
+  return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+}
+
+/** Re-slot a raw pasted copy block into the workflow's labeled boxes (the "turn my copy into
+ *  structure" case). Returns one line per role, in role order (some may be empty if unmatched). */
+export async function reslotCopyToStructure(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  pastedBlock: string;
+}): Promise<StructuredCopyLine[]> {
+  const roles = args.workflow.copy_structure ?? [];
+  if (!roles.length) return [];
+  const system = [
+    "You are Vektor. Map the operator's pasted copy onto the labeled boxes below. Assign each",
+    "pasted line to the box it best fits, in order. Do NOT rewrite the lines; keep the operator's",
+    "exact words. If there are more pasted lines than boxes, merge the closest ones; if fewer,",
+    "leave the extra boxes empty.",
+    "",
+    "COPY STRUCTURE:",
+    rolesBlock(args.workflow),
+    "",
+    "HARD RULES: keep the operator's wording; never use em dashes.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<CopyLinesResult>({
+    model: model(),
+    system,
+    user: [
+      "Pasted copy:",
+      args.pastedBlock,
+      "",
+      `Return JSON: lines, one per box, each { key, text }. Keys: ${roles.map((r) => r.key).join(", ")}.`,
+    ].join("\n"),
+    maxTokens: 900,
+    temperature: 0.3,
+    schemaHint: '{ "lines": [{ "key": string, "text": string }] }',
+    validate: isCopyLines,
+  });
+
+  const byKey = new Map(data.lines.map((l) => [l.key, clean(l.text)]));
+  return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+}
+
+/** Parse a pasted storyboard / timestamp block (freeform, like "Video 1 / 0.0 to 3.5 s / TXT 1
+ *  ...") into a RenderSpec. Best-effort NL parse; returns null if it cannot be read. */
+export async function parseStoryboardToRenderSpec(args: {
+  text: string;
+  mode?: RenderMode;
+  songRef?: string | null;
+}): Promise<RenderSpec | null> {
+  const system = [
+    "You are Vektor. Parse the operator's pasted storyboard into a strict JSON render spec.",
+    "A 'Video N' / 'Shot N' block is one shot with a start and end second. Each 'TXT/txt N' line",
+    "is one on-screen text with its own in/out seconds (and an optional [ROLE] tag and position",
+    "note in parentheses). Read the seconds exactly as written. Do not invent text or timings.",
+    "",
+    "Return JSON: { mode, duration_seconds, shots: [{ i, start, end }],",
+    '  texts: [{ n, text, at_second, out_second, role, position }] }.',
+    "role is the [TAG] lowercased if present; position is the parenthetical note if present.",
+  ].join("\n");
+
+  interface ParsedSpec {
+    duration_seconds?: number;
+    shots: Array<{ i: number; start: number; end: number }>;
+    texts: Array<{ n?: number; text: string; at_second: number; out_second?: number; role?: string; position?: string }>;
+  }
+  const isParsed = (v: unknown): v is ParsedSpec => {
+    const p = v as ParsedSpec;
+    return typeof v === "object" && v !== null && Array.isArray(p.shots) && Array.isArray(p.texts);
+  };
+
+  try {
+    const { data } = await callClaudeJSON<ParsedSpec>({
+      model: model(),
+      system,
+      user: ["Storyboard:", args.text, "", "Return the JSON render spec."].join("\n"),
+      maxTokens: 1200,
+      temperature: 0.2,
+      schemaHint:
+        '{ "mode": string, "duration_seconds": number, "shots": [{ "i": number, "start": number, "end": number }], "texts": [{ "n": number, "text": string, "at_second": number, "out_second": number, "role": string, "position": string }] }',
+      validate: isParsed,
+    });
+    if (!data.shots.length) return null;
+    const duration = data.duration_seconds || Math.max(...data.shots.map((s) => s.end));
+    return {
+      mode: args.mode ?? "static_images",
+      song_ref: args.songRef ?? null,
+      duration_seconds: duration,
+      shots: data.shots.map((s) => ({ i: s.i, start: s.start, end: s.end })),
+      texts: data.texts.map((t, idx) => ({
+        n: t.n ?? idx + 1,
+        text: clean(t.text),
+        at_second: t.at_second,
+        out_second: t.out_second,
+        role: t.role,
+        position: t.position,
+      })),
+    };
+  } catch (e) {
+    console.error("[creative-director] parseStoryboardToRenderSpec failed:", (e as Error).message);
+    return null;
+  }
 }

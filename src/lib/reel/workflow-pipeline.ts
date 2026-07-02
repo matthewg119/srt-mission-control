@@ -25,18 +25,29 @@ import {
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
 import { enrichScene } from "@/lib/reel/prompt-enrich";
 import { saveContentExample } from "@/lib/reel/content-examples";
-import { loadWorkflow, resolveSong } from "@/config/workflows";
+import { loadWorkflow, listWorkflows, resolveSong } from "@/config/workflows";
 import { loadVertical, listVerticals } from "@/config/verticals";
 import {
   generateHeadlineOptions,
   generateCreativeReference,
   generateHookSet,
-  generateCaptionsAndStoryboards,
   generatePicturePlan,
+  generateStructuredCopy,
+  reslotCopyToStructure,
+  parseStoryboardToRenderSpec,
+  type StructuredCopyLine,
 } from "@/lib/reel/creative-director";
-import { setWorkflowSong, addRenderSequence, upsertWorkflow, workflowId } from "@/lib/reel/workflow-author";
+import {
+  specFromWorkflow,
+  applyCopyToSpec,
+  validateRenderSpec,
+  buildVideoDescription,
+  buildRenderClaudePrompt,
+  textsForShot,
+} from "@/lib/reel/render-spec";
+import { setWorkflowSong, setWorkflowStatus, addRenderSequence, upsertWorkflow, workflowId } from "@/lib/reel/workflow-author";
 import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
-import type { Workflow, WorkflowScene } from "@/config/workflows";
+import type { Workflow, WorkflowScene, RenderSpec, RenderMode } from "@/config/workflows";
 
 function numbered(items: string[]): string {
   return items.map((t, i) => `${i + 1}. ${t}`).join("\n");
@@ -192,6 +203,12 @@ export async function handleVektorMessage(args: {
     await setWorkflowSong(data.workflow_id, ref);
     await updateJob(job, { data: { ...job.data, song_ref: ref } });
     await slack.postThreadReply(args.channel, threadTs, `🎵 Song set: *${resolveSong(ref).label}*.`);
+    // If this workflow renders from a spec, the song is the last missing piece: move to the
+    // render-authoring gate (confirm mode, validate, then emit the Claude Code prompt).
+    const wfSong = await loadWorkflow(data.workflow_id);
+    if (wfSong?.render_spec) {
+      await postRenderConfirmCard(args.channel, threadTs, job, wfSong, ref);
+    }
     return true;
   }
   if (/^\s*sequences\s*$/i.test(t) && data.workflow_id) {
@@ -223,6 +240,49 @@ export async function handleVektorMessage(args: {
     return true;
   }
 
+  // ---- Part 2: render-spec authoring commands (need a workflow in context) ---------------
+  if (data.workflow_id) {
+    const wf0 = await loadWorkflow(data.workflow_id);
+
+    // `modify copy` -> back to the labeled boxes.
+    if (/^\s*modify\s+copy\s*$/i.test(t) && wf0) {
+      await updateJob(job, { stage: "structured_copy" });
+      const lines: StructuredCopyLine[] =
+        data.structured_copy ?? (wf0.copy_structure ?? []).map((r) => ({ key: r.key, label: r.label, text: "" }));
+      const card = await postStructuredCopyCard(args.channel, threadTs, wf0, lines);
+      const cardTs = (card as { ts?: string }).ts;
+      if (cardTs) {
+        await updateJob(job, { pickerTs: cardTs, data: { ...job.data, structured_copy: lines } });
+        await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+      }
+      return true;
+    }
+
+    // `save draft` -> keep the current build as a draft, render nothing.
+    if (/^\s*save\s+draft\s*$/i.test(t) && wf0) {
+      await setWorkflowStatus(wf0.id, "draft");
+      await slack.postThreadReply(args.channel, threadTs, `Saved *${wf0.name}* as a draft. Nothing rendered.`);
+      return true;
+    }
+
+    // `save as <name>` -> clone the settings into a NEW draft workflow, carry them into a fresh
+    // #content-full message, and leave the original as a draft. Only the new one is saved.
+    const saveAs = /^\s*save\s+as\s+(.+)\s*$/i.exec(t);
+    if (saveAs && wf0) {
+      const newName = saveAs[1].trim();
+      await startSaveAs(args.channel, job, wf0, newName);
+      return true;
+    }
+
+    // A pasted storyboard/timestamps block -> parse, mismatch-guard, validate (never auto-render).
+    if (looksLikeStoryboard(t) && wf0 && job.stage !== "structured_copy") {
+      await slack.postThreadReply(args.channel, threadTs, "Reading your timestamps...");
+      const pasted = t;
+      waitUntil(handlePastedStoryboard(args.channel, threadTs, job, wf0, pasted));
+      return true;
+    }
+  }
+
   // Stage: headlines -> pick/paste a headline -> hookset.
   if (job.stage === "headlines") {
     let headline: string | undefined;
@@ -247,7 +307,7 @@ export async function handleVektorMessage(args: {
             numbered(hs.title),
           ];
           if (hs.pov?.length) parts.push("", "*POV-first title hooks* — `pov N`:", numbered(hs.pov));
-          parts.push("", "Or send your own with `hook <text>`.");
+          parts.push("", "Pick one, or just *paste your own copy* (I will slot it into the workflow), or `hook <text>`.");
           const fresh = await getLatestJobByThread(threadTs);
           if (fresh) await updateJob(fresh, { data: { ...fresh.data, hookset: hs } });
           await slack.postThreadReply(args.channel, threadTs, parts.join("\n"));
@@ -259,9 +319,12 @@ export async function handleVektorMessage(args: {
     return true;
   }
 
-  // Stage: hookset -> choose the hook -> captions + storyboards.
+  // Stage: hookset -> pick a hook OR paste your own copy -> straight to the WORKFLOW picker.
+  // (This is the gate: the workflow question comes right after the hooks, and a pasted copy block
+  // is accepted here so the session never stalls and the labeled copy is seeded from your words.)
   if (job.stage === "hookset") {
     let hook: string | undefined;
+    let pastedCopy: string | undefined;
     const hm = /^\s*hook\s+(.+)\s*$/i.exec(t);
     if (hm) hook = hm[1].trim();
     const hs = data.hookset;
@@ -271,42 +334,21 @@ export async function handleVektorMessage(args: {
     if (ti && hs?.title?.[ti - 1]) hook = hs.title[ti - 1];
     if (vi && hs?.verbal?.[vi - 1]) hook = hs.verbal[vi - 1];
     if (pi && hs?.pov?.[pi - 1]) hook = hs.pov[pi - 1];
+    // Any other non-command text is Matthew's own copy/message: keep it as the seed.
+    if (!hook && t && !isCommand(t)) {
+      pastedCopy = t;
+      hook = t.split("\n")[0].trim();
+    }
     if (!hook) return false;
-    await updateJob(job, { stage: "captions", data: { ...job.data, chosen_hook: hook } });
-    await slack.postThreadReply(args.channel, threadTs, `Hook: *${hook}*. Drafting captions + storyboards...`);
-    const chosenHook = hook;
-    waitUntil(
-      (async () => {
-        try {
-          const vertical = await loadVertical(job.vertical_id);
-          const cs = await generateCaptionsAndStoryboards({ vertical, chosenHook });
-          const fresh = await getLatestJobByThread(threadTs);
-          if (fresh)
-            await updateJob(fresh, {
-              data: { ...fresh.data, captions3: cs.captions, storyboards3: cs.storyboards },
-            });
-          await slack.postThreadReply(
-            args.channel,
-            threadTs,
-            [
-              "*Captions* — pick with `pick <caption#> <story#>`:",
-              numbered(cs.captions),
-              "",
-              "*Storyboards:*",
-              numbered(cs.storyboards),
-              "",
-              "Example: `pick 1 2` (caption 1, storyboard 2).",
-            ].join("\n")
-          );
-        } catch (e) {
-          console.error("[workflow-pipeline] captions gen failed:", (e as Error).message);
-        }
-      })()
-    );
+    await updateJob(job, {
+      stage: "workflow_pick",
+      data: { ...job.data, chosen_hook: hook, ...(pastedCopy ? { pasted_copy: pastedCopy } : {}) },
+    });
+    await postWorkflowMenu(args.channel, threadTs, job.vertical_id);
     return true;
   }
 
-  // Stage: captions -> pick caption + storyboard -> the picture plan + a checkmark to render.
+  // Stage: captions -> pick caption + storyboard -> the WORKFLOW picker (copy-first).
   if (job.stage === "captions") {
     const pm = /^\s*pick\s+(\d{1,2})\s+(\d{1,2})\s*$/i.exec(t);
     if (!pm) return false;
@@ -317,86 +359,146 @@ export async function handleVektorMessage(args: {
       return true;
     }
     await updateJob(job, {
-      stage: "picture",
+      stage: "workflow_pick",
       data: { ...job.data, chosen_caption: caption, chosen_storyboard: storyboard },
     });
-    await slack.postThreadReply(args.channel, threadTs, "Mapping the whole picture (scenes + timing)...");
-    const hook = data.chosen_hook || "";
+    await postWorkflowMenu(args.channel, threadTs, job.vertical_id);
+    return true;
+  }
+
+  // Stage: workflow_pick -> `workflow N` picks the workflow to build the copy into.
+  if (job.stage === "workflow_pick") {
+    const wi = idxFrom(t, "workflow");
+    if (!wi) return false;
+    const menu = data.workflow_menu ?? [];
+    const chosen = menu[wi - 1];
+    if (!chosen) {
+      await slack.postThreadReply(args.channel, threadTs, "That number is out of range. Reply `workflow N` from the list.");
+      return true;
+    }
+    const wf = await loadWorkflow(chosen.id);
+    if (!wf) {
+      await slack.postThreadReply(args.channel, threadTs, "Could not load that workflow. Pick another.");
+      return true;
+    }
+    // Unconfigured (draft/no copy_structure): hand back the Claude Code prompt to finish it.
+    if (!chosen.configured) {
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        [
+          `*${wf.name}* is not configured yet. To finish it, give Claude Code this:`,
+          "```",
+          `Configure the workflow "${wf.name}" (id: ${wf.id}, avatar: ${wf.vertical_id}) in srt-mission-control:`,
+          "define its copy_structure (labeled boxes), song, shot count, and the per-second render_spec",
+          "(shots + on-screen text timings + positions). Then set status=active.",
+          "```",
+          "Or pick another workflow.",
+        ].join("\n")
+      );
+      return true;
+    }
+    // Active but no labeled copy structure (e.g. seeded POV): use today's picture flow unchanged.
+    if (!wf.copy_structure?.length) {
+      await updateJob(job, { stage: "picture", data: { ...job.data, workflow_id: wf.id } });
+      await slack.postThreadReply(args.channel, threadTs, "Mapping the whole picture (scenes + timing)...");
+      waitUntil(
+        generateAndPostPicture({
+          channel: args.channel,
+          threadTs,
+          verticalId: job.vertical_id,
+          hook: data.chosen_hook || "",
+          caption: data.chosen_caption || "",
+          storyboard: data.chosen_storyboard || "",
+          workflow: wf,
+        })
+      );
+      return true;
+    }
+
+    // Configured with a copy structure: generate the labeled copy, then let Matthew edit it.
+    await updateJob(job, { stage: "structured_copy", data: { ...job.data, workflow_id: wf.id } });
+    await slack.postThreadReply(args.channel, threadTs, `Building the copy for *${wf.name}*...`);
+    const seed = {
+      headline: data.chosen_headline,
+      hook: data.chosen_hook,
+      caption: data.chosen_caption,
+      storyboard: data.chosen_storyboard,
+    };
+    const pastedCopy = data.pasted_copy;
     waitUntil(
       (async () => {
         try {
           const vertical = await loadVertical(job.vertical_id);
-          const plan = await generatePicturePlan({
-            vertical,
-            chosenHook: hook,
-            chosenCaption: caption,
-            chosenStoryboard: storyboard,
-          });
-
-          // Persist as a reusable draft workflow (templatable blueprint).
-          const name = (hook || storyboard).slice(0, 60);
-          const wfId = workflowId(job.vertical_id, "pov", name);
-          const scenes: WorkflowScene[] = plan.scenes.map((s) => ({
-            role: s.role,
-            image_prompt: s.image_prompt,
-            animation_prompt: s.animation_prompt,
-            duration_seconds: 2,
-            image_url: null,
-            image_approved: false,
-          }));
-          const workflow: Workflow = {
-            id: wfId,
-            vertical_id: job.vertical_id,
-            name,
-            category: "pov",
-            subcategory: null,
-            status: "draft",
-            scenes,
-            captions: plan.captions,
-            song_ref: null,
-            render_sequences: [],
-            render_options: { min_shots: scenes.length, max_shots: scenes.length, clip_seconds: 2, aspect: "9:16" },
-            example_video_url: null,
-            example_storyboard: null,
-            shot_screenshots: [],
-            source_kind: "authored",
-            source_example_id: null,
-          };
-          await upsertWorkflow(workflow);
-
-          const sceneLines = plan.scenes
-            .map((s, i) => `*Scene ${i + 1} — ${s.role}*\n  image: ${s.image_prompt}\n  motion: ${s.animation_prompt}`)
-            .join("\n\n");
-          const timeline = plan.captions.map((c) => `  ${c.at_second}s  ${c.text}`).join("\n");
-          const card = await slack.postThreadReply(
-            args.channel,
-            threadTs,
-            [
-              `*The picture* for *${name}*:`,
-              sceneLines,
-              "",
-              "*On-screen text (timed):*",
-              "```",
-              timeline,
-              "```",
-              "React ✅ to generate the images. Reply to tweak any scene first.",
-            ].join("\n")
-          );
-          const cardTs = (card as { ts?: string }).ts;
+          // If Matthew pasted his own copy, re-slot HIS words into the boxes (feedback on his
+          // message); otherwise generate fresh copy seeded from the chosen hook.
+          const lines = pastedCopy
+            ? await reslotCopyToStructure({ vertical, workflow: wf, pastedBlock: pastedCopy })
+            : await generateStructuredCopy({ vertical, workflow: wf, seed });
           const fresh = await getLatestJobByThread(threadTs);
+          const card = await postStructuredCopyCard(args.channel, threadTs, wf, lines);
+          const cardTs = (card as { ts?: string }).ts;
           if (fresh)
             await updateJob(fresh, {
               pickerTs: cardTs ?? fresh.picker_msg_ts,
-              data: { ...fresh.data, workflow_id: wfId, caption_storyboard: { captions: plan.captions, ig_caption: caption } },
+              data: { ...fresh.data, structured_copy: lines },
             });
           if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
         } catch (e) {
-          console.error("[workflow-pipeline] picture plan failed:", (e as Error).message);
-          await slack.postThreadReply(args.channel, threadTs, "Could not map the picture. Try `pick` again.").catch(() => {});
+          console.error("[workflow-pipeline] structured copy gen failed:", (e as Error).message);
+          await slack.postThreadReply(args.channel, threadTs, "Could not build the copy. Try another workflow.").catch(() => {});
         }
       })()
     );
     return true;
+  }
+
+  // Stage: structured_copy -> edit lines (`line N <text>`) or paste a raw block to re-slot.
+  if (job.stage === "structured_copy") {
+    const lines = data.structured_copy ?? [];
+    const wf = data.workflow_id ? await loadWorkflow(data.workflow_id) : null;
+    if (!wf) return false;
+
+    const lm = /^\s*line\s+(\d{1,2})\s+(.+)\s*$/i.exec(t);
+    if (lm) {
+      const idx = parseInt(lm[1], 10) - 1;
+      if (idx < 0 || idx >= lines.length) {
+        await slack.postThreadReply(args.channel, threadTs, `Line ${idx + 1} is out of range (1 to ${lines.length}).`);
+        return true;
+      }
+      const next = lines.map((l, i) => (i === idx ? { ...l, text: lm[2].trim() } : l));
+      await updateJob(job, { data: { ...job.data, structured_copy: next } });
+      const card = await postStructuredCopyCard(args.channel, threadTs, wf, next);
+      const cardTs = (card as { ts?: string }).ts;
+      if (cardTs) {
+        await updateJob(job, { pickerTs: cardTs });
+        await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+      }
+      return true;
+    }
+
+    // A pasted multi-line block -> re-slot it into the labeled boxes.
+    if (t.includes("\n") && !isCommand(t)) {
+      await slack.postThreadReply(args.channel, threadTs, "Re-slotting your copy into the structure...");
+      const pasted = t;
+      waitUntil(
+        (async () => {
+          try {
+            const vertical = await loadVertical(job.vertical_id);
+            const reslotted = await reslotCopyToStructure({ vertical, workflow: wf, pastedBlock: pasted });
+            const fresh = await getLatestJobByThread(threadTs);
+            const card = await postStructuredCopyCard(args.channel, threadTs, wf, reslotted);
+            const cardTs = (card as { ts?: string }).ts;
+            if (fresh) await updateJob(fresh, { pickerTs: cardTs ?? fresh.picker_msg_ts, data: { ...fresh.data, structured_copy: reslotted } });
+            if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+          } catch (e) {
+            console.error("[workflow-pipeline] reslot failed:", (e as Error).message);
+          }
+        })()
+      );
+      return true;
+    }
+    return false;
   }
 
   // Stage: picture -> `redo N <new prompt>` regenerates one scene's image.
@@ -461,8 +563,10 @@ async function renderScene(
 }
 
 /**
- * ✅ on a picture card: generate the real image for every scene, post them, write the urls back
- * onto the workflow, and save each to the library (same edit-and-save loop as other images).
+ * ✅ on a workflow card. Routed by the reacted job's stage:
+ *   structured_copy -> build the picture (scene image prompts + grouped-by-shot preview)
+ *   authoring       -> validate + emit the Claude Code prompt for the render
+ *   picture         -> generate the real images per scene (today's behavior, grouped recap)
  * Returns true when handled.
  */
 export async function handlePictureReaction(args: {
@@ -472,7 +576,12 @@ export async function handlePictureReaction(args: {
 }): Promise<boolean> {
   if (!["white_check_mark", "heavy_check_mark", "+1"].includes(args.reaction)) return false;
   const job = await getJobByPickerTs(args.slackTs);
-  if (!job || job.format_id !== "workflow" || job.stage !== "picture") return false;
+  if (!job || job.format_id !== "workflow") return false;
+
+  if (job.stage === "structured_copy") return buildPictureFromStructuredCopy(job, args.channel);
+  if (job.stage === "authoring") return emitRenderPrompt(job, args.channel);
+  if (job.stage !== "picture") return false;
+
   const workflowIdRef = job.data.workflow_id;
   if (!workflowIdRef) return false;
 
@@ -505,21 +614,474 @@ export async function handlePictureReaction(args: {
           }
         }
         await upsertWorkflow(wf);
-        await slack.postThreadReply(
-          args.channel,
-          threadTs,
-          [
-            "Images done and saved to the library.",
-            "Tweak any with `redo <n> <new prompt>`.",
-            "Set a song with `song <key|url>`, or save an audio variant with `sequence <song> [label]`.",
-          ].join("\n")
-        );
+        // Back to `picture` so `redo N` + song still work after the images land.
+        await updateJob(job, { stage: "picture" });
+
+        // Paint the picture: if this workflow renders from a spec, recap the copy grouped by shot
+        // (which text lands on which image) and point at the song -> render-authoring step.
+        if (wf.render_spec) {
+          const base = specFromWorkflow(wf);
+          const filled = base ? applyCopyToSpec(base, job.data.structured_copy) : null;
+          if (filled) await slack.postThreadReply(args.channel, threadTs, buildVideoDescription(wf, filled));
+          await slack.postThreadReply(
+            args.channel,
+            threadTs,
+            [
+              "Images done and saved to the library. Tweak any with `redo <n> <new prompt>`.",
+              "Add the song with `song <key|url>` and I will confirm the render mode, then hand you the Claude Code prompt to build it.",
+            ].join("\n")
+          );
+        } else {
+          await slack.postThreadReply(
+            args.channel,
+            threadTs,
+            [
+              "Images done and saved to the library.",
+              "Tweak any with `redo <n> <new prompt>`.",
+              "Set a song with `song <key|url>`, or save an audio variant with `sequence <song> [label]`.",
+            ].join("\n")
+          );
+        }
       } catch (e) {
         console.error("[workflow-pipeline] handlePictureReaction gen failed:", (e as Error).message);
       }
     })()
   );
   return true;
+}
+
+// ---- helpers: menus, cards, picture build, render authoring ----------------------------
+
+/** Post the workflow library (active first, drafts marked "needs config") and persist the
+ *  ordering so `workflow N` resolves. */
+async function postWorkflowMenu(channel: string, threadTs: string, verticalId: string): Promise<void> {
+  const all = (await listWorkflows(verticalId, { status: "all" })).filter((w) => w.status !== "archived");
+  const menu = all
+    .sort((a, b) => (a.status === b.status ? 0 : a.status === "active" ? -1 : 1))
+    .map((w) => ({
+      id: w.id,
+      name: w.name,
+      category: String(w.category),
+      subcategory: w.subcategory ?? null,
+      status: w.status,
+      configured: w.status === "active",
+    }));
+  const list = menu
+    .map(
+      (w, i) =>
+        `${i + 1}. ${w.name}${w.subcategory ? ` (${w.subcategory})` : ""}  · ${w.category}${w.configured ? "" : "  — needs config"}`
+    )
+    .join("\n");
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      "*Which workflow are we building?* Reply `workflow N`.",
+      list || "_No workflows yet. Tell Claude Code to author one._",
+    ].join("\n")
+  );
+  const job = await getLatestJobByThread(threadTs);
+  if (job) await updateJob(job, { data: { ...job.data, workflow_menu: menu } });
+}
+
+/** Post the labeled copy boxes for a workflow (each `N. *Label* — text`). Returns the Slack post. */
+async function postStructuredCopyCard(
+  channel: string,
+  threadTs: string,
+  workflow: Workflow,
+  lines: StructuredCopyLine[]
+): Promise<unknown> {
+  const body = lines.map((l, i) => `${i + 1}. *${l.label}* — ${l.text || "_(empty)_"}`).join("\n");
+  return slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `*${workflow.name}* — copy. Edit any line with \`line N <text>\`, or paste a full block to re-slot.`,
+      body,
+      "",
+      "React ✅ when the copy is right (then I paint it onto the shot images).",
+    ].join("\n")
+  );
+}
+
+/** The plain picture flow for an active workflow with NO copy structure (today's behavior). */
+async function generateAndPostPicture(args: {
+  channel: string;
+  threadTs: string;
+  verticalId: string;
+  hook: string;
+  caption: string;
+  storyboard: string;
+  workflow?: Workflow;
+}): Promise<void> {
+  try {
+    const vertical = await loadVertical(args.verticalId);
+    const plan = await generatePicturePlan({
+      vertical,
+      chosenHook: args.hook,
+      chosenCaption: args.caption,
+      chosenStoryboard: args.storyboard,
+    });
+    const name = args.workflow?.name || (args.hook || args.storyboard).slice(0, 60);
+    const wfId = args.workflow?.id || workflowId(args.verticalId, "pov", name);
+    const scenes: WorkflowScene[] = plan.scenes.map((s) => ({
+      role: s.role,
+      image_prompt: s.image_prompt,
+      animation_prompt: s.animation_prompt,
+      duration_seconds: 2,
+      image_url: null,
+      image_approved: false,
+    }));
+    const workflow: Workflow = args.workflow
+      ? { ...args.workflow, scenes, captions: plan.captions }
+      : {
+          id: wfId,
+          vertical_id: args.verticalId,
+          name,
+          category: "pov",
+          subcategory: null,
+          status: "draft",
+          scenes,
+          captions: plan.captions,
+          song_ref: null,
+          render_sequences: [],
+          render_options: { min_shots: scenes.length, max_shots: scenes.length, clip_seconds: 2, aspect: "9:16" },
+          example_video_url: null,
+          example_storyboard: null,
+          shot_screenshots: [],
+          source_kind: "authored",
+          source_example_id: null,
+        };
+    await upsertWorkflow(workflow);
+
+    const sceneLines = plan.scenes
+      .map((s, i) => `*Scene ${i + 1} — ${s.role}*\n  image: ${s.image_prompt}\n  motion: ${s.animation_prompt}`)
+      .join("\n\n");
+    const timeline = plan.captions.map((c) => `  ${c.at_second}s  ${c.text}`).join("\n");
+    const card = await slack.postThreadReply(
+      args.channel,
+      args.threadTs,
+      [
+        `*The picture* for *${name}*:`,
+        sceneLines,
+        "",
+        "*On-screen text (timed):*",
+        "```",
+        timeline,
+        "```",
+        "React ✅ to generate the images. Reply to tweak any scene first.",
+      ].join("\n")
+    );
+    const cardTs = (card as { ts?: string }).ts;
+    const fresh = await getLatestJobByThread(args.threadTs);
+    if (fresh)
+      await updateJob(fresh, {
+        pickerTs: cardTs ?? fresh.picker_msg_ts,
+        data: { ...fresh.data, workflow_id: wfId, caption_storyboard: { captions: plan.captions, ig_caption: args.caption } },
+      });
+    if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+  } catch (e) {
+    console.error("[workflow-pipeline] generateAndPostPicture failed:", (e as Error).message);
+    await slack.postThreadReply(args.channel, args.threadTs, "Could not map the picture. Try `pick` again.").catch(() => {});
+  }
+}
+
+/** Build a picture card grouped by shot: each shot's image prompt + the copy that lands on it. */
+function buildPictureCard(workflow: Workflow, spec: RenderSpec): string {
+  const modeLabel = spec.mode === "animated" ? "video (animated clips)" : "static images";
+  const out: string[] = [`*The picture* for *${workflow.name}* (${modeLabel}, ${spec.duration_seconds}s):`];
+  for (const shot of [...spec.shots].sort((a, b) => a.i - b.i)) {
+    const scene = workflow.scenes[shot.i - 1];
+    out.push(`*Shot ${shot.i}* (${shot.start}s to ${shot.end}s)${scene?.role ? ` — ${scene.role}` : ""}`);
+    if (scene?.image_prompt) out.push(`  image: ${scene.image_prompt}`);
+    for (const tx of textsForShot(spec, shot.i)) {
+      const pos = tx.position ? ` (${tx.position})` : "";
+      out.push(`  ${tx.at_second}s to ${tx.out_second ?? shot.end}s  "${tx.text || tx.role || ""}"${pos}`);
+    }
+  }
+  out.push("", "React ✅ to generate the shot images.");
+  return out.join("\n");
+}
+
+/** ✅ on the labeled-copy card: generate one image prompt per shot from the copy, upsert them onto
+ *  the workflow, and post the picture grouped by shot (copy painted on the images). */
+async function buildPictureFromStructuredCopy(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const threadTs = job.slack_thread_ts;
+  await updateJob(job, { stage: "picture" });
+  await slack.postThreadReply(channel, threadTs, "Painting the picture (mapping copy to the shots)...");
+
+  waitUntil(
+    (async () => {
+      try {
+        const wf = await loadWorkflow(wfId);
+        if (!wf) return;
+        const structured = job.data.structured_copy ?? [];
+        const base = specFromWorkflow(wf);
+        const spec = base ? applyCopyToSpec(base, structured) : null;
+        const shotCount = spec?.shots.length || wf.render_options.max_shots || 3;
+        const vertical = await loadVertical(job.vertical_id);
+        const captionText = structured.map((l) => l.text).filter(Boolean).join(" / ");
+        const plan = await generatePicturePlan({
+          vertical,
+          chosenHook: job.data.chosen_hook || wf.name,
+          chosenCaption: captionText || wf.name,
+          chosenStoryboard: job.data.chosen_storyboard || wf.name,
+        });
+        let scenes = plan.scenes.slice(0, shotCount);
+        while (scenes.length < shotCount) {
+          scenes = scenes.concat(scenes[scenes.length - 1] ?? { role: `shot ${scenes.length + 1}`, image_prompt: "first-person b-roll on the job", animation_prompt: "slow push in" });
+        }
+        const wfScenes: WorkflowScene[] = scenes.map((s) => ({
+          role: s.role,
+          image_prompt: s.image_prompt,
+          animation_prompt: s.animation_prompt,
+          duration_seconds: 2,
+          image_url: null,
+          image_approved: false,
+        }));
+        const updated: Workflow = { ...wf, scenes: wfScenes };
+        await upsertWorkflow(updated);
+        const card = await slack.postThreadReply(channel, threadTs, spec ? buildPictureCard(updated, spec) : "React ✅ to generate the images.");
+        const cardTs = (card as { ts?: string }).ts;
+        const fresh = await getLatestJobByThread(threadTs);
+        if (fresh) await updateJob(fresh, { pickerTs: cardTs ?? fresh.picker_msg_ts, data: { ...fresh.data, candidate_spec: spec } });
+        if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+      } catch (e) {
+        console.error("[workflow-pipeline] buildPictureFromStructuredCopy failed:", (e as Error).message);
+        await slack.postThreadReply(channel, threadTs, "Could not paint the picture. Try `modify copy`.").catch(() => {});
+      }
+    })()
+  );
+  return true;
+}
+
+/** After the song is set, confirm the render mode + validate, then wait for ✅ to emit the prompt. */
+async function postRenderConfirmCard(
+  channel: string,
+  threadTs: string,
+  job: ContentJob,
+  workflow: Workflow,
+  songRef: string | null
+): Promise<void> {
+  const mode: RenderMode = (workflow.render_spec?.mode as RenderMode) ?? "static_images";
+  const base = specFromWorkflow(workflow, mode);
+  if (!base) return;
+  const spec = applyCopyToSpec(base, job.data.structured_copy);
+  spec.song_ref = songRef;
+  const errs = validateRenderSpec(spec);
+  const modeLabel = mode === "animated" ? "video (animated clips)" : "static images";
+  const card = await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      buildVideoDescription(workflow, spec),
+      "",
+      errs.length
+        ? "*Fix these before rendering:*\n" + errs.map((e) => `• ${e}`).join("\n")
+        : `Render *${workflow.name}* with *${modeLabel}*?`,
+      errs.length
+        ? ""
+        : "React ✅ to get the Claude Code prompt to build this render. Post a clip for any shot to switch it to video.",
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+  const cardTs = (card as { ts?: string }).ts;
+  await updateJob(job, {
+    stage: "authoring",
+    pickerTs: cardTs ?? job.picker_msg_ts,
+    data: { ...job.data, candidate_spec: spec, render_mode: mode, song_ref: songRef ?? undefined },
+  });
+  if (cardTs && !errs.length) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+}
+
+/** ✅ on the render-confirm card: validate once more, then post the Claude Code prompt + the
+ *  machine-readable video description. */
+async function emitRenderPrompt(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const threadTs = job.slack_thread_ts;
+  const wf = await loadWorkflow(wfId);
+  if (!wf) return false;
+  let spec = job.data.candidate_spec as RenderSpec | undefined;
+  if (!spec) {
+    const base = specFromWorkflow(wf, job.data.render_mode);
+    spec = base ? applyCopyToSpec(base, job.data.structured_copy) : undefined;
+  }
+  if (!spec) {
+    await slack.postThreadReply(channel, threadTs, "No render spec to build yet.");
+    return true;
+  }
+  if (job.data.song_ref) spec.song_ref = job.data.song_ref;
+  const errs = validateRenderSpec(spec);
+  if (errs.length) {
+    await slack.postThreadReply(channel, threadTs, ["Cannot render yet:", ...errs.map((e) => `• ${e}`)].join("\n"));
+    return true;
+  }
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      "Here is the Claude Code prompt to build this render:",
+      buildRenderClaudePrompt(wf, spec),
+      "",
+      "*Video description* (for the analyzer + creative director):",
+      buildVideoDescription(wf, spec),
+    ].join("\n")
+  );
+  await updateJob(job, { stage: "done", status: "done" });
+  return true;
+}
+
+/** `save as <name>`: clone the workflow's settings into a new DRAFT, carry them into a fresh
+ *  #content-full message + session, and leave the original as a draft. */
+async function startSaveAs(channel: string, job: ContentJob, wf0: Workflow, newName: string): Promise<void> {
+  const cloneId = workflowId(wf0.vertical_id, String(wf0.category), newName);
+  const clone: Workflow = {
+    ...wf0,
+    id: cloneId,
+    name: newName,
+    status: "draft",
+    source_kind: "reference_video",
+    shot_screenshots: [],
+    used_at: null,
+  };
+  await upsertWorkflow(clone);
+  await setWorkflowStatus(wf0.id, "draft"); // leave the original as a draft
+  const shots = clone.render_spec?.shots.length ?? clone.copy_structure?.length ?? 0;
+  const msg = await slack.postMessage(
+    channel,
+    [
+      `*New workflow* *${newName}* started from *${wf0.name}* (both drafts now).`,
+      `Carried: ${shots} shots, song ${resolveSong(clone.song_ref).label}, ${String(clone.category)}/${clone.subcategory ?? "general"}.`,
+      "Add or change the song with `song <key|url>`, paste new timestamps, or upload an example video. Then I hand you the Claude Code prompt.",
+    ].join("\n")
+  );
+  const ts = (msg as { ts?: string }).ts;
+  if (ts) {
+    await insertJob({
+      formatId: "workflow",
+      verticalId: wf0.vertical_id,
+      channel,
+      threadTs: ts,
+      pickerTs: ts,
+      stage: "authoring",
+      sourceKind: "save_as",
+      data: { workflow_id: cloneId, structured_copy: job.data.structured_copy, save_as_from: wf0.id },
+    });
+  }
+}
+
+/** Heuristic: a pasted block that looks like a shot/timestamp storyboard. */
+function looksLikeStoryboard(t: string): boolean {
+  if (!/\n/.test(t)) return false;
+  const timing = /\b\d+(\.\d+)?\s*(?:to|-|–)\s*\d+(\.\d+)?\s*s?\b/i;
+  const shotHdr = /\b(video|shot|clip)\s*\d+\b/i;
+  const txtCount = (t.match(/\btxt\b/gi) ?? []).length;
+  return timing.test(t) && (shotHdr.test(t) || txtCount >= 2);
+}
+
+/** Parse a pasted storyboard, mismatch-guard it against the workflow, validate, and either offer
+ *  options (never auto-render) or move to the render-confirm gate. */
+async function handlePastedStoryboard(
+  channel: string,
+  threadTs: string,
+  job: ContentJob,
+  wf0: Workflow,
+  pasted: string
+): Promise<void> {
+  try {
+    const mode: RenderMode = (wf0.render_spec?.mode as RenderMode) ?? "static_images";
+    const spec = await parseStoryboardToRenderSpec({ text: pasted, mode, songRef: job.data.song_ref ?? wf0.song_ref });
+    if (!spec) {
+      await slack.postThreadReply(channel, threadTs, "Could not read those timestamps. Check the format and try again.");
+      return;
+    }
+    const structRoles = wf0.copy_structure?.length ?? 0;
+    const structShots = wf0.render_spec?.shots.length ?? wf0.render_options.max_shots ?? 0;
+    const mismatch =
+      (structRoles > 0 && spec.texts.length !== structRoles) || (structShots > 0 && spec.shots.length !== structShots);
+    await updateJob(job, { data: { ...job.data, candidate_spec: spec } });
+
+    if (mismatch) {
+      await slack.postThreadReply(
+        channel,
+        threadTs,
+        [
+          "This is not what you said.",
+          `The workflow *${wf0.name}* is ${structRoles} lines / ${structShots} shots; your paste is ${spec.texts.length} lines / ${spec.shots.length} shots.`,
+          "What do you want to do?",
+          "• `modify copy` — bring the copy back to the structure",
+          "• `save as <new name>` — keep this as a new workflow (the original stays a draft)",
+          "• `save draft` — save the current build and stop",
+        ].join("\n")
+      );
+      return;
+    }
+    const errs = validateRenderSpec(spec);
+    if (errs.length) {
+      await slack.postThreadReply(channel, threadTs, ["Fix these before rendering:", ...errs.map((e) => `• ${e}`)].join("\n"));
+      return;
+    }
+    await postRenderConfirmCard(channel, threadTs, job, { ...wf0, render_spec: spec }, spec.song_ref ?? null);
+  } catch (e) {
+    console.error("[workflow-pipeline] handlePastedStoryboard failed:", (e as Error).message);
+  }
+}
+
+/**
+ * Launch a workflow's Slack session from the app ("Run in Slack"): post to #content-full, seed a
+ * job at the structured_copy stage for this workflow, generate + post the labeled copy card with a
+ * ✅. The rest of the flow (edit copy -> paint picture -> images -> song -> render prompt) runs in
+ * Slack as usual. Returns the thread ts so the app can deep-link.
+ */
+export async function launchWorkflowInSlack(id: string): Promise<{ ok: boolean; threadTs?: string }> {
+  const channel = process.env.SLACK_CONTENT_FULL_CHANNEL;
+  if (!channel) return { ok: false };
+  const wf = await loadWorkflow(id);
+  if (!wf) return { ok: false };
+  const res = await slack.postMessage(
+    channel,
+    `*Vektor* launching *${wf.name}* (\`${wf.vertical_id}\`) from the app. Building the copy...`
+  );
+  const ts = (res as { ts?: string }).ts;
+  if (!ts) return { ok: false };
+
+  if (!wf.copy_structure?.length) {
+    await slack.postThreadReply(channel, ts, `*${wf.name}* has no copy structure yet. Configure it via Claude Code first.`);
+    return { ok: true, threadTs: ts };
+  }
+
+  await insertJob({
+    formatId: "workflow",
+    verticalId: wf.vertical_id,
+    channel,
+    threadTs: ts,
+    pickerTs: ts,
+    stage: "structured_copy",
+    sourceKind: "app_launch",
+    data: { workflow_id: wf.id },
+  });
+
+  waitUntil(
+    (async () => {
+      try {
+        const vertical = await loadVertical(wf.vertical_id);
+        const lines = await generateStructuredCopy({ vertical, workflow: wf, seed: {} });
+        const card = await postStructuredCopyCard(channel, ts, wf, lines);
+        const cardTs = (card as { ts?: string }).ts;
+        const fresh = await getLatestJobByThread(ts);
+        if (fresh)
+          await updateJob(fresh, { pickerTs: cardTs ?? fresh.picker_msg_ts, data: { ...fresh.data, structured_copy: lines } });
+        if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+      } catch (e) {
+        console.error("[workflow-pipeline] launchWorkflowInSlack gen failed:", (e as Error).message);
+      }
+    })()
+  );
+  return { ok: true, threadTs: ts };
 }
 
 /** True when a top-level #content-full message is an avatar command like `vektor pest_control`. */

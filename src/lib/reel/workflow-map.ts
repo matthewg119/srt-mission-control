@@ -53,7 +53,8 @@ export async function buildWorkflowMermaid(
       for (const [sub, ws] of subs) {
         lines.push(`        ${sub}`);
         for (const w of ws) {
-          lines.push(`          ${clean(w.name)} ${w.status}`);
+          const tag = w.status === "active" ? "active" : `${w.status} needs config`;
+          lines.push(`          ${clean(w.name)} ${tag}`);
         }
       }
     }

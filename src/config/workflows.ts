@@ -36,6 +36,66 @@ export interface WorkflowCaption {
   at_second: number;
 }
 
+// A labeled copy "box" in a workflow's copy structure (avatar / callout / pain / cta ...). Each
+// role also remembers WHERE and WHEN its line appears (shot + in/out seconds + on-screen
+// position), so the structure is the single source for both the copy and its placement.
+export interface CopyRole {
+  key: string; // stable role key, e.g. "avatar", "pain_callout", "cta"
+  label: string; // human label shown in Slack, e.g. "Pain callout"
+  guidance: string; // what this line must do (fed to Claude when generating the copy)
+  shot?: number; // which shot this line sits on (1-based)
+  at_second?: number; // when the line pops up
+  out_second?: number; // when it leaves
+  position?: string; // on-screen placement, e.g. "upper_middle", "center", "lower"
+}
+
+// The shared vocabulary of copy roles new workflows reuse so labels stay consistent.
+export const COPY_ROLE_LIBRARY: Record<string, { label: string; guidance: string }> = {
+  avatar: { label: "Avatar", guidance: "Name who this is for (the owner/operator persona)." },
+  callout: { label: "Hard truth / callout", guidance: "One-line pain that stops the scroll." },
+  pain_callout: { label: "Pain callout", guidance: "One-line pain that stops the scroll." },
+  increase_pain: { label: "Increase pain / category", guidance: "Twist the knife, make it personal." },
+  logical_reason: { label: "Logical reason", guidance: "The because: why the pain is real." },
+  pattern_callout: { label: "Pattern callout (industry-wide)", guidance: "Name the pattern everyone repeats." },
+  dream_outcome: { label: "Dream outcome", guidance: "The desired result in one line." },
+  solution: { label: "Dream outcome + logical solution", guidance: "How they get it, stated as the method." },
+  pain_reminder: { label: "Pain reminder", guidance: "Re-anchor the pain right before the CTA." },
+  cta: { label: "CTA", guidance: "Single clear call to action (link in bio)." },
+};
+
+// ---- Render spec: how a workflow's structure becomes a video ---------------------------
+// A workflow's copy structure is render-mode-agnostic. `static_images` holds each still for
+// its slot (timing always fits); `animated` uses a generated/posted clip per shot. Mode is
+// chosen at render (Vektor always confirms first). The render_spec is what the emitted Claude
+// Code prompt is built from, and what content-analyzer / the creative director read to iterate.
+export type RenderMode = "static_images" | "animated";
+
+export interface RenderShot {
+  i: number; // 1-based shot index
+  start: number; // slot start (seconds)
+  end: number; // slot end (seconds)
+}
+
+export interface RenderTextEvent {
+  n?: number; // 1-based display order
+  text: string;
+  at_second: number;
+  out_second?: number;
+  role?: string; // the CopyRole.key this text fills
+  size?: string; // e.g. "small" | "medium" | "large"
+  position?: string; // on-screen placement
+}
+
+export interface RenderSpec {
+  mode: RenderMode;
+  song_ref?: string | null;
+  duration_seconds: number;
+  shots: RenderShot[];
+  texts: RenderTextEvent[]; // the timed on-screen text (default/example copy)
+  description?: string; // AI/human-readable description of the finished video
+  example_video_url?: string | null; // optional reference that was scanned
+}
+
 export interface WorkflowRenderOptions {
   min_shots?: number;
   max_shots?: number;
@@ -67,6 +127,8 @@ export interface Workflow {
   status: WorkflowStatus | string;
   scenes: WorkflowScene[];
   captions: WorkflowCaption[];
+  copy_structure?: CopyRole[]; // ordered labeled boxes for this workflow's on-screen copy
+  render_spec?: RenderSpec | null; // baked shots + timed texts + mode (drives the render prompt)
   song_ref?: string | null;
   render_sequences: RenderSequence[]; // template variants (different song/beat/timing)
   render_options: WorkflowRenderOptions;
@@ -166,8 +228,64 @@ const PEST_WASP_NEST: Workflow = {
   source_example_id: null,
 };
 
+// The first authored B-roll workflow: 3 shots, 6 timed on-screen headlines, static images by
+// default (the song is added in Slack). copy_structure carries each line's shot + timing +
+// on-screen position; render_spec is the baked timeline the emitted Claude Code prompt uses.
+const PEST_6HL_PROPAGANDA: Workflow = {
+  id: "pest_control__broll__6hl_propaganda",
+  vertical_id: "pest_control",
+  name: "B roll 6 headlines propaganda",
+  category: "broll",
+  subcategory: "6hl_propaganda",
+  status: "active",
+  scenes: [],
+  captions: [
+    { text: "Pest control Owners", at_second: 0.0 },
+    { text: "Your slow season, is somebody elses high season", at_second: 0.3 },
+    { text: "Homeowners already know who to call and is not you", at_second: 3.4 },
+    { text: "Because Your zip code doesn't know you exist yet", at_second: 6.4 },
+    { text: "imagine clients calling you first", at_second: 8.3 },
+    { text: "Check out link in bio.", at_second: 10.2 },
+  ],
+  copy_structure: [
+    { key: "avatar", label: "Avatar", guidance: "Name who this is for.", shot: 1, at_second: 0.0, out_second: 3.5, position: "upper_side" },
+    { key: "pain_callout", label: "Pain callout", guidance: "One-line pain that stops the scroll.", shot: 1, at_second: 0.3, out_second: 3.5, position: "upper_middle" },
+    { key: "increase_pain", label: "Increase pain / category", guidance: "Twist the knife, make it personal.", shot: 2, at_second: 3.4, out_second: 8.3, position: "center" },
+    { key: "logical_reason", label: "Logical reason", guidance: "The because: why the pain is real.", shot: 2, at_second: 6.4, out_second: 8.3, position: "center" },
+    { key: "dream_outcome", label: "Dream outcome", guidance: "The desired result in one line.", shot: 3, at_second: 8.3, out_second: 11.3, position: "center" },
+    { key: "cta", label: "CTA", guidance: "Single clear call to action.", shot: 3, at_second: 10.2, out_second: 11.3, position: "lower" },
+  ],
+  render_spec: {
+    mode: "static_images",
+    song_ref: null,
+    duration_seconds: 11.3,
+    shots: [
+      { i: 1, start: 0.0, end: 3.5 },
+      { i: 2, start: 3.4, end: 8.3 },
+      { i: 3, start: 8.3, end: 11.3 },
+    ],
+    texts: [
+      { n: 1, text: "Pest control Owners", at_second: 0.0, out_second: 3.5, position: "upper_side", role: "avatar" },
+      { n: 2, text: "Your slow season, is somebody elses high season", at_second: 0.3, out_second: 3.5, position: "upper_middle", role: "pain_callout" },
+      { n: 3, text: "Homeowners already know who to call and is not you", at_second: 3.4, out_second: 8.3, position: "center", role: "increase_pain" },
+      { n: 4, text: "Because Your zip code doesn't know you exist yet", at_second: 6.4, out_second: 8.3, position: "center", role: "logical_reason" },
+      { n: 5, text: "imagine clients calling you first", at_second: 8.3, out_second: 11.3, position: "center", role: "dream_outcome" },
+      { n: 6, text: "Check out link in bio.", at_second: 10.2, out_second: 11.3, position: "lower", role: "cta" },
+    ],
+  },
+  song_ref: null,
+  render_sequences: [],
+  render_options: { min_shots: 3, max_shots: 3, aspect: "9:16" },
+  example_video_url: null,
+  example_storyboard: null,
+  shot_screenshots: [],
+  source_kind: "authored",
+  source_example_id: null,
+};
+
 export const SEED_WORKFLOWS: Record<string, Workflow> = {
   [PEST_WASP_NEST.id]: PEST_WASP_NEST,
+  [PEST_6HL_PROPAGANDA.id]: PEST_6HL_PROPAGANDA,
 };
 
 // ---------------------------------------------------------------------------------------
@@ -183,6 +301,8 @@ interface WorkflowRow {
   status?: string | null;
   scenes?: WorkflowScene[] | null;
   captions?: WorkflowCaption[] | null;
+  copy_structure?: CopyRole[] | null;
+  render_spec?: RenderSpec | null;
   song_ref?: string | null;
   render_sequences?: RenderSequence[] | null;
   render_options?: WorkflowRenderOptions | null;
@@ -204,6 +324,8 @@ function normalizeRow(row: WorkflowRow): Workflow {
     status: row.status || "draft",
     scenes: Array.isArray(row.scenes) ? row.scenes : [],
     captions: Array.isArray(row.captions) ? row.captions : [],
+    copy_structure: Array.isArray(row.copy_structure) ? row.copy_structure : [],
+    render_spec: row.render_spec ?? null,
     song_ref: row.song_ref ?? null,
     render_sequences: Array.isArray(row.render_sequences) ? row.render_sequences : [],
     render_options: row.render_options ?? {},
