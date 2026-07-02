@@ -60,6 +60,10 @@ export interface JobData {
   save_as_from?: string; // the workflow id whose settings a `save as` new draft carried
   render_mode?: "static_images" | "animated"; // the mode confirmed for this render
 
+  // --- remixes: 16 narrative variations of the same workflow + audio + render combo ---
+  remixes?: Array<{ key: string; label: string; lines: Array<{ key: string; label: string; text: string }> }>; // drafted variations (ordering for `remix N`)
+  remix_angle?: string; // the angle key currently being built
+
   // --- #content-analyzer scrub-or-reference decision ---
   video_url?: string; // the staged public video URL a scrub-or-ref card refers to
   video_mimetype?: string;
@@ -97,7 +101,10 @@ export type JobStage =
   | "workflow_pick"
   | "structured_copy"
   | "authoring"
-  | "await_example";
+  | "await_example"
+  // remix upsell stages (after the render prompt is emitted):
+  | "remix_offer"
+  | "remix_copy";
 
 export interface ContentJob {
   id: string;

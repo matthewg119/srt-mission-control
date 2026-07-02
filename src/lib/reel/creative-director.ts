@@ -671,6 +671,156 @@ export async function reslotCopyToStructure(args: {
   return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
 }
 
+// ---- Remixes: 16 narrative variations of the SAME workflow + audio + render combo -------
+// After a video is built, the upsell: same structure, same song, same timings, a different
+// narrative angle. Approving a remix re-renders with the same images (or regenerates
+// creatives from the new copy on request).
+
+export interface RemixAngle {
+  key: string;
+  label: string;
+  guidance: string;
+}
+
+export const REMIX_ANGLES: RemixAngle[] = [
+  { key: "propaganda", label: "Propaganda", guidance: "Relentless one-sided drumbeat: repeat the core claim like a movement slogan." },
+  { key: "indoctrination", label: "Indoctrination", guidance: "Teach it as the obvious truth insiders already live by; the viewer is late to it." },
+  { key: "direct_cta", label: "Direct call to action", guidance: "Every line pushes the click; urgent, imperative, zero fluff." },
+  { key: "mini_story", label: "Mini story", guidance: "A tiny 3-act story: someone like the viewer, the turn, the outcome." },
+  { key: "horror_story", label: "Horror story", guidance: "The worst case that actually happens when this is ignored; end on the way out." },
+  { key: "testimonial", label: "Testimonial voice", guidance: "First-person as a customer/operator who lived it; concrete and plain." },
+  { key: "myth_bust", label: "Myth bust", guidance: "Name the common belief, break it, replace it with what actually works." },
+  { key: "us_vs_them", label: "Us vs them", guidance: "The scrappy owner against the big players/the old way; pick a side." },
+  { key: "insider_secret", label: "Insider secret", guidance: "What the industry does not say out loud; whispered, forbidden knowledge." },
+  { key: "stat_shock", label: "Stat shock", guidance: "Lead with the surprising number/fact pattern; let the implication land." },
+  { key: "before_after", label: "Before / after", guidance: "Paint the before state, cut to the after state, the mechanism in between." },
+  { key: "objection_kill", label: "Objection killer", guidance: "Voice the viewer's main objection, then dismantle it line by line." },
+  { key: "seasonal_fomo", label: "Seasonal FOMO", guidance: "The window is open NOW and closing; what waiting costs this season." },
+  { key: "authority_proof", label: "Authority / proof", guidance: "Calm expert certainty; speak from experience and results, not hype." },
+  { key: "relatable_daily", label: "Relatable day-to-day", guidance: "The small daily moment every one of them recognizes; humor allowed." },
+  { key: "dream_outcome", label: "Dream outcome", guidance: "Pure aspiration: the life/business after the problem is gone." },
+];
+
+/** One remix: fill the workflow's copy boxes in a specific narrative angle, keeping the same
+ *  structure and roughly the same line lengths so the timings still fit. */
+export async function generateRemixCopy(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  angle: RemixAngle;
+  baseCopy?: StructuredCopyLine[];
+}): Promise<StructuredCopyLine[]> {
+  const roles = args.workflow.copy_structure ?? [];
+  if (!roles.length) return [];
+  const system = [
+    `You are Vektor, the direct-response creative director for a ${args.vertical.business_descriptor}.`,
+    "This workflow already produced a video. Write a REMIX: the same labeled structure, the same",
+    `timings, a different narrative. Angle: ${args.angle.label} - ${args.angle.guidance}`,
+    "Write ONE short line per box (10 words or fewer, so it fits the same on-screen slot).",
+    "The lines must read as one continuous piece of copy in the new angle.",
+    "",
+    "COPY STRUCTURE (fill each box):",
+    (args.workflow.copy_structure ?? []).map((r, i) => `${i + 1}. key="${r.key}" (${r.label}): ${r.guidance}`).join("\n"),
+    "",
+    avatarBlock(args.vertical),
+    "",
+    "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<CopyLinesResult>({
+    model: model(),
+    system,
+    user: [
+      args.baseCopy?.length
+        ? ["The ORIGINAL video's copy (do not repeat it, vary the narrative):", ...args.baseCopy.map((l) => `- [${l.label}] ${l.text}`)].join("\n")
+        : "",
+      `Return JSON: lines, one per box, each { key, text }. Keys: ${roles.map((r) => r.key).join(", ")}.`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    maxTokens: 900,
+    temperature: 0.9,
+    schemaHint: '{ "lines": [{ "key": string, "text": string }] }',
+    validate: isCopyLines,
+  });
+  const byKey = new Map(data.lines.map((l) => [l.key, clean(l.text)]));
+  return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+}
+
+export interface RemixVariation {
+  key: string;
+  label: string;
+  lines: StructuredCopyLine[];
+}
+
+/** All 16 remixes in ONE call: for each angle, a full set of lines for the workflow's boxes.
+ *  Best-effort: angles the model misses are simply left out of the result. */
+export async function generateAllRemixes(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  baseCopy?: StructuredCopyLine[];
+}): Promise<RemixVariation[]> {
+  const roles = args.workflow.copy_structure ?? [];
+  if (!roles.length) return [];
+  interface AllRemixesResult {
+    variations: Array<{ key: string; lines: Array<{ key: string; text: string }> }>;
+  }
+  const isAll = (v: unknown): v is AllRemixesResult => {
+    const p = v as AllRemixesResult;
+    return (
+      typeof v === "object" &&
+      v !== null &&
+      Array.isArray(p.variations) &&
+      p.variations.length > 0 &&
+      p.variations.every((x) => x && typeof x.key === "string" && Array.isArray(x.lines))
+    );
+  };
+  const system = [
+    `You are Vektor, the direct-response creative director for a ${args.vertical.business_descriptor}.`,
+    "This workflow already produced a video. Write 16 REMIX variations: the same labeled",
+    "structure and timings, each in a different narrative angle. One short line per box",
+    "(10 words or fewer). Each variation must read as one continuous piece of copy.",
+    "",
+    "THE 16 ANGLES (return one variation per angle, using its key):",
+    REMIX_ANGLES.map((a) => `- key="${a.key}" (${a.label}): ${a.guidance}`).join("\n"),
+    "",
+    "COPY STRUCTURE (fill each box in every variation):",
+    roles.map((r, i) => `${i + 1}. key="${r.key}" (${r.label}): ${r.guidance}`).join("\n"),
+    "",
+    avatarBlock(args.vertical),
+    "",
+    "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<AllRemixesResult>({
+    model: model(),
+    system,
+    user: [
+      args.baseCopy?.length
+        ? ["The ORIGINAL video's copy (vary the narrative, do not repeat it):", ...args.baseCopy.map((l) => `- [${l.label}] ${l.text}`)].join("\n")
+        : "",
+      `Return JSON: variations, one per angle, each { key: <angle key>, lines: [{ key, text }] }.`,
+      `Line keys: ${roles.map((r) => r.key).join(", ")}.`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    maxTokens: 8000,
+    temperature: 0.9,
+    schemaHint: '{ "variations": [{ "key": string, "lines": [{ "key": string, "text": string }] }] }',
+    validate: isAll,
+  });
+
+  const byAngle = new Map(data.variations.map((v) => [v.key, v.lines]));
+  const out: RemixVariation[] = [];
+  for (const angle of REMIX_ANGLES) {
+    const raw = byAngle.get(angle.key);
+    if (!raw) continue;
+    const byKey = new Map(raw.map((l) => [l.key, clean(l.text)]));
+    const lines = roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+    if (lines.some((l) => l.text)) out.push({ key: angle.key, label: angle.label, lines });
+  }
+  return out;
+}
+
 // ---- Productize: turn a pasted FINISHED copy block into a full repeatable workflow ------
 // The point: the structure (roles + shots + timings + textbox positions + category) becomes a
 // repeatable pattern, so the same audio/structure can carry different copy next time.

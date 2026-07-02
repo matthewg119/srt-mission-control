@@ -52,6 +52,10 @@ flowchart TD
   SY -->|sync manual| M{Confirm render mode<br/>static images or video?}
   SY -->|sync auto| BS[Beat grid read from the song<br/>cuts + text drops snapped to beats] --> M
   M -->|react ✅| R[Emit Claude Code render prompt<br/>+ video description]
+  R --> UP{Remix upsell:<br/>variation of this video?<br/>16 angles: propaganda / indoctrination /<br/>direct CTA / mini story / horror / ...}
+  UP -->|remix N or remixes| RC[New copy in that angle<br/>same structure + song + timings]
+  RC -->|react ✅| M2[Render variation<br/>with the SAME images] --> R
+  RC -->|new images| P
 
   G -. drop 3 screenshots/videos of the manual edit .-> REF[reference creatives 3/3]
   REF -->|finish workflow| PROD[[4th creative renders<br/>workflow IN PRODUCTION]]
@@ -90,5 +94,6 @@ The fixes/features:
 - `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings
 - drop screenshots/videos in the thread — reference creatives (3 needed)
 - `finish workflow` — render the 4th creative and mark the workflow IN PRODUCTION
+- `remix N` / `remixes` — after a render: 16 narrative variations (propaganda, indoctrination, direct CTA, mini story, horror, testimonial, myth bust, us-vs-them, insider secret, stat shock, before/after, objection killer, seasonal FOMO, authority, relatable, dream outcome) of the same workflow + song; ✅ renders with the same images, `new images` regenerates creatives from the new copy
 - `save as <name>` / `save draft` / `modify copy` — when a paste does not match the structure
 - `map` / `library` (optionally `map <avatar>`) — the library as a labeled image

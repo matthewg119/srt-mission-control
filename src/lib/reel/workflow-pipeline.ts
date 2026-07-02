@@ -36,6 +36,9 @@ import {
   reslotCopyToStructure,
   parseStoryboardToRenderSpec,
   productizeCopyToWorkflow,
+  generateRemixCopy,
+  generateAllRemixes,
+  REMIX_ANGLES,
   type StructuredCopyLine,
 } from "@/lib/reel/creative-director";
 import {
@@ -74,7 +77,7 @@ function idxFrom(text: string, verb: string): number | null {
 
 // A pasted line at the `headlines` stage is treated as Matthew's own headline UNLESS it is one
 // of our commands.
-const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|template|create|finish|headline|title|verbal|pov|hook|pick|song|sequence|sequences|\d{1,2})\b/i;
+const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|template|create|finish|remixes|remix|headline|title|verbal|pov|hook|pick|song|sequence|sequences|\d{1,2})\b/i;
 function isCommand(t: string): boolean {
   return COMMAND_RE.test(t.trim());
 }
@@ -314,6 +317,86 @@ export async function handleVektorMessage(args: {
       `*${wfFin.name}*: 3 references in. Marked IN PRODUCTION. The 4th creative (the production test) renders next - confirm below.`
     );
     await postRenderConfirmCard(args.channel, threadTs, job, wfFin, data.song_ref ?? wfFin.song_ref ?? null);
+    return true;
+  }
+
+  // `remixes` — draft ALL 16 narrative variations for this workflow + audio + render combo.
+  if (/^\s*remixes\s*$/i.test(t) && data.workflow_id) {
+    const wfRx = await loadWorkflow(data.workflow_id);
+    if (!wfRx?.copy_structure?.length) {
+      await slack.postThreadReply(args.channel, threadTs, "This workflow has no copy structure to remix yet.");
+      return true;
+    }
+    await slack.postThreadReply(
+      args.channel,
+      threadTs,
+      "Drafting all 16 remixes (same structure + song + timings, 16 different narratives)..."
+    );
+    waitUntil(
+      (async () => {
+        try {
+          const vertical = await loadVertical(job.vertical_id);
+          const variations = await generateAllRemixes({ vertical, workflow: wfRx, baseCopy: job.data.structured_copy });
+          if (!variations.length) {
+            await slack.postThreadReply(args.channel, threadTs, "Could not draft the remixes. Try `remixes` again.");
+            return;
+          }
+          const fresh = await getLatestJobByThread(threadTs);
+          if (fresh) await updateJob(fresh, { data: { ...fresh.data, remixes: variations } });
+          const list = variations
+            .map((v, i) => `${i + 1}. *${v.label}* - "${v.lines.find((l) => l.text)?.text ?? ""}"`)
+            .join("\n");
+          await slack.postThreadReply(
+            args.channel,
+            threadTs,
+            [`*${variations.length} remixes drafted.* Reply \`remix N\` to load one:`, list].join("\n")
+          );
+        } catch (e) {
+          console.error("[workflow-pipeline] remixes gen failed:", (e as Error).message);
+          await slack.postThreadReply(args.channel, threadTs, "Could not draft the remixes. Try `remixes` again.").catch(() => {});
+        }
+      })()
+    );
+    return true;
+  }
+
+  // `remix N` — load a drafted variation (or write that angle fresh). ✅ on the card renders it
+  // with the SAME images; `new images` regenerates the creatives from the new copy.
+  const remixIdx = idxFrom(t, "remix");
+  if (remixIdx && data.workflow_id) {
+    const wfRx = await loadWorkflow(data.workflow_id);
+    if (!wfRx?.copy_structure?.length) {
+      await slack.postThreadReply(args.channel, threadTs, "This workflow has no copy structure to remix yet.");
+      return true;
+    }
+    const stored = data.remixes?.[remixIdx - 1];
+    if (stored) {
+      await postRemixCopyCard(args.channel, threadTs, job, wfRx, stored.label, stored.lines);
+      return true;
+    }
+    const angle = REMIX_ANGLES[remixIdx - 1];
+    if (!angle) {
+      await slack.postThreadReply(args.channel, threadTs, `Pick 1 to ${REMIX_ANGLES.length}, or \`remixes\` to draft all of them.`);
+      return true;
+    }
+    await slack.postThreadReply(args.channel, threadTs, `Writing the *${angle.label}* remix...`);
+    waitUntil(
+      (async () => {
+        try {
+          const vertical = await loadVertical(job.vertical_id);
+          const lines = await generateRemixCopy({ vertical, workflow: wfRx, angle, baseCopy: job.data.structured_copy });
+          if (!lines.some((l) => l.text)) {
+            await slack.postThreadReply(args.channel, threadTs, "Could not write that remix. Try again.");
+            return;
+          }
+          const fresh = await getLatestJobByThread(threadTs);
+          if (fresh) await postRemixCopyCard(args.channel, threadTs, fresh, wfRx, angle.label, lines);
+        } catch (e) {
+          console.error("[workflow-pipeline] remix gen failed:", (e as Error).message);
+          await slack.postThreadReply(args.channel, threadTs, "Could not write that remix. Try again.").catch(() => {});
+        }
+      })()
+    );
     return true;
   }
 
@@ -602,11 +685,20 @@ export async function handleVektorMessage(args: {
     return true;
   }
 
-  // Stage: structured_copy -> edit lines (`line N <text>`) or paste a raw block to re-slot.
-  if (job.stage === "structured_copy") {
+  // Stage: structured_copy / remix_copy -> edit lines (`line N <text>`) or paste a block to
+  // re-slot. remix_copy keeps its own footer (✅ = same images) + accepts `new images`.
+  if (job.stage === "structured_copy" || job.stage === "remix_copy") {
+    const isRemix = job.stage === "remix_copy";
+    const footer = isRemix ? remixCardFooter(data.remix_angle) : undefined;
     const lines = data.structured_copy ?? [];
     const wf = data.workflow_id ? await loadWorkflow(data.workflow_id) : null;
     if (!wf) return false;
+
+    // `new images` (remix only): regenerate the creatives from the new copy instead of reusing
+    // the original shot images. Runs the normal picture -> images -> render path.
+    if (isRemix && /^\s*new\s+images\s*$/i.test(t)) {
+      return buildPictureFromStructuredCopy(job, args.channel);
+    }
 
     const lm = /^\s*line\s+(\d{1,2})\s+(.+)\s*$/i.exec(t);
     if (lm) {
@@ -617,7 +709,7 @@ export async function handleVektorMessage(args: {
       }
       const next = lines.map((l, i) => (i === idx ? { ...l, text: lm[2].trim() } : l));
       await updateJob(job, { data: { ...job.data, structured_copy: next } });
-      const card = await postStructuredCopyCard(args.channel, threadTs, wf, next);
+      const card = await postStructuredCopyCard(args.channel, threadTs, wf, next, footer);
       const cardTs = (card as { ts?: string }).ts;
       if (cardTs) {
         await updateJob(job, { pickerTs: cardTs });
@@ -637,7 +729,7 @@ export async function handleVektorMessage(args: {
             const vertical = await loadVertical(job.vertical_id);
             const reslotted = await reslotCopyToStructure({ vertical, workflow: wf, pastedBlock: pasted });
             const fresh = await getLatestJobByThread(threadTs);
-            const card = await postStructuredCopyCard(args.channel, threadTs, wf, reslotted);
+            const card = await postStructuredCopyCard(args.channel, threadTs, wf, reslotted, footer);
             const cardTs = (card as { ts?: string }).ts;
             if (fresh) await updateJob(fresh, { pickerTs: cardTs ?? fresh.picker_msg_ts, data: { ...fresh.data, structured_copy: reslotted } });
             if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
@@ -729,6 +821,7 @@ export async function handlePictureReaction(args: {
   if (!job || job.format_id !== "workflow") return false;
 
   if (job.stage === "structured_copy") return buildPictureFromStructuredCopy(job, args.channel);
+  if (job.stage === "remix_copy") return renderRemixSameImages(job, args.channel);
   if (job.stage === "authoring") return emitRenderPrompt(job, args.channel);
   if (job.stage !== "picture") return false;
 
@@ -1024,12 +1117,14 @@ async function createWorkflowFromPastedCopy(channel: string, threadTs: string, j
   }
 }
 
-/** Post the labeled copy boxes for a workflow (each `N. *Label* — text`). Returns the Slack post. */
+/** Post the labeled copy boxes for a workflow (each `N. *Label* — text`). The optional footer
+ *  overrides the default ✅ hint (the remix card renders with the SAME images). */
 async function postStructuredCopyCard(
   channel: string,
   threadTs: string,
   workflow: Workflow,
-  lines: StructuredCopyLine[]
+  lines: StructuredCopyLine[],
+  footer?: string
 ): Promise<unknown> {
   const body = lines.map((l, i) => `${i + 1}. *${l.label}* — ${l.text || "_(empty)_"}`).join("\n");
   return slack.postThreadReply(
@@ -1039,7 +1134,70 @@ async function postStructuredCopyCard(
       `*${workflow.name}* — copy. Edit any line with \`line N <text>\`, or paste a full block to re-slot.`,
       body,
       "",
-      "React ✅ when the copy is right (then I paint it onto the shot images).",
+      footer ?? "React ✅ when the copy is right (then I paint it onto the shot images).",
+    ].join("\n")
+  );
+}
+
+// ---- Remix upsell: 16 narrative variations of the same workflow + audio + render ---------
+
+function remixCardFooter(angleLabel?: string): string {
+  return [
+    `React ✅ to render this *${angleLabel ?? "remix"}* variation with the SAME images.`,
+    "Reply `new images` to regenerate the creatives from this copy, or `line N <text>` to edit.",
+  ].join("\n");
+}
+
+/** Post a remix's labeled copy for approval and park the session at remix_copy (✅ = render the
+ *  variation with the same images; `new images` = regenerate creatives from the new copy). */
+async function postRemixCopyCard(
+  channel: string,
+  threadTs: string,
+  job: ContentJob,
+  workflow: Workflow,
+  angleLabel: string,
+  lines: StructuredCopyLine[]
+): Promise<void> {
+  const card = await postStructuredCopyCard(channel, threadTs, workflow, lines, remixCardFooter(angleLabel));
+  const cardTs = (card as { ts?: string }).ts;
+  await updateJob(job, {
+    stage: "remix_copy",
+    pickerTs: cardTs ?? job.picker_msg_ts,
+    data: { ...job.data, structured_copy: lines, remix_angle: angleLabel },
+  });
+  if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+}
+
+/** ✅ on a remix copy card: re-render the SAME images + song with the new copy (straight to the
+ *  render-confirm gate; the spec's texts are overlaid from the approved remix lines). */
+async function renderRemixSameImages(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const wf = await loadWorkflow(wfId);
+  if (!wf) return false;
+  const threadTs = job.slack_thread_ts;
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    `Building the *${job.data.remix_angle ?? "remix"}* variation with the same images + song...`
+  );
+  await postRenderConfirmCard(channel, threadTs, job, wf, job.data.song_ref ?? wf.song_ref ?? null);
+  return true;
+}
+
+/** The upsell after a render prompt is emitted: one click away from 16 more variations of the
+ *  same workflow + audio + render combo. */
+async function postRemixOffer(channel: string, threadTs: string): Promise<void> {
+  const list = REMIX_ANGLES.map((a, i) => `${i + 1}. ${a.label}`).join("   ·   ");
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      "*Want a variation of this video?* Same workflow + song + timings, a different narrative:",
+      list,
+      "",
+      "Reply `remix N` for one, or `remixes` to draft all 16 at once.",
+      "The new copy comes back for approval: ✅ renders it with the SAME images, `new images` regenerates the creatives from the new copy.",
     ].join("\n")
   );
 }
@@ -1271,7 +1429,9 @@ async function emitRenderPrompt(job: ContentJob, channel: string): Promise<boole
       buildVideoDescription(wf, spec),
     ].join("\n")
   );
-  await updateJob(job, { stage: "done", status: "done" });
+  // Keep the session ALIVE for the remix upsell (16 variations of this workflow + audio combo).
+  await updateJob(job, { stage: "remix_offer" });
+  await postRemixOffer(channel, threadTs);
   return true;
 }
 
