@@ -8,7 +8,18 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
-import { loadWorkflow, type Workflow, type WorkflowScene, type WorkflowCategory, type RenderSequence } from "@/config/workflows";
+import {
+  COPY_ROLE_LIBRARY,
+  loadWorkflow,
+  type Workflow,
+  type WorkflowScene,
+  type WorkflowCategory,
+  type RenderSequence,
+  type CopyRole,
+  type RenderSpec,
+} from "@/config/workflows";
+import { validateRenderSpec } from "@/lib/reel/render-spec";
+import type { ProductizedWorkflow } from "@/lib/reel/creative-director";
 
 // The subset of the analyzer's VideoAnalysis this authoring path needs (kept local to avoid a
 // circular import with content-analyzer.ts).
@@ -82,6 +93,92 @@ export async function proposeWorkflowFromAnalysis(args: {
 
   const ok = await upsertWorkflow(workflow);
   return ok ? workflow : null;
+}
+
+/**
+ * Turn a productized copy block (from productizeCopyToWorkflow) into a saved ACTIVE workflow:
+ * copy_structure carries each role's shot/timing/position, render_spec is the baked timeline.
+ * Active because it is genuinely configured (the menu's "configured" flag keys off active).
+ * Aspect: POV (Meta-glasses) records 3:4; everything else renders 9:16.
+ */
+export async function createWorkflowFromProductized(args: {
+  verticalId: string;
+  p: ProductizedWorkflow;
+  songRef?: string | null;
+}): Promise<{ workflow: Workflow; specErrors: string[] } | null> {
+  const { p } = args;
+  const copy_structure: CopyRole[] = p.lines.map((l) => ({
+    key: l.key,
+    label: l.label || COPY_ROLE_LIBRARY[l.key]?.label || l.key,
+    guidance: COPY_ROLE_LIBRARY[l.key]?.guidance ?? (l.label || l.key),
+    shot: l.shot,
+    at_second: l.at_second,
+    out_second: l.out_second,
+    position: l.position,
+  }));
+  const render_spec: RenderSpec = {
+    mode: "static_images",
+    song_ref: args.songRef ?? null,
+    duration_seconds: p.duration_seconds,
+    shots: p.shots.map((s) => ({ i: s.i, start: s.start, end: s.end })),
+    texts: p.lines.map((l, i) => ({
+      n: i + 1,
+      text: l.text,
+      at_second: l.at_second,
+      out_second: l.out_second,
+      position: l.position,
+      role: l.key,
+    })),
+  };
+  const specErrors = validateRenderSpec(render_spec);
+  const workflow: Workflow = {
+    id: workflowId(args.verticalId, p.category, p.name),
+    vertical_id: args.verticalId,
+    name: p.name,
+    category: p.category,
+    subcategory: p.subcategory,
+    status: "active",
+    scenes: [],
+    captions: p.lines.map((l) => ({ text: l.text, at_second: l.at_second })),
+    copy_structure,
+    render_spec,
+    song_ref: args.songRef ?? null,
+    render_sequences: [],
+    render_options: {
+      min_shots: p.shots.length,
+      max_shots: p.shots.length,
+      aspect: p.category === "pov" ? "3:4" : "9:16",
+    },
+    example_video_url: null,
+    example_storyboard: null,
+    shot_screenshots: [],
+    source_kind: "productized",
+    source_example_id: null,
+  };
+  const ok = await upsertWorkflow(workflow);
+  return ok ? { workflow, specErrors } : null;
+}
+
+/** Clone a workflow into ANOTHER avatar's library (cross-avatar template use). The clone keeps
+ *  the structure (copy_structure/render_spec/song) but drops the source's scenes/screenshots so
+ *  the new avatar generates its own visuals. Never mutates the source. */
+export async function cloneWorkflowForVertical(wf: Workflow, verticalId: string): Promise<Workflow | null> {
+  if (wf.vertical_id === verticalId) return wf;
+  const clone: Workflow = {
+    ...wf,
+    id: workflowId(verticalId, String(wf.category), wf.name),
+    vertical_id: verticalId,
+    status: "active",
+    scenes: [],
+    shot_screenshots: [],
+    example_video_url: null,
+    example_storyboard: null,
+    source_kind: "authored",
+    source_example_id: null,
+    used_at: null,
+  };
+  const ok = await upsertWorkflow(clone);
+  return ok ? clone : null;
 }
 
 /** Insert or update a workflow row (keyed on id). Best-effort. */

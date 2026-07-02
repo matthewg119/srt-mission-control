@@ -12,6 +12,7 @@ import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/c
 import { stripEmDashes } from "@/lib/reel/text";
 import { loadHeadlineSwipe } from "@/data/reel/headline-swipe";
 import type { Vertical } from "@/config/verticals";
+import { COPY_ROLE_LIBRARY } from "@/config/workflows";
 import type { Workflow, RenderSpec, RenderMode } from "@/config/workflows";
 
 function model(): ClaudeModel {
@@ -668,6 +669,145 @@ export async function reslotCopyToStructure(args: {
 
   const byKey = new Map(data.lines.map((l) => [l.key, clean(l.text)]));
   return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+}
+
+// ---- Productize: turn a pasted FINISHED copy block into a full repeatable workflow ------
+// The point: the structure (roles + shots + timings + textbox positions + category) becomes a
+// repeatable pattern, so the same audio/structure can carry different copy next time.
+
+export interface ProductizedLine {
+  key: string; // role key from COPY_ROLE_LIBRARY
+  label: string;
+  text: string; // the operator's EXACT line
+  shot: number; // 1-based
+  at_second: number;
+  out_second: number;
+  position: string; // upper_side | upper_middle | center | lower
+}
+
+export interface ProductizedWorkflow {
+  name: string; // the repeatable pattern name, not this specific copy
+  category: string; // pov | broll | reveal | before_after
+  subcategory: string | null;
+  duration_seconds: number;
+  shots: Array<{ i: number; start: number; end: number }>;
+  lines: ProductizedLine[];
+}
+
+const PRODUCTIZE_CATEGORIES = ["pov", "broll", "reveal", "before_after"];
+const PRODUCTIZE_POSITIONS = ["upper_side", "upper_middle", "center", "lower"];
+
+function isProductized(v: unknown): v is ProductizedWorkflow {
+  const p = v as ProductizedWorkflow;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    typeof p.name === "string" &&
+    Array.isArray(p.shots) &&
+    p.shots.length > 0 &&
+    p.shots.every((s) => s && typeof s.i === "number" && typeof s.start === "number" && typeof s.end === "number") &&
+    Array.isArray(p.lines) &&
+    p.lines.length > 0 &&
+    p.lines.every(
+      (l) =>
+        l &&
+        typeof l.key === "string" &&
+        typeof l.text === "string" &&
+        typeof l.shot === "number" &&
+        typeof l.at_second === "number" &&
+        typeof l.out_second === "number"
+    )
+  );
+}
+
+/** Productize a pasted finished copy block: label every line with a role from the shared
+ *  vocabulary, group the lines into shots, time each line, place each textbox, and name the
+ *  repeatable pattern + category. The operator's wording is preserved verbatim. */
+export async function productizeCopyToWorkflow(args: {
+  vertical: Vertical;
+  pastedBlock: string;
+  hook?: string;
+}): Promise<ProductizedWorkflow | null> {
+  const roleVocab = Object.entries(COPY_ROLE_LIBRARY)
+    .map(([k, v]) => `key="${k}" (${v.label}): ${v.guidance}`)
+    .join("\n");
+  const system = [
+    "You are Vektor. The operator pasted FINISHED on-screen copy for a short vertical video.",
+    "Productize it into a repeatable workflow structure: label every line with a role, group the",
+    "lines into shots, and time each line to the second. Do NOT rewrite any line; keep the",
+    "operator's exact words.",
+    "",
+    "ROLE VOCABULARY (assign each pasted line the best-fitting key; keep the pasted order; use",
+    "each key at most once):",
+    roleVocab,
+    "",
+    "TIMING / LAYOUT RULES (the house pattern, like the reference edit: 3 clips at",
+    "0-3.5s / 3.4-8.3s / 8.3-11.3s with 6 stacked texts):",
+    "- 2 to 4 shots, each about 3 to 5 seconds; total 9 to 15 seconds.",
+    "- Shots are contiguous: shot N+1 starts where shot N ends (within 0.2s).",
+    "- Each line gets at_second / out_second inside its shot's slot. A line may pop in mid-shot",
+    "  and usually holds until its shot ends.",
+    "- position is one of: upper_side, upper_middle, center, lower. The first line (avatar/hook)",
+    "  sits at the top of the 9:16 frame; later lines on the same shot stack downward.",
+    "",
+    "NAMING: return a short workflow name (6 words or fewer) describing the repeatable PATTERN,",
+    "not this specific copy. category is one of: pov, broll, reveal, before_after. subcategory is",
+    "one short lowercase word (or empty).",
+    "",
+    "HARD RULES: keep the operator's exact wording; never use em dashes.",
+  ].join("\n");
+
+  try {
+    const { data } = await callClaudeJSON<ProductizedWorkflow>({
+      model: model(),
+      system,
+      user: [
+        args.hook ? `The lead hook: ${args.hook}` : "",
+        "Pasted copy (one line per on-screen text):",
+        args.pastedBlock,
+        "",
+        "Return JSON: { name, category, subcategory, duration_seconds, shots: [{ i, start, end }],",
+        '  lines: [{ key, label, text, shot, at_second, out_second, position }] }.',
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      maxTokens: 1600,
+      temperature: 0.3,
+      schemaHint:
+        '{ "name": string, "category": string, "subcategory": string, "duration_seconds": number, "shots": [{ "i": number, "start": number, "end": number }], "lines": [{ "key": string, "label": string, "text": string, "shot": number, "at_second": number, "out_second": number, "position": string }] }',
+      validate: isProductized,
+    });
+
+    const shots = data.shots
+      .map((s) => ({ i: s.i, start: s.start, end: s.end }))
+      .sort((a, b) => a.i - b.i);
+    const shotIdx = new Set(shots.map((s) => s.i));
+    const lines: ProductizedLine[] = data.lines
+      .map((l) => ({
+        key: l.key,
+        label: clean(l.label || COPY_ROLE_LIBRARY[l.key]?.label || l.key),
+        text: clean(l.text),
+        shot: shotIdx.has(l.shot) ? l.shot : shots[0].i,
+        at_second: l.at_second,
+        out_second: l.out_second,
+        position: PRODUCTIZE_POSITIONS.includes(l.position) ? l.position : "center",
+      }))
+      .filter((l) => l.text);
+    if (!lines.length) return null;
+    const category = PRODUCTIZE_CATEGORIES.includes(String(data.category)) ? String(data.category) : "broll";
+    const duration = data.duration_seconds || Math.max(...shots.map((s) => s.end));
+    return {
+      name: clean(data.name).slice(0, 60) || "Untitled pattern",
+      category,
+      subcategory: data.subcategory ? clean(String(data.subcategory)).toLowerCase().replace(/\s+/g, "_").slice(0, 24) || null : null,
+      duration_seconds: duration,
+      shots,
+      lines,
+    };
+  } catch (e) {
+    console.error("[creative-director] productizeCopyToWorkflow failed:", (e as Error).message);
+    return null;
+  }
 }
 
 /** Parse a pasted storyboard / timestamp block (freeform, like "Video 1 / 0.0 to 3.5 s / TXT 1

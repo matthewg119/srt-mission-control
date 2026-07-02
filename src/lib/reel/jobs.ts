@@ -52,7 +52,7 @@ export interface JobData {
   pasted_copy?: string; // Matthew's own copy block pasted at the hooks step (seeds the labeled copy)
 
   // --- workflow selection + labeled copy structure (Part 1) ---
-  workflow_menu?: Array<{ id: string; name: string; category: string; subcategory?: string | null; status: string; configured: boolean }>; // ordering for `workflow N`
+  workflow_menu?: Array<{ id: string; name: string; category: string; subcategory?: string | null; status: string; configured: boolean; cross_avatar?: boolean }>; // ordering for `workflow N` / `template N`
   structured_copy?: Array<{ key: string; label: string; text: string }>; // the labeled copy boxes, filled
 
   // --- render-spec authoring (Part 2) ---

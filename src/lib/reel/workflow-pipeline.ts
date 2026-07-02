@@ -35,6 +35,7 @@ import {
   generateStructuredCopy,
   reslotCopyToStructure,
   parseStoryboardToRenderSpec,
+  productizeCopyToWorkflow,
   type StructuredCopyLine,
 } from "@/lib/reel/creative-director";
 import {
@@ -45,7 +46,15 @@ import {
   buildRenderClaudePrompt,
   textsForShot,
 } from "@/lib/reel/render-spec";
-import { setWorkflowSong, setWorkflowStatus, addRenderSequence, upsertWorkflow, workflowId } from "@/lib/reel/workflow-author";
+import {
+  setWorkflowSong,
+  setWorkflowStatus,
+  addRenderSequence,
+  upsertWorkflow,
+  workflowId,
+  createWorkflowFromProductized,
+  cloneWorkflowForVertical,
+} from "@/lib/reel/workflow-author";
 import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
 import type { Workflow, WorkflowScene, RenderSpec, RenderMode } from "@/config/workflows";
 
@@ -62,9 +71,17 @@ function idxFrom(text: string, verb: string): number | null {
 
 // A pasted line at the `headlines` stage is treated as Matthew's own headline UNLESS it is one
 // of our commands.
-const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|headline|title|verbal|pov|hook|pick|song|sequence|sequences|\d{1,2})\b/i;
+const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|template|create|finish|headline|title|verbal|pov|hook|pick|song|sequence|sequences|\d{1,2})\b/i;
 function isCommand(t: string): boolean {
   return COMMAND_RE.test(t.trim());
+}
+
+/** A multi-line paste of READY copy (3+ non-empty lines that are not a timestamp storyboard).
+ *  Checked BEFORE isCommand at every copy-accepting stage, because a real copy block can start
+ *  with "POV:" or a number and would otherwise be swallowed as a command (silent stall). */
+function looksLikePastedCopy(t: string): boolean {
+  const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.length >= 3 && !looksLikeStoryboard(t);
 }
 
 // ---- go: avatar picker -----------------------------------------------------------------
@@ -285,6 +302,9 @@ export async function handleVektorMessage(args: {
 
   // Stage: headlines -> pick/paste a headline -> hookset.
   if (job.stage === "headlines") {
+    // A pasted READY copy block (3+ lines) skips hook building entirely: store it and go
+    // straight to the workflow question. Line 1 doubles as the chosen headline/hook.
+    if (looksLikePastedCopy(t)) return acceptPastedCopy(args.channel, threadTs, job, t);
     let headline: string | undefined;
     const hi = idxFrom(t, "headline");
     if (hi && Array.isArray(data.headlines) && data.headlines[hi - 1]) headline = data.headlines[hi - 1];
@@ -323,6 +343,9 @@ export async function handleVektorMessage(args: {
   // (This is the gate: the workflow question comes right after the hooks, and a pasted copy block
   // is accepted here so the session never stalls and the labeled copy is seeded from your words.)
   if (job.stage === "hookset") {
+    // Same fast path as the headlines stage: a 3+ line paste is ready copy, not a hook pick.
+    // Runs BEFORE isCommand so a block starting with "POV:"/a number can't stall the session.
+    if (looksLikePastedCopy(t)) return acceptPastedCopy(args.channel, threadTs, job, t);
     let hook: string | undefined;
     let pastedCopy: string | undefined;
     const hm = /^\s*hook\s+(.+)\s*$/i.exec(t);
@@ -344,7 +367,7 @@ export async function handleVektorMessage(args: {
       stage: "workflow_pick",
       data: { ...job.data, chosen_hook: hook, ...(pastedCopy ? { pasted_copy: pastedCopy } : {}) },
     });
-    await postWorkflowMenu(args.channel, threadTs, job.vertical_id);
+    await postWorkflowMenu(args.channel, threadTs, job.vertical_id, { pastedCopy: pastedCopy ?? job.data.pasted_copy });
     return true;
   }
 
@@ -362,24 +385,61 @@ export async function handleVektorMessage(args: {
       stage: "workflow_pick",
       data: { ...job.data, chosen_caption: caption, chosen_storyboard: storyboard },
     });
-    await postWorkflowMenu(args.channel, threadTs, job.vertical_id);
+    await postWorkflowMenu(args.channel, threadTs, job.vertical_id, { pastedCopy: job.data.pasted_copy });
     return true;
   }
 
-  // Stage: workflow_pick -> `workflow N` picks the workflow to build the copy into.
+  // Stage: workflow_pick -> the LIBRARY gate. `workflow N` uses one, `template N` re-slots the
+  // pasted copy into one's structure, `create` productizes the pasted copy into a NEW workflow.
   if (job.stage === "workflow_pick") {
+    // A fresh copy paste while the menu is open replaces the stored block + re-ranks the menu.
+    if (looksLikePastedCopy(t)) {
+      await updateJob(job, { data: { ...job.data, pasted_copy: t, chosen_hook: t.split("\n")[0].trim() } });
+      await postWorkflowMenu(args.channel, threadTs, job.vertical_id, { pastedCopy: t });
+      return true;
+    }
+    // `create` / `new workflow`: productize the pasted copy into a saved repeatable workflow.
+    if (/^\s*(create|new\s+workflow)\s*$/i.test(t)) {
+      if (!data.pasted_copy) {
+        await slack.postThreadReply(args.channel, threadTs, "Paste your copy block first (3+ lines), then reply `create`.");
+        return true;
+      }
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        "Productizing your copy into a new workflow (labeled roles + timings + textbox positions + category)..."
+      );
+      waitUntil(createWorkflowFromPastedCopy(args.channel, threadTs, job));
+      return true;
+    }
     const wi = idxFrom(t, "workflow");
-    if (!wi) return false;
+    const tmpl = idxFrom(t, "template");
+    const pickIdx = wi ?? tmpl;
+    if (!pickIdx) return false;
+    if (tmpl && !data.pasted_copy) {
+      await slack.postThreadReply(args.channel, threadTs, "Nothing pasted yet. Paste your copy block first, or use `workflow N`.");
+      return true;
+    }
     const menu = data.workflow_menu ?? [];
-    const chosen = menu[wi - 1];
+    const chosen = menu[pickIdx - 1];
     if (!chosen) {
       await slack.postThreadReply(args.channel, threadTs, "That number is out of range. Reply `workflow N` from the list.");
       return true;
     }
-    const wf = await loadWorkflow(chosen.id);
+    let wf = await loadWorkflow(chosen.id);
     if (!wf) {
       await slack.postThreadReply(args.channel, threadTs, "Could not load that workflow. Pick another.");
       return true;
+    }
+    // Cross-avatar template: clone it into THIS avatar's library first; never touch the source.
+    if (chosen.cross_avatar && wf.vertical_id !== job.vertical_id) {
+      const clone = await cloneWorkflowForVertical(wf, job.vertical_id);
+      if (!clone) {
+        await slack.postThreadReply(args.channel, threadTs, "Could not clone that workflow into this avatar. Pick another.");
+        return true;
+      }
+      wf = clone;
+      await slack.postThreadReply(args.channel, threadTs, `Cloned *${wf.name}* into this avatar's library.`);
     }
     // Unconfigured (draft/no copy_structure): hand back the Claude Code prompt to finish it.
     if (!chosen.configured) {
@@ -477,8 +537,9 @@ export async function handleVektorMessage(args: {
       return true;
     }
 
-    // A pasted multi-line block -> re-slot it into the labeled boxes.
-    if (t.includes("\n") && !isCommand(t)) {
+    // A pasted multi-line block -> re-slot it into the labeled boxes. (A real copy block can
+    // start with "POV:"/a number, so a 3+ line paste bypasses the command check.)
+    if (t.includes("\n") && (!isCommand(t) || looksLikePastedCopy(t))) {
       await slack.postThreadReply(args.channel, threadTs, "Re-slotting your copy into the structure...");
       const pasted = t;
       waitUntil(
@@ -652,36 +713,226 @@ export async function handlePictureReaction(args: {
 
 // ---- helpers: menus, cards, picture build, render authoring ----------------------------
 
-/** Post the workflow library (active first, drafts marked "needs config") and persist the
- *  ordering so `workflow N` resolves. */
-async function postWorkflowMenu(channel: string, threadTs: string, verticalId: string): Promise<void> {
-  const all = (await listWorkflows(verticalId, { status: "all" })).filter((w) => w.status !== "archived");
-  const menu = all
-    .sort((a, b) => (a.status === b.status ? 0 : a.status === "active" ? -1 : 1))
-    .map((w) => ({
-      id: w.id,
-      name: w.name,
-      category: String(w.category),
-      subcategory: w.subcategory ?? null,
-      status: w.status,
-      configured: w.status === "active",
-    }));
-  const list = menu
-    .map(
-      (w, i) =>
-        `${i + 1}. ${w.name}${w.subcategory ? ` (${w.subcategory})` : ""}  · ${w.category}${w.configured ? "" : "  — needs config"}`
-    )
-    .join("\n");
+/** Accept a pasted READY copy block (3+ lines): skip hook generation entirely, store the block,
+ *  and go straight to the workflow question. Line 1 doubles as the chosen headline/hook. */
+async function acceptPastedCopy(channel: string, threadTs: string, job: ContentJob, block: string): Promise<boolean> {
+  const first = block.split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? "";
+  await updateJob(job, {
+    stage: "workflow_pick",
+    data: {
+      ...job.data,
+      pasted_copy: block,
+      chosen_headline: job.data.chosen_headline ?? first,
+      chosen_hook: first,
+    },
+  });
+  await postWorkflowMenu(channel, threadTs, job.vertical_id, { pastedCopy: block });
+  return true;
+}
+
+/** One row of the persisted workflow menu (`workflow N` / `template N` index into this). */
+interface WorkflowMenuEntry {
+  id: string;
+  name: string;
+  category: string;
+  subcategory?: string | null;
+  status: string;
+  configured: boolean;
+  cross_avatar?: boolean;
+}
+
+/**
+ * Post the workflow LIBRARY as the "which workflow?" gate: the avatar's workflows grouped by
+ * category (active first), then configured workflows from other avatars as templates. When a
+ * copy block was pasted, lead with which workflows FIT its structure (slot-count match).
+ * Empty library + pasted copy: skip the menu and productize the copy into a new workflow.
+ * Persists the flat numbering so `workflow N` / `template N` resolve.
+ */
+async function postWorkflowMenu(
+  channel: string,
+  threadTs: string,
+  verticalId: string,
+  opts: { pastedCopy?: string } = {}
+): Promise<void> {
+  const own = (await listWorkflows(verticalId, { status: "all" })).filter((w) => w.status !== "archived");
+
+  // Empty library + pasted copy: nothing to pick from, so create the workflow on the spot.
+  if (!own.length && opts.pastedCopy) {
+    await slack.postThreadReply(
+      channel,
+      threadTs,
+      "No workflows for this avatar yet. Productizing your copy into a new workflow (labeled roles + timings + textbox positions + category)..."
+    );
+    const job = await getLatestJobByThread(threadTs);
+    if (job) {
+      if (!job.data.pasted_copy) await updateJob(job, { data: { ...job.data, pasted_copy: opts.pastedCopy } });
+      waitUntil(createWorkflowFromPastedCopy(channel, threadTs, job));
+    }
+    return;
+  }
+
+  // Templates from other avatars: configured (active) workflows with a real structure, capped.
+  const others = (await listWorkflows(undefined, { status: "active" }))
+    .filter((w) => w.vertical_id !== verticalId && (w.copy_structure?.length || w.render_spec))
+    .slice(0, 8);
+
+  // Group own workflows by category (sorted), active first within each; templates last.
+  const ordered: Array<{ w: Workflow; cross: boolean }> = [];
+  const cats = Array.from(new Set(own.map((w) => String(w.category || "other")))).sort();
+  for (const c of cats) {
+    const group = own
+      .filter((w) => String(w.category || "other") === c)
+      .sort((a, b) =>
+        a.status === b.status
+          ? (a.subcategory ?? "").localeCompare(b.subcategory ?? "")
+          : a.status === "active"
+            ? -1
+            : 1
+      );
+    for (const w of group) ordered.push({ w, cross: false });
+  }
+  for (const w of others) ordered.push({ w, cross: true });
+
+  const menu: WorkflowMenuEntry[] = ordered.map(({ w, cross }) => ({
+    id: w.id,
+    name: w.name,
+    category: String(w.category),
+    subcategory: w.subcategory ?? null,
+    status: w.status,
+    configured: w.status === "active",
+    ...(cross ? { cross_avatar: true } : {}),
+  }));
+
+  const describe = (w: Workflow): string => {
+    const slots = w.copy_structure?.length ?? 0;
+    const shots = w.render_spec?.shots.length ?? w.render_options?.max_shots ?? 0;
+    const dur = w.render_spec?.duration_seconds;
+    const bits = [
+      slots ? `${slots} slots` : "",
+      shots ? `${shots} shots` : "",
+      dur ? `${dur}s` : "",
+      w.render_options?.aspect ?? "",
+    ].filter(Boolean);
+    return bits.length ? `  (${bits.join(" · ")})` : "";
+  };
+
+  // Render grouped: category headers for own workflows, then the templates section.
+  const lines: string[] = [];
+  let lastHeader = "";
+  ordered.forEach(({ w, cross }, i) => {
+    const header = cross ? "Templates from other avatars" : String(w.category || "other");
+    if (header !== lastHeader) {
+      lines.push(`*${header}*`);
+      lastHeader = header;
+    }
+    const tag = cross ? `  [${w.vertical_id}]` : w.status === "active" ? "" : "  - needs config";
+    lines.push(`  ${i + 1}. ${w.name}${w.subcategory ? ` (${w.subcategory})` : ""}${describe(w)}${tag}`);
+  });
+
+  // Fit suggestion: rank by slot-count match against the pasted line count (own avatar first).
+  let fitLine = "";
+  if (opts.pastedCopy) {
+    const n = opts.pastedCopy.split("\n").map((l) => l.trim()).filter(Boolean).length;
+    const scored = ordered
+      .map(({ w, cross }, i) => ({ i: i + 1, w, cross, slots: w.copy_structure?.length ?? 0 }))
+      .filter((x) => x.slots > 0 && Math.abs(x.slots - n) <= 1)
+      .sort((a, b) => {
+        const da = Math.abs(a.slots - n) - Math.abs(b.slots - n);
+        if (da !== 0) return da;
+        if (a.cross !== b.cross) return a.cross ? 1 : -1;
+        return a.i - b.i;
+      })
+      .slice(0, 3);
+    if (scored.length) {
+      fitLine =
+        `Your ${n}-line copy fits: ` +
+        scored.map((x) => `*${x.i}. ${x.w.name}* (${x.slots} slots)`).join("  ·  ");
+    }
+  }
+
+  const footer = opts.pastedCopy
+    ? [
+        "Reply:",
+        "• `workflow N` - use it (your pasted copy gets slotted into its boxes)",
+        "• `template N` - same, said explicitly: re-slot YOUR copy into its structure",
+        "• `create` - build a NEW workflow from your copy (roles + timings + positions, saved to the library)",
+        "• `map` - see the whole library",
+      ]
+    : [
+        "Reply `workflow N` to use one, or paste your copy block (3+ lines) and I rank which workflows fit it.",
+        "`create` after pasting builds a new workflow from your copy. `map` shows the whole library.",
+      ];
+
   await slack.postThreadReply(
     channel,
     threadTs,
     [
-      "*Which workflow are we building?* Reply `workflow N`.",
-      list || "_No workflows yet. Tell Claude Code to author one._",
-    ].join("\n")
+      "*Which workflow are we building?*",
+      fitLine,
+      lines.length ? lines.join("\n") : "_No workflows yet. Paste your copy and reply `create`._",
+      "",
+      ...footer,
+    ]
+      .filter(Boolean)
+      .join("\n")
   );
   const job = await getLatestJobByThread(threadTs);
   if (job) await updateJob(job, { data: { ...job.data, workflow_menu: menu } });
+}
+
+/** `create` (or empty library + pasted copy): productize the pasted block into a saved ACTIVE
+ *  workflow, show the structure (roles + timings + positions + category), then continue the
+ *  normal flow from the structured-copy card seeded with the operator's exact lines. */
+async function createWorkflowFromPastedCopy(channel: string, threadTs: string, job: ContentJob): Promise<void> {
+  try {
+    const pasted = job.data.pasted_copy;
+    if (!pasted) return;
+    const vertical = await loadVertical(job.vertical_id);
+    const p = await productizeCopyToWorkflow({ vertical, pastedBlock: pasted, hook: job.data.chosen_hook });
+    if (!p) {
+      await slack.postThreadReply(channel, threadTs, "Could not structure that copy. Try `create` again, or pick a workflow with `workflow N`.");
+      return;
+    }
+    const created = await createWorkflowFromProductized({
+      verticalId: job.vertical_id,
+      p,
+      songRef: job.data.song_ref ?? null,
+    });
+    if (!created) {
+      await slack.postThreadReply(channel, threadTs, "Could not save the new workflow. Try `create` again.");
+      return;
+    }
+    const { workflow: wf, specErrors } = created;
+    const lines: StructuredCopyLine[] = p.lines.map((l) => ({ key: l.key, label: l.label, text: l.text }));
+    const structure = p.lines
+      .map((l) => `  [${l.label}] "${l.text}"  ->  shot ${l.shot}, ${l.at_second}s to ${l.out_second}s, ${l.position}`)
+      .join("\n");
+    await slack.postThreadReply(
+      channel,
+      threadTs,
+      [
+        `Saved as workflow: *${wf.name}* (${wf.category}${wf.subcategory ? "/" + wf.subcategory : ""}, ${p.shots.length} shots, ${p.duration_seconds}s, ${wf.render_options.aspect}).`,
+        "Same structure, different copy next time. The pattern:",
+        structure,
+        specErrors.length ? "Fix before rendering:\n" + specErrors.map((e) => `• ${e}`).join("\n") : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+    const card = await postStructuredCopyCard(channel, threadTs, wf, lines);
+    const cardTs = (card as { ts?: string }).ts;
+    const fresh = await getLatestJobByThread(threadTs);
+    if (fresh)
+      await updateJob(fresh, {
+        stage: "structured_copy",
+        pickerTs: cardTs ?? fresh.picker_msg_ts,
+        data: { ...fresh.data, workflow_id: wf.id, structured_copy: lines },
+      });
+    if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+  } catch (e) {
+    console.error("[workflow-pipeline] createWorkflowFromPastedCopy failed:", (e as Error).message);
+    await slack.postThreadReply(channel, threadTs, "Could not create the workflow. Try `create` again.").catch(() => {});
+  }
 }
 
 /** Post the labeled copy boxes for a workflow (each `N. *Label* — text`). Returns the Slack post. */
