@@ -23,43 +23,72 @@ flowchart TD
 ```
 
 Problems: copy was asked for **twice** (hookset, then captions/storyboards) before any workflow
-choice, and pasting your own lines at the hooks step matched no command, so it stalled.
+choice; pasting your own lines at the hooks step matched no command, so it stalled; and a full
+copy paste at the headlines step triggered "Building hooks for: <your whole block>".
 
-## AFTER — the current flow (workflow asked right after the hooks)
+## AFTER — the current flow (paste ready copy anywhere; the workflow question IS the library)
 
 ```mermaid
 flowchart TD
   A([go]) --> B[Vektor: which avatar?]
   B -->|reply a number| C[30 headlines + story material]
-  C -->|headline N / paste| D[Hookset:<br/>5 verbal + 5 title + 5 POV]
-  D -->|pick a hook OR paste your own lines| W{Which workflow?}
+  C -->|headline N / one-line paste| D[Hookset:<br/>5 verbal + 5 title + 5 POV]
+  C -->|paste READY copy 3+ lines| W
+  D -->|pick a hook| W
+  D -->|paste READY copy 3+ lines| W
 
+  W{Which workflow?<br/>THE LIBRARY, grouped by category<br/>slots · shots · seconds · aspect<br/>+ fit ranking vs your pasted lines<br/>+ templates from other avatars}
+
+  W -->|workflow N / template N| S[Structured copy<br/>labeled boxes seeded from YOUR words]
   W -->|workflow N = draft| X[Emit Claude Code prompt<br/>to configure it]
   W -->|workflow N = no copy structure| F[Picture plan as before]
-  W -->|workflow N = has copy structure| S[Structured copy<br/>labeled boxes:<br/>avatar / callout / pain / reason /<br/>dream / CTA - seeded from YOUR message]
+  W -->|create - or empty library| NW[PRODUCTIZE your copy:<br/>each line labeled with a role<br/>+ shot + in/out seconds + textbox position<br/>+ category - saved ACTIVE to the library]
+  NW --> S
 
   S -->|line N edit / paste to re-slot| S
   S -->|react ✅| P[Paint the picture<br/>copy shown on the shot images]
   P -->|react ✅| G[Generate shot images]
-  G -->|song key or url| M{Confirm render mode<br/>static images or video?}
-  M -->|shot-length validation| M
+  G -->|song key/url OR attach the AUDIO FILE| SY{sync auto or manual?}
+  SY -->|sync manual| M{Confirm render mode<br/>static images or video?}
+  SY -->|sync auto| BS[Beat grid read from the song<br/>cuts + text drops snapped to beats] --> M
   M -->|react ✅| R[Emit Claude Code render prompt<br/>+ video description]
 
+  G -. drop 3 screenshots/videos of the manual edit .-> REF[reference creatives 3/3]
+  REF -->|finish workflow| PROD[[4th creative renders<br/>workflow IN PRODUCTION]]
+
   style W fill:#14233a,stroke:#3a6ea5,color:#c2d8f5
+  style NW fill:#2a1a33,stroke:#7a3aa5,color:#e2c2f5
   style R fill:#14331a,stroke:#3a8a4a,color:#c2f5c9
+  style PROD fill:#14331a,stroke:#3a8a4a,color:#c2f5c9
 ```
 
-Two fixes: (1) the workflow is asked **immediately after the hooks** (the separate captions/
-storyboards step is removed from this path, so copy is asked once); (2) pasting your own copy at
-the hooks step now advances the flow and **seeds the labeled copy from your words** (re-slotted
-into the boxes), so Vektor gives feedback on your message instead of asking again.
+The fixes/features:
+1. **Pasting a ready copy block (3+ lines) anywhere skips hook building** and goes straight to
+   the workflow question. Blocks starting with "POV:" or a number no longer stall the session.
+2. **The workflow question is the library**: grouped by category with slots/shots/seconds/aspect
+   labels, a fit ranking against your pasted line count, cross-avatar templates, and `create`.
+3. **`create` productizes your copy on the spot**: exact words kept, each line labeled with a
+   role (avatar / pain callout / reason / dream / CTA...), timed and placed on the 9:16 frame
+   (3:4 for Meta-glasses POV), category assigned, saved as an ACTIVE workflow — same structure,
+   different copy next time. An empty library auto-creates without asking.
+4. **Attach the audio file in Slack** to set the workflow's song; `sync auto` reads its beat grid
+   (render-service `analyze-song`) and snaps shot cuts + text drops to the beat.
+5. **Production gate**: drop 3 reference creatives (screenshots of your manual edit, videos,
+   the audio) in the session thread, then `finish workflow` renders the 4th and marks the
+   workflow IN PRODUCTION. `map` shows all of it as a rendered image.
 
 ## Command cheat-sheet
 - `go` — start (pick an avatar by number, or `new` to create one)
-- `headline N` or paste your own headline
-- `title N` / `verbal N` / `pov N` / `hook <text>` — pick a hook, **or just paste your copy**
-- `workflow N` — pick the workflow to build into
+- `headline N` or paste your own headline (one line)
+- **paste your READY copy (3+ lines)** — anywhere after the avatar: jumps to the workflow library
+- `title N` / `verbal N` / `pov N` / `hook <text>` — pick a hook
+- `workflow N` — use a workflow (your pasted copy gets slotted into its boxes)
+- `template N` — same, explicitly: re-slot YOUR copy into its structure (cross-avatar picks clone first)
+- `create` / `new workflow` — productize your pasted copy into a NEW saved workflow
 - `line N <text>` — edit one labeled copy box; paste a full block to re-slot it
-- `song <key|url>` — set the song (then confirm the render mode)
+- `song <key|url>` or **attach the audio file** — set the song
+- `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings
+- drop screenshots/videos in the thread — reference creatives (3 needed)
+- `finish workflow` — render the 4th creative and mark the workflow IN PRODUCTION
 - `save as <name>` / `save draft` / `modify copy` — when a paste does not match the structure
-- `map` / `library` — the workflow inventory
+- `map` / `library` (optionally `map <avatar>`) — the library as a labeled image

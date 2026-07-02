@@ -124,10 +124,15 @@ export function textsForShot(spec: RenderSpec, shotIndex: number): RenderSpec["t
 /** The human/AI-readable "video description" block: mode, duration, song, and per-shot the slot
  *  + its timed texts (with in/out + position). Content-analyzer + the creative director read this
  *  to make adjustments. */
+/** A workflow's render aspect: POV/Meta-glasses record 3:4; everything else renders 9:16. */
+export function workflowAspect(workflow: Workflow): string {
+  return workflow.render_options?.aspect ?? (String(workflow.category) === "pov" ? "3:4" : "9:16");
+}
+
 export function buildVideoDescription(workflow: Workflow, spec: RenderSpec): string {
   const song = resolveSong(spec.song_ref ?? workflow.song_ref).label;
   const lines: string[] = [
-    `*${workflow.name}* — ${spec.mode === "animated" ? "video (animated clips)" : "static images"}, ${spec.duration_seconds}s, song: ${song}.`,
+    `*${workflow.name}* — ${spec.mode === "animated" ? "video (animated clips)" : "static images"}, ${spec.duration_seconds}s, ${workflowAspect(workflow)}, song: ${song}.`,
   ];
   for (const shot of [...spec.shots].sort((a, b) => a.i - b.i)) {
     lines.push(`Shot ${shot.i} (${shot.start}s to ${shot.end}s):`);
@@ -151,7 +156,7 @@ export function buildRenderClaudePrompt(workflow: Workflow, spec: RenderSpec): s
     `(workflow id: ${workflow.id}, avatar: ${workflow.vertical_id}).`,
     "",
     `Format: ${spec.mode === "animated" ? "animated video clips" : "static images held for each shot's slot"}, ` +
-      `${spec.shots.length} shots, ${spec.duration_seconds}s total, 9:16.`,
+      `${spec.shots.length} shots, ${spec.duration_seconds}s total, ${workflowAspect(workflow)}.`,
     `Song: ${song.label}${song.url ? ` (${song.url})` : " (render-service default bed)"}.`,
     "",
     "Shots (slot seconds):",

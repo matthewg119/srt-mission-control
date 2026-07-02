@@ -53,8 +53,10 @@ import {
   handleVektorMessage,
   handlePictureReaction,
   parseAvatarCommand,
+  handleSongAttachment,
+  handleWorkflowReferenceUpload,
 } from "@/lib/reel/workflow-pipeline";
-import { buildWorkflowMapForSlack } from "@/lib/reel/workflow-map";
+import { postWorkflowMap } from "@/lib/reel/workflow-map";
 import {
   startNewAvatar,
   parseNewAvatar,
@@ -361,8 +363,11 @@ export async function POST(request: NextRequest) {
           await startGo({ channel });
           return NextResponse.json({ ok: true });
         }
-        if (/^\s*(map|library)\s*$/i.test(userText)) {
-          await slack.postMessage(channel, await buildWorkflowMapForSlack());
+        // `map` / `library` (optionally scoped: `map pest_control`) -> the labeled library
+        // flowchart rendered as an IMAGE (shots · seconds · text positions · production state).
+        const mapMatch = /^\s*(?:map|library)(?:\s+([a-z][a-z0-9_]*))?\s*$/i.exec(userText);
+        if (mapMatch) {
+          await postWorkflowMap(channel, mapMatch[1]?.toLowerCase());
           return NextResponse.json({ ok: true });
         }
         const newAvatar = parseNewAvatar(userText);
@@ -593,6 +598,27 @@ export async function POST(request: NextRequest) {
           text: userText.trim(),
         });
         return NextResponse.json({ ok: true });
+      }
+
+      // #content-full file drops for the workflow session: an AUDIO file becomes the session's
+      // song (beat-sync source); images/videos in a workflow session thread become that
+      // workflow's REFERENCE creatives (3 refs -> produce the 4th -> in production). Both
+      // self-route by content_jobs and fall through when no session claims them.
+      if (isContentFullChannel && attachedFiles.length > 0) {
+        const songHandled = await handleSongAttachment({
+          channel,
+          threadTs: parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : undefined,
+          files: attachedFiles,
+        });
+        if (songHandled) return NextResponse.json({ ok: true });
+        if (parentThreadTs && parentThreadTs !== event.ts) {
+          const refHandled = await handleWorkflowReferenceUpload({
+            channel,
+            threadTs: parentThreadTs,
+            files: attachedFiles,
+          });
+          if (refHandled) return NextResponse.json({ ok: true });
+        }
       }
 
       // Reel drop: an image uploaded into a known reel-drop thread takes over the

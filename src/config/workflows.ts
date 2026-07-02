@@ -118,6 +118,14 @@ export interface RenderSequence {
 export type WorkflowStatus = "draft" | "active" | "archived";
 export type WorkflowCategory = "pov" | "broll" | "reveal" | "before_after";
 
+// A reference creative attached to a workflow (screenshot of a manual edit, an example video,
+// or the audio). The production gate: 3 references uploaded -> produce a 4th -> in_production.
+export interface WorkflowReference {
+  kind: string; // "screenshot" | "video" | "audio"
+  url: string;
+  added_at?: string;
+}
+
 export interface Workflow {
   id: string;
   vertical_id: string;
@@ -135,9 +143,13 @@ export interface Workflow {
   example_video_url?: string | null;
   example_storyboard?: unknown | null;
   shot_screenshots: Array<{ role: string; url: string }>;
-  source_kind: string; // authored | reference_video | seeded
+  source_kind: string; // authored | reference_video | seeded | productized
   source_example_id?: string | null;
   used_at?: string | null;
+  // Production gate (columns from docs/2026-07-04 follow-up SQL; written via dedicated updates,
+  // NOT the generic upsert, so a missing column never breaks workflow saves).
+  reference_media?: WorkflowReference[];
+  production_status?: string; // "building" (default) | "in_production"
 }
 
 // ---------------------------------------------------------------------------------------
@@ -312,6 +324,8 @@ interface WorkflowRow {
   source_kind?: string | null;
   source_example_id?: string | null;
   used_at?: string | null;
+  reference_media?: WorkflowReference[] | null;
+  production_status?: string | null;
 }
 
 function normalizeRow(row: WorkflowRow): Workflow {
@@ -335,6 +349,8 @@ function normalizeRow(row: WorkflowRow): Workflow {
     source_kind: row.source_kind || "authored",
     source_example_id: row.source_example_id ?? null,
     used_at: row.used_at ?? null,
+    reference_media: Array.isArray(row.reference_media) ? row.reference_media : [],
+    production_status: row.production_status || "building",
   };
 }
 

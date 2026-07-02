@@ -54,7 +54,10 @@ import {
   workflowId,
   createWorkflowFromProductized,
   cloneWorkflowForVertical,
+  addWorkflowReference,
+  setProductionStatus,
 } from "@/lib/reel/workflow-author";
+import { analyzeSong, snapSpecToBeats } from "@/lib/reel/beat-sync";
 import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
 import type { Workflow, WorkflowScene, RenderSpec, RenderMode } from "@/config/workflows";
 
@@ -221,13 +224,99 @@ export async function handleVektorMessage(args: {
     await updateJob(job, { data: { ...job.data, song_ref: ref } });
     await slack.postThreadReply(args.channel, threadTs, `🎵 Song set: *${resolveSong(ref).label}*.`);
     // If this workflow renders from a spec, the song is the last missing piece: move to the
-    // render-authoring gate (confirm mode, validate, then emit the Claude Code prompt).
+    // render-authoring gate. An uploaded/pasted song URL first offers beat sync (`sync auto`
+    // snaps the timeline to its beat grid); the default bed goes straight to the confirm card.
     const wfSong = await loadWorkflow(data.workflow_id);
     if (wfSong?.render_spec) {
-      await postRenderConfirmCard(args.channel, threadTs, job, wfSong, ref);
+      if (/^https?:\/\//i.test(ref)) {
+        await slack.postThreadReply(
+          args.channel,
+          threadTs,
+          "Reply `sync auto` to snap shot cuts + text drops to this song's beat, or `sync manual` to keep your timings."
+        );
+      } else {
+        await postRenderConfirmCard(args.channel, threadTs, job, wfSong, ref);
+      }
     }
     return true;
   }
+  // `sync auto` / `sync manual` — after a song is attached, choose beat-snapped timings or the
+  // typed ones. Auto reads the uploaded song's beat grid (render-service analyze-song) and snaps
+  // shot boundaries + text drops to the nearest beats before the render-confirm gate.
+  const syncMatch = /^\s*sync\s+(auto|manual)\s*$/i.exec(t);
+  if (syncMatch && data.workflow_id) {
+    const wfSync = await loadWorkflow(data.workflow_id);
+    if (!wfSync) return false;
+    const songRef = data.song_ref ?? wfSync.song_ref ?? null;
+    if (syncMatch[1].toLowerCase() === "manual") {
+      await postRenderConfirmCard(args.channel, threadTs, job, wfSync, songRef);
+      return true;
+    }
+    const songUrl = songRef && /^https?:\/\//i.test(songRef) ? songRef : null;
+    if (!songUrl) {
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        "Auto sync needs an uploaded song (attach the audio file in this thread). The default bed already renders on its measured beat grid, so use `sync manual`."
+      );
+      return true;
+    }
+    await slack.postThreadReply(args.channel, threadTs, "Reading the song's beat grid and snapping the timeline...");
+    waitUntil(
+      (async () => {
+        try {
+          const grid = await analyzeSong(songUrl);
+          if (!grid) {
+            await slack.postThreadReply(args.channel, threadTs, "Could not read the beat grid. Keep `sync manual` for now.");
+            return;
+          }
+          const base = specFromWorkflow(wfSync);
+          const filled = base ? applyCopyToSpec(base, job.data.structured_copy) : null;
+          if (!filled) {
+            await slack.postThreadReply(args.channel, threadTs, "No render spec to snap yet. Build the copy + picture first.");
+            return;
+          }
+          const { spec: snapped, moved } = snapSpecToBeats(filled, grid.beats);
+          await slack.postThreadReply(
+            args.channel,
+            threadTs,
+            `Beat grid: ${grid.bpm ? `${Math.round(grid.bpm)} BPM, ` : ""}${grid.beats.length} beats. Snapped ${moved} timing${moved === 1 ? "" : "s"} to the beat.`
+          );
+          const fresh = await getLatestJobByThread(threadTs);
+          if (fresh) await postRenderConfirmCard(args.channel, threadTs, fresh, { ...wfSync, render_spec: snapped }, songRef);
+        } catch (e) {
+          console.error("[workflow-pipeline] sync auto failed:", (e as Error).message);
+          await slack.postThreadReply(args.channel, threadTs, "Auto sync failed. Use `sync manual`.").catch(() => {});
+        }
+      })()
+    );
+    return true;
+  }
+
+  // `finish workflow` — the production gate: 3 reference creatives uploaded, then the 4th (the
+  // production test render) finishes it and flips the workflow to IN PRODUCTION.
+  if (/^\s*finish\s+workflow\s*$/i.test(t) && data.workflow_id) {
+    const wfFin = await loadWorkflow(data.workflow_id);
+    if (!wfFin) return false;
+    const refs = wfFin.reference_media?.length ?? 0;
+    if (refs < 3) {
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        `*${wfFin.name}* has ${refs}/3 reference creatives. Drop ${3 - refs} more screenshot(s)/video(s) of the manual edit in this thread (plus the song), then \`finish workflow\` again.`
+      );
+      return true;
+    }
+    await setProductionStatus(wfFin.id, "in_production");
+    await slack.postThreadReply(
+      args.channel,
+      threadTs,
+      `*${wfFin.name}*: 3 references in. Marked IN PRODUCTION. The 4th creative (the production test) renders next - confirm below.`
+    );
+    await postRenderConfirmCard(args.channel, threadTs, job, wfFin, data.song_ref ?? wfFin.song_ref ?? null);
+    return true;
+  }
+
   if (/^\s*sequences\s*$/i.test(t) && data.workflow_id) {
     const wf = await loadWorkflow(data.workflow_id);
     const seqs = wf?.render_sequences ?? [];
@@ -1333,6 +1422,124 @@ export async function launchWorkflowInSlack(id: string): Promise<{ ok: boolean; 
     })()
   );
   return { ok: true, threadTs: ts };
+}
+
+// ---- Slack file drops: song attach + reference creatives --------------------------------
+
+interface DroppedFile {
+  name?: string;
+  mimetype?: string;
+  url_private_download?: string;
+}
+
+function isAudioFile(f: DroppedFile): boolean {
+  return (f.mimetype ?? "").startsWith("audio/") || /\.(m4a|mp3|wav|aac|ogg)$/i.test(f.name ?? "");
+}
+
+/**
+ * An AUDIO file dropped in #content-full: store it in Supabase and attach it as the active
+ * session's song (this is how new workflows get their audio without leaving Slack). Claims the
+ * message only when an active workflow session exists; returns false otherwise.
+ */
+export async function handleSongAttachment(args: {
+  channel: string;
+  threadTs?: string;
+  files: DroppedFile[];
+}): Promise<boolean> {
+  const audio = args.files.find(isAudioFile);
+  if (!audio?.url_private_download) return false;
+  const job =
+    (args.threadTs ? await getLatestJobByThread(args.threadTs) : null) ??
+    (await getLatestSessionByChannel(args.channel));
+  if (!job || job.format_id !== "workflow") return false;
+  const threadTs = job.slack_thread_ts;
+  try {
+    const buf = await slack.downloadFile(audio.url_private_download);
+    const url = await uploadToReels(buf, audio.mimetype || "audio/mp4");
+    if (!url) {
+      await slack.postThreadReply(args.channel, threadTs, "Could not store that audio. Try attaching it again.");
+      return true;
+    }
+    await updateJob(job, { data: { ...job.data, song_ref: url } });
+    if (job.data.workflow_id) {
+      await setWorkflowSong(job.data.workflow_id, url);
+      await addWorkflowReference(job.data.workflow_id, { kind: "audio", url });
+      const wf = await loadWorkflow(job.data.workflow_id);
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        [
+          `🎵 Song attached to *${wf?.name ?? "the workflow"}*.`,
+          wf?.render_spec
+            ? "Reply `sync auto` to snap shot cuts + text drops to its beat, or `sync manual` to keep your timings."
+            : "It rides along once the render spec exists.",
+        ].join(" ")
+      );
+    } else {
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        "🎵 Song stored for this session. It attaches to the workflow you pick or `create`."
+      );
+    }
+    return true;
+  } catch (e) {
+    console.error("[workflow-pipeline] song attach failed:", (e as Error).message);
+    await slack.postThreadReply(args.channel, threadTs, "Could not attach that audio. Try again.").catch(() => {});
+    return true;
+  }
+}
+
+/**
+ * Screenshots / example videos dropped in a workflow session thread become the workflow's
+ * REFERENCE CREATIVES (the production gate: 3 references -> produce the 4th -> in production).
+ * Claims the drop only when this thread's session has a workflow in context.
+ */
+export async function handleWorkflowReferenceUpload(args: {
+  channel: string;
+  threadTs: string;
+  files: DroppedFile[];
+}): Promise<boolean> {
+  const media = args.files.filter(
+    (f) =>
+      f.url_private_download &&
+      ((f.mimetype ?? "").startsWith("image/") || (f.mimetype ?? "").startsWith("video/"))
+  );
+  if (!media.length) return false;
+  const job = await getLatestJobByThread(args.threadTs);
+  if (!job || job.format_id !== "workflow" || !job.data.workflow_id) return false;
+  const wfId = job.data.workflow_id;
+  const threadTs = job.slack_thread_ts;
+
+  let count: number | null = null;
+  for (const f of media.slice(0, 5)) {
+    try {
+      const buf = await slack.downloadFile(f.url_private_download!);
+      const url = await uploadToReels(buf, f.mimetype || "image/jpeg");
+      if (!url) continue;
+      const kind = (f.mimetype ?? "").startsWith("video/") ? "video" : "screenshot";
+      count = await addWorkflowReference(wfId, { kind, url });
+    } catch (e) {
+      console.error("[workflow-pipeline] reference upload failed:", (e as Error).message);
+    }
+  }
+  if (count == null) {
+    await slack.postThreadReply(
+      args.channel,
+      threadTs,
+      "Could not save those as references (is the reference_media migration applied?)."
+    );
+    return true;
+  }
+  const wf = await loadWorkflow(wfId);
+  await slack.postThreadReply(
+    args.channel,
+    threadTs,
+    count >= 3
+      ? `Reference ${count}/3 saved for *${wf?.name ?? wfId}*. Reply \`finish workflow\` to render the production test and put it IN PRODUCTION.`
+      : `Reference ${count}/3 saved for *${wf?.name ?? wfId}*. ${3 - count} more (screenshots of the manual edit, like your Reels timeline) and it can go into production.`
+  );
+  return true;
 }
 
 /** True when a top-level #content-full message is an avatar command like `vektor pest_control`. */

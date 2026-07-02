@@ -18,6 +18,10 @@
       "memory": 2048,
       "maxDuration": 120,
       "includeFiles": "api/srt_reel/**"
+    },
+    "api/analyze-song.py": {
+      "memory": 1024,
+      "maxDuration": 120
     }
   }
 }

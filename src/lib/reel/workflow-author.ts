@@ -232,6 +232,44 @@ export async function setWorkflowStatus(id: string, status: string): Promise<voi
   }
 }
 
+/** Attach a reference creative (screenshot/video/audio) to a workflow's reference_media.
+ *  Returns the new reference count, or null on failure (e.g. the column is not applied yet). */
+export async function addWorkflowReference(
+  id: string,
+  ref: { kind: string; url: string }
+): Promise<number | null> {
+  try {
+    const wf = await loadWorkflow(id);
+    if (!wf) return null;
+    const next = [...(wf.reference_media ?? []), { ...ref, added_at: new Date().toISOString() }];
+    const { error } = await supabaseAdmin
+      .from("workflows")
+      .update({ reference_media: next, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) {
+      console.error("[workflows] addReference failed:", error.message);
+      return null;
+    }
+    return next.length;
+  } catch (e) {
+    console.error("[workflows] addReference threw:", (e as Error).message);
+    return null;
+  }
+}
+
+/** Flip a workflow's production gate ("building" -> "in_production"). Best-effort. */
+export async function setProductionStatus(id: string, productionStatus: string): Promise<void> {
+  try {
+    const { error } = await supabaseAdmin
+      .from("workflows")
+      .update({ production_status: productionStatus, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) console.error("[workflows] setProductionStatus failed:", error.message);
+  } catch (e) {
+    console.error("[workflows] setProductionStatus threw:", (e as Error).message);
+  }
+}
+
 /** Set the song on a workflow (a SONGS key or a pasted audio URL). Best-effort. */
 export async function setWorkflowSong(id: string, songRef: string): Promise<void> {
   try {
