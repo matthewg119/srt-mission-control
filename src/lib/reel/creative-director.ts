@@ -641,6 +641,73 @@ export async function generateStructuredCopy(args: {
   return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
 }
 
+// ---- Picture ideas: 3 visual directions to pick from BEFORE any image generates ---------
+
+export interface PictureIdea {
+  title: string; // the direction in a few words, e.g. "Quiet cab, loud competitor"
+  shots: string[]; // one b-roll image gist per shot, in shot order
+}
+interface PictureIdeasResult {
+  ideas: PictureIdea[];
+}
+function isPictureIdeas(v: unknown): v is PictureIdeasResult {
+  const p = v as PictureIdeasResult;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    Array.isArray(p.ideas) &&
+    p.ideas.length > 0 &&
+    p.ideas.every((i) => i && typeof i.title === "string" && Array.isArray(i.shots) && i.shots.every((s) => typeof s === "string"))
+  );
+}
+
+/** 3 DISTINCT visual directions for the workflow's b-roll, each matched line-by-line to the
+ *  approved copy (which text lands on which image). The operator picks one (`idea N`) before
+ *  any image generates - the gate that keeps image credits from burning on a look he hates. */
+export async function generatePictureIdeas(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  structuredCopy: StructuredCopyLine[];
+  count?: number;
+}): Promise<PictureIdea[]> {
+  const count = args.count ?? 3;
+  const shotCount = args.workflow.render_spec?.shots.length || args.workflow.render_options?.max_shots || 3;
+  const copyBlock = args.structuredCopy.map((l) => `${l.label}: ${l.text}`).join("\n");
+  const system = [
+    `You are Vektor, the creative director for a ${args.vertical.business_descriptor}.`,
+    `The copy below is APPROVED. Propose ${count} DISTINCT visual directions for the b-roll images`,
+    `that will sit under it. Each idea: a short title + exactly ${shotCount} image gists (one per`,
+    "shot, in order), each one sentence, matched to the copy that lands on that shot. The shots",
+    "must feel like one continuous piece of footage per idea (same location arc, same time of day).",
+    "The three ideas must differ in setting/arc, not wording.",
+    "",
+    avatarBlock(args.vertical),
+    "",
+    workflowBlock(args.workflow),
+    "",
+    "HARD RULES: no text/captions/logos inside the images; never use em dashes.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<PictureIdeasResult>({
+    model: model(),
+    system,
+    user: [
+      "The approved copy (in shot order):",
+      copyBlock,
+      "",
+      `Return JSON: { "ideas": [{ "title": string, "shots": [${shotCount} strings] }] } with exactly ${count} ideas.`,
+    ].join("\n"),
+    maxTokens: 1400,
+    temperature: 0.9,
+    schemaHint: '{ "ideas": [{ "title": string, "shots": [string] }] }',
+    validate: isPictureIdeas,
+  });
+  return data.ideas.slice(0, count).map((i) => ({
+    title: clean(i.title),
+    shots: i.shots.map(clean).filter(Boolean).slice(0, shotCount),
+  }));
+}
+
 /** Re-slot a raw pasted copy block into the workflow's labeled boxes (the "turn my copy into
  *  structure" case). Returns one line per role, in role order (some may be empty if unmatched). */
 export async function reslotCopyToStructure(args: {

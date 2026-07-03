@@ -104,6 +104,8 @@ The fixes/features:
 - `template N` — same, explicitly: re-slot YOUR copy into its structure (cross-avatar picks clone first)
 - `create` / `new workflow` — productize your pasted copy into a NEW saved workflow
 - `line N <text>` — edit one labeled copy box; paste a full block to re-slot it
+- `idea N` (✅ = idea 1) — pick a visual direction at the ideas gate (posts after copy ✅, BEFORE any image generates)
+- `more ideas` / `more hooks` — redraw the 3 directions, or back up for fresh hook options
 - `song <key|url>` or **attach the audio file** — set the song
 - `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings
 - drop screenshots/videos in the thread — reference creatives (3 needed)

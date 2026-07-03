@@ -55,6 +55,10 @@ export interface JobData {
   workflow_menu?: Array<{ id: string; name: string; category: string; subcategory?: string | null; status: string; configured: boolean; cross_avatar?: boolean }>; // ordering for `workflow N` / `template N`
   structured_copy?: Array<{ key: string; label: string; text: string }>; // the labeled copy boxes, filled
 
+  // --- picture ideas gate (pick a visual direction BEFORE any image generates) ---
+  picture_ideas?: Array<{ title: string; shots: string[] }>; // ordering for `idea N`
+  chosen_idea?: string; // the locked visual direction (title + per-shot gists, flattened)
+
   // --- render-spec authoring (Part 2) ---
   candidate_spec?: unknown; // a parsed RenderSpec awaiting the mismatch/validation gate
   save_as_from?: string; // the workflow id whose settings a `save as` new draft carried
@@ -100,6 +104,7 @@ export type JobStage =
   // workflow selection + copy structure + render-spec authoring stages:
   | "workflow_pick"
   | "structured_copy"
+  | "picture_ideas"
   | "authoring"
   | "await_example"
   // remix upsell stages (after the render prompt is emitted):

@@ -36,6 +36,7 @@ import {
   generateCreativeReference,
   generateHookSet,
   generatePicturePlan,
+  generatePictureIdeas,
   generateStructuredCopy,
   reslotCopyToStructure,
   parseStoryboardToRenderSpec,
@@ -84,7 +85,7 @@ function idxFrom(text: string, verb: string): number | null {
 
 // A pasted line at the `headlines` stage is treated as Matthew's own headline UNLESS it is one
 // of our commands.
-const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|template|create|finish|remixes|remix|headline|title|verbal|pov|hook|pick|song|sequence|sequences|\d{1,2})\b/i;
+const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|template|create|finish|remixes|remix|headline|title|verbal|pov|hook|pick|song|sequence|sequences|idea|ideas|more|\d{1,2})\b/i;
 function isCommand(t: string): boolean {
   return COMMAND_RE.test(t.trim());
 }
@@ -788,6 +789,57 @@ export async function handleVektorMessage(args: {
     return false;
   }
 
+  // Stage: picture_ideas -> `idea N` locks a visual direction; `more ideas` redraws the card;
+  // `more hooks` regenerates the hook menu for this workflow (more options before committing).
+  if (job.stage === "picture_ideas") {
+    const ii = idxFrom(t, "idea");
+    if (ii) return pickPictureIdea(job, args.channel, ii);
+    if (/^\s*(more\s+ideas|ideas)\s*$/i.test(t)) {
+      // Back to structured_copy for a beat so startPictureIdeas re-enters cleanly.
+      await updateJob(job, { stage: "structured_copy" });
+      const fresh = await getLatestJobByThread(threadTs);
+      return startPictureIdeas(fresh ?? job, args.channel);
+    }
+    if (/^\s*more\s+hooks\s*$/i.test(t) && data.workflow_id) {
+      const wfH = await loadWorkflow(data.workflow_id);
+      if (!wfH) return false;
+      await updateJob(job, { stage: "hookset" });
+      await slack.postThreadReply(args.channel, threadTs, `Building fresh hooks for *${wfH.name}*...`);
+      waitUntil(
+        (async () => {
+          try {
+            const vertical = await loadVertical(job.vertical_id);
+            const isPov = String(wfH.category) === "pov";
+            const hs = await generateHookSet({
+              vertical,
+              chosenHeadline: data.chosen_headline || data.chosen_hook || wfH.name,
+              isPov,
+              workflow: wfH,
+            });
+            const parts = [
+              `*Fresh hooks for ${wfH.name}*`,
+              "",
+              "*Verbal hooks* (voiceover) — `verbal N`:",
+              numbered(hs.verbal),
+              "",
+              "*Title hooks* (on-screen) — `title N`:",
+              numbered(hs.title),
+            ];
+            if (hs.pov?.length) parts.push("", "*POV-first title hooks* — `pov N`:", numbered(hs.pov));
+            parts.push("", "Pick one (the copy rebuilds on it), or `hook <text>` for your own.");
+            const fresh = await getLatestJobByThread(threadTs);
+            if (fresh) await updateJob(fresh, { data: { ...fresh.data, hookset: hs } });
+            await slack.postThreadReply(args.channel, threadTs, parts.join("\n"));
+          } catch (e) {
+            console.error("[workflow-pipeline] more hooks failed:", (e as Error).message);
+          }
+        })()
+      );
+      return true;
+    }
+    return false;
+  }
+
   // Stage: picture -> `redo N <new prompt>` regenerates one scene's image.
   if (job.stage === "picture") {
     const rm = /^\s*redo\s+(\d{1,2})\s+(.+)\s*$/i.exec(t);
@@ -875,7 +927,10 @@ export async function handlePictureReaction(args: {
   const job = await getJobByPickerTs(args.slackTs);
   if (!job || job.format_id !== "workflow") return false;
 
-  if (job.stage === "structured_copy") return buildPictureFromStructuredCopy(job, args.channel);
+  // ✅ on the labeled copy: the IDEAS GATE comes first - 3 visual directions to pick from
+  // before a single image credit is spent. ✅ on the ideas card = lock idea 1.
+  if (job.stage === "structured_copy") return startPictureIdeas(job, args.channel);
+  if (job.stage === "picture_ideas") return pickPictureIdea(job, args.channel, 1);
   if (job.stage === "remix_copy") return renderRemixSameImages(job, args.channel);
   if (job.stage === "authoring") return emitRenderPrompt(job, args.channel);
   if (job.stage !== "picture") return false;
@@ -1413,6 +1468,74 @@ function buildPictureCard(workflow: Workflow, spec: RenderSpec): string {
   }
   out.push("", "React ✅ to generate the shot images.");
   return out.join("\n");
+}
+
+/** ✅ on the labeled-copy card: the IDEAS GATE. Post 3 distinct visual directions (each: title +
+ *  one b-roll gist per shot, matched to the approved copy) and wait for `idea N` before any
+ *  image generates. `more ideas` redraws; `more hooks` goes back to the hook menu. */
+async function startPictureIdeas(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const threadTs = job.slack_thread_ts;
+  await updateJob(job, { stage: "picture_ideas" });
+  await slack.postThreadReply(channel, threadTs, "Copy locked. Drafting 3 visual directions for the b-roll...");
+
+  waitUntil(
+    (async () => {
+      try {
+        const wf = await loadWorkflow(wfId);
+        if (!wf) return;
+        const vertical = await loadVertical(job.vertical_id);
+        const ideas = await generatePictureIdeas({
+          vertical,
+          workflow: wf,
+          structuredCopy: job.data.structured_copy ?? [],
+        });
+        const body: string[] = [`*Visual directions for ${wf.name}* — pick one before any image generates:`];
+        ideas.forEach((idea, i) => {
+          body.push("", `*${i + 1}. ${idea.title}*`);
+          idea.shots.forEach((s, j) => body.push(`   Shot ${j + 1}: ${s}`));
+        });
+        body.push(
+          "",
+          "Reply `idea N` (or react ✅ for idea 1) to lock it and paint the picture.",
+          "`more ideas` for 3 fresh directions · `more hooks` for new hook options."
+        );
+        const card = await slack.postThreadReply(channel, threadTs, body.join("\n"));
+        const cardTs = (card as { ts?: string }).ts;
+        const fresh = await getLatestJobByThread(threadTs);
+        if (fresh)
+          await updateJob(fresh, {
+            pickerTs: cardTs ?? fresh.picker_msg_ts,
+            data: { ...fresh.data, picture_ideas: ideas },
+          });
+        if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+      } catch (e) {
+        console.error("[workflow-pipeline] picture ideas failed:", (e as Error).message);
+        // Never stall the session: fall through to the direct picture build.
+        const fresh = await getLatestJobByThread(threadTs);
+        if (fresh) await buildPictureFromStructuredCopy(fresh, channel);
+      }
+    })()
+  );
+  return true;
+}
+
+/** Lock visual direction N and hand off to the picture build (the idea rides in as the
+ *  storyboard seed so every scene prompt follows the chosen direction). */
+async function pickPictureIdea(job: ContentJob, channel: string, n: number): Promise<boolean> {
+  const ideas = job.data.picture_ideas ?? [];
+  const idea = ideas[n - 1];
+  const threadTs = job.slack_thread_ts;
+  if (!idea) {
+    await slack.postThreadReply(channel, threadTs, `No idea ${n} on the card. Reply \`idea 1\`-\`idea ${ideas.length || 3}\` or \`more ideas\`.`);
+    return true;
+  }
+  const ideaText = [`Visual direction: ${idea.title}`, ...idea.shots.map((s, i) => `Shot ${i + 1}: ${s}`)].join("\n");
+  await updateJob(job, { data: { ...job.data, chosen_idea: ideaText, chosen_storyboard: ideaText } });
+  await slack.postThreadReply(channel, threadTs, `Locked *${idea.title}*.`);
+  const fresh = await getLatestJobByThread(threadTs);
+  return buildPictureFromStructuredCopy(fresh ?? job, channel);
 }
 
 /** ✅ on the labeled-copy card: generate one image prompt per shot from the copy, upsert them onto
