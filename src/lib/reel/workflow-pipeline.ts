@@ -56,7 +56,7 @@ import {
   textsForShot,
   workflowAspect,
 } from "@/lib/reel/render-spec";
-import type { ImageProvider } from "@/lib/providers/image-gen";
+import { nearestHazelAspect, type ImageProvider } from "@/lib/providers/image-gen";
 import {
   setWorkflowSong,
   setWorkflowStatus,
@@ -995,6 +995,7 @@ export async function handleVektorMessage(args: {
                 // must never become reference frames (that's how wasp shots leaked into a
                 // storytime). Outputs live on the workflow (scenes.image_url) + galleries.
                 await slack.uploadFile(args.channel, `scene${idx + 1}.png`, rendered.buffer, rendered.mimetype, threadTs);
+                await slack.postThreadReply(args.channel, threadTs, `scene ${idx + 1}: ${rendered.stamp}`).catch(() => {});
               }
             } catch (e) {
               console.error("[workflow-pipeline] redo scene failed:", (e as Error).message);
@@ -1035,6 +1036,24 @@ async function enrichWorkflowPrompt(
   }
 }
 
+/** Human label for the provider a workflow's images generate with, plus the TRUE output
+ *  aspect (hazel collapses portrait requests to 2:3). Posted under every generated image
+ *  so "which model made this?" is answered per image, never by eye. */
+function providerStamp(workflow?: Workflow | null): string {
+  const prov = (workflow?.render_options?.provider as string | undefined) ?? "higgsfield-gpt";
+  const requested = workflow ? workflowAspect(workflow) : "3:4";
+  const labels: Record<string, string> = {
+    "higgsfield-gpt": "gpt-image-2 (hazel)",
+    higgsfield: "Soul",
+    openai: "gpt-image-2 (OpenAI direct)",
+    elevenlabs: "Seedream",
+  };
+  const label = labels[prov] ?? prov;
+  const rendered = prov === "higgsfield-gpt" ? nearestHazelAspect(requested) : requested;
+  const aspectNote = rendered === requested ? requested : `${rendered} (requested ${requested})`;
+  return `${label} @ ${aspectNote}`;
+}
+
 /** Enrich a scene prompt on the workflow's references + visual rules (see enrichWorkflowPrompt),
  *  then generate one still with the workflow's image settings (best-effort).
  *  opts.skipEnrich: the prompt was already enriched AND approved at the prompt-review gate —
@@ -1044,7 +1063,7 @@ async function renderScene(
   imagePrompt: string,
   workflow?: Workflow | null,
   opts?: { skipEnrich?: boolean }
-): Promise<{ url: string; buffer: Buffer; mimetype: string } | null> {
+): Promise<{ url: string; buffer: Buffer; mimetype: string; stamp: string } | null> {
   try {
     const enriched = opts?.skipEnrich
       ? imagePrompt
@@ -1057,7 +1076,7 @@ async function renderScene(
     if (!img) return null;
     const url = await uploadToReels(img.buffer, img.mimetype);
     if (!url) return null;
-    return { url, buffer: img.buffer, mimetype: img.mimetype };
+    return { url, buffer: img.buffer, mimetype: img.mimetype, stamp: providerStamp(workflow) };
   } catch (e) {
     console.error("[workflow-pipeline] renderScene failed:", (e as Error).message);
     return null;
@@ -1173,6 +1192,7 @@ async function generateSceneImages(job: ContentJob, channel: string): Promise<bo
             scene.image_approved = true;
             // Generated images intentionally NOT saved to content_examples (see redo path note).
             await slack.uploadFile(args.channel, `scene${i + 1}.png`, rendered.buffer, rendered.mimetype, threadTs);
+            await slack.postThreadReply(args.channel, threadTs, `scene ${i + 1}: ${rendered.stamp}`).catch(() => {});
           } else {
             await slack.postThreadReply(args.channel, threadTs, `Scene ${i + 1} image failed. Retry with \`redo ${i + 1} <prompt>\`.`);
           }

@@ -17,6 +17,7 @@ import { saveContentExample, pruneReferencesToCap } from "@/lib/reel/content-exa
 import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
 import { insertJob, getJobByPickerTs, updateJob } from "@/lib/reel/jobs";
 import { proposeWorkflowFromAnalysis } from "@/lib/reel/workflow-author";
+import { buildAnalysisMarkdown } from "@/lib/reel/workflow-doc";
 
 // The avatar all #content-analyzer drops attach to for now (pest_control is the only avatar
 // with a real Soul/look). Overridable via env once other avatars have looks.
@@ -422,6 +423,7 @@ export async function handleAnalyzerReaction(args: {
   await updateJob(job, { stage: "done" });
   const result = await analyzeVideo({ channel: args.channel, threadTs, file });
   if (!result) return true;
+  let draft: { id: string; name: string; verticalId: string } | null = null;
   try {
     const wf = await proposeWorkflowFromAnalysis({
       verticalId: job.vertical_id,
@@ -437,6 +439,7 @@ export async function handleAnalyzerReaction(args: {
       },
     });
     if (wf) {
+      draft = { id: wf.id, name: wf.name, verticalId: wf.vertical_id };
       await slack.postThreadReply(
         args.channel,
         threadTs,
@@ -449,6 +452,23 @@ export async function handleAnalyzerReaction(args: {
     }
   } catch (e) {
     console.error("[content-analyzer] proposeWorkflowFromAnalysis failed:", (e as Error).message);
+  }
+  // The whole scrub as ONE ready-to-build document: storyboard + remake + the exact prompt
+  // to finish the drafted workflow. Uploaded as a .md file so it can be saved/committed.
+  try {
+    const md = buildAnalysisMarkdown(result.analysis, {
+      videoUrl: result.publicUrl,
+      section: section ?? undefined,
+      draftWorkflow: draft,
+    });
+    const slug = (draft?.id ?? (result.analysis.our_version.idea || "analysis"))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "")
+      .slice(0, 60);
+    await slack.uploadFile(args.channel, `storyboard-${slug}.md`, Buffer.from(md, "utf8"), "text/markdown", threadTs);
+  } catch (e) {
+    console.error("[content-analyzer] storyboard md upload failed:", (e as Error).message);
   }
   return true;
 }

@@ -158,137 +158,25 @@ Return a table: source | link or exact search | shot covered | expected content 
 ```
 
 
-### Meta Glasses POV - attic removal (jumpscare) — `pest_control__pov__attic_jumpscare` (pov)  ·  refs 0/3
+### Review Highlight — `pest_control__broll__review_highlight` (broll, NOT POV)  ·  refs 0/3
 
-**The look:** 13s 3-shot Meta-glasses POV attic reveal: dark climb, the jumpscare find, the cleared attic.
-
-**House rules:**
-- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
-- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
-- The three shots read as ONE continuous job (same house, same time of day).
-- No text, captions, logos, or watermarks inside the image.
-
-**Where to look:**
-- TikTok/IG: #atticinspection #rodentremoval #pestcontrolpov
-- YouTube: "attic rodent inspection POV", "attic droppings inspection flashlight", "rodent proofing attic before after"
-- Reddit: r/pestcontrol attic/rodent threads
-- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
-- Reddit: r/RayBanMeta raw samples
-
-**What to capture:** one screenshot per shot role, at the exact beat that matches it:
-1. climb into the dark attic
-2. the find (jumpscare)
-3. cleared and sealed
-Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
-
-**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
-
-**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
-
-**Research prompt (paste into Claude/ChatGPT):**
-```
-You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
-13s 3-shot Meta-glasses POV attic reveal: dark climb, the jumpscare find, the cleared attic.
-
-My piece has exactly 3 shots. Find footage that covers each:
-1. climb into the dark attic
-2. the find (jumpscare)
-3. cleared and sealed
-
-Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
-exact subreddits or creator accounts. For each, say what I should expect to find and
-which shot it covers.
-
-Before I save any clip, score it 1-5 on each point of this visual checklist:
-1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
-2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
-3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
-4. Hands enter from the BOTTOM of frame naturally when gesturing or working
-5. No visible camera, rig, phone, or mirror reveal anywhere in frame
-6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
-7. Flat, slightly desaturated grade; highlights wash slightly in bright light
-8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
-9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
-Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
-
-Return a table: source | link or exact search | shot covered | expected content | score notes.
-```
-
-
-### Meta Glasses POV - attic removal (regular) — `pest_control__pov__attic_regular` (pov)  ·  refs 0/3
-
-**The look:** 13s 3-shot Meta-glasses POV attic inspection: entry, evidence walkthrough, sealed result.
+**The look:** 13s 3-shot customer-review reel: the review quote leads over warm job b-roll - arrival context, the careful detail work, the happy result at the door.
 
 **House rules:**
-- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
-- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
-- The three shots read as ONE continuous job (same house, same time of day).
-- No text, captions, logos, or watermarks inside the image.
+- Warm, authentic job b-roll that a real customer's words sit on top of - trust, not drama.
+- Shot 1 sets context: service truck arriving, tech walking up, morning suburban street.
+- Shot 2 is the care: close detail work done carefully (dusting an eave, sealing a gap), gloved hands ok.
+- Shot 3 is the happy ending: the clean result at the front door, welcoming light, job done.
 
 **Where to look:**
-- TikTok/IG: #atticinspection #rodentremoval #pestcontrolpov
-- YouTube: "attic rodent inspection POV", "attic droppings inspection flashlight", "rodent proofing attic before after"
-- Reddit: r/pestcontrol attic/rodent threads
-- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
-- Reddit: r/RayBanMeta raw samples
+- TikTok/IG: #customerreview #testimonialvideo #5starreview (home-service reels)
+- YouTube: "customer review reel home service", "5 star review video b-roll"
+- Your own Google/Yelp reviews - screenshot the QUOTES; the b-roll is arrival/care/result
 
 **What to capture:** one screenshot per shot role, at the exact beat that matches it:
-1. enter the attic
-2. walk the evidence
-3. sealed entry point
-Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
-
-**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
-
-**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
-
-**Research prompt (paste into Claude/ChatGPT):**
-```
-You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
-13s 3-shot Meta-glasses POV attic inspection: entry, evidence walkthrough, sealed result.
-
-My piece has exactly 3 shots. Find footage that covers each:
-1. enter the attic
-2. walk the evidence
-3. sealed entry point
-
-Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
-exact subreddits or creator accounts. For each, say what I should expect to find and
-which shot it covers.
-
-Before I save any clip, score it 1-5 on each point of this visual checklist:
-1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
-2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
-3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
-4. Hands enter from the BOTTOM of frame naturally when gesturing or working
-5. No visible camera, rig, phone, or mirror reveal anywhere in frame
-6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
-7. Flat, slightly desaturated grade; highlights wash slightly in bright light
-8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
-9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
-Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
-
-Return a table: source | link or exact search | shot covered | expected content | score notes.
-```
-
-
-### B-roll caption indoctrination — `pest_control__broll__indoctrination` (broll, NOT POV)  ·  refs 0/3
-
-**The look:** 13s 3-shot b-roll belief-shift: six timed captions reframe how homeowners think about pests.
-
-**House rules:**
-- Clean 9:16 b-roll of homes and pest evidence; shots leave clear space for the timed captions.
-- Muted cinematic grade, no faces, no branding.
-- No text, captions, logos, or watermarks inside the image.
-
-**Where to look:**
-- TikTok/IG: #hiddenpests #whatsinyourwalls #macrovideo
-- YouTube: "ants inside wall macro", "termite damage behind drywall", "pest evidence homeowners miss"
-
-**What to capture:** one screenshot per shot role, at the exact beat that matches it:
-1. the comfortable lie
-2. the hidden truth
-3. the reframe
+1. arrival context
+2. the careful detail work
+3. the happy result
 Screenshot for the GRADE (muted, documentary) as much as the subject.
 
 **How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
@@ -298,12 +186,12 @@ Screenshot for the GRADE (muted, documentary) as much as the subject.
 **Research prompt (paste into Claude/ChatGPT):**
 ```
 You are a short-form content researcher. I make documentary b-roll content for a pest control brand. I need REAL reference clips of:
-13s 3-shot b-roll belief-shift: six timed captions reframe how homeowners think about pests.
+13s 3-shot customer-review reel: the review quote leads over warm job b-roll - arrival context, the careful detail work, the happy result at the door.
 
 My piece has exactly 3 shots. Find footage that covers each:
-1. the comfortable lie
-2. the hidden truth
-3. the reframe
+1. arrival context
+2. the careful detail work
+3. the happy result
 
 Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
 exact subreddits or creator accounts. For each, say what I should expect to find and
@@ -320,6 +208,174 @@ Before I save any clip, score it 1-5 on each point of this visual checklist:
 8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
 9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
 (For this format the clips must be third-person documentary b-roll with a muted grade — apply points 6-9 only.)
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### Seasonal Pest Alert — `pest_control__broll__seasonal_alert` (broll, NOT POV)  ·  refs 0/3
+
+**The look:** 13s 3-shot seasonal warning: the season cue (weather turning), the pest surge it triggers, the protected home. News-alert urgency over documentary b-roll.
+
+**House rules:**
+- Urgent news-alert energy carried by the b-roll: weather turning, activity surging, then calm.
+- Shot 1 is the SEASON, not a pest: first warm day, spring rain, falling leaves, snow melt on a suburban street.
+- Shot 2 is the surge: dramatic close-up of seasonal pest activity (swarm, trail, nest building).
+- Shot 3 is the protected home: calm suburban house, subtle evidence of treatment (barrier band, tech leaving).
+
+**Where to look:**
+- TikTok/IG: #pestseason #antseason #termiteswarm
+- YouTube: "spring ant season", "termite swarm season", "first warm day pests" (news-style b-roll)
+- Stock-adjacent: weather-turn b-roll (first warm day, spring rain, leaves) - the season IS shot 1
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. the season cue
+2. the pest surge
+3. the protected home
+Screenshot for the GRADE (muted, documentary) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make documentary b-roll content for a pest control brand. I need REAL reference clips of:
+13s 3-shot seasonal warning: the season cue (weather turning), the pest surge it triggers, the protected home. News-alert urgency over documentary b-roll.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. the season cue
+2. the pest surge
+3. the protected home
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
+(For this format the clips must be third-person documentary b-roll with a muted grade — apply points 6-9 only.)
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### Before / After Transformation — `pest_control__before_after__transformation` (before_after, NOT POV)  ·  refs 0/3
+
+**The look:** 13s 3-shot before/after: the visible infestation or damage, the treatment moment, then the SAME angle spotless. The evidence is the subject; the locked repeat angle sells the transformation.
+
+**House rules:**
+- Shot 1 (before) and shot 3 (after) are the SAME location from the SAME camera angle and height - a locked repeat frame; only the pest evidence changes.
+- The evidence is the subject: visible infestation, damage, droppings, nests, trails - never a person.
+- Shot 2 is the work: gloved hands and equipment mid-treatment, documentary and real.
+- Real lived-in homes, natural daylight, documentary grade; no staging, no studio light.
+
+**Where to look:**
+- TikTok/IG: #beforeandafter #pestcontrolresults #satisfyingcleaning
+- YouTube: "pest control before and after", "infestation cleanup before after", "wasp nest removal before after"
+- Reddit: r/pestcontrol result posts (techs post before/after pairs)
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. the BEFORE (locked angle)
+2. the treatment moment
+3. the AFTER (same locked angle)
+Screenshot for the GRADE (muted, documentary) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make documentary b-roll content for a pest control brand. I need REAL reference clips of:
+13s 3-shot before/after: the visible infestation or damage, the treatment moment, then the SAME angle spotless. The evidence is the subject; the locked repeat angle sells the transformation.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. the BEFORE (locked angle)
+2. the treatment moment
+3. the AFTER (same locked angle)
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
+(For this format the clips must be third-person documentary b-roll with a muted grade — apply points 6-9 only.)
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### Meta Glasses POV - spraying indoors — `pest_control__pov__spray_indoor` (pov)  ·  refs 0/3
+
+**The look:** 13s 3-shot Meta-glasses POV: inside a home, find the activity, treat the baseboards, clean finish.
+
+**House rules:**
+- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
+- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
+- The three shots read as ONE continuous job (same house, same time of day).
+- No text, captions, logos, or watermarks inside the image.
+
+**Where to look:**
+- TikTok/IG: #pestcontrol #antproblem #baseboardspray
+- YouTube: "interior pest treatment POV", "ant trail kitchen baseboard treatment", "crack and crevice treatment"
+- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
+- Reddit: r/RayBanMeta raw samples
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. spot the activity indoors
+2. treat the baseboards
+3. clean kitchen result
+Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
+13s 3-shot Meta-glasses POV: inside a home, find the activity, treat the baseboards, clean finish.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. spot the activity indoors
+2. treat the baseboards
+3. clean kitchen result
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
 Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
 
 Return a table: source | link or exact search | shot covered | expected content | score notes.
@@ -383,9 +439,9 @@ Return a table: source | link or exact search | shot covered | expected content 
 ```
 
 
-### Meta Glasses POV - vent cleaning — `pest_control__pov__vent_cleaning` (pov)  ·  refs 0/3
+### Meta Glasses POV - spraying outdoors — `pest_control__pov__spray_outdoor` (pov)  ·  refs 0/3
 
-**The look:** 13s 3-shot Meta-glasses POV vent job: the blocked vent, the clean-out, the airflow payoff.
+**The look:** 13s 3-shot Meta-glasses POV perimeter treatment: the entry points, the barrier spray, the protected home.
 
 **House rules:**
 - Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
@@ -394,15 +450,15 @@ Return a table: source | link or exact search | shot covered | expected content 
 - No text, captions, logos, or watermarks inside the image.
 
 **Where to look:**
-- TikTok/IG: #ductcleaning #ventcleaning #satisfyingcleaning
-- YouTube: "duct cleaning satisfying", "vent cleaning before after", "dryer vent bird nest removal"
+- TikTok/IG: #perimeterspray #pestcontrolservice #satisfyingwork
+- YouTube: "pest control perimeter spray POV", "exterior barrier treatment foundation", "power spray perimeter"
 - IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
 - Reddit: r/RayBanMeta raw samples
 
 **What to capture:** one screenshot per shot role, at the exact beat that matches it:
-1. the blocked vent
-2. the clean-out
-3. clean airflow
+1. find the entry points
+2. lay the barrier
+3. protected house wide
 Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
 
 **How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
@@ -412,68 +468,12 @@ Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subje
 **Research prompt (paste into Claude/ChatGPT):**
 ```
 You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
-13s 3-shot Meta-glasses POV vent job: the blocked vent, the clean-out, the airflow payoff.
+13s 3-shot Meta-glasses POV perimeter treatment: the entry points, the barrier spray, the protected home.
 
 My piece has exactly 3 shots. Find footage that covers each:
-1. the blocked vent
-2. the clean-out
-3. clean airflow
-
-Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
-exact subreddits or creator accounts. For each, say what I should expect to find and
-which shot it covers.
-
-Before I save any clip, score it 1-5 on each point of this visual checklist:
-1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
-2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
-3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
-4. Hands enter from the BOTTOM of frame naturally when gesturing or working
-5. No visible camera, rig, phone, or mirror reveal anywhere in frame
-6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
-7. Flat, slightly desaturated grade; highlights wash slightly in bright light
-8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
-9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
-Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
-
-Return a table: source | link or exact search | shot covered | expected content | score notes.
-```
-
-
-### Meta Glasses POV - spraying indoors — `pest_control__pov__spray_indoor` (pov)  ·  refs 0/3
-
-**The look:** 13s 3-shot Meta-glasses POV: inside a home, find the activity, treat the baseboards, clean finish.
-
-**House rules:**
-- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
-- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
-- The three shots read as ONE continuous job (same house, same time of day).
-- No text, captions, logos, or watermarks inside the image.
-
-**Where to look:**
-- TikTok/IG: #pestcontrol #antproblem #baseboardspray
-- YouTube: "interior pest treatment POV", "ant trail kitchen baseboard treatment", "crack and crevice treatment"
-- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
-- Reddit: r/RayBanMeta raw samples
-
-**What to capture:** one screenshot per shot role, at the exact beat that matches it:
-1. spot the activity indoors
-2. treat the baseboards
-3. clean kitchen result
-Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
-
-**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
-
-**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
-
-**Research prompt (paste into Claude/ChatGPT):**
-```
-You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
-13s 3-shot Meta-glasses POV: inside a home, find the activity, treat the baseboards, clean finish.
-
-My piece has exactly 3 shots. Find footage that covers each:
-1. spot the activity indoors
-2. treat the baseboards
-3. clean kitchen result
+1. find the entry points
+2. lay the barrier
+3. protected house wide
 
 Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
 exact subreddits or creator accounts. For each, say what I should expect to find and
@@ -552,62 +552,6 @@ Return a table: source | link or exact search | shot covered | expected content 
 ```
 
 
-### Meta Glasses POV - spraying outdoors — `pest_control__pov__spray_outdoor` (pov)  ·  refs 0/3
-
-**The look:** 13s 3-shot Meta-glasses POV perimeter treatment: the entry points, the barrier spray, the protected home.
-
-**House rules:**
-- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
-- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
-- The three shots read as ONE continuous job (same house, same time of day).
-- No text, captions, logos, or watermarks inside the image.
-
-**Where to look:**
-- TikTok/IG: #perimeterspray #pestcontrolservice #satisfyingwork
-- YouTube: "pest control perimeter spray POV", "exterior barrier treatment foundation", "power spray perimeter"
-- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
-- Reddit: r/RayBanMeta raw samples
-
-**What to capture:** one screenshot per shot role, at the exact beat that matches it:
-1. find the entry points
-2. lay the barrier
-3. protected house wide
-Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
-
-**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
-
-**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
-
-**Research prompt (paste into Claude/ChatGPT):**
-```
-You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
-13s 3-shot Meta-glasses POV perimeter treatment: the entry points, the barrier spray, the protected home.
-
-My piece has exactly 3 shots. Find footage that covers each:
-1. find the entry points
-2. lay the barrier
-3. protected house wide
-
-Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
-exact subreddits or creator accounts. For each, say what I should expect to find and
-which shot it covers.
-
-Before I save any clip, score it 1-5 on each point of this visual checklist:
-1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
-2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
-3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
-4. Hands enter from the BOTTOM of frame naturally when gesturing or working
-5. No visible camera, rig, phone, or mirror reveal anywhere in frame
-6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
-7. Flat, slightly desaturated grade; highlights wash slightly in bright light
-8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
-9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
-Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
-
-Return a table: source | link or exact search | shot covered | expected content | score notes.
-```
-
-
 ### Storytime — `pest_control__story__storytime` (story, NOT POV)  ·  refs 0/3
 
 **The look:** 13s 3-shot storytime: job b-roll carries a first-person story with a twist payoff.
@@ -657,6 +601,230 @@ Before I save any clip, score it 1-5 on each point of this visual checklist:
 8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
 9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
 (For this format the clips must be third-person documentary b-roll with a muted grade — apply points 6-9 only.)
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### B-roll caption indoctrination — `pest_control__broll__indoctrination` (broll, NOT POV)  ·  refs 0/3
+
+**The look:** 13s 3-shot b-roll belief-shift: six timed captions reframe how homeowners think about pests.
+
+**House rules:**
+- Clean 9:16 b-roll of homes and pest evidence; shots leave clear space for the timed captions.
+- Muted cinematic grade, no faces, no branding.
+- No text, captions, logos, or watermarks inside the image.
+
+**Where to look:**
+- TikTok/IG: #hiddenpests #whatsinyourwalls #macrovideo
+- YouTube: "ants inside wall macro", "termite damage behind drywall", "pest evidence homeowners miss"
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. the comfortable lie
+2. the hidden truth
+3. the reframe
+Screenshot for the GRADE (muted, documentary) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make documentary b-roll content for a pest control brand. I need REAL reference clips of:
+13s 3-shot b-roll belief-shift: six timed captions reframe how homeowners think about pests.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. the comfortable lie
+2. the hidden truth
+3. the reframe
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
+(For this format the clips must be third-person documentary b-roll with a muted grade — apply points 6-9 only.)
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### Meta Glasses POV - attic removal (regular) — `pest_control__pov__attic_regular` (pov)  ·  refs 0/3
+
+**The look:** 13s 3-shot Meta-glasses POV attic inspection: entry, evidence walkthrough, sealed result.
+
+**House rules:**
+- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
+- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
+- The three shots read as ONE continuous job (same house, same time of day).
+- No text, captions, logos, or watermarks inside the image.
+
+**Where to look:**
+- TikTok/IG: #atticinspection #rodentremoval #pestcontrolpov
+- YouTube: "attic rodent inspection POV", "attic droppings inspection flashlight", "rodent proofing attic before after"
+- Reddit: r/pestcontrol attic/rodent threads
+- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
+- Reddit: r/RayBanMeta raw samples
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. enter the attic
+2. walk the evidence
+3. sealed entry point
+Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
+13s 3-shot Meta-glasses POV attic inspection: entry, evidence walkthrough, sealed result.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. enter the attic
+2. walk the evidence
+3. sealed entry point
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### Meta Glasses POV - vent cleaning — `pest_control__pov__vent_cleaning` (pov)  ·  refs 0/3
+
+**The look:** 13s 3-shot Meta-glasses POV vent job: the blocked vent, the clean-out, the airflow payoff.
+
+**House rules:**
+- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
+- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
+- The three shots read as ONE continuous job (same house, same time of day).
+- No text, captions, logos, or watermarks inside the image.
+
+**Where to look:**
+- TikTok/IG: #ductcleaning #ventcleaning #satisfyingcleaning
+- YouTube: "duct cleaning satisfying", "vent cleaning before after", "dryer vent bird nest removal"
+- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
+- Reddit: r/RayBanMeta raw samples
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. the blocked vent
+2. the clean-out
+3. clean airflow
+Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
+13s 3-shot Meta-glasses POV vent job: the blocked vent, the clean-out, the airflow payoff.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. the blocked vent
+2. the clean-out
+3. clean airflow
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
+Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
+
+Return a table: source | link or exact search | shot covered | expected content | score notes.
+```
+
+
+### Meta Glasses POV - attic removal (jumpscare) — `pest_control__pov__attic_jumpscare` (pov)  ·  refs 0/3
+
+**The look:** 13s 3-shot Meta-glasses POV attic reveal: dark climb, the jumpscare find, the cleared attic.
+
+**House rules:**
+- Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.
+- Real suburban job-site settings, natural daylight, documentary look; no studio lighting.
+- The three shots read as ONE continuous job (same house, same time of day).
+- No text, captions, logos, or watermarks inside the image.
+
+**Where to look:**
+- TikTok/IG: #atticinspection #rodentremoval #pestcontrolpov
+- YouTube: "attic rodent inspection POV", "attic droppings inspection flashlight", "rodent proofing attic before after"
+- Reddit: r/pestcontrol attic/rodent threads
+- IG/TikTok: #metaglasses #raybanmeta #povglasses (the authentic drift + hand entry, any subject)
+- Reddit: r/RayBanMeta raw samples
+
+**What to capture:** one screenshot per shot role, at the exact beat that matches it:
+1. climb into the dark attic
+2. the find (jumpscare)
+3. cleared and sealed
+Screenshot for the POV feel (hand entry, eye-height, drift) as much as the subject.
+
+**How many:** minimum 3 (unlocks the production gate), target 6-10 from 3+ different creators.
+
+**How to drop them:** in #content-full open a session (`vektor pest_control` → pick this workflow) and drop the screenshots/clips in the session thread. Each drop counts toward refs N/3 AND grounds every future image this workflow generates.
+
+**Research prompt (paste into Claude/ChatGPT):**
+```
+You are a short-form content researcher. I make first-person Ray-Ban Meta smart-glasses POV content for a pest control brand. I need REAL reference clips of:
+13s 3-shot Meta-glasses POV attic reveal: dark climb, the jumpscare find, the cleared attic.
+
+My piece has exactly 3 shots. Find footage that covers each:
+1. climb into the dark attic
+2. the find (jumpscare)
+3. cleared and sealed
+
+Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
+exact subreddits or creator accounts. For each, say what I should expect to find and
+which shot it covers.
+
+Before I save any clip, score it 1-5 on each point of this visual checklist:
+1. True eye-height first-person camera (not chest/body-cam, not hand-level phone, not helmet-high)
+2. Portrait 3:4 framing (the native 3024x4032 capture), or cleanly croppable to it — NOT 9:16
+3. Micro head-sway: EIS-smoothed organic drift/bob, not locked gimbal, not shaky-cam
+4. Hands enter from the BOTTOM of frame naturally when gesturing or working
+5. No visible camera, rig, phone, or mirror reveal anywhere in frame
+6. Mild edge softness / barrel distortion on wide scenes, sharpest in the center third
+7. Flat, slightly desaturated grade; highlights wash slightly in bright light
+8. Mixed ambient lighting (never studio-lit); can look flat/HDR-compressed indoors
+9. Gaze-centered framing: the subject sits center-frame because the wearer is LOOKING at it
 Keep only clips scoring 4+ on at least 7 points (b-roll: 3+ of the 4 applied points).
 
 Return a table: source | link or exact search | shot covered | expected content | score notes.

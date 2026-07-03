@@ -133,6 +133,30 @@ const KEYWORD_QUERIES: Array<{ match: string; queries: string[] }> = [
     ],
   },
   {
+    match: "before_after",
+    queries: [
+      "TikTok/IG: #beforeandafter #pestcontrolresults #satisfyingcleaning",
+      'YouTube: "pest control before and after", "infestation cleanup before after", "wasp nest removal before after"',
+      "Reddit: r/pestcontrol result posts (techs post before/after pairs)",
+    ],
+  },
+  {
+    match: "seasonal",
+    queries: [
+      "TikTok/IG: #pestseason #antseason #termiteswarm",
+      'YouTube: "spring ant season", "termite swarm season", "first warm day pests" (news-style b-roll)',
+      "Stock-adjacent: weather-turn b-roll (first warm day, spring rain, leaves) - the season IS shot 1",
+    ],
+  },
+  {
+    match: "review",
+    queries: [
+      "TikTok/IG: #customerreview #testimonialvideo #5starreview (home-service reels)",
+      'YouTube: "customer review reel home service", "5 star review video b-roll"',
+      "Your own Google/Yelp reviews - screenshot the QUOTES; the b-roll is arrival/care/result",
+    ],
+  },
+  {
     match: "local_owner_pain",
     queries: [
       "TikTok/IG: #pestcontrolpov #bluecollartok (work-only b-roll, different angles per clip)",

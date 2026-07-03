@@ -69,6 +69,9 @@ export async function enrichScene(
         "first-person Ray-Ban Meta smart-glasses POV shot for a pest control brand. Keep the SAME",
         "action, subject, framing, gloved hands, and any equipment described in the base scene. You are",
         "only allowed to make the setting more realistic and specific, and to honor the operator's rules.",
+        "NON-NEGOTIABLE: the rewritten scene MUST read as a true first-person eye-height POV, never a",
+        "third-person or stock-photo close-up. START the scene with 'First-person Meta-glasses POV'.",
+        "Gaze-centered framing; when hands appear they enter from the BOTTOM of the frame.",
       ]
     : [
         `You refine the scene description for a single AI-generated first frame of a ${String(wf?.category)} shot`,
@@ -92,7 +95,9 @@ export async function enrichScene(
       : "No explicit style rules; just make the setting realistic and lived-in.",
     "",
     "Return JSON: { \"scene\": string } where scene is ONE vivid sentence or two, the rewritten scene",
-    "description ONLY (no camera/style boilerplate, no on-screen text, no camera brand names). Do not",
+    isPov
+      ? "description ONLY (no on-screen text; keep the 'First-person Meta-glasses POV' opener). Do not"
+      : "description ONLY (no camera/style boilerplate, no on-screen text, no camera brand names). Do not",
     "add bugs or anything the base scene did not have beyond realism details. Never use em dashes.",
   ].join("\n");
 

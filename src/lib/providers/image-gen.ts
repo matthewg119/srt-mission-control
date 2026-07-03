@@ -93,8 +93,9 @@ export function sizeToAspect(size?: string): string | undefined {
   return r >= 1.55 ? "16:9" : "3:2";
 }
 
-/** Collapse any requested aspect onto hazel's supported set (1:1 | 3:2 | 2:3 | auto). */
-function nearestHazelAspect(aspect?: string): string {
+/** Collapse any requested aspect onto hazel's supported set (1:1 | 3:2 | 2:3 | auto).
+ *  Exported so callers can STAMP the true output aspect on generated images. */
+export function nearestHazelAspect(aspect?: string): string {
   const a = (aspect || "").trim();
   if (a === "1:1" || a === "3:2" || a === "2:3" || a === "auto") return a;
   // Portrait requests (3:4, 9:16, 2:3-ish) -> 2:3; landscape -> 3:2; unknown -> 2:3
