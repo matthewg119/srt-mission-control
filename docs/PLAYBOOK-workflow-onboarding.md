@@ -31,9 +31,12 @@ Everything happens in **#content-full**, top level, then in the session thread.
    - `more ideas` -> 3 fresh directions
    - `more hooks` -> back up: new hook options for this workflow
 7. The **picture card** posts (per-shot image prompts + your text timings). React ✅ ->
-   the 3 shot images generate (GPT image model, 3:4). Fix any with `redo N <new prompt>` —
-   works before AND after the render card. If the workflow already has a song, the
-   render-confirm card posts by itself right after the images; otherwise `song <key|url>`.
+   the **final prompts card** posts (the EXACT text gpt-image-2 gets, references + rules
+   baked in). Review it: `prompt N <new text>` rewrites one, then ✅ -> the 3 shot images
+   generate (GPT image model; POV = 3:4, story/b-roll = 9:16). Fix any with
+   `redo N <new prompt>` — works before AND after the render card. If the workflow already
+   has a song, the render-confirm card posts by itself right after the images; otherwise
+   `song <key|url>`.
 8. **References are OPTIONAL** — drop screenshots of reels you like / a competitor
    example / the song file in the thread whenever, to progress the `refs N/3` badge.
    `finish workflow` never blocks on them anymore.

@@ -114,6 +114,7 @@ The fixes/features:
 - `line N <text>` — edit one labeled copy box (works at the ideas gate too); paste a full block to re-slot it
 - `idea N` or bare `N` (✅ = idea 1) — pick a visual direction at the ideas gate (BEFORE any image generates)
 - `more ideas` / `more hooks` — redraw the 3 directions, or back up for fresh hook options
+- ✅ on the picture card — posts the **final image prompts** (references + rules baked in, exactly what gpt-image-2 gets); `prompt N <new text>` rewrites one; ✅ on the prompts card generates the images with them verbatim
 - `redo N <new prompt>` — regenerate one scene image (works after the render card too)
 - `song <key|url>` or **attach the audio file** — set the song (skipped when the workflow already has one: images ✅ goes straight to the render card)
 - `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings

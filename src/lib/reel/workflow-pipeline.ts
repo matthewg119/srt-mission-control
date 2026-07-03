@@ -103,7 +103,8 @@ const STAGE_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   structured_copy: "Didn't catch that. Edit with `line N <text>`, paste a full block to re-slot, or react ✅ on the copy card.",
   remix_copy: "Didn't catch that. `line N <text>` edits, `new images` regenerates the creatives, ✅ renders with the same images.",
   picture_ideas: "Didn't catch that. Reply `idea N` (or just the number), `line N <text>` to edit the copy, `more ideas`, or `more hooks`.",
-  picture: "Didn't catch that. `redo N <new prompt>` tweaks a scene, `song <key|url>` moves on, or ✅ the picture card to generate the images.",
+  picture: "Didn't catch that. ✅ the picture card to see the final image prompts, `redo N <new prompt>` tweaks a scene, `song <key|url>` moves on.",
+  prompt_review: "Didn't catch that. `prompt N <new text>` rewrites one final prompt; ✅ the prompts card generates the images with them.",
   render: "Generating the images now — hang tight. Once they land, `redo N <new prompt>` tweaks any of them.",
   authoring: "Didn't catch that. ✅ the render card for the build prompt, or `redo N <new prompt>` / `modify copy` / `song <key|url>`.",
   remix_offer: "Didn't catch that. Reply `remix N`, `remixes`, `modify copy`, or `save as <name>`.",
@@ -937,6 +938,40 @@ export async function handleVektorMessage(args: {
     return consumeWithNudge(job, args.channel);
   }
 
+  // Stage: prompt_review -> `prompt N <new text>` rewrites one final prompt before approval.
+  // ✅ on the prompts card (handlePictureReaction) generates with the approved prompts verbatim.
+  if (job.stage === "prompt_review") {
+    const pm = /^\s*prompt\s+(\d{1,2})\s+([\s\S]+?)\s*$/i.exec(t);
+    if (pm && data.workflow_id) {
+      const finals = [...(data.final_prompts ?? [])];
+      const idx = parseInt(pm[1], 10) - 1;
+      const wfP = await loadWorkflow(data.workflow_id);
+      if (!wfP || idx < 0 || idx >= Math.max(finals.length, wfP.scenes.length)) {
+        await slack.postThreadReply(args.channel, threadTs, `Prompt ${idx + 1} is out of range (1 to ${Math.max(finals.length, wfP?.scenes.length ?? 0)}).`);
+        return true;
+      }
+      finals[idx] = pm[2].trim();
+      await updateJob(job, { data: { ...job.data, final_prompts: finals } });
+      const card = await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        [
+          `*Final image prompts for ${wfP.name}* — updated:`,
+          ...finals.map((p, i) => `\n*${i + 1}. ${wfP.scenes[i]?.role ?? `shot ${i + 1}`}*\n${p}`),
+          "",
+          "React ✅ to generate the images with these prompts, or `prompt N <new text>` to keep editing.",
+        ].join("\n")
+      );
+      const cardTs = (card as { ts?: string }).ts;
+      if (cardTs) {
+        await updateJob(job, { pickerTs: cardTs });
+        await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+      }
+      return true;
+    }
+    return consumeWithNudge(job, args.channel);
+  }
+
   // Stage: picture / authoring -> `redo N <new prompt>` regenerates one scene's image (works
   // after the render-confirm card too, which parks the stage at authoring).
   if (job.stage === "picture" || job.stage === "authoring") {
@@ -977,23 +1012,43 @@ export async function handleVektorMessage(args: {
   return consumeWithNudge(job, args.channel);
 }
 
-/** Enrich a scene prompt on the avatar's references + THIS workflow's visual rules, then
- *  generate one still with the workflow's image settings (best-effort). */
-async function renderScene(
+/** Enrich one scene prompt on THIS workflow's reference library + visual rules. Falls back to
+ *  the raw prompt on any error. Shared by the prompt-review gate (which shows the result for
+ *  approval) and renderScene's direct path (redo etc.). */
+async function enrichWorkflowPrompt(
   verticalId: string,
   imagePrompt: string,
   workflow?: Workflow | null
-): Promise<{ url: string; buffer: Buffer; mimetype: string } | null> {
+): Promise<string> {
   try {
     const vertical = await loadVertical(verticalId);
-    const enriched = await enrichScene(imagePrompt, {
+    return await enrichScene(imagePrompt, {
       vertical,
       formatGroup: String(workflow?.category ?? "pov"),
       extraRules: workflow?.visual_rules,
       workflow: workflow
         ? { id: workflow.id, category: String(workflow.category), description: workflow.description ?? null }
         : null,
-    }).catch(() => imagePrompt);
+    });
+  } catch {
+    return imagePrompt;
+  }
+}
+
+/** Enrich a scene prompt on the workflow's references + visual rules (see enrichWorkflowPrompt),
+ *  then generate one still with the workflow's image settings (best-effort).
+ *  opts.skipEnrich: the prompt was already enriched AND approved at the prompt-review gate —
+ *  send it verbatim so what Matthew approved is exactly what generates. */
+async function renderScene(
+  verticalId: string,
+  imagePrompt: string,
+  workflow?: Workflow | null,
+  opts?: { skipEnrich?: boolean }
+): Promise<{ url: string; buffer: Buffer; mimetype: string } | null> {
+  try {
+    const enriched = opts?.skipEnrich
+      ? imagePrompt
+      : await enrichWorkflowPrompt(verticalId, imagePrompt, workflow);
     const img = await generatePovImage(enriched, {
       provider: workflow?.render_options?.provider as ImageProvider | undefined,
       aspect: workflow ? workflowAspect(workflow) : undefined,
@@ -1012,8 +1067,9 @@ async function renderScene(
 /**
  * ✅ on a workflow card. Routed by the reacted job's stage:
  *   structured_copy -> build the picture (scene image prompts + grouped-by-shot preview)
+ *   picture         -> PROMPT REVIEW: enrich every scene prompt and post them for approval
+ *   prompt_review   -> generate the real images with the approved prompts, verbatim
  *   authoring       -> validate + emit the Claude Code prompt for the render
- *   picture         -> generate the real images per scene (today's behavior, grouped recap)
  * Returns true when handled.
  */
 export async function handlePictureReaction(args: {
@@ -1031,10 +1087,67 @@ export async function handlePictureReaction(args: {
   if (job.stage === "picture_ideas") return pickPictureIdea(job, args.channel, 1);
   if (job.stage === "remix_copy") return renderRemixSameImages(job, args.channel);
   if (job.stage === "authoring") return emitRenderPrompt(job, args.channel);
-  if (job.stage !== "picture") return false;
+  // ✅ on the picture card -> the PROMPT REVIEW gate (see the exact prompts before any credit).
+  if (job.stage === "picture") return startPromptReview(job, args.channel);
+  if (job.stage !== "prompt_review") return false;
+  return generateSceneImages(job, args.channel);
+}
 
+/** The PROMPT REVIEW gate: enrich every scene's prompt (references + rules baked in) and post
+ *  the EXACT text that will go to gpt-image-2. `prompt N <new text>` edits one; ✅ generates. */
+async function startPromptReview(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const threadTs = job.slack_thread_ts;
+  await updateJob(job, { stage: "prompt_review" });
+  await slack.postThreadReply(channel, threadTs, "Writing the final image prompts (references + rules baked in)...");
+
+  waitUntil(
+    (async () => {
+      try {
+        const wf = await loadWorkflow(wfId);
+        if (!wf) return;
+        const prompts: string[] = [];
+        for (const scene of wf.scenes) {
+          prompts.push(await enrichWorkflowPrompt(job.vertical_id, scene.image_prompt, wf));
+        }
+        const card = await slack.postThreadReply(
+          channel,
+          threadTs,
+          [
+            `*Final image prompts for ${wf.name}* — exactly what gpt-image-2 will get, one per shot:`,
+            ...prompts.map((p, i) => `\n*${i + 1}. ${wf.scenes[i]?.role ?? `shot ${i + 1}`}*\n${p}`),
+            "",
+            "React ✅ to generate the images with these prompts, or `prompt N <new text>` to rewrite one first.",
+          ].join("\n")
+        );
+        const cardTs = (card as { ts?: string }).ts;
+        const fresh = await getLatestJobByThread(threadTs);
+        if (fresh)
+          await updateJob(fresh, {
+            pickerTs: cardTs ?? fresh.picker_msg_ts,
+            data: { ...fresh.data, final_prompts: prompts },
+          });
+        if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+      } catch (e) {
+        console.error("[workflow-pipeline] prompt review failed:", (e as Error).message);
+        await slack
+          .postThreadReply(channel, threadTs, "Could not write the final prompts. React ✅ on the picture card again to retry.")
+          .catch(() => {});
+        const fresh = await getLatestJobByThread(threadTs);
+        if (fresh) await updateJob(fresh, { stage: "picture" });
+      }
+    })()
+  );
+  return true;
+}
+
+/** Generate the scene images using the APPROVED final prompts verbatim (no re-enrichment), then
+ *  hand off to the song/render step. */
+async function generateSceneImages(job: ContentJob, channel: string): Promise<boolean> {
   const workflowIdRef = job.data.workflow_id;
   if (!workflowIdRef) return false;
+  const args = { channel };
 
   const threadTs = job.slack_thread_ts;
   await updateJob(job, { stage: "render" });
@@ -1045,9 +1158,16 @@ export async function handlePictureReaction(args: {
       try {
         const wf = await loadWorkflow(workflowIdRef);
         if (!wf) return;
+        const finals = job.data.final_prompts ?? [];
         for (let i = 0; i < wf.scenes.length; i++) {
           const scene = wf.scenes[i];
-          const rendered = await renderScene(job.vertical_id, scene.image_prompt, wf);
+          const approved = finals[i];
+          // The approved prompt becomes the scene's prompt of record (what you approved is
+          // what the scene IS); it is sent verbatim, no second enrichment pass.
+          if (approved) scene.image_prompt = approved;
+          const rendered = await renderScene(job.vertical_id, scene.image_prompt, wf, {
+            skipEnrich: Boolean(approved),
+          });
           if (rendered) {
             scene.image_url = rendered.url;
             scene.image_approved = true;
@@ -1704,7 +1824,12 @@ async function buildPictureFromStructuredCopy(job: ContentJob, channel: string):
         const card = await slack.postThreadReply(channel, threadTs, spec ? buildPictureCard(updated, spec) : "React ✅ to generate the images.");
         const cardTs = (card as { ts?: string }).ts;
         const fresh = await getLatestJobByThread(threadTs);
-        if (fresh) await updateJob(fresh, { pickerTs: cardTs ?? fresh.picker_msg_ts, data: { ...fresh.data, candidate_spec: spec } });
+        if (fresh)
+          await updateJob(fresh, {
+            pickerTs: cardTs ?? fresh.picker_msg_ts,
+            // A fresh picture invalidates previously approved prompts.
+            data: { ...fresh.data, candidate_spec: spec, final_prompts: undefined },
+          });
         if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
       } catch (e) {
         console.error("[workflow-pipeline] buildPictureFromStructuredCopy failed:", (e as Error).message);

@@ -59,6 +59,9 @@ export interface JobData {
   picture_ideas?: Array<{ title: string; shots: string[] }>; // ordering for `idea N`
   chosen_idea?: string; // the locked visual direction (title + per-shot gists, flattened)
 
+  // --- prompt review gate (the EXACT enriched prompts, approved before any credit is spent) ---
+  final_prompts?: string[]; // one per scene; `prompt N <text>` edits, ✅ generates with these verbatim
+
   // --- render-spec authoring (Part 2) ---
   candidate_spec?: unknown; // a parsed RenderSpec awaiting the mismatch/validation gate
   save_as_from?: string; // the workflow id whose settings a `save as` new draft carried
@@ -105,6 +108,7 @@ export type JobStage =
   | "workflow_pick"
   | "structured_copy"
   | "picture_ideas"
+  | "prompt_review"
   | "authoring"
   | "await_example"
   // remix upsell stages (after the render prompt is emitted):
