@@ -1,12 +1,16 @@
 // Avatar-first workflow pipeline (Content Engine v3) — the Slack-native creative-director flow.
 //
-// Front door is the AVATAR. In #content-full:
+// Front door is the AVATAR, and the WORKFLOW comes before the hooks (flip, 2026-07-03), so
+// every hook/copy generation is grounded in the chosen workflow's profile (description,
+// copy structure, visual rules). In #content-full:
 //   `go`                      -> pick an avatar (or `new` to create one)
 //   pick a number             -> Vektor posts ~30 headlines + a story reference block
-//   `headline N` / paste text -> 5 verbal + 5 title (+5 POV-first) hooks
-//   `title N`/`verbal N`/`pov N`/`hook <text>` -> 3 captions + 3 storyboards
-//   `pick <caption#> <story#>`-> the picture plan (scene image+animation prompts + timed
-//                                captions) with a checkmark to render the real images
+//   `headline N` / paste text -> the WORKFLOW LIBRARY menu (descriptions + gate badges)
+//   `workflow N`              -> 5 verbal + 5 title (+5 POV-first) hooks FOR that workflow
+//   `title N`/`verbal N`/`pov N`/`hook <text>` -> the labeled copy card -> ✅ -> picture ->
+//                                images -> song -> render prompt (+ remix upsell)
+//   Pasting a ready copy block (3+ lines) at any of those stages skips the hooks and slots
+//   your words straight into the workflow's boxes.
 //
 // Sessions are CHANNEL-SCOPED (getLatestSessionByChannel), so Matthew can drive the whole flow
 // by typing in the channel; thread replies also work. Heavy Claude/image work runs in
@@ -48,7 +52,9 @@ import {
   buildVideoDescription,
   buildRenderClaudePrompt,
   textsForShot,
+  workflowAspect,
 } from "@/lib/reel/render-spec";
+import type { ImageProvider } from "@/lib/providers/image-gen";
 import {
   setWorkflowSong,
   setWorkflowStatus,
@@ -59,6 +65,7 @@ import {
   cloneWorkflowForVertical,
   addWorkflowReference,
   setProductionStatus,
+  addApprovedVariation,
 } from "@/lib/reel/workflow-author";
 import { analyzeSong, snapSpecToBeats } from "@/lib/reel/beat-sync";
 import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
@@ -314,7 +321,7 @@ export async function handleVektorMessage(args: {
     await slack.postThreadReply(
       args.channel,
       threadTs,
-      `*${wfFin.name}*: 3 references in. Marked IN PRODUCTION. The 4th creative (the production test) renders next - confirm below.`
+      `*${wfFin.name}*: 3 references in. Marked IN PRODUCTION. The 4th creative (the production test) renders next - confirm below. From here, 4 ✅-approved variation renders flip it LIVE.`
     );
     await postRenderConfirmCard(args.channel, threadTs, job, wfFin, data.song_ref ?? wfFin.song_ref ?? null);
     return true;
@@ -472,7 +479,8 @@ export async function handleVektorMessage(args: {
     }
   }
 
-  // Stage: headlines -> pick/paste a headline -> hookset.
+  // Stage: headlines -> pick/paste a headline -> the WORKFLOW picker (workflow-first order:
+  // the format is chosen BEFORE any hooks, so the hooks are generated FOR that workflow).
   if (job.stage === "headlines") {
     // A pasted READY copy block (3+ lines) skips hook building entirely: store it and go
     // straight to the workflow question. Line 1 doubles as the chosen headline/hook.
@@ -482,42 +490,31 @@ export async function handleVektorMessage(args: {
     if (hi && Array.isArray(data.headlines) && data.headlines[hi - 1]) headline = data.headlines[hi - 1];
     else if (t && !isCommand(t)) headline = t;
     if (!headline) return false;
-    await updateJob(job, { stage: "hookset", data: { ...job.data, chosen_headline: headline } });
-    await slack.postThreadReply(args.channel, threadTs, `Building hooks for: *${headline}*...`);
-    const chosen = headline;
-    waitUntil(
-      (async () => {
-        try {
-          const vertical = await loadVertical(job.vertical_id);
-          const isPov = true; // POV is our default brand format; always offer the POV-first set.
-          const hs = await generateHookSet({ vertical, chosenHeadline: chosen, isPov });
-          const parts = [
-            "*Verbal hooks* (voiceover) — `verbal N`:",
-            numbered(hs.verbal),
-            "",
-            "*Title hooks* (on-screen) — `title N`:",
-            numbered(hs.title),
-          ];
-          if (hs.pov?.length) parts.push("", "*POV-first title hooks* — `pov N`:", numbered(hs.pov));
-          parts.push("", "Pick one, or just *paste your own copy* (I will slot it into the workflow), or `hook <text>`.");
-          const fresh = await getLatestJobByThread(threadTs);
-          if (fresh) await updateJob(fresh, { data: { ...fresh.data, hookset: hs } });
-          await slack.postThreadReply(args.channel, threadTs, parts.join("\n"));
-        } catch (e) {
-          console.error("[workflow-pipeline] hookset gen failed:", (e as Error).message);
-        }
-      })()
-    );
+    await updateJob(job, { stage: "workflow_pick", data: { ...job.data, chosen_headline: headline } });
+    await postWorkflowMenu(args.channel, threadTs, job.vertical_id, {});
     return true;
   }
 
-  // Stage: hookset -> pick a hook OR paste your own copy -> straight to the WORKFLOW picker.
-  // (This is the gate: the workflow question comes right after the hooks, and a pasted copy block
-  // is accepted here so the session never stalls and the labeled copy is seeded from your words.)
+  // Stage: hookset -> pick a hook. In the workflow-first order the workflow is ALREADY bound
+  // (data.workflow_id), so the picked hook goes straight into that workflow's copy build.
+  // Mid-flight sessions from the old order (no workflow_id yet) keep the old behavior: the
+  // workflow menu comes next.
   if (job.stage === "hookset") {
-    // Same fast path as the headlines stage: a 3+ line paste is ready copy, not a hook pick.
+    // A 3+ line paste is ready copy, not a hook pick. With a workflow bound it re-slots into
+    // that workflow's boxes; without one it goes through the library gate (old behavior).
     // Runs BEFORE isCommand so a block starting with "POV:"/a number can't stall the session.
-    if (looksLikePastedCopy(t)) return acceptPastedCopy(args.channel, threadTs, job, t);
+    if (looksLikePastedCopy(t)) {
+      if (data.workflow_id) {
+        const wfP = await loadWorkflow(data.workflow_id);
+        if (wfP?.copy_structure?.length) {
+          await updateJob(job, { data: { ...job.data, pasted_copy: t, chosen_hook: t.split("\n")[0].trim() } });
+          const freshJob = await getLatestJobByThread(threadTs);
+          await startStructuredCopyBuild(args.channel, threadTs, freshJob ?? job, wfP, { pastedCopy: t });
+          return true;
+        }
+      }
+      return acceptPastedCopy(args.channel, threadTs, job, t);
+    }
     let hook: string | undefined;
     let pastedCopy: string | undefined;
     const hm = /^\s*hook\s+(.+)\s*$/i.exec(t);
@@ -535,6 +532,38 @@ export async function handleVektorMessage(args: {
       hook = t.split("\n")[0].trim();
     }
     if (!hook) return false;
+
+    // Workflow-first order: the workflow is bound, run its copy/picture path with this hook.
+    if (data.workflow_id) {
+      const wf = await loadWorkflow(data.workflow_id);
+      if (wf) {
+        await updateJob(job, {
+          data: { ...job.data, chosen_hook: hook, ...(pastedCopy ? { pasted_copy: pastedCopy } : {}) },
+        });
+        const freshJob = await getLatestJobByThread(threadTs);
+        const j = freshJob ?? job;
+        if (wf.copy_structure?.length) {
+          await startStructuredCopyBuild(args.channel, threadTs, j, wf, { pastedCopy });
+        } else {
+          await updateJob(j, { stage: "picture" });
+          await slack.postThreadReply(args.channel, threadTs, "Mapping the whole picture (scenes + timing)...");
+          waitUntil(
+            generateAndPostPicture({
+              channel: args.channel,
+              threadTs,
+              verticalId: job.vertical_id,
+              hook,
+              caption: data.chosen_caption || "",
+              storyboard: data.chosen_storyboard || "",
+              workflow: wf,
+            })
+          );
+        }
+        return true;
+      }
+    }
+
+    // Old-order fallback (session parked at hookset before the flip deployed).
     await updateJob(job, {
       stage: "workflow_pick",
       data: { ...job.data, chosen_hook: hook, ...(pastedCopy ? { pasted_copy: pastedCopy } : {}) },
@@ -630,55 +659,71 @@ export async function handleVektorMessage(args: {
       );
       return true;
     }
-    // Active but no labeled copy structure (e.g. seeded POV): use today's picture flow unchanged.
-    if (!wf.copy_structure?.length) {
-      await updateJob(job, { stage: "picture", data: { ...job.data, workflow_id: wf.id } });
-      await slack.postThreadReply(args.channel, threadTs, "Mapping the whole picture (scenes + timing)...");
-      waitUntil(
-        generateAndPostPicture({
-          channel: args.channel,
-          threadTs,
-          verticalId: job.vertical_id,
-          hook: data.chosen_hook || "",
-          caption: data.chosen_caption || "",
-          storyboard: data.chosen_storyboard || "",
-          workflow: wf,
-        })
-      );
+    // Pasted copy in hand: Matthew's words drive the build directly - re-slot them into the
+    // workflow's boxes (no hook step needed, his copy IS the copy).
+    if (data.pasted_copy && wf.copy_structure?.length) {
+      await updateJob(job, { data: { ...job.data, workflow_id: wf.id } });
+      const freshJob = await getLatestJobByThread(threadTs);
+      await startStructuredCopyBuild(args.channel, threadTs, freshJob ?? job, wf, { pastedCopy: data.pasted_copy });
       return true;
     }
 
-    // Configured with a copy structure: generate the labeled copy, then let Matthew edit it.
-    await updateJob(job, { stage: "structured_copy", data: { ...job.data, workflow_id: wf.id } });
-    await slack.postThreadReply(args.channel, threadTs, `Building the copy for *${wf.name}*...`);
-    const seed = {
-      headline: data.chosen_headline,
-      hook: data.chosen_hook,
-      caption: data.chosen_caption,
-      storyboard: data.chosen_storyboard,
-    };
-    const pastedCopy = data.pasted_copy;
+    // A hook already chosen (old-order mid-flight session or the captions path): keep the
+    // original behavior and build straight from it.
+    if (data.chosen_hook) {
+      if (!wf.copy_structure?.length) {
+        await updateJob(job, { stage: "picture", data: { ...job.data, workflow_id: wf.id } });
+        await slack.postThreadReply(args.channel, threadTs, "Mapping the whole picture (scenes + timing)...");
+        waitUntil(
+          generateAndPostPicture({
+            channel: args.channel,
+            threadTs,
+            verticalId: job.vertical_id,
+            hook: data.chosen_hook || "",
+            caption: data.chosen_caption || "",
+            storyboard: data.chosen_storyboard || "",
+            workflow: wf,
+          })
+        );
+        return true;
+      }
+      await updateJob(job, { data: { ...job.data, workflow_id: wf.id } });
+      const freshJob = await getLatestJobByThread(threadTs);
+      await startStructuredCopyBuild(args.channel, threadTs, freshJob ?? job, wf, {});
+      return true;
+    }
+
+    // Workflow-first order: the workflow is chosen, NOW generate the hooks FOR it, grounded
+    // in its description, copy structure, and visual rules.
+    await updateJob(job, { stage: "hookset", data: { ...job.data, workflow_id: wf.id } });
+    await slack.postThreadReply(args.channel, threadTs, `Building hooks for *${wf.name}*...`);
+    const chosenHeadline = data.chosen_headline || wf.name;
+    const wfForHooks = wf;
     waitUntil(
       (async () => {
         try {
           const vertical = await loadVertical(job.vertical_id);
-          // If Matthew pasted his own copy, re-slot HIS words into the boxes (feedback on his
-          // message); otherwise generate fresh copy seeded from the chosen hook.
-          const lines = pastedCopy
-            ? await reslotCopyToStructure({ vertical, workflow: wf, pastedBlock: pastedCopy })
-            : await generateStructuredCopy({ vertical, workflow: wf, seed });
+          const isPov = String(wfForHooks.category) === "pov";
+          const hs = await generateHookSet({ vertical, chosenHeadline, isPov, workflow: wfForHooks });
+          const parts = [
+            `*Hooks for ${wfForHooks.name}*`,
+            "",
+            "*Verbal hooks* (voiceover) — `verbal N`:",
+            numbered(hs.verbal),
+            "",
+            "*Title hooks* (on-screen) — `title N`:",
+            numbered(hs.title),
+          ];
+          if (hs.pov?.length) parts.push("", "*POV-first title hooks* — `pov N`:", numbered(hs.pov));
+          parts.push("", "Pick one, or just *paste your own copy* (I slot it into this workflow), or `hook <text>`.");
           const fresh = await getLatestJobByThread(threadTs);
-          const card = await postStructuredCopyCard(args.channel, threadTs, wf, lines);
-          const cardTs = (card as { ts?: string }).ts;
-          if (fresh)
-            await updateJob(fresh, {
-              pickerTs: cardTs ?? fresh.picker_msg_ts,
-              data: { ...fresh.data, structured_copy: lines },
-            });
-          if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+          if (fresh) await updateJob(fresh, { data: { ...fresh.data, hookset: hs } });
+          await slack.postThreadReply(args.channel, threadTs, parts.join("\n"));
         } catch (e) {
-          console.error("[workflow-pipeline] structured copy gen failed:", (e as Error).message);
-          await slack.postThreadReply(args.channel, threadTs, "Could not build the copy. Try another workflow.").catch(() => {});
+          console.error("[workflow-pipeline] hookset gen failed:", (e as Error).message);
+          await slack
+            .postThreadReply(args.channel, threadTs, "Could not build the hooks. Reply `hook <text>` to use your own.")
+            .catch(() => {});
         }
       })()
     );
@@ -756,7 +801,7 @@ export async function handleVektorMessage(args: {
         waitUntil(
           (async () => {
             try {
-              const rendered = await renderScene(vid, newPrompt);
+              const rendered = await renderScene(vid, newPrompt, wf);
               wf.scenes[idx].image_prompt = newPrompt;
               wf.scenes[idx].image_url = rendered?.url ?? wf.scenes[idx].image_url ?? null;
               await upsertWorkflow(wf);
@@ -785,15 +830,25 @@ export async function handleVektorMessage(args: {
   return false;
 }
 
-/** Enrich a scene prompt on the avatar's references + generate one still (best-effort). */
+/** Enrich a scene prompt on the avatar's references + THIS workflow's visual rules, then
+ *  generate one still with the workflow's image settings (best-effort). */
 async function renderScene(
   verticalId: string,
-  imagePrompt: string
+  imagePrompt: string,
+  workflow?: Workflow | null
 ): Promise<{ url: string; buffer: Buffer; mimetype: string } | null> {
   try {
     const vertical = await loadVertical(verticalId);
-    const enriched = await enrichScene(imagePrompt, { vertical, formatGroup: "pov" }).catch(() => imagePrompt);
-    const img = await generatePovImage(enriched);
+    const enriched = await enrichScene(imagePrompt, {
+      vertical,
+      formatGroup: String(workflow?.category ?? "pov"),
+      extraRules: workflow?.visual_rules,
+    }).catch(() => imagePrompt);
+    const img = await generatePovImage(enriched, {
+      provider: workflow?.render_options?.provider as ImageProvider | undefined,
+      aspect: workflow ? workflowAspect(workflow) : undefined,
+      quality: workflow?.render_options?.quality,
+    });
     if (!img) return null;
     const url = await uploadToReels(img.buffer, img.mimetype);
     if (!url) return null;
@@ -839,7 +894,7 @@ export async function handlePictureReaction(args: {
         if (!wf) return;
         for (let i = 0; i < wf.scenes.length; i++) {
           const scene = wf.scenes[i];
-          const rendered = await renderScene(job.vertical_id, scene.image_prompt);
+          const rendered = await renderScene(job.vertical_id, scene.image_prompt, wf);
           if (rendered) {
             scene.image_url = rendered.url;
             scene.image_approved = true;
@@ -930,6 +985,51 @@ interface WorkflowMenuEntry {
  * Empty library + pasted copy: skip the menu and productize the copy into a new workflow.
  * Persists the flat numbering so `workflow N` / `template N` resolve.
  */
+/** Kick off the labeled-copy build for a bound workflow: re-slot Matthew's pasted copy into
+ *  the boxes when he supplied it, otherwise generate fresh copy seeded from the chosen hook.
+ *  Ends on the structured-copy card with the ✅ primed. (Shared by the workflow_pick and
+ *  hookset stages in the workflow-first order.) */
+async function startStructuredCopyBuild(
+  channel: string,
+  threadTs: string,
+  job: ContentJob,
+  wf: Workflow,
+  opts: { pastedCopy?: string }
+): Promise<void> {
+  const data = job.data;
+  await updateJob(job, { stage: "structured_copy", data: { ...job.data, workflow_id: wf.id } });
+  await slack.postThreadReply(channel, threadTs, `Building the copy for *${wf.name}*...`);
+  const seed = {
+    headline: data.chosen_headline,
+    hook: data.chosen_hook,
+    caption: data.chosen_caption,
+    storyboard: data.chosen_storyboard,
+  };
+  const pastedCopy = opts.pastedCopy ?? data.pasted_copy;
+  waitUntil(
+    (async () => {
+      try {
+        const vertical = await loadVertical(job.vertical_id);
+        const lines = pastedCopy
+          ? await reslotCopyToStructure({ vertical, workflow: wf, pastedBlock: pastedCopy })
+          : await generateStructuredCopy({ vertical, workflow: wf, seed });
+        const fresh = await getLatestJobByThread(threadTs);
+        const card = await postStructuredCopyCard(channel, threadTs, wf, lines);
+        const cardTs = (card as { ts?: string }).ts;
+        if (fresh)
+          await updateJob(fresh, {
+            pickerTs: cardTs ?? fresh.picker_msg_ts,
+            data: { ...fresh.data, structured_copy: lines },
+          });
+        if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+      } catch (e) {
+        console.error("[workflow-pipeline] structured copy gen failed:", (e as Error).message);
+        await slack.postThreadReply(channel, threadTs, "Could not build the copy. Try another workflow.").catch(() => {});
+      }
+    })()
+  );
+}
+
 async function postWorkflowMenu(
   channel: string,
   threadTs: string,
@@ -998,7 +1098,16 @@ async function postWorkflowMenu(
     return bits.length ? `  (${bits.join(" · ")})` : "";
   };
 
-  // Render grouped: category headers for own workflows, then the templates section.
+  // Onboarding gate badge: LIVE / onboarding N/4 approved variations / refs N/3.
+  const gateBadge = (w: Workflow): string => {
+    if (w.production_status === "live") return "  ★ LIVE";
+    if (w.production_status === "in_production") return `  onboarding ${(w.approved_variations ?? []).length}/4`;
+    const refs = w.reference_media?.length ?? 0;
+    return refs > 0 ? `  refs ${refs}/3` : "";
+  };
+
+  // Render grouped: category headers for own workflows, then the templates section. Each row
+  // carries the workflow's one-line description so the menu doubles as the library inventory.
   const lines: string[] = [];
   let lastHeader = "";
   ordered.forEach(({ w, cross }, i) => {
@@ -1008,7 +1117,11 @@ async function postWorkflowMenu(
       lastHeader = header;
     }
     const tag = cross ? `  [${w.vertical_id}]` : w.status === "active" ? "" : "  - needs config";
-    lines.push(`  ${i + 1}. ${w.name}${w.subcategory ? ` (${w.subcategory})` : ""}${describe(w)}${tag}`);
+    lines.push(`  ${i + 1}. ${w.name}${w.subcategory ? ` (${w.subcategory})` : ""}${describe(w)}${gateBadge(w)}${tag}`);
+    if (w.description) {
+      const d = w.description.length > 90 ? `${w.description.slice(0, 87)}...` : w.description;
+      lines.push(`      _${d}_`);
+    }
   });
 
   // Fit suggestion: rank by slot-count match against the pasted line count (own avatar first).
@@ -1219,6 +1332,7 @@ async function generateAndPostPicture(args: {
       chosenHook: args.hook,
       chosenCaption: args.caption,
       chosenStoryboard: args.storyboard,
+      workflow: args.workflow,
     });
     const name = args.workflow?.name || (args.hook || args.storyboard).slice(0, 60);
     const wfId = args.workflow?.id || workflowId(args.verticalId, "pov", name);
@@ -1326,6 +1440,7 @@ async function buildPictureFromStructuredCopy(job: ContentJob, channel: string):
           chosenHook: job.data.chosen_hook || wf.name,
           chosenCaption: captionText || wf.name,
           chosenStoryboard: job.data.chosen_storyboard || wf.name,
+          workflow: wf,
         });
         let scenes = plan.scenes.slice(0, shotCount);
         while (scenes.length < shotCount) {
@@ -1370,12 +1485,19 @@ async function postRenderConfirmCard(
   spec.song_ref = songRef;
   const errs = validateRenderSpec(spec);
   const modeLabel = mode === "animated" ? "video (animated clips)" : "static images";
+  const onboarding =
+    workflow.production_status === "in_production"
+      ? `Onboarding ${(workflow.approved_variations ?? []).length}/4 approved variations to LIVE.`
+      : workflow.production_status === "live"
+        ? "★ This workflow is LIVE."
+        : "";
   const card = await slack.postThreadReply(
     channel,
     threadTs,
     [
       buildVideoDescription(workflow, spec),
       "",
+      onboarding,
       errs.length
         ? "*Fix these before rendering:*\n" + errs.map((e) => `• ${e}`).join("\n")
         : `Render *${workflow.name}* with *${modeLabel}*?`,
@@ -1429,6 +1551,28 @@ async function emitRenderPrompt(job: ContentJob, channel: string): Promise<boole
       buildVideoDescription(wf, spec),
     ].join("\n")
   );
+
+  // Onboarding gate: every ✅-approved render counts as an APPROVED VARIATION. Once a workflow
+  // is in production, 4 of them flip it LIVE. The array keeps growing after live too - it is
+  // the workflow's generated-examples gallery on the dashboard.
+  if (wf.production_status === "in_production" || wf.production_status === "live") {
+    const count = await addApprovedVariation(wf.id, {
+      label: (job.data.remix_angle as string | undefined) ?? "base",
+      structured_copy: (job.data.structured_copy ?? []).map((l) => ({ key: l.key, text: l.text })),
+      song_ref: spec.song_ref ?? null,
+      thread_ts: threadTs,
+      image_urls: wf.scenes.map((s) => s.image_url).filter((u): u is string => Boolean(u)),
+    });
+    if (count !== null && wf.production_status === "in_production") {
+      if (count >= 4) {
+        await setProductionStatus(wf.id, "live");
+        await slack.postThreadReply(channel, threadTs, `★ *${wf.name}* is LIVE. ${count} approved variations in the library.`);
+      } else {
+        await slack.postThreadReply(channel, threadTs, `Onboarding ${count}/4 approved variations. ${4 - count} more to go LIVE.`);
+      }
+    }
+  }
+
   // Keep the session ALIVE for the remix upsell (16 variations of this workflow + audio combo).
   await updateJob(job, { stage: "remix_offer" });
   await postRemixOffer(channel, threadTs);

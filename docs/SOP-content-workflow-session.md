@@ -26,22 +26,25 @@ Problems: copy was asked for **twice** (hookset, then captions/storyboards) befo
 choice; pasting your own lines at the hooks step matched no command, so it stalled; and a full
 copy paste at the headlines step triggered "Building hooks for: <your whole block>".
 
-## AFTER — the current flow (paste ready copy anywhere; the workflow question IS the library)
+## AFTER — the current flow (WORKFLOW FIRST, then hooks; paste ready copy anywhere)
+
+Flip (2026-07-03): the workflow is chosen BEFORE any hooks, so the hooks/copy are generated
+FOR that workflow, grounded in its description + copy structure + visual rules.
 
 ```mermaid
 flowchart TD
   A([go]) --> B[Vektor: which avatar?]
   B -->|reply a number| C[30 headlines + story material]
-  C -->|headline N / one-line paste| D[Hookset:<br/>5 verbal + 5 title + 5 POV]
+  C -->|headline N / one-line paste| W
   C -->|paste READY copy 3+ lines| W
-  D -->|pick a hook| W
-  D -->|paste READY copy 3+ lines| W
 
-  W{Which workflow?<br/>THE LIBRARY, grouped by category<br/>slots · shots · seconds · aspect<br/>+ fit ranking vs your pasted lines<br/>+ templates from other avatars}
+  W{Which workflow?<br/>THE LIBRARY, grouped by category<br/>description + slots · shots · seconds · aspect<br/>+ gate badge: LIVE / onboarding N of 4 / refs N of 3<br/>+ fit ranking vs your pasted lines<br/>+ templates from other avatars}
 
-  W -->|workflow N / template N| S[Structured copy<br/>labeled boxes seeded from YOUR words]
+  W -->|workflow N, no pasted copy| D[Hooks FOR that workflow:<br/>5 verbal + 5 title + 5 POV<br/>grounded in its profile]
+  D -->|title N / verbal N / pov N / hook TEXT| S
+  D -->|paste READY copy 3+ lines| S
+  W -->|workflow N / template N with pasted copy| S[Structured copy<br/>labeled boxes seeded from YOUR words]
   W -->|workflow N = draft| X[Emit Claude Code prompt<br/>to configure it]
-  W -->|workflow N = no copy structure| F[Picture plan as before]
   W -->|create - or empty library| NW[PRODUCTIZE your copy:<br/>each line labeled with a role<br/>+ shot + in/out seconds + textbox position<br/>+ category - saved ACTIVE to the library]
   NW --> S
 
@@ -59,6 +62,7 @@ flowchart TD
 
   G -. drop 3 screenshots/videos of the manual edit .-> REF[reference creatives 3/3]
   REF -->|finish workflow| PROD[[4th creative renders<br/>workflow IN PRODUCTION]]
+  PROD -. every ✅ render counts .-> ONB[[4 approved variations<br/>workflow goes LIVE]]
 
   style W fill:#14233a,stroke:#3a6ea5,color:#c2d8f5
   style NW fill:#2a1a33,stroke:#7a3aa5,color:#e2c2f5
@@ -80,6 +84,16 @@ The fixes/features:
 5. **Production gate**: drop 3 reference creatives (screenshots of your manual edit, videos,
    the audio) in the session thread, then `finish workflow` renders the 4th and marks the
    workflow IN PRODUCTION. `map` shows all of it as a rendered image.
+6. **Onboarding to LIVE**: once in production, every ✅-approved render (base or remix) counts
+   as an approved variation; at 4 the workflow flips LIVE. The variations double as the
+   examples gallery on `/dashboard/content-workflows/<id>`.
+7. **Consistency profile**: each workflow carries a one-line description + visual rules that
+   ground every hook, copy line, and scene image prompt. Edit them (plus per-shot prompts,
+   image model, aspect, quality, song, timings) on the workflow's dashboard editor page —
+   click any card on the Content Studio board.
+8. **Image/motion models**: ALL images generate with the GPT image model via the Higgsfield key
+   (slug `openai/hazel`); ALL animation runs Seedance via Higgsfield. Per-workflow override:
+   `render_options.provider`.
 
 ## Command cheat-sheet
 - `go` — start (pick an avatar by number, or `new` to create one)

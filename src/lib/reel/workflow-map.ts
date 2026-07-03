@@ -29,14 +29,24 @@ function workflowLabel(w: Workflow): string {
     new Set((w.copy_structure ?? []).map((r) => r.position).filter((p): p is string => Boolean(p)))
   );
   const refs = w.reference_media?.length ?? 0;
-  const prod = w.production_status === "in_production" ? "IN PRODUCTION" : `refs ${refs}/3`;
+  const vars = (w.approved_variations ?? []).length;
+  const prod =
+    w.production_status === "live"
+      ? "LIVE"
+      : w.production_status === "in_production"
+        ? `IN PRODUCTION ${vars}/4`
+        : `refs ${refs}/3`;
   const specBits = [
     shots ? `${shots} shots/images` : "no shots yet",
     dur ? `${dur}s` : "",
     workflowAspect(w),
   ].filter(Boolean);
+  const desc = w.description
+    ? clean(w.description.length > 80 ? `${w.description.slice(0, 77)}...` : w.description)
+    : "";
   const rows = [
     clean(w.name),
+    desc,
     specBits.join(" · "),
     positions.length ? `text: ${positions.join(", ")}` : "",
     `${w.status}${w.status === "active" ? "" : " (needs config)"} · ${prod}`,
@@ -85,7 +95,9 @@ export async function buildWorkflowMermaid(
       ws.forEach((w, wi) => {
         const wid = `${cid}W${wi + 1}`;
         lines.push(`  ${cid} --> ${wid}["${workflowLabel(w)}"]`);
-        if (w.production_status === "in_production") {
+        if (w.production_status === "live") {
+          lines.push(`  style ${wid} fill:#0d4d2b,stroke:#00C9A7,stroke-width:2px`);
+        } else if (w.production_status === "in_production") {
           lines.push(`  style ${wid} fill:#14331a,stroke:#3a8a4a`);
         } else if (w.status !== "active") {
           lines.push(`  style ${wid} fill:#33261a,stroke:#8a6a3a`);
@@ -93,6 +105,58 @@ export async function buildWorkflowMermaid(
       });
     }
   }
+  return lines.join("\n");
+}
+
+/**
+ * A single workflow's structure as a mermaid flowchart: copy roles (label + timing + position)
+ * -> the shots they land on -> the production gates chain. Rendered by the dashboard editor
+ * (mermaid.ink img, same as the library map) so the whole recipe is visible at a glance.
+ */
+export function buildWorkflowDetailMermaid(w: Workflow): string {
+  const lines: string[] = ["flowchart LR"];
+  const shots = w.render_spec?.shots ?? [];
+  const roles = w.copy_structure ?? [];
+
+  lines.push(`  WF["${workflowLabel(w)}"]`);
+
+  if (shots.length) {
+    for (const s of [...shots].sort((a, b) => a.i - b.i)) {
+      const scene = w.scenes[s.i - 1];
+      const label = [`Shot ${s.i}`, `${s.start}s to ${s.end}s`, scene?.role ? clean(scene.role) : ""]
+        .filter(Boolean)
+        .join("<br/>");
+      lines.push(`  WF --> S${s.i}["${label}"]`);
+    }
+  } else if (w.scenes.length) {
+    w.scenes.forEach((scene, i) => {
+      lines.push(`  WF --> S${i + 1}["Shot ${i + 1}<br/>${clean(scene.role)}"]`);
+    });
+  }
+
+  roles.forEach((r, i) => {
+    const label = [
+      clean(r.label),
+      r.at_second !== undefined ? `${r.at_second}s${r.out_second !== undefined ? ` to ${r.out_second}s` : ""}` : "",
+      r.position ? clean(r.position) : "",
+    ]
+      .filter(Boolean)
+      .join("<br/>");
+    const rid = `R${i + 1}`;
+    lines.push(`  ${rid}(["${label}"])`);
+    lines.push(r.shot ? `  ${rid} --> S${r.shot}` : `  ${rid} --> WF`);
+  });
+
+  const refs = w.reference_media?.length ?? 0;
+  const vars = (w.approved_variations ?? []).length;
+  lines.push(`  WF --> G1["refs ${refs}/3"]`);
+  lines.push(`  G1 --> G2["in production"]`);
+  lines.push(`  G2 --> G3["variations ${vars}/4"]`);
+  lines.push(`  G3 --> G4["LIVE"]`);
+  if (w.production_status === "live") lines.push("  style G4 fill:#0d4d2b,stroke:#00C9A7,stroke-width:2px");
+  else if (w.production_status === "in_production") lines.push("  style G2 fill:#14331a,stroke:#3a8a4a");
+  else if (refs > 0) lines.push("  style G1 fill:#33261a,stroke:#8a6a3a");
+
   return lines.join("\n");
 }
 

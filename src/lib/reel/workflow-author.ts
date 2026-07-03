@@ -17,6 +17,7 @@ import {
   type RenderSequence,
   type CopyRole,
   type RenderSpec,
+  type ApprovedVariation,
 } from "@/config/workflows";
 import { validateRenderSpec } from "@/lib/reel/render-spec";
 import type { ProductizedWorkflow } from "@/lib/reel/creative-director";
@@ -92,6 +93,7 @@ export async function proposeWorkflowFromAnalysis(args: {
   };
 
   const ok = await upsertWorkflow(workflow);
+  if (ok) await setWorkflowProfile(workflow.id, { description: describeWorkflowMechanically(workflow) });
   return ok ? workflow : null;
 }
 
@@ -156,6 +158,7 @@ export async function createWorkflowFromProductized(args: {
     source_example_id: null,
   };
   const ok = await upsertWorkflow(workflow);
+  if (ok) await setWorkflowProfile(workflow.id, { description: describeWorkflowMechanically(workflow) });
   return ok ? { workflow, specErrors } : null;
 }
 
@@ -257,7 +260,62 @@ export async function addWorkflowReference(
   }
 }
 
-/** Flip a workflow's production gate ("building" -> "in_production"). Best-effort. */
+/** Write a workflow's consistency profile (description + image visual rules). Dedicated
+ *  update (not the generic upsert) so a missing column never breaks other saves. */
+export async function setWorkflowProfile(
+  id: string,
+  profile: { description?: string; visual_rules?: string[] }
+): Promise<void> {
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (profile.description !== undefined) patch.description = stripEmDashes(profile.description);
+  if (profile.visual_rules !== undefined) patch.visual_rules = profile.visual_rules.map((r) => stripEmDashes(r));
+  try {
+    const { error } = await supabaseAdmin.from("workflows").update(patch).eq("id", id);
+    if (error) console.error("[workflows] setProfile failed:", error.message);
+  } catch (e) {
+    console.error("[workflows] setProfile threw:", (e as Error).message);
+  }
+}
+
+/** Append an APPROVED VARIATION (an approved render of this workflow). Returns the new
+ *  count, or null on failure - the onboarding gate flips to live at 4. */
+export async function addApprovedVariation(
+  id: string,
+  variation: ApprovedVariation
+): Promise<number | null> {
+  try {
+    const wf = await loadWorkflow(id);
+    if (!wf) return null;
+    const next = [...(wf.approved_variations ?? []), { ...variation, approved_at: new Date().toISOString() }];
+    const { error } = await supabaseAdmin
+      .from("workflows")
+      .update({ approved_variations: next, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) {
+      console.error("[workflows] addApprovedVariation failed:", error.message);
+      return null;
+    }
+    return next.length;
+  } catch (e) {
+    console.error("[workflows] addApprovedVariation threw:", (e as Error).message);
+    return null;
+  }
+}
+
+/** Compose a one-line mechanical description from a workflow's structure (no AI call). */
+export function describeWorkflowMechanically(w: Workflow): string {
+  const shots = w.render_spec?.shots?.length || w.scenes.length || w.render_options.max_shots || 0;
+  const dur = w.render_spec?.duration_seconds;
+  const roles = (w.copy_structure ?? []).map((r) => r.label).slice(0, 4).join(" -> ");
+  const mode = w.render_spec?.mode === "static_images" ? "static" : "animated";
+  const parts = [
+    `${shots}-shot${dur ? ` ${dur}s` : ""} ${mode} ${w.category}`,
+    roles ? `copy: ${roles}` : w.scenes.length ? `scenes: ${w.scenes.map((s) => s.role).slice(0, 3).join(", ")}` : "",
+  ].filter(Boolean);
+  return parts.join(". ");
+}
+
+/** Flip a workflow's production gate ("building" -> "in_production" -> "live"). Best-effort. */
 export async function setProductionStatus(id: string, productionStatus: string): Promise<void> {
   try {
     const { error } = await supabaseAdmin

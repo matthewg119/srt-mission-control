@@ -1,14 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { ContentWorkflowBoard, type WorkflowCard } from "@/components/content-workflows/board";
-import { DetailDrawer } from "@/components/content-workflows/detail-drawer";
 
 export default function ContentWorkflowsPage() {
+  const router = useRouter();
   const [workflows, setWorkflows] = useState<WorkflowCard[]>([]);
   const [liveWorkflowIds, setLiveWorkflowIds] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchWorkflows = useCallback(async () => {
@@ -68,10 +68,12 @@ export default function ContentWorkflowsPage() {
       {loading ? (
         <p className="text-white/40 text-sm">Loading workflows…</p>
       ) : (
-        <ContentWorkflowBoard workflows={workflows} liveWorkflowIds={liveWorkflowIds} onSelect={setSelected} />
+        <ContentWorkflowBoard
+          workflows={workflows}
+          liveWorkflowIds={liveWorkflowIds}
+          onSelect={(id) => router.push(`/dashboard/content-workflows/${encodeURIComponent(id)}`)}
+        />
       )}
-
-      {selected && <DetailDrawer id={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }

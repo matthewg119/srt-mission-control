@@ -19,15 +19,17 @@ import { POV_SCENES, POV_SOUL_SIZE, POV_STYLE_VERSION } from "@/config/pov-style
 import type { ReelSlot } from "@/config/reel-style";
 import { getActiveVertical, type Vertical } from "@/config/verticals";
 
-// Image provider for the POV format only (the rest of the system keeps IMAGE_PROVIDER).
-// Prod runs "higgsfield" = Higgsfield Soul text2image WITHOUT a character (see
-// generatePovImage): reliable, true 3:4, reuses HF_CREDENTIALS, and never depends on a
-// Soul id living under this API key. "openai" (gpt-image-2) stays available as a fallback
-// if an OPENAI_API_KEY is ever set. Note: GPT Image 2 is not exposed to the Higgsfield
-// HTTP API, so "GPT Image 2 via Higgsfield" is served by the Soul-no-character path.
+// Image provider for the POV/workflow scene paths. Default is "higgsfield-gpt" -
+// OpenAI's GPT image model served by the Higgsfield key API (slug openai/hazel) -
+// per Matthew's standing rule: ALL image generation uses the GPT image model, Soul is
+// only for the trained-character (Vargas) belief drop. Overridable per call/workflow
+// via render_options.provider, or globally via POV_IMAGE_PROVIDER.
 export function povImageProvider(): ImageProvider {
-  const p = (process.env.POV_IMAGE_PROVIDER || "higgsfield").toLowerCase();
-  return (p === "higgsfield" || p === "elevenlabs" ? p : "openai") as ImageProvider;
+  const p = (process.env.POV_IMAGE_PROVIDER || "higgsfield-gpt").toLowerCase();
+  if (p === "higgsfield" || p === "elevenlabs" || p === "openai" || p === "higgsfield-gpt") {
+    return p as ImageProvider;
+  }
+  return "higgsfield-gpt";
 }
 
 /** Build the POV image prompt: the vertical's style token + the scene (no text overlay). */
@@ -37,13 +39,22 @@ export async function buildPovImagePrompt(scene: string, vertical?: Vertical): P
 }
 
 /**
- * Generate a single POV image. Runs plain Soul text2image with NO character (no soulId)
- * so it never fails with character_not_found, at true 3:4 (POV_SOUL_SIZE) to match the
- * Meta-glasses studio look.
+ * Generate a single POV/workflow scene image. Defaults to the GPT image model at the
+ * portrait 3:4 look (POV_SOUL_SIZE maps to the model's nearest portrait aspect);
+ * per-workflow overrides (render_options.provider/aspect/quality) come in via opts.
  */
-export async function generatePovImage(prompt: string) {
-  const provider = povImageProvider();
-  const [img] = await generateImages({ prompts: [prompt], provider, size: POV_SOUL_SIZE });
+export async function generatePovImage(
+  prompt: string,
+  opts?: { provider?: ImageProvider; aspect?: string; quality?: string }
+) {
+  const provider = opts?.provider ?? povImageProvider();
+  const [img] = await generateImages({
+    prompts: [prompt],
+    provider,
+    size: POV_SOUL_SIZE,
+    aspect: opts?.aspect,
+    quality: opts?.quality,
+  });
   return img;
 }
 

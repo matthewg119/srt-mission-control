@@ -102,6 +102,7 @@ export interface WorkflowRenderOptions {
   clip_seconds?: number; // per-scene default duration
   aspect?: string; // e.g. "9:16"
   provider?: string; // image provider override (else POV_IMAGE_PROVIDER)
+  quality?: string; // gpt image quality override ("low" | "medium" | "high")
 }
 
 // A RENDER SEQUENCE is a reusable rendering variant of the SAME workflow scenes: a different
@@ -126,6 +127,18 @@ export interface WorkflowReference {
   added_at?: string;
 }
 
+// One APPROVED render of this workflow (a distinct angle/variation of the same format).
+// The onboarding gate: 4 approved variations flip production_status to "live". The array
+// keeps growing after live — it doubles as the workflow's generated-examples gallery.
+export interface ApprovedVariation {
+  label: string; // remix angle or "base"
+  structured_copy?: Array<{ key: string; text: string }>;
+  song_ref?: string | null;
+  thread_ts?: string; // the Slack session that produced it
+  image_urls?: string[];
+  approved_at?: string;
+}
+
 export interface Workflow {
   id: string;
   vertical_id: string;
@@ -146,10 +159,13 @@ export interface Workflow {
   source_kind: string; // authored | reference_video | seeded | productized
   source_example_id?: string | null;
   used_at?: string | null;
-  // Production gate (columns from docs/2026-07-04 follow-up SQL; written via dedicated updates,
-  // NOT the generic upsert, so a missing column never breaks workflow saves).
+  // Production gate + consistency profile (columns from docs/2026-07-05-workflow-systemization.sql;
+  // written via dedicated updates, NOT the generic upsert, so a missing column never breaks saves).
   reference_media?: WorkflowReference[];
-  production_status?: string; // "building" (default) | "in_production"
+  production_status?: string; // "building" (default) | "in_production" (3 refs) | "live" (4 approved variations)
+  description?: string | null; // one-line human description shown in the menu/map/dashboard
+  visual_rules?: string[]; // per-workflow image style guide, fed into every scene prompt
+  approved_variations?: ApprovedVariation[];
 }
 
 // ---------------------------------------------------------------------------------------
@@ -238,6 +254,12 @@ const PEST_WASP_NEST: Workflow = {
   shot_screenshots: [],
   source_kind: "seeded",
   source_example_id: null,
+  description: "4-shot 8s first-person Meta-glasses POV: find a wasp nest, climb, bag it, clean reveal.",
+  visual_rules: [
+    "Every frame is first-person POV through Ray-Ban Meta glasses; gloved hands may enter frame, never a face.",
+    "Real suburban job-site settings, natural daylight, documentary look; no studio lighting.",
+    "No text, captions, logos, or watermarks inside the image.",
+  ],
 };
 
 // The first authored B-roll workflow: 3 shots, 6 timed on-screen headlines, static images by
@@ -293,6 +315,12 @@ const PEST_6HL_PROPAGANDA: Workflow = {
   shot_screenshots: [],
   source_kind: "authored",
   source_example_id: null,
+  description: "3-shot 11.3s static b-roll with 6 timed headlines: avatar callout, pain escalation, dream outcome + CTA.",
+  visual_rules: [
+    "Photorealistic b-roll of pest control business life (trucks, techs, homeowners), vertical portrait.",
+    "Muted, cinematic color; shots must leave clear space for the timed headline overlays.",
+    "No text, captions, logos, or watermarks inside the image.",
+  ],
 };
 
 export const SEED_WORKFLOWS: Record<string, Workflow> = {
@@ -326,6 +354,9 @@ interface WorkflowRow {
   used_at?: string | null;
   reference_media?: WorkflowReference[] | null;
   production_status?: string | null;
+  description?: string | null;
+  visual_rules?: string[] | null;
+  approved_variations?: ApprovedVariation[] | null;
 }
 
 function normalizeRow(row: WorkflowRow): Workflow {
@@ -351,6 +382,9 @@ function normalizeRow(row: WorkflowRow): Workflow {
     used_at: row.used_at ?? null,
     reference_media: Array.isArray(row.reference_media) ? row.reference_media : [],
     production_status: row.production_status || "building",
+    description: row.description ?? null,
+    visual_rules: Array.isArray(row.visual_rules) ? row.visual_rules : [],
+    approved_variations: Array.isArray(row.approved_variations) ? row.approved_variations : [],
   };
 }
 

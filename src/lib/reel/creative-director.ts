@@ -40,9 +40,16 @@ function avatarBlock(vertical: Vertical): string {
 function workflowBlock(workflow?: Workflow): string {
   if (!workflow) return "";
   const scenes = workflow.scenes.map((s, i) => `${i + 1}. ${s.role}`).join("\n");
+  const roles = (workflow.copy_structure ?? [])
+    .map((r, i) => `${i + 1}. ${r.label}: ${r.guidance}`)
+    .join("\n");
+  const rules = (workflow.visual_rules ?? []).map((r) => `- ${r}`).join("\n");
   return [
     `WORKFLOW: ${workflow.name} (${workflow.category}${workflow.subcategory ? "/" + workflow.subcategory : ""}).`,
+    workflow.description ? `WHAT THIS WORKFLOW IS: ${workflow.description}` : "",
+    roles ? `COPY STRUCTURE (the labeled slots every line must serve, in order):\n${roles}` : "",
     scenes ? `SCENE SEQUENCE (the visual beats the copy sits on):\n${scenes}` : "",
+    rules ? `WORKFLOW VISUAL RULES (the look this format must keep):\n${rules}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -508,6 +515,7 @@ export async function generatePicturePlan(args: {
   chosenCaption: string;
   chosenStoryboard: string;
   clipSeconds?: number;
+  workflow?: Workflow;
 }): Promise<PicturePlan> {
   const clip = args.clipSeconds ?? 2;
   const system = [
@@ -523,6 +531,8 @@ export async function generatePicturePlan(args: {
     args.vertical.style_token,
     "",
     avatarBlock(args.vertical),
+    "",
+    workflowBlock(args.workflow),
     "",
     "HARD RULES: image_prompt has no text overlay; never invent guarantees/numbers/rates/terms;",
     "never use em dashes.",

@@ -30,5 +30,9 @@ function toCard(w: Workflow) {
     shots,
     mode: w.render_spec?.mode ?? null,
     song: resolveSong(w.song_ref ?? w.render_spec?.song_ref).label,
+    description: w.description ?? null,
+    production_status: w.production_status ?? "building",
+    refs: w.reference_media?.length ?? 0,
+    approved_count: w.approved_variations?.length ?? 0,
   };
 }

@@ -3,7 +3,7 @@
 //   const adapter = getMotionAdapter();          // selected by MOTION_ENGINE
 //   const mp4: Buffer = await adapter.animate(imageUrl, motionPrompt, refFrames);
 //
-// MOTION_ENGINE = veo (default) | seedance | fal
+// MOTION_ENGINE = seedance (default) | veo | fal
 //   veo      — ElevenLabs veo-3-lite via generateVideo/pollVideo. Proven, live default.
 //   seedance — Higgsfield seedance-v2.0-i2v via HF_CREDENTIALS. Native multi-shot cuts +
 //              character consistency from up to 9 reference frames. Endpoint/field shape
@@ -112,7 +112,12 @@ class SeedanceAdapter implements MotionAdapter {
     // Verified live against platform.higgsfield.ai (2026-06-30): model enum is
     // seedance_lite | seedance_pro; input_image is an object {type,image_url}; the
     // body below clears validation (the only failure left is account credits).
-    const SUBMIT_URL = `${HIGGSFIELD_HOST}/v1/image2video/seedance`;
+    // Re-probed 2026-07-03 (scripts/probe-higgsfield-gpt.ts): Seedance 2.0 is NOT on
+    // the key API yet - the model enum is still hard-locked to pro|lite and no
+    // slug-style v2 route exists. Matthew's target is Seedance 2.0; the moment
+    // Higgsfield exposes it, flip SEEDANCE_MODEL (and SEEDANCE_ENDPOINT if it ships
+    // as a new slug route) in Vercel - no code change needed.
+    const SUBMIT_URL = process.env.SEEDANCE_ENDPOINT || `${HIGGSFIELD_HOST}/v1/image2video/seedance`;
     const submitBody = {
       params: {
         model: process.env.SEEDANCE_MODEL || "seedance_pro", // seedance_lite live-fails ("Generation failed"); pro renders
@@ -222,7 +227,9 @@ class FalAdapter implements MotionAdapter {
 // ---- factory ---------------------------------------------------------------------
 
 export function getMotionAdapter(): MotionAdapter {
-  const engine = (process.env.MOTION_ENGINE || "veo").toLowerCase();
+  // Seedance is the default per Matthew's rule (ALL animation via Seedance; veo/fal
+  // stay selectable as fallbacks via MOTION_ENGINE).
+  const engine = (process.env.MOTION_ENGINE || "seedance").toLowerCase();
   switch (engine) {
     case "seedance":
       return new SeedanceAdapter();
@@ -231,7 +238,7 @@ export function getMotionAdapter(): MotionAdapter {
     case "veo":
       return new VeoAdapter();
     default:
-      console.warn(`[motion-adapter] unknown MOTION_ENGINE="${engine}", falling back to veo`);
-      return new VeoAdapter();
+      console.warn(`[motion-adapter] unknown MOTION_ENGINE="${engine}", falling back to seedance`);
+      return new SeedanceAdapter();
   }
 }

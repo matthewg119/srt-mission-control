@@ -5,16 +5,25 @@
 // still post the others + the copy).
 //
 // Providers (IMAGE_PROVIDER env):
-//   higgsfield (default) — official Higgsfield text2image/soul API. The trained
-//                          Vargas Soul (soulId) gives day-to-day character consistency.
-//   elevenlabs           — reuses src/lib/elevenlabs-media.ts (Seedream). No Soul /
-//                          no character consistency; fallback only.
+//   higgsfield-gpt (default) — OpenAI's GPT Image model served by the Higgsfield key
+//                              API (slug openai/hazel). Matthew's standing rule: ALL
+//                              image generation uses the GPT image model; Soul is only
+//                              for the trained-character (Vargas) path.
+//   higgsfield               — Higgsfield text2image/soul API. The trained Vargas Soul
+//                              (soulId) gives day-to-day character consistency.
+//   elevenlabs               — reuses src/lib/elevenlabs-media.ts (Seedream). Fallback only.
+//   openai                   — gpt-image-2 straight from OpenAI (needs OPENAI_API_KEY).
 //
 // Higgsfield contract follows @higgsfield/client v2: host platform.higgsfield.ai,
 // auth `Authorization: Key KEY_ID:KEY_SECRET` (HF_CREDENTIALS), POST /v1/text2image/soul,
 // poll /requests/{id}/status, result url at jobs[0].results.raw.url. Response parsing
 // is defensive (several shapes) since the raw JSON isn't formally published; if a live
 // call shows a different field, adjust extractJobId/extractUrl below.
+//
+// The key API is also model-slug routed: POST platform.higgsfield.ai/{model_id}
+// (verified live 2026-07-03 via scripts/probe-higgsfield-gpt.ts). The GPT image slug is
+// openai/hazel; completed jobs return { status:'completed', images:[{url}] } which
+// deepFindUrl already parses.
 
 import {
   HIGGSFIELD_HOST,
@@ -25,7 +34,7 @@ import {
 import { POV_IMAGE_SIZE } from "@/config/pov-style";
 import { generateImage as elevenLabsImage } from "@/lib/elevenlabs-media";
 
-export type ImageProvider = "higgsfield" | "elevenlabs" | "openai";
+export type ImageProvider = "higgsfield-gpt" | "higgsfield" | "elevenlabs" | "openai";
 
 export interface ImageResult {
   buffer: Buffer;
@@ -36,26 +45,61 @@ export interface ImageResult {
 export interface GenerateImagesOpts {
   prompts: string[];
   soulId?: string;
-  /** "reel" (9:16) — reserved for future sizing variants; sizing currently from config. */
+  /**
+   * Aspect ratio for the gpt image provider ("3:4" | "9:16" | "1:1" | ...). Mapped to
+   * the model's supported set (hazel: 1:1 | 3:2 | 2:3 | auto) by nearestHazelAspect.
+   * When omitted it is derived from `size` via sizeToAspect. Soul ignores this.
+   */
   aspect?: string;
   /**
    * Override the provider for this call only (the global IMAGE_PROVIDER default is
-   * unchanged). The Meta Glasses POV drop passes "openai" to use gpt-image-2 while
-   * the rest of the system stays on Higgsfield.
+   * unchanged). Per-workflow render_options.provider lands here; the Vargas belief
+   * drop passes "higgsfield" explicitly for trained-Soul character consistency.
    */
   provider?: ImageProvider;
   /**
    * Higgsfield width_and_height override (e.g. "1536x2048" for true 3:4). Defaults to
-   * SOUL_SIZE. The POV drop passes 3:4 so the Meta-glasses look matches the studio.
+   * SOUL_SIZE. Soul-only; for higgsfield-gpt it is mapped to the nearest aspect_ratio
+   * via sizeToAspect so existing callers keep working untouched.
    */
   size?: string;
+  /** gpt image quality for higgsfield-gpt/openai ("low" | "medium" | "high"). */
+  quality?: string;
 }
 
 const POLL_INTERVAL_MS = 4_000;
 const POLL_TIMEOUT_MS = 120_000;
 
 function provider(): ImageProvider {
-  return (process.env.IMAGE_PROVIDER || "higgsfield").toLowerCase() as ImageProvider;
+  return (process.env.IMAGE_PROVIDER || "higgsfield-gpt").toLowerCase() as ImageProvider;
+}
+
+/**
+ * Map a Higgsfield width_and_height size string to an aspect ratio so callers that
+ * still pass `size` (all the Soul-era call sites) get the right gpt aspect for free.
+ */
+export function sizeToAspect(size?: string): string | undefined {
+  if (!size) return undefined;
+  const m = size.match(/^(\d+)x(\d+)$/);
+  if (!m) return undefined;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  if (!w || !h) return undefined;
+  const r = w / h;
+  if (Math.abs(r - 1) < 0.05) return "1:1";
+  if (r < 1) return r <= 0.65 ? "9:16" : "3:4"; // 1152x2048 -> 9:16, 1536x2048 -> 3:4
+  return r >= 1.55 ? "16:9" : "3:2";
+}
+
+/** Collapse any requested aspect onto hazel's supported set (1:1 | 3:2 | 2:3 | auto). */
+function nearestHazelAspect(aspect?: string): string {
+  const a = (aspect || "").trim();
+  if (a === "1:1" || a === "3:2" || a === "2:3" || a === "auto") return a;
+  // Portrait requests (3:4, 9:16, 2:3-ish) -> 2:3; landscape -> 3:2; unknown -> 2:3
+  // because every reel/POV surface in this system is portrait.
+  const m = a.match(/^(\d+):(\d+)$/);
+  if (m && Number(m[1]) > Number(m[2])) return "3:2";
+  return "2:3";
 }
 
 async function downloadToBuffer(url: string): Promise<ImageResult> {
@@ -171,6 +215,65 @@ async function higgsfieldGenerateOne(
   throw new Error(`higgsfield job ${jobId} timed out`);
 }
 
+// ---- Higgsfield-hosted GPT Image (Matthew's default for ALL image generation) ------
+// ---- HF_GPT_REQUEST ---------------------------------------------------------------
+// EVERYTHING slug/body-specific is in this block, same convention as SEEDANCE_REQUEST
+// in motion-adapter.ts. Verified live 2026-07-03 (scripts/probe-higgsfield-gpt.ts):
+// POST platform.higgsfield.ai/openai/hazel with a FLAT body (no `params` wrapper);
+// aspect_ratio enum is 1:1 | 3:2 | 2:3 | auto (no 3:4 / 9:16 - nearestHazelAspect
+// collapses those); quality enum low | medium | high; unknown fields are silently
+// ignored, so keep the body minimal. Completed status shape: { images: [{ url }] }.
+async function higgsfieldGptGenerateOne(
+  prompt: string,
+  opts?: { aspect?: string; quality?: string }
+): Promise<ImageResult> {
+  const creds = process.env.HF_CREDENTIALS;
+  if (!creds) throw new Error("HF_CREDENTIALS not set");
+
+  const endpoint = process.env.HF_GPT_ENDPOINT || `${HIGGSFIELD_HOST}/openai/hazel`;
+  const body = {
+    prompt,
+    aspect_ratio: nearestHazelAspect(opts?.aspect),
+    quality: opts?.quality || process.env.HF_GPT_QUALITY || "high",
+  };
+  // ---- end HF_GPT_REQUEST ----------------------------------------------------------
+
+  const headers = {
+    Authorization: `Key ${creds}`,
+    "Content-Type": "application/json",
+  };
+
+  const submitRes = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!submitRes.ok) {
+    throw new Error(`higgsfield-gpt submit failed (${submitRes.status}): ${(await submitRes.text()).slice(0, 300)}`);
+  }
+
+  const submitJson = (await submitRes.json()) as Record<string, unknown>;
+  const immediate = deepFindUrl(submitJson);
+  if (immediate && statusOf(submitJson) !== "failed") return downloadToBuffer(immediate);
+
+  const jobId = extractJobId(submitJson);
+  if (!jobId) throw new Error(`higgsfield-gpt: no job id in response: ${JSON.stringify(submitJson).slice(0, 300)}`);
+
+  const start = Date.now();
+  while (Date.now() - start < POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const stRes = await fetch(`${HIGGSFIELD_HOST}/requests/${jobId}/status`, { headers });
+    if (!stRes.ok) continue;
+    const stJson = (await stRes.json()) as Record<string, unknown>;
+    const status = statusOf(stJson);
+    if (status === "completed" || status === "succeeded") {
+      const url = deepFindUrl(stJson);
+      if (!url) throw new Error("higgsfield-gpt: completed but no url found");
+      return downloadToBuffer(url);
+    }
+    if (status === "failed" || status === "nsfw") {
+      throw new Error(`higgsfield-gpt job ${jobId} ended: ${status}`);
+    }
+  }
+  throw new Error(`higgsfield-gpt job ${jobId} timed out`);
+}
+
 async function elevenLabsGenerateOne(prompt: string): Promise<ImageResult> {
   const out = await elevenLabsImage(prompt);
   if (out.startsWith("data:")) {
@@ -220,8 +323,20 @@ async function generateOne(
   prompt: string,
   soulId: string | undefined,
   prov: ImageProvider,
-  size?: string
+  size?: string,
+  aspect?: string,
+  quality?: string
 ): Promise<ImageResult> {
+  if (prov === "higgsfield-gpt") {
+    try {
+      return await higgsfieldGptGenerateOne(prompt, { aspect: aspect ?? sizeToAspect(size), quality });
+    } catch (e) {
+      // Safety net: if the hazel slug ever moves/errors, fall back to Soul so the
+      // daily drops keep posting; the error is logged by the caller's retry loop.
+      console.error("[image-gen] higgsfield-gpt failed, falling back to soul:", (e as Error).message);
+      return higgsfieldGenerateOne(prompt, undefined, size);
+    }
+  }
   if (prov === "openai") return openaiGenerateOne(prompt);
   if (prov === "elevenlabs") return elevenLabsGenerateOne(prompt);
   return higgsfieldGenerateOne(prompt, soulId, size);
@@ -267,8 +382,10 @@ export async function editImageOpenAI(
 
 /**
  * Edit an existing image (add/replace content) via gpt-image-2. Returns null on any failure
- * so the caller can fall back to a fresh text2image "after" frame. Only the openai provider
- * supports edits today; other providers return null.
+ * so the caller can fall back to a fresh text2image "after" frame. Only the direct OpenAI
+ * API supports edits today (needs OPENAI_API_KEY) - the Higgsfield-hosted hazel slug is
+ * text-to-image only (probe 2026-07-03), so without an OpenAI key callers get null and
+ * regenerate the frame fresh via the gpt image model instead.
  */
 export async function editImage(opts: {
   image: Buffer;
@@ -296,7 +413,7 @@ export async function generateImages(opts: GenerateImagesOpts): Promise<(ImageRe
     let result: ImageResult | null = null;
     for (let attempt = 0; attempt < 2 && !result; attempt++) {
       try {
-        result = await generateOne(prompt, opts.soulId, prov, opts.size);
+        result = await generateOne(prompt, opts.soulId, prov, opts.size, opts.aspect, opts.quality);
       } catch (e) {
         console.error(
           `[reel] image ${i + 1} attempt ${attempt + 1} failed (${prov}):`,

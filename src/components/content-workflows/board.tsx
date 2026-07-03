@@ -24,6 +24,10 @@ export interface WorkflowCard {
   shots: number;
   mode: string | null;
   song: string;
+  description: string | null;
+  production_status: string; // building | in_production | live
+  refs: number; // reference creatives collected (gate: 3)
+  approved_count: number; // approved variations (gate: 4 -> live)
 }
 
 interface CardData extends WorkflowCard {
@@ -37,6 +41,15 @@ function prettyAvatar(id: string): string {
 
 function WorkflowCardNode({ data }: { data: CardData }) {
   const color = data.status === "active" ? "#00C9A7" : "#f59e0b";
+  // The onboarding gate badge: LIVE (4 approved variations) / onboarding N/4 / refs N/3.
+  const gate =
+    data.production_status === "live"
+      ? { text: "★ LIVE", bg: "rgba(0,201,167,0.25)", fg: "#00C9A7" }
+      : data.production_status === "in_production"
+        ? { text: `onboarding ${data.approved_count}/4`, bg: "rgba(59,130,246,0.15)", fg: "#93c5fd" }
+        : data.refs > 0
+          ? { text: `refs ${data.refs}/3`, bg: "rgba(255,255,255,0.06)", fg: "rgba(255,255,255,0.5)" }
+          : null;
   return (
     <div
       className="relative rounded-xl px-4 py-3 w-[220px] shadow-lg cursor-pointer transition-transform hover:-translate-y-0.5"
@@ -54,6 +67,9 @@ function WorkflowCardNode({ data }: { data: CardData }) {
             {data.category}
             {data.subcategory ? ` · ${data.subcategory}` : ""}
           </p>
+          {data.description && (
+            <p className="text-[10px] text-white/35 mt-0.5 leading-snug line-clamp-2">{data.description}</p>
+          )}
           <div className="flex flex-wrap items-center gap-1 mt-1.5">
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${color}22`, color }}>
               {data.status === "active" ? `${data.shots} shots` : "needs config"}
@@ -63,8 +79,13 @@ function WorkflowCardNode({ data }: { data: CardData }) {
                 {data.mode === "animated" ? "video" : "images"}
               </span>
             )}
+            {gate && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: gate.bg, color: gate.fg }}>
+                {gate.text}
+              </span>
+            )}
             {data.live && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">live</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">running</span>
             )}
           </div>
           <p className="text-[10px] text-white/30 mt-1 truncate">♪ {data.song}</p>
@@ -88,7 +109,7 @@ interface BoardProps {
 export function ContentWorkflowBoard({ workflows, liveWorkflowIds, onSelect }: BoardProps) {
   const nodes: Node[] = useMemo(() => {
     const COL_W = 250;
-    const ROW_H = 132;
+    const ROW_H = 156; // taller cards: description line + gate badge
     const PER_ROW = 4;
     const X0 = 40;
     const LABEL_H = 52;
