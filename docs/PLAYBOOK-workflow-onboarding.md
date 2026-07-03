@@ -3,8 +3,12 @@
 State when this playbook was written (2026-07-03): all 9 former drafts are already
 CONFIGURED (script `scripts/configure-draft-workflows.ts` ran) — active, 3 shots / 13s /
 6 timed text slots (the Local Owner Pain skeleton), Meta-glasses POV visual rules, images
-locked to the GPT image model (`higgsfield-gpt`) at 3:4. What is left per workflow is the
-ONBOARDING: 3 reference files -> IN PRODUCTION -> 4 approved renders -> LIVE.
+locked to gpt-image-2 via the DIRECT OpenAI API (`openai`) at 3:4. What is left per
+workflow is the ONBOARDING: 3 reference files -> IN PRODUCTION -> 4 approved renders -> LIVE.
+
+NOTE (2026-07-03, prompt-first mode): auto image generation is OFF by default
+(`IMAGE_GEN_ENABLED` unset). Sessions post the final prompts; you generate the images
+yourself and paste them into the thread — pasted = approved + saved as references.
 
 The session flow now has the IDEAS GATE: after the copy is approved you always get
 **3 visual directions to pick from before any image generates.**
@@ -99,9 +103,12 @@ next session inherits it. That is the whole systemization.
 
 ## Guardrails
 
-- Images: ALWAYS the GPT image model via Higgsfield (`openai/hazel`). If a shot looks
-  like Soul (plasticky/stylized), check Vercel logs for `(higgsfield-gpt)` — if it says
-  `(higgsfield)`, an env is overriding the default.
+- Images: ALWAYS gpt-image-2 straight from the OpenAI API (`openai`); the Higgsfield key
+  is for Seedance 2.0 animation ONLY. Every generated image posts a stamp like
+  `gpt-image-2 (OpenAI direct) @ 1024x1536` — if a stamp ever names another model, a
+  per-workflow `render_options.provider` or an env is overriding the default.
+- Auto generation only runs with `IMAGE_GEN_ENABLED=true`; otherwise sessions are
+  prompt-first (you paste the images).
 - Every workflow's look lives in its **visual rules** (editor page). If a generated
   image drifts (faces visible, studio lighting, text baked in), fix the RULE, not just
   the one image — that is the systemization.

@@ -49,17 +49,24 @@ flowchart TD
   NW --> S
 
   S -->|line N edit / paste to re-slot| S
-  S -->|react ✅| P[Paint the picture<br/>copy shown on the shot images]
-  P -->|react ✅| G[Generate shot images]
-  G -->|song key/url OR attach the AUDIO FILE| SY{sync auto or manual?}
-  SY -->|sync manual| M{Confirm render mode<br/>static images or video?}
+  S -->|react ✅| I3[3 visual directions<br/>MANDATORY idea gate]
+  I3 -->|idea N - ✅ = idea 1| P[Paint the picture<br/>copy shown on the shot images]
+  P -->|react ✅| PR[FINAL IMAGE PROMPTS<br/>one copy block per shot<br/>prompt N rewrites one]
+  PR -->|react ✅| GATE{IMAGE_GEN_ENABLED?}
+  GATE -->|unset - DEFAULT| AW[YOU generate the images<br/>paste them into the thread<br/>scene N targets a slot<br/>pasted = approved + saved as reference]
+  GATE -->|true| G[Auto-generate images<br/>gpt-image-2 OpenAI direct] --> IR[Image review<br/>redo N regenerates one]
+  AW -->|all scenes in| AN[Animation prompts<br/>Seedance 2.0 motion only<br/>motion N rewrites one]
+  IR -->|react ✅| AN
+  AN -->|react ✅| SONGQ[song key/url OR attach the AUDIO FILE] --> SY{sync auto or manual?}
+  SY -->|sync manual| M{We have everything:<br/>copy + images + animation + song.<br/>Render mode: static or video?}
   SY -->|sync auto| BS[Beat grid read from the song<br/>cuts + text drops snapped to beats] --> M
   M -->|react ✅| R[Emit Claude Code render prompt<br/>+ video description]
-  R --> UP{Remix upsell:<br/>variation of this video?<br/>16 angles: propaganda / indoctrination /<br/>direct CTA / mini story / horror / ...}
+  R -->|drop the FINAL MP4 in the thread| UP{Variations suggestion:<br/>variation of this exact video?<br/>16 angles: propaganda / indoctrination /<br/>direct CTA / mini story / horror / ...}
   UP -->|remix N or remixes| RC[New copy in that angle<br/>same structure + song + timings]
   RC -->|react ✅| M2[Render variation<br/>with the SAME images] --> R
   RC -->|new images| P
 
+  AW -. every pasted scene image .-> REFLIB[[workflow reference library<br/>grounds all future prompts]]
   G -. drop 3 screenshots/videos of the manual edit .-> REF[reference creatives 3/3]
   REF -->|finish workflow| PROD[[4th creative renders<br/>workflow IN PRODUCTION]]
   PROD -. every ✅ render counts .-> ONB[[4 approved variations<br/>workflow goes LIVE]]
@@ -99,9 +106,20 @@ The fixes/features:
    ground every hook, copy line, and scene image prompt. Edit them (plus per-shot prompts,
    image model, aspect, quality, song, timings) on the workflow's dashboard editor page —
    click any card on the Content Studio board.
-8. **Image/motion models**: ALL images generate with the GPT image model via the Higgsfield key
-   (slug `openai/hazel`); ALL animation runs Seedance via Higgsfield. Per-workflow override:
-   `render_options.provider`.
+8. **Image/motion models (2026-07-03)**: ALL images = gpt-image-2 straight from the OpenAI API
+   (portrait renders 1024x1536, cropped to 9:16 in the render); the Higgsfield key is for
+   Seedance 2.0 animation ONLY. Per-workflow override: `render_options.provider`.
+9. **PROMPT-FIRST sessions (2026-07-03)**: auto image generation is OFF unless
+   `IMAGE_GEN_ENABLED=true` in Vercel. Default flow: the prompts card posts each final prompt
+   in its own copy block; you generate the images wherever you want and paste them into the
+   thread (in scene order, or comment `scene N` on an upload). Every pasted image is approved
+   on arrival AND saved to the workflow's reference library — the dataset that grounds future
+   prompts and, later, re-enabled automation. Then: animation prompts (`motion N` edits) → ✅ →
+   song → render confirm → drop the final MP4 → the variations card.
+10. **Session-scoped scenes (the wasp-leak fix)**: a session's picture plan lives on the JOB,
+   not the shared workflow row; the workflow's seeded scenes are structure/style only. The
+   subject always comes from your approved copy + chosen visual direction. The idea gate is
+   mandatory (no silent fallthrough), and the workflow row only updates at animation approval.
 
 ## Command cheat-sheet
 - `go` — start (pick an avatar by number, or `new` to create one)
@@ -114,9 +132,13 @@ The fixes/features:
 - `line N <text>` — edit one labeled copy box (works at the ideas gate too); paste a full block to re-slot it
 - `idea N` or bare `N` (✅ = idea 1) — pick a visual direction at the ideas gate (BEFORE any image generates)
 - `more ideas` / `more hooks` — redraw the 3 directions, or back up for fresh hook options
-- ✅ on the picture card — posts the **final image prompts** (references + rules baked in, exactly what gpt-image-2 gets); `prompt N <new text>` rewrites one; ✅ on the prompts card generates the images with them verbatim
-- `redo N <new prompt>` — regenerate one scene image (works after the render card too)
-- `song <key|url>` or **attach the audio file** — set the song (skipped when the workflow already has one: images ✅ goes straight to the render card)
+- ✅ on the picture card — posts the **final image prompts** (references + rules baked in, exactly what gpt-image-2 gets), one copy block per shot; `prompt N <new text>` rewrites one; ✅ on the prompts card LOCKS them
+- **paste the scene images** (prompts locked, default mode) — in scene order, or comment `scene N` on an upload to target/replace a slot; pasted = approved + saved to the workflow's reference library
+- ✅ on the images card (auto mode only) — approve the generated images and move to animation
+- `motion N <new text>` — rewrite one animation prompt (Seedance 2.0, motion only); ✅ on the animation card approves them all and writes the session back onto the workflow
+- `redo N <new prompt>` — regenerate one scene image, auto mode only (paused mode: paste a replacement with `scene N`)
+- `song <key|url>` or **attach the audio file** — set the song (the render card only posts after the image + animation approvals)
+- **drop the final MP4** after the render — logs it on the session and posts the variations suggestion card
 - `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings
 - drop screenshots/videos in the thread — reference creatives (optional; 3 progress onboarding) — each drop ALSO joins this workflow's reference library and visually grounds every future image it generates
 - `worksheet` / `sources` [name|number] — the content-sourcing card: what real reference clips to find for a workflow + exact hashtags/searches (bare form in a session = current workflow; full doc: docs/WORKSHEET-content-sourcing.md)

@@ -65,12 +65,12 @@ async function main() {
     ...existing,
     name: NAME,
     scenes: SCENES,
-    render_options: { ...existing.render_options, aspect: "3:4", provider: "higgsfield-gpt" },
+    render_options: { ...existing.render_options, aspect: "3:4", provider: "openai" },
   };
   const ok = await upsertWorkflow(wf);
   if (!ok) throw new Error("upsertWorkflow failed");
   await setWorkflowProfile(ID, { description: DESCRIPTION, visual_rules: VISUAL_RULES });
-  console.log(`retuned ${ID} -> "${NAME}" (${VISUAL_RULES.length} visual rules, ${SCENES.length} seed scenes, higgsfield-gpt @ 3:4)`);
+  console.log(`retuned ${ID} -> "${NAME}" (${VISUAL_RULES.length} visual rules, ${SCENES.length} seed scenes, openai @ 3:4)`);
 }
 
 main().catch((e) => {

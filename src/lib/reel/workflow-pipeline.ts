@@ -25,6 +25,7 @@ import {
   getJobByPickerTs,
   updateJob,
   type ContentJob,
+  type JobData,
 } from "@/lib/reel/jobs";
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
 import { enrichScene } from "@/lib/reel/prompt-enrich";
@@ -56,7 +57,14 @@ import {
   textsForShot,
   workflowAspect,
 } from "@/lib/reel/render-spec";
-import { nearestHazelAspect, type ImageProvider } from "@/lib/providers/image-gen";
+import {
+  nearestHazelAspect,
+  openaiSizeFor,
+  imageGenEnabled,
+  ImageGenPausedError,
+  IMAGE_GEN_PAUSED_NOTE,
+  type ImageProvider,
+} from "@/lib/providers/image-gen";
 import {
   setWorkflowSong,
   setWorkflowStatus,
@@ -104,10 +112,13 @@ const STAGE_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   remix_copy: "Didn't catch that. `line N <text>` edits, `new images` regenerates the creatives, ✅ renders with the same images.",
   picture_ideas: "Didn't catch that. Reply `idea N` (or just the number), `line N <text>` to edit the copy, `more ideas`, or `more hooks`.",
   picture: "Didn't catch that. ✅ the picture card to see the final image prompts, `redo N <new prompt>` tweaks a scene, `song <key|url>` moves on.",
-  prompt_review: "Didn't catch that. `prompt N <new text>` rewrites one final prompt; ✅ the prompts card generates the images with them.",
+  prompt_review: "Didn't catch that. `prompt N <new text>` rewrites one final prompt; ✅ the prompts card locks them.",
+  awaiting_images: "Waiting on the scene images. Paste them in this thread in scene order (or comment `scene N` on an upload). `prompt N <new text>` still edits a prompt.",
+  image_review: "Didn't catch that. React ✅ on the images card to approve them, `redo N <new prompt>` regenerates one, or paste a replacement image with `scene N`.",
+  animation_review: "Didn't catch that. `motion N <new text>` rewrites one animation prompt; ✅ the animation card approves them all.",
   render: "Generating the images now — hang tight. Once they land, `redo N <new prompt>` tweaks any of them.",
   authoring: "Didn't catch that. ✅ the render card for the build prompt, or `redo N <new prompt>` / `modify copy` / `song <key|url>`.",
-  remix_offer: "Didn't catch that. Reply `remix N`, `remixes`, `modify copy`, or `save as <name>`.",
+  remix_offer: "Drop the final MP4 in this thread and I'll offer variations. Or reply `remix N`, `remixes`, `modify copy`, or `save as <name>`.",
 };
 
 async function consumeWithNudge(job: ContentJob, channel: string): Promise<boolean> {
@@ -296,8 +307,14 @@ export async function handleVektorMessage(args: {
     // If this workflow renders from a spec, the song is the last missing piece: move to the
     // render-authoring gate. An uploaded/pasted song URL first offers beat sync (`sync auto`
     // snaps the timeline to its beat grid); the default bed goes straight to the confirm card.
+    // GATED: the render confirm only comes after the images + animation prompts are approved
+    // (final_animation_prompts) — the song is stored either way.
     const wfSong = await loadWorkflow(data.workflow_id);
     if (wfSong?.render_spec) {
+      if (!job.data.final_animation_prompts && job.stage !== "authoring" && job.stage !== "remix_offer" && job.stage !== "remix_copy") {
+        await slack.postThreadReply(args.channel, threadTs, "Song saved. Finish the image + animation approvals first, then I confirm the render.");
+        return true;
+      }
       if (/^https?:\/\//i.test(ref)) {
         await slack.postThreadReply(
           args.channel,
@@ -317,6 +334,10 @@ export async function handleVektorMessage(args: {
   if (syncMatch && data.workflow_id) {
     const wfSync = await loadWorkflow(data.workflow_id);
     if (!wfSync) return false;
+    if (!job.data.final_animation_prompts && job.stage !== "authoring" && job.stage !== "remix_offer" && job.stage !== "remix_copy") {
+      await slack.postThreadReply(args.channel, threadTs, "Sync noted. Finish the image + animation approvals first, then set the sync.");
+      return true;
+    }
     const songRef = data.song_ref ?? wfSync.song_ref ?? null;
     if (syncMatch[1].toLowerCase() === "manual") {
       await postRenderConfirmCard(args.channel, threadTs, job, wfSync, songRef);
@@ -938,30 +959,55 @@ export async function handleVektorMessage(args: {
     return consumeWithNudge(job, args.channel);
   }
 
-  // Stage: prompt_review -> `prompt N <new text>` rewrites one final prompt before approval.
-  // ✅ on the prompts card (handlePictureReaction) generates with the approved prompts verbatim.
-  if (job.stage === "prompt_review") {
+  // Stage: prompt_review / awaiting_images -> `prompt N <new text>` rewrites one final prompt.
+  // ✅ on the prompts card (handlePictureReaction) locks them; in manual mode the images are
+  // then pasted into the thread, in auto mode they generate verbatim.
+  if (job.stage === "prompt_review" || job.stage === "awaiting_images") {
     const pm = /^\s*prompt\s+(\d{1,2})\s+([\s\S]+?)\s*$/i.exec(t);
     if (pm && data.workflow_id) {
       const finals = [...(data.final_prompts ?? [])];
       const idx = parseInt(pm[1], 10) - 1;
       const wfP = await loadWorkflow(data.workflow_id);
-      if (!wfP || idx < 0 || idx >= Math.max(finals.length, wfP.scenes.length)) {
-        await slack.postThreadReply(args.channel, threadTs, `Prompt ${idx + 1} is out of range (1 to ${Math.max(finals.length, wfP?.scenes.length ?? 0)}).`);
+      if (!wfP) return true;
+      const { scenes, fromSeed } = sceneListFor(job, wfP);
+      if (idx < 0 || idx >= Math.max(finals.length, scenes.length)) {
+        await slack.postThreadReply(args.channel, threadTs, `Prompt ${idx + 1} is out of range (1 to ${Math.max(finals.length, scenes.length)}).`);
         return true;
       }
       finals[idx] = pm[2].trim();
-      await updateJob(job, { data: { ...job.data, final_prompts: finals } });
+      // The edited prompt is also the scene's prompt of record for the paste intake.
+      const nextScenes = scenes.map((s, i) => (i === idx ? { ...s, image_prompt: finals[idx] } : s));
+      await updateJob(job, { data: { ...job.data, final_prompts: finals, session_scenes: nextScenes } });
       const card = await slack.postThreadReply(
         args.channel,
         threadTs,
-        [
-          `*Final image prompts for ${wfP.name}* — updated:`,
-          ...finals.map((p, i) => `\n*${i + 1}. ${wfP.scenes[i]?.role ?? `shot ${i + 1}`}*\n${p}`),
-          "",
-          "React ✅ to generate the images with these prompts, or `prompt N <new text>` to keep editing.",
-        ].join("\n")
+        buildPromptsCard(wfP.name, nextScenes, finals, { fromSeed })
       );
+      const cardTs = (card as { ts?: string }).ts;
+      if (cardTs && job.stage === "prompt_review") {
+        await updateJob(job, { pickerTs: cardTs });
+        await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
+      }
+      return true;
+    }
+    return consumeWithNudge(job, args.channel);
+  }
+
+  // Stage: animation_review -> `motion N <new text>` rewrites one animation prompt before ✅.
+  if (job.stage === "animation_review") {
+    const mm = /^\s*motion\s+(\d{1,2})\s+([\s\S]+?)\s*$/i.exec(t);
+    if (mm && data.workflow_id) {
+      const wfM = await loadWorkflow(data.workflow_id);
+      if (!wfM) return true;
+      const { scenes } = sceneListFor(job, wfM);
+      const idx = parseInt(mm[1], 10) - 1;
+      if (idx < 0 || idx >= scenes.length) {
+        await slack.postThreadReply(args.channel, threadTs, `Motion ${idx + 1} is out of range (1 to ${scenes.length}).`);
+        return true;
+      }
+      const nextScenes = scenes.map((s, i) => (i === idx ? { ...s, animation_prompt: mm[2].trim() } : s));
+      await updateJob(job, { data: { ...job.data, session_scenes: nextScenes } });
+      const card = await postAnimationCard(args.channel, threadTs, wfM.name, nextScenes);
       const cardTs = (card as { ts?: string }).ts;
       if (cardTs) {
         await updateJob(job, { pickerTs: cardTs });
@@ -972,32 +1018,45 @@ export async function handleVektorMessage(args: {
     return consumeWithNudge(job, args.channel);
   }
 
-  // Stage: picture / authoring -> `redo N <new prompt>` regenerates one scene's image (works
-  // after the render-confirm card too, which parks the stage at authoring).
-  if (job.stage === "picture" || job.stage === "authoring") {
+  // Stage: picture / image_review / authoring -> `redo N <new prompt>` regenerates one scene's
+  // image (works after the render-confirm card too, which parks the stage at authoring).
+  if (job.stage === "picture" || job.stage === "image_review" || job.stage === "authoring") {
     const rm = /^\s*redo\s+(\d{1,2})\s+(.+)\s*$/i.exec(t);
     if (rm && data.workflow_id) {
       const idx = parseInt(rm[1], 10) - 1;
       const newPrompt = rm[2].trim();
       const wf = await loadWorkflow(data.workflow_id);
-      if (wf && wf.scenes[idx]) {
+      const { scenes } = wf ? sceneListFor(job, wf) : { scenes: [] as SessionScene[] };
+      if (wf && scenes[idx]) {
         await slack.postThreadReply(args.channel, threadTs, `Redoing scene ${idx + 1}...`);
         const vid = job.vertical_id;
         waitUntil(
           (async () => {
             try {
               const rendered = await renderScene(vid, newPrompt, wf);
-              wf.scenes[idx].image_prompt = newPrompt;
-              wf.scenes[idx].image_url = rendered?.url ?? wf.scenes[idx].image_url ?? null;
-              await upsertWorkflow(wf);
+              // Session-scoped: the redo lands on the JOB's scenes, never mid-session on the
+              // shared workflow row (the animation gate is the one sanctioned write-back).
+              const nextScenes = scenes.map((s, i) =>
+                i === idx
+                  ? { ...s, image_prompt: newPrompt, image_url: rendered?.url ?? s.image_url ?? null, image_approved: Boolean(rendered) || s.image_approved }
+                  : s
+              );
+              const fresh = await getLatestJobByThread(threadTs);
+              if (fresh) await updateJob(fresh, { data: { ...fresh.data, session_scenes: nextScenes } });
               if (rendered) {
                 // NOTE: generated images are NOT saved to content_examples — our own outputs
                 // must never become reference frames (that's how wasp shots leaked into a
-                // storytime). Outputs live on the workflow (scenes.image_url) + galleries.
+                // storytime). Outputs live on the session + galleries.
                 await slack.uploadFile(args.channel, `scene${idx + 1}.png`, rendered.buffer, rendered.mimetype, threadTs);
                 await slack.postThreadReply(args.channel, threadTs, `scene ${idx + 1}: ${rendered.stamp}`).catch(() => {});
               }
             } catch (e) {
+              if (e instanceof ImageGenPausedError) {
+                await slack
+                  .postThreadReply(args.channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}\nPaste the replacement image in this thread with \`scene ${idx + 1}\` instead.`)
+                  .catch(() => {});
+                return;
+              }
               console.error("[workflow-pipeline] redo scene failed:", (e as Error).message);
             }
           })()
@@ -1011,6 +1070,46 @@ export async function handleVektorMessage(args: {
   // Catch-all for stages with no text branch (render, remix_offer, ...): consume with the
   // stage's nudge so the generic content handler never hijacks an active session thread.
   return consumeWithNudge(job, args.channel);
+}
+
+// ---- session scenes: the wasp-leak fix -----------------------------------------------------
+// The picture plan a session builds lives on the JOB (data.session_scenes), never on the shared
+// workflows row mid-session. That row's SEEDED scenes (e.g. the wasp-nest shots a workflow was
+// born with) are only a last-resort skeleton, and using them is called out loudly on the card.
+// The one sanctioned write-back to the workflow row is the animation-approval gate.
+
+type SessionScene = NonNullable<JobData["session_scenes"]>[number];
+
+function sceneListFor(job: ContentJob, wf: Workflow): { scenes: SessionScene[]; fromSeed: boolean } {
+  const sess = job.data.session_scenes;
+  if (sess?.length) return { scenes: sess.map((s) => ({ ...s })), fromSeed: false };
+  return {
+    scenes: wf.scenes.map((s) => ({
+      role: s.role,
+      image_prompt: s.image_prompt,
+      animation_prompt: s.animation_prompt,
+      image_url: null,
+      image_approved: false,
+    })),
+    fromSeed: true,
+  };
+}
+
+const SEED_SCENES_WARNING =
+  "⚠️ Using this workflow's SEED scenes (no session picture was built) — CHECK THE SUBJECT matches your copy before approving.";
+
+/** The prompts card: one copy-paste code block per shot (mobile-friendly), ✅ locks them. */
+function buildPromptsCard(wfName: string, scenes: SessionScene[], prompts: string[], opts?: { fromSeed?: boolean }): string {
+  const blocks = prompts.map((p, i) => `*${i + 1}. ${scenes[i]?.role ?? `shot ${i + 1}`}*\n\`\`\`\n${p}\n\`\`\``);
+  return [
+    `*Final image prompts for ${wfName}* — one per shot, each in its own copy block:`,
+    ...(opts?.fromSeed ? [SEED_SCENES_WARNING] : []),
+    ...blocks,
+    imageGenEnabled()
+      ? "React ✅ to lock these prompts and generate the images."
+      : "React ✅ to lock these prompts. Then generate each one yourself and paste the finished images back in this thread (auto-generation is paused).",
+    "`prompt N <new text>` rewrites one first.",
+  ].join("\n");
 }
 
 /** Enrich one scene prompt on THIS workflow's reference library + visual rules. Falls back to
@@ -1040,7 +1139,7 @@ async function enrichWorkflowPrompt(
  *  aspect (hazel collapses portrait requests to 2:3). Posted under every generated image
  *  so "which model made this?" is answered per image, never by eye. */
 function providerStamp(workflow?: Workflow | null): string {
-  const prov = (workflow?.render_options?.provider as string | undefined) ?? "higgsfield-gpt";
+  const prov = (workflow?.render_options?.provider as string | undefined) ?? "openai";
   const requested = workflow ? workflowAspect(workflow) : "3:4";
   const labels: Record<string, string> = {
     "higgsfield-gpt": "gpt-image-2 (hazel)",
@@ -1049,6 +1148,11 @@ function providerStamp(workflow?: Workflow | null): string {
     elevenlabs: "Seedream",
   };
   const label = labels[prov] ?? prov;
+  if (prov === "openai") {
+    const size = openaiSizeFor(requested);
+    const cropNote = size === "1024x1536" && requested !== "2:3" ? ` (requested ${requested}, crop in render)` : "";
+    return `${label} @ ${size}${cropNote}`;
+  }
   const rendered = prov === "higgsfield-gpt" ? nearestHazelAspect(requested) : requested;
   const aspectNote = rendered === requested ? requested : `${rendered} (requested ${requested})`;
   return `${label} @ ${aspectNote}`;
@@ -1078,6 +1182,8 @@ async function renderScene(
     if (!url) return null;
     return { url, buffer: img.buffer, mimetype: img.mimetype, stamp: providerStamp(workflow) };
   } catch (e) {
+    // The kill switch stays LOUD: callers post the paused note instead of a generic failure.
+    if (e instanceof ImageGenPausedError) throw e;
     console.error("[workflow-pipeline] renderScene failed:", (e as Error).message);
     return null;
   }
@@ -1108,12 +1214,113 @@ export async function handlePictureReaction(args: {
   if (job.stage === "authoring") return emitRenderPrompt(job, args.channel);
   // ✅ on the picture card -> the PROMPT REVIEW gate (see the exact prompts before any credit).
   if (job.stage === "picture") return startPromptReview(job, args.channel);
+  // ✅ on the images card -> the ANIMATION gate; ✅ on the animation card -> approve + write-back.
+  if (job.stage === "image_review") return startAnimationReview(job, args.channel);
+  if (job.stage === "animation_review") return approveAnimationPrompts(job, args.channel);
   if (job.stage !== "prompt_review") return false;
-  return generateSceneImages(job, args.channel);
+  return approvePrompts(job, args.channel);
 }
 
-/** The PROMPT REVIEW gate: enrich every scene's prompt (references + rules baked in) and post
- *  the EXACT text that will go to gpt-image-2. `prompt N <new text>` edits one; ✅ generates. */
+/** ✅ on the prompts card: the prompts are LOCKED. Auto mode (IMAGE_GEN_ENABLED=true) generates
+ *  them verbatim; manual mode (the default) asks Matthew to generate the images himself and
+ *  paste them into the thread — pasted = approved AND saved as workflow references. */
+async function approvePrompts(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  if (imageGenEnabled()) return generateSceneImages(job, channel);
+  const wf = await loadWorkflow(wfId);
+  if (!wf) return false;
+  const threadTs = job.slack_thread_ts;
+  const { scenes } = sceneListFor(job, wf);
+  const finals = job.data.final_prompts ?? [];
+  // The approved prompt becomes each scene's prompt of record for the paste intake.
+  const nextScenes = scenes.map((s, i) => ({ ...s, image_prompt: finals[i] ?? s.image_prompt, image_url: null, image_approved: false }));
+  await updateJob(job, { stage: "awaiting_images", data: { ...job.data, session_scenes: nextScenes } });
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `*Prompts locked.* Generate each one yourself (auto-generation is paused) and paste the finished images back in this thread:`,
+      ...nextScenes.map((s, i) => `${i + 1}. ${s.role}`),
+      "",
+      "Paste in scene order, or comment `scene N` on an upload to target a slot. Every pasted image is approved on arrival and saved to this workflow's reference library.",
+      `0 of ${nextScenes.length} received.`,
+    ].join("\n")
+  );
+  return true;
+}
+
+/** All scene images are in (pasted or generated + ✅). Post the animation-prompts card. */
+async function startAnimationReview(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const wf = await loadWorkflow(wfId);
+  if (!wf) return false;
+  const threadTs = job.slack_thread_ts;
+  const { scenes } = sceneListFor(job, wf);
+  await updateJob(job, { stage: "animation_review" });
+  const card = await postAnimationCard(channel, threadTs, wf.name, scenes);
+  const cardTs = (card as { ts?: string }).ts;
+  if (cardTs) {
+    await updateJob(job, { pickerTs: cardTs });
+    await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
+  }
+  return true;
+}
+
+/** The animation card: per-scene Seedance 2.0 motion prompts, `motion N <text>` edits, ✅ approves.
+ *  No animation credits are spent here — approved prompts ride into the render spec (and the
+ *  future Seedance I2V step slots in behind this gate). */
+async function postAnimationCard(channel: string, threadTs: string, wfName: string, scenes: SessionScene[]): Promise<unknown> {
+  return slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `*Animation prompts for ${wfName}* (Seedance 2.0, motion only) — one per scene:`,
+      ...scenes.map((s, i) => `${i + 1}. *${s.role}* — ${s.animation_prompt || "_(none)_"}`),
+      "",
+      "`motion N <new text>` rewrites one. React ✅ to approve them all (nothing animates yet; these go into the render).",
+    ].join("\n")
+  );
+}
+
+/** ✅ on the animation card: approve the motion prompts, write the session's scenes back onto
+ *  the workflow row (the ONE sanctioned write-back), then move to the song/render step. */
+async function approveAnimationPrompts(job: ContentJob, channel: string): Promise<boolean> {
+  const wfId = job.data.workflow_id;
+  if (!wfId) return false;
+  const wf = await loadWorkflow(wfId);
+  if (!wf) return false;
+  const threadTs = job.slack_thread_ts;
+  const { scenes } = sceneListFor(job, wf);
+  const finalMotions = scenes.map((s) => s.animation_prompt);
+  const wfScenes: WorkflowScene[] = scenes.map((s, i) => ({
+    role: s.role,
+    image_prompt: s.image_prompt,
+    animation_prompt: s.animation_prompt,
+    duration_seconds: wf.scenes[i]?.duration_seconds ?? 2,
+    image_url: s.image_url ?? null,
+    image_approved: Boolean(s.image_approved),
+  }));
+  await upsertWorkflow({ ...wf, scenes: wfScenes });
+  await updateJob(job, { data: { ...job.data, session_scenes: scenes, final_animation_prompts: finalMotions } });
+  const songRef = job.data.song_ref ?? wf.song_ref ?? null;
+  if (songRef && wf.render_spec) {
+    const fresh = await getLatestJobByThread(threadTs);
+    await postRenderConfirmCard(channel, threadTs, fresh ?? job, { ...wf, scenes: wfScenes }, songRef);
+  } else {
+    await slack.postThreadReply(
+      channel,
+      threadTs,
+      "Animation approved. Add the song with `song <key|url>` (or attach the audio file here) and I confirm the render."
+    );
+  }
+  return true;
+}
+
+/** The PROMPT REVIEW gate: enrich every SESSION scene's prompt (references + rules baked in)
+ *  and post the EXACT text that will go to gpt-image-2, one copy block per shot.
+ *  `prompt N <new text>` edits one; ✅ locks them (manual paste or auto-generate). */
 async function startPromptReview(job: ContentJob, channel: string): Promise<boolean> {
   const wfId = job.data.workflow_id;
   if (!wfId) return false;
@@ -1126,26 +1333,18 @@ async function startPromptReview(job: ContentJob, channel: string): Promise<bool
       try {
         const wf = await loadWorkflow(wfId);
         if (!wf) return;
+        const { scenes, fromSeed } = sceneListFor(job, wf);
         const prompts: string[] = [];
-        for (const scene of wf.scenes) {
+        for (const scene of scenes) {
           prompts.push(await enrichWorkflowPrompt(job.vertical_id, scene.image_prompt, wf));
         }
-        const card = await slack.postThreadReply(
-          channel,
-          threadTs,
-          [
-            `*Final image prompts for ${wf.name}* — exactly what gpt-image-2 will get, one per shot:`,
-            ...prompts.map((p, i) => `\n*${i + 1}. ${wf.scenes[i]?.role ?? `shot ${i + 1}`}*\n${p}`),
-            "",
-            "React ✅ to generate the images with these prompts, or `prompt N <new text>` to rewrite one first.",
-          ].join("\n")
-        );
+        const card = await slack.postThreadReply(channel, threadTs, buildPromptsCard(wf.name, scenes, prompts, { fromSeed }));
         const cardTs = (card as { ts?: string }).ts;
         const fresh = await getLatestJobByThread(threadTs);
         if (fresh)
           await updateJob(fresh, {
             pickerTs: cardTs ?? fresh.picker_msg_ts,
-            data: { ...fresh.data, final_prompts: prompts },
+            data: { ...fresh.data, final_prompts: prompts, session_scenes: scenes },
           });
         if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
       } catch (e) {
@@ -1161,8 +1360,9 @@ async function startPromptReview(job: ContentJob, channel: string): Promise<bool
   return true;
 }
 
-/** Generate the scene images using the APPROVED final prompts verbatim (no re-enrichment), then
- *  hand off to the song/render step. */
+/** AUTO mode only (IMAGE_GEN_ENABLED=true): generate the scene images using the APPROVED final
+ *  prompts verbatim (no re-enrichment), then park at the IMAGE REVIEW gate — ✅ moves to the
+ *  animation gate, `redo N <prompt>` regenerates one. Session-scoped: results land on the job. */
 async function generateSceneImages(job: ContentJob, channel: string): Promise<boolean> {
   const workflowIdRef = job.data.workflow_id;
   if (!workflowIdRef) return false;
@@ -1178,8 +1378,10 @@ async function generateSceneImages(job: ContentJob, channel: string): Promise<bo
         const wf = await loadWorkflow(workflowIdRef);
         if (!wf) return;
         const finals = job.data.final_prompts ?? [];
-        for (let i = 0; i < wf.scenes.length; i++) {
-          const scene = wf.scenes[i];
+        const { scenes } = sceneListFor(job, wf);
+        let ok = 0;
+        for (let i = 0; i < scenes.length; i++) {
+          const scene = scenes[i];
           const approved = finals[i];
           // The approved prompt becomes the scene's prompt of record (what you approved is
           // what the scene IS); it is sent verbatim, no second enrichment pass.
@@ -1190,6 +1392,7 @@ async function generateSceneImages(job: ContentJob, channel: string): Promise<bo
           if (rendered) {
             scene.image_url = rendered.url;
             scene.image_approved = true;
+            ok++;
             // Generated images intentionally NOT saved to content_examples (see redo path note).
             await slack.uploadFile(args.channel, `scene${i + 1}.png`, rendered.buffer, rendered.mimetype, threadTs);
             await slack.postThreadReply(args.channel, threadTs, `scene ${i + 1}: ${rendered.stamp}`).catch(() => {});
@@ -1197,49 +1400,33 @@ async function generateSceneImages(job: ContentJob, channel: string): Promise<bo
             await slack.postThreadReply(args.channel, threadTs, `Scene ${i + 1} image failed. Retry with \`redo ${i + 1} <prompt>\`.`);
           }
         }
-        await upsertWorkflow(wf);
-        // Back to `picture` so `redo N` + song still work after the images land.
-        await updateJob(job, { stage: "picture" });
-
-        // Paint the picture: if this workflow renders from a spec, recap the copy grouped by shot
-        // (which text lands on which image) and point at the song -> render-authoring step.
-        if (wf.render_spec) {
-          const base = specFromWorkflow(wf);
-          const filled = base ? applyCopyToSpec(base, job.data.structured_copy) : null;
-          if (filled) await slack.postThreadReply(args.channel, threadTs, buildVideoDescription(wf, filled));
-          // Song already on the session/workflow -> approved images flow STRAIGHT into the
-          // render-confirm card. The song ask is the only allowed gate, and only when missing.
-          const songRef = job.data.song_ref ?? wf.song_ref ?? null;
-          if (songRef) {
-            await slack.postThreadReply(
-              args.channel,
-              threadTs,
-              "Images done. Tweak any with `redo <n> <new prompt>` — moving to the render."
-            );
-            const freshJob = await getLatestJobByThread(threadTs);
-            await postRenderConfirmCard(args.channel, threadTs, freshJob ?? job, wf, songRef);
-          } else {
-            await slack.postThreadReply(
-              args.channel,
-              threadTs,
-              [
-                "Images done. Tweak any with `redo <n> <new prompt>`.",
-                "Add the song with `song <key|url>` and I will confirm the render mode, then hand you the Claude Code prompt to build it.",
-              ].join("\n")
-            );
-          }
-        } else {
-          await slack.postThreadReply(
-            args.channel,
-            threadTs,
-            [
-              "Images done.",
-              "Tweak any with `redo <n> <new prompt>`.",
-              "Set a song with `song <key|url>`, or save an audio variant with `sequence <song> [label]`.",
-            ].join("\n")
-          );
-        }
+        // Session-scoped results + the IMAGE REVIEW gate (✅ -> animation prompts).
+        const freshJob = await getLatestJobByThread(threadTs);
+        const card = await slack.postThreadReply(
+          args.channel,
+          threadTs,
+          [
+            `*Images: ${ok}/${scenes.length} generated.*`,
+            "React ✅ to approve them and move to the animation prompts.",
+            "`redo N <new prompt>` regenerates one, or paste a replacement image with `scene N`.",
+          ].join("\n")
+        );
+        const cardTs = (card as { ts?: string }).ts;
+        if (freshJob)
+          await updateJob(freshJob, {
+            stage: "image_review",
+            pickerTs: cardTs ?? freshJob.picker_msg_ts,
+            data: { ...freshJob.data, session_scenes: scenes },
+          });
+        if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
       } catch (e) {
+        if (e instanceof ImageGenPausedError) {
+          // Kill switch flipped mid-flight: stay retryable at prompt_review, say so loudly.
+          await slack.postThreadReply(args.channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`).catch(() => {});
+          const fresh = await getLatestJobByThread(threadTs);
+          if (fresh) await updateJob(fresh, { stage: "prompt_review" });
+          return;
+        }
         console.error("[workflow-pipeline] handlePictureReaction gen failed:", (e as Error).message);
       }
     })()
@@ -1661,27 +1848,30 @@ async function generateAndPostPicture(args: {
       image_url: null,
       image_approved: false,
     }));
-    const workflow: Workflow = args.workflow
-      ? { ...args.workflow, scenes, captions: plan.captions }
-      : {
-          id: wfId,
-          vertical_id: args.verticalId,
-          name,
-          category: "pov",
-          subcategory: null,
-          status: "draft",
-          scenes,
-          captions: plan.captions,
-          song_ref: null,
-          render_sequences: [],
-          render_options: { min_shots: scenes.length, max_shots: scenes.length, clip_seconds: 2, aspect: "9:16" },
-          example_video_url: null,
-          example_storyboard: null,
-          shot_screenshots: [],
-          source_kind: "authored",
-          source_example_id: null,
-        };
-    await upsertWorkflow(workflow);
+    // Only a brand-NEW draft workflow is upserted here (the row must exist). An existing
+    // workflow's row is NOT touched mid-session — the plan lives on the job (session_scenes)
+    // until the animation gate writes it back.
+    if (!args.workflow) {
+      const workflow: Workflow = {
+        id: wfId,
+        vertical_id: args.verticalId,
+        name,
+        category: "pov",
+        subcategory: null,
+        status: "draft",
+        scenes,
+        captions: plan.captions,
+        song_ref: null,
+        render_sequences: [],
+        render_options: { min_shots: scenes.length, max_shots: scenes.length, clip_seconds: 2, aspect: "9:16" },
+        example_video_url: null,
+        example_storyboard: null,
+        shot_screenshots: [],
+        source_kind: "authored",
+        source_example_id: null,
+      };
+      await upsertWorkflow(workflow);
+    }
 
     const sceneLines = plan.scenes
       .map((s, i) => `*Scene ${i + 1} — ${s.role}*\n  image: ${s.image_prompt}\n  motion: ${s.animation_prompt}`)
@@ -1706,7 +1896,18 @@ async function generateAndPostPicture(args: {
     if (fresh)
       await updateJob(fresh, {
         pickerTs: cardTs ?? fresh.picker_msg_ts,
-        data: { ...fresh.data, workflow_id: wfId, caption_storyboard: { captions: plan.captions, ig_caption: args.caption } },
+        data: {
+          ...fresh.data,
+          workflow_id: wfId,
+          caption_storyboard: { captions: plan.captions, ig_caption: args.caption },
+          session_scenes: scenes.map((s) => ({
+            role: s.role,
+            image_prompt: s.image_prompt,
+            animation_prompt: s.animation_prompt,
+            image_url: null,
+            image_approved: false,
+          })),
+        },
       });
     if (cardTs) await slack.addReaction(args.channel, cardTs, "white_check_mark").catch(() => {});
   } catch (e) {
@@ -1728,7 +1929,7 @@ function buildPictureCard(workflow: Workflow, spec: RenderSpec): string {
       out.push(`  ${tx.at_second}s to ${tx.out_second ?? shot.end}s  "${tx.text || tx.role || ""}"${pos}`);
     }
   }
-  out.push("", "React ✅ to generate the shot images.");
+  out.push("", "React ✅ to see the final image prompts (nothing generates yet).");
   return out.join("\n");
 }
 
@@ -1774,9 +1975,14 @@ async function startPictureIdeas(job: ContentJob, channel: string): Promise<bool
         if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
       } catch (e) {
         console.error("[workflow-pipeline] picture ideas failed:", (e as Error).message);
-        // Never stall the session: fall through to the direct picture build.
+        // The IDEA GATE is MANDATORY. The old fallthrough built the picture with NO chosen idea,
+        // which let the workflow's seeded subject (the wasp nest) drive the prompts. Stay at the
+        // copy card and retry instead.
+        await slack
+          .postThreadReply(channel, threadTs, "Could not draft the visual directions. React ✅ on the copy card again (or reply `more ideas`) to retry.")
+          .catch(() => {});
         const fresh = await getLatestJobByThread(threadTs);
-        if (fresh) await buildPictureFromStructuredCopy(fresh, channel);
+        if (fresh) await updateJob(fresh, { stage: "structured_copy" });
       }
     })()
   );
@@ -1794,7 +2000,8 @@ async function pickPictureIdea(job: ContentJob, channel: string, n: number): Pro
     return true;
   }
   const ideaText = [`Visual direction: ${idea.title}`, ...idea.shots.map((s, i) => `Shot ${i + 1}: ${s}`)].join("\n");
-  await updateJob(job, { data: { ...job.data, chosen_idea: ideaText, chosen_storyboard: ideaText } });
+  // chosen_idea_shots = each shot's NON-NEGOTIABLE subject for the picture plan.
+  await updateJob(job, { data: { ...job.data, chosen_idea: ideaText, chosen_storyboard: ideaText, chosen_idea_shots: idea.shots } });
   await slack.postThreadReply(channel, threadTs, `Locked *${idea.title}*.`);
   const fresh = await getLatestJobByThread(threadTs);
   return buildPictureFromStructuredCopy(fresh ?? job, channel);
@@ -1820,35 +2027,49 @@ async function buildPictureFromStructuredCopy(job: ContentJob, channel: string):
         const shotCount = spec?.shots.length || wf.render_options.max_shots || 3;
         const vertical = await loadVertical(job.vertical_id);
         const captionText = structured.map((l) => l.text).filter(Boolean).join(" / ");
+        // NEVER seed the subject from wf.name (a workflow literally named "wasp nest removal"
+        // used to drive the subject whenever no idea was picked). The session's copy is the
+        // fallback; the chosen idea's per-shot gists are the per-shot subjects.
         const plan = await generatePicturePlan({
           vertical,
-          chosenHook: job.data.chosen_hook || wf.name,
-          chosenCaption: captionText || wf.name,
-          chosenStoryboard: job.data.chosen_storyboard || wf.name,
+          chosenHook: job.data.chosen_hook || structured.find((l) => l.text)?.text || "",
+          chosenCaption: captionText,
+          chosenStoryboard: job.data.chosen_storyboard || captionText,
+          chosenIdeaShots: job.data.chosen_idea_shots,
           workflow: wf,
         });
         let scenes = plan.scenes.slice(0, shotCount);
         while (scenes.length < shotCount) {
           scenes = scenes.concat(scenes[scenes.length - 1] ?? { role: `shot ${scenes.length + 1}`, image_prompt: "first-person b-roll on the job", animation_prompt: "slow push in" });
         }
-        const wfScenes: WorkflowScene[] = scenes.map((s) => ({
+        // SESSION-SCOPED (the wasp-leak fix): the plan lives on the JOB, not the shared
+        // workflows row. The animation gate is the one sanctioned write-back.
+        const sessionScenes: SessionScene[] = scenes.map((s) => ({
           role: s.role,
           image_prompt: s.image_prompt,
           animation_prompt: s.animation_prompt,
-          duration_seconds: 2,
           image_url: null,
           image_approved: false,
         }));
-        const updated: Workflow = { ...wf, scenes: wfScenes };
-        await upsertWorkflow(updated);
-        const card = await slack.postThreadReply(channel, threadTs, spec ? buildPictureCard(updated, spec) : "React ✅ to generate the images.");
+        const preview: Workflow = {
+          ...wf,
+          scenes: sessionScenes.map((s, i) => ({
+            role: s.role,
+            image_prompt: s.image_prompt,
+            animation_prompt: s.animation_prompt,
+            duration_seconds: wf.scenes[i]?.duration_seconds ?? 2,
+            image_url: null,
+            image_approved: false,
+          })),
+        };
+        const card = await slack.postThreadReply(channel, threadTs, spec ? buildPictureCard(preview, spec) : "React ✅ to see the final image prompts.");
         const cardTs = (card as { ts?: string }).ts;
         const fresh = await getLatestJobByThread(threadTs);
         if (fresh)
           await updateJob(fresh, {
             pickerTs: cardTs ?? fresh.picker_msg_ts,
             // A fresh picture invalidates previously approved prompts.
-            data: { ...fresh.data, candidate_spec: spec, final_prompts: undefined },
+            data: { ...fresh.data, candidate_spec: spec, final_prompts: undefined, session_scenes: sessionScenes },
           });
         if (cardTs) await slack.addReaction(channel, cardTs, "white_check_mark").catch(() => {});
       } catch (e) {
@@ -1890,7 +2111,7 @@ async function postRenderConfirmCard(
       onboarding,
       errs.length
         ? "*Fix these before rendering:*\n" + errs.map((e) => `• ${e}`).join("\n")
-        : `Render *${workflow.name}* with *${modeLabel}*?`,
+        : `*We have everything: copy, images, animation prompts, song.* Render *${workflow.name}* with *${modeLabel}*?`,
       errs.length
         ? ""
         : "React ✅ to get the Claude Code prompt to build this render. Post a clip for any shot to switch it to video.",
@@ -1963,9 +2184,14 @@ async function emitRenderPrompt(job: ContentJob, channel: string): Promise<boole
     }
   }
 
-  // Keep the session ALIVE for the remix upsell (16 variations of this workflow + audio combo).
+  // Keep the session ALIVE: the variations suggestion card fires when the final MP4 lands in
+  // this thread (handleWorkflowReferenceUpload). `remix N` / `remixes` still work as text.
   await updateJob(job, { stage: "remix_offer" });
-  await postRemixOffer(channel, threadTs);
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    "When the render is done, drop the final MP4 in this thread — I'll log it and offer variations of this exact version."
+  );
   return true;
 }
 
@@ -2185,14 +2411,21 @@ export async function handleSongAttachment(args: {
 }
 
 /**
- * Screenshots / example videos dropped in a workflow session thread become the workflow's
- * REFERENCE CREATIVES (the production gate: 3 references -> produce the 4th -> in production).
+ * Media dropped in a workflow session thread, routed by the session's stage:
+ *   awaiting_images / image_review -> SCENE IMAGES (manual-image mode): each pasted image is
+ *     approved on arrival, fills the next unfilled scene slot (or `scene N` in the message
+ *     targets one), and is ALSO saved to the workflow's reference library — the dataset that
+ *     grounds future prompts and future automation.
+ *   remix_offer + a video -> the FINAL RENDERED MP4: logged on the session, then the
+ *     variations suggestion card posts.
+ *   anything else -> REFERENCE CREATIVES (the production gate: 3 refs -> produce the 4th).
  * Claims the drop only when this thread's session has a workflow in context.
  */
 export async function handleWorkflowReferenceUpload(args: {
   channel: string;
   threadTs: string;
   files: DroppedFile[];
+  text?: string;
 }): Promise<boolean> {
   const media = args.files.filter(
     (f) =>
@@ -2204,6 +2437,98 @@ export async function handleWorkflowReferenceUpload(args: {
   if (!job || job.format_id !== "workflow" || !job.data.workflow_id) return false;
   const wfId = job.data.workflow_id;
   const threadTs = job.slack_thread_ts;
+
+  // ---- Scene-image intake (manual-image mode) ----------------------------------------------
+  const sess = job.data.session_scenes ?? [];
+  if ((job.stage === "awaiting_images" || job.stage === "image_review") && sess.length) {
+    const images = media.filter((f) => (f.mimetype ?? "").startsWith("image/"));
+    if (!images.length) {
+      await slack.postThreadReply(args.channel, threadTs, "Waiting on the scene IMAGES here (videos come later at the render step).");
+      return true;
+    }
+    const wfForScenes = await loadWorkflow(wfId);
+    const scenes = sess.map((s) => ({ ...s }));
+    // `scene N` in the message targets a slot (and replaces it); otherwise fill in order.
+    const targetMatch = /\bscene\s+(\d{1,2})\b/i.exec(args.text ?? "");
+    let target = targetMatch ? parseInt(targetMatch[1], 10) - 1 : null;
+    for (const f of images.slice(0, scenes.length)) {
+      let slot = target ?? scenes.findIndex((s) => !s.image_url);
+      if (slot === null || slot < 0 || slot >= scenes.length) {
+        if (target === null) {
+          await slack.postThreadReply(
+            args.channel,
+            threadTs,
+            `All ${scenes.length} scenes have images. Comment \`scene N\` on an upload to replace one, or react ✅ to continue.`
+          );
+          break;
+        }
+        slot = Math.min(Math.max(target, 0), scenes.length - 1);
+      }
+      try {
+        const buf = await slack.downloadFile(f.url_private_download!);
+        const url = await uploadToReels(buf, f.mimetype || "image/png");
+        if (!url) {
+          await slack.postThreadReply(args.channel, threadTs, "Could not store that image. Try uploading it again.");
+          continue;
+        }
+        scenes[slot] = { ...scenes[slot], image_url: url, image_approved: true };
+        // The feedback dataset: every approved manual image grounds this workflow's future
+        // prompts (loadReferenceFrames workflow tier) — this is the railway to automation.
+        await saveContentExample({
+          verticalId: job.vertical_id,
+          workflowId: wfId,
+          sourcePath: url,
+          storyboard: { hook: scenes[slot].role || wfForScenes?.name || wfId, shots: [] },
+          labels: ["approved_manual", "scene_image"],
+          difficulty: "medium",
+          frameUrls: [url],
+        }).catch((e) => console.error("[workflow-pipeline] scene-image example save failed:", (e as Error).message));
+        const filled = scenes.filter((s) => s.image_url).length;
+        await slack.postThreadReply(
+          args.channel,
+          threadTs,
+          `Scene ${slot + 1} (*${scenes[slot].role}*) received and approved. ${filled} of ${scenes.length}.`
+        );
+      } catch (e) {
+        console.error("[workflow-pipeline] scene-image intake failed:", (e as Error).message);
+        await slack.postThreadReply(args.channel, threadTs, "Could not save that image. Try uploading it again.").catch(() => {});
+      }
+      if (target !== null) target++;
+    }
+    await updateJob(job, { data: { ...job.data, session_scenes: scenes } });
+    if (scenes.every((s) => s.image_url)) {
+      await slack.postThreadReply(
+        args.channel,
+        threadTs,
+        [
+          `*All ${scenes.length} scene images are in:*`,
+          ...scenes.map((s, i) => `${i + 1}. *${s.role}* — ${s.image_url}`),
+          "",
+          "Moving to the animation prompts.",
+        ].join("\n")
+      );
+      const fresh = await getLatestJobByThread(threadTs);
+      await startAnimationReview(fresh ?? job, args.channel);
+    }
+    return true;
+  }
+
+  // ---- Final rendered MP4 -> the variations suggestion card --------------------------------
+  if (job.stage === "remix_offer") {
+    const video = media.find((f) => (f.mimetype ?? "").startsWith("video/"));
+    if (video?.url_private_download) {
+      try {
+        const buf = await slack.downloadFile(video.url_private_download);
+        const url = await uploadToReels(buf, video.mimetype || "video/mp4");
+        if (url) await updateJob(job, { data: { ...job.data, final_video_url: url } });
+      } catch (e) {
+        console.error("[workflow-pipeline] final video store failed:", (e as Error).message);
+      }
+      await slack.postThreadReply(args.channel, threadTs, "*Final video received.*");
+      await postRemixOffer(args.channel, threadTs);
+      return true;
+    }
+  }
 
   const wfForRefs = await loadWorkflow(wfId);
   let count: number | null = null;

@@ -516,6 +516,8 @@ export async function generatePicturePlan(args: {
   chosenStoryboard: string;
   clipSeconds?: number;
   workflow?: Workflow;
+  /** The locked visual direction's per-shot gists: each shot's NON-NEGOTIABLE subject. */
+  chosenIdeaShots?: string[];
 }): Promise<PicturePlan> {
   const clip = args.clipSeconds ?? 2;
   const system = [
@@ -536,10 +538,20 @@ export async function generatePicturePlan(args: {
     ...(args.workflow?.visual_rules?.length
       ? [
           "",
-          "NON-NEGOTIABLE: every scene's image_prompt MUST comply with the WORKFLOW VISUAL RULES",
-          "above; when they conflict with the storyboard or the avatar look, the rules win. When",
-          "the rules call for POV b-roll of the work, vary the angle/job between scenes - never",
-          "the subject matter, and never a banned subject.",
+          "SUBJECT vs STRUCTURE: the WORKFLOW VISUAL RULES and the workflow's scenes define the",
+          "STRUCTURE and STYLE (shot count, POV framing, grade, banned subjects) - they are law",
+          "for HOW each shot looks. The SUBJECT of each shot comes from THIS SESSION's approved",
+          "copy and chosen visual direction; when the workflow's own examples show a different",
+          "subject (a different pest, job, or scene), the session's subject WINS. Banned subjects",
+          "stay banned no matter what.",
+        ]
+      : []),
+    ...(args.chosenIdeaShots?.length
+      ? [
+          "",
+          "NON-NEGOTIABLE PER-SHOT SUBJECTS (the operator picked these; each scene's image_prompt",
+          "must depict its shot's subject, restyled to the rules above, never replaced):",
+          ...args.chosenIdeaShots.map((s, i) => `Shot ${i + 1}: ${s}`),
         ]
       : []),
     "",
@@ -696,10 +708,11 @@ export async function generatePictureIdeas(args: {
     ...(args.workflow.visual_rules?.length
       ? [
           "",
-          "NON-NEGOTIABLE: every shot gist MUST comply with the WORKFLOW VISUAL RULES above; they",
-          "override the avatar look and any instinct to add people or drama. When the rules call",
-          "for POV b-roll of the work, each idea varies the ANGLE and the JOB (different task, area,",
-          "camera height) - never the subject matter, and never a banned subject.",
+          "SUBJECT vs STRUCTURE: the WORKFLOW VISUAL RULES define the STRUCTURE and STYLE (POV",
+          "framing, grade, no people, banned subjects) - they are law for HOW each shot looks.",
+          "The SUBJECT of every gist comes from the APPROVED COPY below; when the workflow's own",
+          "examples or description show a different subject (a different pest, job, or scene),",
+          "the copy's subject WINS. Banned subjects stay banned no matter what.",
         ]
       : []),
     "",

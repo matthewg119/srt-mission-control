@@ -58,9 +58,24 @@ export interface JobData {
   // --- picture ideas gate (pick a visual direction BEFORE any image generates) ---
   picture_ideas?: Array<{ title: string; shots: string[] }>; // ordering for `idea N`
   chosen_idea?: string; // the locked visual direction (title + per-shot gists, flattened)
+  chosen_idea_shots?: string[]; // the locked idea's per-shot gists (each shot's non-negotiable subject)
 
   // --- prompt review gate (the EXACT enriched prompts, approved before any credit is spent) ---
   final_prompts?: string[]; // one per scene; `prompt N <text>` edits, ✅ generates with these verbatim
+
+  // --- SESSION-SCOPED scenes (the wasp-leak fix): the picture plan lives on the JOB, not the
+  // shared workflow row, until the animation gate approves it (the one sanctioned write-back).
+  session_scenes?: Array<{
+    role: string;
+    image_prompt: string;
+    animation_prompt: string;
+    image_url?: string | null;
+    image_approved?: boolean;
+  }>;
+
+  // --- manual-image mode + animation gate + final video ---
+  final_animation_prompts?: string[]; // one per scene; `motion N <text>` edits, ✅ approves
+  final_video_url?: string; // the rendered MP4 Matthew dropped back into the thread
 
   // --- render-spec authoring (Part 2) ---
   candidate_spec?: unknown; // a parsed RenderSpec awaiting the mismatch/validation gate
@@ -109,6 +124,10 @@ export type JobStage =
   | "structured_copy"
   | "picture_ideas"
   | "prompt_review"
+  // staged approval chain (2026-07-03): paste/generate images -> approve -> animation prompts:
+  | "awaiting_images"
+  | "image_review"
+  | "animation_review"
   | "authoring"
   | "await_example"
   // remix upsell stages (after the render prompt is emitted):

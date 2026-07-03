@@ -25,6 +25,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage, generatePovImagesForJob } from "@/lib/reel/pov";
+import { ImageGenPausedError, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import { handleStudioImage, parseBoxes } from "@/lib/reel/studio";
 import { loadExampleFewShot } from "@/lib/reel/content-examples";
 import { suggestFormatsForFrame } from "@/lib/reel/format-suggest";
@@ -745,7 +746,11 @@ async function postRecreate(channel: string, threadTs: string, data: RecreatePac
       imageOk = true;
     }
   } catch (e) {
-    console.error("[pov-studio] recreate image gen failed:", (e as Error).message);
+    if (e instanceof ImageGenPausedError) {
+      await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`).catch(() => {});
+    } else {
+      console.error("[pov-studio] recreate image gen failed:", (e as Error).message);
+    }
   }
 
   await slack.postThreadReply(

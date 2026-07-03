@@ -15,7 +15,7 @@
 import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
-import { generateImages, editImage } from "@/lib/providers/image-gen";
+import { generateImages, editImage, imageGenEnabled, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import { povImageProvider, buildPovImagePrompt, uploadToReels } from "@/lib/reel/pov";
 import { enrichScene } from "@/lib/reel/prompt-enrich";
 import {
@@ -186,6 +186,12 @@ async function generateShotsForJob(job: ContentJob, format: ContentFormat): Prom
     return 0;
   }
 
+  if (!imageGenEnabled()) {
+    // Kill switch: say so loudly and keep the gate open so a later ✅ retries.
+    await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+    return 0;
+  }
+
   await slack.postThreadReply(channel, threadTs, `⏳ Generating ${scenes.length} ${format.ideaNoun} shots…`);
 
   // Ground each scene in the reference library + active style rules (byte-identical to the raw
@@ -299,6 +305,10 @@ async function buildAfterFrame(
   chosen: ShotOption
 ): Promise<string | null> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  if (!imageGenEnabled()) {
+    await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+    return null;
+  }
   let afterBuffer: Buffer | null = null;
   let afterMime = "image/png";
 
@@ -438,6 +448,10 @@ async function handleTuningFeedback(job: ContentJob, format: ContentFormat, text
       try {
         const provider = povImageProvider();
         let posted = 0;
+        if (!imageGenEnabled()) {
+          await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+          targets = [];
+        }
         for (const idx of targets) {
           const opt = opts.find((o) => o.index === idx);
           if (!opt) continue;

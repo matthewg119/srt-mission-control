@@ -30,7 +30,7 @@ export function buildWorkflowMarkdown(wf: Workflow): string {
     `| avatar | ${wf.vertical_id} |`,
     `| category | ${wf.category}${String(wf.subcategory ?? "") ? ` / ${wf.subcategory}` : ""} |`,
     `| status | ${wf.status} · ${wf.production_status ?? "building"} · refs ${refs}/3 · approved ${approved}/4 |`,
-    `| image model | ${opts.provider ?? "higgsfield-gpt"} (gpt-image-2) @ ${opts.aspect ?? "3:4"}${opts.quality ? ` · ${opts.quality}` : ""} — hazel renders 2:3, its only portrait |`,
+    `| image model | ${opts.provider ?? "openai"} (gpt-image-2 direct) @ ${opts.aspect ?? "3:4"}${opts.quality ? ` · ${opts.quality}` : ""} — portrait renders 1024x1536 (2:3) |`,
     `| song | ${wf.song_ref ?? "(none — session asks)"} |`,
     `| editor | ${EDITOR_BASE}/${wf.id} |`,
     "",

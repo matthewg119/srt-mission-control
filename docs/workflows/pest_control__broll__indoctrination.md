@@ -6,7 +6,7 @@
 | avatar | pest_control |
 | category | broll / indoctrination |
 | status | active · building · refs 0/3 · approved 0/4 |
-| image model | higgsfield-gpt (gpt-image-2) @ 9:16 — hazel renders 2:3, its only portrait |
+| image model | higgsfield-gpt (gpt-image-2 direct) @ 9:16 — portrait renders 1024x1536 (2:3) |
 | song | (none — session asks) |
 | editor | https://mission.srtagency.com/dashboard/content-workflows/pest_control__broll__indoctrination |
 

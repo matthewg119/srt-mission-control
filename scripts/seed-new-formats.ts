@@ -156,7 +156,7 @@ async function main() {
       render_spec: buildSpec(seed, slots),
       song_ref: null,
       render_sequences: [],
-      render_options: { min_shots: 3, max_shots: 3, aspect: "9:16", provider: "higgsfield-gpt" },
+      render_options: { min_shots: 3, max_shots: 3, aspect: "9:16", provider: "openai" },
       example_video_url: null,
       example_storyboard: null,
       shot_screenshots: [],

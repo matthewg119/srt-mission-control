@@ -19,7 +19,7 @@ async function main() {
     const before = `${wf.render_options?.aspect ?? "unset"}/${wf.render_options?.provider ?? "unset"}`;
     const ok = await upsertWorkflow({
       ...wf,
-      render_options: { ...wf.render_options, aspect, provider: "higgsfield-gpt" },
+      render_options: { ...wf.render_options, aspect, provider: "openai" },
     });
     let ruleNote = "";
     if (ok && isPov) {
@@ -29,10 +29,10 @@ async function main() {
         ruleNote = " +framing rule";
       }
     }
-    console.log(`${ok ? "set" : "FAILED"} ${wf.id} (was ${before} -> ${aspect}/higgsfield-gpt)${ruleNote}`);
+    console.log(`${ok ? "set" : "FAILED"} ${wf.id} (was ${before} -> ${aspect}/openai)${ruleNote}`);
   }
-  console.log(`\n${all.length} workflows set: POV @ 3:4, everything else @ 9:16, all on higgsfield-gpt.`);
-  console.log("Note: hazel's only portrait output is 2:3; POV framing rule is the composition lever.");
+  console.log(`\n${all.length} workflows set: POV @ 3:4, everything else @ 9:16, all on openai (gpt-image-2 direct).`);
+  console.log("Note: gpt-image-2's only portrait size is 1024x1536 (2:3); POV framing rule is the composition lever.");
 }
 
 main().catch((e) => {

@@ -17,7 +17,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { callClaudeJSON } from "@/lib/claude-calls";
-import { generateImages } from "@/lib/providers/image-gen";
+import { generateImages, ImageGenPausedError, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import type { Vertical } from "@/config/verticals";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
@@ -225,12 +225,22 @@ export async function runAutoReel(
   const packageId = pkg.id as string;
 
   // 4. Soul stills — same CEO across every shot via the vertical's Higgsfield Soul.
-  const stills = await generateImages({
-    prompts: plan.shots.map((s) => s.image_prompt),
-    provider: "higgsfield",
-    soulId: vertical.soul_id ?? undefined,
-    aspect: "reel",
-  });
+  // The kill switch covers this path too (the provider choice is otherwise untouched).
+  let stills;
+  try {
+    stills = await generateImages({
+      prompts: plan.shots.map((s) => s.image_prompt),
+      provider: "higgsfield",
+      soulId: vertical.soul_id ?? undefined,
+      aspect: "reel",
+    });
+  } catch (e) {
+    if (e instanceof ImageGenPausedError) {
+      await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`).catch(() => {});
+      return null;
+    }
+    throw e;
+  }
 
   // 5. Seed content_scenes; upload each still to the reels bucket for a durable URL.
   const sceneRows: Array<{

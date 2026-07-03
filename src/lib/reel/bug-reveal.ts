@@ -18,7 +18,7 @@ import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
-import { generateImages, editImage } from "@/lib/providers/image-gen";
+import { generateImages, editImage, imageGenEnabled, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import { povImageProvider, buildPovImagePrompt, uploadToReels } from "@/lib/reel/pov";
 import { enrichScene } from "@/lib/reel/prompt-enrich";
 import { loadStyleRulesText, distillFeedbackToRules, savePendingRules } from "@/lib/reel/style-rules";
@@ -258,6 +258,12 @@ async function generateBeforeImagesForJob(job: BugRevealJobRow): Promise<number>
     return 0;
   }
 
+  if (!imageGenEnabled()) {
+    // Kill switch: say so loudly and keep the gate open so a later ✅ retries.
+    await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+    return 0;
+  }
+
   await slack.postThreadReply(channel, threadTs, `⏳ Generating ${scenes.length} "before" shots…`);
 
   // Ground each scene in the reference library + active style rules before prompting (byte-
@@ -448,6 +454,10 @@ export async function handleBugRevealFeedback(args: {
       try {
         const provider = povImageProvider();
         let posted = 0;
+        if (!imageGenEnabled()) {
+          await slack.postThreadReply(args.channel, args.threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+          targets = [];
+        }
         for (const idx of targets) {
           const opt = opts.find((o) => o.index === idx);
           if (!opt) continue;
@@ -563,6 +573,11 @@ async function buildRevealForJob(job: BugRevealJobRow, chosen: BeforeOption): Pr
   const instruction = buildBugAddInstruction(chosen.scene, rulesText);
   let afterBuffer: Buffer | null = null;
   let afterMime = "image/png";
+
+  if (!imageGenEnabled()) {
+    await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+    return;
+  }
 
   // Preferred (only when OPENAI_API_KEY is set): edit the exact chosen before image so the two
   // frames line up pixel-for-pixel. We run on Higgsfield today (no OpenAI key), so this is

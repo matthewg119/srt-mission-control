@@ -4,17 +4,26 @@
 // (aligned to prompts; null = that image failed after one retry, so the drop can
 // still post the others + the copy).
 //
+// KILL SWITCH (2026-07-03, Matthew): image generation is DISABLED unless
+// IMAGE_GEN_ENABLED=true. While disabled, workflow sessions run PROMPT-FIRST: the
+// final prompts are posted in Slack and Matthew generates the images himself and
+// pastes them into the thread (pasted = approved + saved as references). Every
+// generation entry point inherits this via generateImages/editImage throwing
+// ImageGenPausedError — no path may generate around it.
+//
 // Providers (IMAGE_PROVIDER env):
-//   higgsfield-gpt (default) — OpenAI's GPT Image model served by the Higgsfield key
-//                              API (slug openai/hazel). Matthew's standing rule: ALL
-//                              image generation uses the GPT image model; Soul is only
-//                              for the trained-character (Vargas) path. This provider
+//   openai (default)         — gpt-image-2 straight from OpenAI (needs OPENAI_API_KEY).
+//                              Matthew's standing rule (2026-07-03): ALL images come from
+//                              the DIRECT OpenAI API; the Higgsfield key is for Seedance
+//                              2.0 animation ONLY. Soul stays banned for generation.
+//   higgsfield-gpt           — OpenAI's GPT Image model served by the Higgsfield key
+//                              API (slug openai/hazel). No longer the default: hazel only
+//                              supports 1:1|3:2|2:3 and proxies the model. Kept selectable.
 //                              NEVER silently degrades to Soul: a hazel failure retries
 //                              once (generateImages) then fails visibly (null).
 //   higgsfield               — Higgsfield text2image/soul API. The trained Vargas Soul
 //                              (soulId) gives day-to-day character consistency.
 //   elevenlabs               — reuses src/lib/elevenlabs-media.ts (Seedream). Fallback only.
-//   openai                   — gpt-image-2 straight from OpenAI (needs OPENAI_API_KEY).
 //
 // Higgsfield contract follows @higgsfield/client v2: host platform.higgsfield.ai,
 // auth `Authorization: Key KEY_ID:KEY_SECRET` (HF_CREDENTIALS), POST /v1/text2image/soul,
@@ -67,13 +76,38 @@ export interface GenerateImagesOpts {
   size?: string;
   /** gpt image quality for higgsfield-gpt/openai ("low" | "medium" | "high"). */
   quality?: string;
+  /**
+   * Bypass the IMAGE_GEN_ENABLED kill switch for this call only. Nothing sets this
+   * today; it exists so a future per-session "generate anyway" override has a seam
+   * that doesn't require touching the global switch.
+   */
+  allowWhenPaused?: boolean;
 }
 
 const POLL_INTERVAL_MS = 4_000;
 const POLL_TIMEOUT_MS = 120_000;
 
+/** Global image-generation kill switch. UNSET or anything but "true" = paused. */
+export function imageGenEnabled(): boolean {
+  return process.env.IMAGE_GEN_ENABLED === "true";
+}
+
+/** Thrown by generateImages/editImage when the kill switch is off. Callers catch this
+ *  and post IMAGE_GEN_PAUSED_NOTE into their Slack thread instead of failing silently. */
+export class ImageGenPausedError extends Error {
+  constructor() {
+    super("image generation is paused (IMAGE_GEN_ENABLED is not true)");
+    this.name = "ImageGenPausedError";
+  }
+}
+
+export const IMAGE_GEN_PAUSED_NOTE =
+  "Image generation is paused. Nothing was generated, no credits were spent. " +
+  "Copy the prompts, generate the images yourself, and paste them in this thread. " +
+  "Set IMAGE_GEN_ENABLED=true in Vercel and redeploy to re-enable auto-generation.";
+
 function provider(): ImageProvider {
-  return (process.env.IMAGE_PROVIDER || "higgsfield-gpt").toLowerCase() as ImageProvider;
+  return (process.env.IMAGE_PROVIDER || "openai").toLowerCase() as ImageProvider;
 }
 
 /**
@@ -287,11 +321,26 @@ async function elevenLabsGenerateOne(prompt: string): Promise<ImageResult> {
   return downloadToBuffer(out);
 }
 
-// ---- OpenAI gpt-image-2 (the Meta Glasses POV format's auto-generated image) ------
+// ---- OpenAI gpt-image-2 (the DEFAULT image generator, direct API) ------------------
 // Synchronous images endpoint — no Soul, no polling. gpt-image-2 returns base64 in
 // data[0].b64_json (there is no URL response_format for this model); a url is handled
 // defensively in case the account returns one.
-async function openaiGenerateOne(prompt: string): Promise<ImageResult> {
+
+/** Map any requested aspect onto gpt-image-2's supported sizes. Portrait/unknown ->
+ *  1024x1536 (2:3, same geometry hazel produced; srt-reel-render crops portrait stills
+ *  to 9:16 in post). Exported so callers can STAMP the true output size. */
+export function openaiSizeFor(aspect?: string): string {
+  const a = (aspect || "").trim();
+  if (a === "1:1") return "1024x1024";
+  const m = a.match(/^(\d+):(\d+)$/);
+  if (m && Number(m[1]) > Number(m[2])) return "1536x1024";
+  return "1024x1536";
+}
+
+async function openaiGenerateOne(
+  prompt: string,
+  opts?: { aspect?: string; quality?: string }
+): Promise<ImageResult> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -304,7 +353,8 @@ async function openaiGenerateOne(prompt: string): Promise<ImageResult> {
     body: JSON.stringify({
       model: "gpt-image-2",
       prompt,
-      size: POV_IMAGE_SIZE,
+      size: opts?.aspect ? openaiSizeFor(opts.aspect) : POV_IMAGE_SIZE,
+      quality: opts?.quality || process.env.OPENAI_IMAGE_QUALITY || "high",
       n: 1,
     }),
   });
@@ -336,7 +386,9 @@ async function generateOne(
     // Slack thread gets a visible "image failed" message instead of a silent Soul image.
     return higgsfieldGptGenerateOne(prompt, { aspect: aspect ?? sizeToAspect(size), quality });
   }
-  if (prov === "openai") return openaiGenerateOne(prompt);
+  if (prov === "openai") {
+    return openaiGenerateOne(prompt, { aspect: aspect ?? sizeToAspect(size), quality });
+  }
   if (prov === "elevenlabs") return elevenLabsGenerateOne(prompt);
   return higgsfieldGenerateOne(prompt, soulId, size);
 }
@@ -352,6 +404,7 @@ export async function editImageOpenAI(
   prompt: string,
   size?: string
 ): Promise<ImageResult> {
+  if (!imageGenEnabled()) throw new ImageGenPausedError();
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -395,6 +448,9 @@ export async function editImage(opts: {
   try {
     return await editImageOpenAI(opts.image, opts.mimetype, opts.prompt, opts.size);
   } catch (e) {
+    // The kill switch must stay LOUD: callers post the paused note, never a silent
+    // fallback to a fresh generation (which would also throw, but confusingly).
+    if (e instanceof ImageGenPausedError) throw e;
     console.error("[image-gen] editImage failed:", (e as Error).message);
     return null;
   }
@@ -405,6 +461,7 @@ export async function editImage(opts: {
  * yields null at that index so the drop continues with whatever succeeded.
  */
 export async function generateImages(opts: GenerateImagesOpts): Promise<(ImageResult | null)[]> {
+  if (!imageGenEnabled() && !opts.allowWhenPaused) throw new ImageGenPausedError();
   const prov = opts.provider ?? provider();
   const results: (ImageResult | null)[] = [];
   for (let i = 0; i < opts.prompts.length; i++) {

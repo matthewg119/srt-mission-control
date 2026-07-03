@@ -625,6 +625,7 @@ export async function POST(request: NextRequest) {
             channel,
             threadTs: parentThreadTs,
             files: attachedFiles,
+            text: userText,
           });
           if (refHandled) return NextResponse.json({ ok: true });
         }

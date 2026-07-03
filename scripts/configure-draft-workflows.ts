@@ -199,7 +199,7 @@ async function main() {
         min_shots: 3,
         max_shots: 3,
         aspect: isPov ? "3:4" : "9:16",
-        provider: "higgsfield-gpt",
+        provider: "openai",
       },
     };
     const ok = await upsertWorkflow(wf);

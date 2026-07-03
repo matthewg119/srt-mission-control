@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { generateImage } from "@/lib/elevenlabs-media";
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
+import { ImageGenPausedError, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import { getMotionAdapter } from "@/lib/reel/motion-adapter";
 import { stitchClipsRemote } from "@/lib/reel/auto-reel";
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
@@ -772,6 +773,10 @@ async function generateAndPostStill(
   try {
     img = await generatePovImage(scene.image_prompt as string);
   } catch (err) {
+    if (err instanceof ImageGenPausedError) {
+      await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`).catch(() => {});
+      return;
+    }
     img = null;
     console.error(`[scene-runner] still ${slideNumber} threw:`, (err as Error).message);
   }

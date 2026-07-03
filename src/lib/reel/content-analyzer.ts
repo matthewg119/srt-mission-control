@@ -13,6 +13,7 @@ import { slack } from "@/lib/slack-bot";
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
+import { ImageGenPausedError, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import { saveContentExample, pruneReferencesToCap } from "@/lib/reel/content-examples";
 import { POV_GLASSES_TOKEN, POV_GOLD_EXAMPLES } from "@/config/pov-style";
 import { insertJob, getJobByPickerTs, updateJob } from "@/lib/reel/jobs";
@@ -186,7 +187,11 @@ async function postAnalysis(channel: string, threadTs: string, data: VideoAnalys
       imageOk = true;
     }
   } catch (e) {
-    console.error("[content-analyzer] recreate image gen failed:", (e as Error).message);
+    if (e instanceof ImageGenPausedError) {
+      await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`).catch(() => {});
+    } else {
+      console.error("[content-analyzer] recreate image gen failed:", (e as Error).message);
+    }
   }
 
   await slack.postThreadReply(

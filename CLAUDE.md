@@ -80,7 +80,24 @@ META_ADS_TOKEN=            # System-user token with ads_management (Custom Audie
 META_AD_ACCOUNT_ID=        # Numeric ad account id (route prefixes act_). Used to create the exclusion audience.
 META_AUDIENCE_ID=          # "SRT - CRM Master Exclusion" audience id (from /api/admin/create-exclusion-audience)
 META_ADS_API_VERSION=      # Optional, defaults to v21.0
+IMAGE_GEN_ENABLED=         # "true" re-enables AUTO image generation; unset = prompt-first mode (Matthew pastes the images in Slack)
+IMAGE_PROVIDER=            # Image provider override; code default is openai (gpt-image-2 DIRECT from OpenAI)
+POV_IMAGE_PROVIDER=        # POV/workflow-path override; code default openai
+OPENAI_API_KEY=            # gpt-image-2 (ALL image generation + edits)
+OPENAI_IMAGE_QUALITY=      # Optional: low | medium | high (default high)
+HF_CREDENTIALS=            # Higgsfield key — Seedance 2.0 ANIMATION ONLY (images no longer route through it)
 ```
+
+## Image generation rules (2026-07-03)
+- ALL images: gpt-image-2 via the direct OpenAI API. Higgsfield = Seedance animation only.
+  Soul stays banned for generation (Vargas belief-drop excepted, explicit provider).
+- Kill switch: `IMAGE_GEN_ENABLED` unset/false pauses every generation path loudly
+  (`ImageGenPausedError` -> Slack paused note). Workflow sessions then run PROMPT-FIRST:
+  final prompts post as copy blocks, Matthew pastes the images, pasted = approved + saved
+  to the workflow's reference library (`content_examples`, labels `approved_manual`).
+- Session approval chain: copy ✅ -> idea N (mandatory) -> picture ✅ -> prompts ✅ ->
+  images (paste or auto+✅) -> animation `motion N` ✅ -> song -> render ✅ -> drop final
+  MP4 -> variations card. See docs/SOP-content-workflow-session.md.
 
 ## CRM Master Exclusion Sync (Meta)
 Daily cron pushes every Zoho lead + contact (hashed email/phone/name/zip/city/state) into

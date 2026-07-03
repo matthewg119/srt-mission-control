@@ -14,22 +14,28 @@ import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { stripEmDashes } from "@/lib/reel/text";
-import { generateImages, type ImageProvider } from "@/lib/providers/image-gen";
+import {
+  generateImages,
+  ImageGenPausedError,
+  IMAGE_GEN_PAUSED_NOTE,
+  imageGenEnabled,
+  type ImageProvider,
+} from "@/lib/providers/image-gen";
 import { POV_SCENES, POV_SOUL_SIZE, POV_STYLE_VERSION } from "@/config/pov-style";
 import type { ReelSlot } from "@/config/reel-style";
 import { getActiveVertical, type Vertical } from "@/config/verticals";
 
-// Image provider for the POV/workflow scene paths. Default is "higgsfield-gpt" -
-// OpenAI's GPT image model served by the Higgsfield key API (slug openai/hazel) -
-// per Matthew's standing rule: ALL image generation uses the GPT image model, Soul is
-// only for the trained-character (Vargas) belief drop. Overridable per call/workflow
-// via render_options.provider, or globally via POV_IMAGE_PROVIDER.
+// Image provider for the POV/workflow scene paths. Default is "openai" - gpt-image-2
+// from the DIRECT OpenAI API - per Matthew's standing rule (2026-07-03): the Higgsfield
+// key is for Seedance 2.0 animation ONLY, Soul is only for the trained-character
+// (Vargas) belief drop. Overridable per call/workflow via render_options.provider,
+// or globally via POV_IMAGE_PROVIDER.
 export function povImageProvider(): ImageProvider {
-  const p = (process.env.POV_IMAGE_PROVIDER || "higgsfield-gpt").toLowerCase();
+  const p = (process.env.POV_IMAGE_PROVIDER || "openai").toLowerCase();
   if (p === "higgsfield" || p === "elevenlabs" || p === "openai" || p === "higgsfield-gpt") {
     return p as ImageProvider;
   }
-  return "higgsfield-gpt";
+  return "openai";
 }
 
 /** Build the POV image prompt: the vertical's style token + the scene (no text overlay). */
@@ -357,6 +363,11 @@ export interface PovIdeasJob {
 export async function generatePovImagesForJob(job: PovIdeasJob): Promise<number> {
   const start = Date.now();
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  if (!imageGenEnabled()) {
+    // Kill switch: post the paused note and keep the gate open so a later ✅ retries.
+    await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
+    return 0;
+  }
   const provider = povImageProvider();
   const vertical = await getActiveVertical();
 

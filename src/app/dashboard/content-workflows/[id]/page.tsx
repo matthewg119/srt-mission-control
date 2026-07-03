@@ -314,10 +314,10 @@ export default function WorkflowEditorPage() {
           <div>
             <label className={labelCls}>Image model</label>
             <select value={provider} onChange={(e) => setProvider(e.target.value)} className={inputCls}>
-              <option value="">default (gpt image via Higgsfield)</option>
-              <option value="higgsfield-gpt">higgsfield-gpt (GPT image)</option>
+              <option value="">default (gpt-image-2, OpenAI direct)</option>
+              <option value="openai">openai (gpt-image-2 direct)</option>
+              <option value="higgsfield-gpt">higgsfield-gpt (GPT image via Higgsfield)</option>
               <option value="higgsfield">higgsfield (Soul)</option>
-              <option value="openai">openai (direct, needs key)</option>
             </select>
           </div>
           <div>

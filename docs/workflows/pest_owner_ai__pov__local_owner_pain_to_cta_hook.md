@@ -6,7 +6,7 @@
 | avatar | pest_owner_ai |
 | category | pov / callout |
 | status | active · building · refs 0/3 · approved 0/4 |
-| image model | higgsfield-gpt (gpt-image-2) @ 3:4 — hazel renders 2:3, its only portrait |
+| image model | higgsfield-gpt (gpt-image-2 direct) @ 3:4 — portrait renders 1024x1536 (2:3) |
 | song | (none — session asks) |
 | editor | https://mission.srtagency.com/dashboard/content-workflows/pest_owner_ai__pov__local_owner_pain_to_cta_hook |
 
@@ -42,20 +42,20 @@
 
 ## Scenes (seed image prompts — sessions regenerate, these define the LOOK)
 
-### Shot 1 — baseboard treatment, low indoor angle
-- image_prompt: Crouched eye-level POV at a suburban kitchen baseboard in early morning, a latex-gloved right hand guides a slim metal wand tip along the painted white quarter-round molding where it meets worn vinyl tile, a thin steady bead of treatment liquid tracing the seam past a dusty corner joint, scuffed baseboard paint and faint grout lines filling the tall portrait frame, pale warm light filtering from a window off to the left casting soft shadows under the molding.
-- animation: The wand tip slowly tracks left along the baseboard while a faint mist drifts upward and settles along the quarter-round molding.
-- duration: 2s · [last render](https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/c9cf11d8-a656-4ad7-8303-b290db1e83dd.png)
+### Shot 1 — Avatar callout / baseboard treatment
+- image_prompt: First-person Meta-glasses POV looking down at eye-height toward a scuffed white baseboard running along the bottom of a beige drywall living room wall, a latex-gloved right hand entering from the bottom of the frame gripping a stainless B&G extension wand, the narrow fan-tip nozzle held two inches from the baseboard joint and trailing a fine mist of treatment solution along the seam where wall meets laminate flooring, afternoon window light from the left casting a soft diagonal shadow across the baseboard, dust and minor paint chips visible at the wall base adding authentic wear, handheld documentary steadiness with slight natural drift, photorealistic 3:4 portrait framing, no faces no text no logos.
+- animation: The gloved hand slowly drags the sprayer wand left along the baseboard while a faint mist settles at the wall joint.
+- duration: 2s · [last render](https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/1f770a37-1ee9-474d-91df-0decb5e45655.png)
 
-### Shot 2 — eave nest work, looking up outdoors
-- image_prompt: Eye-level gaze tilted sharply upward toward a weathered suburban fascia board, a gloved hand and forearm in a tan nitrile work glove entering the upper portion of the tall portrait frame as the crack-and-crevice extension tip of a compressed-air aerosol wand is pressed firmly into the gap between the fascia and soffit where a papery gray-yellow jacket nest bulges from the shadow, the rough-sawn wood overhang showing peeling white paint and old water stains, a pale early-morning sky fading from soft blue to white filling the background behind the roofline, natural diffused dawn light casting faint shadows across the nest texture, handheld slight camera tilt giving the shot a working documentary feel.
-- animation: The gloved hand steadies the crack-and-crevice tip against the nest opening while loose papery nest fibers flutter slightly in the breeze.
-- duration: 2s · [last render](https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/0f90d089-7216-4d6b-9452-af514cf8bdeb.png)
+### Shot 2 — Hard truth and pain callout / eave nest work
+- image_prompt: First-person Meta-glasses POV tilted upward at the underside of a weathered cream-colored vinyl soffit on a single-story suburban ranch home, a gray-brown paper wasp nest roughly the size of a grapefruit clinging to the soffit seam where it meets the fascia board, a green-nitrile-gloved forearm and the ribbed plastic extension wand of a B&G compressed-air sprayer entering the frame from the bottom edge and angling upward toward the nest, the overcast midday sky filling the upper third of the tall portrait frame with flat white light that casts soft even shadows across the textured soffit panels, surrounding trim paint slightly peeling at the corners, a leafy oak branch visible at the far right edge, handheld slight camera tilt giving a genuine working-angle documentary feel, no faces no text no logos.
+- animation: The camera tilts slowly upward following the extension wand as it approaches the nest, slight natural hand tremor adding realism.
+- duration: 2s · [last render](https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/054f0e40-8549-441e-af2b-39bbdf11b7d4.png)
 
-### Shot 3 — perimeter barrier, walking angle
-- image_prompt: Eye-level POV walking slowly along a weathered concrete slab foundation, a gloved right hand gripping a handheld granule spreader held low and angled against the slab edge, a thin even line of white granules settling into the dew-damp soil, scattered brown oak leaves and sparse crabgrass pressed against the foundation, soft early-morning sidelight raking long shadows across the rough concrete surface and exposing the texture of the treatment line, the suburban lawn and a wood fence panel visible in the shallow background.
-- animation: The granule spreader glides steadily forward along the slab edge as granules scatter onto the damp soil in a continuous arc.
-- duration: 2s · [last render](https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/d73c8dbf-3a0e-4682-a01f-2d241fbcbd71.png)
+### Shot 3 — Logical reason and dream outcome and CTA / perimeter barrier
+- image_prompt: First-person Meta-glasses POV at eye-height walking slowly along the sun-lit concrete foundation of a single-story suburban ranch home, gaze tracking down and forward along the rough grey foundation wall meeting a narrow mulch bed, a tan nitrile-gloved right hand entering from the bottom of the frame gripping a white poly sprayer wand with a fan-tip nozzle, directing a low steady chemical stream in a tight band where the foundation meets the soil, a well-kept green bermuda lawn stretching to the right under midmorning natural light, the shadow of the technician falling faintly across the concrete, handheld documentary steadiness with slight forward motion blur suggesting a slow walking pace, photorealistic 3:4 portrait framing.
+- animation: The camera moves forward at a slow walking pace as the sprayer wand traces a continuous treatment line along the foundation, ground passing steadily underfoot.
+- duration: 2s · [last render](https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/97635e5c-c7eb-4662-959a-5e58a07fa8bc.png)
 
 ## Sourcing (fill this workflow's reference library)
 
@@ -75,9 +75,9 @@ You are a short-form content researcher. I make first-person Ray-Ban Meta smart-
 13s 3-shot first-person Meta-glasses POV b-roll of real pest-control WORK: three different angles of the job (baseboard treatment, eave/nest work, perimeter barrier) carrying the timed pain-to-CTA copy. The work is the subject - never a person.
 
 My piece has exactly 3 shots. Find footage that covers each:
-1. baseboard treatment, low indoor angle
-2. eave nest work, looking up outdoors
-3. perimeter barrier, walking angle
+1. Avatar callout / baseboard treatment
+2. Hard truth and pain callout / eave nest work
+3. Logical reason and dream outcome and CTA / perimeter barrier
 
 Give me 15-20 specific places to look: exact hashtags, exact YouTube search strings,
 exact subreddits or creator accounts. For each, say what I should expect to find and
