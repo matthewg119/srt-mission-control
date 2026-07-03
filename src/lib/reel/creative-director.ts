@@ -533,6 +533,15 @@ export async function generatePicturePlan(args: {
     avatarBlock(args.vertical),
     "",
     workflowBlock(args.workflow),
+    ...(args.workflow?.visual_rules?.length
+      ? [
+          "",
+          "NON-NEGOTIABLE: every scene's image_prompt MUST comply with the WORKFLOW VISUAL RULES",
+          "above; when they conflict with the storyboard or the avatar look, the rules win. When",
+          "the rules call for POV b-roll of the work, vary the angle/job between scenes - never",
+          "the subject matter, and never a banned subject.",
+        ]
+      : []),
     "",
     "HARD RULES: image_prompt has no text overlay; never invent guarantees/numbers/rates/terms;",
     "never use em dashes.",
@@ -684,6 +693,15 @@ export async function generatePictureIdeas(args: {
     avatarBlock(args.vertical),
     "",
     workflowBlock(args.workflow),
+    ...(args.workflow.visual_rules?.length
+      ? [
+          "",
+          "NON-NEGOTIABLE: every shot gist MUST comply with the WORKFLOW VISUAL RULES above; they",
+          "override the avatar look and any instinct to add people or drama. When the rules call",
+          "for POV b-roll of the work, each idea varies the ANGLE and the JOB (different task, area,",
+          "camera height) - never the subject matter, and never a banned subject.",
+        ]
+      : []),
     "",
     "HARD RULES: no text/captions/logos inside the images; never use em dashes.",
   ].join("\n");
@@ -718,15 +736,16 @@ export async function reslotCopyToStructure(args: {
   const roles = args.workflow.copy_structure ?? [];
   if (!roles.length) return [];
   const system = [
-    "You are Vektor. Map the operator's pasted copy onto the labeled boxes below. Assign each",
-    "pasted line to the box it best fits, in order. Do NOT rewrite the lines; keep the operator's",
-    "exact words. If there are more pasted lines than boxes, merge the closest ones; if fewer,",
-    "leave the extra boxes empty.",
+    "You are Vektor. Fit the operator's pasted copy into ALL the labeled boxes below. Prefer his",
+    "exact words. When the line counts do not match, split, merge, condense, or lightly rewrite so",
+    "EVERY box gets one line that serves its role and guidance, preserving his wording and meaning",
+    "as much as possible. Never leave a box empty when there is source material to draw from.",
     "",
     "COPY STRUCTURE:",
     rolesBlock(args.workflow),
     "",
-    "HARD RULES: keep the operator's wording; never use em dashes.",
+    "HARD RULES: never invent claims, numbers, rates, or guarantees that are not in the pasted",
+    "copy; never use em dashes.",
   ].join("\n");
 
   const { data } = await callClaudeJSON<CopyLinesResult>({

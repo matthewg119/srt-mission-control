@@ -81,9 +81,17 @@ The fixes/features:
    different copy next time. An empty library auto-creates without asking.
 4. **Attach the audio file in Slack** to set the workflow's song; `sync auto` reads its beat grid
    (render-service `analyze-song`) and snaps shot cuts + text drops to the beat.
-5. **Production gate**: drop 3 reference creatives (screenshots of your manual edit, videos,
-   the audio) in the session thread, then `finish workflow` renders the 4th and marks the
-   workflow IN PRODUCTION. `map` shows all of it as a rendered image.
+5. **References are optional (2026-07-03)**: drop reference creatives (screenshots, videos,
+   the audio) in the session thread anytime to progress `refs N/3`; `finish workflow` no
+   longer halts on them — it notes the count and moves straight to the render card. At 3/3
+   it still flips the workflow IN PRODUCTION. `map` shows all of it as a rendered image.
+5b. **Session guard (2026-07-03)**: while a session is open, unrecognized replies get a
+   "here's what I expected" nudge instead of falling into the generic image-drop flow.
+   Bare numbers work at every picker (`1` = `workflow 1` / `idea 1`), typing a workflow's
+   name selects it, and `cancel` closes the session. Pasting your own copy block skips the
+   copy-card ✅: the fitted copy (every box filled, mismatches split/condensed) + 3 visual
+   directions post immediately, and approved images jump straight to the render card when
+   the workflow already has a song.
 6. **Onboarding to LIVE**: once in production, every ✅-approved render (base or remix) counts
    as an approved variation; at 4 the workflow flips LIVE. The variations double as the
    examples gallery on `/dashboard/content-workflows/<id>`.
@@ -100,16 +108,18 @@ The fixes/features:
 - `headline N` or paste your own headline (one line)
 - **paste your READY copy (3+ lines)** — anywhere after the avatar: jumps to the workflow library
 - `title N` / `verbal N` / `pov N` / `hook <text>` — pick a hook
-- `workflow N` — use a workflow (your pasted copy gets slotted into its boxes)
+- `workflow N` (or bare `N`, or the workflow's name) — use a workflow (your pasted copy gets fitted into its boxes, then the ideas gate posts right away)
 - `template N` — same, explicitly: re-slot YOUR copy into its structure (cross-avatar picks clone first)
 - `create` / `new workflow` — productize your pasted copy into a NEW saved workflow
-- `line N <text>` — edit one labeled copy box; paste a full block to re-slot it
-- `idea N` (✅ = idea 1) — pick a visual direction at the ideas gate (posts after copy ✅, BEFORE any image generates)
+- `line N <text>` — edit one labeled copy box (works at the ideas gate too); paste a full block to re-slot it
+- `idea N` or bare `N` (✅ = idea 1) — pick a visual direction at the ideas gate (BEFORE any image generates)
 - `more ideas` / `more hooks` — redraw the 3 directions, or back up for fresh hook options
-- `song <key|url>` or **attach the audio file** — set the song
+- `redo N <new prompt>` — regenerate one scene image (works after the render card too)
+- `song <key|url>` or **attach the audio file** — set the song (skipped when the workflow already has one: images ✅ goes straight to the render card)
 - `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings
-- drop screenshots/videos in the thread — reference creatives (3 needed)
-- `finish workflow` — render the 4th creative and mark the workflow IN PRODUCTION
+- drop screenshots/videos in the thread — reference creatives (optional; 3 progress onboarding)
+- `finish workflow` — flips IN PRODUCTION at 3/3 refs; below that it just notes the count and moves to the render
+- `cancel` — close the session (frees the channel for image drops / new sessions)
 - `remix N` / `remixes` — after a render: 16 narrative variations (propaganda, indoctrination, direct CTA, mini story, horror, testimonial, myth bust, us-vs-them, insider secret, stat shock, before/after, objection killer, seasonal FOMO, authority, relatable, dream outcome) of the same workflow + song; ✅ renders with the same images, `new images` regenerates creatives from the new copy
 - `save as <name>` / `save draft` / `modify copy` — when a paste does not match the structure
 - `map` / `library` (optionally `map <avatar>`) — the library as a labeled image

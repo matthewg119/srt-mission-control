@@ -69,6 +69,7 @@ import {
   addApprovedVariation,
 } from "@/lib/reel/workflow-author";
 import { analyzeSong, snapSpecToBeats } from "@/lib/reel/beat-sync";
+import { postWorkflowMap } from "@/lib/reel/workflow-map";
 import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
 import type { Workflow, WorkflowScene, RenderSpec, RenderMode } from "@/config/workflows";
 
@@ -86,6 +87,33 @@ function idxFrom(text: string, verb: string): number | null {
 // A pasted line at the `headlines` stage is treated as Matthew's own headline UNLESS it is one
 // of our commands.
 const COMMAND_RE = /^\s*(go|map|library|new|vektor|avatar|workflow|template|create|finish|remixes|remix|headline|title|verbal|pov|hook|pick|song|sequence|sequences|idea|ideas|more|\d{1,2})\b/i;
+
+// Stage guard: while a session is ACTIVE, an unrecognized reply is consumed with a "here's what
+// I expected" nudge instead of falling through to the generic content-drop handler (which would
+// post the welcome message, or hijack the thread into a full production-package build). The
+// `cancel` command is the escape hatch — never ship a new stage here without a nudge entry.
+const STAGE_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
+  avatar: "Didn't catch that. Reply the avatar's number from the list, or `new` for a new avatar. (`cancel` ends this session.)",
+  headlines: "Didn't catch that. Reply `headline N`, type your own headline, or paste a full copy block (3+ lines).",
+  hookset: "Didn't catch that. Reply `title N` / `verbal N` / `pov N`, `hook <your hook>`, or paste your copy block.",
+  captions: "Didn't catch that. Reply `pick <caption#> <storyboard#>`, e.g. `pick 1 1`.",
+  workflow_pick: "Didn't catch that. Reply `workflow N` (or just the number), `template N`, `create`, or `map`.",
+  structured_copy: "Didn't catch that. Edit with `line N <text>`, paste a full block to re-slot, or react ✅ on the copy card.",
+  remix_copy: "Didn't catch that. `line N <text>` edits, `new images` regenerates the creatives, ✅ renders with the same images.",
+  picture_ideas: "Didn't catch that. Reply `idea N` (or just the number), `line N <text>` to edit the copy, `more ideas`, or `more hooks`.",
+  picture: "Didn't catch that. `redo N <new prompt>` tweaks a scene, `song <key|url>` moves on, or ✅ the picture card to generate the images.",
+  render: "Generating the images now — hang tight. Once they land, `redo N <new prompt>` tweaks any of them.",
+  authoring: "Didn't catch that. ✅ the render card for the build prompt, or `redo N <new prompt>` / `modify copy` / `song <key|url>`.",
+  remix_offer: "Didn't catch that. Reply `remix N`, `remixes`, `modify copy`, or `save as <name>`.",
+};
+
+async function consumeWithNudge(job: ContentJob, channel: string): Promise<boolean> {
+  if (job.status !== "active") return false; // done/skipped/error sessions don't own the channel
+  const nudge = STAGE_NUDGES[job.stage];
+  if (!nudge) return false;
+  await slack.postThreadReply(channel, job.slack_thread_ts, nudge).catch(() => {});
+  return true;
+}
 function isCommand(t: string): boolean {
   return COMMAND_RE.test(t.trim());
 }
@@ -209,6 +237,14 @@ export async function handleVektorMessage(args: {
   const data = job.data;
   const t = args.text.trim();
 
+  // `cancel` — close the session so the channel stops routing here. This is the escape hatch
+  // for the stage guard; without it an active session would swallow the channel forever.
+  if (/^\s*(cancel|stop\s+session)\s*$/i.test(t) && job.status === "active") {
+    await updateJob(job, { stage: "done", status: "done" });
+    await slack.postThreadReply(args.channel, job.slack_thread_ts, "Session closed. `go` starts a new one.");
+    return true;
+  }
+
   // `go` avatar-picker session: number picks an avatar; `new` starts avatar creation.
   if (job.format_id === "avatar_pick") {
     if (/^\s*new\b/i.test(t)) {
@@ -221,11 +257,18 @@ export async function handleVektorMessage(args: {
       await updateJob(job, { stage: "done", status: "done" });
       return startAvatarSession({ channel: args.channel, verticalId: data.avatar_ids[n - 1] });
     }
-    return false;
+    return consumeWithNudge(job, args.channel);
   }
 
   if (job.format_id !== "workflow") return false;
   const threadTs = job.slack_thread_ts;
+
+  // `map` / `library` — the whole library as an image, mid-session (the menu footer promises it;
+  // route.ts only catches the top-level form).
+  if (/^\s*(map|library)\s*$/i.test(t)) {
+    await postWorkflowMap(args.channel, job.vertical_id);
+    return true;
+  }
 
   // song / sequences (available once a draft workflow exists).
   const songMatch = /^\s*song\s+(.+)\s*$/i.exec(t);
@@ -311,11 +354,14 @@ export async function handleVektorMessage(args: {
     if (!wfFin) return false;
     const refs = wfFin.reference_media?.length ?? 0;
     if (refs < 3) {
+      // References are OPTIONAL — never halt a session on them. Note the count, keep the
+      // onboarding tracker honest (no in_production flip), and move straight to the render.
       await slack.postThreadReply(
         args.channel,
         threadTs,
-        `*${wfFin.name}* has ${refs}/3 reference creatives. Drop ${3 - refs} more screenshot(s)/video(s) of the manual edit in this thread (plus the song), then \`finish workflow\` again.`
+        `*${wfFin.name}* has ${refs}/3 reference creatives — optional. Drop screenshots/videos of reels you like in this thread anytime to progress onboarding. Moving on to the render.`
       );
+      await postRenderConfirmCard(args.channel, threadTs, job, wfFin, data.song_ref ?? wfFin.song_ref ?? null);
       return true;
     }
     await setProductionStatus(wfFin.id, "in_production");
@@ -490,7 +536,7 @@ export async function handleVektorMessage(args: {
     const hi = idxFrom(t, "headline");
     if (hi && Array.isArray(data.headlines) && data.headlines[hi - 1]) headline = data.headlines[hi - 1];
     else if (t && !isCommand(t)) headline = t;
-    if (!headline) return false;
+    if (!headline) return consumeWithNudge(job, args.channel);
     await updateJob(job, { stage: "workflow_pick", data: { ...job.data, chosen_headline: headline } });
     await postWorkflowMenu(args.channel, threadTs, job.vertical_id, {});
     return true;
@@ -532,7 +578,7 @@ export async function handleVektorMessage(args: {
       pastedCopy = t;
       hook = t.split("\n")[0].trim();
     }
-    if (!hook) return false;
+    if (!hook) return consumeWithNudge(job, args.channel);
 
     // Workflow-first order: the workflow is bound, run its copy/picture path with this hook.
     if (data.workflow_id) {
@@ -576,7 +622,7 @@ export async function handleVektorMessage(args: {
   // Stage: captions -> pick caption + storyboard -> the WORKFLOW picker (copy-first).
   if (job.stage === "captions") {
     const pm = /^\s*pick\s+(\d{1,2})\s+(\d{1,2})\s*$/i.exec(t);
-    if (!pm) return false;
+    if (!pm) return consumeWithNudge(job, args.channel);
     const caption = data.captions3?.[parseInt(pm[1], 10) - 1];
     const storyboard = data.storyboards3?.[parseInt(pm[2], 10) - 1];
     if (!caption || !storyboard) {
@@ -614,15 +660,29 @@ export async function handleVektorMessage(args: {
       waitUntil(createWorkflowFromPastedCopy(args.channel, threadTs, job));
       return true;
     }
+    const menu = data.workflow_menu ?? [];
     const wi = idxFrom(t, "workflow");
     const tmpl = idxFrom(t, "template");
-    const pickIdx = wi ?? tmpl;
-    if (!pickIdx) return false;
+    let pickIdx = wi ?? tmpl;
+    // Bare "1" picks like the avatar picker; the workflow's NAME (typed or copied from the
+    // menu) picks too — either way, never fall through to the generic content handler.
+    if (!pickIdx && /^\d{1,2}$/.test(t)) pickIdx = parseInt(t, 10);
+    if (!pickIdx && !t.includes("\n") && t.length >= 4) {
+      const q = t.toLowerCase();
+      const exact = menu.findIndex((m) => m.name.toLowerCase() === q);
+      if (exact >= 0) pickIdx = exact + 1;
+      else {
+        const partial = menu
+          .map((m, i) => ({ i, name: m.name.toLowerCase() }))
+          .filter((m) => m.name.includes(q) || q.includes(m.name));
+        if (partial.length === 1) pickIdx = partial[0].i + 1; // ambiguous names never pick
+      }
+    }
+    if (!pickIdx) return consumeWithNudge(job, args.channel);
     if (tmpl && !data.pasted_copy) {
       await slack.postThreadReply(args.channel, threadTs, "Nothing pasted yet. Paste your copy block first, or use `workflow N`.");
       return true;
     }
-    const menu = data.workflow_menu ?? [];
     const chosen = menu[pickIdx - 1];
     if (!chosen) {
       await slack.postThreadReply(args.channel, threadTs, "That number is out of range. Reply `workflow N` from the list.");
@@ -786,14 +846,36 @@ export async function handleVektorMessage(args: {
       );
       return true;
     }
-    return false;
+    return consumeWithNudge(job, args.channel);
   }
 
   // Stage: picture_ideas -> `idea N` locks a visual direction; `more ideas` redraws the card;
   // `more hooks` regenerates the hook menu for this workflow (more options before committing).
   if (job.stage === "picture_ideas") {
-    const ii = idxFrom(t, "idea");
+    const ii = idxFrom(t, "idea") ?? (/^\d{1,2}$/.test(t) ? parseInt(t, 10) : null);
     if (ii) return pickPictureIdea(job, args.channel, ii);
+    // `line N <text>` still edits the copy at the ideas gate (the picture always builds from
+    // the latest lines). The pickerTs stays on the ideas card so ✅ keeps meaning "idea 1".
+    const lm = /^\s*line\s+(\d{1,2})\s+(.+)\s*$/i.exec(t);
+    if (lm && data.workflow_id) {
+      const wfL = await loadWorkflow(data.workflow_id);
+      const lines = data.structured_copy ?? [];
+      const idx = parseInt(lm[1], 10) - 1;
+      if (!wfL || idx < 0 || idx >= lines.length) {
+        await slack.postThreadReply(args.channel, threadTs, `Line ${idx + 1} is out of range (1 to ${lines.length}).`);
+        return true;
+      }
+      const next = lines.map((l, i) => (i === idx ? { ...l, text: lm[2].trim() } : l));
+      await updateJob(job, { data: { ...job.data, structured_copy: next } });
+      await postStructuredCopyCard(
+        args.channel,
+        threadTs,
+        wfL,
+        next,
+        "Updated. Still at the ideas gate — reply `idea N` (or ✅ the ideas card)."
+      );
+      return true;
+    }
     if (/^\s*(more\s+ideas|ideas)\s*$/i.test(t)) {
       // Back to structured_copy for a beat so startPictureIdeas re-enters cleanly.
       await updateJob(job, { stage: "structured_copy" });
@@ -837,11 +919,12 @@ export async function handleVektorMessage(args: {
       );
       return true;
     }
-    return false;
+    return consumeWithNudge(job, args.channel);
   }
 
-  // Stage: picture -> `redo N <new prompt>` regenerates one scene's image.
-  if (job.stage === "picture") {
+  // Stage: picture / authoring -> `redo N <new prompt>` regenerates one scene's image (works
+  // after the render-confirm card too, which parks the stage at authoring).
+  if (job.stage === "picture" || job.stage === "authoring") {
     const rm = /^\s*redo\s+(\d{1,2})\s+(.+)\s*$/i.exec(t);
     if (rm && data.workflow_id) {
       const idx = parseInt(rm[1], 10) - 1;
@@ -876,10 +959,12 @@ export async function handleVektorMessage(args: {
         return true;
       }
     }
-    return false;
+    return consumeWithNudge(job, args.channel);
   }
 
-  return false;
+  // Catch-all for stages with no text branch (render, remix_offer, ...): consume with the
+  // stage's nudge so the generic content handler never hijacks an active session thread.
+  return consumeWithNudge(job, args.channel);
 }
 
 /** Enrich a scene prompt on the avatar's references + THIS workflow's visual rules, then
@@ -976,14 +1061,27 @@ export async function handlePictureReaction(args: {
           const base = specFromWorkflow(wf);
           const filled = base ? applyCopyToSpec(base, job.data.structured_copy) : null;
           if (filled) await slack.postThreadReply(args.channel, threadTs, buildVideoDescription(wf, filled));
-          await slack.postThreadReply(
-            args.channel,
-            threadTs,
-            [
-              "Images done and saved to the library. Tweak any with `redo <n> <new prompt>`.",
-              "Add the song with `song <key|url>` and I will confirm the render mode, then hand you the Claude Code prompt to build it.",
-            ].join("\n")
-          );
+          // Song already on the session/workflow -> approved images flow STRAIGHT into the
+          // render-confirm card. The song ask is the only allowed gate, and only when missing.
+          const songRef = job.data.song_ref ?? wf.song_ref ?? null;
+          if (songRef) {
+            await slack.postThreadReply(
+              args.channel,
+              threadTs,
+              "Images done and saved to the library. Tweak any with `redo <n> <new prompt>` — moving to the render."
+            );
+            const freshJob = await getLatestJobByThread(threadTs);
+            await postRenderConfirmCard(args.channel, threadTs, freshJob ?? job, wf, songRef);
+          } else {
+            await slack.postThreadReply(
+              args.channel,
+              threadTs,
+              [
+                "Images done and saved to the library. Tweak any with `redo <n> <new prompt>`.",
+                "Add the song with `song <key|url>` and I will confirm the render mode, then hand you the Claude Code prompt to build it.",
+              ].join("\n")
+            );
+          }
         } else {
           await slack.postThreadReply(
             args.channel,
@@ -1061,6 +1159,10 @@ async function startStructuredCopyBuild(
     storyboard: data.chosen_storyboard,
   };
   const pastedCopy = opts.pastedCopy ?? data.pasted_copy;
+  // A real pasted block (3+ lines) is Matthew's own words — pre-approved by definition, so the
+  // fitted copy card posts for reference and the IDEAS GATE follows immediately (no ✅ wait).
+  // A 1-line typed hook also lands in pasted_copy via the hookset branch and keeps the ✅ gate.
+  const isPasted = Boolean(pastedCopy && looksLikePastedCopy(pastedCopy));
   waitUntil(
     (async () => {
       try {
@@ -1069,6 +1171,20 @@ async function startStructuredCopyBuild(
           ? await reslotCopyToStructure({ vertical, workflow: wf, pastedBlock: pastedCopy })
           : await generateStructuredCopy({ vertical, workflow: wf, seed });
         const fresh = await getLatestJobByThread(threadTs);
+        if (isPasted) {
+          // pickerTs stays OFF this card so a late ✅ on it resolves to no job (idempotent).
+          await postStructuredCopyCard(
+            channel,
+            threadTs,
+            wf,
+            lines,
+            "Your copy, fitted to the boxes. Edit any line with `line N <text>` — the picture always uses the latest lines."
+          );
+          if (fresh) await updateJob(fresh, { data: { ...fresh.data, structured_copy: lines } });
+          const fresh2 = await getLatestJobByThread(threadTs);
+          if (fresh2) await startPictureIdeas(fresh2, channel);
+          return;
+        }
         const card = await postStructuredCopyCard(channel, threadTs, wf, lines);
         const cardTs = (card as { ts?: string }).ts;
         if (fresh)
