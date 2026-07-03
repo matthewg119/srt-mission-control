@@ -29,6 +29,7 @@ import {
 import { generatePovImage, uploadToReels } from "@/lib/reel/pov";
 import { enrichScene } from "@/lib/reel/prompt-enrich";
 import { saveContentExample } from "@/lib/reel/content-examples";
+import { fetchVideoFrames } from "@/lib/reel/content-analyzer";
 import { loadWorkflow, listWorkflows, resolveSong } from "@/config/workflows";
 import { loadVertical, listVerticals } from "@/config/verticals";
 import {
@@ -70,6 +71,7 @@ import {
 } from "@/lib/reel/workflow-author";
 import { analyzeSong, snapSpecToBeats } from "@/lib/reel/beat-sync";
 import { postWorkflowMap } from "@/lib/reel/workflow-map";
+import { postSourcingCard } from "@/lib/reel/sourcing-worksheet";
 import { startNewAvatar, parseNewAvatar } from "@/lib/reel/avatar-create";
 import type { Workflow, WorkflowScene, RenderSpec, RenderMode } from "@/config/workflows";
 
@@ -267,6 +269,19 @@ export async function handleVektorMessage(args: {
   // route.ts only catches the top-level form).
   if (/^\s*(map|library)\s*$/i.test(t)) {
     await postWorkflowMap(args.channel, job.vertical_id);
+    return true;
+  }
+  // `worksheet` / `sources` [name|number] — the content-sourcing card. Bare form inside a
+  // session shows the CURRENT workflow's card.
+  const wsMatch = /^\s*(?:worksheet|sources)(?:\s+(.+))?\s*$/i.exec(t);
+  if (wsMatch) {
+    await postSourcingCard({
+      channel: args.channel,
+      threadTs,
+      arg: wsMatch[1]?.trim(),
+      workflowId: data.workflow_id,
+      verticalId: job.vertical_id,
+    });
     return true;
   }
 
@@ -941,15 +956,10 @@ export async function handleVektorMessage(args: {
               wf.scenes[idx].image_url = rendered?.url ?? wf.scenes[idx].image_url ?? null;
               await upsertWorkflow(wf);
               if (rendered) {
+                // NOTE: generated images are NOT saved to content_examples — our own outputs
+                // must never become reference frames (that's how wasp shots leaked into a
+                // storytime). Outputs live on the workflow (scenes.image_url) + galleries.
                 await slack.uploadFile(args.channel, `scene${idx + 1}.png`, rendered.buffer, rendered.mimetype, threadTs);
-                await saveContentExample({
-                  verticalId: vid,
-                  sourcePath: rendered.url,
-                  storyboard: { hook: wf.name, labels: ["generated", "pov"], difficulty: "medium", shots: [] },
-                  labels: ["generated", "pov"],
-                  difficulty: "medium",
-                  frameUrls: [rendered.url],
-                });
               }
             } catch (e) {
               console.error("[workflow-pipeline] redo scene failed:", (e as Error).message);
@@ -980,6 +990,9 @@ async function renderScene(
       vertical,
       formatGroup: String(workflow?.category ?? "pov"),
       extraRules: workflow?.visual_rules,
+      workflow: workflow
+        ? { id: workflow.id, category: String(workflow.category), description: workflow.description ?? null }
+        : null,
     }).catch(() => imagePrompt);
     const img = await generatePovImage(enriched, {
       provider: workflow?.render_options?.provider as ImageProvider | undefined,
@@ -1038,15 +1051,8 @@ export async function handlePictureReaction(args: {
           if (rendered) {
             scene.image_url = rendered.url;
             scene.image_approved = true;
+            // Generated images intentionally NOT saved to content_examples (see redo path note).
             await slack.uploadFile(args.channel, `scene${i + 1}.png`, rendered.buffer, rendered.mimetype, threadTs);
-            await saveContentExample({
-              verticalId: job.vertical_id,
-              sourcePath: rendered.url,
-              storyboard: { hook: wf.name, labels: ["generated", "pov"], difficulty: "medium", shots: [] },
-              labels: ["generated", "pov"],
-              difficulty: "medium",
-              frameUrls: [rendered.url],
-            });
           } else {
             await slack.postThreadReply(args.channel, threadTs, `Scene ${i + 1} image failed. Retry with \`redo ${i + 1} <prompt>\`.`);
           }
@@ -1068,7 +1074,7 @@ export async function handlePictureReaction(args: {
             await slack.postThreadReply(
               args.channel,
               threadTs,
-              "Images done and saved to the library. Tweak any with `redo <n> <new prompt>` — moving to the render."
+              "Images done. Tweak any with `redo <n> <new prompt>` — moving to the render."
             );
             const freshJob = await getLatestJobByThread(threadTs);
             await postRenderConfirmCard(args.channel, threadTs, freshJob ?? job, wf, songRef);
@@ -1077,7 +1083,7 @@ export async function handlePictureReaction(args: {
               args.channel,
               threadTs,
               [
-                "Images done and saved to the library. Tweak any with `redo <n> <new prompt>`.",
+                "Images done. Tweak any with `redo <n> <new prompt>`.",
                 "Add the song with `song <key|url>` and I will confirm the render mode, then hand you the Claude Code prompt to build it.",
               ].join("\n")
             );
@@ -1087,7 +1093,7 @@ export async function handlePictureReaction(args: {
             args.channel,
             threadTs,
             [
-              "Images done and saved to the library.",
+              "Images done.",
               "Tweak any with `redo <n> <new prompt>`.",
               "Set a song with `song <key|url>`, or save an audio variant with `sequence <song> [label]`.",
             ].join("\n")
@@ -2054,6 +2060,7 @@ export async function handleWorkflowReferenceUpload(args: {
   const wfId = job.data.workflow_id;
   const threadTs = job.slack_thread_ts;
 
+  const wfForRefs = await loadWorkflow(wfId);
   let count: number | null = null;
   for (const f of media.slice(0, 5)) {
     try {
@@ -2062,6 +2069,25 @@ export async function handleWorkflowReferenceUpload(args: {
       if (!url) continue;
       const kind = (f.mimetype ?? "").startsWith("video/") ? "video" : "screenshot";
       count = await addWorkflowReference(wfId, { kind, url });
+      // Every dropped ref ALSO lands in THIS workflow's reference library, so it grounds
+      // every future image the workflow generates (loadReferenceFrames workflowId tier).
+      // Videos get frames sampled; a sampling failure still saves the row (logged).
+      let frameUrls: string[] = [url];
+      if (kind === "video") {
+        const sampled = await fetchVideoFrames(url, 4).catch(() => ({ ok: false as const }));
+        frameUrls = sampled.ok && sampled.frames?.length ? sampled.frames : [];
+        if (!frameUrls.length)
+          console.error("[workflow-pipeline] reference video frame sampling failed; row saved without frames:", url);
+      }
+      await saveContentExample({
+        verticalId: job.vertical_id,
+        workflowId: wfId,
+        sourcePath: url,
+        storyboard: { hook: wfForRefs?.name ?? wfId, shots: [] },
+        labels: ["workflow_reference", kind],
+        difficulty: "medium",
+        frameUrls,
+      });
     } catch (e) {
       console.error("[workflow-pipeline] reference upload failed:", (e as Error).message);
     }
@@ -2074,13 +2100,14 @@ export async function handleWorkflowReferenceUpload(args: {
     );
     return true;
   }
-  const wf = await loadWorkflow(wfId);
+  const wf = wfForRefs;
   await slack.postThreadReply(
     args.channel,
     threadTs,
-    count >= 3
+    (count >= 3
       ? `Reference ${count}/3 saved for *${wf?.name ?? wfId}*. Reply \`finish workflow\` to render the production test and put it IN PRODUCTION.`
-      : `Reference ${count}/3 saved for *${wf?.name ?? wfId}*. ${3 - count} more (screenshots of the manual edit, like your Reels timeline) and it can go into production.`
+      : `Reference ${count}/3 saved for *${wf?.name ?? wfId}*. ${3 - count} more (screenshots of reels you like) and it can go into production.`) +
+      "\nSaved to this workflow's reference library — future images will be grounded on it."
   );
   return true;
 }

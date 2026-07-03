@@ -57,6 +57,7 @@ import {
   handleWorkflowReferenceUpload,
 } from "@/lib/reel/workflow-pipeline";
 import { postWorkflowMap } from "@/lib/reel/workflow-map";
+import { postSourcingCard } from "@/lib/reel/sourcing-worksheet";
 import {
   startNewAvatar,
   parseNewAvatar,
@@ -368,6 +369,14 @@ export async function POST(request: NextRequest) {
         const mapMatch = /^\s*(?:map|library)(?:\s+([a-z][a-z0-9_]*))?\s*$/i.exec(userText);
         if (mapMatch) {
           await postWorkflowMap(channel, mapMatch[1]?.toLowerCase());
+          return NextResponse.json({ ok: true });
+        }
+        // `worksheet` / `sources` [name|number] -> the content-sourcing card (what real
+        // reference clips to find for a workflow + where). Must match BEFORE the channel
+        // session fallback so an active session's stage guard can't swallow it.
+        const wsMatch = /^\s*(?:worksheet|sources)(?:\s+(.+))?\s*$/i.exec(userText);
+        if (wsMatch) {
+          await postSourcingCard({ channel, arg: wsMatch[1]?.trim() });
           return NextResponse.json({ ok: true });
         }
         const newAvatar = parseNewAvatar(userText);

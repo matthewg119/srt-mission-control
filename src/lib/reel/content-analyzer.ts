@@ -57,8 +57,9 @@ interface VideoFramesResult {
 }
 
 /** POST the public video URL to the render-service video-frames endpoint. Mirrors
- * fetchIgFrames: derive the endpoint from REEL_RENDER_URL if VIDEO_FRAMES_URL isn't set. */
-async function fetchVideoFrames(url: string, count: number): Promise<VideoFramesResult> {
+ * fetchIgFrames: derive the endpoint from REEL_RENDER_URL if VIDEO_FRAMES_URL isn't set.
+ * Exported: workflow-pipeline samples dropped reference videos with it. */
+export async function fetchVideoFrames(url: string, count: number): Promise<VideoFramesResult> {
   const endpoint =
     process.env.VIDEO_FRAMES_URL ||
     (process.env.REEL_RENDER_URL ? process.env.REEL_RENDER_URL.replace(/render-reel\/?$/, "video-frames") : "");

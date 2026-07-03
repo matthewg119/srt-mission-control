@@ -117,7 +117,8 @@ The fixes/features:
 - `redo N <new prompt>` — regenerate one scene image (works after the render card too)
 - `song <key|url>` or **attach the audio file** — set the song (skipped when the workflow already has one: images ✅ goes straight to the render card)
 - `sync auto` / `sync manual` — snap the timeline to the song's beat, or keep your timings
-- drop screenshots/videos in the thread — reference creatives (optional; 3 progress onboarding)
+- drop screenshots/videos in the thread — reference creatives (optional; 3 progress onboarding) — each drop ALSO joins this workflow's reference library and visually grounds every future image it generates
+- `worksheet` / `sources` [name|number] — the content-sourcing card: what real reference clips to find for a workflow + exact hashtags/searches (bare form in a session = current workflow; full doc: docs/WORKSHEET-content-sourcing.md)
 - `finish workflow` — flips IN PRODUCTION at 3/3 refs; below that it just notes the count and moves to the render
 - `cancel` — close the session (frees the channel for image drops / new sessions)
 - `remix N` / `remixes` — after a render: 16 narrative variations (propaganda, indoctrination, direct CTA, mini story, horror, testimonial, myth bust, us-vs-them, insider secret, stat shock, before/after, objection killer, seasonal FOMO, authority, relatable, dream outcome) of the same workflow + song; ✅ renders with the same images, `new images` regenerates creatives from the new copy

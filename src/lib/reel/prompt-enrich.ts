@@ -36,7 +36,15 @@ function isEnrichResult(v: unknown): v is EnrichResult {
  */
 export async function enrichScene(
   scene: string,
-  opts: { vertical: Vertical; formatGroup?: string; referenceLimit?: number; extraRules?: string[] }
+  opts: {
+    vertical: Vertical;
+    formatGroup?: string;
+    referenceLimit?: number;
+    extraRules?: string[];
+    /** The workflow whose look this frame belongs to: its OWN reference library grounds the
+     *  frame, and the subject wording follows its category (POV wording only for pov). */
+    workflow?: { id: string; category?: string; description?: string | null } | null;
+  }
 ): Promise<string> {
   const verticalId = opts.vertical.id || DEFAULT_VERTICAL_ID;
 
@@ -45,17 +53,35 @@ export async function enrichScene(
   // operator approves them, so their presence alone is enough to enrich.
   const [rules, frames] = await Promise.all([
     loadActiveStyleRules(verticalId, opts.formatGroup),
-    loadReferenceFrames(verticalId, { limit: opts.referenceLimit ?? 4 }),
+    loadReferenceFrames(verticalId, { limit: opts.referenceLimit ?? 4, workflowId: opts.workflow?.id }),
   ]);
   const extra = (opts.extraRules ?? []).map((r) => stripEmDashes(r)).filter(Boolean);
   if (rules.length === 0 && frames.length === 0 && extra.length === 0) return scene;
 
+  // Subject line follows the workflow's category: glasses-POV wording ONLY for pov workflows
+  // (a storytime/broll frame must never inherit gloved-hands POV framing). No workflow (the
+  // daily-drop crons) keeps the original POV wording unchanged.
+  const wf = opts.workflow;
+  const isPov = !wf || String(wf.category ?? "pov") === "pov";
+  const subjectLines = isPov
+    ? [
+        "You refine the scene description for a single AI-generated first frame. The frame is a",
+        "first-person Ray-Ban Meta smart-glasses POV shot for a pest control brand. Keep the SAME",
+        "action, subject, framing, gloved hands, and any equipment described in the base scene. You are",
+        "only allowed to make the setting more realistic and specific, and to honor the operator's rules.",
+      ]
+    : [
+        `You refine the scene description for a single AI-generated first frame of a ${String(wf?.category)} shot`,
+        `for a ${opts.vertical.business_descriptor}. This is documentary b-roll, NOT a glasses POV: no gloved`,
+        "hands, no first-person framing unless the base scene says so. Keep the SAME action, subject, and",
+        "framing described in the base scene. You are only allowed to make the setting more realistic and",
+        "specific, and to honor the operator's rules.",
+      ];
+  if (wf?.description) subjectLines.push(`This workflow: ${stripEmDashes(wf.description)}`);
+
   const ruleLines = [...rules.map((r) => r.rule), ...extra].map((r) => `- ${stripEmDashes(r)}`);
   const system = [
-    "You refine the scene description for a single AI-generated first frame. The frame is a",
-    "first-person Ray-Ban Meta smart-glasses POV shot for a pest control brand. Keep the SAME",
-    "action, subject, framing, gloved hands, and any equipment described in the base scene. You are",
-    "only allowed to make the setting more realistic and specific, and to honor the operator's rules.",
+    ...subjectLines,
     "",
     frames.length > 0
       ? `You are shown ${frames.length} reference photo(s) of the real look we want (real, lived-in homes). Use them to ground materials, wear, age, clutter, and lighting, so the result never looks like clean new construction or a showroom.`

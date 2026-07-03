@@ -124,9 +124,10 @@ export function textsForShot(spec: RenderSpec, shotIndex: number): RenderSpec["t
 /** The human/AI-readable "video description" block: mode, duration, song, and per-shot the slot
  *  + its timed texts (with in/out + position). Content-analyzer + the creative director read this
  *  to make adjustments. */
-/** A workflow's render aspect: POV/Meta-glasses record 3:4; everything else renders 9:16. */
+/** A workflow's render aspect. 3:4 is the house standard (the Ray-Ban Meta native ratio) —
+ *  rows without an explicit render_options.aspect must never regress to 9:16. */
 export function workflowAspect(workflow: Workflow): string {
-  return workflow.render_options?.aspect ?? (String(workflow.category) === "pov" ? "3:4" : "9:16");
+  return workflow.render_options?.aspect ?? "3:4";
 }
 
 export function buildVideoDescription(workflow: Workflow, spec: RenderSpec): string {

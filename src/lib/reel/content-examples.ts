@@ -292,40 +292,76 @@ async function fetchFrame(url: string): Promise<ClaudeImageInput | null> {
 }
 
 /**
- * Load up to `limit` reference FRAMES for a vertical as base64 image blocks, to visually ground
- * image generation (so houses look real and lived-in, not new/clean). Rows tagged
- * `reference_house` / `realism_reference` are preferred, then the most recent examples. Frames
- * are public `reels` URLs. Best-effort: returns [] when the table is empty/absent or on error.
+ * Load up to `limit` reference FRAMES as base64 image blocks, to visually ground image
+ * generation (so houses look real and lived-in, not new/clean).
+ *
+ * Scoping: with `workflowId`, THAT workflow's own references fill first (tier 1); any
+ * remaining slots fill from the vertical's realism refs (`reference_house` /
+ * `realism_reference`) only. Without `workflowId`, the vertical-wide behavior applies
+ * (realism refs preferred, then recency). Rows labeled `generated` are ALWAYS excluded —
+ * our own outputs must never ground new generations (that is how a wasp shot leaked into
+ * a storytime). Best-effort: returns [] when the table is empty/absent or on error.
  */
 export async function loadReferenceFrames(
   verticalId: string = DEFAULT_VERTICAL_ID,
-  opts: { limit?: number } = {}
+  opts: { limit?: number; workflowId?: string } = {}
 ): Promise<ClaudeImageInput[]> {
   const limit = opts.limit ?? 4;
   try {
+    const notGenerated = (r: FrameRow) => !(r.labels ?? []).includes("generated");
+    const isRealism = (r: FrameRow) =>
+      (r.labels ?? []).some((l) => l === "reference_house" || l === "realism_reference");
+
+    // Tier 1: the workflow's own reference rows (newest first). Tolerate a missing
+    // workflow_id column (migration not applied yet) by falling through to tier 2.
+    let scoped: FrameRow[] = [];
+    if (opts.workflowId) {
+      const { data, error } = await supabaseAdmin
+        .from("content_examples")
+        .select("frame_urls,labels")
+        .eq("workflow_id", opts.workflowId)
+        .order("created_at", { ascending: false })
+        .limit(40);
+      if (!error && Array.isArray(data)) scoped = (data as FrameRow[]).filter(notGenerated);
+      else if (error) console.error("[content-examples] workflow-scoped query failed (falling back):", error.message);
+    }
+
+    // Tier 2: vertical-wide rows. With a workflowId in play only realism refs may fill the
+    // remainder (never another workflow's subject matter); without one, keep the old order.
     const { data, error } = await supabaseAdmin
       .from("content_examples")
       .select("frame_urls,labels")
       .eq("vertical_id", verticalId)
       .order("created_at", { ascending: false })
       .limit(40);
-    if (error || !Array.isArray(data) || data.length === 0) return [];
-
-    const rows = data as FrameRow[];
-    const isRealism = (r: FrameRow) =>
-      (r.labels ?? []).some((l) => l === "reference_house" || l === "realism_reference");
-    // Realism references first, then everything else, keeping recency order within each group.
-    const ordered = [...rows.filter(isRealism), ...rows.filter((r) => !isRealism(r))];
+    let vertical: FrameRow[] = [];
+    if (!error && Array.isArray(data)) {
+      const rows = (data as FrameRow[]).filter(notGenerated);
+      vertical = opts.workflowId
+        ? rows.filter(isRealism)
+        : [...rows.filter(isRealism), ...rows.filter((r) => !isRealism(r))];
+    }
 
     const urls: string[] = [];
-    for (const r of ordered) {
-      for (const u of r.frame_urls ?? []) {
-        if (typeof u === "string" && u && !urls.includes(u)) urls.push(u);
+    let scopedCount = 0;
+    for (const [tier, rows] of [["workflow", scoped], ["vertical", vertical]] as const) {
+      for (const r of rows) {
+        for (const u of r.frame_urls ?? []) {
+          if (typeof u === "string" && u && !urls.includes(u)) {
+            urls.push(u);
+            if (tier === "workflow") scopedCount++;
+          }
+          if (urls.length >= limit) break;
+        }
         if (urls.length >= limit) break;
       }
       if (urls.length >= limit) break;
     }
     if (urls.length === 0) return [];
+    if (opts.workflowId)
+      console.log(
+        `[content-examples] loadReferenceFrames: ${scopedCount} workflow-scoped + ${urls.length - scopedCount} vertical frames (workflowId=${opts.workflowId})`
+      );
 
     const frames = await Promise.all(urls.map((u) => fetchFrame(u)));
     return frames.filter((f): f is ClaudeImageInput => f !== null);
@@ -351,6 +387,7 @@ export async function saveContentExample(row: {
   frameUrls: string[];
   section?: string | null; // e.g. 'pov/modern_house' (requirement: max 30 per avatar per section)
   zip?: string | null; // optional location tag (e.g. '27401')
+  workflowId?: string | null; // scope this reference to ONE workflow's library
 }): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
@@ -370,6 +407,9 @@ export async function saveContentExample(row: {
         frame_urls: row.frameUrls,
         section: row.section ?? null,
         zip: row.zip ?? null,
+        // Only sent when set, so callers that don't pass it (and DBs without the
+        // 2026-07-06 migration) keep byte-identical payloads.
+        ...(row.workflowId ? { workflow_id: row.workflowId } : {}),
       },
       { onConflict: "source_path" }
     );

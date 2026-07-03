@@ -8,7 +8,9 @@
 //   higgsfield-gpt (default) — OpenAI's GPT Image model served by the Higgsfield key
 //                              API (slug openai/hazel). Matthew's standing rule: ALL
 //                              image generation uses the GPT image model; Soul is only
-//                              for the trained-character (Vargas) path.
+//                              for the trained-character (Vargas) path. This provider
+//                              NEVER silently degrades to Soul: a hazel failure retries
+//                              once (generateImages) then fails visibly (null).
 //   higgsfield               — Higgsfield text2image/soul API. The trained Vargas Soul
 //                              (soulId) gives day-to-day character consistency.
 //   elevenlabs               — reuses src/lib/elevenlabs-media.ts (Seedream). Fallback only.
@@ -328,14 +330,10 @@ async function generateOne(
   quality?: string
 ): Promise<ImageResult> {
   if (prov === "higgsfield-gpt") {
-    try {
-      return await higgsfieldGptGenerateOne(prompt, { aspect: aspect ?? sizeToAspect(size), quality });
-    } catch (e) {
-      // Safety net: if the hazel slug ever moves/errors, fall back to Soul so the
-      // daily drops keep posting; the error is logged by the caller's retry loop.
-      console.error("[image-gen] higgsfield-gpt failed, falling back to soul:", (e as Error).message);
-      return higgsfieldGenerateOne(prompt, undefined, size);
-    }
+    // NO Soul fallback: gpt-image-2 is the only allowed generator on this path. The caller's
+    // retry loop (generateImages) retries once; a persistent failure yields null and the
+    // Slack thread gets a visible "image failed" message instead of a silent Soul image.
+    return higgsfieldGptGenerateOne(prompt, { aspect: aspect ?? sizeToAspect(size), quality });
   }
   if (prov === "openai") return openaiGenerateOne(prompt);
   if (prov === "elevenlabs") return elevenLabsGenerateOne(prompt);
