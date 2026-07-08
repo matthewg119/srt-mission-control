@@ -67,6 +67,7 @@ import {
   handleDropThreadReply,
   handleDropReaction,
   handleDropFileDrop,
+  handleDropGo,
 } from "@/lib/reel/drop-studio";
 import {
   startAgentSession,
@@ -381,12 +382,18 @@ export async function POST(request: NextRequest) {
               console.error("[slack/events] drop lane reply error:", (e as Error).message)
             )
           );
+        } else if (/^\s*go\s*$/i.test(userText)) {
+          waitUntil(
+            handleDropGo(channel).catch((e) =>
+              console.error("[slack/events] drop go error:", (e as Error).message)
+            )
+          );
         } else if (/^\s*(workflows|library|map)\s*$/i.test(userText)) {
           await postWorkflowMap(channel, "pest_control");
         } else if (userText.trim()) {
           await slack.postMessage(
             channel,
-            "Drop your media + copy together in ONE message to render. `workflows` shows the library."
+            "Drop your media + copy together in ONE message to render. `go` gives you headlines + story material. `workflows` shows the library."
           );
         }
         return NextResponse.json({ ok: true });

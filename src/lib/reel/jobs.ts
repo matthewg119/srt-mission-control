@@ -115,6 +115,7 @@ export interface JobData {
   // --- #ai-content-pest-control drop lane (drop-studio.ts) ---
   drop_media?: Array<{ url: string; kind: "image" | "video" }>; // resolved stills, drop order
   drop_lines?: string[]; // parsed copy lines as dropped
+  mode_images?: string[]; // resolved image URLs held at the animate-vs-still gate (dr_mode)
   fit_menu?: string[]; // workflow ids in fit-card order (reply N picks)
   prompt_slots?: Array<{ scene: number; image_url?: string | null }>; // prompt-drop image intake
   copy_options?: string[]; // rendered copy-option summaries (pick N at pd_copy)
@@ -173,6 +174,8 @@ export type JobStage =
   // #ai-content-pest-control drop lane (drop-studio.ts): drop-and-render + prompt drops:
   | "dr_fit"
   | "dr_copy"
+  | "dr_mode" // animate-vs-still gate (ask before rendering)
+  | "dr_animate" // motion prompts posted; awaiting clips or a `still` fallback
   | "dr_render"
   | "pd_await_images"
   | "pd_copy"

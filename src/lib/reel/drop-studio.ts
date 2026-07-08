@@ -43,6 +43,8 @@ import {
 import {
   reslotCopyToStructure,
   generateStructuredCopy,
+  generateHeadlineOptions,
+  generateCreativeReference,
   type StructuredCopyLine,
 } from "@/lib/reel/creative-director";
 import { renderWorkflow, workflowRenderBuild } from "@/lib/reel/render-dispatch";
@@ -50,7 +52,7 @@ import { markWorkflowUsed, ensureWorkflowRow } from "@/lib/reel/workflow-author"
 import { loadReferenceFrames, saveContentExample } from "@/lib/reel/content-examples";
 import { distillFeedbackToRules, savePendingRules } from "@/lib/reel/style-rules";
 import { stripEmDashes } from "@/lib/reel/text";
-import { listWorkflows, loadWorkflow, type Workflow } from "@/config/workflows";
+import { listWorkflows, loadWorkflow, resolveSong, type Workflow } from "@/config/workflows";
 import { loadVertical, type Vertical } from "@/config/verticals";
 
 export const DROP_VERTICAL_ID = "pest_control";
@@ -212,6 +214,48 @@ async function activeWorkflows(): Promise<Workflow[]> {
   return all.filter(isRenderable);
 }
 
+// ---- `go` — headlines + story material (no images needed) ----------------------------------
+
+/**
+ * `go` in the drop channel: post 30 headline angles + the avatar's story material so the
+ * operator has raw copy to build from, then drop images + lines to render. Mirrors the
+ * #agent-wokrflow-creator report but pinned to the drop vertical (pest_control).
+ */
+export async function handleDropGo(channel: string): Promise<void> {
+  const vertical = await loadVertical(DROP_VERTICAL_ID);
+  await slack.postMessage(channel, `*${vertical.name}* — pulling 30 headline angles + story material...`);
+  try {
+    const [headlines, ref] = await Promise.all([
+      generateHeadlineOptions({ vertical, count: 30 }),
+      generateCreativeReference(vertical),
+    ]);
+    await slack.postMessage(
+      channel,
+      [
+        `*${vertical.name}* — 30 headline angles (raw material for your copy):`,
+        headlines.map((h, i) => `${i + 1}. ${h}`).join("\n"),
+      ].join("\n")
+    );
+    await slack.postMessage(
+      channel,
+      [
+        "*Story material* (mix these in):",
+        `*Fears:* ${ref.fears.join(" | ")}`,
+        `*Beliefs:* ${ref.beliefs.join(" | ")}`,
+        `*Desires:* ${ref.desires.join(" | ")}`,
+        `*Facts:* ${ref.facts.join(" | ")}`,
+        `*Fantasies:* ${ref.fantasies.join(" | ")}`,
+        `*Horror stories:* ${ref.horror.join(" | ")}`,
+        "",
+        "Write your lines, then drop your images + those lines in ONE message and I'll ask which workflow to render.",
+      ].join("\n")
+    );
+  } catch (e) {
+    console.error("[drop-studio] go report failed:", (e as Error).message);
+    await slack.postMessage(channel, "Could not pull the report. Drop your images + copy in one message to render.");
+  }
+}
+
 // ---- drop-and-render -----------------------------------------------------------------------
 
 /**
@@ -248,58 +292,15 @@ export async function handleDropMessage(args: {
   const fits = candidates
     .map((w) => scoreFit(w, media.length, lines))
     .sort((a, b) => b.score - a.score || (b.workflow.used_at ?? "").localeCompare(a.workflow.used_at ?? ""));
-  const perfects = fits.filter((f) => f.perfect);
-  const strongs = fits.filter((f) => f.strong);
 
   const baseData: JobData = {
     drop_media: media,
     drop_lines: lines,
   };
 
-  // One perfect fit whose copy maps verbatim -> render immediately.
-  if (perfects.length === 1) {
-    const w = perfects[0].workflow;
-    const copy = zeroAdaptationCopy(w, lines);
-    if (copy) {
-      const jobId = await insertJob({
-        formatId: DROP_FORMAT,
-        verticalId: DROP_VERTICAL_ID,
-        channel,
-        threadTs,
-        pickerTs: threadTs,
-        stage: "dr_render",
-        sourceKind: "drop",
-        data: { ...baseData, workflow_id: w.id, structured_copy: copy },
-      });
-      await post(channel, threadTs, `This fits *${w.name}*. Rendering now...${videoNote}`);
-      const job = await getLatestJobByThread(threadTs);
-      if (job && jobId) waitUntil(finishDropRender(job, w, copy, media.map((m) => m.url)));
-      return;
-    }
-  }
-
-  // One strong fit that needs the copy adapted -> reslot + checkmark gate.
-  if (strongs.length === 1) {
-    const w = strongs[0].workflow;
-    await insertJob({
-      formatId: DROP_FORMAT,
-      verticalId: DROP_VERTICAL_ID,
-      channel,
-      threadTs,
-      pickerTs: threadTs,
-      stage: "dr_copy",
-      sourceKind: "drop",
-      data: { ...baseData, workflow_id: w.id },
-    });
-    await post(channel, threadTs, `This fits *${w.name}*, adapting your copy to its boxes...${videoNote}`);
-    const job = await getLatestJobByThread(threadTs);
-    if (job) waitUntil(postAdaptedCopyCard(job, w, lines.join("\n")));
-    return;
-  }
-
-  // Zero or multiple candidates -> the fit card.
-  const top = fits.slice(0, 4);
-  if (!top.length) {
+  // ALWAYS ask which workflow (the library is song-based and grows over time). The pick then
+  // routes through pickFitWorkflow -> the animate/still gate -> render. No silent auto-render.
+  if (!fits.length) {
     await post(channel, threadTs, "No active workflows can render yet. Create one in #agent-wokrflow-creator first.");
     return;
   }
@@ -311,23 +312,36 @@ export async function handleDropMessage(args: {
     pickerTs: threadTs,
     stage: "dr_fit",
     sourceKind: "drop",
-    data: { ...baseData, fit_menu: top.map((f) => f.workflow.id) },
+    data: { ...baseData, fit_menu: fits.map((f) => f.workflow.id) },
   });
-  const menu = top.map((f, i) => {
-    const S = shotCount(f.workflow);
-    const B = boxCount(f.workflow);
+  const menu = fits.map((f, i) => {
+    const w = f.workflow;
+    const S = shotCount(w);
+    const B = boxCount(w);
+    const meta = [`${S} shot${S === 1 ? "" : "s"}`, `${B} copy box${B === 1 ? "" : "es"}`, songNote(w)]
+      .filter(Boolean)
+      .join(", ");
     const note = f.notes.length ? `  (${f.notes.join("; ")})` : "  ready as dropped";
-    return `${i + 1}. *${f.workflow.name}* (${S} shot${S === 1 ? "" : "s"}, ${B} copy boxes)${note}`;
+    return `${i + 1}. *${w.name}* (${meta})${note}`;
   });
   const job = await getLatestJobByThread(threadTs);
   if (job) {
     await postCard(job, [
-      `This fits *${top[0].workflow.name}* best. React with the checkmark to use it, or pick a number:`,
+      `*Which workflow?* You dropped ${media.length} image(s) + ${lines.length} line(s). React ✅ for the top pick, or reply a number:`,
       ...menu,
       videoNote.trim(),
       "Missing images can be pasted right here (comment `scene N` to target a slot). `cancel` ends it.",
     ].filter(Boolean).join("\n"));
   }
+}
+
+/** Short human label for a workflow's song (workflows are song-based). */
+function songNote(w: Workflow): string {
+  const dur = w.render_spec?.duration_seconds;
+  const durPart = dur ? `${dur}s, ` : "";
+  if (!w.song_ref || w.song_ref === "song_master") return `${durPart}house bed`;
+  if (/^https?:/i.test(w.song_ref)) return `${durPart}custom song`;
+  return `${durPart}${resolveSong(w.song_ref).label}`;
 }
 
 async function postAdaptedCopyCard(job: ContentJob, w: Workflow, pastedBlock: string): Promise<void> {
@@ -422,6 +436,141 @@ async function finishDropRender(
     await post(channel, threadTs, `Render failed: ${(e as Error).message}\nReact with the checkmark again or reply \`render\` to retry.`);
     const fresh = (await getLatestJobByThread(threadTs)) ?? job;
     await updateJob(fresh, { stage: retryStage });
+  }
+}
+
+// ---- animate-vs-still gate -----------------------------------------------------------------
+// "Just ask before rendering in case I do it by mistake." Every drop that would otherwise render
+// stops here first: animate the images (write a Seedance motion prompt per image, no render) or
+// render them as stills (the normal render-spec path). Nothing renders until the operator picks.
+
+/** Open the gate: hold the matched workflow + copy + images on the job, post the choice card. */
+async function enterDropModeGate(
+  job: ContentJob,
+  workflow: Workflow,
+  copy: StructuredCopyLine[],
+  images: string[]
+): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const ts = await post(
+    channel,
+    threadTs,
+    [
+      `Matched *${workflow.name}* — ${images.length} image(s) + ${copy.length} line(s).`,
+      "Animate these images, or render as stills?",
+      "React 1️⃣ *Animate* (I write a motion prompt per image, nothing renders) or 2️⃣ *Still* (render now).",
+      "Or reply `animate` / `still`. Nothing renders until you pick.",
+    ].join("\n")
+  );
+  const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+  await updateJob(fresh, {
+    stage: "dr_mode",
+    ...(ts ? { pickerTs: ts } : {}),
+    data: { ...fresh.data, workflow_id: workflow.id, structured_copy: copy, mode_images: images },
+  });
+  if (ts) {
+    await slack.addReaction(channel, ts, "one").catch(() => {});
+    await slack.addReaction(channel, ts, "two").catch(() => {});
+  }
+}
+
+/** Read the images + copy + workflow held at the gate. */
+async function gateContext(
+  job: ContentJob
+): Promise<{ workflow: Workflow; copy: StructuredCopyLine[]; images: string[] } | null> {
+  const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
+  const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
+  const images =
+    job.data.mode_images ?? (job.data.drop_media ?? []).map((m) => m.url);
+  if (!workflow || !copy.length || !images.length) return null;
+  return { workflow, copy, images };
+}
+
+/** Resolve the gate: "still" renders now, "animate" writes motion prompts (no render). */
+async function resolveDropMode(job: ContentJob, mode: "animate" | "still"): Promise<void> {
+  const ctx = await gateContext(job);
+  if (!ctx) {
+    await post(job.slack_channel, job.slack_thread_ts, "Lost the drop details. Re-drop the images + copy to start again.");
+    return;
+  }
+  if (mode === "still") {
+    await post(job.slack_channel, job.slack_thread_ts, `Rendering *${ctx.workflow.name}* as stills...`);
+    waitUntil(finishDropRender(job, ctx.workflow, ctx.copy, ctx.images));
+  } else {
+    await post(job.slack_channel, job.slack_thread_ts, "Writing a motion prompt for each image...");
+    waitUntil(postAnimatePrompts(job, ctx.workflow, ctx.copy, ctx.images));
+  }
+}
+
+/** ONE Seedance motion sentence per image (camera/subject motion only, no render). */
+async function generateMotionPrompts(
+  images: string[],
+  ctx: { workflow: Workflow; copy: StructuredCopyLine[] }
+): Promise<string[]> {
+  const imgs: ClaudeImageInput[] = [];
+  for (const url of images) {
+    const buf = await downloadSlackUrl(url).catch(() => null);
+    if (buf) imgs.push({ media_type: "image/jpeg", data: buf.toString("base64") });
+  }
+  const roles = (ctx.workflow.copy_structure ?? []).map((r) => r.label);
+  interface MotionGen {
+    motions: string[];
+  }
+  const system = [
+    `You write image-to-video MOTION prompts for Seedance 2.0 for a ${ctx.workflow.name} reel.`,
+    "For EACH image (in order), return ONE short sentence describing camera and subject MOTION only:",
+    "how the shot should move (slow push in, tilt up, handheld drift, subject action). No style, no",
+    "on-screen text, no scene re-description, never em dashes. Keep each under 20 words.",
+    ctx.workflow.visual_rules?.length ? `Look: ${ctx.workflow.visual_rules.join(" ")}` : "",
+    roles.length ? `On-screen line per shot (for pacing context): ${roles.join(" | ")}` : "",
+    `Return exactly ${images.length} motion prompt(s), one per image, in order.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const { data } = await callClaudeJSON<MotionGen>({
+    model: model(),
+    system,
+    user: "Return the motion prompts as JSON.",
+    images: imgs.length ? imgs : undefined,
+    maxTokens: 700,
+    temperature: 0.7,
+    schemaHint: '{ "motions": [string] }',
+    validate: (v: unknown): v is MotionGen =>
+      typeof v === "object" && v !== null && Array.isArray((v as MotionGen).motions),
+  });
+  return data.motions.slice(0, images.length).map((m) => stripEmDashes(m));
+}
+
+/** Post one motion prompt per image; keep the job open so `still` still works and clips can drop. */
+async function postAnimatePrompts(
+  job: ContentJob,
+  workflow: Workflow,
+  copy: StructuredCopyLine[],
+  images: string[]
+): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  try {
+    const motions = await generateMotionPrompts(images, { workflow, copy });
+    const roles = workflow.copy_structure ?? [];
+    const lines = images.map((_, i) => {
+      const role = roles[i]?.label ?? `Shot ${i + 1}`;
+      return `${i + 1}. *${role}* — ${motions[i] ?? "slow push in on the subject"}`;
+    });
+    await post(
+      channel,
+      threadTs,
+      [
+        `*Motion prompts for ${workflow.name}* (Seedance 2.0, one per image):`,
+        ...lines,
+        "",
+        "Animate each image with these, drop the clips back here, or reply `still` to render the images as-is.",
+      ].join("\n")
+    );
+    const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+    await updateJob(fresh, { stage: "dr_animate", data: { ...fresh.data, mode_images: images } });
+  } catch (e) {
+    console.error("[drop-studio] motion prompts failed:", (e as Error).message);
+    await post(channel, threadTs, `Could not write the motion prompts (${(e as Error).message.slice(0, 120)}). Reply \`still\` to render the images instead.`);
   }
 }
 
@@ -710,6 +859,8 @@ async function handleTextFeedback(job: ContentJob, text: string): Promise<boolea
 const DR_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   dr_fit: "Pick a workflow by number, react with the checkmark for the top pick, paste missing images, or `cancel`.",
   dr_copy: "React with the checkmark on the copy card to render, paste a replacement copy block, or `cancel`.",
+  dr_mode: "Animate or still? React 1️⃣ Animate / 2️⃣ Still, or reply `animate` / `still`.",
+  dr_animate: "Motion prompts are above. Animate the images and drop the clips, or reply `still` to render the images as-is.",
   dr_render: "Rendering now. Reply `render` to retry if it fails.",
   pd_await_images: "Waiting on the generated images. Upload them into this thread (comment `scene N` to target a slot).",
   pd_copy: "Pick a copy option by number (or react), paste your own lines, or `cancel`.",
@@ -768,6 +919,24 @@ export async function handleDropThreadReply(args: {
           waitUntil(postAdaptedCopyCard(job, wf, text));
           return true;
         }
+      }
+      break;
+    }
+    case "dr_mode": {
+      if (/^\s*(animate|1)\s*$/i.test(text)) {
+        await resolveDropMode(job, "animate");
+        return true;
+      }
+      if (/^\s*(still|2)\s*$/i.test(text)) {
+        await resolveDropMode(job, "still");
+        return true;
+      }
+      break;
+    }
+    case "dr_animate": {
+      if (/^\s*(still|render|2)\s*$/i.test(text)) {
+        await resolveDropMode(job, "still");
+        return true;
       }
       break;
     }
@@ -842,7 +1011,7 @@ async function pickFitWorkflow(job: ContentJob, n: number): Promise<void> {
   }
   const direct = zeroAdaptationCopy(workflow, lines);
   if (direct) {
-    waitUntil(finishDropRender(job, workflow, direct, media.map((m) => m.url)));
+    await enterDropModeGate(job, workflow, direct, media.map((m) => m.url));
     return;
   }
   await post(channel, threadTs, `Adapting your copy to *${workflow.name}*...`);
@@ -893,9 +1062,16 @@ export async function handleDropReaction(args: {
       const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
       const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
       const images = (job.data.drop_media ?? []).map((m) => m.url);
-      if (workflow && copy.length) waitUntil(finishDropRender(job, workflow, copy, images));
+      if (workflow && copy.length) waitUntil(enterDropModeGate(job, workflow, copy, images));
       return true;
     }
+    case "dr_mode":
+      if (keycap === 1) waitUntil(resolveDropMode(job, "animate"));
+      else if (keycap === 2 || approve) waitUntil(resolveDropMode(job, "still"));
+      return true;
+    case "dr_animate":
+      if (approve || keycap === 2) waitUntil(resolveDropMode(job, "still"));
+      return true;
     case "pd_copy": {
       if (keycap) {
         await pickPromptDropOption(job, keycap);
@@ -945,7 +1121,7 @@ export async function handleDropFileDrop(args: {
     if (wf && all.length >= shotCount(wf)) {
       const lines = job.data.drop_lines ?? [];
       const direct = zeroAdaptationCopy(wf, lines);
-      if (direct) waitUntil(finishDropRender(job, wf, direct, all.map((m) => m.url)));
+      if (direct) await enterDropModeGate(job, wf, direct, all.map((m) => m.url));
       else {
         await post(job.slack_channel, job.slack_thread_ts, `All images in. Adapting your copy to *${wf.name}*...`);
         waitUntil(postAdaptedCopyCard(job, wf, lines.join("\n")));

@@ -53,6 +53,7 @@ interface DroppedFile {
   id?: string;
   name?: string;
   mimetype?: string;
+  filetype?: string; // Slack's own type tag (e.g. "mpeg", "m4a", "mp4a", "binary")
   url_private?: string;
   url_private_download?: string;
 }
@@ -72,8 +73,23 @@ function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
 }
 
+// Extensions/filetypes we treat as audio. Includes WhatsApp's ".mpeg" export and the codecs
+// Slack sometimes leaves without an "audio/" mimetype (it labels them "Binary" / octet-stream).
+const AUDIO_EXT_RE = /\.(m4a|m4b|mp3|mpeg|mpga|mpg|wav|aac|ogg|oga|opus|flac|wma|amr)$/i;
+const AUDIO_FILETYPES = new Set(["mp3", "mpeg", "mpga", "m4a", "m4b", "mp4a", "wav", "aac", "ogg", "oga", "opus", "flac", "wma", "amr", "voice-message"]);
+
+/** True when a name/extension looks like an audio file (used for the "didn't register" nudge). */
+function looksAudio(f: DroppedFile): boolean {
+  return AUDIO_EXT_RE.test(f.name ?? "") || AUDIO_FILETYPES.has((f.filetype ?? "").toLowerCase());
+}
+
 function isAudio(f: DroppedFile): boolean {
-  return (f.mimetype ?? "").startsWith("audio/") || /\.(m4a|mp3|wav|aac|ogg)$/i.test(f.name ?? "");
+  const mime = (f.mimetype ?? "").toLowerCase();
+  if (mime.startsWith("audio/") || mime === "video/mp4a-latm") return true;
+  if (looksAudio(f)) return true;
+  // Slack often ships unknown audio as "Binary"/octet-stream with a usable name/extension.
+  if ((mime === "" || mime === "application/octet-stream") && AUDIO_EXT_RE.test(f.name ?? "")) return true;
+  return false;
 }
 
 async function post(channel: string, threadTs: string, text: string): Promise<string | null> {
@@ -214,7 +230,7 @@ async function intakeFiles(job: ContentJob, channel: string, files: DroppedFile[
   const audio = files.find(isAudio);
   if (audio?.url_private_download) {
     const buf = await downloadSlackUrl(audio.url_private_download);
-    const url = buf ? await uploadToReels(buf, audio.mimetype || "audio/mp4") : null;
+    const url = buf ? await uploadToReels(buf, audio.mimetype || "audio/mpeg") : null;
     if (url) {
       const grid = await analyzeSong(url);
       patch.song_ref = url;
@@ -229,6 +245,17 @@ async function intakeFiles(job: ContentJob, channel: string, files: DroppedFile[
       );
     } else {
       await post(channel, threadTs, "Could not store that audio. Try attaching it again.");
+    }
+  } else if (!job.data.song_ref) {
+    // No audio recognized. If a file LOOKS like audio (Slack shipped it as "Binary"/no mimetype),
+    // say so instead of sitting silently — this is the ".mpeg didn't register" case.
+    const strayAudio = files.find(looksAudio);
+    if (strayAudio) {
+      await post(
+        channel,
+        threadTs,
+        `That audio didn't register (Slack sent \`${strayAudio.name ?? "it"}\` as \`${strayAudio.mimetype || strayAudio.filetype || "binary"}\`). Re-drop it as .mp3/.m4a, or paste a link.`
+      );
     }
   }
 

@@ -280,7 +280,7 @@ const PEST_WASP_NEST: Workflow = {
 const PEST_6HL_PROPAGANDA: Workflow = {
   id: "pest_control__broll__6hl_propaganda",
   vertical_id: "pest_control",
-  name: "B roll 6 headlines propaganda",
+  name: "Workflow 2",
   category: "broll",
   subcategory: "6hl_propaganda",
   status: "active",
@@ -319,7 +319,8 @@ const PEST_6HL_PROPAGANDA: Workflow = {
       { n: 6, text: "Check out link in bio.", at_second: 10.2, out_second: 11.3, position: "lower", role: "cta" },
     ],
   },
-  song_ref: null,
+  // 0702.MP3 (~11s) uploaded to the reels bucket; matches the 11.3s timeline.
+  song_ref: "https://gvsborqpkyvhcfrpgagp.supabase.co/storage/v1/object/public/reels/pov/0b2e23de-7624-4119-a21b-8674cd731733.mpeg",
   render_sequences: [],
   render_options: { min_shots: 3, max_shots: 3, aspect: "9:16" },
   example_video_url: null,
@@ -327,11 +328,12 @@ const PEST_6HL_PROPAGANDA: Workflow = {
   shot_screenshots: [],
   source_kind: "authored",
   source_example_id: null,
-  description: "3-shot 11.3s static b-roll with 6 timed headlines: avatar callout, pain escalation, dream outcome + CTA.",
+  description: "3-shot 11.3s static POV/b-roll with 6 timed headlines: avatar callout, pain escalation, dream outcome + CTA.",
   visual_rules: [
-    "Photorealistic b-roll of pest control business life (trucks, techs, homeowners), vertical portrait.",
-    "Muted, cinematic color; shots must leave clear space for the timed headline overlays.",
-    "No text, captions, logos, or watermarks inside the image.",
+    "Default look: first-person Ray-Ban Meta glasses POV. Gloved hands may enter frame, never a face; real suburban job-site, natural daylight, documentary feel.",
+    "B-roll is also allowed: photoreal pest-business life (trucks, techs, homeowners), vertical portrait, muted cinematic color.",
+    "Every shot must leave clear space for the timed headline overlays.",
+    "No text, captions, logos, or watermarks baked inside the image.",
   ],
 };
 
