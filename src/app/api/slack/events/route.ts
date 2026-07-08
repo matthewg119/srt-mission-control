@@ -62,6 +62,18 @@ import {
   handleBuilderReaction,
   handleBuilderFileDrop,
 } from "@/lib/reel/workflow-builder";
+import {
+  handleDropMessage,
+  handleDropThreadReply,
+  handleDropReaction,
+  handleDropFileDrop,
+} from "@/lib/reel/drop-studio";
+import {
+  startAgentSession,
+  handleAgentMessage,
+  handleAgentFileDrop,
+  handleAgentReaction,
+} from "@/lib/reel/workflow-agent";
 import { postWorkflowMap } from "@/lib/reel/workflow-map";
 import { postSourcingCard } from "@/lib/reel/sourcing-worksheet";
 import {
@@ -182,6 +194,22 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (builderReactionHandled) return NextResponse.json({ ok: true });
+
+        // #ai-content-pest-control drop lane: ✅ / keycaps on fit + copy cards.
+        const dropReactionHandled = await handleDropReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (dropReactionHandled) return NextResponse.json({ ok: true });
+
+        // #agent-wokrflow-creator: ✅ on the variations card = keep 1 / 🚫 cancels.
+        const agentReactionHandled = await handleAgentReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (agentReactionHandled) return NextResponse.json({ ok: true });
 
         // Content Engine v3 scrub-or-reference: 📚 (save reference) / 🧪 (scrub into a workflow)
         // on a #content-analyzer decision card. Self-routes by content_jobs; falls through otherwise.
@@ -329,6 +357,63 @@ export async function POST(request: NextRequest) {
       const isContentFullChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.contentFull;
 
       const parentThreadTs = (event.thread_ts as string | undefined) || null;
+
+      // ---- Dedicated lanes: these two channels ALWAYS return here, never falling
+      // through to the legacy content / AI-manager handlers. ----
+
+      // #ai-content-pest-control — drop-and-render + prompt drops + feedback (drop-studio.ts).
+      if (Boolean(channel) && channel === VEKTOR_CHANNELS.aiContentPestControl) {
+        const isThreadReply = Boolean(parentThreadTs) && parentThreadTs !== event.ts;
+        if (attachedFiles.length > 0) {
+          const messageTs = event.ts as string;
+          waitUntil(
+            (async () => {
+              if (isThreadReply) {
+                await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
+              } else {
+                await handleDropMessage({ channel, threadTs: messageTs, files: attachedFiles, text: userText });
+              }
+            })().catch((e) => console.error("[slack/events] drop lane files error:", (e as Error).message))
+          );
+        } else if (isThreadReply && userText.trim()) {
+          waitUntil(
+            handleDropThreadReply({ channel, threadTs: parentThreadTs!, text: userText }).catch((e) =>
+              console.error("[slack/events] drop lane reply error:", (e as Error).message)
+            )
+          );
+        } else if (/^\s*(workflows|library|map)\s*$/i.test(userText)) {
+          await postWorkflowMap(channel, "pest_control");
+        } else if (userText.trim()) {
+          await slack.postMessage(
+            channel,
+            "Drop your media + copy together in ONE message to render. `workflows` shows the library."
+          );
+        }
+        return NextResponse.json({ ok: true });
+      }
+
+      // #agent-wokrflow-creator — the Workflow Creator agent (workflow-agent.ts).
+      if (Boolean(channel) && channel === VEKTOR_CHANNELS.agentWorkflowCreator) {
+        const threadArg = parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : undefined;
+        if (attachedFiles.length === 0 && /^\s*go\s*$/i.test(userText)) {
+          await startAgentSession({ channel });
+        } else if (attachedFiles.length > 0) {
+          waitUntil(
+            (async () => {
+              const handled = await handleAgentFileDrop({ channel, threadTs: threadArg, files: attachedFiles, text: userText });
+              if (!handled) await slack.postMessage(channel, "Type `go` to start a Workflow Creator session first.");
+            })().catch((e) => console.error("[slack/events] agent files error:", (e as Error).message))
+          );
+        } else if (userText.trim()) {
+          waitUntil(
+            (async () => {
+              const handled = await handleAgentMessage({ channel, threadTs: threadArg, text: userText });
+              if (!handled) await slack.postMessage(channel, "Type `go` to start a Workflow Creator session.");
+            })().catch((e) => console.error("[slack/events] agent message error:", (e as Error).message))
+          );
+        }
+        return NextResponse.json({ ok: true });
+      }
 
       // #content-full thread reply on a drop. Three interpretations, in order:
       //   1. "rules"        -> list the active style rules.
@@ -1645,6 +1730,15 @@ async function handleFileShared(fileId: string): Promise<void> {
     ...(file.shares?.public ?? {}),
     ...(file.shares?.private ?? {}),
   });
+  // Files in the two dedicated lanes are handled entirely by the message event
+  // (drop-studio / workflow-agent); nothing in this handler may claim them.
+  if (
+    allShareChannels.some(
+      (ch) => ch === VEKTOR_CHANNELS.aiContentPestControl || ch === VEKTOR_CHANNELS.agentWorkflowCreator
+    )
+  ) {
+    return;
+  }
   const isInContentChannel = allShareChannels.some(
     (ch) => ch === VEKTOR_CHANNELS.content || ch === VEKTOR_CHANNELS.contentFull
   );

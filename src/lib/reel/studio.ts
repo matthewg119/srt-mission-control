@@ -358,8 +358,9 @@ async function finalizeStudio(job: StudioJobRow, script: ReelScript): Promise<vo
   }
 }
 
-/** Call the Python render service and return the MP4 bytes + its public URL (when stored). */
-async function renderReel(
+/** Call the Python render service and return the MP4 bytes + its public URL (when stored).
+ *  Exported: render-dispatch.ts routes `render_options.build === "render_reel"` workflows here. */
+export async function renderReel(
   script: ReelScript,
   img: ClaudeImageInput
 ): Promise<{ mp4: Buffer; url: string | null }> {

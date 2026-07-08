@@ -11,6 +11,7 @@ import { stripEmDashes } from "@/lib/reel/text";
 import {
   COPY_ROLE_LIBRARY,
   loadWorkflow,
+  SEED_WORKFLOWS,
   type Workflow,
   type WorkflowScene,
   type WorkflowCategory,
@@ -219,6 +220,33 @@ export async function upsertWorkflow(w: Workflow): Promise<boolean> {
   } catch (e) {
     console.error("[workflows] upsert threw:", (e as Error).message);
     return false;
+  }
+}
+
+/** Make sure an in-code seed workflow has a real DB row (so used_at tracking and
+ *  dedicated column updates work). No-op when the row exists or the id has no seed. */
+export async function ensureWorkflowRow(id: string): Promise<void> {
+  try {
+    const { data } = await supabaseAdmin.from("workflows").select("id").eq("id", id).maybeSingle();
+    if (data) return;
+    const seed = SEED_WORKFLOWS[id];
+    if (seed) await upsertWorkflow(seed);
+  } catch (e) {
+    console.error("[workflows] ensureWorkflowRow threw:", (e as Error).message);
+  }
+}
+
+/** Stamp used_at (the prompt-drop LRU rotation key). Best-effort; seeds get a row first. */
+export async function markWorkflowUsed(id: string): Promise<void> {
+  try {
+    await ensureWorkflowRow(id);
+    const { error } = await supabaseAdmin
+      .from("workflows")
+      .update({ used_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) console.error("[workflows] markWorkflowUsed failed:", error.message);
+  } catch (e) {
+    console.error("[workflows] markWorkflowUsed threw:", (e as Error).message);
   }
 }
 

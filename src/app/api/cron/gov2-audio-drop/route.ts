@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { slack } from "@/lib/slack-bot";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
-import { insertBuilderSessionAtThread } from "@/lib/reel/workflow-builder";
-import { listVerticals, DEFAULT_VERTICAL_ID } from "@/config/verticals";
+import { insertJob } from "@/lib/reel/jobs";
+import { AGENT_FORMAT_ID } from "@/lib/reel/workflow-agent";
+import { listVerticals } from "@/config/verticals";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Workflow of the day (gov2) — every morning, ask for the audio of the day in
-// #content-full. Dropping the audio file in that thread starts a full Workflow
-// Builder v2 session (song -> style DNA -> timings -> scene boards -> prompts ->
-// images -> save -> test render -> caption). One new workflow per day.
+// Workflow of the day — every morning, open a Workflow Creator session in
+// #agent-wokrflow-creator (the creation lane): pick the avatar, then send the
+// audio + images + copy and the agent designs 3 render variations.
+// (Route path kept as gov2-audio-drop to avoid vercel.json churn.)
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -25,35 +26,37 @@ export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const channel = VEKTOR_CHANNELS.contentFull;
+  const channel = VEKTOR_CHANNELS.agentWorkflowCreator;
   if (!channel) {
-    return NextResponse.json({ error: "contentFull channel is not configured" }, { status: 500 });
+    return NextResponse.json({ error: "SLACK_AGENT_WORKFLOW_CREATOR_CHANNEL not set" }, { status: 500 });
   }
 
-  // Single active avatar -> pin the session to it; otherwise the first reply picks one.
-  let verticalId = DEFAULT_VERTICAL_ID;
-  try {
-    const avatars = (await listVerticals()).filter((a) => a.status !== "archived");
-    if (avatars.length === 1) verticalId = avatars[0].id;
-  } catch {
-    /* keep the default */
-  }
-
-  const res = await slack
+  const avatars = (await listVerticals()).filter((a) => a.status !== "archived");
+  const res = (await slack
     .postMessage(
       channel,
       [
-        "*Workflow of the day.* Send me the audio in this thread and I will start the v2 builder:",
-        "song -> style DNA -> your timings -> scene boards -> prompts -> images -> test render -> caption.",
-        "(Or type `gov2` anywhere in this channel to start one yourself.)",
+        "*Workflow of the day.* Which avatar is it for?",
+        avatars.map((a, i) => `${i + 1}. ${a.name}  (\`${a.id}\`)`).join("\n"),
+        "",
+        "Reply with the number, then send the audio + your images/videos + the copy.",
       ].join("\n")
     )
-    .catch(() => null);
-  const ts = ((res as { ts?: string } | null)?.ts as string) ?? null;
+    .catch(() => null)) as { ts?: string } | null;
+  const ts = res?.ts ?? null;
   if (!ts) {
     return NextResponse.json({ error: "could not post the daily card" }, { status: 500 });
   }
 
-  await insertBuilderSessionAtThread({ channel, threadTs: ts, verticalId, sourceKind: "cron" });
-  return NextResponse.json({ ok: true, thread_ts: ts, vertical_id: verticalId });
+  await insertJob({
+    formatId: AGENT_FORMAT_ID,
+    verticalId: "_",
+    channel,
+    threadTs: ts,
+    pickerTs: ts,
+    stage: "awc_avatar",
+    sourceKind: "cron",
+    data: { avatar_ids: avatars.map((a) => a.id) },
+  });
+  return NextResponse.json({ ok: true, thread_ts: ts });
 }

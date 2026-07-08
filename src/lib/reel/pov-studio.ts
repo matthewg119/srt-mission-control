@@ -107,7 +107,8 @@ function requirementsLine(id: ContentWorkflowId): string {
 
 // Resolve any posted file to a still-image URL Claude/render can use: a real image's
 // url_private, or a video's poster thumbnail (via files.info). Returns null if neither.
-async function resolveStillFrame(
+// Exported: drop-studio.ts (the #ai-content-pest-control lane) reuses it for video drops.
+export async function resolveStillFrame(
   file: SlackFileLike
 ): Promise<{ url: string; mimetype: string; kind: "image" | "video" } | null> {
   const mime = file.mimetype ?? "";

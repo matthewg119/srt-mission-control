@@ -111,6 +111,18 @@ export interface JobData {
   }>;
   wf_name?: string; // display name typed at the save card
   caption_draft?: string; // the caption awaiting ✅
+
+  // --- #ai-content-pest-control drop lane (drop-studio.ts) ---
+  drop_media?: Array<{ url: string; kind: "image" | "video" }>; // resolved stills, drop order
+  drop_lines?: string[]; // parsed copy lines as dropped
+  fit_menu?: string[]; // workflow ids in fit-card order (reply N picks)
+  prompt_slots?: Array<{ scene: number; image_url?: string | null }>; // prompt-drop image intake
+  copy_options?: string[]; // rendered copy-option summaries (pick N at pd_copy)
+
+  // --- #agent-wokrflow-creator (workflow-agent.ts) ---
+  agent_media?: string[]; // uploaded still URLs (drop order)
+  agent_copy?: string[]; // his copy lines (re-paste replaces)
+  variations?: unknown[]; // the 3 proposed render variations awaiting keep N
 }
 
 export type JobStage =
@@ -157,7 +169,18 @@ export type JobStage =
   | "b2_images"
   | "b2_save"
   | "b2_render"
-  | "b2_caption";
+  | "b2_caption"
+  // #ai-content-pest-control drop lane (drop-studio.ts): drop-and-render + prompt drops:
+  | "dr_fit"
+  | "dr_copy"
+  | "dr_render"
+  | "pd_await_images"
+  | "pd_copy"
+  | "pd_render"
+  // #agent-wokrflow-creator (workflow-agent.ts): create workflows via 3 render variations:
+  | "awc_avatar"
+  | "awc_await_content"
+  | "awc_variations";
 
 export interface ContentJob {
   id: string;

@@ -28,6 +28,14 @@ export const VEKTOR_CHANNELS = {
   contentFull: process.env.SLACK_CONTENT_FULL_CHANNEL || "",
   // #content-analyzer — drop a video, get a shot-by-shot storyboard + pest remake.
   contentAnalyzer: process.env.SLACK_CONTENT_ANALYZER_CHANNEL || "",
+  // #ai-content-pest-control — the SIMPLE daily lane, pinned to the pest_control
+  // avatar: drop media + copy -> workflow match -> MP4 + caption; 3x/day prompt
+  // drops; workflow reference feedback. (drop-studio.ts)
+  aiContentPestControl: process.env.SLACK_AI_CONTENT_PEST_CONTROL_CHANNEL || "",
+  // #agent-wokrflow-creator — workflow CREATION agent: go -> avatar -> report ->
+  // audio + media + copy -> 3 render variations as Claude Code prompts -> keep N.
+  // (workflow-agent.ts; channel name typo is Matthew's, keep it.)
+  agentWorkflowCreator: process.env.SLACK_AGENT_WORKFLOW_CREATOR_CHANNEL || "",
 };
 
 export type VektorCategory =

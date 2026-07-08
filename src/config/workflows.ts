@@ -106,6 +106,11 @@ export interface WorkflowRenderOptions {
   aspect?: string; // e.g. "9:16"
   provider?: string; // image provider override (else POV_IMAGE_PROVIDER)
   quality?: string; // gpt image quality override ("low" | "medium" | "high")
+  // ONE render build per workflow (render-dispatch.ts). "render_reel" = the legacy
+  // Vargas 6s single-image build; "render_spec" (default) = the generic spec engine;
+  // any other value = a custom render-service endpoint slug (api/<build>.py) that
+  // accepts the same render-spec JSON payload (created via agent-channel Claude Code prompts).
+  build?: string;
 }
 
 // A RENDER SEQUENCE is a reusable rendering variant of the SAME workflow scenes: a different
@@ -330,9 +335,44 @@ const PEST_6HL_PROPAGANDA: Workflow = {
   ],
 };
 
+// "Shabang" — the original Vargas 6s single-image reel (label + hook + payoff + cta
+// chips over one still, house song bed) registered as a first-class workflow so the
+// drop-and-render fit matcher and the prompt-drop rotation can use it. Its render is
+// the legacy render-reel build (render-dispatch.ts); copy keys mirror studio.ts
+// parseBoxes exactly so a 4-line drop maps 1:1. Timings are nominal (the Python
+// template owns layout); they exist for box-count matching + reslotCopyToStructure.
+const PEST_SHABANG: Workflow = {
+  id: "pest_control__reel__shabang",
+  vertical_id: "pest_control",
+  name: "Shabang",
+  category: "reel",
+  subcategory: null,
+  status: "active",
+  scenes: [], // the single image comes from the drop
+  captions: [],
+  copy_structure: [
+    { key: "label", label: "Label", guidance: "Top strip: who this is for or the topic.", shot: 1, at_second: 0, out_second: 6, position: "upper_middle" },
+    { key: "hook", label: "Hook", guidance: "The scroll-stopping line.", shot: 1, at_second: 0, out_second: 6, position: "center" },
+    { key: "payoff", label: "Payoff", guidance: "The twist or consequence line.", shot: 1, at_second: 0, out_second: 6, position: "center" },
+    { key: "cta", label: "CTA", guidance: "Single clear call to action.", shot: 1, at_second: 0, out_second: 6, position: "lower" },
+  ],
+  render_spec: null, // render_reel builds ignore the spec engine
+  song_ref: DEFAULT_SONG_REF, // the fixed render-service bed
+  render_sequences: [],
+  render_options: { min_shots: 1, max_shots: 1, aspect: "9:16", build: "render_reel" },
+  example_video_url: null,
+  example_storyboard: null,
+  shot_screenshots: [],
+  source_kind: "seeded",
+  source_example_id: null,
+  production_status: "live",
+  description: "1-image 6s branded reel: label, hook, payoff, cta over one still, house song bed.",
+};
+
 export const SEED_WORKFLOWS: Record<string, Workflow> = {
   [PEST_WASP_NEST.id]: PEST_WASP_NEST,
   [PEST_6HL_PROPAGANDA.id]: PEST_6HL_PROPAGANDA,
+  [PEST_SHABANG.id]: PEST_SHABANG,
 };
 
 // ---------------------------------------------------------------------------------------
