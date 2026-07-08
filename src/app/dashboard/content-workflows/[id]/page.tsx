@@ -14,10 +14,21 @@ interface Scene {
   role: string;
   image_prompt: string;
   animation_prompt: string;
+  animation_preset?: string;
+  animation_examples?: string[];
   duration_seconds?: number;
   image_url?: string | null;
   image_approved?: boolean;
 }
+
+const ANIMATION_PRESET_KEYS = [
+  "static_hold",
+  "slow_push_in",
+  "slow_pull_out",
+  "handheld_walk",
+  "whip_pan",
+  "tilt_reveal",
+];
 
 interface CopyRole {
   key: string;
@@ -64,6 +75,10 @@ interface WorkflowDetail {
   reference_media: Array<{ kind: string; url: string; added_at?: string }>;
   approved_variations: ApprovedVariation[];
   production_status: string;
+  style_dna: string | null;
+  caption_template: string | null;
+  beat_grid: { bpm: number | null; beats: number[]; duration: number | null } | null;
+  scene_refs: Record<string, string[]>;
   detail_mermaid: string | null;
   video_description: string | null;
   render_prompt: string | null;
@@ -120,6 +135,10 @@ export default function WorkflowEditorPage() {
   const [quality, setQuality] = useState("");
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [copyStructure, setCopyStructure] = useState<CopyRole[]>([]);
+  const [styleDna, setStyleDna] = useState("");
+  const [captionTemplate, setCaptionTemplate] = useState("");
+  const [rendering, setRendering] = useState(false);
+  const [testVideoUrl, setTestVideoUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -138,6 +157,8 @@ export default function WorkflowEditorPage() {
       setQuality(data.render_options?.quality ?? "");
       setScenes(data.scenes ?? []);
       setCopyStructure(data.copy_structure ?? []);
+      setStyleDna(data.style_dna ?? "");
+      setCaptionTemplate(data.caption_template ?? "");
     } catch {
       setNotice("Could not load this workflow.");
     } finally {
@@ -164,8 +185,10 @@ export default function WorkflowEditorPage() {
     if (Object.keys(ro).length) patch.render_options = ro;
     if (JSON.stringify(scenes) !== JSON.stringify(wf.scenes ?? [])) patch.scenes = scenes;
     if (JSON.stringify(copyStructure) !== JSON.stringify(wf.copy_structure ?? [])) patch.copy_structure = copyStructure;
+    if (styleDna !== (wf.style_dna ?? "")) patch.style_dna = styleDna;
+    if (captionTemplate !== (wf.caption_template ?? "")) patch.caption_template = captionTemplate;
     return patch;
-  }, [wf, name, status, description, visualRules, songRef, provider, aspect, quality, scenes, copyStructure]);
+  }, [wf, name, status, description, visualRules, songRef, provider, aspect, quality, scenes, copyStructure, styleDna, captionTemplate]);
 
   const dirty = useMemo(() => Object.keys(buildPatch()).length > 0, [buildPatch]);
 
@@ -211,6 +234,27 @@ export default function WorkflowEditorPage() {
     } finally {
       setLaunching(false);
       setTimeout(() => setNotice(null), 4000);
+    }
+  }, [id]);
+
+  const testRender = useCallback(async () => {
+    setRendering(true);
+    setTestVideoUrl(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/content-workflows/${encodeURIComponent(id)}/test-render`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setNotice(data.problems?.length ? `${data.error}: ${data.problems.join("; ")}` : (data.error ?? "Render failed."));
+        return;
+      }
+      setTestVideoUrl(data.url as string);
+      setNotice(`Test render done (${Number(data.duration).toFixed(1)}s).`);
+    } catch {
+      setNotice("Render failed.");
+    } finally {
+      setRendering(false);
+      setTimeout(() => setNotice(null), 6000);
     }
   }, [id]);
 
@@ -285,6 +329,31 @@ export default function WorkflowEditorPage() {
         <h2 className="text-sm font-semibold text-white mb-3">Consistency profile</h2>
         <label className={labelCls}>Description (what this workflow is, one line)</label>
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+        <label className={`${labelCls} mt-4`}>
+          Style DNA (prepended to EVERY scene prompt; scene prompts describe only the action)
+        </label>
+        <textarea
+          value={styleDna}
+          onChange={(e) => setStyleDna(e.target.value)}
+          rows={3}
+          placeholder="POV GoPro chest mount, pest control tech, daytime residential exterior, natural harsh sunlight, slight fisheye, gloved hands visible..."
+          className={`${inputCls} resize-none`}
+        />
+        <label className={`${labelCls} mt-4`}>Caption template (optional; the caption stage fills it when set)</label>
+        <textarea
+          value={captionTemplate}
+          onChange={(e) => setCaptionTemplate(e.target.value)}
+          rows={2}
+          placeholder="Leave empty for a fully generated caption."
+          className={`${inputCls} resize-none`}
+        />
+        {wf.beat_grid && (
+          <p className="text-xs text-white/40 mt-3">
+            Beat grid on file: {wf.beat_grid.bpm ? `${Math.round(wf.beat_grid.bpm)} BPM` : "unknown BPM"} ·{" "}
+            {wf.beat_grid.beats.length} beats · {wf.beat_grid.duration ? `${wf.beat_grid.duration.toFixed(1)}s` : "?"} (used by
+            `sync auto` in Slack)
+          </p>
+        )}
         <label className={`${labelCls} mt-4`}>Visual rules (every image prompt must honor these)</label>
         <div className="space-y-2">
           {visualRules.map((r, i) => (
@@ -377,15 +446,45 @@ export default function WorkflowEditorPage() {
                       className={`${inputCls} resize-none text-xs`}
                     />
                   </div>
-                  <div>
-                    <label className={labelCls}>Animation prompt (motion only)</label>
-                    <textarea
-                      value={s.animation_prompt}
-                      onChange={(e) => setScenes(scenes.map((x, j) => (j === i ? { ...x, animation_prompt: e.target.value } : x)))}
-                      rows={1}
-                      className={`${inputCls} resize-none text-xs`}
-                    />
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className={labelCls}>Animation prompt (motion only; overrides the preset)</label>
+                      <textarea
+                        value={s.animation_prompt}
+                        onChange={(e) => setScenes(scenes.map((x, j) => (j === i ? { ...x, animation_prompt: e.target.value } : x)))}
+                        rows={1}
+                        className={`${inputCls} resize-none text-xs`}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Preset</label>
+                      <select
+                        value={s.animation_preset ?? ""}
+                        onChange={(e) =>
+                          setScenes(scenes.map((x, j) => (j === i ? { ...x, animation_preset: e.target.value || undefined } : x)))
+                        }
+                        className={`${inputCls} !py-1 text-xs`}
+                      >
+                        <option value="">none</option>
+                        {ANIMATION_PRESET_KEYS.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
+                  {(wf.scene_refs?.[String(i + 1)] ?? []).length > 0 && (
+                    <div>
+                      <label className={labelCls}>Reference board ({(wf.scene_refs[String(i + 1)] ?? []).length}/9, scene-scoped)</label>
+                      <div className="grid grid-cols-9 gap-1">
+                        {(wf.scene_refs[String(i + 1)] ?? []).slice(0, 9).map((u, j) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={j} src={u} alt="" className="aspect-[3/4] rounded object-cover" />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -541,12 +640,25 @@ export default function WorkflowEditorPage() {
         <div className={sectionCls}>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-white">Render</h2>
-            {wf.render_prompt && (
-              <button onClick={copyPrompt} className="flex items-center gap-1.5 text-xs text-white/60 hover:text-white px-2.5 py-1.5 rounded bg-white/5">
-                <Copy size={12} /> {copied ? "Copied" : "Copy render prompt"}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={testRender}
+                disabled={rendering}
+                className="flex items-center gap-1.5 text-xs font-semibold text-[#0B1426] bg-[#00C9A7] hover:opacity-90 disabled:opacity-40 px-2.5 py-1.5 rounded"
+                title="Render the spec (own song + scene images + text timings) through render-spec"
+              >
+                <Play size={12} /> {rendering ? "Rendering..." : "Test render"}
               </button>
-            )}
+              {wf.render_prompt && (
+                <button onClick={copyPrompt} className="flex items-center gap-1.5 text-xs text-white/60 hover:text-white px-2.5 py-1.5 rounded bg-white/5">
+                  <Copy size={12} /> {copied ? "Copied" : "Copy render prompt"}
+                </button>
+              )}
+            </div>
           </div>
+          {testVideoUrl && (
+            <video src={testVideoUrl} controls className="w-64 rounded-lg border border-white/10 mb-3" />
+          )}
           {wf.video_description && (
             <pre className="text-[11px] text-white/50 font-mono whitespace-pre-wrap bg-black/20 rounded-lg p-3 max-h-64 overflow-auto">
               {wf.video_description}

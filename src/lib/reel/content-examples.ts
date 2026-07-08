@@ -388,6 +388,7 @@ export async function saveContentExample(row: {
   section?: string | null; // e.g. 'pov/modern_house' (requirement: max 30 per avatar per section)
   zip?: string | null; // optional location tag (e.g. '27401')
   workflowId?: string | null; // scope this reference to ONE workflow's library
+  sceneIndex?: number | null; // scope to ONE scene of that workflow (1-based; gov2 reference boards)
 }): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
@@ -408,14 +409,71 @@ export async function saveContentExample(row: {
         section: row.section ?? null,
         zip: row.zip ?? null,
         // Only sent when set, so callers that don't pass it (and DBs without the
-        // 2026-07-06 migration) keep byte-identical payloads.
+        // 2026-07-06 / 2026-07-08 migrations) keep byte-identical payloads.
         ...(row.workflowId ? { workflow_id: row.workflowId } : {}),
+        ...(row.sceneIndex ? { scene_index: row.sceneIndex } : {}),
       },
       { onConflict: "source_path" }
     );
     if (error) console.error("[content-examples] saveContentExample upsert failed:", error.message);
   } catch (e) {
     console.error("[content-examples] saveContentExample threw:", (e as Error).message);
+  }
+}
+
+// ---- Scene-scoped reference boards (Workflow Builder v2) ----------------------------------
+
+/**
+ * Load a scene's OWN reference frames, and only those. STRICT by design (the continuity
+ * guarantee): `workflow_id = X AND scene_index = N`, rows labeled `generated` excluded,
+ * and NO vertical/realism fallback — a scene with an empty board gets [] so its prompt is
+ * grounded by the style DNA alone, never by another scene's or workflow's subject matter.
+ * Best-effort: returns [] on error.
+ */
+export async function loadSceneReferenceFrames(
+  workflowId: string,
+  sceneIndex: number,
+  limit = 9
+): Promise<ClaudeImageInput[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("frame_urls,labels")
+      .eq("workflow_id", workflowId)
+      .eq("scene_index", sceneIndex)
+      .order("created_at", { ascending: false })
+      .limit(limit * 2);
+    if (error || !Array.isArray(data)) return [];
+    const urls: string[] = [];
+    for (const r of data as FrameRow[]) {
+      if ((r.labels ?? []).includes("generated")) continue;
+      for (const u of r.frame_urls ?? []) {
+        if (typeof u === "string" && u && !urls.includes(u)) urls.push(u);
+        if (urls.length >= limit) break;
+      }
+      if (urls.length >= limit) break;
+    }
+    if (urls.length === 0) return [];
+    const frames = await Promise.all(urls.map((u) => fetchFrame(u)));
+    return frames.filter((f): f is ClaudeImageInput => f !== null);
+  } catch (e) {
+    console.error("[content-examples] loadSceneReferenceFrames fell back to empty:", (e as Error).message);
+    return [];
+  }
+}
+
+/** How many reference rows a scene's board holds (for the 9-image cap). */
+export async function countSceneRefs(workflowId: string, sceneIndex: number): Promise<number> {
+  try {
+    const { count, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("id", { count: "exact", head: true })
+      .eq("workflow_id", workflowId)
+      .eq("scene_index", sceneIndex);
+    if (error) return 0;
+    return count ?? 0;
+  } catch {
+    return 0;
   }
 }
 

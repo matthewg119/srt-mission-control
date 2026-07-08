@@ -56,6 +56,12 @@ import {
   handleSongAttachment,
   handleWorkflowReferenceUpload,
 } from "@/lib/reel/workflow-pipeline";
+import {
+  startGoV2,
+  handleBuilderMessage,
+  handleBuilderReaction,
+  handleBuilderFileDrop,
+} from "@/lib/reel/workflow-builder";
 import { postWorkflowMap } from "@/lib/reel/workflow-map";
 import { postSourcingCard } from "@/lib/reel/sourcing-worksheet";
 import {
@@ -167,6 +173,15 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (pipelineHandled) return NextResponse.json({ ok: true });
+
+        // Workflow Builder v2 (gov2): ✅ advances the current card / 🚫 cancels the session.
+        // Self-routes by content_jobs (format_id workflow_build); falls through otherwise.
+        const builderReactionHandled = await handleBuilderReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (builderReactionHandled) return NextResponse.json({ ok: true });
 
         // Content Engine v3 scrub-or-reference: 📚 (save reference) / 🧪 (scrub into a workflow)
         // on a #content-analyzer decision card. Self-routes by content_jobs; falls through otherwise.
@@ -332,6 +347,14 @@ export async function POST(request: NextRequest) {
           await slack.postThreadReply(channel, parentThreadTs, await summarizeActiveRules());
           return NextResponse.json({ ok: true });
         }
+        // Workflow Builder v2 (gov2) session replies (DNA, timings paste, scene edits, name,
+        // caption). Self-routes by content_jobs (workflow_build); falls through otherwise.
+        const builderReply = await handleBuilderMessage({
+          channel,
+          threadTs: parentThreadTs,
+          text: userText,
+        });
+        if (builderReply) return NextResponse.json({ ok: true });
         // v3 avatar session: `workflow N` -> hooks, `hook N` -> bodies, `body N` -> storyboard,
         // `song X`. Self-routes by the content_jobs workflow session in this thread.
         const vektorReply = await handleVektorMessage({
@@ -360,6 +383,13 @@ export async function POST(request: NextRequest) {
         attachedFiles.length === 0 &&
         userText.trim().length > 0
       ) {
+        // Workflow Builder v2: `gov2` (optionally `gov2 pest_control`) starts the audio-first
+        // builder. Checked before `go` so the two grammars never collide.
+        const gov2Match = /^\s*gov2(?:\s+([a-z][a-z0-9_]*))?\s*$/i.exec(userText);
+        if (gov2Match) {
+          await startGoV2({ channel, verticalId: gov2Match[1]?.toLowerCase() });
+          return NextResponse.json({ ok: true });
+        }
         if (/^\s*go\s*$/i.test(userText)) {
           await startGo({ channel });
           return NextResponse.json({ ok: true });
@@ -389,6 +419,9 @@ export async function POST(request: NextRequest) {
           await startAvatarSession({ channel, verticalId: avatar });
           return NextResponse.json({ ok: true });
         }
+        // Channel-scoped gov2 builder commands (avatar number, `song <url>`, timing paste, ...).
+        const builderChannelReply = await handleBuilderMessage({ channel, text: userText });
+        if (builderChannelReply) return NextResponse.json({ ok: true });
         // Channel-scoped session commands (number pick, headline N, title N, pick, redo, song...).
         const vektorChannelReply = await handleVektorMessage({ channel, text: userText });
         if (vektorChannelReply) return NextResponse.json({ ok: true });
@@ -614,6 +647,15 @@ export async function POST(request: NextRequest) {
       // workflow's REFERENCE creatives (3 refs -> produce the 4th -> in production). Both
       // self-route by content_jobs and fall through when no session claims them.
       if (isContentFullChannel && attachedFiles.length > 0) {
+        // Workflow Builder v2 first: a gov2 session claims its song + scene-image drops
+        // (v1's song handler rejects builder jobs, so order matters here).
+        const builderDropHandled = await handleBuilderFileDrop({
+          channel,
+          threadTs: parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : undefined,
+          files: attachedFiles,
+          text: userText,
+        });
+        if (builderDropHandled) return NextResponse.json({ ok: true });
         const songHandled = await handleSongAttachment({
           channel,
           threadTs: parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : undefined,

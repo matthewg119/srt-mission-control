@@ -96,6 +96,21 @@ export interface JobData {
   // --- new-avatar creation (a kit drop is awaited for this new vertical) ---
   new_vertical_id?: string;
   new_vertical_name?: string;
+
+  // --- Workflow Builder v2 (gov2, format_id "workflow_build") ---
+  beat_grid?: { bpm: number | null; beats: number[]; duration: number | null }; // the analyzed song
+  style_dna?: string; // the approved visual-invariants block for this new workflow
+  timing_spec?: unknown; // the parsed RenderSpec built from Matthew's pasted timings
+  scene_defs?: Array<{
+    role: string; // the action line from the timing paste
+    animation_prompt?: string; // freeform motion override
+    animation_preset?: string; // named preset key (animation-presets.ts)
+    animation_examples?: string[]; // up to 4 collected motion examples
+    ref_count?: number; // reference images saved for this scene so far (cap 9)
+    image_url?: string | null; // the final pasted scene image
+  }>;
+  wf_name?: string; // display name typed at the save card
+  caption_draft?: string; // the caption awaiting ✅
 }
 
 export type JobStage =
@@ -132,7 +147,17 @@ export type JobStage =
   | "await_example"
   // remix upsell stages (after the render prompt is emitted):
   | "remix_offer"
-  | "remix_copy";
+  | "remix_copy"
+  // Workflow Builder v2 (gov2) stages — distinct b2_ prefix, no collision with the v1 machine:
+  | "b2_await_song"
+  | "b2_style_dna"
+  | "b2_timings"
+  | "b2_scenes"
+  | "b2_prompts"
+  | "b2_images"
+  | "b2_save"
+  | "b2_render"
+  | "b2_caption";
 
 export interface ContentJob {
   id: string;
@@ -213,6 +238,24 @@ export async function getLatestSessionByChannel(channel: string): Promise<Conten
     .eq("slack_channel", channel)
     .eq("status", "active")
     .in("format_id", ["avatar_pick", "workflow"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return normalize(data as Record<string, unknown> | null);
+}
+
+/** The most-recent ACTIVE job of one format in a channel (gov2 builder sessions; the v1
+ *  whitelist in getLatestSessionByChannel stays untouched). */
+export async function getLatestJobByChannelFormat(
+  channel: string,
+  formatId: string
+): Promise<ContentJob | null> {
+  const { data } = await supabaseAdmin
+    .from("content_jobs")
+    .select(COLS)
+    .eq("slack_channel", channel)
+    .eq("status", "active")
+    .eq("format_id", formatId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

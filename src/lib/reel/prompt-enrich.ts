@@ -11,7 +11,7 @@
 // Graceful: when there are NO reference frames AND NO active rules, enrichScene returns the scene
 // unchanged, so the generated prompt is byte-identical to today until the library/rules exist.
 
-import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
+import { callClaudeJSON, type ClaudeImageInput, type ClaudeModel } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { loadReferenceFrames } from "@/lib/reel/content-examples";
 import { loadActiveStyleRules } from "@/lib/reel/style-rules";
@@ -44,6 +44,12 @@ export async function enrichScene(
     /** The workflow whose look this frame belongs to: its OWN reference library grounds the
      *  frame, and the subject wording follows its category (POV wording only for pov). */
     workflow?: { id: string; category?: string; description?: string | null } | null;
+    /** Caller-supplied reference frames (gov2 scene boards). When set, the internal
+     *  loadReferenceFrames lookup is SKIPPED entirely — only these frames ground the scene. */
+    frames?: ClaudeImageInput[];
+    /** The workflow's style DNA. The caller prepends it to the final prompt; here it only
+     *  tells the rewriter the invariants are already covered, so the scene stays action-only. */
+    styleDna?: string | null;
   }
 ): Promise<string> {
   const verticalId = opts.vertical.id || DEFAULT_VERTICAL_ID;
@@ -53,7 +59,9 @@ export async function enrichScene(
   // operator approves them, so their presence alone is enough to enrich.
   const [rules, frames] = await Promise.all([
     loadActiveStyleRules(verticalId, opts.formatGroup),
-    loadReferenceFrames(verticalId, { limit: opts.referenceLimit ?? 4, workflowId: opts.workflow?.id }),
+    opts.frames !== undefined
+      ? Promise.resolve(opts.frames)
+      : loadReferenceFrames(verticalId, { limit: opts.referenceLimit ?? 4, workflowId: opts.workflow?.id }),
   ]);
   const extra = (opts.extraRules ?? []).map((r) => stripEmDashes(r)).filter(Boolean);
   if (rules.length === 0 && frames.length === 0 && extra.length === 0) return scene;
@@ -81,6 +89,14 @@ export async function enrichScene(
         "specific, and to honor the operator's rules.",
       ];
   if (wf?.description) subjectLines.push(`This workflow: ${stripEmDashes(wf.description)}`);
+  if (opts.styleDna) {
+    subjectLines.push(
+      "The workflow's style DNA (character, location, lighting, lens, wardrobe) is prepended to the",
+      "prompt separately, so do NOT restate camera or style boilerplate. Keep the rewritten scene",
+      "ACTION-ONLY, consistent with this DNA:",
+      stripEmDashes(opts.styleDna)
+    );
+  }
 
   const ruleLines = [...rules.map((r) => r.rule), ...extra].map((r) => `- ${stripEmDashes(r)}`);
   const system = [

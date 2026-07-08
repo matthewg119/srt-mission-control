@@ -11,6 +11,31 @@ import {
 } from "@/lib/reel/render-spec";
 import { buildWorkflowDetailMermaid } from "@/lib/reel/workflow-map";
 
+// The per-scene reference boards (Workflow Builder v2): urls grouped by scene_index.
+// Tolerates a missing scene_index column (migration not applied) by returning {}.
+async function loadSceneRefIndex(workflowId: string): Promise<Record<string, string[]>> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("frame_urls,labels,scene_index")
+      .eq("workflow_id", workflowId)
+      .order("created_at", { ascending: false })
+      .limit(120);
+    if (error || !Array.isArray(data)) return {};
+    const out: Record<string, string[]> = {};
+    for (const row of data as Array<{ frame_urls: string[] | null; labels: string[] | null; scene_index: number | null }>) {
+      if (!row.scene_index || (row.labels ?? []).includes("generated")) continue;
+      const key = String(row.scene_index);
+      for (const u of row.frame_urls ?? []) {
+        if (typeof u === "string" && u) (out[key] ??= []).push(u);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 // GET — one workflow's full profile for the editor page: description + visual rules, scenes
 // (image/animation prompts), copy boxes, render options (provider/aspect/quality), song,
 // reference media, approved variations (the examples gallery), the production gates, the
@@ -42,6 +67,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       reference_media: wf.reference_media ?? [],
       approved_variations: wf.approved_variations ?? [],
       production_status: wf.production_status ?? "building",
+      style_dna: wf.style_dna ?? null,
+      caption_template: wf.caption_template ?? null,
+      beat_grid: wf.beat_grid ?? null,
+      scene_refs: await loadSceneRefIndex(wf.id),
       detail_mermaid: buildWorkflowDetailMermaid(wf),
       video_description: spec ? buildVideoDescription(wf, spec) : null,
       render_prompt: spec ? buildRenderClaudePrompt(wf, spec) : null,
@@ -56,7 +85,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 // copy_structure and returns validation warnings WITHOUT blocking the save.
 // Note: the Slack pipeline writes the same row via upsertWorkflow while a session runs;
 // single operator, last-writer-wins is accepted.
-const STRING_FIELDS = ["name", "description", "song_ref", "status", "production_status"] as const;
+const STRING_FIELDS = [
+  "name",
+  "description",
+  "song_ref",
+  "status",
+  "production_status",
+  "style_dna",
+  "caption_template",
+] as const;
 
 function cleanStringArray(v: unknown): string[] | null {
   if (!Array.isArray(v)) return null;

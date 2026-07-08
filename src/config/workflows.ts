@@ -25,6 +25,8 @@ export interface WorkflowScene {
   role: string; // the semantic step, e.g. "walk up the ladder", "reveal the nest", "spray"
   image_prompt: string; // first-frame prompt in the avatar's look, NO on-screen text
   animation_prompt: string; // motion only, one sentence
+  animation_preset?: string; // named motion preset key (src/config/animation-presets.ts); freeform animation_prompt wins
+  animation_examples?: string[]; // up to 4 example motion descriptions collected for this scene
   duration_seconds?: number; // shot length (defaults from render_options.clip_seconds)
   image_url?: string | null; // set once the scene image is generated
   image_approved?: boolean; // set once the operator approves that scene image
@@ -84,6 +86,7 @@ export interface RenderTextEvent {
   role?: string; // the CopyRole.key this text fills
   size?: string; // e.g. "small" | "medium" | "large"
   position?: string; // on-screen placement
+  color?: string; // optional chip color lock (engine palette name, e.g. "pink")
 }
 
 export interface RenderSpec {
@@ -166,6 +169,10 @@ export interface Workflow {
   description?: string | null; // one-line human description shown in the menu/map/dashboard
   visual_rules?: string[]; // per-workflow image style guide, fed into every scene prompt
   approved_variations?: ApprovedVariation[];
+  // Workflow Builder v2 columns (docs/2026-07-08-workflow-builder-v2.sql):
+  style_dna?: string | null; // the visual invariants block PREPENDED to every scene prompt (scene prompts = action only)
+  caption_template?: string | null; // optional fill-in template for the post caption
+  beat_grid?: { bpm: number | null; beats: number[]; duration: number | null } | null; // analyzed song grid
 }
 
 // ---------------------------------------------------------------------------------------
@@ -357,6 +364,9 @@ interface WorkflowRow {
   description?: string | null;
   visual_rules?: string[] | null;
   approved_variations?: ApprovedVariation[] | null;
+  style_dna?: string | null;
+  caption_template?: string | null;
+  beat_grid?: { bpm: number | null; beats: number[]; duration: number | null } | null;
 }
 
 function normalizeRow(row: WorkflowRow): Workflow {
@@ -385,6 +395,9 @@ function normalizeRow(row: WorkflowRow): Workflow {
     description: row.description ?? null,
     visual_rules: Array.isArray(row.visual_rules) ? row.visual_rules : [],
     approved_variations: Array.isArray(row.approved_variations) ? row.approved_variations : [],
+    style_dna: row.style_dna ?? null,
+    caption_template: row.caption_template ?? null,
+    beat_grid: row.beat_grid ?? null,
   };
 }
 

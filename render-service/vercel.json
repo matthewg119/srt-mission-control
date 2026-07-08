@@ -6,6 +6,11 @@
       "maxDuration": 120,
       "includeFiles": "api/srt_reel/**"
     },
+    "api/render-spec.py": {
+      "memory": 2048,
+      "maxDuration": 120,
+      "includeFiles": "api/srt_reel/**"
+    },
     "api/ig-frames.py": {
       "memory": 2048,
       "maxDuration": 120

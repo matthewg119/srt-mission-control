@@ -79,6 +79,10 @@
     {
       "path": "/api/cron/crm-exclusion-sync",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/gov2-audio-drop",
+      "schedule": "0 12 * * *"
     }
   ]
 }
