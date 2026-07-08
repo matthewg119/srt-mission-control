@@ -18,6 +18,7 @@ export interface SpecRenderText {
   position?: string;
   color?: string;
   size?: string;
+  pop?: boolean; // false = first line of its shot: appears with the cut, no pop-in
 }
 
 export interface SpecRenderPayload {
@@ -48,18 +49,46 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
   const duration =
     spec.duration_seconds || Math.max(...shots.map((s) => s.end));
   const song = resolveSong(spec.song_ref ?? workflow.song_ref);
+
+  // The first line of each shot appears with the cut (no pop); later lines in the
+  // same shot animate in. Map each text to the shot whose slot contains its
+  // at_second (fall back to the last shot that started before it), then the
+  // earliest text in each shot is static. An explicit `pop` on the spec wins.
+  const shotsByStart = [...shots].sort((a, b) => a.start - b.start);
+  const shotIndexFor = (at: number): number => {
+    let idx = 0;
+    for (let k = 0; k < shotsByStart.length; k++) {
+      const s = shotsByStart[k];
+      if (at >= s.start && at < s.end) return k;
+      if (at >= s.start) idx = k;
+    }
+    return idx;
+  };
+  const specTexts = spec.texts ?? [];
+  const minAtByShot = new Map<number, number>();
+  for (const t of specTexts) {
+    const si = shotIndexFor(t.at_second);
+    const cur = minAtByShot.get(si);
+    if (cur === undefined || t.at_second < cur) minAtByShot.set(si, t.at_second);
+  }
+
   return {
     song_url: song.url ?? null,
     duration,
     shots: payloadShots,
-    texts: (spec.texts ?? []).map((t) => ({
-      text: t.text,
-      at_second: t.at_second,
-      out_second: t.out_second ?? duration,
-      ...(t.position ? { position: t.position } : {}),
-      ...(t.color ? { color: t.color } : {}),
-      ...(t.size ? { size: t.size } : {}),
-    })),
+    texts: specTexts.map((t) => {
+      const isFirstInShot = minAtByShot.get(shotIndexFor(t.at_second)) === t.at_second;
+      const pop = typeof t.pop === "boolean" ? t.pop : !isFirstInShot;
+      return {
+        text: t.text,
+        at_second: t.at_second,
+        out_second: t.out_second ?? duration,
+        pop,
+        ...(t.position ? { position: t.position } : {}),
+        ...(t.color ? { color: t.color } : {}),
+        ...(t.size ? { size: t.size } : {}),
+      };
+    }),
   };
 }
 

@@ -767,7 +767,7 @@ async function pickPromptDropOption(job: ContentJob, n: number): Promise<void> {
       { key: "payoff", label: "Payoff", text: script.line2 },
       { key: "cta", label: "CTA", text: script.cta },
     ];
-    waitUntil(finishDropRender(job, workflow, copy, images));
+    waitUntil(enterDropModeGate(job, workflow, copy, images));
     return;
   }
 
@@ -977,7 +977,7 @@ async function handlePastedCopyAtPdCopy(job: ContentJob, text: string): Promise<
   const lines = splitLines(text);
   const direct = zeroAdaptationCopy(workflow, lines);
   if (direct) {
-    waitUntil(finishDropRender(job, workflow, direct, images));
+    waitUntil(enterDropModeGate(job, workflow, direct, images));
     return;
   }
   await post(job.slack_channel, job.slack_thread_ts, "Fitting your lines to the boxes...");
@@ -1082,7 +1082,7 @@ export async function handleDropReaction(args: {
         if (copy.length) {
           const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
           const images = (job.data.prompt_slots ?? []).map((s) => s.image_url!).filter(Boolean);
-          if (workflow) waitUntil(finishDropRender(job, workflow, copy, images));
+          if (workflow) waitUntil(enterDropModeGate(job, workflow, copy, images));
         } else {
           await pickPromptDropOption(job, 1);
         }

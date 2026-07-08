@@ -87,6 +87,7 @@ export interface RenderTextEvent {
   size?: string; // e.g. "small" | "medium" | "large"
   position?: string; // on-screen placement
   color?: string; // optional chip color lock (engine palette name, e.g. "pink")
+  pop?: boolean; // animate the chip in (default); false = appears with the cut, no pop
 }
 
 export interface RenderSpec {

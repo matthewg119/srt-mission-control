@@ -12,6 +12,7 @@ primitives (cover, render_chip, ease_pop, PALETTE, FFMPEG, W/H/FPS).
 """
 
 import math
+import random
 import subprocess
 
 from PIL import Image
@@ -36,15 +37,27 @@ POSITIONS = {
 }
 DEFAULT_POSITION = "center"
 
-SIZE_SCALE = {"small": 0.7, "medium": 0.85, "large": 1.0}
+# Smaller than the locked format so the chips stop covering the footage (matches
+# how Matthew edits in CapCut). Tunable: "medium" is the default and lands ~46px.
+SIZE_SCALE = {"small": 0.60, "medium": 0.72, "large": 0.85}
 
 SAFE_TOP = int(H * 0.11)
 SAFE_BOT = int(H * 0.93)
 
-# Default chip color per position when the spec doesn't pin one; the top slot
-# reads best in white (like the locked format's label), everything else pink.
-POSITION_DEFAULT_COLOR = {"top": "white"}
-DEFAULT_COLOR = "pink"
+
+def _color_cycle():
+    """Yield palette color keys in a shuffled cycle so every box that doesn't pin
+    its own color gets a different one (pink/green/purple/... mix). Reshuffles
+    each time the deck is exhausted."""
+    keys = list(engine.PALETTE.keys())
+    random.shuffle(keys)
+    i = 0
+    while True:
+        if i >= len(keys):
+            random.shuffle(keys)
+            i = 0
+        yield keys[i]
+        i += 1
 
 
 def validate_spec(shots, texts, duration):
@@ -101,11 +114,17 @@ def _prep_shots(shots, image_paths):
 
 
 def _prep_texts(texts):
-    """Render every chip once; keep timing + placement."""
+    """Render every chip once; keep timing + placement.
+
+    `pop` (default True) animates the chip in with the CapCut-style pop; a chip
+    with pop=False just appears at full size the instant it's due (used for the
+    first line of each shot, which is baked into the cut). Chips without an
+    explicit `color` get a randomized palette color."""
+    palette = _color_cycle()
     out = []
     for t in texts or []:
         position = t.get("position") or DEFAULT_POSITION
-        color = t.get("color") or POSITION_DEFAULT_COLOR.get(position, DEFAULT_COLOR)
+        color = t.get("color") or next(palette)
         scale = SIZE_SCALE.get(t.get("size") or "medium", SIZE_SCALE["medium"])
         chip = engine.render_chip(str(t["text"]), color, "body", scale)
         out.append(
@@ -114,6 +133,7 @@ def _prep_texts(texts):
                 at=float(t.get("at_second", 0)),
                 out=float(t.get("out_second", 0)),
                 position=position,
+                pop=bool(t.get("pop", True)),
             )
         )
     out.sort(key=lambda x: x["at"])
@@ -159,9 +179,14 @@ def _place_texts(active, t):
         y = max(SAFE_TOP, min(y, SAFE_BOT - total))
         for it in items:
             chip = it["chip"]
-            p_in = min(1.0, (t - it["at"]) / POP)
-            scale = engine.ease_pop(p_in)
-            alpha = min(1.0, (t - it["at"]) / (POP * 0.6))
+            if it["pop"]:
+                p_in = min(1.0, (t - it["at"]) / POP)
+                scale = engine.ease_pop(p_in)
+                alpha = min(1.0, (t - it["at"]) / (POP * 0.6))
+            else:
+                # First line of the shot: appears with the cut, no pop / no fade-in.
+                scale = 1.0
+                alpha = 1.0
             remaining = it["out"] - t
             if remaining < FADE_OUT:
                 alpha *= max(0.0, remaining / FADE_OUT)
