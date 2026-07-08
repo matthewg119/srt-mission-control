@@ -95,6 +95,7 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
 export interface SpecRenderResult {
   url: string;
   duration: number;
+  engineVersion?: string;
 }
 
 /**
@@ -113,7 +114,13 @@ export async function renderSpecVideo(payload: SpecRenderPayload): Promise<SpecR
     signal: AbortSignal.timeout(120000),
   });
   const bodyText = await res.text();
-  let body: { url?: string; duration?: number; error?: string; problems?: string[] } = {};
+  let body: {
+    url?: string;
+    duration?: number;
+    engine_version?: string;
+    error?: string;
+    problems?: string[];
+  } = {};
   try {
     body = JSON.parse(bodyText);
   } catch {
@@ -125,5 +132,11 @@ export async function renderSpecVideo(payload: SpecRenderPayload): Promise<SpecR
       : body.error || bodyText.slice(0, 300) || `HTTP ${res.status}`;
     throw new Error(`render-spec failed: ${detail}`);
   }
-  return { url: body.url, duration: body.duration ?? payload.duration };
+  // Proves which renderer build actually ran (guards against a stale srt-reel-render deploy).
+  console.log(`[render-spec] rendered by engine=${body.engine_version ?? "unknown"}`);
+  return {
+    url: body.url,
+    duration: body.duration ?? payload.duration,
+    engineVersion: body.engine_version,
+  };
 }

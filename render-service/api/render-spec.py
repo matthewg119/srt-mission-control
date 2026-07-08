@@ -122,15 +122,19 @@ class handler(BaseHTTPRequestHandler):
                 shots, texts, image_paths, song_path, duration, out_path, quiet=True
             )
 
+            engine_version = getattr(spec_engine, "ENGINE_VERSION", "unknown")
             url = _supabase_upload(out_path)
             if url:
-                return self._send(200, {"url": url, "duration": duration})
+                return self._send(
+                    200, {"url": url, "duration": duration, "engine_version": engine_version}
+                )
             with open(out_path, "rb") as fh:
                 return self._send(
                     200,
                     {
                         "mp4_b64": base64.b64encode(fh.read()).decode("ascii"),
                         "duration": duration,
+                        "engine_version": engine_version,
                     },
                 )
         except ValueError as e:

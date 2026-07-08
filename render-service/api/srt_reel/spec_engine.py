@@ -21,6 +21,10 @@ from . import engine
 
 W, H, FPS = engine.W, engine.H, engine.FPS
 
+# Bump on every renderer behavior change so a render response can prove which
+# build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
+ENGINE_VERSION = "spec-2026-07-08-decollide"
+
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
 STACK_GAP = 12    # px between two chips active at the same position
@@ -167,32 +171,42 @@ def _shot_frame(shot, t):
 
 
 def _place_texts(active, t):
-    """Yield (chip, x, y, alpha_scale, alpha) for every active text at time t.
-    Chips sharing a position stack downward; everything clamps to the safe area."""
-    by_position = {}
-    for item in active:
-        by_position.setdefault(item["position"], []).append(item)
-    for position, items in by_position.items():
-        y_center = int(H * POSITIONS[position])
-        total = sum(it["chip"].size[1] for it in items) + STACK_GAP * (len(items) - 1)
-        y = y_center - total // 2
-        y = max(SAFE_TOP, min(y, SAFE_BOT - total))
-        for it in items:
-            chip = it["chip"]
-            if it["pop"]:
-                p_in = min(1.0, (t - it["at"]) / POP)
-                scale = engine.ease_pop(p_in)
-                alpha = min(1.0, (t - it["at"]) / (POP * 0.6))
-            else:
-                # First line of the shot: appears with the cut, no pop / no fade-in.
-                scale = 1.0
-                alpha = 1.0
-            remaining = it["out"] - t
-            if remaining < FADE_OUT:
-                alpha *= max(0.0, remaining / FADE_OUT)
-            cw, ch = chip.size
-            yield chip, (W - cw) // 2, y + ch // 2, scale, alpha
-            y += ch + STACK_GAP
+    """Yield (chip, x, y_center, scale, alpha) for every active text at time t.
+
+    Each chip is anchored to its own position's y-center, but a lower chip is
+    pushed DOWN whenever it would cover the chip above it (across all positions,
+    not just chips sharing a position). This keeps the title fixed and drops the
+    next line below it instead of on top. Nothing ever overlaps."""
+    # Top -> bottom by position, then resolve collisions in one downward sweep.
+    ordered = sorted(active, key=lambda it: POSITIONS[it["position"]])
+    placed = []          # (item, top_y)
+    prev_bottom = SAFE_TOP
+    for it in ordered:
+        ch = it["chip"].size[1]
+        anchor_top = int(H * POSITIONS[it["position"]]) - ch // 2
+        top = max(anchor_top, prev_bottom)
+        placed.append((it, top))
+        prev_bottom = top + ch + STACK_GAP
+    # If the stack ran past the bottom safe line, shift the whole group up.
+    overflow = (prev_bottom - STACK_GAP) - SAFE_BOT
+    if overflow > 0:
+        placed = [(it, top - overflow) for it, top in placed]
+
+    for it, top in placed:
+        chip = it["chip"]
+        if it["pop"]:
+            p_in = min(1.0, (t - it["at"]) / POP)
+            scale = engine.ease_pop(p_in)
+            alpha = min(1.0, (t - it["at"]) / (POP * 0.6))
+        else:
+            # First line of the shot: appears with the cut, no pop / no fade-in.
+            scale = 1.0
+            alpha = 1.0
+        remaining = it["out"] - t
+        if remaining < FADE_OUT:
+            alpha *= max(0.0, remaining / FADE_OUT)
+        cw, ch = chip.size
+        yield chip, (W - cw) // 2, top + ch // 2, scale, alpha
 
 
 def render_spec(shots, texts, image_paths, song_path, duration, out_path, quiet=True):
