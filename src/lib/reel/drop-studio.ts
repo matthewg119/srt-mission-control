@@ -56,6 +56,10 @@ import { listWorkflows, loadWorkflow, resolveSong, type Workflow } from "@/confi
 import { loadVertical, type Vertical } from "@/config/verticals";
 
 export const DROP_VERTICAL_ID = "pest_control";
+// The `go` report (30 headlines + story material) speaks to the pest-control BUSINESS
+// OWNER (the B2B AI-content buyer), not the consumer/homeowner avatar. Render/workflow
+// matching stays on DROP_VERTICAL_ID (Workflow 2 is filed under pest_control).
+const DROP_REPORT_VERTICAL_ID = "pest_owner_ai";
 const DROP_FORMAT = "drop_render";
 const PROMPT_FORMAT = "prompt_drop";
 
@@ -219,10 +223,10 @@ async function activeWorkflows(): Promise<Workflow[]> {
 /**
  * `go` in the drop channel: post 30 headline angles + the avatar's story material so the
  * operator has raw copy to build from, then drop images + lines to render. Mirrors the
- * #agent-wokrflow-creator report but pinned to the drop vertical (pest_control).
+ * #agent-wokrflow-creator report but pinned to the pest-control OWNER avatar.
  */
 export async function handleDropGo(channel: string): Promise<void> {
-  const vertical = await loadVertical(DROP_VERTICAL_ID);
+  const vertical = await loadVertical(DROP_REPORT_VERTICAL_ID);
   await slack.postMessage(channel, `*${vertical.name}* — pulling 30 headline angles + story material...`);
   try {
     const [headlines, ref] = await Promise.all([
