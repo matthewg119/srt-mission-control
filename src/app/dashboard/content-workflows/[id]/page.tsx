@@ -18,6 +18,7 @@ interface Scene {
   animation_examples?: string[];
   duration_seconds?: number;
   image_url?: string | null;
+  video_url?: string | null;
   image_approved?: boolean;
 }
 
@@ -444,6 +445,17 @@ export default function WorkflowEditorPage() {
                       onChange={(e) => setScenes(scenes.map((x, j) => (j === i ? { ...x, image_prompt: e.target.value } : x)))}
                       rows={2}
                       className={`${inputCls} resize-none text-xs`}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Video URL (animated clip; renders in place of the still, trimmed to the shot)</label>
+                    <input
+                      value={s.video_url ?? ""}
+                      placeholder="https://…mp4 — leave blank to use the still image"
+                      onChange={(e) =>
+                        setScenes(scenes.map((x, j) => (j === i ? { ...x, video_url: e.target.value || null } : x)))
+                      }
+                      className={`${inputCls} !py-1 text-xs`}
                     />
                   </div>
                   <div className="grid grid-cols-3 gap-2">

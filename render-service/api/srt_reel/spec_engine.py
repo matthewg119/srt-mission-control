@@ -12,6 +12,7 @@ primitives (cover, render_chip, ease_pop, PALETTE, FFMPEG, W/H/FPS).
 """
 
 import math
+import os
 import random
 import subprocess
 
@@ -23,7 +24,7 @@ W, H, FPS = engine.W, engine.H, engine.FPS
 
 # Bump on every renderer behavior change so a render response can prove which
 # build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
-ENGINE_VERSION = "spec-2026-07-08-decollide"
+ENGINE_VERSION = "spec-2026-07-09-video"
 
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
@@ -74,8 +75,8 @@ def validate_spec(shots, texts, duration):
     if duration and duration > MAX_DURATION:
         problems.append(f"duration {duration}s exceeds the {MAX_DURATION:.0f}s cap")
     for i, s in enumerate(shots):
-        if not s.get("image_url"):
-            problems.append(f"shot {i + 1} has no image_url")
+        if not s.get("image_url") and not s.get("video_url"):
+            problems.append(f"shot {i + 1} has no image_url or video_url")
         start, end = float(s.get("start", 0)), float(s.get("end", 0))
         if end <= start:
             problems.append(f"shot {i + 1}: end ({end}) must be after start ({start})")
@@ -101,18 +102,30 @@ def validate_spec(shots, texts, duration):
     return problems
 
 
-def _prep_shots(shots, image_paths):
-    """Cover-crop every shot image once; keep slot times."""
+def _prep_shots(shots, sources):
+    """Prep each shot's background, keeping slot times.
+
+    `sources[i]` mirrors `shots[i]` (before the start-sort) and is either
+    {"kind":"image","path":...} (cover-cropped once here) or
+    {"kind":"video","frames_dir":...,"count":N} (frames already cover-cropped to
+    WxH by render-spec.py). A bare path is treated as an image for back-compat."""
     out = []
-    for s, path in zip(shots, image_paths):
-        out.append(
-            dict(
-                img=engine.cover(path),
-                start=float(s.get("start", 0)),
-                end=float(s.get("end", 0)),
-                zoom=float(s.get("zoom") or 0.0),
-            )
+    for s, src in zip(shots, sources):
+        shot = dict(
+            start=float(s.get("start", 0)),
+            end=float(s.get("end", 0)),
+            zoom=float(s.get("zoom") or 0.0),
         )
+        if isinstance(src, dict) and src.get("kind") == "video":
+            shot.update(
+                kind="video",
+                frames_dir=src["frames_dir"],
+                count=int(src["count"]),
+            )
+        else:
+            path = src["path"] if isinstance(src, dict) else src
+            shot.update(kind="image", img=engine.cover(path))
+        out.append(shot)
     out.sort(key=lambda x: x["start"])
     return out
 
@@ -154,20 +167,33 @@ def _active_shot(shots, t):
     return shots[-1]
 
 
-def _shot_frame(shot, t):
-    """The shot's frame at time t, zoom progressing over the shot's OWN slot."""
-    if shot["zoom"] <= 0:
-        return shot["img"].convert("RGBA")
+def _zoomed(img, shot, t):
+    """Ken-burns crop of a WxH image, zoom progressing over the shot's OWN slot."""
     slot = max(0.001, shot["end"] - shot["start"])
     p = min(1.0, max(0.0, (t - shot["start"]) / slot))
     z = 1 + shot["zoom"] * p
     fw, fh = int(W * z), int(H * z)
-    return (
-        shot["img"]
-        .resize((fw, fh), Image.LANCZOS)
-        .crop(((fw - W) // 2, (fh - H) // 2, (fw - W) // 2 + W, (fh - H) // 2 + H))
-        .convert("RGBA")
+    return img.resize((fw, fh), Image.LANCZOS).crop(
+        ((fw - W) // 2, (fh - H) // 2, (fw - W) // 2 + W, (fh - H) // 2 + H)
     )
+
+
+def _shot_frame(shot, t):
+    """The shot's frame at time t.
+
+    Stills apply the ken-burns zoom over the shot's slot. A video shot returns its
+    pre-extracted (already cover-cropped) frame at the local time, holding the last
+    frame if the clip is shorter than the shot; zoom is applied only when set > 0
+    so the clip's own motion normally reads on its own."""
+    if shot["kind"] == "video":
+        idx = max(0, min(shot["count"] - 1, int((t - shot["start"]) * FPS)))
+        img = Image.open(
+            os.path.join(shot["frames_dir"], f"{idx + 1:05d}.png")
+        ).convert("RGB")
+        return (_zoomed(img, shot, t) if shot["zoom"] > 0 else img).convert("RGBA")
+    if shot["zoom"] <= 0:
+        return shot["img"].convert("RGBA")
+    return _zoomed(shot["img"], shot, t).convert("RGBA")
 
 
 def _place_texts(active, t):
@@ -209,16 +235,17 @@ def _place_texts(active, t):
         yield chip, (W - cw) // 2, top + ch // 2, scale, alpha
 
 
-def render_spec(shots, texts, image_paths, song_path, duration, out_path, quiet=True):
+def render_spec(shots, texts, sources, song_path, duration, out_path, quiet=True):
     """Render the spec to out_path.
 
-    shots:       [{image_url, start, end, zoom?}] (image_url only used for errors)
-    texts:       [{text, at_second, out_second, position?, color?, size?}]
-    image_paths: local file per shot, same order as shots
-    song_path:   local audio file, or None for the default bed (engine.SONG)
-    duration:    total seconds (song loops if shorter, trims if longer)
+    shots:     [{image_url, video_url?, start, end, zoom?}] (urls only used for errors)
+    texts:     [{text, at_second, out_second, position?, color?, size?}]
+    sources:   per-shot background, same order as shots: {"kind":"image","path":...}
+               or {"kind":"video","frames_dir":...,"count":N}
+    song_path: local audio file, or None for the default bed (engine.SONG)
+    duration:  total seconds (song loops if shorter, trims if longer)
     """
-    prepped_shots = _prep_shots(shots, image_paths)
+    prepped_shots = _prep_shots(shots, sources)
     prepped_texts = _prep_texts(texts)
     total = float(duration)
     nframes = int(math.ceil(total * FPS))

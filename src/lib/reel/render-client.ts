@@ -5,7 +5,8 @@
 import { resolveSong, type RenderSpec, type Workflow } from "@/config/workflows";
 
 export interface SpecRenderShot {
-  image_url: string;
+  image_url: string; // still background (used when video_url is absent)
+  video_url?: string; // animated clip background; rendered in place of the still, trimmed to the shot
   start: number;
   end: number;
   zoom?: number;
@@ -37,13 +38,20 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
   const missing: number[] = [];
   const payloadShots: SpecRenderShot[] = shots.map((s) => {
     const scene = workflow.scenes[s.i - 1];
-    const url = scene?.image_url;
-    if (!url) missing.push(s.i);
-    return { image_url: url ?? "", start: s.start, end: s.end };
+    const image = scene?.image_url ?? "";
+    const video = scene?.video_url ?? "";
+    // A shot is renderable with a still OR a video background.
+    if (!image && !video) missing.push(s.i);
+    return {
+      image_url: image,
+      start: s.start,
+      end: s.end,
+      ...(video ? { video_url: video } : {}),
+    };
   });
   if (missing.length) {
     throw new Error(
-      `Scenes ${missing.join(", ")} have no image yet. Paste the scene image(s) first, then render.`
+      `Scenes ${missing.join(", ")} have no image or video yet. Paste the scene media first, then render.`
     );
   }
   const duration =

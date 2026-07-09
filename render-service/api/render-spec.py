@@ -10,8 +10,10 @@ its URL. All Slack posting + DB writes stay in TypeScript.
 Request  (POST, header `x-reel-secret: $REEL_RENDER_SECRET`):
   { "song_url": str|null,              # null = default bed (song_master)
     "duration": float,                 # total seconds, <= 60
-    "shots": [ { "image_url": str, "start": float, "end": float,
-                 "zoom": float|0 }, ... ],
+    "shots": [ { "image_url": str, "video_url": str|null, "start": float,
+                 "end": float, "zoom": float|0 }, ... ],
+                 # video_url (an animated clip) renders in place of the still,
+                 # trimmed to the shot; falls back to image_url when absent.
     "texts": [ { "text": str, "at_second": float, "out_second": float,
                  "position": "top|upper_side|upper_middle|center|lower|bottom",
                  "color": str|null, "size": "small|medium|large" }, ... ] }
@@ -26,6 +28,7 @@ Response:
 import base64
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -73,6 +76,27 @@ def _download(url: str, dest: str, what: str):
     return dest
 
 
+def _extract_video_frames(src: str, frames_dir: str, seconds: float) -> int:
+    """Explode a video into cover-cropped 9:16 PNG frames at the render FPS, capped
+    to `seconds` (so a clip longer than its shot is trimmed at the end). The
+    cover-crop mirrors engine.cover(); frames come out already sized WxH so the
+    per-frame loop treats them exactly like a still. Returns the frame count."""
+    eng = spec_engine.engine
+    w, h, fps = eng.W, eng.H, eng.FPS
+    vf = (
+        f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+        f"crop={w}:{h},fps={fps}"
+    )
+    cmd = [
+        eng.FFMPEG, "-y", "-loglevel", "error",
+        "-i", src, "-t", f"{max(0.001, seconds):.3f}",
+        "-vf", vf, os.path.join(frames_dir, "%05d.png"),
+    ]
+    if subprocess.run(cmd).returncode != 0:
+        raise ValueError(f"could not extract frames from video: {src}")
+    return len([n for n in os.listdir(frames_dir) if n.endswith(".png")])
+
+
 class handler(BaseHTTPRequestHandler):
     def _send(self, code: int, payload: dict):
         data = json.dumps(payload).encode("utf-8")
@@ -107,11 +131,30 @@ class handler(BaseHTTPRequestHandler):
         tmpdir = tempfile.mkdtemp(prefix="spec_")
         out_path = os.path.join(tmpdir, "reel.mp4")
         try:
-            image_paths = []
+            # Each shot's background is a still image OR an animated video clip.
+            # A video is downloaded and pre-exploded into cover-cropped frames
+            # (trimmed to the shot length); the engine then treats those frames
+            # exactly like a still per frame.
+            sources = []
             for i, s in enumerate(shots):
-                path = os.path.join(tmpdir, f"shot_{i}")
-                _download(s["image_url"], path, f"shot {i + 1} image")
-                image_paths.append(path)
+                video_url = s.get("video_url")
+                if video_url:
+                    vid_path = os.path.join(tmpdir, f"shot_{i}.mp4")
+                    _download(video_url, vid_path, f"shot {i + 1} video")
+                    frames_dir = os.path.join(tmpdir, f"shot_{i}_frames")
+                    os.makedirs(frames_dir, exist_ok=True)
+                    count = _extract_video_frames(
+                        vid_path,
+                        frames_dir,
+                        float(s.get("end", 0)) - float(s.get("start", 0)),
+                    )
+                    if count <= 0:
+                        raise ValueError(f"shot {i + 1}: video produced no frames")
+                    sources.append({"kind": "video", "frames_dir": frames_dir, "count": count})
+                else:
+                    path = os.path.join(tmpdir, f"shot_{i}")
+                    _download(s["image_url"], path, f"shot {i + 1} image")
+                    sources.append({"kind": "image", "path": path})
 
             song_path = None
             song_url = body.get("song_url")
@@ -119,7 +162,7 @@ class handler(BaseHTTPRequestHandler):
                 song_path = _download(song_url, os.path.join(tmpdir, "song"), "song")
 
             spec_engine.render_spec(
-                shots, texts, image_paths, song_path, duration, out_path, quiet=True
+                shots, texts, sources, song_path, duration, out_path, quiet=True
             )
 
             engine_version = getattr(spec_engine, "ENGINE_VERSION", "unknown")

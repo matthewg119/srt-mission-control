@@ -120,7 +120,7 @@ def wrap(draw, text, font, max_w):
         lines.append(cur)
     return lines
 
-def fit_font(draw, text, path, max_w, max_lines, start, floor=30):
+def fit_font(draw, text, path, max_w, max_lines, start, floor=26):
     """Shrink font until the wrapped text fits max_w within max_lines."""
     size = start
     while size > floor:
@@ -138,14 +138,16 @@ def render_chip(text, color, kind="body", scale=1.0):
     """Render one rounded text chip to a tight RGBA image (with soft shadow).
     `scale` shrinks the whole chip (font + padding) for auto-fit."""
     bg = PALETTE[color]["bg"]; fg = PALETTE[color]["fg"]
+    # Base sizes are ~6px smaller than the original (label 36/cta 46/body 64) for a
+    # tighter, smaller-text look across every workflow.
     if kind == "label":
-        font_path, base, max_w, max_lines = FONT_LABEL, 36, int(W*0.80), 1
+        font_path, base, max_w, max_lines = FONT_LABEL, 30, int(W*0.80), 1
         padx, pady, radius = 26, 14, 14
     elif kind == "cta":
-        font_path, base, max_w, max_lines = FONT_BODY, 46, int(W*0.62), 2
+        font_path, base, max_w, max_lines = FONT_BODY, 40, int(W*0.62), 2
         padx, pady, radius = 30, 18, 22
     else:  # body hook line
-        font_path, base, max_w, max_lines = FONT_BODY, 64, int(W*0.80), 3
+        font_path, base, max_w, max_lines = FONT_BODY, 58, int(W*0.80), 3
         padx, pady, radius = 30, 18, 22
     base = max(22, int(base*scale)); padx = int(padx*scale)
     pady = int(pady*scale); radius = int(radius*scale)

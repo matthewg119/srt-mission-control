@@ -29,6 +29,7 @@ export interface WorkflowScene {
   animation_examples?: string[]; // up to 4 example motion descriptions collected for this scene
   duration_seconds?: number; // shot length (defaults from render_options.clip_seconds)
   image_url?: string | null; // set once the scene image is generated
+  video_url?: string | null; // set when the scene background is an animated clip (rendered in place of the still)
   image_approved?: boolean; // set once the operator approves that scene image
 }
 
@@ -289,35 +290,38 @@ const PEST_6HL_PROPAGANDA: Workflow = {
   captions: [
     { text: "Pest control Owners", at_second: 0.0 },
     { text: "Your slow season, is somebody elses high season", at_second: 0.03 },
-    { text: "Homeowners already know who to call and is not you", at_second: 3.04 },
+    { text: "Ignorance is costing you a fortune every year.", at_second: 2.04 },
+    { text: "Homeowners already know who to call and is not you", at_second: 3.06 },
     { text: "Because Your zip code doesn't know you exist yet", at_second: 6.04 },
     { text: "imagine clients calling you first", at_second: 8.302 },
-    { text: "Check out link in bio.", at_second: 10.02 },
+    { text: "Check out link in bio", at_second: 10.02 },
   ],
   copy_structure: [
-    { key: "avatar", label: "Avatar", guidance: "Name who this is for.", shot: 1, at_second: 0.0, out_second: 3.5, position: "upper_side" },
-    { key: "pain_callout", label: "Pain callout", guidance: "One-line pain that stops the scroll.", shot: 1, at_second: 0.03, out_second: 3.5, position: "upper_middle" },
-    { key: "increase_pain", label: "Increase pain / category", guidance: "Twist the knife, make it personal.", shot: 2, at_second: 3.04, out_second: 8.02, position: "center" },
+    { key: "avatar", label: "Avatar", guidance: "Name who this is for.", shot: 1, at_second: 0.0, out_second: 3.06, position: "upper_side" },
+    { key: "pain_callout", label: "Pain callout", guidance: "One-line pain that stops the scroll.", shot: 1, at_second: 0.03, out_second: 3.06, position: "upper_middle" },
+    { key: "cost_pain", label: "Increase pain / cost", guidance: "What the pain is costing them.", shot: 1, at_second: 2.04, out_second: 3.06, position: "upper_middle" },
+    { key: "category_pain", label: "Increase pain / category", guidance: "Twist the knife, make it personal.", shot: 2, at_second: 3.06, out_second: 8.02, position: "center" },
     { key: "logical_reason", label: "Logical reason", guidance: "The because: why the pain is real.", shot: 2, at_second: 6.04, out_second: 8.02, position: "center" },
-    { key: "dream_outcome", label: "Dream outcome", guidance: "The desired result in one line.", shot: 3, at_second: 8.302, out_second: 11.3, position: "center" },
-    { key: "cta", label: "CTA", guidance: "Single clear call to action.", shot: 3, at_second: 10.02, out_second: 11.3, position: "lower" },
+    { key: "dream_outcome", label: "Dream outcome", guidance: "The desired result in one line.", shot: 3, at_second: 8.302, out_second: 11.3, position: "upper_middle" },
+    { key: "cta", label: "CTA", guidance: "Single clear call to action.", shot: 3, at_second: 10.02, out_second: 11.3, position: "center" },
   ],
   render_spec: {
     mode: "static_images",
     song_ref: null,
     duration_seconds: 11.3,
     shots: [
-      { i: 1, start: 0.0, end: 3.5 },
-      { i: 2, start: 3.04, end: 8.02 },
+      { i: 1, start: 0.0, end: 3.06 },
+      { i: 2, start: 3.06, end: 8.02 },
       { i: 3, start: 8.02, end: 11.3 },
     ],
     texts: [
-      { n: 1, text: "Pest control Owners", at_second: 0.0, out_second: 3.5, position: "upper_side", role: "avatar", pop: false },
-      { n: 2, text: "Your slow season, is somebody elses high season", at_second: 0.03, out_second: 3.5, position: "upper_middle", role: "pain_callout", pop: true },
-      { n: 3, text: "Homeowners already know who to call and is not you", at_second: 3.04, out_second: 8.02, position: "center", role: "increase_pain", pop: false },
-      { n: 4, text: "Because Your zip code doesn't know you exist yet", at_second: 6.04, out_second: 8.02, position: "center", role: "logical_reason", pop: true },
-      { n: 5, text: "imagine clients calling you first", at_second: 8.302, out_second: 11.3, position: "center", role: "dream_outcome", pop: false },
-      { n: 6, text: "Check out link in bio.", at_second: 10.02, out_second: 11.3, position: "lower", role: "cta", pop: true },
+      { n: 1, text: "Pest control Owners", at_second: 0.0, out_second: 3.06, position: "upper_side", role: "avatar", pop: false },
+      { n: 2, text: "Your slow season, is somebody elses high season", at_second: 0.03, out_second: 3.06, position: "upper_middle", role: "pain_callout", pop: true },
+      { n: 3, text: "Ignorance is costing you a fortune every year.", at_second: 2.04, out_second: 3.06, position: "upper_middle", role: "cost_pain", pop: true },
+      { n: 4, text: "Homeowners already know who to call and is not you", at_second: 3.06, out_second: 8.02, position: "center", role: "category_pain", pop: false },
+      { n: 5, text: "Because Your zip code doesn't know you exist yet", at_second: 6.04, out_second: 8.02, position: "center", role: "logical_reason", pop: true },
+      { n: 6, text: "imagine clients calling you first", at_second: 8.302, out_second: 11.3, position: "upper_middle", role: "dream_outcome", pop: false },
+      { n: 7, text: "Check out link in bio", at_second: 10.02, out_second: 11.3, position: "center", role: "cta", pop: true },
     ],
   },
   // 0702.MP3 (~11s) uploaded to the reels bucket; matches the 11.3s timeline.
@@ -329,7 +333,7 @@ const PEST_6HL_PROPAGANDA: Workflow = {
   shot_screenshots: [],
   source_kind: "authored",
   source_example_id: null,
-  description: "3-shot 11.3s static POV/b-roll with 6 timed headlines: avatar callout, pain escalation, dream outcome + CTA.",
+  description: "3-shot 11.3s POV/b-roll (still or video backgrounds) with 7 timed headlines: avatar callout, pain escalation, dream outcome + CTA.",
   visual_rules: [
     "Default look: first-person Ray-Ban Meta glasses POV. Gloved hands may enter frame, never a face; real suburban job-site, natural daylight, documentary feel.",
     "B-roll is also allowed: photoreal pest-business life (trucks, techs, homeowners), vertical portrait, muted cinematic color.",
