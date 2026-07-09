@@ -11,11 +11,11 @@ a workflow's render_spec verbatim. engine.py stays untouched; we reuse its
 primitives (cover, render_chip, ease_pop, PALETTE, FFMPEG, W/H/FPS).
 """
 
-import json
 import math
 import os
 import random
 import subprocess
+import urllib.parse
 import urllib.request
 
 from PIL import Image
@@ -33,8 +33,8 @@ FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
 STACK_GAP = 12    # px between two chips active at the same position
 MAX_DURATION = 60.0
 
-# Voiceover: each text line is synthesized (OpenAI TTS), pitched up to a chipmunk,
-# and mixed at its at_second over a ducked music bed.
+# Voiceover: each text line is synthesized (free keyless Google Translate TTS),
+# pitched up to a chipmunk, and mixed at its at_second over a ducked music bed.
 TTS_SAMPLE_RATE = 44100
 VO_STYLE_PITCH = {"chipmunk": 1.5}   # asetrate multiplier per style
 VO_DEFAULT_PITCH = 1.5
@@ -250,16 +250,14 @@ def _tts_text(raw):
     return " ".join("".join(parts).split())
 
 
-def _synthesize_tts(text, dest, api_key):
-    """OpenAI text-to-speech -> mp3 at dest. Raises ValueError on failure."""
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/audio/speech",
-        data=json.dumps(
-            {"model": "tts-1", "voice": "alloy", "input": text, "response_format": "mp3"}
-        ).encode("utf-8"),
-        method="POST",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+def _synthesize_tts(text, dest):
+    """Free, keyless text-to-speech (Google Translate TTS, the same endpoint gTTS uses)
+    -> mp3 at dest. Short lines only (the endpoint caps ~200 chars, well above ours).
+    Raises ValueError on failure."""
+    url = "https://translate.google.com/translate_tts?" + urllib.parse.urlencode(
+        {"ie": "UTF-8", "client": "tw-ob", "tl": "en", "q": text[:200]}
     )
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read()
@@ -273,18 +271,15 @@ def _synthesize_tts(text, dest, api_key):
 
 
 def _prep_voiceover(texts, voiceover, workdir):
-    """Synthesize a chipmunk clip per text line. Returns [(path, at_second), ...]
-    ordered by at_second. Raises ValueError if enabled but misconfigured."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("voiceover is enabled but OPENAI_API_KEY is not set on the render service")
+    """Synthesize a clip per text line (pitched to a chipmunk at mux time). Returns
+    [(path, at_second), ...] ordered by at_second. No API key required."""
     clips = []
     for k, t in enumerate(sorted(texts or [], key=lambda x: float(x.get("at_second", 0)))):
         spoken = _tts_text(t.get("text", ""))
         if not spoken:
             continue
         dest = os.path.join(workdir or ".", f"vo_{k}.mp3")
-        _synthesize_tts(spoken, dest, api_key)
+        _synthesize_tts(spoken, dest)
         clips.append((dest, float(t.get("at_second", 0))))
     return clips
 
