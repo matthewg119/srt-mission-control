@@ -33,8 +33,9 @@ FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
 STACK_GAP = 12    # px between two chips active at the same position
 MAX_DURATION = 60.0
 
-# Voiceover: each text line is synthesized (free keyless Google Translate TTS),
-# pitched up to a chipmunk, and mixed at its at_second over a ducked music bed.
+# Voiceover: each text line is synthesized (free keyless TTS — Google Translate first,
+# Edge neural as fallback), pitched up to a chipmunk, mixed at its at_second over a
+# ducked music bed.
 TTS_SAMPLE_RATE = 44100
 VO_STYLE_PITCH = {"chipmunk": 1.5}   # asetrate multiplier per style
 VO_DEFAULT_PITCH = 1.5
@@ -250,24 +251,50 @@ def _tts_text(raw):
     return " ".join("".join(parts).split())
 
 
-def _synthesize_tts(text, dest):
-    """Free, keyless text-to-speech (Google Translate TTS, the same endpoint gTTS uses)
-    -> mp3 at dest. Short lines only (the endpoint caps ~200 chars, well above ours).
-    Raises ValueError on failure."""
+EDGE_VOICE = "en-US-GuyNeural"   # neutral neural voice; chipmunked at mux time
+
+
+def _tts_google(text, dest):
+    """Free keyless Google Translate TTS (same endpoint gTTS uses) -> mp3 at dest.
+    Short lines only (the endpoint caps ~200 chars, well above ours)."""
     url = "https://translate.google.com/translate_tts?" + urllib.parse.urlencode(
         {"ie": "UTF-8", "client": "tw-ob", "tl": "en", "q": text[:200]}
     )
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = resp.read()
-    except Exception as e:
-        raise ValueError(f"TTS request failed: {e}")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = resp.read()
     if not data:
-        raise ValueError("TTS returned empty audio")
+        raise ValueError("empty audio")
     with open(dest, "wb") as fh:
         fh.write(data)
     return dest
+
+
+def _tts_edge(text, dest):
+    """Free keyless Microsoft Edge neural TTS (edge-tts package) -> mp3 at dest."""
+    import asyncio
+    import edge_tts
+
+    async def _go():
+        await edge_tts.Communicate(text, EDGE_VOICE).save(dest)
+
+    asyncio.run(_go())
+    if not os.path.exists(dest) or not os.path.getsize(dest):
+        raise ValueError("empty audio")
+    return dest
+
+
+def _synthesize_tts(text, dest):
+    """Free, keyless text-to-speech -> mp3 at dest. Google Translate TTS first; if it
+    fails (e.g. the server IP gets rate-limited) fall back to Edge neural TTS. Raises
+    ValueError only if BOTH fail."""
+    try:
+        return _tts_google(text, dest)
+    except Exception as e_google:
+        try:
+            return _tts_edge(text, dest)
+        except Exception as e_edge:
+            raise ValueError(f"TTS failed (google: {e_google}; edge: {e_edge})")
 
 
 def _prep_voiceover(texts, voiceover, workdir):
