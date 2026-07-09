@@ -305,7 +305,7 @@ export async function generateHeadlineOptions(args: {
     model: model(),
     system,
     user: `Return JSON with ${count} headline options.`,
-    maxTokens: 1600,
+    maxTokens: 2400,
     temperature: 0.95,
     schemaHint: '{ "headlines": [string] }',
     validate: isHeadlines,
@@ -358,7 +358,7 @@ export async function generateCreativeReference(vertical: Vertical): Promise<Cre
     model: model(),
     system,
     user: "Return JSON with fears, beliefs, desires, random_facts, fantasies, horror_stories (3 each).",
-    maxTokens: 1200,
+    maxTokens: 3000,
     temperature: 0.85,
     schemaHint:
       '{ "fears": [string], "beliefs": [string], "desires": [string], "random_facts": [string], "fantasies": [string], "horror_stories": [string] }',

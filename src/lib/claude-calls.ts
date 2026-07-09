@@ -83,7 +83,7 @@ async function fetchAnthropicWithRetry(
   apiKey: string,
   body: Omit<AnthropicRequestBody, "model">,
   models: ClaudeModel[]
-): Promise<{ content: Array<{ type: string; text?: string }>; usage: { input_tokens: number; output_tokens: number } }> {
+): Promise<{ content: Array<{ type: string; text?: string }>; usage: { input_tokens: number; output_tokens: number }; stop_reason?: string }> {
   let lastError: Error | null = null;
 
   for (let m = 0; m < models.length; m++) {
@@ -118,6 +118,7 @@ async function fetchAnthropicWithRetry(
         return (await res.json()) as {
           content: Array<{ type: string; text?: string }>;
           usage: { input_tokens: number; output_tokens: number };
+          stop_reason?: string;
         };
       }
 
@@ -182,38 +183,71 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
       ]
     : opts.user;
 
-  const json = await fetchAnthropicWithRetry(
-    apiKey,
-    {
-      max_tokens: opts.maxTokens ?? 2048,
-      temperature: opts.temperature ?? 0.2,
-      system: systemWithHint,
-      messages: [{ role: "user", content: userContent }],
-    },
-    resolveModels(opts.model, opts.fallbackModels)
-  );
+  const models = resolveModels(opts.model, opts.fallbackModels);
 
-  const raw = json.content
-    .filter((c) => c.type === "text")
-    .map((c) => c.text ?? "")
-    .join("")
-    .trim();
+  // One request attempt at a given token budget: fetch, extract text, strip fences.
+  const attempt = async (maxTokens: number) => {
+    const json = await fetchAnthropicWithRetry(
+      apiKey,
+      {
+        max_tokens: maxTokens,
+        temperature: opts.temperature ?? 0.2,
+        system: systemWithHint,
+        messages: [{ role: "user", content: userContent }],
+      },
+      models
+    );
+    const raw = json.content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text ?? "")
+      .join("")
+      .trim();
+    const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+    return { json, cleaned };
+  };
 
-  const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+  // Parse + validate; returns an error string instead of throwing so the caller can
+  // decide whether the failure is worth a retry (truncation) or terminal.
+  const parseAndValidate = (
+    cleaned: string
+  ): { ok: true; parsed: T } | { ok: false; error: string } => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      return { ok: false, error: `Claude JSON parse error: ${(e as Error).message}\nRaw: ${cleaned.slice(0, 500)}` };
+    }
+    if (opts.validate && !opts.validate(parsed)) {
+      return { ok: false, error: `Claude response failed validation. Raw: ${cleaned.slice(0, 500)}` };
+    }
+    return { ok: true, parsed: parsed as T };
+  };
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch (e) {
-    throw new Error(`Claude JSON parse error: ${(e as Error).message}\nRaw: ${cleaned.slice(0, 500)}`);
+  const MAX_RETRY_TOKENS = 8000;
+  let requestedTokens = opts.maxTokens ?? 2048;
+  let { json, cleaned } = await attempt(requestedTokens);
+  let result = parseAndValidate(cleaned);
+
+  // Anthropic returns stop_reason:"max_tokens" when the model was cut off mid-output. That
+  // truncates the JSON (unterminated string) and fails parse/validation. Retry ONCE with a
+  // bigger budget rather than surfacing an opaque parse error — protects every generator.
+  if (!result.ok && json.stop_reason === "max_tokens" && requestedTokens < MAX_RETRY_TOKENS) {
+    const bigger = Math.min(requestedTokens * 2, MAX_RETRY_TOKENS);
+    console.warn(`[claude] response truncated at max_tokens=${requestedTokens}; retrying once at ${bigger}`);
+    requestedTokens = bigger;
+    ({ json, cleaned } = await attempt(bigger));
+    result = parseAndValidate(cleaned);
   }
 
-  if (opts.validate && !opts.validate(parsed)) {
-    throw new Error(`Claude response failed validation. Raw: ${cleaned.slice(0, 500)}`);
+  if (!result.ok) {
+    if (json.stop_reason === "max_tokens") {
+      throw new Error(`Claude response truncated (hit max_tokens=${requestedTokens}); raise maxTokens. ${result.error}`);
+    }
+    throw new Error(result.error);
   }
 
   return {
-    data: parsed as T,
+    data: result.parsed,
     raw: cleaned,
     usage: json.usage,
     latencyMs: Date.now() - start,

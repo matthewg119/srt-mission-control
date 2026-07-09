@@ -46,6 +46,7 @@ import {
   generateHeadlineOptions,
   generateCreativeReference,
   type StructuredCopyLine,
+  type CreativeReference,
 } from "@/lib/reel/creative-director";
 import { renderWorkflow, workflowRenderBuild } from "@/lib/reel/render-dispatch";
 import { markWorkflowUsed, ensureWorkflowRow } from "@/lib/reel/workflow-author";
@@ -225,39 +226,85 @@ async function activeWorkflows(): Promise<Workflow[]> {
  * operator has raw copy to build from, then drop images + lines to render. Mirrors the
  * #agent-wokrflow-creator report but pinned to the pest-control OWNER avatar.
  */
+/** Proven headlines already in the avatar kit — the fallback when Claude is unavailable. */
+function seedHeadlines(vertical: Vertical): string[] {
+  return (vertical.offer?.headlines ?? []).map((h) =>
+    h.subtitle ? `${h.title} ${h.subtitle}` : h.title
+  );
+}
+
+/** Story material derived straight from the avatar kit — the fallback when Claude is down. */
+function seedReference(vertical: Vertical): CreativeReference {
+  const three = (a: (string | undefined)[]) => a.filter((x): x is string => Boolean(x)).slice(0, 3);
+  const objections = vertical.offer?.objections ?? [];
+  return {
+    fears: three(objections.map((o) => o.objection)),
+    beliefs: three((vertical.beliefs ?? []).map((b) => b.text)),
+    desires: three(vertical.offer?.belief_chains ?? []),
+    facts: three(objections.map((o) => o.evidence)),
+    fantasies: three([vertical.offer?.big_idea]),
+    horror: three(objections.map((o) => o.response)),
+  };
+}
+
 export async function handleDropGo(channel: string): Promise<void> {
   const vertical = await loadVertical(DROP_REPORT_VERTICAL_ID);
   await slack.postMessage(channel, `*${vertical.name}* — pulling 30 headline angles + story material...`);
-  try {
-    const [headlines, ref] = await Promise.all([
-      generateHeadlineOptions({ vertical, count: 30 }),
-      generateCreativeReference(vertical),
-    ]);
-    await slack.postMessage(
-      channel,
-      [
-        `*${vertical.name}* — 30 headline angles (raw material for your copy):`,
-        headlines.map((h, i) => `${i + 1}. ${h}`).join("\n"),
-      ].join("\n")
-    );
-    await slack.postMessage(
-      channel,
-      [
-        "*Story material* (mix these in):",
-        `*Fears:* ${ref.fears.join(" | ")}`,
-        `*Beliefs:* ${ref.beliefs.join(" | ")}`,
-        `*Desires:* ${ref.desires.join(" | ")}`,
-        `*Facts:* ${ref.facts.join(" | ")}`,
-        `*Fantasies:* ${ref.fantasies.join(" | ")}`,
-        `*Horror stories:* ${ref.horror.join(" | ")}`,
-        "",
-        "Write your lines, then drop your images + those lines in ONE message and I'll ask which workflow to render.",
-      ].join("\n")
-    );
-  } catch (e) {
-    console.error("[drop-studio] go report failed:", (e as Error).message);
-    await slack.postMessage(channel, "Could not pull the report. Drop your images + copy in one message to render.");
+
+  // Run both independently: one failing (e.g. a transient Claude error) must not kill the
+  // other, and either can fall back to the avatar's own seed material so `go` never dead-ends.
+  const [hRes, rRes] = await Promise.allSettled([
+    generateHeadlineOptions({ vertical, count: 30 }),
+    generateCreativeReference(vertical),
+  ]);
+
+  let headlines: string[];
+  let headlinesFellBack = false;
+  if (hRes.status === "fulfilled" && hRes.value.length) {
+    headlines = hRes.value;
+  } else {
+    if (hRes.status === "rejected") console.error("[drop-studio] headlines failed:", (hRes.reason as Error)?.message);
+    headlines = seedHeadlines(vertical);
+    headlinesFellBack = true;
   }
+
+  let ref: CreativeReference;
+  let refFellBack = false;
+  if (rRes.status === "fulfilled") {
+    ref = rRes.value;
+  } else {
+    console.error("[drop-studio] reference failed:", (rRes.reason as Error)?.message);
+    ref = seedReference(vertical);
+    refFellBack = true;
+  }
+
+  await slack.postMessage(
+    channel,
+    [
+      `*${vertical.name}* — ${headlines.length} headline angles (raw material for your copy):`,
+      headlines.map((h, i) => `${i + 1}. ${h}`).join("\n"),
+      headlinesFellBack ? "\n_(used seed headlines, Claude was unavailable)_" : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+  await slack.postMessage(
+    channel,
+    [
+      "*Story material* (mix these in):",
+      `*Fears:* ${ref.fears.join(" | ")}`,
+      `*Beliefs:* ${ref.beliefs.join(" | ")}`,
+      `*Desires:* ${ref.desires.join(" | ")}`,
+      `*Facts:* ${ref.facts.join(" | ")}`,
+      `*Fantasies:* ${ref.fantasies.join(" | ")}`,
+      `*Horror stories:* ${ref.horror.join(" | ")}`,
+      refFellBack ? "_(used seed material, Claude was unavailable)_" : "",
+      "",
+      "Write your lines, then drop your images + those lines in ONE message and I'll ask which workflow to render.",
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
 }
 
 // ---- drop-and-render -----------------------------------------------------------------------
