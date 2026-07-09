@@ -83,6 +83,20 @@ export async function POST(request: NextRequest) {
     // Extract source, ID, email, and status
     const leadSource = lead.Lead_Source || lead.lead_source || "Zoho CRM";
     const leadId = lead.id || lead.Id || undefined;
+
+    // ── Silent sources: cold-scrape prospects must NOT trigger Speed-to-Lead /
+    // #hot-leads / DNQ. These are inserted with trigger:[] so this webhook should
+    // never fire for them, but guard here too in case a Zoho rule ever runs. ──
+    const SILENT_SOURCES = new Set(
+      (process.env.PROSPECT_ZOHO_LEAD_SOURCE || "Pest Control Scrape")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (SILENT_SOURCES.has(String(leadSource).trim().toLowerCase())) {
+      console.log("[Zoho Webhook] Skipping — silent scrape source:", leadSource);
+      return NextResponse.json({ success: true, skipped: true, reason: "scrape_source" });
+    }
     let email = lead.Email || lead.email || "";
     let leadStatus = lead.Lead_Status || lead.lead_status || "";
 

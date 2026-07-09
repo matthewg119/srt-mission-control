@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { mapRecord, toGroups, OutscraperRecord, ProspectLeadRow } from "@/lib/outscraper";
+import { syncProspectRows, ProspectRow } from "@/lib/prospect-zoho-sync";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -150,16 +151,20 @@ export async function POST(req: NextRequest) {
       toInsert.push(m);
     }
 
-    // 3. Insert the genuinely new rows (chunked).
-    let inserted = 0;
+    // 3. Insert the genuinely new rows (chunked), returning ids for the Zoho push.
+    const insertedRows: ProspectRow[] = [];
     for (let i = 0; i < toInsert.length; i += 500) {
       const chunk = toInsert.slice(i, i + 500);
-      const { error, count } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from("prospect_leads")
-        .insert(chunk, { count: "exact" });
+        .insert(chunk)
+        .select("id, business_name, phone, website, full_address, city, state, postal_code, categories, rating, review_count");
       if (error) throw error;
-      inserted += count ?? chunk.length;
+      insertedRows.push(...((data ?? []) as ProspectRow[]));
     }
+
+    // 3b. Push the new leads to Zoho CRM silently (trigger: [] — no new-lead alerts).
+    const zoho = await syncProspectRows(insertedRows);
 
     const newLeads = toInsert.length;
     const duplicates = mapped.length - newLeads;
@@ -214,6 +219,15 @@ export async function POST(req: NextRequest) {
     const pct = totalZips ? Math.round(((exhaustedZips ?? 0) / totalZips) * 1000) / 10 : 0;
     const statesLabel = (run.states ?? []).join(", ") || "USA";
 
+    // Zoho upload summary line for the report.
+    const zohoLine = zoho.disabled
+      ? "⏸️ sync disabled"
+      : zoho.failed === 0 && zoho.ok > 0
+        ? `✅ All ${zoho.ok} added successfully to Zoho`
+        : zoho.ok === 0 && zoho.failed === 0
+          ? "— nothing to add"
+          : `${zoho.ok} added, ${zoho.failed} failed (see logs)`;
+
     if (followups) {
       const blocks: SlackBlock[] = [
         {
@@ -230,6 +244,10 @@ export async function POST(req: NextRequest) {
             { type: "mrkdwn", text: `*📊 Total in DB:*\n${runningTotal ?? 0}` },
             { type: "mrkdwn", text: `*🗺️ USA coverage:*\n${exhaustedZips ?? 0}/${totalZips ?? 0} ZIPs (${pct}%)` },
           ],
+        },
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: `*🗂️ Zoho:* ${zohoLine}` },
         },
       ];
       await slack.postMessage(followups, `🐛 Pest control prospects — ${newLeads} new (${statesLabel})`, blocks);

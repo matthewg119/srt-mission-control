@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "seed:prospects": "bun run scripts/seed-prospect-rotation.ts",
-    "pull:now": "bun run scripts/pull-prospects-now.ts"
+    "pull:now": "bun run scripts/pull-prospects-now.ts",
+    "sync:zoho": "bun run scripts/sync-prospects-to-zoho.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

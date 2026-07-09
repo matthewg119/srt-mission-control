@@ -613,6 +613,46 @@ export async function upsertRecords(
   return res.data ?? [];
 }
 
+/**
+ * Bulk-create Leads SILENTLY — passes `trigger: []` so Zoho skips ALL workflow
+ * rules, approvals and blueprints for these inserts. That's what keeps scraped
+ * prospects from firing the "new lead" automation (the workflow rule that POSTs
+ * to /api/webhooks/zoho-lead → Speed-to-Lead + #hot-leads thread) or any other
+ * Zoho-side alert. Batches at Zoho's 100-record cap, throttled to stay under the
+ * 10 req/s limit. Returns one result per input record, in order.
+ */
+export async function bulkCreateLeadsSilent(
+  records: Array<Record<string, unknown>>
+): Promise<Array<{ status: string; id?: string; code?: string; message?: string }>> {
+  const out: Array<{ status: string; id?: string; code?: string; message?: string }> = [];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  for (let i = 0; i < records.length; i += 100) {
+    const batch = records.slice(i, i + 100);
+    try {
+      const res = (await zohoRequest("POST", "/Leads", { data: batch, trigger: [] })) as {
+        data?: Array<{ code?: string; status?: string; message?: string; details?: { id?: string } }>;
+      };
+      const rows = res.data ?? [];
+      for (let j = 0; j < batch.length; j++) {
+        const r = rows[j];
+        out.push({
+          status: r?.status ?? "error",
+          id: r?.details?.id,
+          code: r?.code,
+          message: r?.message,
+        });
+      }
+    } catch (err) {
+      // Whole-batch failure (auth/network/HTTP) — mark every record in it failed.
+      const message = err instanceof Error ? err.message : String(err);
+      for (let j = 0; j < batch.length; j++) out.push({ status: "error", message });
+    }
+    if (i + 100 < records.length) await sleep(150);
+  }
+  return out;
+}
+
 export async function testConnection(): Promise<boolean> {
             try {
                           await zohoRequest("GET", "/Leads?per_page=1");
