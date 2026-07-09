@@ -27,6 +27,7 @@ export interface SpecRenderPayload {
   duration: number;
   shots: SpecRenderShot[];
   texts: SpecRenderText[];
+  voiceover?: { enabled: boolean; style?: string }; // TTS read-aloud of each line, music ducked
 }
 
 /**
@@ -84,6 +85,7 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
     song_url: song.url ?? null,
     duration,
     shots: payloadShots,
+    ...(spec.voiceover ? { voiceover: spec.voiceover } : {}),
     texts: specTexts.map((t) => {
       const isFirstInShot = minAtByShot.get(shotIndexFor(t.at_second)) === t.at_second;
       const pop = typeof t.pop === "boolean" ? t.pop : !isFirstInShot;

@@ -162,7 +162,8 @@ class handler(BaseHTTPRequestHandler):
                 song_path = _download(song_url, os.path.join(tmpdir, "song"), "song")
 
             spec_engine.render_spec(
-                shots, texts, sources, song_path, duration, out_path, quiet=True
+                shots, texts, sources, song_path, duration, out_path,
+                quiet=True, voiceover=body.get("voiceover"), workdir=tmpdir,
             )
 
             engine_version = getattr(spec_engine, "ENGINE_VERSION", "unknown")

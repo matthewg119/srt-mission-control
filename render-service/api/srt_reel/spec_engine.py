@@ -11,10 +11,12 @@ a workflow's render_spec verbatim. engine.py stays untouched; we reuse its
 primitives (cover, render_chip, ease_pop, PALETTE, FFMPEG, W/H/FPS).
 """
 
+import json
 import math
 import os
 import random
 import subprocess
+import urllib.request
 
 from PIL import Image
 
@@ -24,12 +26,19 @@ W, H, FPS = engine.W, engine.H, engine.FPS
 
 # Bump on every renderer behavior change so a render response can prove which
 # build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
-ENGINE_VERSION = "spec-2026-07-09-video"
+ENGINE_VERSION = "spec-2026-07-09-inter-vo"
 
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
 STACK_GAP = 12    # px between two chips active at the same position
 MAX_DURATION = 60.0
+
+# Voiceover: each text line is synthesized (OpenAI TTS), pitched up to a chipmunk,
+# and mixed at its at_second over a ducked music bed.
+TTS_SAMPLE_RATE = 44100
+VO_STYLE_PITCH = {"chipmunk": 1.5}   # asetrate multiplier per style
+VO_DEFAULT_PITCH = 1.5
+DUCK_VOLUME = 0.30                    # music bed level while voiceover plays
 
 # y-center of each named position, as a fraction of H. x is always centered.
 POSITIONS = {
@@ -235,7 +244,53 @@ def _place_texts(active, t):
         yield chip, (W - cw) // 2, top + ch // 2, scale, alpha
 
 
-def render_spec(shots, texts, sources, song_path, duration, out_path, quiet=True):
+def _tts_text(raw):
+    """The line as spoken: drop emoji chunks, collapse whitespace."""
+    parts = [s for kind, s in engine.split_emoji(str(raw)) if kind == "txt"]
+    return " ".join("".join(parts).split())
+
+
+def _synthesize_tts(text, dest, api_key):
+    """OpenAI text-to-speech -> mp3 at dest. Raises ValueError on failure."""
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/speech",
+        data=json.dumps(
+            {"model": "tts-1", "voice": "alloy", "input": text, "response_format": "mp3"}
+        ).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = resp.read()
+    except Exception as e:
+        raise ValueError(f"TTS request failed: {e}")
+    if not data:
+        raise ValueError("TTS returned empty audio")
+    with open(dest, "wb") as fh:
+        fh.write(data)
+    return dest
+
+
+def _prep_voiceover(texts, voiceover, workdir):
+    """Synthesize a chipmunk clip per text line. Returns [(path, at_second), ...]
+    ordered by at_second. Raises ValueError if enabled but misconfigured."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("voiceover is enabled but OPENAI_API_KEY is not set on the render service")
+    clips = []
+    for k, t in enumerate(sorted(texts or [], key=lambda x: float(x.get("at_second", 0)))):
+        spoken = _tts_text(t.get("text", ""))
+        if not spoken:
+            continue
+        dest = os.path.join(workdir or ".", f"vo_{k}.mp3")
+        _synthesize_tts(spoken, dest, api_key)
+        clips.append((dest, float(t.get("at_second", 0))))
+    return clips
+
+
+def render_spec(shots, texts, sources, song_path, duration, out_path,
+                quiet=True, voiceover=None, workdir=None):
     """Render the spec to out_path.
 
     shots:     [{image_url, video_url?, start, end, zoom?}] (urls only used for errors)
@@ -244,6 +299,10 @@ def render_spec(shots, texts, sources, song_path, duration, out_path, quiet=True
                or {"kind":"video","frames_dir":...,"count":N}
     song_path: local audio file, or None for the default bed (engine.SONG)
     duration:  total seconds (song loops if shorter, trims if longer)
+    voiceover: {"enabled": bool, "style": "chipmunk"} or None. When enabled, each text
+               line is read aloud (TTS) at its at_second, pitched to a chipmunk, over a
+               ducked music bed.
+    workdir:   temp dir for the synthesized voiceover clips.
     """
     prepped_shots = _prep_shots(shots, sources)
     prepped_texts = _prep_texts(texts)
@@ -251,15 +310,54 @@ def render_spec(shots, texts, sources, song_path, duration, out_path, quiet=True
     nframes = int(math.ceil(total * FPS))
 
     song = song_path or engine.SONG
-    cmd = [
-        engine.FFMPEG, "-y", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-        "-stream_loop", "-1", "-i", song,
-        "-t", f"{total:.3f}",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20",
-        "-c:a", "aac", "-b:a", "192k", "-shortest",
-        "-movflags", "+faststart", out_path,
-    ]
+
+    vo_clips = []
+    if voiceover and voiceover.get("enabled"):
+        vo_clips = _prep_voiceover(texts, voiceover, workdir)
+
+    if vo_clips:
+        pitch = VO_STYLE_PITCH.get((voiceover or {}).get("style"), VO_DEFAULT_PITCH)
+        cmd = [
+            engine.FFMPEG, "-y", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
+            "-stream_loop", "-1", "-i", song,
+        ]
+        for path, _ in vo_clips:
+            cmd += ["-i", path]
+        # Duck the bed; pitch + delay each voice clip to its cue; mix everything.
+        parts = [f"[1:a]volume={DUCK_VOLUME}[bg]"]
+        mix_labels = ["[bg]"]
+        for idx, (_, at) in enumerate(vo_clips):
+            ff_in = idx + 2  # inputs: 0=video, 1=song, voices start at 2
+            ms = max(0, int(at * 1000))
+            lbl = f"[v{ff_in}]"
+            parts.append(
+                f"[{ff_in}:a]asetrate={TTS_SAMPLE_RATE}*{pitch},"
+                f"aresample={TTS_SAMPLE_RATE},adelay={ms}|{ms}{lbl}"
+            )
+            mix_labels.append(lbl)
+        parts.append(
+            "".join(mix_labels)
+            + f"amix=inputs={len(mix_labels)}:normalize=0:duration=first[aout]"
+        )
+        cmd += [
+            "-filter_complex", ";".join(parts),
+            "-map", "0:v", "-map", "[aout]",
+            "-t", f"{total:.3f}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", out_path,
+        ]
+    else:
+        cmd = [
+            engine.FFMPEG, "-y", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
+            "-stream_loop", "-1", "-i", song,
+            "-t", f"{total:.3f}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k", "-shortest",
+            "-movflags", "+faststart", out_path,
+        ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
     for fi in range(nframes):

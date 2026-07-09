@@ -99,6 +99,9 @@ export interface RenderSpec {
   texts: RenderTextEvent[]; // the timed on-screen text (default/example copy)
   description?: string; // AI/human-readable description of the finished video
   example_video_url?: string | null; // optional reference that was scanned
+  // When set + enabled, the renderer reads each text line aloud (TTS) at its at_second,
+  // pitched to the given style ("chipmunk"), with the music bed ducked underneath.
+  voiceover?: { enabled: boolean; style?: string } | null;
 }
 
 export interface WorkflowRenderOptions {
@@ -376,9 +379,25 @@ const PEST_SHABANG: Workflow = {
   description: "1-image 6s branded reel: label, hook, payoff, cta over one still, house song bed.",
 };
 
+// "Workflow 2.1" — Workflow 2 exactly, plus a chipmunk TTS voiceover that reads each
+// timed line aloud (music ducked underneath). Identical shots/texts/timings; only the
+// render_spec.voiceover flag differs. Renderer synthesizes + muxes the voice.
+const PEST_6HL_PROPAGANDA_VO: Workflow = {
+  ...structuredClone(PEST_6HL_PROPAGANDA),
+  id: "pest_control__broll__6hl_propaganda_vo",
+  name: "Workflow 2.1",
+  render_spec: {
+    ...structuredClone(PEST_6HL_PROPAGANDA.render_spec!),
+    voiceover: { enabled: true, style: "chipmunk" },
+  },
+  description:
+    "Workflow 2 + chipmunk voiceover: reads each timed headline aloud as it appears, music ducked underneath.",
+};
+
 export const SEED_WORKFLOWS: Record<string, Workflow> = {
   [PEST_WASP_NEST.id]: PEST_WASP_NEST,
   [PEST_6HL_PROPAGANDA.id]: PEST_6HL_PROPAGANDA,
+  [PEST_6HL_PROPAGANDA_VO.id]: PEST_6HL_PROPAGANDA_VO,
   [PEST_SHABANG.id]: PEST_SHABANG,
 };
 
