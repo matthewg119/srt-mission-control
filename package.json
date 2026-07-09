@@ -7,7 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed:prospects": "bun run scripts/seed-prospect-rotation.ts",
+    "pull:now": "bun run scripts/pull-prospects-now.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

@@ -95,6 +95,10 @@
     {
       "path": "/api/cron/prompt-drop?slot=evening",
       "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/cron/pull-prospects",
+      "schedule": "0 12 * * *"
     }
   ]
 }
