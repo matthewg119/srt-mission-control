@@ -13,7 +13,9 @@ Request  (POST, header `x-reel-secret: $REEL_RENDER_SECRET`):
     "shots": [ { "image_url": str, "video_url": str|null, "start": float,
                  "end": float, "zoom": float|0 }, ... ],
                  # video_url (an animated clip) renders in place of the still,
-                 # trimmed to the shot; falls back to image_url when absent.
+                 # trimmed to the shot; falls back to image_url when absent. The
+                 # clip's own audio is mixed FAINTLY (CLIP_AUDIO_VOLUME) under the
+                 # song, which stays the main track.
     "texts": [ { "text": str, "at_second": float, "out_second": float,
                  "position": "top|upper_side|upper_middle|center|lower|bottom",
                  "color": str|null, "size": "small|medium|large" }, ... ] }
@@ -74,6 +76,21 @@ def _download(url: str, dest: str, what: str):
     with open(dest, "wb") as fh:
         fh.write(data)
     return dest
+
+
+def _extract_video_audio(src: str, dest: str, seconds: float) -> bool:
+    """Pull the clip's OWN audio track (trimmed to the shot slot) so the engine can mix
+    it faintly under the song. Returns False when the clip is silent / has no audio
+    stream (many image-to-video exports are), which just means nothing to mix."""
+    eng = spec_engine.engine
+    cmd = [
+        eng.FFMPEG, "-y", "-loglevel", "error",
+        "-i", src, "-t", f"{max(0.001, seconds):.3f}",
+        "-vn", "-c:a", "aac", "-b:a", "128k", dest,
+    ]
+    if subprocess.run(cmd).returncode != 0:
+        return False
+    return os.path.exists(dest) and os.path.getsize(dest) > 0
 
 
 def _extract_video_frames(src: str, frames_dir: str, seconds: float) -> int:
@@ -143,14 +160,21 @@ class handler(BaseHTTPRequestHandler):
                     _download(video_url, vid_path, f"shot {i + 1} video")
                     frames_dir = os.path.join(tmpdir, f"shot_{i}_frames")
                     os.makedirs(frames_dir, exist_ok=True)
-                    count = _extract_video_frames(
-                        vid_path,
-                        frames_dir,
-                        float(s.get("end", 0)) - float(s.get("start", 0)),
-                    )
+                    slot = float(s.get("end", 0)) - float(s.get("start", 0))
+                    count = _extract_video_frames(vid_path, frames_dir, slot)
                     if count <= 0:
                         raise ValueError(f"shot {i + 1}: video produced no frames")
-                    sources.append({"kind": "video", "frames_dir": frames_dir, "count": count})
+                    # The clip's own sound rides under the song at CLIP_AUDIO_VOLUME;
+                    # a silent clip simply contributes nothing.
+                    audio_path = os.path.join(tmpdir, f"shot_{i}_audio.m4a")
+                    if not _extract_video_audio(vid_path, audio_path, slot):
+                        audio_path = None
+                    sources.append({
+                        "kind": "video",
+                        "frames_dir": frames_dir,
+                        "count": count,
+                        "audio_path": audio_path,
+                    })
                 else:
                     path = os.path.join(tmpdir, f"shot_{i}")
                     _download(s["image_url"], path, f"shot {i + 1} image")

@@ -1,9 +1,11 @@
 """
 SRT Spec Engine (Workflow Builder v2)
 -------------------------------------
-Renders a fully spec-driven vertical reel: N still-image shots with start/end
-times, text chips that appear/disappear at arbitrary timestamps, and the
-workflow's OWN song (looped when shorter than the video, trimmed when longer).
+Renders a fully spec-driven vertical reel: N shots (still images or animated
+clips) with start/end times, text chips that appear/disappear at arbitrary
+timestamps, and the workflow's OWN song (looped when shorter than the video,
+trimmed when longer). A video shot's own audio is mixed in faintly at
+CLIP_AUDIO_VOLUME; the song stays the main track.
 
 This is the generic counterpart to engine.render(): that one is the locked
 Vargas format (one image, fixed song_master, fixed cue times); this one takes
@@ -27,7 +29,7 @@ W, H, FPS = engine.W, engine.H, engine.FPS
 
 # Bump on every renderer behavior change so a render response can prove which
 # build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
-ENGINE_VERSION = "spec-2026-07-10-natural-vo"
+ENGINE_VERSION = "spec-2026-07-10-clip-audio"
 
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
@@ -45,6 +47,7 @@ VO_STYLE_SPEED = {"chipmunk": 1.0}
 VO_DEFAULT_SPEED = 1.0
 DUCK_VOLUME = 0.30                    # music bed level while voiceover plays
 VO_LINE_GAP = 0.15                    # min silence between two voice lines (no talk-over)
+CLIP_AUDIO_VOLUME = 0.05              # a video shot's OWN sound, faint under the song ("volume 5")
 
 # y-center of each named position, as a fraction of H. x is always centered.
 POSITIONS = {
@@ -136,6 +139,7 @@ def _prep_shots(shots, sources):
                 kind="video",
                 frames_dir=src["frames_dir"],
                 count=int(src["count"]),
+                audio_path=src.get("audio_path"),
             )
         else:
             path = src["path"] if isinstance(src, dict) else src
@@ -380,27 +384,43 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
     if voiceover and voiceover.get("enabled"):
         vo_clips = _prep_voiceover(texts, voiceover, workdir)
 
-    if vo_clips:
-        speed = VO_STYLE_SPEED.get((voiceover or {}).get("style"), VO_DEFAULT_SPEED)
-        sequenced = _sequence_voiceover(vo_clips, speed)
-        cmd = [
-            engine.FFMPEG, "-y", "-loglevel", "error",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-            "-stream_loop", "-1", "-i", song,
-        ]
-        for path, _ in sequenced:
-            cmd += ["-i", path]
-        # Duck the bed; delay each voice clip to its (non-overlapping) start; mix everything.
-        parts = [f"[1:a]volume={DUCK_VOLUME}[bg]"]
+    # A video shot's own soundtrack (extracted by render-spec.py, already trimmed to the
+    # slot) plays faintly under the song from the shot's start. The song stays the main bed.
+    clip_audios = [
+        (s["audio_path"], s["start"])
+        for s in prepped_shots
+        if s["kind"] == "video" and s.get("audio_path")
+    ]
+
+    cmd = [
+        engine.FFMPEG, "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
+        "-stream_loop", "-1", "-i", song,
+    ]
+    if vo_clips or clip_audios:
+        # One mix graph: song bed (ducked only while VO plays) + delayed voice lines +
+        # delayed faint clip audio. Inputs: 0=video pipe, 1=song, extras from 2 up.
+        extra_inputs = []
+        parts = [f"[1:a]volume={DUCK_VOLUME if vo_clips else 1.0}[bg]"]
         mix_labels = ["[bg]"]
-        for idx, (_, at) in enumerate(sequenced):
-            ff_in = idx + 2  # inputs: 0=video, 1=song, voices start at 2
+        if vo_clips:
+            speed = VO_STYLE_SPEED.get((voiceover or {}).get("style"), VO_DEFAULT_SPEED)
+            for path, at in _sequence_voiceover(vo_clips, speed):
+                extra_inputs.append(path)
+                ff_in = 1 + len(extra_inputs)
+                ms = max(0, int(at * 1000))
+                lbl = f"[v{ff_in}]"
+                parts.append(f"[{ff_in}:a]atempo={speed},adelay={ms}|{ms}{lbl}")
+                mix_labels.append(lbl)
+        for path, at in clip_audios:
+            extra_inputs.append(path)
+            ff_in = 1 + len(extra_inputs)
             ms = max(0, int(at * 1000))
-            lbl = f"[v{ff_in}]"
-            parts.append(
-                f"[{ff_in}:a]atempo={speed},adelay={ms}|{ms}{lbl}"
-            )
+            lbl = f"[c{ff_in}]"
+            parts.append(f"[{ff_in}:a]volume={CLIP_AUDIO_VOLUME},adelay={ms}|{ms}{lbl}")
             mix_labels.append(lbl)
+        for path in extra_inputs:
+            cmd += ["-i", path]
         parts.append(
             "".join(mix_labels)
             + f"amix=inputs={len(mix_labels)}:normalize=0:duration=first[aout]"
@@ -414,10 +434,7 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
             "-movflags", "+faststart", out_path,
         ]
     else:
-        cmd = [
-            engine.FFMPEG, "-y", "-loglevel", "error",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-            "-stream_loop", "-1", "-i", song,
+        cmd += [
             "-t", f"{total:.3f}",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k", "-shortest",

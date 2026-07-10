@@ -117,6 +117,7 @@ export interface JobData {
   drop_media?: Array<{ url: string; kind: "image" | "video" }>; // resolved stills, drop order
   drop_lines?: string[]; // parsed copy lines as dropped
   mode_images?: string[]; // resolved image URLs held at the animate-vs-still gate (dr_mode)
+  mode_videos?: Array<string | null>; // animated clip URLs per shot (dr_animate); null = keep the still
   seeded_reactions?: string[]; // emojis the bot pre-seeded on the picker card; these only act at count >= 2
   fit_menu?: string[]; // workflow ids in fit-card order (reply N picks)
   prompt_slots?: Array<{ scene: number; image_url?: string | null }>; // prompt-drop image intake

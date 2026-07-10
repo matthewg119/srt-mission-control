@@ -128,6 +128,27 @@ async function resolveDropMedia(
   return out;
 }
 
+/** Resolve dropped VIDEO files to public clip URLs in the reels bucket — the FULL clip,
+ *  not a poster frame (that's resolveDropMedia's job). Non-video files are skipped. */
+async function resolveDropClips(files: DroppedFile[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const f of files) {
+    const mt = f.mimetype || "";
+    if (!mt.startsWith("video/")) continue;
+    const src = f.url_private_download || f.url_private;
+    if (!src) continue;
+    const buf = await downloadSlackUrl(src);
+    if (!buf) continue;
+    const url = await uploadToReels(buf, mt);
+    if (url) out.push(url);
+  }
+  return out;
+}
+
+function hasVideoFiles(files: DroppedFile[]): boolean {
+  return files.some((f) => (f.mimetype || "").startsWith("video/"));
+}
+
 function splitLines(text: string): string[] {
   return (text || "")
     .split(/\r?\n/)
@@ -466,12 +487,14 @@ async function writeSalesLetterFor(
   }
 }
 
-/** Shared render + caption finish for both drop flows. */
+/** Shared render + caption finish for both drop flows. `videos` (per-shot animated clip
+ *  URLs, null = keep the still) rides along when the operator pasted Seedance clips. */
 async function finishDropRender(
   job: ContentJob,
   workflow: Workflow,
   copy: StructuredCopyLine[],
-  images: string[]
+  images: string[],
+  videos?: Array<string | null>
 ): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   const retryStage = job.format_id === PROMPT_FORMAT ? "pd_copy" : "dr_copy";
@@ -481,12 +504,13 @@ async function finishDropRender(
   });
   try {
     const shots = workflow.scenes?.length || workflow.render_spec?.shots?.length || 1;
+    const clipCount = (videos ?? []).filter(Boolean).length;
     await post(
       channel,
       threadTs,
-      `Rendering *${workflow.name}* - ${shots} shot${shots === 1 ? "" : "s"} into one reel. This takes about a minute...`
+      `Rendering *${workflow.name}* - ${shots} shot${shots === 1 ? "" : "s"}${clipCount ? ` (${clipCount} animated clip${clipCount === 1 ? "" : "s"})` : ""} into one reel. This takes about a minute...`
     );
-    const result = await renderWorkflow(workflow, { images, copy });
+    const result = await renderWorkflow(workflow, { images, copy, videos });
 
     let uploaded = false;
     let mp4 = result.mp4 ?? null;
@@ -573,16 +597,21 @@ async function enterDropModeGate(
   }
 }
 
-/** Read the images + copy + workflow held at the gate. */
+/** Read the images + copy + workflow (+ any pasted clips) held at the gate. */
 async function gateContext(
   job: ContentJob
-): Promise<{ workflow: Workflow; copy: StructuredCopyLine[]; images: string[] } | null> {
+): Promise<{
+  workflow: Workflow;
+  copy: StructuredCopyLine[];
+  images: string[];
+  videos: Array<string | null>;
+} | null> {
   const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
   const images =
     job.data.mode_images ?? (job.data.drop_media ?? []).map((m) => m.url);
   if (!workflow || !copy.length || !images.length) return null;
-  return { workflow, copy, images };
+  return { workflow, copy, images, videos: job.data.mode_videos ?? [] };
 }
 
 /** Resolve the gate: "still" renders now, "animate" writes motion prompts (no render). */
@@ -676,7 +705,7 @@ async function postAnimatePrompts(
         `*Motion prompts for ${workflow.name}* (Seedance 2.0, one per image):`,
         ...lines,
         "",
-        "Animate each image with these, drop the clips back here, or reply `still` to render the images as-is.",
+        `Animate each image with these and drop the clips back here — I'll render automatically once all ${images.length} are in. Or reply \`still\` to render the images as-is.`,
       ].join("\n")
     );
     const fresh = (await getLatestJobByThread(threadTs)) ?? job;
@@ -684,6 +713,61 @@ async function postAnimatePrompts(
   } catch (e) {
     console.error("[drop-studio] motion prompts failed:", (e as Error).message);
     await post(channel, threadTs, `Could not write the motion prompts (${(e as Error).message.slice(0, 120)}). Reply \`still\` to render the images instead.`);
+  }
+}
+
+/** Seedance clips pasted at the animate gate: upload the FULL clips, slot them per shot
+ *  (drop order, or comment `scene N` to target), and render as soon as every shot has one.
+ *  A partial drop holds; `render` renders now (missing shots keep their stills) and `still`
+ *  still renders stills only. */
+async function handleAnimatedClipDrop(
+  job: ContentJob,
+  files: DroppedFile[],
+  text: string
+): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const ctx = await gateContext(job);
+  if (!ctx) {
+    await post(channel, threadTs, "Lost the drop details. Re-drop the images + copy to start again.");
+    return;
+  }
+  await post(channel, threadTs, "Got the clips. Pulling them in...");
+  const clips = await resolveDropClips(files);
+  if (!clips.length) {
+    await post(channel, threadTs, "Could not read those files as video clips. Try re-uploading the MP4s.");
+    return;
+  }
+  const total = ctx.images.length;
+  const videos: Array<string | null> = [...ctx.videos];
+  while (videos.length < total) videos.push(null);
+  const targetMatch = /\bscene\s+(\d{1,2})\b/i.exec(text);
+  let target = targetMatch ? parseInt(targetMatch[1], 10) - 1 : null;
+  for (const url of clips) {
+    let slot = target ?? videos.findIndex((v) => !v);
+    if (slot === null || slot < 0 || slot >= total) slot = total - 1;
+    videos[slot] = url;
+    if (target !== null) target++;
+  }
+  const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+  await updateJob(fresh, { data: { ...fresh.data, mode_videos: videos } });
+  const filled = videos.filter(Boolean).length;
+  if (filled >= total) {
+    // finishDropRender posts its own "Rendering ..." status line.
+    waitUntil(
+      finishDropRender(
+        { ...fresh, data: { ...fresh.data, mode_videos: videos } },
+        ctx.workflow,
+        ctx.copy,
+        ctx.images,
+        videos
+      )
+    );
+  } else {
+    await post(
+      channel,
+      threadTs,
+      `${filled} of ${total} clip(s) in. Drop the rest, reply \`render\` to render now (shots without a clip keep the still), or \`still\` for stills only.`
+    );
   }
 }
 
@@ -978,7 +1062,7 @@ const DR_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   dr_fit: "Pick a workflow by number, react with the checkmark for the top pick, paste missing images, or `cancel`.",
   dr_copy: "React with the checkmark on the copy card to render, paste a replacement copy block, or `cancel`.",
   dr_mode: "Animate or still? React 1️⃣ Animate / 2️⃣ Still, or reply `animate` / `still`.",
-  dr_animate: "Motion prompts are above. Animate the images and drop the clips, or reply `still` to render the images as-is.",
+  dr_animate: "Motion prompts are above. Animate the images and drop the clips here (renders automatically once every shot has one), reply `render` to render with the clips in so far, or `still` for the images as-is.",
   dr_render: "Rendering now. Reply `render` to retry if it fails.",
   pd_await_images: "Waiting on the generated images. Upload them into this thread (comment `scene N` to target a slot).",
   pd_copy: "Pick a copy option by number (or react), paste your own lines, or `cancel`.",
@@ -1075,8 +1159,15 @@ export async function handleDropThreadReply(args: {
       break;
     }
     case "dr_animate": {
-      if (/^\s*(still|render|2)\s*$/i.test(text)) {
-        await resolveDropMode(job, "still");
+      if (/^\s*(still|2)\s*$/i.test(text)) {
+        await resolveDropMode(job, "still"); // stills only, any pasted clips are ignored
+        return true;
+      }
+      if (/^\s*(render|go)\s*$/i.test(text)) {
+        // Render with whatever clips are in; shots without a clip keep their stills.
+        const ctx = await gateContext(job);
+        if (ctx) waitUntil(finishDropRender(job, ctx.workflow, ctx.copy, ctx.images, ctx.videos));
+        else await post(channel, job.slack_thread_ts, "Lost the drop details. Re-drop the images + copy to start again.");
         return true;
       }
       break;
@@ -1170,7 +1261,7 @@ async function retryRender(job: ContentJob): Promise<void> {
     await post(job.slack_channel, job.slack_thread_ts, "Nothing to retry yet.");
     return;
   }
-  waitUntil(finishDropRender(job, workflow, copy, images));
+  waitUntil(finishDropRender(job, workflow, copy, images, job.data.mode_videos ?? []));
 }
 
 /** Reactions on drop cards. Self-routes by picker ts + format. */
@@ -1309,6 +1400,13 @@ export async function handleDropFileDrop(args: {
     } else {
       await post(job.slack_channel, job.slack_thread_ts, `${filled} of ${slots.length} scene image(s) in.`);
     }
+    return true;
+  }
+
+  // Animate gate: pasted VIDEO files are the Seedance clips for this drop — slot them per
+  // shot and render. (Image-only replies below still teach the workflow as references.)
+  if ((job.stage === "dr_animate" || job.stage === "dr_mode") && hasVideoFiles(args.files)) {
+    await handleAnimatedClipDrop(job, args.files, text);
     return true;
   }
 

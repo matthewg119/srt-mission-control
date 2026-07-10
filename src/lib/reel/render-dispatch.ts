@@ -38,6 +38,9 @@ export interface RenderWorkflowInput {
   images: string[];
   /** One line per copy_structure role, role order. */
   copy: StructuredCopyLine[];
+  /** Optional animated clip URL per shot (same order); null/undefined keeps the still.
+   *  Spec builds render the clip in place of the image; render_reel ignores these. */
+  videos?: Array<string | null | undefined>;
 }
 
 export interface RenderWorkflowResult {
@@ -84,13 +87,23 @@ function overlayCopyOnSpec(spec: RenderSpec, copy: StructuredCopyLine[]): Render
 }
 
 /** A workflow clone whose scenes carry the input images (placeholders created when
- *  the workflow has no baked scenes, e.g. b-roll templates). */
-function cloneWithImages(w: Workflow, spec: RenderSpec, images: string[]): Workflow {
+ *  the workflow has no baked scenes, e.g. b-roll templates). A per-shot animated clip
+ *  in `videos` becomes the scene's video_url (renders in place of the still). */
+function cloneWithImages(
+  w: Workflow,
+  spec: RenderSpec,
+  images: string[],
+  videos?: Array<string | null | undefined>
+): Workflow {
   const shotCount = spec.shots.length;
   const scenes: WorkflowScene[] = [];
   for (let i = 0; i < shotCount; i++) {
     const base = w.scenes[i] ?? { role: `shot ${i + 1}`, image_prompt: "", animation_prompt: "" };
-    scenes.push({ ...base, image_url: images[i] ?? base.image_url ?? null });
+    scenes.push({
+      ...base,
+      image_url: images[i] ?? base.image_url ?? null,
+      video_url: videos?.[i] ?? base.video_url ?? null,
+    });
   }
   return { ...w, scenes };
 }
@@ -150,7 +163,7 @@ export async function renderWorkflow(
     throw new Error(`Workflow "${w.name}" has no render spec yet, so it cannot render.`);
   }
   const spec = overlayCopyOnSpec(structuredClone(baseSpec), input.copy);
-  const clone = cloneWithImages(w, spec, input.images);
+  const clone = cloneWithImages(w, spec, input.images, input.videos);
   const payload = buildRenderPayload(clone, spec);
   // Respect the workflow's own song even when the spec carries none.
   if (!payload.song_url) payload.song_url = resolveSong(w.song_ref).url ?? null;
