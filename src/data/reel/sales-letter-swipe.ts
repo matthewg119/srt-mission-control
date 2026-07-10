@@ -69,3 +69,63 @@ HARD RULES:
 export function loadSalesLetterSwipe(): string {
   return SALES_LETTER_SWIPE;
 }
+
+// The vertical-agnostic version of the swipe: the same skeleton, archetypes, and hard
+// rules, minus everything that is pest-specific (the pest mechanism line, the pest
+// archetype examples, the pest objection order, and the verbatim pest language, which
+// the model gets from the avatar block instead). Used for any owner avatar that has no
+// sales_letter_swipe of its own and is not the pest owner.
+export const SALES_LETTER_SWIPE_GENERIC = `
+SALES-LETTER CAPTION FORMAT (condensed direct-response, 150-220 words):
+
+Write ONE caption as a tight sales letter that installs a single belief. Keep it to
+150-220 words. Use this skeleton, each part short:
+
+1) HEADLINE: one bold, ALL-CAPS or strong line. Enter the conversation in the buyer's
+   head. Lead with THEIR situation, fear, or desire, never with "we" or the company.
+2) SUBHEAD: one italic-style line naming the promise or the reframe.
+3) BODY: 4 to 7 very short paragraphs (1-3 sentences each). Open a loop, name the real
+   problem, reframe it, then land the offer's mechanism (use the Big Idea and the
+   unique-mechanism material from the avatar/offer block). Speak the buyer's language.
+4) PROOF: one line of proof. Use ONLY a real fact from the avatar/offer material given to
+   you. If none fits, write the literal token [PROOF] as a placeholder. NEVER invent a
+   stat, price, rate, or guarantee.
+5) CTA: one bold call to action line.
+6) P.S.: one line that adds urgency, grounded in the avatar's real fears or deadlines.
+
+THE 5 LEAD-TYPE ARCHETYPES (pick the one that best fits the belief + the video):
+- confession (direct-attack): validate the buyer's skepticism head-on. Opens by naming
+  the way they have been burned before.
+- discovery (story): the reveal of the real reason their problem persists. Educational,
+  for colder readers.
+- proclamation (fear): a deadline or season they already dread, made concrete.
+- underdog (us-vs-them): local pride against the big national player they cannot outspend.
+- multiplier (mechanism): for the buyer already spending on marketing, show how this
+  makes what they already do work harder.
+
+OBJECTION HANDLING: pick the ONE objection from the avatar/offer block this video most
+naturally answers and focus the caption on it. Use the avatar's own reframes.
+
+VERBATIM AVATAR LANGUAGE: weave in the buyer's exact words from the avatar material
+where they fit. Never invent quotes.
+
+HARD RULES:
+- Write in ENGLISH, in the buyer's own voice and vocabulary (the belief text you are
+  given may be in Spanish; express the belief in English).
+- Never invent guarantees, numbers, prices, rates, or terms. Only use proof present in the
+  avatar/offer material; otherwise use the literal [PROOF] token.
+- Never use em dashes or en dashes. Use commas, periods, or hyphens.
+- Direct, confident, respectful of the trade. No fluff, no hype words, no emojis.
+`.trim();
+
+/** Swipe for a specific OWNER avatar: its own sales_letter_swipe column when set, the
+ *  full pest swipe for the pest ids (today's behavior), the generic skeleton otherwise. */
+export function salesLetterSwipeFor(vertical: {
+  id: string;
+  sales_letter_swipe?: string | null;
+}): string {
+  const own = vertical.sales_letter_swipe?.trim();
+  if (own) return own;
+  if (vertical.id === "pest_owner_ai" || vertical.id === "pest_control") return SALES_LETTER_SWIPE;
+  return SALES_LETTER_SWIPE_GENERIC;
+}

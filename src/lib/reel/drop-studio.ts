@@ -1,5 +1,7 @@
-// Drop Studio — everything that happens in #ai-content-pest-control (the SIMPLE daily
-// lane, pinned to the pest_control avatar).
+// Drop Studio — the SIMPLE daily lane. Runs in any channel wired to a vertical via
+// verticals.slack_drop_channel_id (plus #ai-content-pest-control via env, backward
+// compat). Adding an avatar channel is a SQL paste, no deploy — see
+// docs/2026-07-10-drop-channel-verticals.sql.
 //
 //   1. DROP-AND-RENDER: drop 1+ images (or videos) + your copy in ONE message. The copy
 //      + media count are matched against the workflow library (Shabang = 1 image + 2-4
@@ -39,6 +41,7 @@ import {
   generateHookCopy,
   buildHookCopySystem,
   generateSalesLetterCaption,
+  hasSalesLetterExamples,
 } from "@/lib/reel/captions";
 import {
   reslotCopyToStructure,
@@ -54,13 +57,17 @@ import { loadReferenceFrames, saveContentExample } from "@/lib/reel/content-exam
 import { distillFeedbackToRules, savePendingRules } from "@/lib/reel/style-rules";
 import { stripEmDashes } from "@/lib/reel/text";
 import { listWorkflows, loadWorkflow, resolveSong, type Workflow } from "@/config/workflows";
-import { loadVertical, type Vertical } from "@/config/verticals";
+import {
+  loadVertical,
+  dropOwnerVerticalId,
+  dropWorkflowLibraryId,
+  type Vertical,
+} from "@/config/verticals";
 
-export const DROP_VERTICAL_ID = "pest_control";
-// The `go` report (30 headlines + story material) speaks to the pest-control BUSINESS
-// OWNER (the B2B AI-content buyer), not the consumer/homeowner avatar. Render/workflow
-// matching stays on DROP_VERTICAL_ID (Workflow 2 is filed under pest_control).
-const DROP_REPORT_VERTICAL_ID = "pest_owner_ai";
+// Which vertical a drop belongs to travels on the job row (content_jobs.vertical_id), set
+// once by handleDropMessage/runPromptDrop from the channel's vertical; the `go` report and
+// the sales-letter caption speak to that vertical's OWNER avatar (dropOwnerVerticalId), and
+// workflow matching uses its library (dropWorkflowLibraryId, shared pest_control by default).
 const DROP_FORMAT = "drop_render";
 const PROMPT_FORMAT = "prompt_drop";
 
@@ -214,8 +221,8 @@ function zeroAdaptationCopy(w: Workflow, lines: string[]): StructuredCopyLine[] 
   return roles.map((r, i) => ({ key: r.key, label: r.label, text: lines[i] }));
 }
 
-async function activeWorkflows(): Promise<Workflow[]> {
-  const all = await listWorkflows(DROP_VERTICAL_ID, { status: "active" });
+async function activeWorkflows(libraryVerticalId: string): Promise<Workflow[]> {
+  const all = await listWorkflows(libraryVerticalId, { status: "active" });
   return all.filter(isRenderable);
 }
 
@@ -247,8 +254,9 @@ function seedReference(vertical: Vertical): CreativeReference {
   };
 }
 
-export async function handleDropGo(channel: string): Promise<void> {
-  const vertical = await loadVertical(DROP_REPORT_VERTICAL_ID);
+export async function handleDropGo(channel: string, dropVerticalId: string): Promise<void> {
+  const drop = await loadVertical(dropVerticalId);
+  const vertical = await loadVertical(dropOwnerVerticalId(drop));
   await slack.postMessage(channel, `*${vertical.name}* — pulling 30 headline angles + story material...`);
 
   // Run both independently: one failing (e.g. a transient Claude error) must not kill the
@@ -318,6 +326,7 @@ export async function handleDropMessage(args: {
   threadTs: string;
   files: DroppedFile[];
   text: string;
+  verticalId: string;
 }): Promise<void> {
   const { channel, threadTs } = args;
   const media = await resolveDropMedia(args.files);
@@ -339,7 +348,8 @@ export async function handleDropMessage(args: {
     ? "\nNote: videos were resolved to still frames (render builds are stills based for now)."
     : "";
 
-  const candidates = await activeWorkflows();
+  const dropVertical = await loadVertical(args.verticalId);
+  const candidates = await activeWorkflows(dropWorkflowLibraryId(dropVertical));
   const fits = candidates
     .map((w) => scoreFit(w, media.length, lines))
     .sort((a, b) => b.score - a.score || (b.workflow.used_at ?? "").localeCompare(a.workflow.used_at ?? ""));
@@ -357,7 +367,7 @@ export async function handleDropMessage(args: {
   }
   await insertJob({
     formatId: DROP_FORMAT,
-    verticalId: DROP_VERTICAL_ID,
+    verticalId: args.verticalId,
     channel,
     threadTs,
     pickerTs: threadTs,
@@ -397,7 +407,7 @@ function songNote(w: Workflow): string {
 
 async function postAdaptedCopyCard(job: ContentJob, w: Workflow, pastedBlock: string): Promise<void> {
   try {
-    const vertical = await loadVertical(DROP_VERTICAL_ID);
+    const vertical = await loadVertical(job.vertical_id);
     const copy = await reslotCopyToStructure({ vertical, workflow: w, pastedBlock });
     if (!copy.length) throw new Error("the workflow has no copy boxes");
     const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
@@ -413,6 +423,46 @@ async function postAdaptedCopyCard(job: ContentJob, w: Workflow, pastedBlock: st
     ].join("\n"));
   } catch (e) {
     await post(job.slack_channel, job.slack_thread_ts, `Could not adapt the copy: ${(e as Error).message}`);
+  }
+}
+
+/** Sales letter for a finished drop, in the channel's OWNER avatar voice. Returns the
+ *  Slack note to post: the letter itself, the "paste letters first" instructions when the
+ *  avatar has no reference letters yet, or the manual-fallback line on a Claude error. */
+async function writeSalesLetterFor(
+  job: ContentJob,
+  workflow: Workflow,
+  copy: StructuredCopyLine[]
+): Promise<{ caption: string; beliefInstalled: string; note: string }> {
+  const none = { caption: "", beliefInstalled: "" };
+  try {
+    const drop = await loadVertical(job.vertical_id);
+    const ownerId = dropOwnerVerticalId(drop);
+    const owner = await loadVertical(ownerId);
+    if (!hasSalesLetterExamples(owner)) {
+      return {
+        ...none,
+        note: [
+          `Reel ready. No sales letter: the *${owner.name}* avatar has no reference letters yet,`,
+          "and I never write captions in a borrowed voice.",
+          `Paste 3-5 of your letters into \`verticals.sales_letter_examples\` for id \`${ownerId}\``,
+          "(Supabase SQL editor), then reply `caption` here and I'll write it.",
+        ].join("\n"),
+      };
+    }
+    const onScreen = copy.map((c) => c.text).filter(Boolean).join(" | ");
+    const sl = await generateSalesLetterCaption({ vertical: owner, workflow, onScreenCopy: onScreen });
+    const beliefLine = sl.belief_installed
+      ? `_Installs belief: ${sl.belief_installed}${sl.lead_type ? ` (${sl.lead_type})` : ""}_`
+      : "";
+    return {
+      caption: sl.caption,
+      beliefInstalled: sl.belief_installed,
+      note: [beliefLine, "*Sales letter*", sl.caption].filter(Boolean).join("\n"),
+    };
+  } catch (e) {
+    console.error("[drop-studio] sales letter failed:", (e as Error).message);
+    return { ...none, note: "Reel ready. (Sales letter generation failed, reply `caption` to retry or write it manually.)" };
   }
 }
 
@@ -454,31 +504,13 @@ async function finishDropRender(
       await post(channel, threadTs, result.url ? `Reel ready: ${result.url}` : "Render finished but nothing came back.");
     }
 
-    // Post-render caption is a belief-installing SALES LETTER written to the pest-control
-    // OWNER avatar (the B2B content-service buyer = pest_owner_ai), condensed to 150-220
-    // words so it drops straight under the reel. Non-fatal: the MP4 is already posted.
-    let caption = "";
-    let beliefInstalled = "";
-    let beliefLine = "";
-    try {
-      const vertical = await loadVertical(DROP_REPORT_VERTICAL_ID);
-      const onScreen = copy.map((c) => c.text).filter(Boolean).join(" | ");
-      const sl = await generateSalesLetterCaption({ vertical, workflow, onScreenCopy: onScreen });
-      caption = sl.caption;
-      beliefInstalled = sl.belief_installed;
-      beliefLine = sl.belief_installed
-        ? `_Installs belief: ${sl.belief_installed}${sl.lead_type ? ` (${sl.lead_type})` : ""}_`
-        : "";
-    } catch (e) {
-      console.error("[drop-studio] sales letter failed:", (e as Error).message);
-    }
-    await post(
-      channel,
-      threadTs,
-      caption
-        ? [beliefLine, "*Sales letter*", caption].filter(Boolean).join("\n")
-        : "Reel ready. (Sales letter generation failed, write it manually.)"
-    );
+    // Post-render caption is a belief-installing SALES LETTER written to this channel's
+    // OWNER avatar (dropOwnerVerticalId), condensed to 150-220 words so it drops straight
+    // under the reel. The voice is anchored on real reference letters: an avatar without
+    // sales_letter_examples gets NO caption, just instructions to paste letters and reply
+    // `caption`. Non-fatal either way: the MP4 is already posted.
+    const { caption, beliefInstalled, note } = await writeSalesLetterFor(job, workflow, copy);
+    await post(channel, threadTs, note);
 
     await markWorkflowUsed(workflow.id);
     const fresh = (await getLatestJobByThread(threadTs)) ?? job;
@@ -671,7 +703,9 @@ export async function generateDropPrompts(
   const scenes = workflow.scenes.length
     ? workflow.scenes.map((s) => s.role)
     : ["the single hero shot"];
-  const frames = await loadReferenceFrames(DROP_VERTICAL_ID, { workflowId: workflow.id, limit: 4 });
+  // References are filed under the workflow's own vertical, so every channel sharing the
+  // library benefits from the same examples.
+  const frames = await loadReferenceFrames(workflow.vertical_id, { workflowId: workflow.id, limit: 4 });
 
   interface PromptGen {
     prompts: Array<{ scene: number; action: string }>;
@@ -725,8 +759,10 @@ export async function generateDropPrompts(
 export async function runPromptDrop(args: {
   channel: string;
   slot: string;
+  verticalId: string;
 }): Promise<{ ok: boolean; workflowId?: string; error?: string }> {
-  const candidates = await activeWorkflows();
+  const vertical = await loadVertical(args.verticalId);
+  const candidates = await activeWorkflows(dropWorkflowLibraryId(vertical));
   if (!candidates.length) return { ok: false, error: "no active renderable workflows" };
   const byLru = [...candidates].sort((a, b) => {
     const au = a.used_at ?? "";
@@ -736,7 +772,6 @@ export async function runPromptDrop(args: {
   const workflow = byLru[0];
   await ensureWorkflowRow(workflow.id);
 
-  const vertical = await loadVertical(DROP_VERTICAL_ID);
   let prompts: DropPromptsResult;
   try {
     prompts = await generateDropPrompts(workflow, vertical, 9);
@@ -764,7 +799,7 @@ export async function runPromptDrop(args: {
 
   await insertJob({
     formatId: PROMPT_FORMAT,
-    verticalId: DROP_VERTICAL_ID,
+    verticalId: args.verticalId,
     channel: args.channel,
     threadTs: header.ts,
     pickerTs: header.ts,
@@ -800,7 +835,7 @@ async function advancePromptDropToCopy(job: ContentJob, workflow: Workflow): Pro
         ...variations.map((v, i) => `${caps[i]} *${v.label}*\n      ${v.line1}\n      ${v.line2}\n      _${v.cta}_`),
       ].join("\n"));
     } else {
-      const vertical = await loadVertical(DROP_VERTICAL_ID);
+      const vertical = await loadVertical(job.vertical_id);
       const hook = await generateHookCopy({
         scene: `Workflow: ${workflow.description ?? workflow.name}. Scenes: ${workflow.scenes.map((s) => s.role).join(" -> ")}`,
         system: buildHookCopySystem("pov_hook", vertical),
@@ -856,7 +891,7 @@ async function pickPromptDropOption(job: ContentJob, n: number): Promise<void> {
   waitUntil(
     (async () => {
       try {
-        const vertical = await loadVertical(DROP_VERTICAL_ID);
+        const vertical = await loadVertical(job.vertical_id);
         const copy = await generateStructuredCopy({ vertical, workflow, seed: { headline: picked } });
         const fresh = (await getLatestJobByThread(threadTs)) ?? job;
         await updateJob(fresh, { data: { ...fresh.data, structured_copy: copy } });
@@ -887,7 +922,9 @@ async function saveFeedbackReferences(
   const wf = await loadWorkflow(wfId);
   for (const m of media) {
     await saveContentExample({
-      verticalId: DROP_VERTICAL_ID,
+      // File the reference under the workflow's own vertical (shared library), falling
+      // back to the drop's vertical for legacy workflows without one.
+      verticalId: wf?.vertical_id ?? job.vertical_id,
       workflowId: wfId,
       sourcePath: m.url,
       storyboard: { hook: stripEmDashes(text).slice(0, 200) || wf?.name || wfId, shots: [] },
@@ -909,7 +946,7 @@ async function handleTextFeedback(job: ContentJob, text: string): Promise<boolea
     const distilled = await distillFeedbackToRules({
       text,
       formatGroup: "drop_studio",
-      verticalId: DROP_VERTICAL_ID,
+      verticalId: job.vertical_id,
     });
     if (distilled.intent !== "tune" || distilled.rules.length === 0) return false;
     const lines = distilled.rules.map((r, i) => {
@@ -922,7 +959,7 @@ async function handleTextFeedback(job: ContentJob, text: string): Promise<boolea
     ].join("\n"));
     if (card) {
       await savePendingRules(distilled.rules, {
-        verticalId: DROP_VERTICAL_ID,
+        verticalId: job.vertical_id,
         channel: job.slack_channel,
         threadTs: job.slack_thread_ts,
         proposalTs: card,
@@ -974,11 +1011,34 @@ export async function handleDropThreadReply(args: {
     return true;
   }
 
-  // Finished threads: text feedback -> style-rule proposal.
+  // Finished threads: `caption` re-runs the sales letter (e.g. after the operator pastes
+  // reference letters for a new avatar); other text -> style-rule proposal.
   if (job.status !== "active") {
+    if (/^\s*caption\s*$/i.test(text)) {
+      const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
+      const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
+      if (!workflow || !copy.length) {
+        await post(channel, job.slack_thread_ts, "I can't find this drop's workflow/copy to caption from.");
+        return true;
+      }
+      await post(channel, job.slack_thread_ts, "Writing the sales letter...");
+      waitUntil(
+        (async () => {
+          const { caption, beliefInstalled, note } = await writeSalesLetterFor(job, workflow, copy);
+          await post(channel, job.slack_thread_ts, note);
+          if (caption) {
+            const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
+            await updateJob(fresh, {
+              data: { ...fresh.data, caption_draft: caption, belief_installed: beliefInstalled || undefined },
+            });
+          }
+        })()
+      );
+      return true;
+    }
     const handled = await handleTextFeedback(job, text);
     if (!handled) {
-      await post(channel, job.slack_thread_ts, "This drop is finished. Send feedback with example images to teach the workflow, or start a new drop.");
+      await post(channel, job.slack_thread_ts, "This drop is finished. Send feedback with example images to teach the workflow, or start a new drop. Reply `caption` to rewrite the sales letter.");
     }
     return true;
   }

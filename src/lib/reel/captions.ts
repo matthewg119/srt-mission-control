@@ -6,8 +6,8 @@
 
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { IG_CAPTION_TEMPLATES } from "@/data/reel/ig-caption-templates";
-import { loadSalesLetterSwipe } from "@/data/reel/sales-letter-swipe";
-import { loadSalesLetterExamples } from "@/data/reel/sales-letter-examples";
+import { salesLetterSwipeFor } from "@/data/reel/sales-letter-swipe";
+import { salesLetterExamplesFor } from "@/data/reel/sales-letter-examples";
 import { stripEmDashes } from "@/lib/reel/text";
 import type { Belief } from "@/lib/reel/beliefs";
 import type { HeadlinePair } from "@/lib/reel/headlines";
@@ -242,11 +242,12 @@ export async function generateCaptionForScript(
 
 // ---- Sales-letter caption (the post-render, belief-installing caption) ----------------
 //
-// After a reel renders in #ai-content-pest-control, we replace the short IG caption with a
-// condensed (150-220 word) SALES LETTER written to the pest-control OWNER avatar and
+// After a reel renders in a drop channel, we replace the short IG caption with a
+// condensed (150-220 word) SALES LETTER written to that channel's OWNER avatar and
 // engineered to install ONE belief from that avatar's belief stack. Grounded in the
 // vertical's own avatar_summary + beliefs + offer (richer, English, no extra Claude call)
-// and the sales-letter swipe. See src/data/reel/sales-letter-swipe.ts.
+// and the avatar's swipe + reference letters (per-avatar; captions are blocked until the
+// avatar has reference letters). See src/data/reel/sales-letter-swipe.ts.
 
 export interface SalesLetterCaption {
   belief_installed: string; // the ONE belief this letter installs (in English)
@@ -298,24 +299,35 @@ function salesLetterAvatarBlock(vertical: Vertical): string {
  * the avatar's belief stack, selects the matching lead-type archetype, and writes the
  * letter in the swipe format. English output enforced. Em dashes stripped (house rule).
  */
+export function hasSalesLetterExamples(vertical: Vertical): boolean {
+  return salesLetterExamplesFor(vertical).length > 0;
+}
+
 export async function generateSalesLetterCaption(args: {
   vertical: Vertical;
   workflow: Workflow;
   onScreenCopy: string; // the actual on-screen lines baked into THIS video
 }): Promise<SalesLetterCaption> {
+  // Voice is anchored on real reference letters. No letters for this avatar = no caption
+  // (callers gate on hasSalesLetterExamples and ask the operator to paste letters first).
+  const examples = salesLetterExamplesFor(args.vertical);
+  if (!examples) {
+    throw new Error(`no sales-letter examples for vertical "${args.vertical.id}"`);
+  }
   const system = [
-    "You are the copy chief for SRT Agency. You sell a done-for-you AI short-form content",
-    "service to pest-control BUSINESS OWNERS. You write ONE condensed sales-letter caption",
-    "(150-220 words) that the owner can post directly under this reel, engineered to install",
-    "a single buying belief. Everything speaks the owner's language, in ENGLISH.",
+    `You are the copy chief for SRT Agency. You sell a ${args.vertical.business_descriptor}`,
+    `to buyers who are each a ${args.vertical.wearer_role}. You write ONE condensed`,
+    "sales-letter caption (150-220 words) that can be posted directly under this reel,",
+    "engineered to install a single buying belief. Everything speaks the buyer's language,",
+    "in ENGLISH.",
     "",
     salesLetterAvatarBlock(args.vertical),
     "",
     "SALES-LETTER SWIPE (format, the 5 lead-type archetypes, objection order, verbatim language, rules):",
-    loadSalesLetterSwipe(),
+    salesLetterSwipeFor(args.vertical),
     "",
     "REFERENCE LETTERS (match this voice, rhythm, and sentence-level moves. Do NOT copy verbatim, and never output a bracketed placeholder):",
-    loadSalesLetterExamples(),
+    examples,
   ].join("\n");
 
   const user = [

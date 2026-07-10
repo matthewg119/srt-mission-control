@@ -14,6 +14,7 @@ primitives (cover, render_chip, ease_pop, PALETTE, FFMPEG, W/H/FPS).
 import math
 import os
 import random
+import re
 import subprocess
 import urllib.parse
 import urllib.request
@@ -26,7 +27,7 @@ W, H, FPS = engine.W, engine.H, engine.FPS
 
 # Bump on every renderer behavior change so a render response can prove which
 # build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
-ENGINE_VERSION = "spec-2026-07-09-inter-vo"
+ENGINE_VERSION = "spec-2026-07-10-natural-vo"
 
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
@@ -38,11 +39,12 @@ MAX_DURATION = 60.0
 # a ducked music bed.
 TTS_SAMPLE_RATE = 44100
 # atempo multiplier per style. This changes SPEED only and preserves pitch (no chipmunk), so
-# the voice stays natural and understandable. 1.1 = slightly upbeat; 1.0 = fully natural.
+# the voice stays natural and understandable. 1.0 = fully natural pace.
 # Valid atempo range is 0.5-2.0.
-VO_STYLE_SPEED = {"chipmunk": 1.1}
-VO_DEFAULT_SPEED = 1.1
+VO_STYLE_SPEED = {"chipmunk": 1.0}
+VO_DEFAULT_SPEED = 1.0
 DUCK_VOLUME = 0.30                    # music bed level while voiceover plays
+VO_LINE_GAP = 0.15                    # min silence between two voice lines (no talk-over)
 
 # y-center of each named position, as a fraction of H. x is always centered.
 POSITIONS = {
@@ -300,9 +302,28 @@ def _synthesize_tts(text, dest):
             raise ValueError(f"TTS failed (google: {e_google}; edge: {e_edge})")
 
 
+def _audio_duration(path):
+    """Clip duration in seconds. imageio-ffmpeg bundles ffmpeg but not ffprobe, so read
+    it from `ffmpeg -i`'s stderr ("Duration: HH:MM:SS.ss"). Returns 0.0 if not found."""
+    try:
+        proc = subprocess.run(
+            [engine.FFMPEG, "-i", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        err = proc.stderr.decode("utf-8", "ignore")
+        m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", err)
+        if m:
+            return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    except Exception:
+        pass
+    return 0.0
+
+
 def _prep_voiceover(texts, voiceover, workdir):
-    """Synthesize a clip per text line (pitched to a chipmunk at mux time). Returns
-    [(path, at_second), ...] ordered by at_second. No API key required."""
+    """Synthesize a clip per text line. Returns [(path, at_second, duration), ...]
+    ordered by at_second. No API key required."""
     clips = []
     for k, t in enumerate(sorted(texts or [], key=lambda x: float(x.get("at_second", 0)))):
         spoken = _tts_text(t.get("text", ""))
@@ -310,8 +331,26 @@ def _prep_voiceover(texts, voiceover, workdir):
             continue
         dest = os.path.join(workdir or ".", f"vo_{k}.mp3")
         _synthesize_tts(spoken, dest)
-        clips.append((dest, float(t.get("at_second", 0))))
+        # ~15 chars/sec of speech is a safe estimate when the probe comes up empty,
+        # so the no-overlap sequencing still has something to work with.
+        dur = _audio_duration(dest) or (len(spoken) / 15.0)
+        clips.append((dest, float(t.get("at_second", 0)), dur))
     return clips
+
+
+def _sequence_voiceover(clips, speed):
+    """Turn cue times into start times that never overlap: each line starts at its
+    at_second OR when the previous line has finished (+ VO_LINE_GAP), whichever is
+    later. Voice can drift later than the on-screen text on dense workflows, but two
+    lines never talk over each other. Returns [(path, start_second), ...]."""
+    out = []
+    prev_end = 0.0
+    for path, at, dur in clips:
+        start = max(at, prev_end)
+        effective = (dur / speed) if speed else dur
+        prev_end = start + effective + VO_LINE_GAP
+        out.append((path, start))
+    return out
 
 
 def render_spec(shots, texts, sources, song_path, duration, out_path,
@@ -325,8 +364,9 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
     song_path: local audio file, or None for the default bed (engine.SONG)
     duration:  total seconds (song loops if shorter, trims if longer)
     voiceover: {"enabled": bool, "style": "chipmunk"} or None. When enabled, each text
-               line is read aloud (TTS) at its at_second, pitched to a chipmunk, over a
-               ducked music bed.
+               line is read aloud (TTS) at its at_second (pushed later if the previous
+               line hasn't finished — lines never overlap), natural pitch and pace,
+               over a ducked music bed.
     workdir:   temp dir for the synthesized voiceover clips.
     """
     prepped_shots = _prep_shots(shots, sources)
@@ -342,17 +382,18 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
 
     if vo_clips:
         speed = VO_STYLE_SPEED.get((voiceover or {}).get("style"), VO_DEFAULT_SPEED)
+        sequenced = _sequence_voiceover(vo_clips, speed)
         cmd = [
             engine.FFMPEG, "-y", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
             "-stream_loop", "-1", "-i", song,
         ]
-        for path, _ in vo_clips:
+        for path, _ in sequenced:
             cmd += ["-i", path]
-        # Duck the bed; speed up (pitch-preserving) + delay each voice clip to its cue; mix everything.
+        # Duck the bed; delay each voice clip to its (non-overlapping) start; mix everything.
         parts = [f"[1:a]volume={DUCK_VOLUME}[bg]"]
         mix_labels = ["[bg]"]
-        for idx, (_, at) in enumerate(vo_clips):
+        for idx, (_, at) in enumerate(sequenced):
             ff_in = idx + 2  # inputs: 0=video, 1=song, voices start at 2
             ms = max(0, int(at * 1000))
             lbl = f"[v{ff_in}]"

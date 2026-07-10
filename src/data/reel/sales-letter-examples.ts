@@ -248,3 +248,17 @@ percent, what does that return on your current monthly spend? Now add the close-
 export function loadSalesLetterExamples(): string {
   return SALES_LETTER_EXAMPLES;
 }
+
+/** Reference letters for a specific OWNER avatar: its own sales_letter_examples column
+ *  when set, the in-code pest letters for the pest ids (today's behavior), otherwise ""
+ *  — and an empty result BLOCKS caption generation (the operator is asked to paste
+ *  letters for that avatar first; captions are never written in a borrowed voice). */
+export function salesLetterExamplesFor(vertical: {
+  id: string;
+  sales_letter_examples?: string | null;
+}): string {
+  const own = vertical.sales_letter_examples?.trim();
+  if (own) return own;
+  if (vertical.id === "pest_owner_ai" || vertical.id === "pest_control") return SALES_LETTER_EXAMPLES;
+  return "";
+}

@@ -84,6 +84,7 @@ import {
   consumePendingNewAvatar,
 } from "@/lib/reel/avatar-create";
 import { handleGenerateIdeas, resolveVerticalId } from "@/lib/reel/format-generator";
+import { resolveDropVertical, dropWorkflowLibraryId } from "@/config/verticals";
 import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
@@ -363,8 +364,10 @@ export async function POST(request: NextRequest) {
       // ---- Dedicated lanes: these two channels ALWAYS return here, never falling
       // through to the legacy content / AI-manager handlers. ----
 
-      // #ai-content-pest-control — drop-and-render + prompt drops + feedback (drop-studio.ts).
-      if (Boolean(channel) && channel === VEKTOR_CHANNELS.aiContentPestControl) {
+      // Drop lanes — drop-and-render + prompt drops + feedback (drop-studio.ts). Any
+      // channel wired via verticals.slack_drop_channel_id (plus the env pest channel).
+      const dropVertical = channel ? await resolveDropVertical(channel) : null;
+      if (dropVertical) {
         const isThreadReply = Boolean(parentThreadTs) && parentThreadTs !== event.ts;
         if (attachedFiles.length > 0) {
           const messageTs = event.ts as string;
@@ -373,7 +376,7 @@ export async function POST(request: NextRequest) {
               if (isThreadReply) {
                 await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
               } else {
-                await handleDropMessage({ channel, threadTs: messageTs, files: attachedFiles, text: userText });
+                await handleDropMessage({ channel, threadTs: messageTs, files: attachedFiles, text: userText, verticalId: dropVertical.id });
               }
             })().catch((e) => console.error("[slack/events] drop lane files error:", (e as Error).message))
           );
@@ -385,12 +388,12 @@ export async function POST(request: NextRequest) {
           );
         } else if (/^\s*go\s*$/i.test(userText)) {
           waitUntil(
-            handleDropGo(channel).catch((e) =>
+            handleDropGo(channel, dropVertical.id).catch((e) =>
               console.error("[slack/events] drop go error:", (e as Error).message)
             )
           );
         } else if (/^\s*(workflows|library|map)\s*$/i.test(userText)) {
-          await postWorkflowMap(channel, "pest_control");
+          await postWorkflowMap(channel, dropWorkflowLibraryId(dropVertical));
         } else if (userText.trim()) {
           await slack.postMessage(
             channel,
@@ -1738,14 +1741,13 @@ async function handleFileShared(fileId: string): Promise<void> {
     ...(file.shares?.public ?? {}),
     ...(file.shares?.private ?? {}),
   });
-  // Files in the two dedicated lanes are handled entirely by the message event
-  // (drop-studio / workflow-agent); nothing in this handler may claim them.
-  if (
-    allShareChannels.some(
-      (ch) => ch === VEKTOR_CHANNELS.aiContentPestControl || ch === VEKTOR_CHANNELS.agentWorkflowCreator
-    )
-  ) {
-    return;
+  // Files in the dedicated lanes are handled entirely by the message event
+  // (drop-studio / workflow-agent); nothing in this handler may claim them. Drop lanes
+  // are any channel wired via verticals.slack_drop_channel_id (cached lookup).
+  for (const ch of allShareChannels) {
+    if (ch === VEKTOR_CHANNELS.agentWorkflowCreator || (await resolveDropVertical(ch))) {
+      return;
+    }
   }
   const isInContentChannel = allShareChannels.some(
     (ch) => ch === VEKTOR_CHANNELS.content || ch === VEKTOR_CHANNELS.contentFull

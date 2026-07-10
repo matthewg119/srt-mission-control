@@ -86,6 +86,15 @@ export interface Vertical {
   cta_formats: string[];
   gold_examples: PovGoldExample[]; // few-shot anchor (replaces POV_GOLD_EXAMPLES)
 
+  // Drop-studio wiring (docs/2026-07-10-drop-channel-verticals.sql). These come from the
+  // DB row ONLY — never from a seed — because seedFor(unknownId) returns the pest seed and
+  // a new avatar must not silently inherit pest wiring or pest voice.
+  slack_drop_channel_id?: string | null; // Slack channel whose drops run through drop-studio
+  owner_vertical_id?: string | null; // the avatar the post-render sales letter speaks to
+  workflow_vertical_id?: string | null; // whose workflow library the drop lane matches (null = pest_control's)
+  sales_letter_examples?: string | null; // full-text reference letters (caption voice anchor)
+  sales_letter_swipe?: string | null; // distilled format/voice rules override
+
   // TS-only (not DB columns yet) — scene pools for rotation, always seeded from constants:
   scenes?: string[]; // POV_SCENES
   scene_variations?: string[]; // SCENE_VARIATIONS
@@ -580,6 +589,11 @@ interface VerticalRow {
   soul_id?: string | null;
   cta_formats?: string[] | null;
   gold_examples?: PovGoldExample[] | null;
+  slack_drop_channel_id?: string | null;
+  owner_vertical_id?: string | null;
+  workflow_vertical_id?: string | null;
+  sales_letter_examples?: string | null;
+  sales_letter_swipe?: string | null;
 }
 
 // Merge a DB row OVER a seed: a non-null/non-empty DB value wins, otherwise the seed fills
@@ -609,6 +623,13 @@ function mergeRowOverSeed(seed: Vertical, row: VerticalRow): Vertical {
     soul_id: pick(row.soul_id, seed.soul_id),
     cta_formats: pick(row.cta_formats, seed.cta_formats),
     gold_examples: pick(row.gold_examples, seed.gold_examples),
+    // Drop-studio wiring is ROW-ONLY (no seed fallback): seedFor(unknownId) is the pest
+    // seed, and inheriting these would bleed pest channel/voice into new avatars.
+    slack_drop_channel_id: row.slack_drop_channel_id ?? null,
+    owner_vertical_id: row.owner_vertical_id ?? null,
+    workflow_vertical_id: row.workflow_vertical_id ?? null,
+    sales_letter_examples: row.sales_letter_examples ?? null,
+    sales_letter_swipe: row.sales_letter_swipe ?? null,
     // Scene pools are not DB columns yet, so they always inherit the seed.
     scenes: seed.scenes,
     scene_variations: seed.scene_variations,
@@ -638,6 +659,80 @@ export async function loadVertical(id: string): Promise<Vertical> {
 export async function getActiveVertical(): Promise<Vertical> {
   const id = process.env.CONTENT_VERTICAL || DEFAULT_VERTICAL_ID;
   return loadVertical(id);
+}
+
+// ---------------------------------------------------------------------------------------
+// Drop-studio channel wiring (any vertical can own a Slack drop channel; adding one is a
+// SQL paste — set verticals.slack_drop_channel_id — no deploy needed).
+// ---------------------------------------------------------------------------------------
+
+/** The avatar the post-render sales letter speaks to. Falls back to the historical
+ *  pest_control -> pest_owner_ai pairing; otherwise the vertical speaks for itself. */
+export function dropOwnerVerticalId(v: Vertical): string {
+  if (v.owner_vertical_id) return v.owner_vertical_id;
+  return v.id === DEFAULT_VERTICAL_ID ? "pest_owner_ai" : v.id;
+}
+
+/** Which vertical's workflow library this drop channel matches against. Defaults to the
+ *  shared pest_control library so new channels reuse the existing workflows. */
+export function dropWorkflowLibraryId(v: Vertical): string {
+  return v.workflow_vertical_id || DEFAULT_VERTICAL_ID;
+}
+
+// channelId -> vertical id (or null = known non-drop channel). Negative entries matter:
+// this lookup runs for every Slack message event in every channel, and the cache is what
+// keeps it off the events route's 3s ack budget.
+const dropChannelCache = new Map<string, { verticalId: string | null; expires: number }>();
+const DROP_CHANNEL_CACHE_MS = 60_000;
+
+/** Resolve a Slack channel to its drop vertical. The env pest channel wins (backward
+ *  compat), then verticals.slack_drop_channel_id. Returns null when the channel is not a
+ *  drop channel (or the DB is unreachable — fail open to "not a drop channel"). */
+export async function resolveDropVertical(channelId: string): Promise<Vertical | null> {
+  if (!channelId) return null;
+  const envPestChannel = process.env.SLACK_AI_CONTENT_PEST_CONTROL_CHANNEL || "";
+  if (envPestChannel && channelId === envPestChannel) return loadVertical(DEFAULT_VERTICAL_ID);
+
+  const cached = dropChannelCache.get(channelId);
+  if (cached && cached.expires > Date.now()) {
+    return cached.verticalId ? loadVertical(cached.verticalId) : null;
+  }
+  let verticalId: string | null = null;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("verticals")
+      .select("id")
+      .eq("slack_drop_channel_id", channelId)
+      .maybeSingle();
+    if (!error && data?.id) verticalId = data.id as string;
+  } catch (e) {
+    console.error("[verticals] resolveDropVertical lookup failed:", (e as Error).message);
+    return null; // don't cache errors
+  }
+  dropChannelCache.set(channelId, { verticalId, expires: Date.now() + DROP_CHANNEL_CACHE_MS });
+  return verticalId ? loadVertical(verticalId) : null;
+}
+
+/** Every wired drop channel: the env pest channel plus every verticals row with a
+ *  slack_drop_channel_id, deduped by channel (used by the prompt-drop cron). */
+export async function listDropChannels(): Promise<Array<{ channelId: string; verticalId: string }>> {
+  const out = new Map<string, string>();
+  const envPestChannel = process.env.SLACK_AI_CONTENT_PEST_CONTROL_CHANNEL || "";
+  if (envPestChannel) out.set(envPestChannel, DEFAULT_VERTICAL_ID);
+  try {
+    const { data } = await supabaseAdmin
+      .from("verticals")
+      .select("id,slack_drop_channel_id")
+      .not("slack_drop_channel_id", "is", null);
+    for (const r of (data ?? []) as Array<{ id: string; slack_drop_channel_id: string | null }>) {
+      if (r.slack_drop_channel_id && !out.has(r.slack_drop_channel_id)) {
+        out.set(r.slack_drop_channel_id, r.id);
+      }
+    }
+  } catch (e) {
+    console.error("[verticals] listDropChannels fell back to env channel:", (e as Error).message);
+  }
+  return Array.from(out.entries()).map(([channelId, verticalId]) => ({ channelId, verticalId }));
 }
 
 // List every avatar (DB rows merged over the in-code seeds), for the `go` picker. Best-effort:
