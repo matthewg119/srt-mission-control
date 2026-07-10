@@ -1,13 +1,11 @@
-// Seed the ZIP-by-ZIP rotation for the pest-control prospecting pipeline.
-// Populates prospect_rotation with every US ZIP (~33k rows), Sun Belt first, so
-// Route A works through the whole country ZIP by ZIP, state by state.
+// Seed the ZIP-by-ZIP rotation for the med-spa prospecting pipeline. Populates
+// med_spa_rotation with every US ZIP (~33k rows), highest med-spa-density states
+// first, so Route A works through the whole country ZIP by ZIP.
 //
-// Run once (safe to re-run — upserts on zip):  bun run seed:prospects
+// Run once (safe to re-run — upserts on zip):  bun run seed:medspa
 //
-// The ZIP dataset is fetched from a public JSON source at run time (this is a
-// one-time manual seed, so a 30k-row SQL paste is impractical). Override the
-// source with ZIP_DATASET_URL if needed. Expected item shape:
-//   { zip_code: number|string, city: string, state: string }
+// The ZIP dataset is fetched from a public JSON source at run time. Override with
+// ZIP_DATASET_URL if needed. Expected item shape: { zip_code, city, state }.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -20,13 +18,13 @@ const DATASET_URL =
   process.env.ZIP_DATASET_URL ||
   "https://raw.githubusercontent.com/millbj92/US-Zip-Codes-JSON/master/USCities.json";
 
-const QUERY = process.env.PROSPECT_QUERY || "pest control";
+const QUERY = process.env.MEDSPA_QUERY || "med spa";
 
-// Lower number = pulled first. Sun Belt leads (that's where pest control
-// concentrates); everything else defaults to 100.
+// Lower number = pulled first. Med spas concentrate in the Sun Belt + affluent
+// metros (Matthew's target markets: FL, TX, AZ, NC, GA, TN, plus CA/NV/CO).
 const STATE_PRIORITY: Record<string, number> = {
-  TX: 1, FL: 2, AZ: 3, GA: 4, NC: 5, SC: 6, TN: 7, NV: 8, CA: 9, LA: 10,
-  AL: 11, MS: 12, AR: 13, OK: 14, NM: 15, "": 99,
+  FL: 1, TX: 2, AZ: 3, CA: 4, NC: 5, GA: 6, TN: 7, NV: 8, CO: 9, NY: 10,
+  NJ: 11, IL: 12, WA: 13, VA: 14, SC: 15, "": 99,
 };
 
 interface RawZip {
@@ -52,7 +50,6 @@ async function main() {
   const raw = (await res.json()) as RawZip[];
   console.log(`   got ${raw.length} raw rows`);
 
-  // De-dupe by ZIP, build rows.
   const byZip = new Map<string, { zip: string; city: string | null; state: string | null }>();
   for (const r of raw) {
     const zip = pad5(r.zip_code ?? r.zip ?? "");
@@ -69,23 +66,19 @@ async function main() {
     query: QUERY,
   }));
 
-  console.log(`⬆️  Upserting ${rows.length} unique ZIP rows into prospect_rotation...`);
+  console.log(`⬆️  Upserting ${rows.length} unique ZIP rows into med_spa_rotation...`);
   let done = 0;
   for (let i = 0; i < rows.length; i += 1000) {
     const chunk = rows.slice(i, i + 1000);
-    const { error } = await supabase
-      .from("prospect_rotation")
-      .upsert(chunk, { onConflict: "zip", ignoreDuplicates: true });
+    const { error } = await supabase.from("med_spa_rotation").upsert(chunk, { onConflict: "zip", ignoreDuplicates: true });
     if (error) throw error;
     done += chunk.length;
     process.stdout.write(`\r   ${done}/${rows.length}`);
   }
   process.stdout.write("\n");
 
-  const { count } = await supabase
-    .from("prospect_rotation")
-    .select("*", { count: "exact", head: true });
-  console.log(`✅ prospect_rotation now has ${count ?? "?"} ZIP rows. Sun Belt (TX/FL/AZ/GA/...) will pull first.`);
+  const { count } = await supabase.from("med_spa_rotation").select("*", { count: "exact", head: true });
+  console.log(`✅ med_spa_rotation now has ${count ?? "?"} ZIP rows. FL/TX/AZ/CA/NC/GA/TN pull first.`);
 }
 
 main().catch((err) => {

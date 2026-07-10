@@ -1,5 +1,7 @@
-// Manually trigger Route A (the daily med-spa pull, all cities) without waiting
-// for the Vercel cron schedule.  Usage:  bun run medspa:pull
+// Manually trigger Route A (the daily async med-spa pull — one ZIP-rotation batch)
+// without waiting for the Vercel cron. Results come back via the webhook, so this
+// only makes sense against a deployed URL. For a synchronous local run that also
+// inserts/syncs/reports, use `bun run medspa:run` instead.  Usage:  bun run medspa:pull
 //
 // Hits the local dev server by default; override with PULL_URL to target prod.
 // Sends the CRON_SECRET bearer so the route authorizes exactly like Vercel Cron.

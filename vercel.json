@@ -97,7 +97,7 @@
       "schedule": "30 21 * * *"
     },
     {
-      "path": "/api/cron/pull-prospects",
+      "path": "/api/cron/pull-medspa",
       "schedule": "0 12 * * *"
     }
   ]

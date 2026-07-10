@@ -8,10 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "seed:prospects": "bun run scripts/seed-prospect-rotation.ts",
-    "pull:now": "bun run scripts/pull-prospects-now.ts",
-    "sync:zoho": "bun run scripts/sync-prospects-to-zoho.ts",
-    "medspa:test": "bun run scripts/test-medspa-charlotte.ts",
+    "seed:medspa": "bun run scripts/seed-medspa-rotation.ts",
+    "medspa:run": "bun run scripts/run-medspa.ts",
+    "medspa:owners": "bun run scripts/enrich-medspa-owners.ts",
     "medspa:pull": "bun run scripts/pull-medspa-now.ts"
   },
   "dependencies": {

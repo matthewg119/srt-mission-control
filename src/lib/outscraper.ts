@@ -1,10 +1,7 @@
-// Outscraper Google Maps Search client + record mappers for the pest-control
-// prospecting pipeline. We use the REST API directly (no SDK) with the
-// `X-API-KEY` header, and always submit ASYNC with a webhook so the serverless
-// function never blocks waiting for a 500-record pull.
-//
-// Email enrichment is intentionally OFF (base records only) — see the
-// prospect-pipeline plan. Records land in the `prospect_leads` shape below.
+// Generic Outscraper Google Maps Search transport (no SDK): submit ASYNC with the
+// `X-API-KEY` header + a webhook so a serverless function never blocks waiting on a
+// large pull, and normalize the webhook payload into per-query groups. Vertical-
+// specific record mapping lives with each pipeline (see src/lib/medspa.ts).
 //
 // Docs: https://app.outscraper.com/api-docs#tag/Google-Maps
 
@@ -34,65 +31,11 @@ export interface OutscraperRecord {
   [key: string]: unknown;
 }
 
-export interface ProspectLeadRow {
-  business_name: string;
-  phone: string | null;
-  phone_normalized: string | null;
-  email: string | null;
-  website: string | null;
-  full_address: string | null;
-  city: string | null;
-  state: string | null;
-  postal_code: string | null;
-  categories: string | null;
-  rating: number | null;
-  review_count: number | null;
-  google_place_id: string | null;
-  source: string;
-  search_zip: string;
-}
-
 /** Reduce a phone string to digits only; empty -> null so the unique index skips it. */
 export function normalizePhone(raw?: string | null): string | null {
   if (!raw) return null;
   const digits = String(raw).replace(/\D+/g, "");
   return digits.length ? digits : null;
-}
-
-function num(v: unknown): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.]/g, ""));
-  return Number.isFinite(n) ? n : null;
-}
-
-function str(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  const s = String(v).trim();
-  return s.length ? s : null;
-}
-
-/** Map one raw Outscraper business record into a `prospect_leads` row. */
-export function mapRecord(r: OutscraperRecord, searchZip: string): ProspectLeadRow | null {
-  const business_name = str(r.name);
-  if (!business_name) return null; // skip junk rows with no name
-  const phone = str(r.phone) ?? str(r.phone_1);
-  return {
-    business_name,
-    phone,
-    phone_normalized: normalizePhone(phone),
-    email: str(r.email),
-    website: str(r.site) ?? str(r.website),
-    full_address: str(r.full_address),
-    city: str(r.city),
-    state: str(r.state) ?? str(r.us_state),
-    postal_code: str(r.postal_code),
-    categories: str(r.category) ?? str(r.type) ?? str(r.subtypes),
-    rating: num(r.rating),
-    review_count: num(r.reviews) ?? num(r.reviews_count),
-    google_place_id: str(r.place_id) ?? str(r.google_id),
-    source: "outscraper",
-    search_zip: searchZip,
-  };
 }
 
 export interface SubmitResult {
