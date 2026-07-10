@@ -34,14 +34,14 @@ STACK_GAP = 12    # px between two chips active at the same position
 MAX_DURATION = 60.0
 
 # Voiceover: each text line is synthesized (free keyless TTS — Google Translate first,
-# Edge neural as fallback), pitched up to a chipmunk, mixed at its at_second over a
-# ducked music bed.
+# Edge neural as fallback), lightly sped up (pitch-preserving), mixed at its at_second over
+# a ducked music bed.
 TTS_SAMPLE_RATE = 44100
-# asetrate multiplier per style. This changes speed AND pitch, so lower = slower and more
-# understandable. 1.2 keeps a light pitched-up character while staying intelligible; nudge
-# toward 1.0 for a fully natural voice.
-VO_STYLE_PITCH = {"chipmunk": 1.2}
-VO_DEFAULT_PITCH = 1.2
+# atempo multiplier per style. This changes SPEED only and preserves pitch (no chipmunk), so
+# the voice stays natural and understandable. 1.1 = slightly upbeat; 1.0 = fully natural.
+# Valid atempo range is 0.5-2.0.
+VO_STYLE_SPEED = {"chipmunk": 1.1}
+VO_DEFAULT_SPEED = 1.1
 DUCK_VOLUME = 0.30                    # music bed level while voiceover plays
 
 # y-center of each named position, as a fraction of H. x is always centered.
@@ -341,7 +341,7 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
         vo_clips = _prep_voiceover(texts, voiceover, workdir)
 
     if vo_clips:
-        pitch = VO_STYLE_PITCH.get((voiceover or {}).get("style"), VO_DEFAULT_PITCH)
+        speed = VO_STYLE_SPEED.get((voiceover or {}).get("style"), VO_DEFAULT_SPEED)
         cmd = [
             engine.FFMPEG, "-y", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
@@ -349,7 +349,7 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
         ]
         for path, _ in vo_clips:
             cmd += ["-i", path]
-        # Duck the bed; pitch + delay each voice clip to its cue; mix everything.
+        # Duck the bed; speed up (pitch-preserving) + delay each voice clip to its cue; mix everything.
         parts = [f"[1:a]volume={DUCK_VOLUME}[bg]"]
         mix_labels = ["[bg]"]
         for idx, (_, at) in enumerate(vo_clips):
@@ -357,8 +357,7 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
             ms = max(0, int(at * 1000))
             lbl = f"[v{ff_in}]"
             parts.append(
-                f"[{ff_in}:a]asetrate={TTS_SAMPLE_RATE}*{pitch},"
-                f"aresample={TTS_SAMPLE_RATE},adelay={ms}|{ms}{lbl}"
+                f"[{ff_in}:a]atempo={speed},adelay={ms}|{ms}{lbl}"
             )
             mix_labels.append(lbl)
         parts.append(

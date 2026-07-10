@@ -7,6 +7,7 @@
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { IG_CAPTION_TEMPLATES } from "@/data/reel/ig-caption-templates";
 import { loadSalesLetterSwipe } from "@/data/reel/sales-letter-swipe";
+import { loadSalesLetterExamples } from "@/data/reel/sales-letter-examples";
 import { stripEmDashes } from "@/lib/reel/text";
 import type { Belief } from "@/lib/reel/beliefs";
 import type { HeadlinePair } from "@/lib/reel/headlines";
@@ -312,6 +313,9 @@ export async function generateSalesLetterCaption(args: {
     "",
     "SALES-LETTER SWIPE (format, the 5 lead-type archetypes, objection order, verbatim language, rules):",
     loadSalesLetterSwipe(),
+    "",
+    "REFERENCE LETTERS (match this voice, rhythm, and sentence-level moves. Do NOT copy verbatim, and never output a bracketed placeholder):",
+    loadSalesLetterExamples(),
   ].join("\n");
 
   const user = [

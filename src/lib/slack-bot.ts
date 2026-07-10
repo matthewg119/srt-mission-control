@@ -82,6 +82,16 @@ export const slack = {
                   return cachedBotUserId;
         },
 
+        /** Total count of a specific emoji currently on a message (0 if none). The bot pre-seeds
+         *  its cards, so a seeded emoji reaching count 2 means a human reacted on top of the seed.
+         *  Requires the reactions:read scope. */
+        async getReactionCount(channel: string, ts: string, name: string): Promise<number> {
+                  const res = await slackFetch("reactions.get", { channel, timestamp: ts });
+                  const msg = (res?.ok ? res.message : null) as { reactions?: Array<{ name?: string; count?: number }> } | null;
+                  const hit = msg?.reactions?.find((r) => r.name === name);
+                  return hit?.count ?? 0;
+        },
+
         /** Update an existing message */
         async updateMessage(channel: string, ts: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
                   const body: Record<string, unknown> = { channel, ts, text };

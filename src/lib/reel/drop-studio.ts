@@ -89,7 +89,7 @@ async function postCard(job: ContentJob, text: string): Promise<void> {
   const ts = await post(job.slack_channel, job.slack_thread_ts, text);
   if (ts) {
     await slack.addReaction(job.slack_channel, ts, "white_check_mark").catch(() => {});
-    await updateJob(job, { pickerTs: ts });
+    await updateJob(job, { pickerTs: ts, data: { ...job.data, seeded_reactions: ["white_check_mark"] } });
   }
 }
 
@@ -527,7 +527,13 @@ async function enterDropModeGate(
   await updateJob(fresh, {
     stage: "dr_mode",
     ...(ts ? { pickerTs: ts } : {}),
-    data: { ...fresh.data, workflow_id: workflow.id, structured_copy: copy, mode_images: images },
+    data: {
+      ...fresh.data,
+      workflow_id: workflow.id,
+      structured_copy: copy,
+      mode_images: images,
+      seeded_reactions: ["one", "two"],
+    },
   });
   if (ts) {
     await slack.addReaction(channel, ts, "one").catch(() => {});
@@ -575,9 +581,17 @@ async function generateMotionPrompts(
   for (const url of images) {
     const res = await fetch(url).catch(() => null);
     if (!res?.ok) continue;
-    const mt = res.headers.get("content-type") || "image/png";
+    const mt = res.headers.get("content-type") || "";
+    // Only forward real images. A non-image body (an HTML/JSON error page from a private or
+    // stale bucket URL) base64-encoded as an "image" is exactly what makes Anthropic 400 on
+    // messages.0.content.N.image, so skip it instead of sending garbage.
+    if (!mt.startsWith("image/")) continue;
     const buf = Buffer.from(await res.arrayBuffer());
-    imgs.push({ media_type: mt.startsWith("image/") ? mt : "image/png", data: buf.toString("base64") });
+    if (!buf.length) continue;
+    imgs.push({ media_type: mt, data: buf.toString("base64") });
+  }
+  if (!imgs.length) {
+    throw new Error("no fetchable images (reels-bucket URLs may not be public)");
   }
   const roles = (ctx.workflow.copy_structure ?? []).map((r) => r.label);
   interface MotionGen {
@@ -1118,6 +1132,15 @@ export async function handleDropReaction(args: {
   // fire a reaction_added event for the bot itself. Ignore it: only a HUMAN reaction acts,
   // so the card advances only when the operator adds the second reaction (count reaches 2).
   if (args.userId && args.userId === (await slack.getBotUserId())) return true;
+
+  // Deterministic firewall (does not depend on the bot id resolving): a pre-seeded emoji only
+  // acts once its total count on the card reaches 2 (the bot's seed + the operator's reaction).
+  // Non-seeded reactions (number keycaps on the fit card, cancel) still fire on the first tap.
+  const seeded = (job.data.seeded_reactions ?? []) as string[];
+  if (seeded.includes(args.reaction)) {
+    const count = await slack.getReactionCount(job.slack_channel, args.slackTs, args.reaction);
+    if (count < 2) return true; // only the bot's pre-seed so far — wait for the human's reaction
+  }
 
   if (cancel) {
     await updateJob(job, { status: "skipped", stage: "skipped" });
