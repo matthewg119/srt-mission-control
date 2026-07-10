@@ -37,8 +37,11 @@ MAX_DURATION = 60.0
 # Edge neural as fallback), pitched up to a chipmunk, mixed at its at_second over a
 # ducked music bed.
 TTS_SAMPLE_RATE = 44100
-VO_STYLE_PITCH = {"chipmunk": 1.5}   # asetrate multiplier per style
-VO_DEFAULT_PITCH = 1.5
+# asetrate multiplier per style. This changes speed AND pitch, so lower = slower and more
+# understandable. 1.2 keeps a light pitched-up character while staying intelligible; nudge
+# toward 1.0 for a fully natural voice.
+VO_STYLE_PITCH = {"chipmunk": 1.2}
+VO_DEFAULT_PITCH = 1.2
 DUCK_VOLUME = 0.30                    # music bed level while voiceover plays
 
 # y-center of each named position, as a fraction of H. x is always centered.

@@ -6,10 +6,12 @@
 
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { IG_CAPTION_TEMPLATES } from "@/data/reel/ig-caption-templates";
+import { loadSalesLetterSwipe } from "@/data/reel/sales-letter-swipe";
 import { stripEmDashes } from "@/lib/reel/text";
 import type { Belief } from "@/lib/reel/beliefs";
 import type { HeadlinePair } from "@/lib/reel/headlines";
 import type { Vertical } from "@/config/verticals";
+import type { Workflow } from "@/config/workflows";
 import type { CopyStyle } from "@/config/format-registry";
 import { buildBugRevealCopySystem } from "@/config/bug-reveal-style";
 
@@ -235,4 +237,115 @@ export async function generateCaptionForScript(
   });
 
   return stripEmDashes(data.caption).trim();
+}
+
+// ---- Sales-letter caption (the post-render, belief-installing caption) ----------------
+//
+// After a reel renders in #ai-content-pest-control, we replace the short IG caption with a
+// condensed (150-220 word) SALES LETTER written to the pest-control OWNER avatar and
+// engineered to install ONE belief from that avatar's belief stack. Grounded in the
+// vertical's own avatar_summary + beliefs + offer (richer, English, no extra Claude call)
+// and the sales-letter swipe. See src/data/reel/sales-letter-swipe.ts.
+
+export interface SalesLetterCaption {
+  belief_installed: string; // the ONE belief this letter installs (in English)
+  lead_type: string; // one of: confession | discovery | proclamation | underdog | multiplier
+  caption: string; // the sales-letter caption itself
+}
+
+function isSalesLetterCaption(v: unknown): v is SalesLetterCaption {
+  if (typeof v !== "object" || v === null) return false;
+  const c = v as SalesLetterCaption;
+  return (
+    typeof c.caption === "string" &&
+    c.caption.trim().length > 0 &&
+    typeof c.belief_installed === "string" &&
+    typeof c.lead_type === "string"
+  );
+}
+
+/** Compact avatar/offer material for the owner-facing sales letter (English-forced). */
+function salesLetterAvatarBlock(vertical: Vertical): string {
+  const beliefs = (vertical.beliefs ?? [])
+    .map((b) => `- Belief ${b.n}${b.label ? ` (${b.label})` : ""}: ${b.text}`)
+    .join("\n");
+  const objections = (vertical.offer?.objections ?? [])
+    .map((o) => `- Objection: ${o.objection}${o.response ? `\n  Reframe: ${o.response}` : ""}`)
+    .join("\n");
+  const headlines = (vertical.offer?.headlines ?? [])
+    .map((h) => `- ${h.title}${h.subtitle ? ` | ${h.subtitle}` : ""}`)
+    .join("\n");
+  return [
+    `AVATAR: the buyer is a ${vertical.wearer_role}. Service being sold: ${vertical.business_descriptor}.`,
+    vertical.avatar_summary
+      ? `WHO THEY ARE (fears, desires, villains, proof, verbatim language):\n${vertical.avatar_summary}`
+      : "",
+    beliefs
+      ? `BELIEF STACK (install exactly ONE of these; the belief text may be in Spanish, express it in English):\n${beliefs}`
+      : "",
+    vertical.offer?.big_idea ? `BIG IDEA: ${vertical.offer.big_idea}` : "",
+    objections ? `OBJECTIONS + REFRAMES:\n${objections}` : "",
+    headlines ? `PROVEN OFFER HEADLINES (for tone):\n${headlines}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Write ONE condensed (150-220 word) sales-letter caption for a finished reel. Reads the
+ * video's on-screen copy, picks the single belief this video most naturally installs from
+ * the avatar's belief stack, selects the matching lead-type archetype, and writes the
+ * letter in the swipe format. English output enforced. Em dashes stripped (house rule).
+ */
+export async function generateSalesLetterCaption(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  onScreenCopy: string; // the actual on-screen lines baked into THIS video
+}): Promise<SalesLetterCaption> {
+  const system = [
+    "You are the copy chief for SRT Agency. You sell a done-for-you AI short-form content",
+    "service to pest-control BUSINESS OWNERS. You write ONE condensed sales-letter caption",
+    "(150-220 words) that the owner can post directly under this reel, engineered to install",
+    "a single buying belief. Everything speaks the owner's language, in ENGLISH.",
+    "",
+    salesLetterAvatarBlock(args.vertical),
+    "",
+    "SALES-LETTER SWIPE (format, the 5 lead-type archetypes, objection order, verbatim language, rules):",
+    loadSalesLetterSwipe(),
+  ].join("\n");
+
+  const user = [
+    `This reel is the workflow "${args.workflow.name}"${
+      args.workflow.description ? ` (${args.workflow.description})` : ""
+    }.`,
+    args.onScreenCopy ? `The on-screen text baked into the video: ${args.onScreenCopy}` : "",
+    "",
+    "Do this:",
+    "1) Read the video's on-screen text and pick the ONE belief from the belief stack that",
+    "   this specific video most naturally installs.",
+    "2) Choose the matching lead-type archetype (confession, discovery, proclamation,",
+    "   underdog, or multiplier).",
+    "3) Write ONE sales-letter caption (150-220 words) in the swipe format that installs that",
+    "   belief and pairs with this video.",
+    "",
+    "Return JSON. belief_installed = the belief you chose, stated in ONE English sentence.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const { data } = await callClaudeJSON<SalesLetterCaption>({
+    model: model(),
+    system,
+    user,
+    maxTokens: 1400,
+    temperature: 0.8,
+    schemaHint: '{ "belief_installed": string, "lead_type": string, "caption": string }',
+    validate: isSalesLetterCaption,
+  });
+
+  return {
+    belief_installed: stripEmDashes(data.belief_installed).trim(),
+    lead_type: stripEmDashes(data.lead_type).trim(),
+    caption: stripEmDashes(data.caption).trim(),
+  };
 }

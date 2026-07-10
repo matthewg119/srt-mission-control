@@ -110,7 +110,8 @@ export interface JobData {
     image_url?: string | null; // the final pasted scene image
   }>;
   wf_name?: string; // display name typed at the save card
-  caption_draft?: string; // the caption awaiting ✅
+  caption_draft?: string; // the caption awaiting ✅ (post-render, the sales-letter caption)
+  belief_installed?: string; // the ONE avatar belief the post-render sales letter installs
 
   // --- #ai-content-pest-control drop lane (drop-studio.ts) ---
   drop_media?: Array<{ url: string; kind: "image" | "video" }>; // resolved stills, drop order

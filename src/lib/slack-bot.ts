@@ -13,6 +13,10 @@ function getToken(): string {
         return process.env.SLACK_BOT_TOKEN || "";
 }
 
+// Cached bot user id (from auth.test) so we can tell the bot's own reactions apart from a
+// human's. Resolved once per process; falls back to SLACK_BOT_USER_ID if auth.test fails.
+let cachedBotUserId: string | null = null;
+
 export interface SlackBlock {
         type: string;
         text?: { type: string; text: string; emoji?: boolean };
@@ -66,6 +70,16 @@ export const slack = {
                   const body: Record<string, unknown> = { channel, text, thread_ts: threadTs };
                   if (blocks) body.blocks = blocks;
                   return slackFetch("chat.postMessage", body);
+        },
+
+        /** The bot's own Slack user id (cached). Used to ignore the bot's own reactions so a
+         *  pre-seeded emoji only triggers an action when a human reacts. */
+        async getBotUserId(): Promise<string> {
+                  if (cachedBotUserId !== null) return cachedBotUserId;
+                  const res = await slackFetch("auth.test", {});
+                  const id = (res?.ok && typeof res.user_id === "string" ? res.user_id : "") as string;
+                  cachedBotUserId = id || process.env.SLACK_BOT_USER_ID || "";
+                  return cachedBotUserId;
         },
 
         /** Update an existing message */

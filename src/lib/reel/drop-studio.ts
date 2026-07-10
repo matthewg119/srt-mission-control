@@ -36,9 +36,9 @@ import { parseBoxes } from "@/lib/reel/studio";
 import { resolveStillFrame } from "@/lib/reel/pov-studio";
 import { generateStudioVariations, type ReelScript } from "@/lib/reel/studio-variations";
 import {
-  generateCaptionForScript,
   generateHookCopy,
   buildHookCopySystem,
+  generateSalesLetterCaption,
 } from "@/lib/reel/captions";
 import {
   reslotCopyToStructure,
@@ -430,6 +430,12 @@ async function finishDropRender(
     data: { ...job.data, workflow_id: workflow.id, structured_copy: copy },
   });
   try {
+    const shots = workflow.scenes?.length || workflow.render_spec?.shots?.length || 1;
+    await post(
+      channel,
+      threadTs,
+      `Rendering *${workflow.name}* - ${shots} shot${shots === 1 ? "" : "s"} into one reel. This takes about a minute...`
+    );
     const result = await renderWorkflow(workflow, { images, copy });
 
     let uploaded = false;
@@ -448,39 +454,43 @@ async function finishDropRender(
       await post(channel, threadTs, result.url ? `Reel ready: ${result.url}` : "Render finished but nothing came back.");
     }
 
+    // Post-render caption is a belief-installing SALES LETTER written to the pest-control
+    // OWNER avatar (the B2B content-service buyer = pest_owner_ai), condensed to 150-220
+    // words so it drops straight under the reel. Non-fatal: the MP4 is already posted.
     let caption = "";
+    let beliefInstalled = "";
+    let beliefLine = "";
     try {
-      if (workflowRenderBuild(workflow) === "render_reel") {
-        const byKey = new Map(copy.map((c) => [c.key, c.text]));
-        caption = await generateCaptionForScript({
-          label: byKey.get("label") ?? "",
-          line1: byKey.get("hook") ?? "",
-          line2: byKey.get("payoff") ?? "",
-          cta: byKey.get("cta") ?? "",
-        });
-      } else {
-        const vertical = await loadVertical(DROP_VERTICAL_ID);
-        const hook = await generateHookCopy({
-          scene: [
-            `Video: ${workflow.description ?? workflow.name}`,
-            `On-screen lines: ${copy.map((c) => c.text).filter(Boolean).join(" | ")}`,
-          ].join("\n"),
-          system: buildHookCopySystem("pov_hook", vertical),
-          withAfterFrame: false,
-        });
-        caption = hook.caption;
-      }
+      const vertical = await loadVertical(DROP_REPORT_VERTICAL_ID);
+      const onScreen = copy.map((c) => c.text).filter(Boolean).join(" | ");
+      const sl = await generateSalesLetterCaption({ vertical, workflow, onScreenCopy: onScreen });
+      caption = sl.caption;
+      beliefInstalled = sl.belief_installed;
+      beliefLine = sl.belief_installed
+        ? `_Installs belief: ${sl.belief_installed}${sl.lead_type ? ` (${sl.lead_type})` : ""}_`
+        : "";
     } catch (e) {
-      console.error("[drop-studio] caption failed:", (e as Error).message);
+      console.error("[drop-studio] sales letter failed:", (e as Error).message);
     }
-    await post(channel, threadTs, caption ? `*Caption*\n${caption}` : "Reel ready. (Caption generation failed, write it manually.)");
+    await post(
+      channel,
+      threadTs,
+      caption
+        ? [beliefLine, "*Sales letter*", caption].filter(Boolean).join("\n")
+        : "Reel ready. (Sales letter generation failed, write it manually.)"
+    );
 
     await markWorkflowUsed(workflow.id);
     const fresh = (await getLatestJobByThread(threadTs)) ?? job;
     await updateJob(fresh, {
       stage: "done",
       status: "done",
-      data: { ...fresh.data, final_video_url: result.url ?? undefined, caption_draft: caption },
+      data: {
+        ...fresh.data,
+        final_video_url: result.url ?? undefined,
+        caption_draft: caption,
+        belief_installed: beliefInstalled || undefined,
+      },
     });
   } catch (e) {
     console.error("[drop-studio] render failed:", (e as Error).message);
@@ -545,7 +555,7 @@ async function resolveDropMode(job: ContentJob, mode: "animate" | "still"): Prom
     return;
   }
   if (mode === "still") {
-    await post(job.slack_channel, job.slack_thread_ts, `Rendering *${ctx.workflow.name}* as stills...`);
+    // finishDropRender posts the "Rendering ... N shots ..." status itself.
     waitUntil(finishDropRender(job, ctx.workflow, ctx.copy, ctx.images));
   } else {
     await post(job.slack_channel, job.slack_thread_ts, "Writing a motion prompt for each image...");
@@ -558,10 +568,16 @@ async function generateMotionPrompts(
   images: string[],
   ctx: { workflow: Workflow; copy: StructuredCopyLine[] }
 ): Promise<string[]> {
+  // These are already-public reels-bucket URLs (resolveDropMedia -> uploadToReels), so fetch
+  // them plainly. Using downloadSlackUrl here attaches a Slack token the bucket rejects, and
+  // the error body gets base64-encoded and sent as a bogus image (Anthropic 400).
   const imgs: ClaudeImageInput[] = [];
   for (const url of images) {
-    const buf = await downloadSlackUrl(url).catch(() => null);
-    if (buf) imgs.push({ media_type: "image/jpeg", data: buf.toString("base64") });
+    const res = await fetch(url).catch(() => null);
+    if (!res?.ok) continue;
+    const mt = res.headers.get("content-type") || "image/png";
+    const buf = Buffer.from(await res.arrayBuffer());
+    imgs.push({ media_type: mt.startsWith("image/") ? mt : "image/png", data: buf.toString("base64") });
   }
   const roles = (ctx.workflow.copy_structure ?? []).map((r) => r.label);
   interface MotionGen {
@@ -1088,6 +1104,7 @@ export async function handleDropReaction(args: {
   reaction: string;
   slackTs: string;
   channel: string;
+  userId?: string;
 }): Promise<boolean> {
   const keycap = KEYCAPS[args.reaction];
   const approve = APPROVE.has(args.reaction);
@@ -1096,6 +1113,11 @@ export async function handleDropReaction(args: {
 
   const job = await getJobByPickerTs(args.slackTs);
   if (!isDropJob(job) || job.status !== "active") return false;
+
+  // The bot pre-seeds the emoji on its cards as a one-click affordance, which makes Slack
+  // fire a reaction_added event for the bot itself. Ignore it: only a HUMAN reaction acts,
+  // so the card advances only when the operator adds the second reaction (count reaches 2).
+  if (args.userId && args.userId === (await slack.getBotUserId())) return true;
 
   if (cancel) {
     await updateJob(job, { status: "skipped", stage: "skipped" });

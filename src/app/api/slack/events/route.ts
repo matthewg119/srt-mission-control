@@ -201,6 +201,7 @@ export async function POST(request: NextRequest) {
           reaction: event.reaction as string,
           slackTs: event.item.ts as string,
           channel: event.item.channel as string,
+          userId: event.user as string,
         });
         if (dropReactionHandled) return NextResponse.json({ ok: true });
 
