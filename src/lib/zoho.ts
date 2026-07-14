@@ -182,13 +182,16 @@ export async function zohoRequest(
 }
 
 /**
- * Full-table scan of a Zoho module (e.g. "Leads", "Contacts"), page-based v5
- * pagination matching the convention in hanging-leads.ts. Accumulates records until
- * `info.more_records` is false (a 204 yields an empty body -> {} -> no data -> stop).
+ * Full-table scan of a Zoho module (e.g. "Leads", "Contacts") using v5 CURSOR pagination.
+ * Offset pagination (`page=1,2,3…`) 400s past 2000 records (DISCRETE_PAGINATION_LIMIT_EXCEEDED),
+ * so after the first request every subsequent page is fetched with the `page_token` cursor
+ * from `info.next_page_token`. Accumulates records until `info.more_records` is false
+ * (a 204 yields an empty body -> {} -> no data -> stop).
  *
  * Safety: stops at MAX_PAGES so a runaway never loops forever. `truncated` is true if
- * that ceiling was hit with more records still available, so callers can warn instead of
- * silently reporting a partial pull as complete. Throttled to stay under Zoho's 10 req/s.
+ * that ceiling was hit (or Zoho reported more records without a cursor) with records still
+ * available, so callers can warn instead of silently reporting a partial pull as complete.
+ * Throttled to stay under Zoho's 10 req/s.
  */
 export async function listAllRecords(
   module: string,
@@ -201,25 +204,29 @@ export async function listAllRecords(
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const records: ZohoApiRecord[] = [];
-  let page = 1;
+  let pageToken: string | undefined;
+  let pages = 0;
   let truncated = false;
 
-  while (page <= maxPages) {
-    const path = `/${module}?fields=${encodeURIComponent(fields)}&per_page=${perPage}&page=${page}`;
+  while (pages < maxPages) {
+    const path =
+      `/${module}?fields=${encodeURIComponent(fields)}&per_page=${perPage}` +
+      (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : "");
     const result = (await zohoRequest("GET", path)) as {
       data?: ZohoApiRecord[];
-      info?: { more_records?: boolean };
+      info?: { more_records?: boolean; next_page_token?: string };
     };
     const batch = result.data ?? [];
     if (batch.length === 0) break;
     records.push(...batch);
+    pages++;
 
     if (!result.info?.more_records) break;
-    if (page === maxPages) {
-      truncated = true; // more_records still true but we have hit the ceiling
+    pageToken = result.info?.next_page_token;
+    if (!pageToken || pages === maxPages) {
+      truncated = true; // more records available but no cursor / ceiling hit
       break;
     }
-    page++;
     await sleep(sleepMs);
   }
 

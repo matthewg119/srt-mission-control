@@ -45,18 +45,6 @@
       "schedule": "0 21 * * 1-5"
     },
     {
-      "path": "/api/cron/reel-drop?slot=morning",
-      "schedule": "0 13 * * *"
-    },
-    {
-      "path": "/api/cron/reel-drop?slot=midday",
-      "schedule": "0 16 * * *"
-    },
-    {
-      "path": "/api/cron/reel-drop?slot=evening",
-      "schedule": "0 21 * * *"
-    },
-    {
       "path": "/api/cron/sms-followups",
       "schedule": "0 13 * * *"
     },

@@ -38,7 +38,6 @@ import {
   handleInstagramLink,
   INSTAGRAM_URL_RE,
 } from "@/lib/reel/pov-studio";
-import { handleBugRevealIdeasApproval, handleBugRevealPick, handleBugRevealReply, handleBugRevealFeedback } from "@/lib/reel/bug-reveal";
 import { handlePipelineReaction, handlePipelineThreadReply } from "@/lib/reel/pipeline";
 import { handleStyleRuleApproval, summarizeActiveRules } from "@/lib/reel/style-rules";
 import {
@@ -179,7 +178,7 @@ export async function POST(request: NextRequest) {
         if (guardianHandled) return NextResponse.json({ ok: true });
 
         // Unified content pipeline (Content Engine v2): ✅/🚫 ideate gate + 1️⃣/2️⃣/3️⃣ shot pick
-        // for ANY registry format (bug-reveal, attic B-roll, jumpscare, ...). Self-routes by the
+        // for ANY registry format (attic B-roll, jumpscare, ...). Self-routes by the
         // content_jobs table; returns false for non-pipeline messages so legacy handlers still run.
         const pipelineHandled = await handlePipelineReaction({
           reaction: event.reaction as string,
@@ -238,22 +237,6 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (reelHandled) return NextResponse.json({ ok: true });
-
-        // Bug-Reveal ideas gate: ✅ generate / 🚫 skip on the before-shots message (self-routes by DB)
-        const bugIdeasHandled = await handleBugRevealIdeasApproval({
-          reaction: event.reaction as string,
-          slackTs: event.item.ts as string,
-          channel: event.item.channel as string,
-        });
-        if (bugIdeasHandled) return NextResponse.json({ ok: true });
-
-        // Bug-Reveal pick: 1️⃣/2️⃣/3️⃣ to pick the "before", then add bugs + copy (self-routes by DB)
-        const bugPickHandled = await handleBugRevealPick({
-          reaction: event.reaction as string,
-          slackTs: event.item.ts as string,
-          channel: event.item.channel as string,
-        });
-        if (bugPickHandled) return NextResponse.json({ ok: true });
 
         // Style-rule proposal card: ✅ activates / 🚫 discards the pending rules (self-routes by DB)
         const styleRuleHandled = await handleStyleRuleApproval({
@@ -429,9 +412,8 @@ export async function POST(request: NextRequest) {
       // #content-full thread reply on a drop. Three interpretations, in order:
       //   1. "rules"        -> list the active style rules.
       //   2. tuning feedback -> distill into ✅-gated style rules ("make the furnace older").
-      //   3. "remix/more"    -> regenerate 3 fresh before options.
-      // Text-only replies; falls through otherwise. Format group defaults to bug_reveal (the
-      // active daily-drop mode); brand-scope rules apply everywhere regardless.
+      //   3. "remix/more"    -> regenerate fresh options.
+      // Text-only replies; falls through otherwise. Brand-scope rules apply everywhere.
       if (
         isContentFullChannel &&
         parentThreadTs &&
@@ -460,15 +442,9 @@ export async function POST(request: NextRequest) {
         });
         if (vektorReply) return NextResponse.json({ ok: true });
         // Unified pipeline thread reply (tuning feedback -> ✅-gated rules, or remix -> fresh
-        // options) for any registry format. Self-routes by content_jobs; falls through if the
-        // thread is a legacy (bug_reveal_jobs) drop.
+        // options) for any registry format. Self-routes by content_jobs; falls through otherwise.
         const pipelineReply = await handlePipelineThreadReply({ channel, threadTs: parentThreadTs, text: userText });
         if (pipelineReply) return NextResponse.json({ ok: true });
-        // Tuning feedback -> regenerate a live preview with the change, then ✅-gate the save.
-        const tuned = await handleBugRevealFeedback({ channel, threadTs: parentThreadTs, text: userText });
-        if (tuned) return NextResponse.json({ ok: true });
-        const handled = await handleBugRevealReply({ channel, threadTs: parentThreadTs, text: userText });
-        if (handled) return NextResponse.json({ ok: true });
       }
 
       // #content-full TOP-LEVEL avatar-first grammar: `map`/`library` shows the inventory,

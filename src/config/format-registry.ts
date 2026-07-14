@@ -13,21 +13,17 @@
 // The look/voice still comes from the active vertical (src/config/verticals.ts): style_token,
 // gold_examples, business_descriptor. A format only declares WHAT scenes and WHICH copy voice.
 
-import { BUG_REVEAL_SCENES } from "@/config/bug-reveal-style";
-
-// How a format produces its asset. Only the two single-image kinds are wired in Phase 1
+// How a format produces its asset. Only single_shot is wired in Phase 1
 // (render kinds are declared for the map + future rendering-last work).
 export type FormatKind =
   | "single_shot" // one hook image + captions (POV, B-roll, jumpscare)
-  | "before_after_edit" // generate a "before", reveal via editImage/fresh after (bug-reveal)
   | "reference_remake" // frames -> storyboard -> POV remake (IG-link / analyzer)
   | "script_render" // image + 4 script boxes -> MP4 (reel studio)   [rendersVideo]
   | "multi_shot_render"; // storyboard -> N images -> stitched MP4     [rendersVideo, later]
 
 // Which caption/voice the CAPTION stage writes in.
-//   owner_growth = first-person pest-business OWNER quietly selling other owners on posting content
-//   pov_hook     = candid first-person WTF-hook personal account (the POV drop voice)
-export type CopyStyle = "owner_growth" | "pov_hook";
+//   pov_hook = candid first-person WTF-hook personal account (the POV drop voice)
+export type CopyStyle = "pov_hook";
 
 export interface ContentFormat {
   id: string; // stable key, stored on content_jobs.format_id
@@ -75,20 +71,6 @@ const ATTIC_JUMPSCARE_SCENES: string[] = [
 // ---------------------------------------------------------------------------------------
 
 export const FORMAT_REGISTRY: ContentFormat[] = [
-  {
-    id: "bug_reveal",
-    label: "Bug-Reveal Spray",
-    headerEmoji: "🐛",
-    verticalId: "pest_control",
-    kind: "before_after_edit",
-    formatGroup: "bug_reveal", // keep legacy group so existing style_rules still apply
-    scenePool: BUG_REVEAL_SCENES,
-    shotCount: 3,
-    ideaNoun: "before",
-    copyStyle: "owner_growth",
-    rendersVideo: false,
-    inRotation: true,
-  },
   {
     id: "attic_broll",
     label: "Attic Animal-Removal B-roll",

@@ -4,7 +4,7 @@
 // ("make the furnace look older, and put some plates on the shelf so it isn't empty"). We
 // distill that into one or more concrete, imperative rules, post a "save these? ✅" card, and
 // only flip them 'active' once the operator reacts ✅. Active rules are read back into the
-// image-scene enrichment (prompt-enrich.ts) and the bug-reveal edit/copy builders, so the next
+// image-scene enrichment (prompt-enrich.ts) and the pipeline copy builders, so the next
 // drop obeys them. Empty/absent table -> "" everywhere, so behavior is byte-identical to today.
 //
 // State lives in the `style_rules` table (docs/2026-07-01-style-rules.sql).

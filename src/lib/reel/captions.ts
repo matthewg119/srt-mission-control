@@ -14,7 +14,6 @@ import type { HeadlinePair } from "@/lib/reel/headlines";
 import type { Vertical } from "@/config/verticals";
 import type { Workflow } from "@/config/workflows";
 import type { CopyStyle } from "@/config/format-registry";
-import { buildBugRevealCopySystem } from "@/config/bug-reveal-style";
 
 interface CaptionResponse {
   caption: string;
@@ -83,10 +82,8 @@ export async function generateCaptionForHeadline(
 // ---- Unified hook copy (the standardized CAPTION stage for the pipeline) --------------
 //
 // Every single-image format's CAPTION stage returns the SAME shape: exactly 5 on-screen
-// title options (option #1 is always a "POV:" framing), one Instagram caption, one
-// animation prompt, and optionally an after-image prompt (before_after_edit formats). This
-// replaces the per-format copy calls (generateBugRevealCopy = 5 titles + caption;
-// generatePovConcept = 6 titles + 3 captions) with one consistent contract.
+// title options (option #1 is always a "POV:" framing), one Instagram caption, and one
+// animation prompt. One consistent contract for every format.
 
 export interface HookCopy {
   options: string[]; // exactly 5 on-screen titles; options[0] is the POV default
@@ -114,11 +111,7 @@ export function buildHookCopySystem(
   rulesText?: string,
   animationSpec?: string
 ): string {
-  // owner_growth reuses the exact bug-reveal owner voice so that format keeps parity.
-  if (copyStyle === "owner_growth") {
-    return buildBugRevealCopySystem(vertical.business_descriptor, rulesText);
-  }
-
+  void copyStyle; // pov_hook is the only voice today; the param stays for future voices
   // pov_hook: candid first-person WTF-hook personal account (the POV drop voice), standardized
   // to 5 title options + one caption + animation (+ after-image prompt when asked).
   const guidance = rulesText && rulesText.trim() ? ["", rulesText.trim(), ""] : [];

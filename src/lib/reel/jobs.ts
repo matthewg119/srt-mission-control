@@ -27,7 +27,7 @@ export interface JobCopy {
 export interface JobData {
   scenes?: ShotOption[]; // ideate ideas, then the generated shot options (with url/mimetype)
   chosen?: ShotOption; // the picked shot
-  after_image_url?: string | null; // before_after_edit only
+  after_image_url?: string | null; // legacy (before/after edit formats); kept for old rows
   copy?: JobCopy;
 
   // --- Content Engine v3: avatar-first, song-based workflow flow ---

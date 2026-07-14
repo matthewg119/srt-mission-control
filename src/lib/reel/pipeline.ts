@@ -1,10 +1,10 @@
 // The ONE content pipeline. Every single-image format flows through this, driven by its row
-// in src/config/format-registry.ts. Replaces the per-format orchestrators (bug-reveal.ts,
-// pov.ts drop, pov-studio.ts picker) with a single robotic flow:
+// in src/config/format-registry.ts. Replaces the old per-format orchestrators with a single
+// robotic flow:
 //
 //   runDrop            -> IDEATE: pick scenes, post ideas, gate ✅/🚫              (stage=ideate)
 //   handlePipelineReaction (✅) -> SHOT: generate images, post options, gate 1/2/3 (stage=shot)
-//   handlePipelineReaction (1/2/3) -> BUILD: reveal (if edit) + CAPTION (5, POV#1) (stage=build->done)
+//   handlePipelineReaction (1/2/3) -> BUILD: CAPTION (5 options, POV#1)            (stage=build->done)
 //
 // Reactions and thread replies self-route by looking the job up in content_jobs, so the Slack
 // events route calls ONE dispatcher instead of ten per-format branches.
@@ -15,7 +15,7 @@
 import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
-import { generateImages, editImage, imageGenEnabled, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
+import { generateImages, imageGenEnabled, IMAGE_GEN_PAUSED_NOTE } from "@/lib/providers/image-gen";
 import { povImageProvider, buildPovImagePrompt, uploadToReels } from "@/lib/reel/pov";
 import { enrichScene } from "@/lib/reel/prompt-enrich";
 import {
@@ -24,9 +24,8 @@ import {
   savePendingRules,
 } from "@/lib/reel/style-rules";
 import { generateHookCopy, buildHookCopySystem } from "@/lib/reel/captions";
-import { buildBugAddInstruction } from "@/config/bug-reveal-style";
-import { POV_SOUL_SIZE, POV_IMAGE_SIZE } from "@/config/pov-style";
-import { loadVertical, type Vertical } from "@/config/verticals";
+import { POV_SOUL_SIZE } from "@/config/pov-style";
+import { loadVertical } from "@/config/verticals";
 import { getFormat, type ContentFormat } from "@/config/format-registry";
 import type { ReelSlot } from "@/config/reel-style";
 import {
@@ -229,10 +228,7 @@ async function generateShotsForJob(job: ContentJob, format: ContentFormat): Prom
   }
 
   const nums = options.map((o) => `${o.index}️⃣`).join(" ");
-  const verb =
-    format.kind === "before_after_edit"
-      ? "I'll then spray it: add the bugs, write the caption, titles, and the animation prompt."
-      : "I'll then write the caption, 5 titles, and the animation prompt.";
+  const verb = "I'll then write the caption, 5 titles, and the animation prompt.";
   const pick = (await slack.postThreadReply(channel, threadTs, `React ${nums} to pick the one you like. ${verb}`)) as { ts?: string };
 
   await updateJob(job, { stage: "shot", pickerTs: pick?.ts ?? null, data: { scenes: options } });
@@ -240,26 +236,19 @@ async function generateShotsForJob(job: ContentJob, format: ContentFormat): Prom
   return options.length;
 }
 
-// ---- BUILD: reveal (edit formats) + the 5-option copy, then DELIVER -------------------
+// ---- BUILD: the 5-option copy, then DELIVER --------------------------------------------
 
 async function buildForJob(job: ContentJob, format: ContentFormat, chosen: ShotOption): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   const vertical = await loadVertical(format.verticalId);
   const rulesText = await loadStyleRulesText(vertical.id, format.formatGroup);
 
-  let afterUrl: string | null = null;
-
-  // before_after_edit: produce the "after" frame (edit the chosen before, or a fresh after).
-  if (format.kind === "before_after_edit") {
-    afterUrl = await buildAfterFrame(job, format, vertical, rulesText, chosen);
-  }
-
-  // CAPTION (standardized): 5 options (POV #1) + caption + animation prompt (+ after-image prompt).
+  // CAPTION (standardized): 5 options (POV #1) + caption + animation prompt.
   const system = buildHookCopySystem(format.copyStyle, vertical, rulesText, format.animationSpec);
   const copy = await generateHookCopy({
     scene: chosen.scene,
     system,
-    withAfterFrame: format.kind === "before_after_edit",
+    withAfterFrame: false,
     povFallback: `POV: a regular day as a ${vertical.wearer_role}`,
   });
 
@@ -272,83 +261,13 @@ async function buildForJob(job: ContentJob, format: ContentFormat, chosen: ShotO
     copy.caption,
     "",
     `*Animation prompt:* ${copy.animation_prompt}`,
+    "",
+    "_Animate the hook image in Higgsfield with the prompt above, then post with title #1._",
   ];
-  if (format.kind === "before_after_edit") {
-    lines.push(
-      "",
-      "*After-image prompt (to reproduce frame 2 on its own):*",
-      "```",
-      copy.after_image_prompt ?? "(none returned)",
-      "```",
-      "",
-      "*Split test both animations, keep the winner:*",
-      "• *A* = the *before* image + the animation prompt above.",
-      afterUrl
-        ? "• *B* = *before + after* images (first frame to last frame) + the animation prompt above."
-        : "• *B* = needs the after frame (it failed this time); rerun to get before + after interpolation."
-    );
-  } else {
-    lines.push("", "_Animate the hook image in Higgsfield with the prompt above, then post with title #1._");
-  }
 
   await slack.postThreadReply(channel, threadTs, lines.join("\n"));
-  await updateJob(job, { stage: "done", status: "done", data: { after_image_url: afterUrl, copy } });
-  await logEvent(format, "delivered", { after_ok: Boolean(afterUrl), scene: chosen.scene, kind: format.kind });
-}
-
-/** The "after" frame for before_after_edit formats: edit the chosen before, or generate fresh. */
-async function buildAfterFrame(
-  job: ContentJob,
-  format: ContentFormat,
-  vertical: Vertical,
-  rulesText: string,
-  chosen: ShotOption
-): Promise<string | null> {
-  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
-  if (!imageGenEnabled()) {
-    await slack.postThreadReply(channel, threadTs, `⏸️ ${IMAGE_GEN_PAUSED_NOTE}`);
-    return null;
-  }
-  let afterBuffer: Buffer | null = null;
-  let afterMime = "image/png";
-
-  // Preferred (needs OPENAI_API_KEY): edit the exact chosen before so the two frames line up.
-  if (process.env.OPENAI_API_KEY && chosen.url) {
-    const src = await fetch(chosen.url);
-    if (src.ok) {
-      const srcBuf = Buffer.from(await src.arrayBuffer());
-      const srcMime = src.headers.get("content-type") || chosen.mimetype || "image/png";
-      const instruction = buildBugAddInstruction(chosen.scene, rulesText);
-      const edited = await editImage({ image: srcBuf, mimetype: srcMime, prompt: instruction, size: POV_IMAGE_SIZE });
-      if (edited) {
-        afterBuffer = edited.buffer;
-        afterMime = edited.mimetype;
-      }
-    }
-  }
-
-  // Higgsfield path (no OpenAI key): fresh text2image of the same seam with the swarm.
-  if (!afterBuffer) {
-    const groundedBase = await enrichScene(chosen.scene, { vertical, formatGroup: format.formatGroup });
-    const afterPrompt = await buildPovImagePrompt(
-      `${groundedBase} Now a dense swarm of German cockroaches is pouring out of that exact seam and scattering fast across the floor away from the spray.`,
-      vertical
-    );
-    const [fresh] = await generateImages({ prompts: [afterPrompt], provider: povImageProvider(), size: POV_SOUL_SIZE });
-    if (fresh) {
-      afterBuffer = fresh.buffer;
-      afterMime = fresh.mimetype;
-    }
-  }
-
-  if (!afterBuffer) {
-    await slack.postThreadReply(channel, threadTs, "⚠️ Couldn't produce the after frame. Copy + prompts still below.");
-    return null;
-  }
-  const afterUrl = await uploadToReels(afterBuffer, afterMime);
-  await slack.postThreadReply(channel, threadTs, "*After (bugs pouring from the sprayed seam)*");
-  await slack.uploadFile(channel, "after.png", afterBuffer, afterMime, threadTs);
-  return afterUrl;
+  await updateJob(job, { stage: "done", status: "done", data: { copy } });
+  await logEvent(format, "delivered", { scene: chosen.scene, kind: format.kind });
 }
 
 async function failJob(job: ContentJob, phase: string, e: unknown): Promise<void> {
@@ -403,13 +322,13 @@ export async function handlePipelineThreadReply(args: {
     if (tuned) return true;
   }
 
-  // 2) Remix -> fresh options (skips the gate, like the old bug-reveal remix).
+  // 2) Remix -> fresh options (skips the ideate gate).
   if (REMIX_RE.test(args.text)) {
     const scenes = pickScenes(format, format.shotCount);
     await updateJob(job, {
       stage: "build",
       status: "active",
-      data: { scenes: scenes.map((s, i) => ({ index: i + 1, scene: s })), chosen: undefined, after_image_url: null },
+      data: { scenes: scenes.map((s, i) => ({ index: i + 1, scene: s })), chosen: undefined },
     });
     await slack.postThreadReply(args.channel, args.threadTs, `🔁 On it, generating ${scenes.length} fresh options…`);
     waitUntil(generateShotsForJob(job, format).catch((e) => failJob(job, "remix", e)));
