@@ -69,6 +69,12 @@ import {
   handleDropGo,
 } from "@/lib/reel/drop-studio";
 import {
+  handleHookStudioStart,
+  handleHookStudioReply,
+  handleHookStudioReaction,
+  handleHookStudioFileDrop,
+} from "@/lib/reel/hook-studio";
+import {
   startAgentSession,
   handleAgentMessage,
   handleAgentFileDrop,
@@ -195,6 +201,16 @@ export async function POST(request: NextRequest) {
           channel: event.item.channel as string,
         });
         if (builderReactionHandled) return NextResponse.json({ ok: true });
+
+        // Hook-first studio lane: ✅ / keycaps on the workflow menu, copy options, motion
+        // prompts, and review cards. Self-routes by content_jobs (format_id hook_studio).
+        const hookReactionHandled = await handleHookStudioReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+          userId: event.user as string,
+        });
+        if (hookReactionHandled) return NextResponse.json({ ok: true });
 
         // #ai-content-pest-control drop lane: ✅ / keycaps on fit + copy cards.
         const dropReactionHandled = await handleDropReaction({
@@ -357,7 +373,9 @@ export async function POST(request: NextRequest) {
           waitUntil(
             (async () => {
               if (isThreadReply) {
-                await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
+                // Hook-studio threads claim their own files first; drop threads fall through.
+                const hooked = await handleHookStudioFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
+                if (!hooked) await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
               } else {
                 await handleDropMessage({ channel, threadTs: messageTs, files: attachedFiles, text: userText, verticalId: dropVertical.id });
               }
@@ -365,9 +383,10 @@ export async function POST(request: NextRequest) {
           );
         } else if (isThreadReply && userText.trim()) {
           waitUntil(
-            handleDropThreadReply({ channel, threadTs: parentThreadTs!, text: userText }).catch((e) =>
-              console.error("[slack/events] drop lane reply error:", (e as Error).message)
-            )
+            (async () => {
+              const hooked = await handleHookStudioReply({ channel, threadTs: parentThreadTs!, text: userText });
+              if (!hooked) await handleDropThreadReply({ channel, threadTs: parentThreadTs!, text: userText });
+            })().catch((e) => console.error("[slack/events] drop lane reply error:", (e as Error).message))
           );
         } else if (/^\s*go\s*$/i.test(userText)) {
           waitUntil(
@@ -378,9 +397,15 @@ export async function POST(request: NextRequest) {
         } else if (/^\s*(workflows|library|map)\s*$/i.test(userText)) {
           await postWorkflowMap(channel, dropWorkflowLibraryId(dropVertical));
         } else if (userText.trim()) {
-          await slack.postMessage(
-            channel,
-            "Drop your media + copy together in ONE message to render. `go` gives you headlines + story material. `workflows` shows the library."
+          // Hook-first studio: a text-only top-level message IS the hook. The bot answers with
+          // 6 hook-image prompts + 3 complete-copy options and walks the video from there.
+          waitUntil(
+            handleHookStudioStart({
+              channel,
+              threadTs: event.ts as string,
+              text: userText,
+              verticalId: dropVertical.id,
+            }).catch((e) => console.error("[slack/events] hook studio start error:", (e as Error).message))
           );
         }
         return NextResponse.json({ ok: true });

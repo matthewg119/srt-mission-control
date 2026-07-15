@@ -123,6 +123,13 @@ export interface JobData {
   prompt_slots?: Array<{ scene: number; image_url?: string | null }>; // prompt-drop image intake
   copy_options?: string[]; // rendered copy-option summaries (pick N at pd_copy)
 
+  // --- hook-first studio (hook-studio.ts, format_id "hook_studio") ---
+  hook_lines?: string[]; // the operator's hook text, split lines (workflow phrase stripped)
+  hs_image_prompt_options?: Array<{ kind: "meta_pov" | "bot_pick"; prompt: string }>; // 6 hook-image prompts
+  hs_copy_options?: Array<Array<{ key: string; label: string; text: string }>>; // 3 full copy sets
+  hs_storyboards?: Array<{ title: string; prompts: string[] }>; // 3 prompt sets for scenes 2..S
+  hs_chosen_storyboard?: number; // `set N` note (cosmetic, for the review card)
+
   // --- #agent-wokrflow-creator (workflow-agent.ts) ---
   agent_media?: string[]; // uploaded still URLs (drop order)
   agent_copy?: string[]; // his copy lines (re-paste replaces)
@@ -183,6 +190,12 @@ export type JobStage =
   | "pd_await_images"
   | "pd_copy"
   | "pd_render"
+  // hook-first studio (hook-studio.ts): text-only drop -> prompts -> images -> review -> render:
+  | "hs_workflow" // which workflow? menu posted
+  | "hs_options" // 6 hook-image prompts + 3 copy options posted; awaiting copy pick + hook image
+  | "hs_await_images" // storyboard sets posted; collecting the remaining scene images
+  | "hs_anim" // motion prompts posted; clips optional; checkmark/`review` advances
+  | "hs_review" // full review card posted; checkmark/`render` renders, changes re-post the card
   // #agent-wokrflow-creator (workflow-agent.ts): create workflows via 3 render variations:
   | "awc_avatar"
   | "awc_await_content"

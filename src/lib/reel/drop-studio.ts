@@ -71,11 +71,11 @@ import {
 const DROP_FORMAT = "drop_render";
 const PROMPT_FORMAT = "prompt_drop";
 
-const APPROVE = new Set(["white_check_mark", "heavy_check_mark", "+1", "ballot_box_with_check"]);
-const CANCEL = new Set(["no_entry_sign", "no_entry", "x", "-1"]);
-const KEYCAPS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+export const APPROVE = new Set(["white_check_mark", "heavy_check_mark", "+1", "ballot_box_with_check"]);
+export const CANCEL = new Set(["no_entry_sign", "no_entry", "x", "-1"]);
+export const KEYCAPS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
 
-interface DroppedFile {
+export interface DroppedFile {
   id?: string;
   name?: string;
   mimetype?: string;
@@ -113,7 +113,7 @@ async function downloadSlackUrl(url: string): Promise<Buffer | null> {
 }
 
 /** Resolve dropped files to public still URLs in the reels bucket (videos -> poster frame). */
-async function resolveDropMedia(
+export async function resolveDropMedia(
   files: DroppedFile[]
 ): Promise<Array<{ url: string; kind: "image" | "video" }>> {
   const out: Array<{ url: string; kind: "image" | "video" }> = [];
@@ -130,7 +130,7 @@ async function resolveDropMedia(
 
 /** Resolve dropped VIDEO files to public clip URLs in the reels bucket — the FULL clip,
  *  not a poster frame (that's resolveDropMedia's job). Non-video files are skipped. */
-async function resolveDropClips(files: DroppedFile[]): Promise<string[]> {
+export async function resolveDropClips(files: DroppedFile[]): Promise<string[]> {
   const out: string[] = [];
   for (const f of files) {
     const mt = f.mimetype || "";
@@ -149,7 +149,7 @@ function hasVideoFiles(files: DroppedFile[]): boolean {
   return files.some((f) => (f.mimetype || "").startsWith("video/"));
 }
 
-function splitLines(text: string): string[] {
+export function splitLines(text: string): string[] {
   return (text || "")
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -158,7 +158,7 @@ function splitLines(text: string): string[] {
 
 // ---- fit scoring ---------------------------------------------------------------------------
 
-function shotCount(w: Workflow): number {
+export function shotCount(w: Workflow): number {
   return (
     w.render_spec?.shots?.length ||
     w.render_options?.max_shots ||
@@ -167,7 +167,7 @@ function shotCount(w: Workflow): number {
   );
 }
 
-function boxCount(w: Workflow): number {
+export function boxCount(w: Workflow): number {
   return (w.copy_structure ?? []).length;
 }
 
@@ -224,7 +224,7 @@ function scoreFit(w: Workflow, mediaCount: number, lines: string[]): FitResult {
 }
 
 /** True when his exact lines map into the workflow with ZERO rewriting. */
-function zeroAdaptationCopy(w: Workflow, lines: string[]): StructuredCopyLine[] | null {
+export function zeroAdaptationCopy(w: Workflow, lines: string[]): StructuredCopyLine[] | null {
   const build = workflowRenderBuild(w);
   if (build === "render_reel") {
     const script = parseBoxes(lines.join("\n"));
@@ -242,7 +242,7 @@ function zeroAdaptationCopy(w: Workflow, lines: string[]): StructuredCopyLine[] 
   return roles.map((r, i) => ({ key: r.key, label: r.label, text: lines[i] }));
 }
 
-async function activeWorkflows(libraryVerticalId: string): Promise<Workflow[]> {
+export async function activeWorkflows(libraryVerticalId: string): Promise<Workflow[]> {
   const all = await listWorkflows(libraryVerticalId, { status: "active" });
   return all.filter(isRenderable);
 }
@@ -418,7 +418,7 @@ export async function handleDropMessage(args: {
 }
 
 /** Short human label for a workflow's song (workflows are song-based). */
-function songNote(w: Workflow): string {
+export function songNote(w: Workflow): string {
   const dur = w.render_spec?.duration_seconds;
   const durPart = dur ? `${dur}s, ` : "";
   if (!w.song_ref || w.song_ref === "song_master") return `${durPart}house bed`;
@@ -450,7 +450,7 @@ async function postAdaptedCopyCard(job: ContentJob, w: Workflow, pastedBlock: st
 /** Sales letter for a finished drop, in the channel's OWNER avatar voice. Returns the
  *  Slack note to post: the letter itself, the "paste letters first" instructions when the
  *  avatar has no reference letters yet, or the manual-fallback line on a Claude error. */
-async function writeSalesLetterFor(
+export async function writeSalesLetterFor(
   job: ContentJob,
   workflow: Workflow,
   copy: StructuredCopyLine[]
@@ -489,7 +489,7 @@ async function writeSalesLetterFor(
 
 /** Shared render + caption finish for both drop flows. `videos` (per-shot animated clip
  *  URLs, null = keep the still) rides along when the operator pasted Seedance clips. */
-async function finishDropRender(
+export async function finishDropRender(
   job: ContentJob,
   workflow: Workflow,
   copy: StructuredCopyLine[],
@@ -497,7 +497,9 @@ async function finishDropRender(
   videos?: Array<string | null>
 ): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
-  const retryStage = job.format_id === PROMPT_FORMAT ? "pd_copy" : "dr_copy";
+  // On a render failure each lane rewinds to its own "ready to render" stage so `render` retries.
+  const retryStage =
+    job.format_id === PROMPT_FORMAT ? "pd_copy" : job.format_id === "hook_studio" ? "hs_review" : "dr_copy";
   await updateJob(job, {
     stage: job.format_id === PROMPT_FORMAT ? "pd_render" : "dr_render",
     data: { ...job.data, workflow_id: workflow.id, structured_copy: copy },
@@ -631,7 +633,7 @@ async function resolveDropMode(job: ContentJob, mode: "animate" | "still"): Prom
 }
 
 /** ONE Seedance motion sentence per image (camera/subject motion only, no render). */
-async function generateMotionPrompts(
+export async function generateMotionPrompts(
   images: string[],
   ctx: { workflow: Workflow; copy: StructuredCopyLine[] }
 ): Promise<string[]> {
