@@ -21,7 +21,7 @@ function model(): ClaudeModel {
 
 // ---- shared prompt scaffolding ---------------------------------------------------------
 
-function avatarBlock(vertical: Vertical): string {
+export function avatarBlock(vertical: Vertical): string {
   const beliefs = (vertical.beliefs ?? []).map((b) => `- ${b.text}`).join("\n");
   const headlines = (vertical.offer?.headlines ?? [])
     .map((h) => `- ${h.title}${h.subtitle ? ` | ${h.subtitle}` : ""}`)
@@ -660,6 +660,76 @@ export async function generateStructuredCopy(args: {
 
   const byKey = new Map(data.lines.map((l) => [l.key, clean(l.text)]));
   return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+}
+
+interface CopyVariantsResult {
+  variants: Array<{ lines: Array<{ key: string; text: string }> }>;
+}
+function isCopyVariants(v: unknown): v is CopyVariantsResult {
+  const p = v as CopyVariantsResult;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    Array.isArray(p.variants) &&
+    p.variants.length > 0 &&
+    p.variants.every(
+      (x) =>
+        x &&
+        Array.isArray(x.lines) &&
+        x.lines.every((l) => l && typeof l.key === "string" && typeof l.text === "string")
+    )
+  );
+}
+
+/** N complete-copy variants for a workflow, all built on the operator's LOCKED hook lines.
+ *  The hook fills the earliest boxes verbatim (minimally trimmed); the variants differ in how
+ *  they complete the remaining boxes (pain escalation vs proof vs dream outcome), not in the
+ *  hook. Returns one StructuredCopyLine[] per variant, each one line per role in role order. */
+export async function generateStructuredCopyVariants(args: {
+  vertical: Vertical;
+  workflow: Workflow;
+  hookLines: string[];
+  count?: number;
+}): Promise<StructuredCopyLine[][]> {
+  const roles = args.workflow.copy_structure ?? [];
+  if (!roles.length) return [];
+  const count = args.count ?? 3;
+  const system = [
+    `You are Vektor, the direct-response creative director for a ${args.vertical.business_descriptor}.`,
+    `The operator wrote the hook lines below. They are LOCKED: fit them into the earliest boxes`,
+    "verbatim, or minimally trimmed to the 10-word limit. Then complete the remaining boxes so",
+    "each variant reads as one continuous piece of copy, box by box, in the customer's language.",
+    `Return ${count} DISTINCT variants that differ in the completion angle (pain escalation vs`,
+    "proof vs dream outcome), not in the hook. Keep every line tight (10 words or fewer).",
+    "",
+    "COPY STRUCTURE (fill each box):",
+    rolesBlock(args.workflow),
+    "",
+    avatarBlock(args.vertical),
+    "",
+    "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
+  ].join("\n");
+
+  const { data } = await callClaudeJSON<CopyVariantsResult>({
+    model: model(),
+    system,
+    user: [
+      "LOCKED hook lines:",
+      ...args.hookLines.map((l) => `- ${l}`),
+      "",
+      `Return JSON: { "variants": [{ "lines": [{ "key": string, "text": string }] }] } with exactly`,
+      `${count} variants, each with one line per box. Keys: ${roles.map((r) => r.key).join(", ")}.`,
+    ].join("\n"),
+    maxTokens: 2200,
+    temperature: 0.85,
+    schemaHint: '{ "variants": [{ "lines": [{ "key": string, "text": string }] }] }',
+    validate: isCopyVariants,
+  });
+
+  return data.variants.slice(0, count).map((variant) => {
+    const byKey = new Map(variant.lines.map((l) => [l.key, clean(l.text)]));
+    return roles.map((r) => ({ key: r.key, label: r.label, text: byKey.get(r.key) ?? "" }));
+  });
 }
 
 // ---- Picture ideas: 3 visual directions to pick from BEFORE any image generates ---------
