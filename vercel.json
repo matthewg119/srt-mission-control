@@ -83,10 +83,6 @@
     {
       "path": "/api/cron/prompt-drop?slot=evening",
       "schedule": "30 21 * * *"
-    },
-    {
-      "path": "/api/cron/pull-medspa",
-      "schedule": "0 12 * * *"
     }
   ]
 }
