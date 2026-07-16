@@ -106,7 +106,7 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
 // The render service is a SEPARATE Vercel project (srt-reel-render) that only
 // deploys via `vercel --prod` inside render-service/ — this gate is how a stale
 // deploy gets caught instead of silently rendering clips as stills.
-export const EXPECTED_ENGINE_VERSION = "spec-2026-07-16-clip-hardening";
+export const EXPECTED_ENGINE_VERSION = "spec-2026-07-16-smart-linebreaks";
 
 export interface SpecRenderResult {
   url: string;

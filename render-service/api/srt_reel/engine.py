@@ -11,6 +11,7 @@ It does:    auto color assignment (from the locked palette, no two adjacent the 
 """
 
 import os, sys, json, math, random, subprocess, re, shutil
+from itertools import combinations
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -135,6 +136,137 @@ def fit_font(draw, text, path, max_w, max_lines, start, floor=26):
     return f, wrap(draw, text, f, max_w)
 
 
+# ------------------------------------------------------- smart line breaking
+def _line_width(draw, s, font, lh):
+    """Pixel width of one rendered line, emoji-aware (each emoji ~ one em = lh),
+    matching the exact math render_chip draws with."""
+    w = 0
+    for kind, chunk in split_emoji(s):
+        if kind == "emo":
+            w += lh * len(chunk)
+        else:
+            w += int(draw.textlength(chunk, font=font))
+    return w
+
+_STRONG_END = re.compile(r'[.!?…]["\')\]]*$')   # token ends a sentence
+_MEDIUM_END = re.compile(r'[,:;]["\')\]]*$')          # token ends a clause
+# Connectors/function words that must not dangle at the end of a line —
+# break BEFORE them so they start the next line ("months | of bank statements").
+FUNC_WORDS = {
+    "a", "an", "the", "of", "to", "in", "on", "at", "for", "with",
+    "and", "or", "but", "nor", "so", "if", "as", "by", "from",
+    "into", "onto", "over", "than", "your", "our", "my", "their",
+    "his", "her", "its",
+}
+
+def _classify_gaps(words):
+    """For each gap g (between words[g-1] and words[g]) return
+    (kind[g], depth[g]) where kind is 'strong'|'medium'|'paren_open'|
+    'func_end'|'plain' and depth>0 means the gap sits inside (...)."""
+    kind, depth = {}, {}
+    d = 0
+    for g in range(1, len(words)):
+        prev, nxt = words[g - 1], words[g]
+        d += prev.count("(") - prev.count(")")
+        depth[g] = d
+        if _STRONG_END.search(prev):
+            kind[g] = "strong"
+        elif _MEDIUM_END.search(prev):
+            kind[g] = "medium"
+        elif nxt.startswith("("):
+            kind[g] = "paren_open"
+        elif prev.lower().strip("\"'") in FUNC_WORDS:
+            kind[g] = "func_end"
+        else:
+            kind[g] = "plain"
+    return kind, depth
+
+_LIST_INDEX = re.compile(r"^\d+[.:)]?$")   # "1:", "2." — visually tiny, not a word
+
+def _layout_cost(size, base, widths, cuts, breaks, kind, depth, forced, wcounts):
+    """Cost of one candidate layout, in 'pixels of shrink' units scaled to base.
+    wcounts[i] = 1 if words[i] counts toward the per-line word cap."""
+    L = len(widths)
+    cost = float(base - size)                      # 1.0 per px of shrink
+    cost += 0.22 * base * (L - 1)                  # fewer-lines preference
+    if L > 1:
+        wmax = max(widths) or 1
+        rag = sum((1 - w / wmax) ** 2 for w in widths) / L
+        cost += 0.35 * base * rag                  # balance (kept mild: asymmetric
+        if cuts[-1] - cuts[-2] == 1:               # punctuation breaks look good)
+            cost += 0.50 * base                    # 1-word last line (orphan)
+        if cuts[1] - cuts[0] == 1:
+            cost += 0.20 * base                    # 1-word first line, mild
+        for i in range(L):
+            wc = sum(wcounts[cuts[i]:cuts[i + 1]])
+            cost += 0.15 * base * max(0, wc - 5)   # soft ~5-words-per-line cap
+    for g in breaks:
+        if g in forced:
+            continue                               # explicit \n: no bonus/penalty
+        if depth.get(g, 0) > 0:
+            cost += 0.60 * base                    # break inside (...)
+        elif kind[g] == "strong":
+            cost -= 0.20 * base
+        elif kind[g] == "medium":
+            cost -= 0.10 * base
+        elif kind[g] == "paren_open":
+            cost -= 0.08 * base
+        elif kind[g] == "func_end":
+            cost += 0.35 * base                    # connector dangling at line end
+    return cost
+
+def smart_fit(draw, text, path, max_w, max_lines, start, floor=26):
+    """Drop-in replacement for fit_font: returns (font, lines).
+    Scores every possible split — prefers one line at a slightly smaller size,
+    breaks at punctuation, keeps parentheticals intact, ~5 words/line,
+    no orphans, never ends a line on a connector. Explicit \\n = forced break."""
+    floor = min(floor, start)
+    segments = [s for s in (p.strip() for p in text.split("\n")) if s]
+    words, forced = [], set()
+    for si, seg in enumerate(segments):
+        if si:
+            forced.add(len(words))
+        words.extend(seg.split())
+    n = len(words)
+    if n == 0:
+        return ImageFont.truetype(path, start), [""]
+    if max_lines == 1 or n == 1:
+        forced = set()                             # labels: \n joined, one line
+    kind, depth = _classify_gaps(words)
+    wcounts = [0 if _LIST_INDEX.match(w_) else 1 for w_ in words]
+    eff_max_lines = max(max_lines, len(forced) + 1)
+
+    best = None                                    # (cost, size, lines)
+    for size in range(start, floor - 1, -2):
+        # cost >= shrink - max possible break bonuses, so smaller sizes can't win
+        if best and (start - size) - 0.45 * start >= best[0]:
+            break
+        f = ImageFont.truetype(path, size)
+        asc, desc = f.getmetrics()
+        lh = asc + desc
+        span = {}
+        def w_of(i, j):
+            if (i, j) not in span:
+                span[(i, j)] = _line_width(draw, " ".join(words[i:j]), f, lh)
+            return span[(i, j)]
+        for k in range(len(forced) + 1, eff_max_lines + 1):
+            for breaks in combinations(range(1, n), k - 1):
+                if not forced <= set(breaks):
+                    continue
+                cuts = (0,) + breaks + (n,)
+                widths = [w_of(cuts[i], cuts[i + 1]) for i in range(k)]
+                if max(widths) > max_w:
+                    continue
+                cost = _layout_cost(size, start, widths, cuts, breaks, kind, depth, forced, wcounts)
+                if best is None or cost < best[0]:
+                    best = (cost, size,
+                            [" ".join(words[c1:c2]) for c1, c2 in zip(cuts, cuts[1:])])
+    if best is None:                               # e.g. one giant word
+        f = ImageFont.truetype(path, floor)
+        return f, wrap(draw, text, f, max_w)
+    return ImageFont.truetype(path, best[1]), best[2]
+
+
 # ---------------------------------------------------------------- box renderer
 def render_chip(text, color, kind="body", scale=1.0):
     """Render one rounded text chip to a tight RGBA image (with soft shadow).
@@ -154,22 +286,14 @@ def render_chip(text, color, kind="body", scale=1.0):
     pady = int(pady*scale); radius = int(radius*scale)
 
     probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
-    font, lines = fit_font(probe, text, font_path, max_w - 2*padx, max_lines, base)
+    font, lines = smart_fit(probe, text, font_path, max_w - 2*padx, max_lines, base)
 
     # measure
     asc, desc = font.getmetrics()
     lh = asc + desc
     gap = int(lh * 0.06)
     has_emoji = any(c for ln in lines for k, c in split_emoji(ln) if k == "emo")
-    line_ws = []
-    for ln in lines:
-        w_ = 0
-        for kind2, s in split_emoji(ln):
-            if kind2 == "emo":
-                w_ += int(EMOJI_NATIVE * (lh / EMOJI_NATIVE)) * len(s)  # ~one em each
-            else:
-                w_ += int(probe.textlength(s, font=font))
-        line_ws.append(w_)
+    line_ws = [_line_width(probe, ln, font, lh) for ln in lines]
     text_w = max(line_ws) if line_ws else 1
     text_h = len(lines) * lh + (len(lines) - 1) * gap
 

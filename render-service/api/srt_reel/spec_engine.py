@@ -30,7 +30,7 @@ W, H, FPS = engine.W, engine.H, engine.FPS
 
 # Bump on every renderer behavior change so a render response can prove which
 # build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
-ENGINE_VERSION = "spec-2026-07-16-clip-hardening"  # must match EXPECTED_ENGINE_VERSION in render-client.ts
+ENGINE_VERSION = "spec-2026-07-16-smart-linebreaks"  # must match EXPECTED_ENGINE_VERSION in render-client.ts
 
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
