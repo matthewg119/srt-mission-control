@@ -79,6 +79,7 @@ export interface DroppedFile {
   id?: string;
   name?: string;
   mimetype?: string;
+  filetype?: string;
   url_private?: string;
   url_private_download?: string;
 }
@@ -128,25 +129,69 @@ export async function resolveDropMedia(
   return out;
 }
 
-/** Resolve dropped VIDEO files to public clip URLs in the reels bucket — the FULL clip,
- *  not a poster frame (that's resolveDropMedia's job). Non-video files are skipped. */
-export async function resolveDropClips(files: DroppedFile[]): Promise<string[]> {
-  const out: string[] = [];
-  for (const f of files) {
-    const mt = f.mimetype || "";
-    if (!mt.startsWith("video/")) continue;
-    const src = f.url_private_download || f.url_private;
-    if (!src) continue;
-    const buf = await downloadSlackUrl(src);
-    if (!buf) continue;
-    const url = await uploadToReels(buf, mt);
-    if (url) out.push(url);
-  }
-  return out;
+const VIDEO_FILETYPES = new Set(["mp4", "mov", "m4v", "webm", "mpg", "mpeg"]);
+
+/** Slack sometimes delivers thin file objects with no mimetype — fall back to
+ *  filetype/extension so a real clip never silently routes down the image path. */
+export function isVideoFile(f: DroppedFile): boolean {
+  if ((f.mimetype || "").startsWith("video/")) return true;
+  if (VIDEO_FILETYPES.has((f.filetype || "").toLowerCase())) return true;
+  return /\.(mp4|mov|m4v|webm|mpe?g)$/i.test(f.name || "");
 }
 
-function hasVideoFiles(files: DroppedFile[]): boolean {
-  return files.some((f) => (f.mimetype || "").startsWith("video/"));
+/** MP4/MOV/M4V carry "ftyp" at offset 4; WebM/MKV open with the EBML magic. */
+function looksLikeVideoBytes(buf: Buffer): boolean {
+  return (
+    buf.length > 12 &&
+    (buf.subarray(4, 8).toString("latin1") === "ftyp" ||
+      (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3))
+  );
+}
+
+export interface ResolvedClips {
+  clips: string[];
+  /** Per-file reasons a clip could NOT be pulled in — post these to the thread;
+   *  silently dropping one turns its shot into a still with no warning. */
+  failures: string[];
+}
+
+/** Resolve dropped VIDEO files to public clip URLs in the reels bucket — the FULL clip,
+ *  not a poster frame (that's resolveDropMedia's job). Non-video files are skipped. */
+export async function resolveDropClips(files: DroppedFile[]): Promise<ResolvedClips> {
+  const clips: string[] = [];
+  const failures: string[] = [];
+  for (const f of files) {
+    if (!isVideoFile(f)) continue;
+    const label = f.name || "clip";
+    const src = f.url_private_download || f.url_private;
+    if (!src) {
+      failures.push(`${label}: Slack sent no download URL`);
+      continue;
+    }
+    const buf = await downloadSlackUrl(src);
+    if (!buf || !buf.length) {
+      failures.push(`${label}: download from Slack failed`);
+      continue;
+    }
+    if (!looksLikeVideoBytes(buf)) {
+      failures.push(`${label}: downloaded bytes are not a video`);
+      continue;
+    }
+    // Normalize quicktime so the bucket key gets a .mp4-style extension the
+    // render service (and anything else fetching it) can trust.
+    const mt = f.mimetype === "video/quicktime" ? "video/mp4" : f.mimetype || "video/mp4";
+    const url = await uploadToReels(buf, mt);
+    if (!url) {
+      failures.push(`${label}: upload to the reels bucket failed`);
+      continue;
+    }
+    clips.push(url);
+  }
+  return { clips, failures };
+}
+
+export function hasVideoFiles(files: DroppedFile[]): boolean {
+  return files.some(isVideoFile);
 }
 
 export function splitLines(text: string): string[] {
@@ -513,6 +558,7 @@ export async function finishDropRender(
       `Rendering *${workflow.name}* - ${shots} shot${shots === 1 ? "" : "s"}${clipCount ? ` (${clipCount} animated clip${clipCount === 1 ? "" : "s"})` : ""} into one reel. This takes about a minute...`
     );
     const result = await renderWorkflow(workflow, { images, copy, videos });
+    if (result.versionWarning) await post(channel, threadTs, result.versionWarning);
 
     let uploaded = false;
     let mp4 = result.mp4 ?? null;
@@ -734,9 +780,18 @@ async function handleAnimatedClipDrop(
     return;
   }
   await post(channel, threadTs, "Got the clips. Pulling them in...");
-  const clips = await resolveDropClips(files);
+  const { clips, failures } = await resolveDropClips(files);
+  if (failures.length) {
+    await post(
+      channel,
+      threadTs,
+      `Could not pull in ${failures.length} clip(s):\n${failures.join("\n")}\nRe-upload those and I'll slot them.`
+    );
+  }
   if (!clips.length) {
-    await post(channel, threadTs, "Could not read those files as video clips. Try re-uploading the MP4s.");
+    if (!failures.length) {
+      await post(channel, threadTs, "Could not read those files as video clips. Try re-uploading the MP4s.");
+    }
     return;
   }
   const total = ctx.images.length;

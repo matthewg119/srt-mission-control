@@ -47,6 +47,8 @@ export interface RenderWorkflowResult {
   url: string | null; // public MP4 URL when the service stored one
   mp4?: Buffer; // raw bytes (render_reel path) for direct Slack upload
   duration: number;
+  /** Set when the deployed render service is stale — post it to the thread. */
+  versionWarning?: string;
 }
 
 /** The copy mapped into the legacy 4-box ReelScript (parseBoxes key parity). */
@@ -121,7 +123,7 @@ async function renderViaCustomEndpoint(
     method: "POST",
     headers: { "Content-Type": "application/json", "x-reel-secret": secret },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(290000),
   });
   const text = await res.text();
   let body: { url?: string; duration?: number; error?: string } = {};
@@ -170,7 +172,7 @@ export async function renderWorkflow(
 
   if (build === "render_spec") {
     const result = await renderSpecVideo(payload);
-    return { url: result.url, duration: result.duration };
+    return { url: result.url, duration: result.duration, versionWarning: result.versionWarning };
   }
   const result = await renderViaCustomEndpoint(build, payload);
   return { url: result.url, duration: result.duration };

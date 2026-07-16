@@ -18,6 +18,7 @@ import os
 import random
 import re
 import subprocess
+import tempfile
 import urllib.parse
 import urllib.request
 
@@ -29,7 +30,7 @@ W, H, FPS = engine.W, engine.H, engine.FPS
 
 # Bump on every renderer behavior change so a render response can prove which
 # build actually ran (surfaced in render-spec.py's JSON + logged by render-client.ts).
-ENGINE_VERSION = "spec-2026-07-10-clip-audio"
+ENGINE_VERSION = "spec-2026-07-16-clip-hardening"  # must match EXPECTED_ENGINE_VERSION in render-client.ts
 
 POP = 0.18        # seconds of pop-in (same feel as engine.render)
 FADE_OUT = 0.12   # seconds of alpha fade before a text's out_second
@@ -207,7 +208,7 @@ def _shot_frame(shot, t):
     if shot["kind"] == "video":
         idx = max(0, min(shot["count"] - 1, int((t - shot["start"]) * FPS)))
         img = Image.open(
-            os.path.join(shot["frames_dir"], f"{idx + 1:05d}.png")
+            os.path.join(shot["frames_dir"], f"{idx + 1:05d}.jpg")
         ).convert("RGB")
         return (_zoomed(img, shot, t) if shot["zoom"] > 0 else img).convert("RGBA")
     if shot["zoom"] <= 0:
@@ -440,28 +441,42 @@ def render_spec(shots, texts, sources, song_path, duration, out_path,
             "-c:a", "aac", "-b:a", "192k", "-shortest",
             "-movflags", "+faststart", out_path,
         ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    # stderr goes to a file (not a pipe) so a chatty/dying ffmpeg can't deadlock
+    # against our stdin writes; its tail makes the failure message actionable.
+    stderr_path = os.path.join(workdir or tempfile.gettempdir(), "ffmpeg_encode_stderr.log")
+    with open(stderr_path, "wb") as stderr_fh:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=stderr_fh)
 
-    for fi in range(nframes):
-        t = fi / FPS
-        fr = _shot_frame(_active_shot(prepped_shots, t), t)
-        active = [x for x in prepped_texts if x["at"] <= t < x["out"]]
-        for chip, x, y_center, scale, alpha in _place_texts(active, t):
-            if alpha <= 0:
-                continue
-            cw, ch = chip.size
-            sw, sh = max(1, int(cw * scale)), max(1, int(ch * scale))
-            c2 = chip.resize((sw, sh), Image.LANCZOS) if scale < 1 else chip
-            if alpha < 1:
-                a = c2.split()[3].point(lambda v: int(v * alpha))
-                c2 = c2.copy()
-                c2.putalpha(a)
-            fr.alpha_composite(c2, (x + (cw - sw) // 2, y_center - sh // 2))
-        proc.stdin.write(fr.convert("RGB").tobytes())
-    proc.stdin.close()
-    proc.wait()
+        try:
+            for fi in range(nframes):
+                t = fi / FPS
+                fr = _shot_frame(_active_shot(prepped_shots, t), t)
+                active = [x for x in prepped_texts if x["at"] <= t < x["out"]]
+                for chip, x, y_center, scale, alpha in _place_texts(active, t):
+                    if alpha <= 0:
+                        continue
+                    cw, ch = chip.size
+                    sw, sh = max(1, int(cw * scale)), max(1, int(ch * scale))
+                    c2 = chip.resize((sw, sh), Image.LANCZOS) if scale < 1 else chip
+                    if alpha < 1:
+                        a = c2.split()[3].point(lambda v: int(v * alpha))
+                        c2 = c2.copy()
+                        c2.putalpha(a)
+                    fr.alpha_composite(c2, (x + (cw - sw) // 2, y_center - sh // 2))
+                proc.stdin.write(fr.convert("RGB").tobytes())
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # ffmpeg died mid-stream; fall through to report its stderr
+        proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg exited with {proc.returncode}")
+        try:
+            with open(stderr_path, "rb") as fh:
+                tail = fh.read().decode("utf-8", "ignore").strip()[-400:]
+        except OSError:
+            tail = ""
+        raise RuntimeError(
+            f"ffmpeg encode failed (exit {proc.returncode}){f': {tail}' if tail else ''}"
+        )
     if not quiet:
         print(f"  -> {out_path}  ({total:.1f}s, {nframes} frames)")
     return out_path

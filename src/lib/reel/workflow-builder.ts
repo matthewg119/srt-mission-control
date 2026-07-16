@@ -659,6 +659,7 @@ async function saveAndRender(job: ContentJob, channel: string): Promise<void> {
       try {
         const payload = buildRenderPayload(workflow, workflow.render_spec!);
         const result = await renderSpecVideo(payload);
+        if (result.versionWarning) await post(channel, job.slack_thread_ts, result.versionWarning);
         const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
         await updateJob(fresh, { data: { ...fresh.data, final_video_url: result.url } });
         await post(channel, job.slack_thread_ts, [`*Test render done* (${result.duration.toFixed(1)}s):`, result.url].join("\n"));

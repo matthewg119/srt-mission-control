@@ -35,6 +35,7 @@ import {
   type DroppedFile,
   resolveDropMedia,
   resolveDropClips,
+  hasVideoFiles,
   generateMotionPrompts,
   finishDropRender,
   writeSalesLetterFor,
@@ -90,10 +91,6 @@ function isHookJob(job: ContentJob | null): job is ContentJob {
 async function getHookJob(threadTs: string): Promise<ContentJob | null> {
   const job = await getLatestJobByThread(threadTs);
   return isHookJob(job) ? job : null;
-}
-
-function hasVideoFiles(files: DroppedFile[]): boolean {
-  return files.some((f) => (f.mimetype || "").startsWith("video/"));
 }
 
 function slotImages(job: ContentJob): string[] {
@@ -927,9 +924,18 @@ export async function handleHookStudioFileDrop(args: {
   // Seedance clips at the animate gate (or late, at review): slot per shot.
   if ((job.stage === "hs_anim" || job.stage === "hs_review") && hasVideoFiles(args.files)) {
     await post(channel, threadTs, "Got the clips. Pulling them in...");
-    const clips = await resolveDropClips(args.files);
+    const { clips, failures } = await resolveDropClips(args.files);
+    if (failures.length) {
+      await post(
+        channel,
+        threadTs,
+        `Could not pull in ${failures.length} clip(s):\n${failures.join("\n")}\nRe-upload those and I'll slot them.`
+      );
+    }
     if (!clips.length) {
-      await post(channel, threadTs, "Could not read those files as video clips. Try re-uploading the MP4s.");
+      if (!failures.length) {
+        await post(channel, threadTs, "Could not read those files as video clips. Try re-uploading the MP4s.");
+      }
       return true;
     }
     const total = (job.data.prompt_slots ?? []).length || 1;

@@ -30,9 +30,11 @@ Response:
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler
@@ -65,14 +67,24 @@ def _supabase_upload(mp4_path: str) -> str | None:
     return f"{base}/storage/v1/object/public/reels/{name}"
 
 
-def _download(url: str, dest: str, what: str):
+def _download(url: str, dest: str, what: str, expect_video: bool = False):
     try:
         with urllib.request.urlopen(url, timeout=60) as resp:
+            content_type = resp.headers.get("Content-Type", "unknown")
             data = resp.read()
     except Exception as e:
         raise ValueError(f"could not download {what}: {url} ({e})")
     if not data:
         raise ValueError(f"empty download for {what}: {url}")
+    if expect_video:
+        # MP4/MOV/M4V carry "ftyp" at offset 4; WebM/MKV start with the EBML magic.
+        is_video = data[4:8] == b"ftyp" or data[:4] == b"\x1a\x45\xdf\xa3"
+        if not is_video:
+            host = urllib.parse.urlparse(url).hostname or "?"
+            raise ValueError(
+                f"{what}: download from {host} is not a video "
+                f"(content-type {content_type}, {len(data)} bytes, starts {data[:12]!r})"
+            )
     with open(dest, "wb") as fh:
         fh.write(data)
     return dest
@@ -93,11 +105,14 @@ def _extract_video_audio(src: str, dest: str, seconds: float) -> bool:
     return os.path.exists(dest) and os.path.getsize(dest) > 0
 
 
-def _extract_video_frames(src: str, frames_dir: str, seconds: float) -> int:
-    """Explode a video into cover-cropped 9:16 PNG frames at the render FPS, capped
+def _extract_video_frames(src: str, frames_dir: str, seconds: float, what: str) -> int:
+    """Explode a video into cover-cropped 9:16 JPEG frames at the render FPS, capped
     to `seconds` (so a clip longer than its shot is trimmed at the end). The
     cover-crop mirrors engine.cover(); frames come out already sized WxH so the
-    per-frame loop treats them exactly like a still. Returns the frame count."""
+    per-frame loop treats them exactly like a still. Returns the frame count.
+
+    JPEG, not PNG: a 5s 720x1280 clip is ~250 MB as PNGs vs ~25 MB as JPEGs, and
+    Vercel's /tmp is 500 MB total — three PNG clips exhaust it mid-render."""
     eng = spec_engine.engine
     w, h, fps = eng.W, eng.H, eng.FPS
     vf = (
@@ -107,11 +122,16 @@ def _extract_video_frames(src: str, frames_dir: str, seconds: float) -> int:
     cmd = [
         eng.FFMPEG, "-y", "-loglevel", "error",
         "-i", src, "-t", f"{max(0.001, seconds):.3f}",
-        "-vf", vf, os.path.join(frames_dir, "%05d.png"),
+        "-vf", vf, "-q:v", "3", os.path.join(frames_dir, "%05d.jpg"),
     ]
-    if subprocess.run(cmd).returncode != 0:
-        raise ValueError(f"could not extract frames from video: {src}")
-    return len([n for n in os.listdir(frames_dir) if n.endswith(".png")])
+    proc = subprocess.run(cmd, stderr=subprocess.PIPE)
+    stderr_tail = proc.stderr.decode("utf-8", "ignore").strip()[-400:]
+    if proc.returncode != 0:
+        raise ValueError(f"{what}: ffmpeg could not decode the clip: {stderr_tail or f'exit {proc.returncode}'}")
+    count = len([n for n in os.listdir(frames_dir) if n.endswith(".jpg")])
+    if count <= 0:
+        raise ValueError(f"{what}: the clip produced no frames{f' ({stderr_tail})' if stderr_tail else ''}")
+    return count
 
 
 class handler(BaseHTTPRequestHandler):
@@ -156,19 +176,21 @@ class handler(BaseHTTPRequestHandler):
             for i, s in enumerate(shots):
                 video_url = s.get("video_url")
                 if video_url:
+                    what = f"shot {i + 1} video"
                     vid_path = os.path.join(tmpdir, f"shot_{i}.mp4")
-                    _download(video_url, vid_path, f"shot {i + 1} video")
+                    _download(video_url, vid_path, what, expect_video=True)
                     frames_dir = os.path.join(tmpdir, f"shot_{i}_frames")
                     os.makedirs(frames_dir, exist_ok=True)
                     slot = float(s.get("end", 0)) - float(s.get("start", 0))
-                    count = _extract_video_frames(vid_path, frames_dir, slot)
-                    if count <= 0:
-                        raise ValueError(f"shot {i + 1}: video produced no frames")
+                    count = _extract_video_frames(vid_path, frames_dir, slot, what)
                     # The clip's own sound rides under the song at CLIP_AUDIO_VOLUME;
                     # a silent clip simply contributes nothing.
                     audio_path = os.path.join(tmpdir, f"shot_{i}_audio.m4a")
                     if not _extract_video_audio(vid_path, audio_path, slot):
                         audio_path = None
+                    # /tmp is only 500 MB and shared across warm invocations — drop
+                    # the source clip as soon as its frames + audio are extracted.
+                    os.remove(vid_path)
                     sources.append({
                         "kind": "video",
                         "frames_dir": frames_dir,
@@ -209,3 +231,7 @@ class handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": str(e)})
         except Exception as e:
             return self._send(500, {"error": str(e)})
+        finally:
+            # /tmp persists across warm invocations; leaking ~100s of MB of frames
+            # per render exhausts it and kills the NEXT render mid-extraction.
+            shutil.rmtree(tmpdir, ignore_errors=True)

@@ -98,6 +98,7 @@ interface SlackEventFile {
   id: string;
   name?: string;
   mimetype?: string;
+  filetype?: string;
   url_private_download?: string;
   url_private?: string;
 }

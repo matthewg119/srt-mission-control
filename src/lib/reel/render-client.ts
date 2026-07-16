@@ -102,10 +102,18 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
   };
 }
 
+// Must match ENGINE_VERSION in render-service/api/srt_reel/spec_engine.py.
+// The render service is a SEPARATE Vercel project (srt-reel-render) that only
+// deploys via `vercel --prod` inside render-service/ — this gate is how a stale
+// deploy gets caught instead of silently rendering clips as stills.
+export const EXPECTED_ENGINE_VERSION = "spec-2026-07-16-clip-hardening";
+
 export interface SpecRenderResult {
   url: string;
   duration: number;
   engineVersion?: string;
+  /** Set when the deployed render service doesn't match EXPECTED_ENGINE_VERSION — post it to the thread. */
+  versionWarning?: string;
 }
 
 /**
@@ -121,7 +129,9 @@ export async function renderSpecVideo(payload: SpecRenderPayload): Promise<SpecR
     method: "POST",
     headers: { "Content-Type": "application/json", "x-reel-secret": secret },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(120000),
+    // Matches the render service's maxDuration (300s) with headroom inside the
+    // Slack events route's own 300s budget; video shots render slower than stills.
+    signal: AbortSignal.timeout(290000),
   });
   const bodyText = await res.text();
   let body: {
@@ -139,14 +149,23 @@ export async function renderSpecVideo(payload: SpecRenderPayload): Promise<SpecR
   if (!res.ok || !body.url) {
     const detail = body.problems?.length
       ? `${body.error}: ${body.problems.join("; ")}`
-      : body.error || bodyText.slice(0, 300) || `HTTP ${res.status}`;
+      : body.error || bodyText.slice(0, 600) || `HTTP ${res.status}`;
     throw new Error(`render-spec failed: ${detail}`);
   }
   // Proves which renderer build actually ran (guards against a stale srt-reel-render deploy).
   console.log(`[render-spec] rendered by engine=${body.engine_version ?? "unknown"}`);
+  let versionWarning: string | undefined;
+  if (body.engine_version !== EXPECTED_ENGINE_VERSION) {
+    versionWarning =
+      `Note: the render service is running "${body.engine_version ?? "a pre-version build"}" but the app expects ` +
+      `"${EXPECTED_ENGINE_VERSION}". Animated clips may have rendered as stills. ` +
+      `Redeploy it: cd render-service && vercel --prod (git push does NOT deploy it).`;
+    console.warn(`[render-spec] ${versionWarning}`);
+  }
   return {
     url: body.url,
     duration: body.duration ?? payload.duration,
     engineVersion: body.engine_version,
+    ...(versionWarning ? { versionWarning } : {}),
   };
 }
