@@ -294,7 +294,7 @@ async function postHookOptions(job: ContentJob, workflow: Workflow): Promise<voi
 
   const [pRes, cRes] = await Promise.allSettled([
     generateHookImagePrompts({ owner, workflow, lookVertical: drop, hookLines }),
-    generateStructuredCopyVariants({ vertical: owner, workflow, hookLines, count: 3 }),
+    generateStructuredCopyVariants({ vertical: owner, workflow, hookLines, count: 5 }),
   ]);
 
   const prompts = pRes.status === "fulfilled" ? pRes.value : null;
@@ -353,7 +353,7 @@ async function postHookOptions(job: ContentJob, workflow: Workflow): Promise<voi
 
   if (variants.length) {
     const B = boxCount(workflow);
-    const caps = ["one", "two", "three"].slice(0, variants.length);
+    const caps = ["one", "two", "three", "four", "five"].slice(0, variants.length);
     await postCard(
       job,
       [
@@ -648,7 +648,7 @@ async function startHookRender(job: ContentJob, workflow: Workflow): Promise<voi
 const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   hs_workflow: "Pick a workflow by number (or react ✅ for the top pick), or `cancel`.",
   hs_options:
-    "React 1️⃣/2️⃣/3️⃣ on the copy card (or paste your own copy block), then drop the generated hook image here. `retry` re-runs the options, `cancel` ends it.",
+    "Pick a copy option 1-5 on the copy card (react or type the number, or paste your own copy block), then drop the generated hook image here. `retry` re-runs the options, `cancel` ends it.",
   hs_await_images: "Waiting on the scene images. Upload them into this thread (comment `scene N` to target a slot).",
   hs_anim:
     "Drop Seedance clips (optional), react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
@@ -808,7 +808,7 @@ export async function handleHookStudioReply(args: {
       break;
     }
     case "hs_review": {
-      if (/^\s*render\s*$/i.test(text) && workflow) {
+      if (/^\s*(render|still|go)\s*$/i.test(text) && workflow) {
         await startHookRender(job, workflow);
         return true;
       }
@@ -873,7 +873,9 @@ export async function handleHookStudioReaction(args: {
   const seeded = (job.data.seeded_reactions ?? []) as string[];
   if (seeded.includes(args.reaction)) {
     const count = await slack.getReactionCount(job.slack_channel, args.slackTs, args.reaction);
-    if (count < 2) return true;
+    // null = reactions.get failed (likely missing reactions:read scope) — trust the
+    // bot-userId guard above instead of going dead.
+    if (count !== null && count < 2) return true;
   }
 
   if (cancel) {

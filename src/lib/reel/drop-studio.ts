@@ -46,6 +46,7 @@ import {
 import {
   reslotCopyToStructure,
   generateStructuredCopy,
+  generateStructuredCopyVariants,
   generateHeadlineOptions,
   generateCreativeReference,
   type StructuredCopyLine,
@@ -93,12 +94,47 @@ async function post(channel: string, threadTs: string, text: string): Promise<st
   return ((res as { ts?: string } | null)?.ts as string) ?? null;
 }
 
-async function postCard(job: ContentJob, text: string): Promise<void> {
+async function postCard(job: ContentJob, text: string, emojis: string[] = ["white_check_mark"]): Promise<void> {
   const ts = await post(job.slack_channel, job.slack_thread_ts, text);
   if (ts) {
-    await slack.addReaction(job.slack_channel, ts, "white_check_mark").catch(() => {});
-    await updateJob(job, { pickerTs: ts, data: { ...job.data, seeded_reactions: ["white_check_mark"] } });
+    for (const e of emojis) await slack.addReaction(job.slack_channel, ts, e).catch(() => {});
+    await updateJob(job, { pickerTs: ts, data: { ...job.data, seeded_reactions: emojis } });
   }
+}
+
+// Slack chat.postMessage truncates around 40k but long cards get unreadable well before
+// that; split on paragraph boundaries at ~3800 chars so each chunk stays scannable.
+const CHUNK_LIMIT = 3800;
+export function splitForSlack(text: string, limit = CHUNK_LIMIT): string[] {
+  if (text.length <= limit) return [text];
+  const parts: string[] = [];
+  let current = "";
+  for (const para of text.split("\n\n")) {
+    const candidate = current ? `${current}\n\n${para}` : para;
+    if (candidate.length > limit && current) {
+      parts.push(current);
+      current = para;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+/** Post long text as sequential thread messages; returns the LAST message's ts. */
+async function postLong(channel: string, threadTs: string, text: string): Promise<string | null> {
+  let last: string | null = null;
+  for (const chunk of splitForSlack(text)) last = (await post(channel, threadTs, chunk)) ?? last;
+  return last;
+}
+
+/** The job's still images, format-aware: prompt drops collect into prompt_slots, the
+ *  drop-and-render lane into drop_media. Getting this wrong makes ✅ at dr_copy a no-op. */
+function jobImages(job: ContentJob): string[] {
+  return job.format_id === PROMPT_FORMAT
+    ? (job.data.prompt_slots ?? []).map((s) => s.image_url!).filter(Boolean)
+    : (job.data.drop_media ?? []).map((m) => m.url);
 }
 
 async function downloadSlackUrl(url: string): Promise<Buffer | null> {
@@ -471,25 +507,87 @@ export function songNote(w: Workflow): string {
   return `${durPart}${resolveSong(w.song_ref).label}`;
 }
 
-async function postAdaptedCopyCard(job: ContentJob, w: Workflow, pastedBlock: string): Promise<void> {
+/** The dr_copy card: option 1 = a faithful reslot of the operator's lines, options 2-5 =
+ *  divergent direct-response angles built on the same hook. Pick by keycap/typed number;
+ *  checkmark keeps option 1 (structured_copy already defaults to it). */
+async function postCopyVariantsCard(job: ContentJob, w: Workflow, pastedBlock: string): Promise<void> {
   try {
-    const vertical = await loadVertical(job.vertical_id);
-    const copy = await reslotCopyToStructure({ vertical, workflow: w, pastedBlock });
-    if (!copy.length) throw new Error("the workflow has no copy boxes");
+    const drop = await loadVertical(job.vertical_id);
+    const owner = await loadVertical(dropOwnerVerticalId(drop));
+    const hookLines = splitLines(pastedBlock).slice(0, 2);
+    const [reslotRes, divergentRes] = await Promise.allSettled([
+      reslotCopyToStructure({ vertical: drop, workflow: w, pastedBlock }),
+      generateStructuredCopyVariants({ vertical: owner, workflow: w, hookLines, count: 4 }),
+    ]);
+    const reslot = reslotRes.status === "fulfilled" ? reslotRes.value : [];
+    const divergent = divergentRes.status === "fulfilled" ? divergentRes.value : [];
+    if (reslotRes.status === "rejected")
+      console.error("[drop-studio] copy reslot failed:", (reslotRes.reason as Error)?.message);
+    if (divergentRes.status === "rejected")
+      console.error("[drop-studio] copy variants failed:", (divergentRes.reason as Error)?.message);
+
+    const variants = [...(reslot.length ? [reslot] : []), ...divergent].slice(0, 5);
+    if (!variants.length) {
+      throw new Error(
+        (reslotRes.status === "rejected" && (reslotRes.reason as Error)?.message) || "the workflow has no copy boxes"
+      );
+    }
+
     const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
     await updateJob(fresh, {
       stage: "dr_copy",
-      data: { ...fresh.data, workflow_id: w.id, structured_copy: copy },
+      data: { ...fresh.data, workflow_id: w.id, structured_copy: variants[0], copy_variants: variants },
     });
-    await postCard(fresh, [
-      `*${w.name}* copy, adapted from your lines:`,
-      ...copy.map((c) => `*${c.label}:* ${c.text}`),
-      "",
-      "React with the checkmark to render, paste a replacement block to refit, or `cancel`.",
-    ].join("\n"));
+
+    const header =
+      variants.length === 1
+        ? `*${w.name}* copy, adapted from your lines:`
+        : `*${w.name}* copy - ${variants.length} options${reslot.length ? " (1 = your lines refit, rest = new angles)" : ""}:`;
+    const body = variants
+      .map((v, i) => [`*Option ${i + 1}:*`, ...v.map((c) => `*${c.label}:* ${c.text}`)].join("\n"))
+      .join("\n\n");
+    const footer = [
+      variants.length > 1
+        ? `Pick one: react 1-${variants.length} or type the number. Checkmark = option 1.`
+        : "React with the checkmark to keep this copy.",
+      "Paste your own block to refit, `animate` for motion prompts, `still`/`render` to render as-is, or `cancel`.",
+    ].join("\n");
+
+    // Long cards split at option boundaries; the reactions + pickerTs ride the LAST chunk.
+    const caps = [
+      "white_check_mark",
+      ...["one", "two", "three", "four", "five"].slice(0, variants.length > 1 ? variants.length : 0),
+    ];
+    const ts = await postLong(fresh.slack_channel, fresh.slack_thread_ts, [header, body, footer].join("\n\n"));
+    if (ts) {
+      for (const e of caps) await slack.addReaction(fresh.slack_channel, ts, e).catch(() => {});
+      await updateJob(fresh, { pickerTs: ts, data: { ...fresh.data, seeded_reactions: caps } });
+    }
   } catch (e) {
     await post(job.slack_channel, job.slack_thread_ts, `Could not adapt the copy: ${(e as Error).message}`);
   }
+}
+
+/** Lock copy option N and move to the animate-vs-still gate (same as the checkmark). */
+async function pickCopyVariant(job: ContentJob, n: number): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const variants = job.data.copy_variants ?? [];
+  const picked = variants[n - 1];
+  if (!picked) {
+    await post(
+      channel,
+      threadTs,
+      variants.length ? `Pick a number between 1 and ${variants.length}.` : "No copy options on this drop. Paste a copy block instead."
+    );
+    return;
+  }
+  const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
+  if (!workflow) {
+    await post(channel, threadTs, "Lost this drop's workflow. Re-drop the images + copy to start again.");
+    return;
+  }
+  await updateJob(job, { data: { ...job.data, structured_copy: picked } });
+  await enterDropModeGate(job, workflow, picked, job.data.mode_images ?? jobImages(job));
 }
 
 /** Sales letter for a finished drop, in the channel's OWNER avatar voice. Returns the
@@ -656,8 +754,7 @@ async function gateContext(
 } | null> {
   const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
-  const images =
-    job.data.mode_images ?? (job.data.drop_media ?? []).map((m) => m.url);
+  const images = job.data.mode_images ?? jobImages(job);
   if (!workflow || !copy.length || !images.length) return null;
   return { workflow, copy, images, videos: job.data.mode_videos ?? [] };
 }
@@ -1117,7 +1214,8 @@ async function handleTextFeedback(job: ContentJob, text: string): Promise<boolea
 
 const DR_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   dr_fit: "Pick a workflow by number, react with the checkmark for the top pick, paste missing images, or `cancel`.",
-  dr_copy: "React with the checkmark on the copy card to render, paste a replacement copy block, or `cancel`.",
+  dr_copy:
+    "Pick copy 1-5 (react or type the number), paste your own block to refit, reply `animate` for motion prompts, `still`/`render` to render as-is, or `cancel`.",
   dr_mode: "Animate or still? React 1️⃣ Animate / 2️⃣ Still, or reply `animate` / `still`.",
   dr_animate: "Motion prompts are above. Animate the images and drop the clips here (renders automatically once every shot has one), reply `render` to render with the clips in so far, or `still` for the images as-is.",
   dr_render: "Rendering now. Reply `render` to retry if it fails.",
@@ -1194,11 +1292,24 @@ export async function handleDropThreadReply(args: {
       break;
     }
     case "dr_copy": {
+      if (/^\s*animate\s*$/i.test(text)) {
+        await resolveDropMode(job, "animate");
+        return true;
+      }
+      if (/^\s*(still|render|go)\s*$/i.test(text)) {
+        await resolveDropMode(job, "still");
+        return true;
+      }
+      const n = /^\s*([1-9])\s*$/.exec(text)?.[1];
+      if (n) {
+        await pickCopyVariant(job, parseInt(n, 10));
+        return true;
+      }
       if (splitLines(text).length >= 2) {
         const wf = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
         if (wf) {
           await post(channel, job.slack_thread_ts, "Refitting your copy...");
-          waitUntil(postAdaptedCopyCard(job, wf, text));
+          waitUntil(postCopyVariantsCard(job, wf, text));
           return true;
         }
       }
@@ -1270,7 +1381,7 @@ async function handlePastedCopyAtPdCopy(job: ContentJob, text: string): Promise<
     return;
   }
   await post(job.slack_channel, job.slack_thread_ts, "Fitting your lines to the boxes...");
-  waitUntil(postAdaptedCopyCard(job, workflow, text));
+  waitUntil(postCopyVariantsCard(job, workflow, text));
 }
 
 async function pickFitWorkflow(job: ContentJob, n: number): Promise<void> {
@@ -1303,17 +1414,14 @@ async function pickFitWorkflow(job: ContentJob, n: number): Promise<void> {
     await enterDropModeGate(job, workflow, direct, media.map((m) => m.url));
     return;
   }
-  await post(channel, threadTs, `Adapting your copy to *${workflow.name}*...`);
-  waitUntil(postAdaptedCopyCard(job, workflow, lines.join("\n")));
+  await post(channel, threadTs, `Adapting your copy to *${workflow.name}* and writing angles...`);
+  waitUntil(postCopyVariantsCard(job, workflow, lines.join("\n")));
 }
 
 async function retryRender(job: ContentJob): Promise<void> {
   const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
-  const images =
-    job.format_id === PROMPT_FORMAT
-      ? (job.data.prompt_slots ?? []).map((s) => s.image_url!).filter(Boolean)
-      : (job.data.drop_media ?? []).map((m) => m.url);
+  const images = jobImages(job);
   if (!workflow || !copy.length || !images.length) {
     await post(job.slack_channel, job.slack_thread_ts, "Nothing to retry yet.");
     return;
@@ -1347,7 +1455,9 @@ export async function handleDropReaction(args: {
   const seeded = (job.data.seeded_reactions ?? []) as string[];
   if (seeded.includes(args.reaction)) {
     const count = await slack.getReactionCount(job.slack_channel, args.slackTs, args.reaction);
-    if (count < 2) return true; // only the bot's pre-seed so far — wait for the human's reaction
+    // null = reactions.get failed (likely missing reactions:read scope). The bot-userId guard
+    // above already filtered the bot's own seed event, so trust it instead of going dead.
+    if (count !== null && count < 2) return true; // only the bot's pre-seed so far
   }
 
   if (cancel) {
@@ -1362,11 +1472,20 @@ export async function handleDropReaction(args: {
       else if (keycap) await pickFitWorkflow(job, keycap);
       return true;
     case "dr_copy": {
+      if (keycap) {
+        waitUntil(pickCopyVariant(job, keycap));
+        return true;
+      }
       if (!approve) return true;
       const workflow = job.data.workflow_id ? await loadWorkflow(job.data.workflow_id) : null;
       const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
-      const images = (job.data.drop_media ?? []).map((m) => m.url);
-      if (workflow && copy.length) waitUntil(enterDropModeGate(job, workflow, copy, images));
+      if (workflow && copy.length) waitUntil(enterDropModeGate(job, workflow, copy, jobImages(job)));
+      else
+        await post(
+          job.slack_channel,
+          job.slack_thread_ts,
+          "Lost this drop's workflow or copy. Paste the copy block again, or `cancel` and re-drop."
+        );
       return true;
     }
     case "dr_mode":
@@ -1427,8 +1546,8 @@ export async function handleDropFileDrop(args: {
       const direct = zeroAdaptationCopy(wf, lines);
       if (direct) await enterDropModeGate(job, wf, direct, all.map((m) => m.url));
       else {
-        await post(job.slack_channel, job.slack_thread_ts, `All images in. Adapting your copy to *${wf.name}*...`);
-        waitUntil(postAdaptedCopyCard(job, wf, lines.join("\n")));
+        await post(job.slack_channel, job.slack_thread_ts, `All images in. Adapting your copy to *${wf.name}* and writing angles...`);
+        waitUntil(postCopyVariantsCard(job, wf, lines.join("\n")));
       }
     } else {
       await post(job.slack_channel, job.slack_thread_ts, `Got it. ${all.length} image(s) on this drop now.`);

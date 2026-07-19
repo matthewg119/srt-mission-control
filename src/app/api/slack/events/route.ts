@@ -75,6 +75,12 @@ import {
   handleHookStudioFileDrop,
 } from "@/lib/reel/hook-studio";
 import {
+  chatTrigger,
+  handleBrainheartChatStart,
+  handleBrainheartChatReply,
+  handleBrainheartChatFileNote,
+} from "@/lib/reel/brainheart-chat";
+import {
   startAgentSession,
   handleAgentMessage,
   handleAgentFileDrop,
@@ -374,9 +380,13 @@ export async function POST(request: NextRequest) {
           waitUntil(
             (async () => {
               if (isThreadReply) {
-                // Hook-studio threads claim their own files first; drop threads fall through.
+                // Hook-studio threads claim their own files first; drop threads fall through;
+                // chat threads get an explicit "no files here" note instead of silence.
                 const hooked = await handleHookStudioFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
-                if (!hooked) await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
+                if (!hooked) {
+                  const dropped = await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
+                  if (!dropped) await handleBrainheartChatFileNote({ threadTs: parentThreadTs! });
+                }
               } else {
                 await handleDropMessage({ channel, threadTs: messageTs, files: attachedFiles, text: userText, verticalId: dropVertical.id });
               }
@@ -385,6 +395,10 @@ export async function POST(request: NextRequest) {
         } else if (isThreadReply && userText.trim()) {
           waitUntil(
             (async () => {
+              // Chat threads claim their replies first (format self-routing keeps the
+              // strict lanes' threads untouched), then hook studio, then drop studio.
+              const chatted = await handleBrainheartChatReply({ channel, threadTs: parentThreadTs!, text: userText });
+              if (chatted) return;
               const hooked = await handleHookStudioReply({ channel, threadTs: parentThreadTs!, text: userText });
               if (!hooked) await handleDropThreadReply({ channel, threadTs: parentThreadTs!, text: userText });
             })().catch((e) => console.error("[slack/events] drop lane reply error:", (e as Error).message))
@@ -398,16 +412,32 @@ export async function POST(request: NextRequest) {
         } else if (/^\s*(workflows|library|map)\s*$/i.test(userText)) {
           await postWorkflowMap(channel, dropWorkflowLibraryId(dropVertical));
         } else if (userText.trim()) {
-          // Hook-first studio: a text-only top-level message IS the hook. The bot answers with
-          // 6 hook-image prompts + 3 complete-copy options and walks the video from there.
-          waitUntil(
-            handleHookStudioStart({
-              channel,
-              threadTs: event.ts as string,
-              text: userText,
-              verticalId: dropVertical.id,
-            }).catch((e) => console.error("[slack/events] hook studio start error:", (e as Error).message))
-          );
+          // BrainHeart chat: @mention or a leading `chat` opens a free-form creative
+          // thread instead of a hook session. Checked BEFORE Hook Studio so plain text
+          // keeps starting hooks unchanged.
+          const chatBotId = botUserId || (await slack.getBotUserId());
+          const trig = chatTrigger(userText, chatBotId);
+          if (trig.hit) {
+            waitUntil(
+              handleBrainheartChatStart({
+                channel,
+                threadTs: event.ts as string,
+                text: trig.cleaned,
+                verticalId: dropVertical.id,
+              }).catch((e) => console.error("[slack/events] brainheart chat start error:", (e as Error).message))
+            );
+          } else {
+            // Hook-first studio: a text-only top-level message IS the hook. The bot answers with
+            // 6 hook-image prompts + 5 complete-copy options and walks the video from there.
+            waitUntil(
+              handleHookStudioStart({
+                channel,
+                threadTs: event.ts as string,
+                text: userText,
+                verticalId: dropVertical.id,
+              }).catch((e) => console.error("[slack/events] hook studio start error:", (e as Error).message))
+            );
+          }
         }
         return NextResponse.json({ ok: true });
       }

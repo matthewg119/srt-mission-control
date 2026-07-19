@@ -122,6 +122,10 @@ export interface JobData {
   fit_menu?: string[]; // workflow ids in fit-card order (reply N picks)
   prompt_slots?: Array<{ scene: number; image_url?: string | null }>; // prompt-drop image intake
   copy_options?: string[]; // rendered copy-option summaries (pick N at pd_copy)
+  copy_variants?: Array<Array<{ key: string; label: string; text: string }>>; // dr_copy 5-option menu (1 = refit of the operator's lines)
+
+  // --- BrainHeart chat lane (brainheart-chat.ts, format_id "brainheart_chat") ---
+  chat_history?: Array<{ role: "user" | "assistant"; content: string }>; // capped rolling transcript
 
   // --- hook-first studio (hook-studio.ts, format_id "hook_studio") ---
   hook_lines?: string[]; // the operator's hook text, split lines (workflow phrase stripped)
@@ -199,7 +203,9 @@ export type JobStage =
   // #agent-wokrflow-creator (workflow-agent.ts): create workflows via 3 render variations:
   | "awc_avatar"
   | "awc_await_content"
-  | "awc_variations";
+  | "awc_variations"
+  // BrainHeart chat lane (brainheart-chat.ts): free-form creative thread, no render machine:
+  | "bh_chat";
 
 export interface ContentJob {
   id: string;

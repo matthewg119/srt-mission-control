@@ -720,7 +720,7 @@ export async function generateStructuredCopyVariants(args: {
       `Return JSON: { "variants": [{ "lines": [{ "key": string, "text": string }] }] } with exactly`,
       `${count} variants, each with one line per box. Keys: ${roles.map((r) => r.key).join(", ")}.`,
     ].join("\n"),
-    maxTokens: 2200,
+    maxTokens: 3400, // 5 variants x many boxes trips the truncation retry at 2200
     temperature: 0.85,
     schemaHint: '{ "variants": [{ "lines": [{ "key": string, "text": string }] }] }',
     validate: isCopyVariants,

@@ -17,6 +17,21 @@ function getToken(): string {
 // human's. Resolved once per process; falls back to SLACK_BOT_USER_ID if auth.test fails.
 let cachedBotUserId: string | null = null;
 
+// reactions.get failures are usually a missing bot scope — warn once per error string per
+// process instead of on every card tap.
+const warnedReactionErrors = new Set<string>();
+function warnReactionGetOnce(err: string): void {
+        if (warnedReactionErrors.has(err)) return;
+        warnedReactionErrors.add(err);
+        console.error(
+                `[Slack] reactions.get failed (${err}).` +
+                        (err === "missing_scope"
+                                ? " Add the reactions:read bot scope and reinstall the app;"
+                                : "") +
+                        " seeded-emoji cards fall back to userId-only filtering."
+        );
+}
+
 export interface SlackBlock {
         type: string;
         text?: { type: string; text: string; emoji?: boolean };
@@ -84,10 +99,16 @@ export const slack = {
 
         /** Total count of a specific emoji currently on a message (0 if none). The bot pre-seeds
          *  its cards, so a seeded emoji reaching count 2 means a human reacted on top of the seed.
-         *  Requires the reactions:read scope. */
-        async getReactionCount(channel: string, ts: string, name: string): Promise<number> {
+         *  Requires the reactions:read scope. Returns NULL when the API call fails (e.g.
+         *  missing_scope) — "could not check" must never read as "zero reactions", or every
+         *  seeded card dies silently. */
+        async getReactionCount(channel: string, ts: string, name: string): Promise<number | null> {
                   const res = await slackFetch("reactions.get", { channel, timestamp: ts });
-                  const msg = (res?.ok ? res.message : null) as { reactions?: Array<{ name?: string; count?: number }> } | null;
+                  if (!res?.ok) {
+                            warnReactionGetOnce(String(res?.error ?? "unknown"));
+                            return null;
+                  }
+                  const msg = res.message as { reactions?: Array<{ name?: string; count?: number }> } | null;
                   const hit = msg?.reactions?.find((r) => r.name === name);
                   return hit?.count ?? 0;
         },

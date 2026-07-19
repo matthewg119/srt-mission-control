@@ -287,3 +287,42 @@ export async function callClaudeText(opts: {
 
   return { text, usage: json.usage, latencyMs: Date.now() - start };
 }
+
+export interface ClaudeChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Multi-turn sibling of callClaudeText: same retry/fallback path, full message history. */
+export async function callClaudeChat(opts: {
+  model: ClaudeModel;
+  system: string;
+  messages: ClaudeChatMessage[];
+  maxTokens?: number;
+  temperature?: number;
+  fallbackModels?: ClaudeModel[];
+}): Promise<{ text: string; usage: { input_tokens: number; output_tokens: number }; latencyMs: number }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+
+  const start = Date.now();
+
+  const json = await fetchAnthropicWithRetry(
+    apiKey,
+    {
+      max_tokens: opts.maxTokens ?? 2048,
+      temperature: opts.temperature ?? 0.7,
+      system: opts.system,
+      messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+    },
+    resolveModels(opts.model, opts.fallbackModels)
+  );
+
+  const text = json.content
+    .filter((c) => c.type === "text")
+    .map((c) => c.text ?? "")
+    .join("")
+    .trim();
+
+  return { text, usage: json.usage, latencyMs: Date.now() - start };
+}
