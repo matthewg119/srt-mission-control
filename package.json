@@ -11,7 +11,10 @@
     "seed:medspa": "bun run scripts/seed-medspa-rotation.ts",
     "medspa:run": "bun run scripts/run-medspa.ts",
     "medspa:owners": "bun run scripts/enrich-medspa-owners.ts",
-    "medspa:pull": "bun run scripts/pull-medspa-now.ts"
+    "medspa:pull": "bun run scripts/pull-medspa-now.ts",
+    "seed:trt": "bun run scripts/seed-trt-rotation.ts",
+    "trt:run": "bun run scripts/run-trt.ts",
+    "trt:owners": "bun run scripts/enrich-trt-owners.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

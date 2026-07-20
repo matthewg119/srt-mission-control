@@ -62,12 +62,12 @@ function hasVowels(str: string): boolean {
 }
 
 /** Known invalid / unassigned US area codes (not exhaustive, but covers common bot patterns) */
-const INVALID_AREA_CODES = new Set([
+export const INVALID_AREA_CODES = new Set([
   "000", "100", "200", "211", "311", "411", "511", "544", "555",
   "611", "711", "811", "911",
 ]);
 
-function extractAreaCode(phone: string): string | null {
+export function extractAreaCode(phone: string): string | null {
   const digits = phone.replace(/\D/g, "");
   // US numbers: 10 digits or 11 (with leading 1)
   if (digits.length === 10) return digits.slice(0, 3);
