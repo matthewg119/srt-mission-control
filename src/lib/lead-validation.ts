@@ -14,13 +14,15 @@ const rateLimitMap = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_MAX = 5;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 
-// Clean up stale entries every 5 minutes
+// Clean up stale entries every 5 minutes. unref() so importing this module from
+// a bun script (e.g. the TRT scraper's phone verification) doesn't hold the
+// process open after main() returns.
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitMap) {
     if (now > entry.resetAt) rateLimitMap.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref?.();
 
 // ── CORS ──
 
