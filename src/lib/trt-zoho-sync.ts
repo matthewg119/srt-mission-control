@@ -106,26 +106,36 @@ export async function syncTrtRows(rows: TrtZohoRow[]): Promise<SyncResult> {
   const errors: string[] = [];
   const nowIso = new Date().toISOString();
 
-  await Promise.all(
-    withId.map(async (row, i) => {
-      const r = results[i];
-      if (r && r.status === "success" && r.id) {
-        ok++;
-        await supabaseAdmin
-          .from("trt_leads")
-          .update({ zoho_lead_id: r.id, zoho_synced_at: nowIso, zoho_sync_error: null })
-          .eq("id", row.id as string);
-      } else {
-        failed++;
-        const msg = r?.message || r?.code || "unknown Zoho error";
-        if (errors.length < 5) errors.push(`${row.business_name}: ${msg}`);
-        await supabaseAdmin
-          .from("trt_leads")
-          .update({ zoho_sync_error: msg })
-          .eq("id", row.id as string);
-      }
-    })
-  );
+  // Sequential + checked write-backs. A fully concurrent Promise.all here used
+  // to drop updates silently under load, leaving zoho_synced_at null on rows
+  // that ARE in Zoho — which made syncUnsyncedTrt re-push them as duplicates.
+  // (scripts/reconcile-trt-zoho.ts repairs any historical drift.)
+  const writeBack = async (id: string, patch: Record<string, unknown>) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { error: upErr } = await supabaseAdmin.from("trt_leads").update(patch).eq("id", id);
+      if (!upErr) return true;
+      if (attempt === 1) console.error(`trt zoho write-back failed for ${id}: ${upErr.message}`);
+    }
+    return false;
+  };
+
+  for (let i = 0; i < withId.length; i++) {
+    const row = withId[i];
+    const r = results[i];
+    if (r && r.status === "success" && r.id) {
+      ok++;
+      await writeBack(row.id as string, {
+        zoho_lead_id: r.id,
+        zoho_synced_at: nowIso,
+        zoho_sync_error: null,
+      });
+    } else {
+      failed++;
+      const msg = r?.message || r?.code || "unknown Zoho error";
+      if (errors.length < 5) errors.push(`${row.business_name}: ${msg}`);
+      await writeBack(row.id as string, { zoho_sync_error: msg });
+    }
+  }
 
   return { ok, failed, errors };
 }
