@@ -23,7 +23,7 @@ async function main() {
   console.log(`🔎 TRT owner backfill — up to ${LIMIT} rows missing owner_name…`);
   const { data, error } = await supabaseAdmin
     .from("trt_leads")
-    .select("id, business_name, owner_name, phone, website, full_address, city, state, postal_code, categories, rating, review_count, google_maps_url, multi_location_flag, lead_score")
+    .select("id, business_name, owner_name, email, phone, website, full_address, city, state, postal_code, categories, rating, review_count, google_maps_url, multi_location_flag, lead_score")
     .is("owner_name", null)
     .not("website", "is", null)
     .limit(LIMIT);

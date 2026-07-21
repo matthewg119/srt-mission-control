@@ -15,7 +15,7 @@ const CUE_PATTERNS = [
 ];
 
 /** Strip tags + collapse whitespace so cues and names sit on the same line. */
-function textFromHtml(html: string): string {
+export function textFromHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -24,11 +24,15 @@ function textFromHtml(html: string): string {
     .replace(/\s+/g, " ");
 }
 
-async function fetchText(url: string): Promise<string | null> {
+// Full Chrome UA — a bare "Mozilla/5.0" trips more WAF rules (403s) on small-business sites.
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+export async function fetchText(url: string): Promise<string | null> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-    const res = await fetch(url, { signal: ctrl.signal, redirect: "follow", headers: { "User-Agent": "Mozilla/5.0" } });
+    const res = await fetch(url, { signal: ctrl.signal, redirect: "follow", headers: { "User-Agent": USER_AGENT } });
     clearTimeout(t);
     if (!res.ok) return null;
     const ct = res.headers.get("content-type") || "";

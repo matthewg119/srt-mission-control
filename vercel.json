@@ -87,6 +87,10 @@
     {
       "path": "/api/cron/pull-trt",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/enrich-trt-emails",
+      "schedule": "0 9 * * *"
     }
   ]
 }

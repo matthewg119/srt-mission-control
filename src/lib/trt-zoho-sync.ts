@@ -16,6 +16,7 @@ export interface TrtZohoRow {
   id?: string;
   business_name: string;
   owner_name?: string | null;
+  email?: string | null;
   phone?: string | null;
   website?: string | null;
   full_address?: string | null;
@@ -78,6 +79,7 @@ export function mapTrtToZohoLead(row: TrtZohoRow): Record<string, unknown> {
     if (descParts.length) record.Description = descParts.join(" | ");
   }
 
+  if (row.email) record.Email = truncate(row.email, 100);
   if (row.phone) record.Phone = row.phone;
   if (row.website) record.Website = row.website;
   if (row.full_address) record.Street = row.full_address;
@@ -147,7 +149,7 @@ export async function syncUnsyncedTrt(limit = 2000): Promise<SyncResult> {
   }
   const { data, error } = await supabaseAdmin
     .from("trt_leads")
-    .select("id, business_name, owner_name, phone, website, full_address, city, state, postal_code, categories, rating, review_count, google_maps_url, multi_location_flag, lead_score")
+    .select("id, business_name, owner_name, email, phone, website, full_address, city, state, postal_code, categories, rating, review_count, google_maps_url, multi_location_flag, lead_score")
     .is("zoho_synced_at", null)
     .not("business_name", "is", null)
     .not("phone", "is", null)
