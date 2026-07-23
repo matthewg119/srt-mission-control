@@ -14,7 +14,10 @@ import { buildAliases } from "@/lib/audit-engine/mention-match";
 import { extractRecommendedBatch } from "@/lib/audit-engine/extract-recommended";
 import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/slack-format";
 import { BATCH_SIZE, TOTAL_PROMPTS } from "@/lib/audit-engine/types";
-import type { AuditReportRow, AuditEngine } from "@/lib/audit-engine/types";
+import type { AuditReportRow, AuditRunRow, AuditEngine } from "@/lib/audit-engine/types";
+import { buildReportView } from "@/lib/audit-engine/report-view";
+import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
+import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -147,15 +150,13 @@ async function failReport(row: AuditReportRow, message: string): Promise<void> {
 }
 
 async function finishReport(row: AuditReportRow): Promise<void> {
-  const { data: runs } = await supabaseAdmin
-    .from("audit_runs")
-    .select("prompt, mentioned, status")
-    .eq("report_id", row.id);
+  const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", row.id);
+  const runs = (runsData ?? []) as AuditRunRow[];
 
   // A prompt "appeared" if at least one engine returned status:"ok" with mentioned:true.
   // no_data runs never count as a mention either way — see run-prompts.ts.
   const appearedByPrompt = new Map<string, boolean>();
-  for (const r of (runs ?? []) as Array<{ prompt: string; mentioned: boolean | null; status: string }>) {
+  for (const r of runs) {
     const mentioned = r.status === "ok" && r.mentioned === true;
     if (mentioned || !appearedByPrompt.has(r.prompt)) {
       appearedByPrompt.set(r.prompt, mentioned || (appearedByPrompt.get(r.prompt) ?? false));
@@ -176,5 +177,29 @@ async function finishReport(row: AuditReportRow): Promise<void> {
   const finalRow = (updated as AuditReportRow | null) ?? { ...row, status: "done" as const, score };
   if (finalRow.slack_channel_id && finalRow.slack_thread_ts) {
     await slack.postThreadReply(finalRow.slack_channel_id, finalRow.slack_thread_ts, formatFinalMessage(finalRow)).catch(() => {});
+    await postScorecardAndEmailDraft(finalRow, runs);
+  }
+}
+
+// Best-effort: branded PDF scorecard + a first outreach-email draft, posted in
+// the same thread right after the score. Never blocks the report from being
+// marked done — a failure here just means Matthew generates these manually.
+async function postScorecardAndEmailDraft(report: AuditReportRow, runs: AuditRunRow[]): Promise<void> {
+  try {
+    const aliases = buildAliases(report.business_type ?? report.website, report.website);
+    const view = buildReportView(report, runs, aliases);
+
+    const pdfBuffer = generateScorecardPDF(report, view);
+    const fileName = `AI Visibility Scorecard - ${report.business_type ?? report.website}.pdf`;
+    await slack.uploadFilePDF(report.slack_channel_id!, fileName, pdfBuffer, report.slack_thread_ts!);
+
+    const emailDraft = await draftInitialEmail(report, view);
+    await slack.postThreadReply(
+      report.slack_channel_id!,
+      report.slack_thread_ts!,
+      `✉️ Draft outreach email — copy/paste and send:\n\n${emailDraft}\n\n_Reply in this thread with "email 2" through "email 5" for the next follow-up, or paste what the prospect said back and I'll draft the reply._`
+    );
+  } catch (e) {
+    console.error("[audit/process] scorecard/email draft failed:", (e as Error).message);
   }
 }

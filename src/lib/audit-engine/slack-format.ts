@@ -10,7 +10,12 @@ function reportUrl(slug: string): string {
 }
 
 export function formatPromptDrop(report: AuditReportRow): { text: string } {
-  const header = `🎯 ${report.business_type ?? "Unknown business"} · ${report.city ?? "location unknown"}`;
+  // report.city is only ever null here for a confirmed non-local business (the
+  // low-confidence-and-local case returns before a report row is even created)
+  // — so omit the segment entirely rather than implying detection failed.
+  const header = report.city
+    ? `🎯 ${report.business_type ?? "Unknown business"} · ${report.city}`
+    : `🎯 ${report.business_type ?? "Unknown business"}`;
   const promptLines = report.prompts.map((p) => p.prompt).join("\n");
   const text = [
     header,
@@ -33,8 +38,9 @@ export function formatAwaitingCityMessage(website: string, bestGuess: string | n
 export function formatFinalMessage(report: AuditReportRow): string {
   const total = report.prompts.length || 20;
   const score = report.score ?? 0;
+  const location = report.city ? ` · ${report.city}` : "";
   return [
-    `✅ Report done for *${report.business_type ?? report.website}* · ${report.city ?? ""}`,
+    `✅ Report done for *${report.business_type ?? report.website}*${location}`,
     `Score: *${score}/100* — appeared in ${Math.round((score / 100) * total)} of ${total} buyer questions`,
     reportUrl(report.slug),
   ].join("\n");

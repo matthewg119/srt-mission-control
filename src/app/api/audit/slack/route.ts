@@ -64,7 +64,9 @@ async function runAudit(params: { website: string; city?: string; competitors?: 
     return;
   }
 
-  if (classification.city_confidence === "low") {
+  // A city is only ever required for local businesses — a national/online/B2B
+  // business (is_local:false) proceeds with no city, no fallback question.
+  if (classification.is_local && classification.city_confidence === "low") {
     await respondToSlack(responseUrl, formatAwaitingCityMessage(website, classification.city_detected));
     return;
   }

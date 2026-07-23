@@ -99,6 +99,7 @@ import { resolveDropVertical, dropWorkflowLibraryId } from "@/config/verticals";
 import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
+import { handleAuditThreadReply } from "@/lib/audit-engine/thread-assistant";
 
 interface SlackEventFile {
   id: string;
@@ -366,6 +367,22 @@ export async function POST(request: NextRequest) {
       const isContentFullChannel = Boolean(channel) && channel === VEKTOR_CHANNELS.contentFull;
 
       const parentThreadTs = (event.thread_ts as string | undefined) || null;
+
+      // Audit Engine v2: a reply inside an audit-report thread ("email 2", or the
+      // prospect's actual reply pasted in) → draft the next email in the belief
+      // sequence. Gated by channel first (cheap) before the DB lookup inside the
+      // handler, so this never adds load to any other channel's events.
+      const auditChannelId = process.env.AUDIT_CHANNEL_ID || "";
+      if (
+        auditChannelId &&
+        channel === auditChannelId &&
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        userText.trim().length > 0
+      ) {
+        const handled = await handleAuditThreadReply({ channel, threadTs: parentThreadTs, text: userText });
+        if (handled) return NextResponse.json({ ok: true });
+      }
 
       // ---- Dedicated lanes: these two channels ALWAYS return here, never falling
       // through to the legacy content / AI-manager handlers. ----

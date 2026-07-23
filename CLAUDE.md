@@ -121,8 +121,17 @@ zero vertical-specific hardcoding anywhere in this feature.
 - `src/lib/audit-engine/site-research.ts` — fetches homepage + up to 2 inner pages, pulls
   schema.org LocalBusiness/Organization JSON-LD (best city signal).
 - `src/lib/audit-engine/classify.ts` — one Claude call (generic system prompt, no per-vertical
-  branches) returns business_type, city (+ confidence), buyer_persona, 20 buyer-language
-  prompts across 4 blocks, and hypothesized competitors.
+  branches) returns business_type, `is_local` (false for online/national/B2B businesses —
+  no city/geo-modifiers forced onto them), city (+ confidence, only when is_local), buyer_persona,
+  20 buyer-language prompts across 4 blocks, and hypothesized competitors.
+- `src/lib/audit-engine/pdf-scorecard.ts` — branded one-page PDF scorecard (jsPDF, same header/
+  palette as `pdf-generator.ts`), `src/lib/audit-engine/email-assistant.ts` — a 5-email
+  belief-installation sequence grounded in `Desktop/AEO aduit/SRT_Audit_SOP_Universal.md` +
+  `SRT_Sales_Letter.md` (the-gap → differentiation → risk-reversal → ROI math → close), and
+  `src/lib/audit-engine/thread-assistant.ts` — a reply in the report's Slack thread ("email 2",
+  or pasting what the prospect said) drafts the next email. Wired into `src/app/api/slack/events/route.ts`
+  gated by `channel === AUDIT_CHANNEL_ID` first (cheap check before any DB lookup). Every draft
+  is posted for Matthew to review — nothing is ever sent automatically.
 - `src/app/api/audit/slack/route.ts` — the slash-command endpoint (register `/audit` in the
   Slack app config pointing here — that step isn't code). Low-confidence city is the ONLY
   path that asks Matthew a follow-up question; everything else resolves automatically.
