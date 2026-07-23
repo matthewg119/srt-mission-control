@@ -114,6 +114,31 @@ a token with `ads_management` → `META_ADS_TOKEN`; (2) accept Custom Audience T
 `/api/admin/create-exclusion-audience` once → paste id into `META_AUDIENCE_ID`, redeploy;
 (4) in Ads Manager set the audience as an Exclude on each acquisition ad set.
 
+## SRT Audit Engine v2 (2026-07-22)
+`/audit https://website.com` in Slack (optionally `| City, ST | competitor1, competitor2`,
+both always optional) kicks off an AI-search-visibility audit for any business vertical —
+zero vertical-specific hardcoding anywhere in this feature.
+- `src/lib/audit-engine/site-research.ts` — fetches homepage + up to 2 inner pages, pulls
+  schema.org LocalBusiness/Organization JSON-LD (best city signal).
+- `src/lib/audit-engine/classify.ts` — one Claude call (generic system prompt, no per-vertical
+  branches) returns business_type, city (+ confidence), buyer_persona, 20 buyer-language
+  prompts across 4 blocks, and hypothesized competitors.
+- `src/app/api/audit/slack/route.ts` — the slash-command endpoint (register `/audit` in the
+  Slack app config pointing here — that step isn't code). Low-confidence city is the ONLY
+  path that asks Matthew a follow-up question; everything else resolves automatically.
+- `src/app/api/audit/process/route.ts` — internal batch worker (`AUDIT_INTERNAL_SECRET`
+  header), 4 prompts × 2 engines (OpenAI Responses API `web_search` + Perplexity `sonar`)
+  per batch, self-chains via `waitUntil` + fetch until all 20 prompts are done.
+- `src/lib/audit-engine/run-prompts.ts` — the no-fabrication rule lives here: a failed call
+  can only resolve to `status:"no_data"`, never a guessed mention.
+- `src/app/r/[slug]/page.tsx` (+ `/live` screenshot mode) — public branded report, `noindex`,
+  no auth (slug obscurity only). `src/app/r/[slug]/live/page.tsx` gives one-tap links to run
+  each prompt live in ChatGPT/Perplexity/Google AI for manual screenshots.
+- Tables: `audit_reports`, `audit_runs` — see `docs/2026-07-22-audit-engine-v2.sql`.
+- `#ai-visibility-audits` Slack channel is created once via `slack.createChannel()`
+  (`src/lib/audit-engine/audit-channel.ts`) — paste the logged id into `AUDIT_CHANNEL_ID`
+  after the first run, same convention as `SLACK_CEO_CHANNEL`/`SLACK_HOT_LEADS_CHANNEL`.
+
 ## Channels Connected
 - **Web dashboard** — mission.srtagency.com/dashboard/chat
 - **Telegram bot** — same AI, same tools, via /api/telegram/webhook
