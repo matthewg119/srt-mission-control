@@ -15,6 +15,18 @@ import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import type { SuggestedFollowup } from "@/lib/sms-ai-engine";
 
+// Master kill switch for the AI-drafted suggestion card (Send/Regenerate/Remix/
+// Hold) that posts to a lead's #sms-* Slack channel after every inbound
+// iMessage, plus the proactive nudges (stale-replies, intro-suggestion,
+// imessage-followups) that reuse postImessageSuggestion below. OFF by default —
+// set IMESSAGE_SUGGESTIONS_ENABLED=true to bring it back. Inbound messages still
+// mirror into Slack and hot-lead marking still runs; only the AI suggestion
+// card (and its auto-send timer) is suppressed while this is off. Matthew's own
+// replies (postManualSendConfirm) are unaffected — those aren't AI suggestions.
+export function suggestionsEnabled(): boolean {
+  return process.env.IMESSAGE_SUGGESTIONS_ENABLED === "true";
+}
+
 // Whether the 2-minute auto-send is enabled (default true).
 export function autoSendEnabled(): boolean {
   return process.env.IMESSAGE_AUTOSEND_ENABLED !== "false";
@@ -113,6 +125,8 @@ export async function postImessageSuggestion(args: {
   suggestedFollowup?: SuggestedFollowup | null;
   armAutoSend?: boolean;
 }): Promise<void> {
+  if (!suggestionsEnabled()) return;
+
   const { channelId, conversationId, draft, suggestedFollowup } = args;
   const followup = suggestedFollowup ?? null;
   const armAutoSend = args.armAutoSend ?? true;
