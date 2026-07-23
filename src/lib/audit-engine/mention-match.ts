@@ -51,3 +51,13 @@ export function isMentioned(text: string, aliases: string[]): boolean {
   const lower = text.toLowerCase();
   return aliases.some((alias) => lower.includes(alias.toLowerCase()));
 }
+
+/** Is this short extracted name (e.g. "Acme Clinic") the client itself, not a competitor? */
+export function isClientName(candidate: string, aliases: string[]): boolean {
+  const c = candidate.toLowerCase().trim();
+  if (!c) return false;
+  return aliases.some((alias) => {
+    const a = alias.toLowerCase();
+    return c.includes(a) || a.includes(c);
+  });
+}

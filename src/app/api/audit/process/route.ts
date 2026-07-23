@@ -11,6 +11,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { runOpenAI, runPerplexity, withMention } from "@/lib/audit-engine/run-prompts";
 import { buildAliases } from "@/lib/audit-engine/mention-match";
+import { extractRecommendedBatch } from "@/lib/audit-engine/extract-recommended";
 import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/slack-format";
 import { BATCH_SIZE, TOTAL_PROMPTS } from "@/lib/audit-engine/types";
 import type { AuditReportRow, AuditEngine } from "@/lib/audit-engine/types";
@@ -61,33 +62,45 @@ export async function POST(req: NextRequest) {
   const aliases = buildAliases(row.business_type ?? row.website, row.website);
 
   try {
-    await Promise.all(
-      promptsInBatch.map(async (p) => {
+    const perPrompt = await Promise.all(
+      promptsInBatch.map(async (p, idx) => {
         const [openaiResult, perplexityResult] = await Promise.all([
           runOpenAI(p.prompt, row.city).then((r) => withMention(r, aliases)),
           runPerplexity(p.prompt, row.city).then((r) => withMention(r, aliases)),
         ]);
+        return { prompt: p, idx, openaiResult, perplexityResult };
+      })
+    );
 
+    // One cheap extraction call for the whole batch (not per response) — pulls
+    // the 0-5 business names each "ok" response actually named, for display.
+    const extractionItems = perPrompt.flatMap(({ idx, openaiResult, perplexityResult }) => [
+      ...(openaiResult.status === "ok" ? [{ id: `${idx}:openai`, text: openaiResult.raw }] : []),
+      ...(perplexityResult.status === "ok" ? [{ id: `${idx}:perplexity`, text: perplexityResult.raw }] : []),
+    ]);
+    const recommendedMap = await extractRecommendedBatch(extractionItems);
+
+    await Promise.all(
+      perPrompt.flatMap(({ prompt: p, idx, openaiResult, perplexityResult }) => {
         const engineResults: Array<{ engine: AuditEngine; result: typeof openaiResult }> = [
           { engine: "openai", result: openaiResult },
           { engine: "perplexity", result: perplexityResult },
         ];
 
-        await Promise.all(
-          engineResults.map(({ engine, result }) =>
-            supabaseAdmin.from("audit_runs").insert({
-              report_id: row.id,
-              block: p.block,
-              prompt: p.prompt,
-              engine,
-              mentioned: result.status === "ok" ? result.mentioned : null,
-              status: result.status,
-              raw_response: result.raw,
-              citations: result.citations,
-              latency_ms: result.latencyMs,
-              error: result.status === "no_data" ? result.error : null,
-            })
-          )
+        return engineResults.map(({ engine, result }) =>
+          supabaseAdmin.from("audit_runs").insert({
+            report_id: row.id,
+            block: p.block,
+            prompt: p.prompt,
+            engine,
+            mentioned: result.status === "ok" ? result.mentioned : null,
+            status: result.status,
+            raw_response: result.raw,
+            citations: result.citations,
+            recommended: recommendedMap[`${idx}:${engine}`] ?? [],
+            latency_ms: result.latencyMs,
+            error: result.status === "no_data" ? result.error : null,
+          })
         );
       })
     );

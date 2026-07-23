@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { supabaseAdmin } from "@/lib/db";
 import { buildReportView } from "@/lib/audit-engine/report-view";
+import { buildAliases } from "@/lib/audit-engine/mention-match";
 import { ReportHeader } from "@/components/audit-report/ReportHeader";
 import { ScoreGauge } from "@/components/audit-report/ScoreGauge";
 import { BlockBreakdown } from "@/components/audit-report/BlockBreakdown";
@@ -31,7 +32,8 @@ export default async function ReportPage({ params }: { params: { slug: string } 
 
   const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", row.id);
   const runs = (runsData ?? []) as AuditRunRow[];
-  const view = buildReportView(row, runs);
+  const clientAliases = buildAliases(row.business_type ?? row.website, row.website);
+  const view = buildReportView(row, runs, clientAliases);
 
   const isPending = row.status !== "done" && row.status !== "failed";
 
@@ -66,7 +68,11 @@ export default async function ReportPage({ params }: { params: { slug: string } 
           <ScoreGauge score={row.score ?? 0} mentioned={view.totalMentioned} total={view.totalPrompts} />
           <BlockBreakdown blockStats={view.blockStats} />
           <PromptTable prompts={view.prompts} />
-          <CompetitorSection citedDomains={view.citedDomains} likelyCompetitors={row.competitors} />
+          <CompetitorSection
+            mostRecommended={view.mostRecommended}
+            citedDomains={view.citedDomains}
+            likelyCompetitors={row.competitors}
+          />
         </>
       )}
 

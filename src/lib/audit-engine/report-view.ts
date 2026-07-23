@@ -4,6 +4,7 @@
 // appeared=true when a real engine run recorded mentioned:true.
 
 import type { AuditReportRow, AuditRunRow } from "./types";
+import { isClientName } from "./mention-match";
 
 export interface EngineCellView {
   status: "ok" | "no_data";
@@ -11,11 +12,17 @@ export interface EngineCellView {
   snippet: string | null;
 }
 
+export interface RecommendedNameView {
+  name: string;
+  isClient: boolean;
+}
+
 export interface PromptRowView {
   block: string;
   prompt: string;
   appeared: boolean;
   engines: { openai: EngineCellView; perplexity: EngineCellView };
+  recommended: RecommendedNameView[]; // deduped across both engines, capped for display
 }
 
 export interface BlockStat {
@@ -29,15 +36,23 @@ export interface CitedDomain {
   count: number;
 }
 
+export interface MostRecommended {
+  name: string;
+  count: number;
+}
+
 export interface ReportView {
   prompts: PromptRowView[];
   blockStats: BlockStat[];
   citedDomains: CitedDomain[];
+  mostRecommended: MostRecommended[];
   totalMentioned: number;
   totalPrompts: number;
 }
 
 const BLOCK_ORDER = ["MARCA", "SERVICIO", "INFO", "COMPARATIVO"];
+const MAX_RECOMMENDED_PER_PROMPT = 5;
+const MAX_MOST_RECOMMENDED = 8;
 
 function domainOf(url: string): string | null {
   try {
@@ -58,7 +73,17 @@ function engineCell(run: AuditRunRow | undefined): EngineCellView {
   };
 }
 
-export function buildReportView(report: AuditReportRow, runs: AuditRunRow[]): ReportView {
+/** Dedupe names case-insensitively, keeping the first-seen casing. */
+function dedupeNames(names: string[]): string[] {
+  const seen = new Map<string, string>();
+  for (const n of names) {
+    const key = n.trim().toLowerCase();
+    if (key && !seen.has(key)) seen.set(key, n.trim());
+  }
+  return [...seen.values()];
+}
+
+export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], clientAliases: string[]): ReportView {
   const runsByPrompt = new Map<string, AuditRunRow[]>();
   for (const r of runs) {
     const list = runsByPrompt.get(r.prompt) ?? [];
@@ -68,13 +93,22 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[]): Re
 
   const prompts: PromptRowView[] = report.prompts.map((p) => {
     const promptRuns = runsByPrompt.get(p.prompt) ?? [];
-    const openai = engineCell(promptRuns.find((r) => r.engine === "openai"));
-    const perplexity = engineCell(promptRuns.find((r) => r.engine === "perplexity"));
+    const openaiRun = promptRuns.find((r) => r.engine === "openai");
+    const perplexityRun = promptRuns.find((r) => r.engine === "perplexity");
+    const openai = engineCell(openaiRun);
+    const perplexity = engineCell(perplexityRun);
+
+    const recommendedNames = dedupeNames([...(openaiRun?.recommended ?? []), ...(perplexityRun?.recommended ?? [])]).slice(
+      0,
+      MAX_RECOMMENDED_PER_PROMPT
+    );
+
     return {
       block: p.block,
       prompt: p.prompt,
       appeared: Boolean(openai.mentioned || perplexity.mentioned),
       engines: { openai, perplexity },
+      recommended: recommendedNames.map((name) => ({ name, isClient: isClientName(name, clientAliases) })),
     };
   });
 
@@ -93,12 +127,31 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[]): Re
   const citedDomains = [...domainCounts.entries()]
     .map(([domain, count]) => ({ domain, count }))
     .sort((a, b) => b.count - a.count)
-    .slice(0, 8);
+    .slice(0, MAX_MOST_RECOMMENDED);
+
+  // "Who owns the answers": frequency of recommended names across every run,
+  // excluding the client's own business (that's not a competitor).
+  const nameCounts = new Map<string, { display: string; count: number }>();
+  for (const r of runs) {
+    for (const name of r.recommended ?? []) {
+      const trimmed = name.trim();
+      if (!trimmed || isClientName(trimmed, clientAliases)) continue;
+      const key = trimmed.toLowerCase();
+      const existing = nameCounts.get(key);
+      if (existing) existing.count += 1;
+      else nameCounts.set(key, { display: trimmed, count: 1 });
+    }
+  }
+  const mostRecommended = [...nameCounts.values()]
+    .map(({ display, count }) => ({ name: display, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, MAX_MOST_RECOMMENDED);
 
   return {
     prompts,
     blockStats,
     citedDomains,
+    mostRecommended,
     totalMentioned: prompts.filter((p) => p.appeared).length,
     totalPrompts: prompts.length,
   };

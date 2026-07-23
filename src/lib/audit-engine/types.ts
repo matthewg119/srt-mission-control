@@ -39,6 +39,7 @@ export interface AuditRunRow {
   status: AuditRunStatus;
   raw_response: string | null;
   citations: string[];
+  recommended: string[];
   attempt: number;
   latency_ms: number | null;
   error: string | null;

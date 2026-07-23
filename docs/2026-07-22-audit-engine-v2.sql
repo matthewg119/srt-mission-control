@@ -40,6 +40,7 @@ create table if not exists audit_runs (
   status        text not null default 'pending',    -- pending | ok | no_data
   raw_response  text,                                -- FULL, untruncated response body (never truncate at capture)
   citations     jsonb not null default '[]'::jsonb,
+  recommended   jsonb not null default '[]'::jsonb,  -- 0-5 business/provider names extracted from raw_response (see extract-recommended.ts)
   attempt       int not null default 1,              -- 1 or 2 (one retry per prompt/engine)
   latency_ms    int,
   error         text,

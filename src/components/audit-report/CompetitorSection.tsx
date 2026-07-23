@@ -1,19 +1,34 @@
-import type { CitedDomain } from "@/lib/audit-engine/report-view";
+import type { CitedDomain, MostRecommended } from "@/lib/audit-engine/report-view";
 import type { LikelyCompetitor } from "@/lib/audit-engine/classify";
 
 export function CompetitorSection({
+  mostRecommended,
   citedDomains,
   likelyCompetitors,
 }: {
+  mostRecommended: MostRecommended[];
   citedDomains: CitedDomain[];
   likelyCompetitors: LikelyCompetitor[];
 }) {
-  const hasData = citedDomains.length > 0 || likelyCompetitors.length > 0;
+  const hasData = mostRecommended.length > 0 || citedDomains.length > 0 || likelyCompetitors.length > 0;
   if (!hasData) return null; // hide rather than show an empty/misleading section
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-4">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-text-secondary">Who owns the answers</h2>
+
+      {mostRecommended.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-xs text-text-secondary">Most-recommended businesses across all 20 prompts:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {mostRecommended.map((r) => (
+              <span key={r.name} className="rounded-full border border-surface-border bg-surface px-2.5 py-1 text-xs text-text-primary">
+                {r.name} <span className="text-text-secondary">×{r.count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {citedDomains.length > 0 && (
         <div>
