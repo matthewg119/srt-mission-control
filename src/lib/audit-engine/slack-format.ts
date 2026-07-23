@@ -3,10 +3,15 @@
 // it line by line for the live manual demo, so any decoration breaks the parse.
 
 import type { AuditReportRow } from "./types";
+import type { ReportView } from "./report-view";
 
 function reportUrl(slug: string): string {
   const base = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
   return `${base}/r/${slug}`;
+}
+
+function displayName(report: AuditReportRow): string {
+  return report.client_name || report.business_type || report.website;
 }
 
 export function formatPromptDrop(report: AuditReportRow): { text: string } {
@@ -14,8 +19,8 @@ export function formatPromptDrop(report: AuditReportRow): { text: string } {
   // low-confidence-and-local case returns before a report row is even created)
   // — so omit the segment entirely rather than implying detection failed.
   const header = report.city
-    ? `🎯 ${report.business_type ?? "Unknown business"} · ${report.city}`
-    : `🎯 ${report.business_type ?? "Unknown business"}`;
+    ? `🎯 ${displayName(report)} · ${report.city}`
+    : `🎯 ${displayName(report)}`;
   const promptLines = report.prompts.map((p) => p.prompt).join("\n");
   const text = [
     header,
@@ -35,13 +40,12 @@ export function formatAwaitingCityMessage(website: string, bestGuess: string | n
   ].join("\n");
 }
 
-export function formatFinalMessage(report: AuditReportRow): string {
-  const total = report.prompts.length || 20;
+export function formatFinalMessage(report: AuditReportRow, view: ReportView): string {
   const score = report.score ?? 0;
   const location = report.city ? ` · ${report.city}` : "";
   return [
-    `✅ Report done for *${report.business_type ?? report.website}*${location}`,
-    `Score: *${score}/100* — appeared in ${Math.round((score / 100) * total)} of ${total} buyer questions`,
+    `✅ Report done for *${displayName(report)}*${location}`,
+    `Score: *${score}/100* — appeared in ${view.totalMentioned} of ${view.totalPrompts} buyer questions`,
     reportUrl(report.slug),
   ].join("\n");
 }

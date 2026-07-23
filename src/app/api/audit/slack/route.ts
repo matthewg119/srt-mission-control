@@ -79,6 +79,7 @@ async function runAudit(params: { website: string; city?: string; competitors?: 
     .insert({
       slug,
       website,
+      client_name: classification.business_name,
       city: classification.city_detected,
       business_type: classification.business_type,
       vertical_slug: classification.vertical_slug,

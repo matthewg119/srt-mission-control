@@ -43,7 +43,14 @@ function PromptRow({ row }: { row: PromptRowView }) {
     <details className="group rounded-lg border border-surface-border bg-surface open:bg-surface-hover">
       <summary className="flex cursor-pointer list-none flex-col gap-2 p-3">
         <div className="flex items-center justify-between gap-3">
-          <span className="min-w-0 flex-1 truncate text-sm text-text-primary">{row.prompt}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+            {row.prompt}
+            {row.isBranded && (
+              <span className="ml-2 rounded-full bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-secondary">
+                Branded search
+              </span>
+            )}
+          </span>
           <span className="flex shrink-0 gap-1.5">
             <EngineChip label="ChatGPT" cell={row.engines.openai} />
             <EngineChip label="Perplexity" cell={row.engines.perplexity} />
@@ -62,13 +69,13 @@ function PromptRow({ row }: { row: PromptRowView }) {
           {row.engines.openai.snippet && (
             <p>
               <span className="font-semibold text-text-primary">ChatGPT: </span>
-              {row.engines.openai.snippet}…
+              {row.engines.openai.snippet}
             </p>
           )}
           {row.engines.perplexity.snippet && (
             <p>
               <span className="font-semibold text-text-primary">Perplexity: </span>
-              {row.engines.perplexity.snippet}…
+              {row.engines.perplexity.snippet}
             </p>
           )}
         </div>

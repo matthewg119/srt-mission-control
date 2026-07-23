@@ -61,3 +61,31 @@ export function isClientName(candidate: string, aliases: string[]): boolean {
     return c.includes(a) || a.includes(c);
   });
 }
+
+/**
+ * Locate the first alias occurrence in `text` and return a window of text
+ * around it, so a "mentioned" snippet always actually contains the match —
+ * rather than blindly showing the first N characters of a long response,
+ * which can miss the match entirely if it occurs later in the text.
+ */
+export function findMatchExcerpt(text: string, aliases: string[], contextChars = 160): string | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+
+  let bestIndex = -1;
+  let bestLength = 0;
+  for (const alias of aliases) {
+    const idx = lower.indexOf(alias.toLowerCase());
+    if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
+      bestIndex = idx;
+      bestLength = alias.length;
+    }
+  }
+  if (bestIndex === -1) return null;
+
+  const start = Math.max(0, bestIndex - contextChars);
+  const end = Math.min(text.length, bestIndex + bestLength + contextChars);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  return `${prefix}${text.slice(start, end).trim()}${suffix}`;
+}

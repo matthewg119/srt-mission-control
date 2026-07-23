@@ -32,7 +32,7 @@ export default async function ReportPage({ params }: { params: { slug: string } 
 
   const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", row.id);
   const runs = (runsData ?? []) as AuditRunRow[];
-  const clientAliases = buildAliases(row.business_type ?? row.website, row.website);
+  const clientAliases = buildAliases(row.client_name ?? row.business_type ?? row.website, row.website);
   const view = buildReportView(row, runs, clientAliases);
 
   const isPending = row.status !== "done" && row.status !== "failed";

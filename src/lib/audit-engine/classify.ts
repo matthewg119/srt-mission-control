@@ -18,6 +18,7 @@ export interface LikelyCompetitor {
 }
 
 export interface AuditClassification {
+  business_name: string; // the actual proper-noun brand/business name (e.g. "Arpovo Health"), NOT the category
   business_type: string;
   vertical_slug: string;
   is_local: boolean; // false for online/national/B2B businesses with no single relevant city
@@ -40,6 +41,7 @@ function model(): ClaudeModel {
 }
 
 const SCHEMA_HINT = `{
+  "business_name": string,          // the actual proper-noun brand name, e.g. "Arpovo Health" — NOT a category description
   "business_type": string,          // e.g. "TRT clinic", "online medical supply store"
   "vertical_slug": string,          // short kebab-case, e.g. "trt", "medical-supply"
   "is_local": boolean,              // false for online/national/B2B/shipped-anywhere businesses with no single relevant city
@@ -53,6 +55,7 @@ const SCHEMA_HINT = `{
 function isAuditClassification(v: unknown): v is AuditClassification {
   if (typeof v !== "object" || v === null) return false;
   const c = v as Partial<AuditClassification>;
+  if (typeof c.business_name !== "string" || !c.business_name.trim()) return false;
   if (typeof c.business_type !== "string" || !c.business_type.trim()) return false;
   if (typeof c.vertical_slug !== "string" || !c.vertical_slug.trim()) return false;
   if (typeof c.is_local !== "boolean") return false;
@@ -81,7 +84,7 @@ function buildSystemPrompt(): string {
     "You are given raw text and structured hints scraped from a business's own website.",
     "Your job, in one response:",
     "",
-    "1. Identify the business_type in plain buyer language (e.g. 'TRT clinic', 'online medical supply store', 'HVAC contractor') — never a marketing label.",
+    "1. Identify business_name (the actual proper-noun brand name this business trades under, e.g. 'Arpovo Health', 'Joe's Pizza' — read it off the site's title/logo/footer, never invent one) and business_type in plain buyer language (e.g. 'TRT clinic', 'online medical supply store', 'HVAC contractor') — business_type is a category description, never a marketing label.",
     "2. Determine is_local FIRST: is this a business a buyer walks into or that only serves one metro area (clinic, contractor, restaurant), or is it national/online/B2B/ships-anywhere ",
     "   (e-commerce store, SaaS, a distributor, a manufacturer)? Many real businesses are NOT local — set is_local to false for those, and do not try to force a city onto them.",
     "3. Only if is_local is true: determine city_detected — the city/region the business actually serves customers from — with city_confidence 'high' only if you have a clear signal ",

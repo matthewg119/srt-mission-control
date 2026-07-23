@@ -30,21 +30,22 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
 
   const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", report.id);
   const runs = (runsData ?? []) as AuditRunRow[];
-  const aliases = buildAliases(report.business_type ?? report.website, report.website);
+  const aliases = buildAliases(report.client_name ?? report.business_type ?? report.website, report.website);
   const view = buildReportView(report, runs, aliases);
 
   const emailMatch = args.text.trim().match(/^email\s+(\d+)$/i);
 
   try {
-    const draft = emailMatch
+    const { subject, body } = emailMatch
       ? await draftSequenceEmail(report, view, parseInt(emailMatch[1], 10))
       : await draftObjectionReply(report, view, args.text.trim());
 
     const label = emailMatch
       ? `✉️ Email ${emailMatch[1]}${BELIEF_SEQUENCE.find((b) => b.n === parseInt(emailMatch[1], 10)) ? ` — ${BELIEF_SEQUENCE.find((b) => b.n === parseInt(emailMatch[1], 10))!.name}` : ""}:`
       : `✉️ Draft reply:`;
+    const subjectLine = subject ? `Subject: ${subject}\n\n` : "";
 
-    await slack.postThreadReply(args.channel, args.threadTs, `${label}\n\n${draft}`);
+    await slack.postThreadReply(args.channel, args.threadTs, `${label}\n\n${subjectLine}${body}`);
   } catch (e) {
     await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Couldn't draft that: ${(e as Error).message}`).catch(() => {});
   }

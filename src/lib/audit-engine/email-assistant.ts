@@ -51,8 +51,9 @@ function reportContext(report: AuditReportRow, view: ReportView): string {
   const missedExample = view.prompts.find((p) => !p.appeared);
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
 
+  const name = report.client_name || report.business_type || report.website;
   return [
-    `Business: ${report.business_type ?? report.website} (${report.website})${report.city ? ", " + report.city : ""}`,
+    `Business: ${name} — ${report.business_type ?? "unknown category"} (${report.website})${report.city ? ", " + report.city : ""}`,
     `Buyer persona: ${report.buyer_persona ?? "unknown"}`,
     `AI Visibility Score: ${report.score ?? 0}/100 — appeared in ${view.totalMentioned} of ${view.totalPrompts} real buyer questions`,
     `Names the AI recommends instead: ${topCompetitors}`,
@@ -70,7 +71,22 @@ const COMPLIANCE_RULES = [
   "Month-to-month framing — never imply a long-term contract or lock-in.",
 ].join("\n");
 
-export async function draftInitialEmail(report: AuditReportRow, view: ReportView): Promise<string> {
+const SUBJECT_LINE_INSTRUCTION =
+  "Output format: first line is exactly `Subject: <the subject line>`, then one blank line, then the email body. Nothing before the Subject line, no markdown.";
+
+export interface EmailDraft {
+  subject: string;
+  body: string;
+}
+
+/** Splits "Subject: X\n\nbody..." into {subject, body}. Falls back gracefully if the model didn't follow the format. */
+function parseSubjectAndBody(text: string): EmailDraft {
+  const match = text.match(/^Subject:\s*(.+?)\r?\n\r?\n([\s\S]*)$/i);
+  if (match) return { subject: match[1].trim(), body: match[2].trim() };
+  return { subject: "", body: text.trim() };
+}
+
+export async function draftInitialEmail(report: AuditReportRow, view: ReportView): Promise<EmailDraft> {
   const { text } = await callClaudeText({
     model: model(),
     system: [
@@ -78,20 +94,24 @@ export async function draftInitialEmail(report: AuditReportRow, view: ReportView
       "The mechanism: AI engines (ChatGPT, Perplexity, Google AI) don't answer from memory — they search, retrieve a handful of pages, and synthesize an answer citing 3-5 names. If a business isn't in what gets retrieved, or its own pages aren't written to be the quotable answer, it's invisible to that buyer — even with a great website.",
       "Write EMAIL 1 of a sequence: 'The Gap'. Short, direct, uses the business's OWN real audit numbers below (never invented). Tone: a peer pointing out something urgent and fixable, not a salesperson pitching.",
       "Structure: open with the specific gap (their score, what showed up instead of them), 2-3 sentences on why this matters now, soft CTA to reply or book a call to walk through the full report (link included).",
-      "Under 200 words. Plain text ready to paste into an email client — no markdown formatting, no subject line unless asked for one.",
+      "Under 200 words for the body. Plain text ready to paste into an email client — no markdown formatting.",
+      SUBJECT_LINE_INSTRUCTION,
       COMPLIANCE_RULES,
     ].join("\n"),
     user: `Report context:\n${reportContext(report, view)}\n\nWrite the email now.`,
     maxTokens: 700,
     temperature: 0.6,
   });
-  return text;
+  return parseSubjectAndBody(text);
 }
 
-export async function draftSequenceEmail(report: AuditReportRow, view: ReportView, step: number): Promise<string> {
+export async function draftSequenceEmail(report: AuditReportRow, view: ReportView, step: number): Promise<EmailDraft> {
   const belief = BELIEF_SEQUENCE.find((b) => b.n === step);
   if (!belief) {
-    return `There's no email ${step} in the sequence — it only goes up to ${BELIEF_SEQUENCE.length}. Try "email 2" through "email ${BELIEF_SEQUENCE.length}", or just paste what the prospect said back and I'll draft a reply to that instead.`;
+    return {
+      subject: "",
+      body: `There's no email ${step} in the sequence — it only goes up to ${BELIEF_SEQUENCE.length}. Try "email 2" through "email ${BELIEF_SEQUENCE.length}", or just paste what the prospect said back and I'll draft a reply to that instead.`,
+    };
   }
 
   const { text } = await callClaudeText({
@@ -100,17 +120,18 @@ export async function draftSequenceEmail(report: AuditReportRow, view: ReportVie
       "You write follow-up emails continuing SRT Agency LLC's AI-visibility audit outreach sequence.",
       `This is EMAIL ${belief.n} — "${belief.name}". Its job is to install this belief in the reader: ${belief.belief}`,
       "Use the business's own real audit numbers below wherever it strengthens the point (never invent facts not given). Keep the voice of a founder who did the research personally on THIS business, not a generic template.",
-      "Under 180 words. Plain text ready to paste into an email client. No subject line unless asked.",
+      "Under 180 words for the body. Plain text ready to paste into an email client.",
+      SUBJECT_LINE_INSTRUCTION,
       COMPLIANCE_RULES,
     ].join("\n"),
     user: `Report context:\n${reportContext(report, view)}\n\nWrite email ${belief.n} now.`,
     maxTokens: 700,
     temperature: 0.6,
   });
-  return text;
+  return parseSubjectAndBody(text);
 }
 
-export async function draftObjectionReply(report: AuditReportRow, view: ReportView, prospectSaid: string): Promise<string> {
+export async function draftObjectionReply(report: AuditReportRow, view: ReportView, prospectSaid: string): Promise<EmailDraft> {
   const sequenceSummary = BELIEF_SEQUENCE.map((b) => `${b.n}. ${b.name} — ${b.belief}`).join("\n");
 
   const { text } = await callClaudeText({
@@ -120,12 +141,13 @@ export async function draftObjectionReply(report: AuditReportRow, view: ReportVi
       "The belief sequence available to draw from — pick whichever fits the objection, not necessarily in numeric order:",
       sequenceSummary,
       "Use the business's own real audit numbers below wherever relevant (never invent facts not given). Match the tone of someone who already did specific research on THIS business, not a generic canned rebuttal.",
-      "Under 180 words. Plain text ready to paste into an email client.",
+      "Under 180 words for the body. Plain text ready to paste into an email client.",
+      SUBJECT_LINE_INSTRUCTION,
       COMPLIANCE_RULES,
     ].join("\n"),
     user: `Report context:\n${reportContext(report, view)}\n\nThe prospect said:\n"${prospectSaid}"\n\nDraft the reply now.`,
     maxTokens: 700,
     temperature: 0.6,
   });
-  return text;
+  return parseSubjectAndBody(text);
 }

@@ -1,10 +1,10 @@
 // Aggregates raw audit_reports + audit_runs rows into the view model the public
-// report page renders. Kept separate from the page component so the "no
-// fabrication" rule is easy to verify in one place: a prompt only ever reads as
-// appeared=true when a real engine run recorded mentioned:true.
+// report page (and the PDF) render. Kept separate from the page component so
+// the "no fabrication" rule is easy to verify in one place: a prompt only ever
+// reads as appeared=true when a real engine run recorded mentioned:true.
 
 import type { AuditReportRow, AuditRunRow } from "./types";
-import { isClientName } from "./mention-match";
+import { isClientName, isMentioned, findMatchExcerpt } from "./mention-match";
 
 export interface EngineCellView {
   status: "ok" | "no_data";
@@ -21,6 +21,7 @@ export interface PromptRowView {
   block: string;
   prompt: string;
   appeared: boolean;
+  isBranded: boolean; // true when the business's own name is already in the prompt text
   engines: { openai: EngineCellView; perplexity: EngineCellView };
   recommended: RecommendedNameView[]; // deduped across both engines, capped for display
 }
@@ -41,6 +42,14 @@ export interface MostRecommended {
   count: number;
 }
 
+export interface WeightedScore {
+  score: number;
+  organicAppeared: number;
+  organicTotal: number;
+  brandedAppeared: number;
+  brandedTotal: number;
+}
+
 export interface ReportView {
   prompts: PromptRowView[];
   blockStats: BlockStat[];
@@ -53,6 +62,14 @@ export interface ReportView {
 const BLOCK_ORDER = ["MARCA", "SERVICIO", "INFO", "COMPARATIVO"];
 const MAX_RECOMMENDED_PER_PROMPT = 5;
 const MAX_MOST_RECOMMENDED = 8;
+const FALLBACK_SNIPPET_CHARS = 250;
+
+// Appearing in a prompt that already names the business proves almost nothing
+// (of course a search for "Arpovo Health reviews" might mention Arpovo Health).
+// Appearing in a prompt that never named the business is the genuinely earned
+// signal — that's what buyers actually experience. Weighted 90/10 accordingly.
+const ORGANIC_WEIGHT = 0.9;
+const BRANDED_WEIGHT = 0.1;
 
 function domainOf(url: string): string | null {
   try {
@@ -62,15 +79,14 @@ function domainOf(url: string): string | null {
   }
 }
 
-function engineCell(run: AuditRunRow | undefined): EngineCellView {
+function engineCell(run: AuditRunRow | undefined, aliases: string[]): EngineCellView {
   if (!run || run.status !== "ok") {
     return { status: "no_data", mentioned: null, snippet: null };
   }
-  return {
-    status: "ok",
-    mentioned: run.mentioned,
-    snippet: run.raw_response ? run.raw_response.slice(0, 300) : null,
-  };
+  const raw = run.raw_response ?? "";
+  const fallback = raw.length > FALLBACK_SNIPPET_CHARS ? `${raw.slice(0, FALLBACK_SNIPPET_CHARS).trim()}…` : raw.trim();
+  const snippet = run.mentioned ? findMatchExcerpt(raw, aliases) ?? fallback : fallback;
+  return { status: "ok", mentioned: run.mentioned, snippet: snippet || null };
 }
 
 /** Dedupe names case-insensitively, keeping the first-seen casing. */
@@ -95,8 +111,8 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], cli
     const promptRuns = runsByPrompt.get(p.prompt) ?? [];
     const openaiRun = promptRuns.find((r) => r.engine === "openai");
     const perplexityRun = promptRuns.find((r) => r.engine === "perplexity");
-    const openai = engineCell(openaiRun);
-    const perplexity = engineCell(perplexityRun);
+    const openai = engineCell(openaiRun, clientAliases);
+    const perplexity = engineCell(perplexityRun, clientAliases);
 
     const recommendedNames = dedupeNames([...(openaiRun?.recommended ?? []), ...(perplexityRun?.recommended ?? [])]).slice(
       0,
@@ -107,6 +123,7 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], cli
       block: p.block,
       prompt: p.prompt,
       appeared: Boolean(openai.mentioned || perplexity.mentioned),
+      isBranded: isMentioned(p.prompt, clientAliases),
       engines: { openai, perplexity },
       recommended: recommendedNames.map((name) => ({ name, isClient: isClientName(name, clientAliases) })),
     };
@@ -154,5 +171,40 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], cli
     mostRecommended,
     totalMentioned: prompts.filter((p) => p.appeared).length,
     totalPrompts: prompts.length,
+  };
+}
+
+/**
+ * The single source of truth for the score formula — used by the web report,
+ * the PDF, and process/route.ts's DB write, so all three always agree.
+ * organic = prompt never named the business (the earned signal, 90% weight).
+ * branded = prompt already named the business (proves little, 10% weight).
+ */
+export function computeWeightedScore(view: ReportView): WeightedScore {
+  const organic = view.prompts.filter((p) => !p.isBranded);
+  const branded = view.prompts.filter((p) => p.isBranded);
+
+  const organicAppeared = organic.filter((p) => p.appeared).length;
+  const brandedAppeared = branded.filter((p) => p.appeared).length;
+  const organicRate = organic.length > 0 ? organicAppeared / organic.length : null;
+  const brandedRate = branded.length > 0 ? brandedAppeared / branded.length : null;
+
+  let score: number;
+  if (organicRate !== null && brandedRate !== null) {
+    score = ORGANIC_WEIGHT * organicRate * 100 + BRANDED_WEIGHT * brandedRate * 100;
+  } else if (organicRate !== null) {
+    score = organicRate * 100;
+  } else if (brandedRate !== null) {
+    score = brandedRate * 100;
+  } else {
+    score = 0;
+  }
+
+  return {
+    score: Math.round(score),
+    organicAppeared,
+    organicTotal: organic.length,
+    brandedAppeared,
+    brandedTotal: branded.length,
   };
 }
