@@ -245,6 +245,18 @@ export const slack = {
                   return slackFetch("conversations.invite", { channel, users });
         },
 
+        /** Join a public channel. Idempotent — already-there is a harmless no-op.
+         *  Needed before uploadFilePDF/uploadFile on a channel the bot didn't create
+         *  itself (e.g. one a human created manually): chat.postMessage works on a
+         *  public channel without membership, but files.completeUploadExternal's
+         *  channel share silently no-ops (still returns ok:true) if the bot isn't
+         *  actually a member. */
+        async joinChannel(channel: string): Promise<{ ok: boolean; error?: string }> {
+                  if (!channel) return { ok: false, error: "missing_channel" };
+                  const res = (await slackFetch("conversations.join", { channel })) as { ok: boolean; error?: string };
+                  return res;
+        },
+
         /** Pin a message to a channel. */
         async pinMessage(channel: string, timestamp: string): Promise<Record<string, unknown>> {
                   if (!channel || !timestamp) return { ok: false, error: "missing_channel_or_ts" };

@@ -11,7 +11,15 @@ const CHANNEL_NAME = "ai-visibility-audits";
 
 export async function getOrCreateAuditChannel(): Promise<{ id: string; isNew: boolean }> {
   const configured = process.env.AUDIT_CHANNEL_ID;
-  if (configured) return { id: configured, isNew: false };
+  if (configured) {
+    // Best-effort join — no-op if already a member, but required for file
+    // uploads (uploadFilePDF) to actually share into a channel a human created
+    // manually rather than one createChannel() below made. chat.postMessage
+    // works on a public channel without membership; file sharing does not
+    // (silently, files.completeUploadExternal still returns ok:true).
+    await slack.joinChannel(configured).catch(() => {});
+    return { id: configured, isNew: false };
+  }
 
   const created = await slack.createChannel(CHANNEL_NAME);
   if (!created.ok || !created.id) {
