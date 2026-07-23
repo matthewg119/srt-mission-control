@@ -106,12 +106,23 @@ async function runAudit(params: { website: string; city?: string; competitors?: 
     await supabaseAdmin.from("audit_reports").update({ slack_thread_ts: threadTs }).eq("id", report.id);
   }
 
-  // Kick off batch processing. Internal route self-chains through the remaining batches.
+  // Kick off batch processing. Internal route self-chains through the remaining
+  // batches. MUST be awaited here — runAudit() itself runs inside waitUntil() at
+  // the call site below, and waitUntil only keeps the lambda alive until the
+  // promise IT was given settles. A fire-and-forget fetch here resolves
+  // runAudit() instantly, letting Vercel freeze the lambda before the request
+  // is actually sent — the kick-off silently vanishes. (Confirmed in production:
+  // the first real /audit run left status:"running" forever with zero audit_runs
+  // rows, because this fetch never got out the door.)
   const secret = process.env.AUDIT_INTERNAL_SECRET || "";
-  fetch(`${appUrl()}/api/audit/process?id=${report.id}&batch=0`, {
-    method: "POST",
-    headers: { "x-audit-secret": secret },
-  }).catch((e) => console.error("[audit/slack] failed to kick off processing:", (e as Error).message));
+  try {
+    await fetch(`${appUrl()}/api/audit/process?id=${report.id}&batch=0`, {
+      method: "POST",
+      headers: { "x-audit-secret": secret },
+    });
+  } catch (e) {
+    console.error("[audit/slack] failed to kick off processing:", (e as Error).message);
+  }
 }
 
 export async function POST(req: NextRequest) {
