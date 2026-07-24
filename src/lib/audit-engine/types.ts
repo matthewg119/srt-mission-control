@@ -27,6 +27,10 @@ export interface AuditReportRow {
   requester_phone: string | null;
   slack_channel_id: string | null;
   slack_thread_ts: string | null;
+  // The last set of 3 choose-from email options posted to the thread; a "1/2/3" reply turns
+  // the chosen one into an Outlook draft. Shape mirrors EmailOption in email-assistant.ts
+  // (kept inline here to avoid a type import cycle).
+  pending_drafts: Array<{ label: string; subject: string; body: string }> | null;
   error: string | null;
   created_at: string;
   updated_at: string;

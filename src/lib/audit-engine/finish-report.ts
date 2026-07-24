@@ -14,7 +14,8 @@ import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/sla
 import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
 import { buildReportView, computeWeightedScore, type ReportView, type WeightedScore } from "@/lib/audit-engine/report-view";
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
-import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
+import { draftInitialEmail, draftEmailOptions } from "@/lib/audit-engine/email-assistant";
+import { postOptions } from "@/lib/audit-engine/thread-assistant";
 import { microsoft } from "@/lib/microsoft";
 
 function appUrl(): string {
@@ -80,11 +81,13 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
       const fileName = `AI Visibility Scorecard - ${report.business_type ?? report.website}.pdf`;
       await slack.uploadFilePDF(report.slack_channel_id, fileName, pdfBuffer, report.slack_thread_ts);
 
-      const { subject, body } = await draftInitialEmail(report, view);
-      await slack.postThreadReply(
+      const options = await draftEmailOptions(report, view, { kind: "initial" });
+      await postOptions(
+        report,
         report.slack_channel_id,
         report.slack_thread_ts,
-        `✉️ Draft outreach email — copy/paste and send:\n\nSubject: ${subject}\n\n${body}\n\n_Reply in this thread with "email 2" through "email 5" for the next follow-up, or paste what the prospect said back and I'll draft the reply._`
+        "✉️ Draft outreach, 3 angles to choose from (show the loss / verification first / competitor urgency):",
+        options
       );
     } catch (e) {
       console.error("[finishReport] scorecard/thread post failed:", (e as Error).message);
