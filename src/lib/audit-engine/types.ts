@@ -22,6 +22,9 @@ export interface AuditReportRow {
   status: AuditReportStatus;
   score: number | null;
   requested_by: string | null;
+  requester_name: string | null;
+  requester_email: string | null;
+  requester_phone: string | null;
   slack_channel_id: string | null;
   slack_thread_ts: string | null;
   error: string | null;

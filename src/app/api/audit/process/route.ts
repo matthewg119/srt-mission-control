@@ -18,6 +18,7 @@ import type { AuditReportRow, AuditRunRow, AuditEngine } from "@/lib/audit-engin
 import { buildReportView, computeWeightedScore, type ReportView } from "@/lib/audit-engine/report-view";
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
+import { microsoft } from "@/lib/microsoft";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -175,8 +176,9 @@ async function finishReport(row: AuditReportRow): Promise<void> {
 // the same thread right after the score. Never blocks the report from being
 // marked done — a failure here just means Matthew generates these manually.
 async function postScorecardAndEmailDraft(report: AuditReportRow, view: ReportView, weighted: ReturnType<typeof computeWeightedScore>): Promise<void> {
+  let pdfBuffer: Buffer | null = null;
   try {
-    const pdfBuffer = generateScorecardPDF(report, view, weighted);
+    pdfBuffer = generateScorecardPDF(report, view, weighted);
     const fileName = `AI Visibility Scorecard - ${report.business_type ?? report.website}.pdf`;
     await slack.uploadFilePDF(report.slack_channel_id!, fileName, pdfBuffer, report.slack_thread_ts!);
 
@@ -188,5 +190,36 @@ async function postScorecardAndEmailDraft(report: AuditReportRow, view: ReportVi
     );
   } catch (e) {
     console.error("[audit/process] scorecard/email draft failed:", (e as Error).message);
+  }
+
+  // Public-intake requests (srtagency.com free-audit form) have no Slack
+  // presence — email them the same PDF + report link directly. Separate
+  // try/catch: a Slack failure above shouldn't skip this, and vice versa.
+  if (report.requester_email) {
+    try {
+      if (!pdfBuffer) pdfBuffer = generateScorecardPDF(report, view, weighted);
+      const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/r/${report.slug}`;
+      const name = report.client_name || report.business_type || report.website;
+      await microsoft.sendMail({
+        to: report.requester_email,
+        subject: `Your AI Visibility Report — ${name} scored ${report.score ?? 0}/100`,
+        body:
+          `Hi${report.requester_name ? ` ${report.requester_name}` : ""},\n\n` +
+          `We ran ${name} through our AI Visibility Audit — 20 real buyer questions across ChatGPT and Perplexity.\n\n` +
+          `Score: ${report.score ?? 0}/100\n` +
+          `Full report: ${reportUrl}\n\n` +
+          `The full scorecard is attached. Reply to this email if you'd like us to walk you through it.\n\n` +
+          `— SRT Agency`,
+        attachments: [
+          {
+            name: `AI Visibility Scorecard - ${name}.pdf`,
+            contentType: "application/pdf",
+            contentBytes: pdfBuffer.toString("base64"),
+          },
+        ],
+      });
+    } catch (e) {
+      console.error("[audit/process] requester email failed:", (e as Error).message);
+    }
   }
 }
