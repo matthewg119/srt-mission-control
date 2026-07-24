@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runPromptDrop } from "@/lib/reel/drop-studio";
-import { listDropChannels } from "@/config/verticals";
+import { runBrollSuggestionDrop } from "@/lib/reel/broll-suggestions";
+import { listDropChannels, loadVertical, dropMode } from "@/config/verticals";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -50,7 +51,14 @@ export async function GET(req: NextRequest) {
   const slot = resolveSlot(req);
   const results = [];
   for (const t of targets) {
-    const result = await runPromptDrop({ channel: t.channelId, slot, verticalId: t.verticalId });
+    // The daily lane behaves per the channel's vertical.drop_mode: "broll_suggestions"
+    // posts 3 cinematic B-roll prompts (text only); default "reel_prompts" runs the
+    // legacy LRU-workflow / 9-image / render path. Pest is unaffected.
+    const vertical = await loadVertical(t.verticalId);
+    const result =
+      dropMode(vertical) === "broll_suggestions"
+        ? await runBrollSuggestionDrop({ channel: t.channelId, slot, vertical })
+        : await runPromptDrop({ channel: t.channelId, slot, verticalId: t.verticalId });
     results.push({ channel: t.channelId, vertical: t.verticalId, ...result });
   }
   const ok = results.every((r) => r.ok);
