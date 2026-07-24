@@ -1,31 +1,83 @@
-// Internal batch worker for the Audit Engine. Runs 4 prompts x 2 engines per
-// invocation, writes each audit_runs row as soon as it resolves (so partial
-// progress survives a kill), then self-chains to the next batch via waitUntil +
-// fetch. On the final batch: computes score, marks the report done, and posts
-// the final Slack message. Gated by AUDIT_INTERNAL_SECRET — never call directly
-// from the browser or an unauthenticated caller.
+// Internal batch worker for the Audit Engine. Processes ALL remaining batches
+// (4 prompts x 2 engines each) within a SINGLE invocation — no cross-invocation
+// self-chaining. The old waitUntil(fetch(next batch)) hop was silently dropped
+// by Vercel after the response returned, stalling runs at status:"running"
+// forever. ~5 batches fit comfortably under maxDuration=300. Writes are
+// idempotent (each batch clears its prior rows first) so a re-kick from the
+// daily watchdog never double-counts. Gated by AUDIT_INTERNAL_SECRET.
 
 import { NextRequest, NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
 import { supabaseAdmin } from "@/lib/db";
 import { runOpenAI, runPerplexity, withMention } from "@/lib/audit-engine/run-prompts";
 import { buildAliases } from "@/lib/audit-engine/mention-match";
 import { extractRecommendedBatch } from "@/lib/audit-engine/extract-recommended";
 import { BATCH_SIZE, TOTAL_PROMPTS } from "@/lib/audit-engine/types";
 import type { AuditReportRow, AuditEngine } from "@/lib/audit-engine/types";
+import type { AuditPrompt } from "@/lib/audit-engine/classify";
 import { finishReport, failReport } from "@/lib/audit-engine/finish-report";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-function appUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
-}
-
 function checkAuth(req: NextRequest): boolean {
   const secret = process.env.AUDIT_INTERNAL_SECRET;
   return !!secret && req.headers.get("x-audit-secret") === secret;
+}
+
+// Runs one batch (4 prompts x 2 engines) idempotently and bumps the heartbeat.
+async function runBatch(row: AuditReportRow, aliases: string[], promptsInBatch: AuditPrompt[]): Promise<void> {
+  const perPrompt = await Promise.all(
+    promptsInBatch.map(async (p, idx) => {
+      const [openaiResult, perplexityResult] = await Promise.all([
+        runOpenAI(p.prompt, row.city).then((r) => withMention(r, aliases)),
+        runPerplexity(p.prompt, row.city).then((r) => withMention(r, aliases)),
+      ]);
+      return { prompt: p, idx, openaiResult, perplexityResult };
+    })
+  );
+
+  // One cheap extraction call for the whole batch — pulls the 0-5 business names
+  // each "ok" response actually named, for display.
+  const extractionItems = perPrompt.flatMap(({ idx, openaiResult, perplexityResult }) => [
+    ...(openaiResult.status === "ok" ? [{ id: `${idx}:openai`, text: openaiResult.raw }] : []),
+    ...(perplexityResult.status === "ok" ? [{ id: `${idx}:perplexity`, text: perplexityResult.raw }] : []),
+  ]);
+  const recommendedMap = await extractRecommendedBatch(extractionItems);
+
+  // Idempotent: clear any prior rows for these prompts before writing, so a
+  // re-kick (daily watchdog) never double-counts audit_runs (score corruption).
+  const batchPromptTexts = promptsInBatch.map((p) => p.prompt);
+  await supabaseAdmin.from("audit_runs").delete().eq("report_id", row.id).in("prompt", batchPromptTexts);
+
+  await Promise.all(
+    perPrompt.flatMap(({ prompt: p, idx, openaiResult, perplexityResult }) => {
+      const engineResults: Array<{ engine: AuditEngine; result: typeof openaiResult }> = [
+        { engine: "openai", result: openaiResult },
+        { engine: "perplexity", result: perplexityResult },
+      ];
+
+      return engineResults.map(({ engine, result }) =>
+        supabaseAdmin.from("audit_runs").insert({
+          report_id: row.id,
+          block: p.block,
+          prompt: p.prompt,
+          engine,
+          mentioned: result.status === "ok" ? result.mentioned : null,
+          status: result.status,
+          raw_response: result.raw,
+          citations: result.citations,
+          recommended: recommendedMap[`${idx}:${engine}`] ?? [],
+          latency_ms: result.latencyMs,
+          error: result.status === "no_data" ? result.error : null,
+        })
+      );
+    })
+  );
+
+  // Heartbeat: mark progress so the daily watchdog can tell a live run from a
+  // stalled one, and a recovery knows how far the run got.
+  await supabaseAdmin.from("audit_reports").update({ updated_at: new Date().toISOString() }).eq("id", row.id);
 }
 
 export async function POST(req: NextRequest) {
@@ -52,91 +104,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: row.status });
   }
 
-  const start = batch * BATCH_SIZE;
-  const promptsInBatch = row.prompts.slice(start, start + BATCH_SIZE);
-  if (promptsInBatch.length === 0) {
-    return NextResponse.json({ ok: true, skipped: "empty_batch" });
-  }
-
   const aliases = buildAliases(row.client_name ?? row.business_type ?? row.website, row.website);
+  const totalPrompts = row.prompts.length || TOTAL_PROMPTS;
+  const totalBatches = Math.ceil(totalPrompts / BATCH_SIZE);
 
   try {
-    const perPrompt = await Promise.all(
-      promptsInBatch.map(async (p, idx) => {
-        const [openaiResult, perplexityResult] = await Promise.all([
-          runOpenAI(p.prompt, row.city).then((r) => withMention(r, aliases)),
-          runPerplexity(p.prompt, row.city).then((r) => withMention(r, aliases)),
-        ]);
-        return { prompt: p, idx, openaiResult, perplexityResult };
-      })
-    );
-
-    // One cheap extraction call for the whole batch (not per response) — pulls
-    // the 0-5 business names each "ok" response actually named, for display.
-    const extractionItems = perPrompt.flatMap(({ idx, openaiResult, perplexityResult }) => [
-      ...(openaiResult.status === "ok" ? [{ id: `${idx}:openai`, text: openaiResult.raw }] : []),
-      ...(perplexityResult.status === "ok" ? [{ id: `${idx}:perplexity`, text: perplexityResult.raw }] : []),
-    ]);
-    const recommendedMap = await extractRecommendedBatch(extractionItems);
-
-    // Idempotent re-kicks: the watchdog (or a late duplicate self-chain hop) may
-    // re-run this batch. Clear any prior rows for these prompts before writing so
-    // we never double-count audit_runs (which would corrupt the weighted score).
-    const batchPromptTexts = promptsInBatch.map((p) => p.prompt);
-    await supabaseAdmin.from("audit_runs").delete().eq("report_id", row.id).in("prompt", batchPromptTexts);
-
-    await Promise.all(
-      perPrompt.flatMap(({ prompt: p, idx, openaiResult, perplexityResult }) => {
-        const engineResults: Array<{ engine: AuditEngine; result: typeof openaiResult }> = [
-          { engine: "openai", result: openaiResult },
-          { engine: "perplexity", result: perplexityResult },
-        ];
-
-        return engineResults.map(({ engine, result }) =>
-          supabaseAdmin.from("audit_runs").insert({
-            report_id: row.id,
-            block: p.block,
-            prompt: p.prompt,
-            engine,
-            mentioned: result.status === "ok" ? result.mentioned : null,
-            status: result.status,
-            raw_response: result.raw,
-            citations: result.citations,
-            recommended: recommendedMap[`${idx}:${engine}`] ?? [],
-            latency_ms: result.latencyMs,
-            error: result.status === "no_data" ? result.error : null,
-          })
-        );
-      })
-    );
-
-    // Heartbeat: bump updated_at so the watchdog can distinguish a live run
-    // (recent progress) from a stalled one (no progress for minutes).
-    await supabaseAdmin
-      .from("audit_reports")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", row.id);
+    // Process every remaining batch in THIS invocation — no fragile
+    // cross-invocation self-chain. Fresh runs start at batch 0; a watchdog
+    // re-kick starts at the first incomplete batch.
+    for (let b = Math.max(0, batch); b < totalBatches; b++) {
+      const startIdx = b * BATCH_SIZE;
+      const promptsInBatch = row.prompts.slice(startIdx, startIdx + BATCH_SIZE);
+      if (promptsInBatch.length === 0) break;
+      await runBatch(row, aliases, promptsInBatch);
+    }
   } catch (e) {
     await failReport(row, (e as Error).message);
     return NextResponse.json({ ok: false, error: (e as Error).message });
   }
 
-  const totalPrompts = row.prompts.length || TOTAL_PROMPTS;
-  const isLastBatch = start + BATCH_SIZE >= totalPrompts;
-
-  if (!isLastBatch) {
-    const secret = process.env.AUDIT_INTERNAL_SECRET || "";
-    waitUntil(
-      fetch(`${appUrl()}/api/audit/process?id=${row.id}&batch=${batch + 1}`, {
-        method: "POST",
-        headers: { "x-audit-secret": secret },
-      })
-        .then(() => undefined)
-        .catch((e) => console.error("[audit/process] chain to next batch failed:", (e as Error).message))
-    );
-    return NextResponse.json({ ok: true, batch, nextBatch: batch + 1 });
-  }
-
   await finishReport(row);
-  return NextResponse.json({ ok: true, batch, done: true });
+  return NextResponse.json({ ok: true, done: true, fromBatch: batch });
 }

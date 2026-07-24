@@ -8,13 +8,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Self-healing watchdog for the Audit Engine. The batch worker advances via a
-// fire-and-forget waitUntil(fetch(next batch)) hop that Vercel can silently drop,
-// leaving a report stuck at status:"running" with partial audit_runs forever.
-// This cron (every ~2 min) finds those stalled runs and either finalizes them
-// (all runs present, only the last finalize hop dropped) or re-kicks the next
-// batch. Re-kicks are idempotent — the worker deletes a batch's prior rows before
-// writing — so repeated advances never double-count or corrupt the score.
+// Daily backstop for the Audit Engine. The worker now processes all batches in
+// one invocation, so stalls are rare (only a 300s timeout or lambda crash). This
+// cron — daily, the max frequency allowed on the Vercel Hobby plan — sweeps for
+// any run still stuck at status:"running" and either finalizes it (all runs
+// present) or re-kicks the worker from the first incomplete batch. Re-kicks are
+// idempotent (the worker deletes a batch's prior rows before writing), so a
+// recovery never double-counts or corrupts the score. Also callable on demand.
 
 const STALL_MINUTES = 3;
 const ROWS_PER_BATCH = BATCH_SIZE * 2; // 4 prompts x 2 engines = 8
