@@ -132,20 +132,25 @@ export function generateScorecardPDF(report: AuditReportRow, view: ReportView, w
 
   newPage(state, reportUrl);
 
-  // ---- HEADER ----
-  drawBrandIcon(doc, MARGIN, state.y, 3.2);
-  doc.setFontSize(9);
+  // ---- HEADER (mirrors the web /r/[slug] ReportHeader: a small icon + eyebrow
+  // on one row, the title below, subtitle, a divider, then a centered lead-in.
+  // The icon is intentionally small so it never overlaps the title.) ----
+  const iconScale = 1.5;
+  const iconW = 6.4 * iconScale; // total width of the 3-bar mark (3 bars + 2 gaps)
+  const iconH = 7 * iconScale;
+  drawBrandIcon(doc, MARGIN, state.y, iconScale);
+  doc.setFontSize(8.5);
   doc.setFont("helvetica", "bold");
   setColor(doc, "text", REEF);
-  doc.text("AI VISIBILITY REPORT", MARGIN + 20, state.y + 5);
-  state.y += 14;
+  doc.text("AI VISIBILITY REPORT", MARGIN + iconW + 4, state.y + iconH / 2 + 1.4);
+  state.y += iconH + 5;
 
   doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
   setColor(doc, "text", WHITE);
   const titleLines = doc.splitTextToSize(title, CONTENT_W);
-  doc.text(titleLines, MARGIN, state.y);
-  state.y += titleLines.length * 7 + 2;
+  doc.text(titleLines, MARGIN, state.y + 2);
+  state.y += titleLines.length * 7 + 3;
 
   doc.setFontSize(9.5);
   doc.setFont("helvetica", "normal");
@@ -153,38 +158,42 @@ export function generateScorecardPDF(report: AuditReportRow, view: ReportView, w
   const date = new Date(report.created_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const subtitle = [report.business_type, report.city, date].filter(Boolean).join(" · ");
   doc.text(subtitle, MARGIN, state.y);
-  state.y += 5;
-  setColor(doc, "text", OCEAN);
-  doc.text(report.website, MARGIN, state.y);
-  state.y += 10;
+  state.y += 8;
 
-  // ---- SCORE RING ----
-  const ringCx = PAGE_W / 2;
-  const ringCy = state.y + 26;
-  drawScoreRing(doc, ringCx, ringCy, 20, weighted.score);
-  doc.setFontSize(22);
-  doc.setFont("helvetica", "bold");
-  setColor(doc, "text", WHITE);
-  doc.text(`${weighted.score}`, ringCx, ringCy + 1, { align: "center" });
-  doc.setFontSize(8);
-  setColor(doc, "text", MUTED);
-  doc.text("/ 100", ringCx, ringCy + 6, { align: "center" });
-  state.y = ringCy + 32;
+  // Divider under the header, like the web report.
+  setColor(doc, "draw", CARD_BORDER);
+  doc.setLineWidth(0.3);
+  doc.line(MARGIN, state.y, PAGE_W - MARGIN, state.y);
+  state.y += 9;
 
+  // Centered lead-in line (matches the web report's sub-header).
   doc.setFontSize(9.5);
   doc.setFont("helvetica", "normal");
-  setColor(doc, "text", WHITE);
-  doc.text(`Appeared in ${view.totalMentioned} of ${view.totalPrompts} real buyer questions`, PAGE_W / 2, state.y, { align: "center" });
-  state.y += 5;
-  doc.setFontSize(7.5);
   setColor(doc, "text", MUTED);
-  doc.text(
-    `90% weight — organic (not asked by name): ${weighted.organicAppeared}/${weighted.organicTotal}  ·  10% weight — branded (name already in the search): ${weighted.brandedAppeared}/${weighted.brandedTotal}`,
-    PAGE_W / 2,
-    state.y,
-    { align: "center" }
-  );
-  state.y += 10;
+  const leadIn = `${view.totalPrompts} questions real buyers ask before choosing ${report.business_type ? `a ${report.business_type}` : "this business"}`;
+  const leadLines = doc.splitTextToSize(leadIn, CONTENT_W - 24);
+  doc.text(leadLines, PAGE_W / 2, state.y, { align: "center" });
+  state.y += leadLines.length * 5 + 8;
+
+  // ---- SCORE RING (centered) ----
+  const ringCx = PAGE_W / 2;
+  const ringCy = state.y + 24;
+  drawScoreRing(doc, ringCx, ringCy, 20, weighted.score);
+  doc.setFontSize(24);
+  doc.setFont("helvetica", "bold");
+  setColor(doc, "text", WHITE);
+  doc.text(`${weighted.score}`, ringCx, ringCy - 0.5, { align: "center", baseline: "middle" });
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  setColor(doc, "text", MUTED);
+  doc.text("/ 100", ringCx, ringCy + 6, { align: "center", baseline: "middle" });
+  state.y = ringCy + 30;
+
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  setColor(doc, "text", WHITE);
+  doc.text(`Appeared in ${view.totalMentioned} of ${view.totalPrompts} buyer questions`, PAGE_W / 2, state.y, { align: "center" });
+  state.y += 11;
 
   // ---- BREAKDOWN TILES ----
   const tileW = (CONTENT_W - 9) / 4;
@@ -247,20 +256,36 @@ export function generateScorecardPDF(report: AuditReportRow, view: ReportView, w
   return Buffer.from(arrayBuffer);
 }
 
+// jsPDF's standard fonts use WinAnsi encoding, which has no ✓/✗ glyphs — passing
+// them corrupts the whole string. So we draw the check/cross as small vector
+// marks (matching the web report's green ✅ / red ❌ / muted "no data" chips).
 function engineLabel(doc: jsPDF, x: number, y: number, label: string, status: "ok" | "no_data", mentioned: boolean | null): number {
+  const color: [number, number, number] = status === "no_data" ? MUTED : mentioned ? REEF : RED;
+  const text = status === "no_data" ? `${label}: no data` : label;
+
+  let tx = x;
+  if (status === "ok") {
+    setColor(doc, "draw", color);
+    doc.setLineWidth(0.5);
+    doc.setLineCap("round");
+    if (mentioned) {
+      // check mark
+      doc.line(x, y - 1.2, x + 1, y - 0.1);
+      doc.line(x + 1, y - 0.1, x + 2.6, y - 2.4);
+    } else {
+      // cross mark
+      doc.line(x, y - 2.4, x + 2.4, y);
+      doc.line(x + 2.4, y - 2.4, x, y);
+    }
+    doc.setLineCap("butt");
+    tx = x + 4;
+  }
+
   doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
-  if (status === "no_data") {
-    setColor(doc, "text", MUTED);
-    doc.text(`${label}: no data`, x, y);
-  } else if (mentioned) {
-    setColor(doc, "text", REEF);
-    doc.text(`✓ ${label}`, x, y);
-  } else {
-    setColor(doc, "text", RED);
-    doc.text(`✗ ${label}`, x, y);
-  }
-  return doc.getTextWidth(status === "no_data" ? `${label}: no data` : `${mentioned ? "✓" : "✗"} ${label}`) + 6;
+  setColor(doc, "text", color);
+  doc.text(text, tx, y);
+  return tx - x + doc.getTextWidth(text) + 6;
 }
 
 function drawPromptBlock(state: PageState, p: PromptRowView, reportUrl: string): void {
