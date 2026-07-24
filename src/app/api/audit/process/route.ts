@@ -8,17 +8,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { supabaseAdmin } from "@/lib/db";
-import { slack } from "@/lib/slack-bot";
 import { runOpenAI, runPerplexity, withMention } from "@/lib/audit-engine/run-prompts";
 import { buildAliases } from "@/lib/audit-engine/mention-match";
 import { extractRecommendedBatch } from "@/lib/audit-engine/extract-recommended";
-import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/slack-format";
 import { BATCH_SIZE, TOTAL_PROMPTS } from "@/lib/audit-engine/types";
-import type { AuditReportRow, AuditRunRow, AuditEngine } from "@/lib/audit-engine/types";
-import { buildReportView, computeWeightedScore, type ReportView } from "@/lib/audit-engine/report-view";
-import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
-import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
-import { microsoft } from "@/lib/microsoft";
+import type { AuditReportRow, AuditEngine } from "@/lib/audit-engine/types";
+import { finishReport, failReport } from "@/lib/audit-engine/finish-report";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -84,6 +79,12 @@ export async function POST(req: NextRequest) {
     ]);
     const recommendedMap = await extractRecommendedBatch(extractionItems);
 
+    // Idempotent re-kicks: the watchdog (or a late duplicate self-chain hop) may
+    // re-run this batch. Clear any prior rows for these prompts before writing so
+    // we never double-count audit_runs (which would corrupt the weighted score).
+    const batchPromptTexts = promptsInBatch.map((p) => p.prompt);
+    await supabaseAdmin.from("audit_runs").delete().eq("report_id", row.id).in("prompt", batchPromptTexts);
+
     await Promise.all(
       perPrompt.flatMap(({ prompt: p, idx, openaiResult, perplexityResult }) => {
         const engineResults: Array<{ engine: AuditEngine; result: typeof openaiResult }> = [
@@ -108,6 +109,13 @@ export async function POST(req: NextRequest) {
         );
       })
     );
+
+    // Heartbeat: bump updated_at so the watchdog can distinguish a live run
+    // (recent progress) from a stalled one (no progress for minutes).
+    await supabaseAdmin
+      .from("audit_reports")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", row.id);
   } catch (e) {
     await failReport(row, (e as Error).message);
     return NextResponse.json({ ok: false, error: (e as Error).message });
@@ -131,95 +139,4 @@ export async function POST(req: NextRequest) {
 
   await finishReport(row);
   return NextResponse.json({ ok: true, batch, done: true });
-}
-
-async function failReport(row: AuditReportRow, message: string): Promise<void> {
-  await supabaseAdmin
-    .from("audit_reports")
-    .update({ status: "failed", error: message, updated_at: new Date().toISOString() })
-    .eq("id", row.id);
-
-  if (row.slack_channel_id && row.slack_thread_ts) {
-    await slack
-      .postThreadReply(
-        row.slack_channel_id,
-        row.slack_thread_ts,
-        formatFailureMessage({ ...row, status: "failed", error: message })
-      )
-      .catch(() => {});
-  }
-}
-
-async function finishReport(row: AuditReportRow): Promise<void> {
-  const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", row.id);
-  const runs = (runsData ?? []) as AuditRunRow[];
-
-  const aliases = buildAliases(row.client_name ?? row.business_type ?? row.website, row.website);
-  const view = buildReportView(row, runs, aliases);
-  const weighted = computeWeightedScore(view);
-
-  const { data: updated } = await supabaseAdmin
-    .from("audit_reports")
-    .update({ status: "done", score: weighted.score, updated_at: new Date().toISOString() })
-    .eq("id", row.id)
-    .select("*")
-    .single();
-
-  const finalRow = (updated as AuditReportRow | null) ?? { ...row, status: "done" as const, score: weighted.score };
-  if (finalRow.slack_channel_id && finalRow.slack_thread_ts) {
-    await slack.postThreadReply(finalRow.slack_channel_id, finalRow.slack_thread_ts, formatFinalMessage(finalRow, view)).catch(() => {});
-    await postScorecardAndEmailDraft(finalRow, view, weighted);
-  }
-}
-
-// Best-effort: branded PDF scorecard + a first outreach-email draft, posted in
-// the same thread right after the score. Never blocks the report from being
-// marked done — a failure here just means Matthew generates these manually.
-async function postScorecardAndEmailDraft(report: AuditReportRow, view: ReportView, weighted: ReturnType<typeof computeWeightedScore>): Promise<void> {
-  let pdfBuffer: Buffer | null = null;
-  try {
-    pdfBuffer = generateScorecardPDF(report, view, weighted);
-    const fileName = `AI Visibility Scorecard - ${report.business_type ?? report.website}.pdf`;
-    await slack.uploadFilePDF(report.slack_channel_id!, fileName, pdfBuffer, report.slack_thread_ts!);
-
-    const { subject, body } = await draftInitialEmail(report, view);
-    await slack.postThreadReply(
-      report.slack_channel_id!,
-      report.slack_thread_ts!,
-      `✉️ Draft outreach email — copy/paste and send:\n\nSubject: ${subject}\n\n${body}\n\n_Reply in this thread with "email 2" through "email 5" for the next follow-up, or paste what the prospect said back and I'll draft the reply._`
-    );
-  } catch (e) {
-    console.error("[audit/process] scorecard/email draft failed:", (e as Error).message);
-  }
-
-  // Public-intake requests (srtagency.com free-audit form) have no Slack
-  // presence — email them the same PDF + report link directly. Separate
-  // try/catch: a Slack failure above shouldn't skip this, and vice versa.
-  if (report.requester_email) {
-    try {
-      if (!pdfBuffer) pdfBuffer = generateScorecardPDF(report, view, weighted);
-      const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/r/${report.slug}`;
-      const name = report.client_name || report.business_type || report.website;
-      await microsoft.sendMail({
-        to: report.requester_email,
-        subject: `Your AI Visibility Report — ${name} scored ${report.score ?? 0}/100`,
-        body:
-          `Hi${report.requester_name ? ` ${report.requester_name}` : ""},\n\n` +
-          `We ran ${name} through our AI Visibility Audit — 20 real buyer questions across ChatGPT and Perplexity.\n\n` +
-          `Score: ${report.score ?? 0}/100\n` +
-          `Full report: ${reportUrl}\n\n` +
-          `The full scorecard is attached. Reply to this email if you'd like us to walk you through it.\n\n` +
-          `— SRT Agency`,
-        attachments: [
-          {
-            name: `AI Visibility Scorecard - ${name}.pdf`,
-            contentType: "application/pdf",
-            contentBytes: pdfBuffer.toString("base64"),
-          },
-        ],
-      });
-    } catch (e) {
-      console.error("[audit/process] requester email failed:", (e as Error).message);
-    }
-  }
 }

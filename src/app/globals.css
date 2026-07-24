@@ -51,3 +51,20 @@ body {
 .card-hover:hover {
   border-color: rgba(255, 255, 255, 0.12);
 }
+
+/* Keep the dark theme when printing / Save-as-PDF. Browsers strip body/html
+   backgrounds on print unless print-color-adjust is exact; the universal rule
+   is required because the report's cards use semi-transparent-over-midnight
+   fills (bg-surface, bg-reef/15) that otherwise vanish on a white page. */
+@media print {
+  html,
+  body {
+    background: #0B1426 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

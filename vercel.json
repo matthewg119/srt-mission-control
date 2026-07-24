@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/audit-watchdog",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/cron/stale-deals",
       "schedule": "0 13 * * *"
     },
