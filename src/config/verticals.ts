@@ -287,116 +287,6 @@ const PEST_CONTROL: Vertical = {
   style_version: POV_STYLE_VERSION,
 };
 
-const MCA: Vertical = {
-  id: "mca",
-  name: "MCA / Revenue-Based Funding",
-  audience: "business_owner",
-  language: "en",
-  status: "active",
-  business_descriptor:
-    "revenue-based funding brokerage (MCA, equipment financing, lines of credit, working capital)",
-  wearer_role: "small-business owner / SRT Agency funding broker",
-  avatar_doc_url: null,
-  avatar_summary: [
-    "SRT Agency (srtagency.com), an AI-first revenue-based funding brokerage run by Matthew Garcia.",
-    "Products promoted: revenue-based funding (MCA), equipment financing, lines of credit, working",
-    "capital. We do NOT do SBA loans, 7(a), 504, DSCR, or long-term bank loan programs and never",
-    "mention them.",
-    "",
-    "Target: small/mid-size business owners, heavy focus on blue-collar service operators (pest",
-    "control, HVAC, landscaping, trucking, auto repair, cleaning, construction) AND medical (dental,",
-    "chiro, med spa, physical therapy). Secondary: restaurants, retail, e-commerce. Bilingual",
-    "English/Spanish (Hispanic owners are a core audience).",
-    "",
-    "Core pain: sub-600 credit-score business owners who have been turned away by banks. \"Below 600,",
-    "Still Funded\" is the flagship campaign. Free guide: \"The Business Owner's Guide to Funding",
-    "Without a Bank\" at srtagency.com/bfunding. CTA formats: \"Comment FUND\", \"Comment CASH\",",
-    "\"Link in bio\", \"DM the word FUND\".",
-    "",
-    "Realistic numbers for copy: revenue-based funding $25K-$500K, 4-12 month terms, factor rates",
-    "1.15-1.49, same-day to 48-hour funding; equipment financing $1K-$2M, 12-84 month terms, 550+",
-    "credit; lines of credit $1K-$275K, 500-650+ credit, 6-24 month terms.",
-  ].join("\n"),
-  beliefs: [
-    {
-      n: 1,
-      text: "I believe my business has a real cash-flow or growth need right now, and waiting on a bank is costing me opportunities.",
-    },
-    {
-      n: 2,
-      text: "I believe the banks turned me down on my credit score, not on whether my business actually makes money.",
-    },
-    {
-      n: 3,
-      text: "I believe there is a way to get funded based on my revenue without a bank, even with credit below 600.",
-    },
-    {
-      n: 4,
-      text: "I believe SRT Agency is the broker that actually funds owners like me: fast, transparent, and built for blue-collar and service businesses.",
-    },
-    {
-      n: 5,
-      text: "I believe the funding can be in my account in same-day to 48 hours with terms I can understand, not a 12-page trap.",
-    },
-    {
-      n: 6,
-      text: "I believe acting now (comment FUND / grab the free guide) gets me capital while the opportunity is still in front of me.",
-    },
-  ],
-  offer: {
-    ump: "Banks reject sub-600 owners on a credit score, not on real revenue, so profitable businesses stay starved of capital they have already earned.",
-    ums: "Revenue-based approval that looks at what the business actually makes, same-day to 48-hour funding, below 600 still funded, with terms read in plain English.",
-    big_idea: "Below 600, Still Funded.",
-    belief_chains: [
-      "The bank said no because of my credit, not because my business doesn't make money.",
-      "There is funding based on revenue that doesn't require a bank or a high credit score.",
-      "SRT Agency funds owners below 600 and is built for service and blue-collar businesses like mine.",
-      "The money can hit my account in same-day to 48 hours with terms I understand.",
-      "If I act now I get the capital while the opportunity is still here.",
-    ],
-    objections: [
-      {
-        objection: "My credit is below 600, I won't qualify.",
-        response: "Below 600, Still Funded. Approval is based on your revenue, not just your score.",
-      },
-      {
-        objection: "This is going to take weeks like the bank.",
-        response: "Same-day to 48-hour funding once you're approved.",
-      },
-      {
-        objection: "I don't understand the terms / it's a trap.",
-        response: "Plain-English terms: $25K-$500K, 4-12 month terms, no 12-page bank package.",
-      },
-      {
-        objection: "Is this an SBA loan?",
-        response:
-          "No. Revenue-based funding, equipment financing, and lines of credit, not SBA or long-term bank programs.",
-      },
-    ],
-    headlines: [
-      {
-        angle: "Flagship",
-        title: "Below 600 Credit? Still Funded.",
-        subtitle:
-          "Revenue-based funding for service and blue-collar businesses the banks turned away. Same-day to 48-hour funding. Comment FUND.",
-      },
-      {
-        angle: "Anti-bank",
-        title: "The Bank Said No to Your Score, Not Your Revenue.",
-        subtitle:
-          "Get funded on what your business actually makes. Grab the free guide at srtagency.com/bfunding.",
-      },
-    ],
-  },
-  // No current runtime "look" for the MCA vertical (it is the decoder/storyboard flow, not
-  // the POV reel), so look fields are minimal literals for now.
-  style_token: "Photorealistic vertical 9:16, authentic and candid, not studio or cinematic.",
-  house_style_prompt: "",
-  soul_id: undefined,
-  cta_formats: ["Comment FUND", "Comment CASH", "Link in bio", "DM the word FUND"],
-  gold_examples: [],
-};
-
 const PEST_OWNER_AI: Vertical = {
   id: "pest_owner_ai",
   name: "Pest Owner AI Content (B2B)",
@@ -744,7 +634,6 @@ const TRT_CLINIC_AI: Vertical = {
 
 export const SEED_VERTICALS: Record<string, Vertical> = {
   pest_control: PEST_CONTROL,
-  mca: MCA,
   pest_owner_ai: PEST_OWNER_AI,
   trt_clinic_ai: TRT_CLINIC_AI,
 };
