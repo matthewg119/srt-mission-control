@@ -134,6 +134,7 @@ export interface JobData {
   hs_storyboards?: Array<{ title: string; prompts: string[] }>; // 3 prompt sets for scenes 2..S
   hs_chosen_storyboard?: number; // `set N` note (cosmetic, for the review card)
   authored_prompts_posted?: boolean; // authored-scene workflows: the per-scene image prompts were posted (after copy lock)
+  hs_image_prompts_posted?: boolean; // legacy hook-first: the hook-image prompts were written from the locked copy
 
   // --- #agent-wokrflow-creator (workflow-agent.ts) ---
   agent_media?: string[]; // uploaded still URLs (drop order)
