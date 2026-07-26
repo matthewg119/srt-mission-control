@@ -546,7 +546,7 @@ async function postMotionPrompts(job: ContentJob, workflow: Workflow): Promise<v
         `*Motion prompts* (Seedance 2.0, one per scene):`,
         ...images.map((_, i) => `${i + 1}. *Scene ${i + 1}* — ${motions[i] ?? "slow push in on the subject"}`),
         "",
-        "Reply `animate` and I'll generate every clip with Seedance and render the whole video automatically.",
+        "Reply `animate` and I'll generate every clip with Seedance, drop them here, then ask before rendering.",
         "Or animate them yourself and drop the clips here (comment `scene N` to target).",
         "React ✅ or reply `review` to continue with the stills. `motion N <new text>` rewrites one.",
       ].join("\n"),
@@ -647,12 +647,13 @@ async function startHookRender(job: ContentJob, workflow: Workflow): Promise<voi
 }
 
 /** The v2 "animate-directly" branch: animate every scene image with its motion prompt via
- *  Seedance, then hand the clips to finishDropRender so the whole reel renders + delivers to
- *  the thread. Modeled on content-scene-runner.animateAndStitch, but routes clips through the
- *  render_spec build (not stitchClipsRemote) so they land on the workflow's beat-synced
- *  timeline with the clip audio ducked under the song. A shot whose clip fails keeps its
- *  still, so a partial failure still renders. */
-async function autoAnimateAndRender(job: ContentJob, workflow: Workflow): Promise<void> {
+ *  Seedance, drop each finished clip into the thread so the operator can see them, then hold
+ *  at a render gate (`hs_review`) so nothing renders until they confirm with ✅ / `render`.
+ *  Modeled on content-scene-runner.animateAndStitch. When the operator confirms, the existing
+ *  hs_review handler renders through the render_spec build (not stitchClipsRemote) so the clips
+ *  land on the workflow's beat-synced timeline with their audio ducked under the song. A shot
+ *  whose clip fails keeps its still, so a partial failure still renders. */
+async function autoAnimateScenes(job: ContentJob, workflow: Workflow): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
   const images = slotImages(job);
@@ -665,11 +666,15 @@ async function autoAnimateAndRender(job: ContentJob, workflow: Workflow): Promis
   await post(channel, threadTs, `Animating ${images.length} scene(s) with Seedance... this runs in parallel and takes a few minutes.`);
   const motion = getMotionAdapter();
 
-  // Animate every image in parallel; a failed shot resolves to null and keeps its still.
+  // Animate every image in parallel; post each finished clip into the thread. A failed shot
+  // resolves to null and keeps its still.
   const videos = await Promise.all(
     images.map(async (imageUrl, i) => {
       try {
         const buffer = await motion.animate(imageUrl, motions[i] ?? "");
+        // Drop the clip into the thread so the operator sees each animated scene.
+        await slack.uploadFile(channel, `scene-${i + 1}.mp4`, buffer, "video/mp4", threadTs).catch(() => null);
+        // Durable URL for the render service to fetch.
         return await uploadToReels(buffer, "video/mp4");
       } catch (e) {
         console.error(`[hook-studio] scene ${i + 1} animation failed:`, (e as Error).message);
@@ -680,14 +685,25 @@ async function autoAnimateAndRender(job: ContentJob, workflow: Workflow): Promis
   );
 
   if (!videos.some(Boolean)) {
-    await post(channel, threadTs, "No clips animated, so nothing was rendered. Reply `review` to render the stills as-is, or `animate` to try again.");
+    await post(channel, threadTs, "No clips animated, so nothing to render. Reply `review` to render the stills as-is, or `animate` to try again.");
     return;
   }
 
+  // Hold at the render gate: store the clips and ask before rendering. ✅ / `render` on the
+  // card below routes through the existing hs_review handler -> startHookRender.
+  const filled = videos.filter(Boolean).length;
   const fresh = (await getLatestJobByThread(threadTs)) ?? job;
-  await updateJob(fresh, { data: { ...fresh.data, mode_videos: videos } });
-  // finishDropRender posts its own "Rendering ... N shots" status and delivers the MP4.
-  waitUntil(finishDropRender(fresh, workflow, copy, images, videos));
+  await updateJob(fresh, { stage: "hs_review", data: { ...fresh.data, mode_videos: videos } });
+  const freshest = (await getLatestJobByThread(threadTs)) ?? fresh;
+  await postCard(
+    freshest,
+    [
+      `${filled} of ${images.length} clip(s) animated and posted above.`,
+      "Render the final video now? React ✅ or reply `render`.",
+      "`motion N <text>` rewrites a prompt, `cancel` ends it.",
+    ].join("\n"),
+    ["white_check_mark"]
+  );
 }
 
 // ---- routers -----------------------------------------------------------------------------------
@@ -698,7 +714,7 @@ const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
     "Pick a copy option 1-5 on the copy card (react or type the number, or paste your own copy block), then drop the generated hook image here. `retry` re-runs the options, `cancel` ends it.",
   hs_await_images: "Waiting on the scene images. Upload them into this thread (comment `scene N` to target a slot).",
   hs_anim:
-    "Reply `animate` to auto-generate the clips and render the whole video, drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
+    "Reply `animate` and I'll generate the clips, drop them here, then ask before rendering. Or drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
   hs_review: "React ✅ or reply `render` to render. Paste a new copy block, drop a replacement image with `scene N`, or `motion N <text>` to change things.",
   dr_render: "Rendering now. Reply `render` to retry if it fails.",
 };
@@ -840,7 +856,7 @@ export async function handleHookStudioReply(args: {
     }
     case "hs_anim": {
       if (/^\s*animate(\s+all)?\s*$/i.test(text) && workflow) {
-        waitUntil(autoAnimateAndRender(job, workflow));
+        waitUntil(autoAnimateScenes(job, workflow));
         return true;
       }
       if (/^\s*(review|render|still)\s*$/i.test(text) && workflow) {
