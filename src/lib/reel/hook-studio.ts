@@ -55,6 +55,8 @@ import {
 import { stripEmDashes } from "@/lib/reel/text";
 import { loadWorkflow, type Workflow } from "@/config/workflows";
 import { workflowRenderBuild } from "@/lib/reel/render-dispatch";
+import { getMotionAdapter } from "@/lib/reel/motion-adapter";
+import { uploadToReels } from "@/lib/reel/pov";
 import { POV_GLASSES_TOKEN } from "@/config/pov-style";
 import {
   loadVertical,
@@ -544,7 +546,8 @@ async function postMotionPrompts(job: ContentJob, workflow: Workflow): Promise<v
         `*Motion prompts* (Seedance 2.0, one per scene):`,
         ...images.map((_, i) => `${i + 1}. *Scene ${i + 1}* — ${motions[i] ?? "slow push in on the subject"}`),
         "",
-        "Animate with Seedance and drop the clips here (optional, comment `scene N` to target).",
+        "Reply `animate` and I'll generate every clip with Seedance and render the whole video automatically.",
+        "Or animate them yourself and drop the clips here (comment `scene N` to target).",
         "React ✅ or reply `review` to continue with the stills. `motion N <new text>` rewrites one.",
       ].join("\n"),
       ["white_check_mark"]
@@ -643,6 +646,50 @@ async function startHookRender(job: ContentJob, workflow: Workflow): Promise<voi
   waitUntil(finishDropRender(job, workflow, copy, images, job.data.mode_videos ?? []));
 }
 
+/** The v2 "animate-directly" branch: animate every scene image with its motion prompt via
+ *  Seedance, then hand the clips to finishDropRender so the whole reel renders + delivers to
+ *  the thread. Modeled on content-scene-runner.animateAndStitch, but routes clips through the
+ *  render_spec build (not stitchClipsRemote) so they land on the workflow's beat-synced
+ *  timeline with the clip audio ducked under the song. A shot whose clip fails keeps its
+ *  still, so a partial failure still renders. */
+async function autoAnimateAndRender(job: ContentJob, workflow: Workflow): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
+  const images = slotImages(job);
+  const motions = job.data.final_animation_prompts ?? [];
+  if (!copy.length || !images.length) {
+    await post(channel, threadTs, "Missing copy or images, nothing to animate yet.");
+    return;
+  }
+
+  await post(channel, threadTs, `Animating ${images.length} scene(s) with Seedance... this runs in parallel and takes a few minutes.`);
+  const motion = getMotionAdapter();
+
+  // Animate every image in parallel; a failed shot resolves to null and keeps its still.
+  const videos = await Promise.all(
+    images.map(async (imageUrl, i) => {
+      try {
+        const buffer = await motion.animate(imageUrl, motions[i] ?? "");
+        return await uploadToReels(buffer, "video/mp4");
+      } catch (e) {
+        console.error(`[hook-studio] scene ${i + 1} animation failed:`, (e as Error).message);
+        await post(channel, threadTs, `Scene ${i + 1} did not animate (${(e as Error).message.slice(0, 160)}) - it will render as the still.`);
+        return null;
+      }
+    })
+  );
+
+  if (!videos.some(Boolean)) {
+    await post(channel, threadTs, "No clips animated, so nothing was rendered. Reply `review` to render the stills as-is, or `animate` to try again.");
+    return;
+  }
+
+  const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+  await updateJob(fresh, { data: { ...fresh.data, mode_videos: videos } });
+  // finishDropRender posts its own "Rendering ... N shots" status and delivers the MP4.
+  waitUntil(finishDropRender(fresh, workflow, copy, images, videos));
+}
+
 // ---- routers -----------------------------------------------------------------------------------
 
 const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
@@ -651,7 +698,7 @@ const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
     "Pick a copy option 1-5 on the copy card (react or type the number, or paste your own copy block), then drop the generated hook image here. `retry` re-runs the options, `cancel` ends it.",
   hs_await_images: "Waiting on the scene images. Upload them into this thread (comment `scene N` to target a slot).",
   hs_anim:
-    "Drop Seedance clips (optional), react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
+    "Reply `animate` to auto-generate the clips and render the whole video, drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
   hs_review: "React ✅ or reply `render` to render. Paste a new copy block, drop a replacement image with `scene N`, or `motion N <text>` to change things.",
   dr_render: "Rendering now. Reply `render` to retry if it fails.",
 };
@@ -792,6 +839,10 @@ export async function handleHookStudioReply(args: {
       break;
     }
     case "hs_anim": {
+      if (/^\s*animate(\s+all)?\s*$/i.test(text) && workflow) {
+        waitUntil(autoAnimateAndRender(job, workflow));
+        return true;
+      }
       if (/^\s*(review|render|still)\s*$/i.test(text) && workflow) {
         waitUntil(postReview(job, workflow));
         return true;
