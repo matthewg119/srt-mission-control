@@ -518,6 +518,10 @@ export async function generatePicturePlan(args: {
   workflow?: Workflow;
   /** The locked visual direction's per-shot gists: each shot's NON-NEGOTIABLE subject. */
   chosenIdeaShots?: string[];
+  /** Per-shot motion prompts that must survive verbatim (e.g. animated draw-on workflows whose
+   *  animation_prompt encodes the exact second each element is drawn). When set, these overwrite
+   *  Claude's regenerated animation_prompt by scene index so the locked draw beats are preserved. */
+  lockedAnimationPrompts?: string[];
 }): Promise<PicturePlan> {
   const clip = args.clipSeconds ?? 2;
   const system = [
@@ -575,7 +579,7 @@ export async function generatePicturePlan(args: {
     validate: isPicturePlan,
   });
 
-  const scenes = data.scenes
+  let scenes = data.scenes
     .map((s) => ({
       role: clean(s.role || "shot"),
       image_prompt: clean(s.image_prompt),
@@ -583,6 +587,13 @@ export async function generatePicturePlan(args: {
     }))
     .filter((s) => s.image_prompt)
     .slice(0, 5);
+  // Locked motion (animated draw-on workflows): keep the authored per-shot animation prompt —
+  // and its exact second markers — instead of Claude's rewrite, matched by scene index.
+  if (args.lockedAnimationPrompts?.length) {
+    scenes = scenes.map((s, i) =>
+      args.lockedAnimationPrompts![i] ? { ...s, animation_prompt: clean(args.lockedAnimationPrompts![i]) } : s
+    );
+  }
   const captions = [
     { text: clean(args.chosenHook), at_second: 0 },
     ...data.captions

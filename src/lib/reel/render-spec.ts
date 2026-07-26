@@ -169,6 +169,18 @@ export function buildRenderClaudePrompt(workflow: Workflow, spec: RenderSpec): s
         `  ${t.at_second}s to ${t.out_second ?? spec.duration_seconds}s  "${t.text}"` +
         `${t.position ? ` @ ${t.position}` : ""}${t.role ? `  [${t.role}]` : ""}`
     ),
+    // Animated workflows carry a per-shot motion prompt (on the scene). For draw-on / synced
+    // styles it also encodes the EXACT shot-relative second each element is drawn, so it must
+    // reach the render prompt verbatim — honor those second markers, do not paraphrase them.
+    ...(spec.mode === "animated" && (workflow.scenes ?? []).some((sc) => sc?.animation_prompt)
+      ? [
+          "",
+          "Animation (per shot — motion + exact draw timing; reproduce the second markers exactly):",
+          ...[...spec.shots]
+            .sort((a, b) => a.i - b.i)
+            .map((s) => `  Shot ${s.i}: ${workflow.scenes?.[s.i - 1]?.animation_prompt || "(motion only)"}`),
+        ]
+      : []),
     "",
     "Requirements: burn the on-screen text in at the exact in/out seconds and positions above; " +
       (spec.mode === "animated"

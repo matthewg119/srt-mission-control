@@ -1819,6 +1819,16 @@ async function postRemixOffer(channel: string, threadTs: string): Promise<void> 
   );
 }
 
+/** For an animated workflow whose seed scenes carry authored motion prompts, those per-shot
+ *  animation prompts are LOCKED (e.g. draw-on styles encode the exact second each element is
+ *  drawn) and must survive prompt regeneration verbatim. Returns them in shot order, or
+ *  undefined when the workflow doesn't opt in (non-animated, or no authored scene motion). */
+function lockedAnimationPromptsFor(wf?: Workflow): string[] | undefined {
+  if (!wf || wf.render_spec?.mode !== "animated") return undefined;
+  const motions = (wf.scenes ?? []).map((s) => (s?.animation_prompt ?? "").trim());
+  return motions.some((m) => m.length > 0) ? motions : undefined;
+}
+
 /** The plain picture flow for an active workflow with NO copy structure (today's behavior). */
 async function generateAndPostPicture(args: {
   channel: string;
@@ -1837,6 +1847,7 @@ async function generateAndPostPicture(args: {
       chosenCaption: args.caption,
       chosenStoryboard: args.storyboard,
       workflow: args.workflow,
+      lockedAnimationPrompts: lockedAnimationPromptsFor(args.workflow),
     });
     const name = args.workflow?.name || (args.hook || args.storyboard).slice(0, 60);
     const wfId = args.workflow?.id || workflowId(args.verticalId, "pov", name);
@@ -2037,6 +2048,7 @@ async function buildPictureFromStructuredCopy(job: ContentJob, channel: string):
           chosenStoryboard: job.data.chosen_storyboard || captionText,
           chosenIdeaShots: job.data.chosen_idea_shots,
           workflow: wf,
+          lockedAnimationPrompts: lockedAnimationPromptsFor(wf),
         });
         let scenes = plan.scenes.slice(0, shotCount);
         while (scenes.length < shotCount) {
