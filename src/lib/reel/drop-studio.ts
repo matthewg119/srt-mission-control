@@ -252,6 +252,14 @@ export function boxCount(w: Workflow): number {
   return (w.copy_structure ?? []).length;
 }
 
+/** An AUTHORED-SCENE workflow ships its own per-scene prompts (a whiteboard image_prompt +
+ *  a locked draw-beat animation_prompt on every scene), so the drop lanes must use THOSE
+ *  instead of generating generic ones. Legacy b-roll workflows have `scenes: []` -> false,
+ *  which keeps every existing hook-first / motion-generation path byte-for-byte unchanged. */
+export function hasAuthoredScenes(w: Workflow): boolean {
+  return Boolean(w.scenes?.length) && w.scenes.every((s) => Boolean(s.image_prompt?.trim()));
+}
+
 function isRenderable(w: Workflow): boolean {
   const build = workflowRenderBuild(w);
   if (build === "render_reel") return true;
@@ -837,7 +845,12 @@ async function postAnimatePrompts(
 ): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   try {
-    const motions = await generateMotionPrompts(images, { workflow, copy });
+    // Authored-scene workflows carry LOCKED motion (draw-beat seconds) on each scene; use it
+    // verbatim rather than asking Claude for fresh camera sentences.
+    const authored = hasAuthoredScenes(workflow);
+    const motions = authored
+      ? workflow.scenes.map((s) => (s.animation_prompt ?? "").trim())
+      : await generateMotionPrompts(images, { workflow, copy });
     const roles = workflow.copy_structure ?? [];
     const lines = images.map((_, i) => {
       const role = roles[i]?.label ?? `Shot ${i + 1}`;
@@ -847,7 +860,9 @@ async function postAnimatePrompts(
       channel,
       threadTs,
       [
-        `*Motion prompts for ${workflow.name}* (Seedance 2.0, one per image):`,
+        authored
+          ? `*Locked draw-beat motion for ${workflow.name}* (one per image, do not edit unless intentional):`
+          : `*Motion prompts for ${workflow.name}* (Seedance 2.0, one per image):`,
         ...lines,
         "",
         `Animate each image with these and drop the clips back here — I'll render automatically once all ${images.length} are in. Or reply \`still\` to render the images as-is.`,

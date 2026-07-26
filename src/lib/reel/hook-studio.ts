@@ -45,7 +45,9 @@ import {
   boxCount,
   songNote,
   activeWorkflows,
+  hasAuthoredScenes,
 } from "@/lib/reel/drop-studio";
+import { enrichScene } from "@/lib/reel/prompt-enrich";
 import {
   avatarBlock,
   reslotCopyToStructure,
@@ -97,6 +99,24 @@ async function getHookJob(threadTs: string): Promise<ContentJob | null> {
 
 function slotImages(job: ContentJob): string[] {
   return (job.data.prompt_slots ?? []).map((s) => s.image_url!).filter(Boolean);
+}
+
+/** Enrich an authored scene's image_prompt with the workflow's visual_rules + reference frames
+ *  (mirrors enrichWorkflowPrompt in workflow-pipeline.ts). The b-roll branch of enrichScene keeps
+ *  it documentary — no Meta-glasses framing — which is correct for the hand-drawn whiteboard look.
+ *  Falls back to the raw authored prompt on any error, so the prompt is never lost. */
+async function enrichAuthoredScene(imagePrompt: string, wf: Workflow): Promise<string> {
+  try {
+    const vertical = await loadVertical(wf.vertical_id);
+    return await enrichScene(imagePrompt, {
+      vertical,
+      formatGroup: String(wf.category ?? "broll"),
+      extraRules: wf.visual_rules,
+      workflow: { id: wf.id, category: String(wf.category), description: wf.description ?? null },
+    });
+  } catch {
+    return imagePrompt;
+  }
 }
 
 // ---- entry: text-only top-level message ------------------------------------------------------
@@ -284,8 +304,99 @@ async function generateHookImagePrompts(args: {
   };
 }
 
+/** Post the copy-options picker card (shared by the hook-first and authored-scene paths). */
+async function postCopyOptionsCard(
+  job: ContentJob,
+  workflow: Workflow,
+  variants: Array<Array<{ key: string; label: string; text: string }>>,
+  authored = false
+): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  if (variants.length) {
+    const B = boxCount(workflow);
+    const caps = ["one", "two", "three", "four", "five"].slice(0, variants.length);
+    await postCard(
+      job,
+      [
+        `*Complete video copy* — ${variants.length} options for *${workflow.name}*'s ${B} text slot${B === 1 ? "" : "s"}.`,
+        authored
+          ? `React ${caps.map((_, i) => `${i + 1}️⃣`).join("/")} to lock one (or paste an edited version instead):`
+          : `React ${caps.map((_, i) => `${i + 1}️⃣`).join("/")} to lock one (or paste an edited version with the image instead):`,
+        ...variants.flatMap((v, i) => [`*Option ${i + 1}:*`, ...v.map((c) => `  *${c.label}:* ${c.text}`)]),
+        "",
+        authored
+          ? "Lock a copy option (react a number, or paste your own copy block) and I'll post the image prompts to generate."
+          : "Then drop the generated hook image into this thread (copy pasted in the same message is fine).",
+      ].join("\n"),
+      caps
+    );
+  } else {
+    await post(
+      channel,
+      threadTs,
+      workflow.copy_structure?.length
+        ? authored
+          ? "Could not write the copy options. Paste your own copy block to continue (or reply `retry`)."
+          : "Could not write the copy options. Paste your own copy block with the hook image (or reply `retry`)."
+        : "This workflow has free-form copy boxes. Drop the hook image + your copy lines (label, hook, payoff, cta) in one message."
+    );
+  }
+}
+
+/** Authored-scene workflows (e.g. Workflow 30) ship their own per-scene image + motion prompts.
+ *  Post the copy options first and DEFER the image prompts until copy is locked (they are the
+ *  workflow's own whiteboard prompts, so there is no hook-image / storyboard improvisation). */
+async function postAuthoredSceneOptions(job: ContentJob, workflow: Workflow): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const hookLines = job.data.hook_lines ?? [];
+  const S = shotCount(workflow);
+  await post(channel, threadTs, `Fitting *${workflow.name}* — writing copy options for its ${boxCount(workflow)} text slots...`);
+
+  const drop = await loadVertical(job.vertical_id);
+  const owner = await loadVertical(dropOwnerVerticalId(drop));
+  let variants: Array<Array<{ key: string; label: string; text: string }>> = [];
+  try {
+    variants = await generateStructuredCopyVariants({ vertical: owner, workflow, hookLines, count: 5 });
+  } catch (e) {
+    console.error("[hook-studio] authored copy variants failed:", (e as Error).message);
+  }
+
+  await updateJob(job, {
+    stage: "hs_options",
+    data: {
+      ...job.data,
+      workflow_id: workflow.id,
+      hs_copy_options: variants,
+      prompt_slots: Array.from({ length: S }, (_, i) => ({ scene: i + 1, image_url: null })),
+      authored_prompts_posted: false,
+    },
+  });
+  await postCopyOptionsCard(job, workflow, variants, true);
+}
+
+/** Post the workflow's OWN per-scene image prompts (each enriched with its visual_rules), one
+ *  card in scene order. Called once the operator locks a copy option. */
+async function postAuthoredScenePrompts(job: ContentJob, workflow: Workflow): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const scenes = workflow.scenes ?? [];
+  await post(channel, threadTs, `Writing the ${scenes.length} image prompt${scenes.length === 1 ? "" : "s"} for *${workflow.name}*...`);
+  const enriched = await Promise.all(scenes.map((s) => enrichAuthoredScene(s.image_prompt, workflow)));
+  const block = (p: string) => `\`\`\`\n${p}\n\`\`\``;
+  await post(
+    channel,
+    threadTs,
+    [
+      `*Image prompts for ${workflow.name}* — generate each with gpt-image-2 and drop them here in scene order (comment \`scene N\` to target a slot):`,
+      ...scenes.map((s, i) => `*Scene ${i + 1} — ${s.role}*\n${block(enriched[i])}`),
+    ].join("\n")
+  );
+  const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+  await updateJob(fresh, { data: { ...fresh.data, authored_prompts_posted: true } });
+}
+
 /** Post the 6 hook-image prompts + the 3-copy picker card, then wait at hs_options. */
 async function postHookOptions(job: ContentJob, workflow: Workflow): Promise<void> {
+  if (hasAuthoredScenes(workflow)) return postAuthoredSceneOptions(job, workflow);
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   const hookLines = job.data.hook_lines ?? [];
   await post(channel, threadTs, `Writing hook image prompts + copy options for *${workflow.name}*...`);
@@ -353,29 +464,7 @@ async function postHookOptions(job: ContentJob, workflow: Workflow): Promise<voi
     },
   });
 
-  if (variants.length) {
-    const B = boxCount(workflow);
-    const caps = ["one", "two", "three", "four", "five"].slice(0, variants.length);
-    await postCard(
-      job,
-      [
-        `*Complete video copy* — ${variants.length} options for *${workflow.name}*'s ${B} text slot${B === 1 ? "" : "s"}.`,
-        `React ${caps.map((_, i) => `${i + 1}️⃣`).join("/")} to lock one (or paste an edited version with the image instead):`,
-        ...variants.flatMap((v, i) => [`*Option ${i + 1}:*`, ...v.map((c) => `  *${c.label}:* ${c.text}`)]),
-        "",
-        "Then drop the generated hook image into this thread (copy pasted in the same message is fine).",
-      ].join("\n"),
-      caps
-    );
-  } else {
-    await post(
-      channel,
-      threadTs,
-      workflow.copy_structure?.length
-        ? "Could not write the copy options. Paste your own copy block with the hook image (or reply `retry`)."
-        : "This workflow has free-form copy boxes. Drop the hook image + your copy lines (label, hook, payoff, cta) in one message."
-    );
-  }
+  await postCopyOptionsCard(job, workflow, variants);
 }
 
 /** Fit pasted copy to the workflow: exact-count lines pass through verbatim, else re-slot. */
@@ -392,7 +481,32 @@ async function fitCopy(job: ContentJob, workflow: Workflow, text: string): Promi
 async function maybeAdvanceFromOptions(job: ContentJob, workflow: Workflow): Promise<void> {
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
   const slots = job.data.prompt_slots ?? [];
-  if (!copy.length || !slots[0]?.image_url) return;
+  if (!copy.length) return;
+
+  // Authored-scene workflows: image prompts are the workflow's OWN scene prompts, posted once
+  // copy is locked; then collect the images (no hook-image/storyboard step) and go to the locked
+  // motion prompts.
+  if (hasAuthoredScenes(workflow)) {
+    if (!slots.some((s) => s.image_url)) {
+      if (!job.data.authored_prompts_posted) await postAuthoredScenePrompts(job, workflow);
+      return;
+    }
+    if (slots.every((s) => s.image_url)) {
+      await post(job.slack_channel, job.slack_thread_ts, "All scene images in. Writing motion prompts...");
+      await postMotionPrompts(job, workflow);
+    } else {
+      const filled = slots.filter((s) => s.image_url).length;
+      await post(job.slack_channel, job.slack_thread_ts, `${filled} of ${slots.length} image(s) in. Drop the rest in scene order.`);
+    }
+    return;
+  }
+
+  // Legacy hook-first: the hook image (slot 1) must be in before storyboards. On the paste-copy
+  // path with no image yet, print the next step instead of returning silently (the old stall).
+  if (!slots[0]?.image_url) {
+    await post(job.slack_channel, job.slack_thread_ts, "Copy locked. Drop the generated hook image here to continue.");
+    return;
+  }
   if (slots.every((s) => s.image_url)) {
     await post(job.slack_channel, job.slack_thread_ts, "All scene images in. Writing motion prompts...");
     await postMotionPrompts(job, workflow);
@@ -535,7 +649,11 @@ async function postMotionPrompts(job: ContentJob, workflow: Workflow): Promise<v
   try {
     // v2 animate-directly branch point: everything a clip generator needs is on the job here
     // (final_animation_prompts + prompt_slots images + mode_videos slots). Do not build yet.
-    const motions = await generateMotionPrompts(images, { workflow, copy });
+    // Authored-scene workflows carry LOCKED motion (draw-beat seconds) per scene; use it verbatim.
+    const authored = hasAuthoredScenes(workflow);
+    const motions = authored
+      ? workflow.scenes.map((s) => (s.animation_prompt ?? "").trim())
+      : await generateMotionPrompts(images, { workflow, copy });
     await updateJob(job, {
       stage: "hs_anim",
       data: { ...job.data, final_animation_prompts: motions, mode_images: images },
@@ -543,7 +661,9 @@ async function postMotionPrompts(job: ContentJob, workflow: Workflow): Promise<v
     await postCard(
       job,
       [
-        `*Motion prompts* (Seedance 2.0, one per scene):`,
+        authored
+          ? `*Locked draw-beat motion* (one per scene, edit only if intentional):`
+          : `*Motion prompts* (Seedance 2.0, one per scene):`,
         ...images.map((_, i) => `${i + 1}. *Scene ${i + 1}* — ${motions[i] ?? "slow push in on the subject"}`),
         "",
         "Reply `animate` and I'll generate every clip with Seedance, drop them here, then ask before rendering.",
@@ -746,10 +866,12 @@ async function lockCopyOption(job: ContentJob, n: number): Promise<void> {
     return;
   }
   await updateJob(job, { data: { ...job.data, structured_copy: picked } });
+  const workflow = await loadJobWorkflow(job);
   const slots = job.data.prompt_slots ?? [];
-  if (slots[0]?.image_url) {
-    const workflow = await loadJobWorkflow(job);
-    if (workflow) await maybeAdvanceFromOptions(job, workflow);
+  // Authored-scene workflows post their image prompts on copy lock (no hook image required);
+  // legacy hook-first only advances once the hook image is already in.
+  if (workflow && (hasAuthoredScenes(workflow) || slots[0]?.image_url)) {
+    await maybeAdvanceFromOptions(job, workflow);
   } else {
     await post(job.slack_channel, job.slack_thread_ts, `Copy option ${n} locked. Drop the generated hook image here to continue.`);
   }
