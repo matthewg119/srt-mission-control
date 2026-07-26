@@ -81,11 +81,15 @@ export function buildRenderPayload(workflow: Workflow, spec: RenderSpec): SpecRe
     if (cur === undefined || t.at_second < cur) minAtByShot.set(si, t.at_second);
   }
 
+  // AI voiceover is OFF by default: the TTS read-aloud drifts out of sync with the on-screen
+  // text, so renders ship with the music bed + text popups only. Re-enable per environment by
+  // setting REEL_VOICEOVER_ENABLED=1 once the timing is synced.
+  const voiceoverEnabled = process.env.REEL_VOICEOVER_ENABLED === "1";
   return {
     song_url: song.url ?? null,
     duration,
     shots: payloadShots,
-    ...(spec.voiceover ? { voiceover: spec.voiceover } : {}),
+    ...(voiceoverEnabled && spec.voiceover ? { voiceover: spec.voiceover } : {}),
     texts: specTexts.map((t) => {
       const isFirstInShot = minAtByShot.get(shotIndexFor(t.at_second)) === t.at_second;
       const pop = typeof t.pop === "boolean" ? t.pop : !isFirstInShot;
