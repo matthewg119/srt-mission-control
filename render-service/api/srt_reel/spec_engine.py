@@ -48,7 +48,7 @@ VO_STYLE_SPEED = {"chipmunk": 1.0}
 VO_DEFAULT_SPEED = 1.0
 DUCK_VOLUME = 0.30                    # music bed level while voiceover plays
 VO_LINE_GAP = 0.15                    # min silence between two voice lines (no talk-over)
-CLIP_AUDIO_VOLUME = 0.05              # a video shot's OWN sound, faint under the song ("volume 5")
+CLIP_AUDIO_VOLUME = 0.12              # a video shot's OWN sound, faint under the song (~12%)
 
 # y-center of each named position, as a fraction of H. x is always centered.
 POSITIONS = {
