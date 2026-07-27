@@ -106,10 +106,15 @@ HF_CREDENTIALS=            # Higgsfield key — Seedance 2.0 ANIMATION ONLY (ima
 ## Image generation rules (2026-07-03)
 - ALL images: gpt-image-2 via the direct OpenAI API. Higgsfield = Seedance animation only.
   Soul stays banned for generation (Vargas belief-drop excepted, explicit provider).
-- Kill switch: `IMAGE_GEN_ENABLED` unset/false pauses every generation path loudly
+- Kill switch: `IMAGE_GEN_ENABLED` unset/false pauses every AUTOMATIC generation path loudly
   (`ImageGenPausedError` -> Slack paused note). Workflow sessions then run PROMPT-FIRST:
   final prompts post as copy blocks, Matthew pastes the images, pasted = approved + saved
   to the workflow's reference library (`content_examples`, labels `approved_manual`).
+- ONE deliberate exception (2026-07-27): reacting ✅ on Hook Studio's scene-prompt card
+  generates those images even while paused (`generateSceneImages` in `src/lib/reel/hook-studio.ts`,
+  the only caller of `GenerateImagesOpts.allowWhenPaused`). The switch governs unattended
+  spend; a reaction is Matthew explicitly asking. Nothing else may pass that flag — if a
+  second caller ever needs it, that is the signal to make the switch three-valued instead.
 - Session approval chain: copy ✅ -> idea N (mandatory) -> picture ✅ -> prompts ✅ ->
   images (paste or auto+✅) -> animation `motion N` ✅ -> song -> render ✅ -> drop final
   MP4 -> variations card. See docs/SOP-content-workflow-session.md.

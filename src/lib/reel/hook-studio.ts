@@ -5,8 +5,9 @@
 //
 //   hook text -> 5 complete-copy options sized to the workflow's boxes
 //   -> operator locks one (react a number) or pastes his own block
-//   -> ONE image prompt per scene, written from that locked copy
-//   -> operator drops the scene images -> motion prompts (Seedance, prompts only)
+//   -> ONE image prompt per scene, written from that locked copy, on a checkmark card
+//   -> checkmark generates every scene image with gpt-image-2 in-thread (or the operator
+//      drops his own) -> motion prompts (Seedance, prompts only)
 //   (an image dropped BEFORE copy locks still takes the older hook-first route: that image
 //    anchors the look and postStoryboards writes the remaining scenes to continue it)
 //   -> "Seems like we have everything we need" full shot-by-shot review
@@ -15,7 +16,9 @@
 // format_id "hook_studio", stages hs_workflow -> hs_options -> hs_await_images -> hs_anim
 // -> hs_review -> dr_render -> done. Coexists with drop-studio in the same channels: entry
 // is disjoint (text-only vs files) and every in-thread handler self-routes by format_id.
-// Prompt-first stays law: this module never generates images; animation is prompts only
+// Prompt-first stays the DEFAULT: nothing generates on its own. Images are only ever made
+// when the operator asks for them by reacting on the scene-prompt card (generateSceneImages,
+// which is why it is the one caller passing allowWhenPaused). Animation stays prompts-only
 // (v1) — the future animate-directly branch slots in at postMotionPrompts (the job already
 // carries final_animation_prompts + mode_videos + prompt_slots, all a v2 needs).
 
@@ -59,6 +62,7 @@ import { stripEmDashes } from "@/lib/reel/text";
 import { loadWorkflow, type Workflow } from "@/config/workflows";
 import { workflowRenderBuild } from "@/lib/reel/render-dispatch";
 import { getMotionAdapter } from "@/lib/reel/motion-adapter";
+import { generateImages } from "@/lib/providers/image-gen";
 import { uploadToReels } from "@/lib/reel/pov";
 import {
   loadVertical,
@@ -396,18 +400,8 @@ async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow
     });
     if (!board?.prompts.length) throw new Error("no prompts returned");
 
-    const block = (p: string) => `\`\`\`\n${p}\n\`\`\``;
-    await post(
-      channel,
-      threadTs,
-      [
-        `Copy locked. *Image prompts for ${workflow.name}*, built from it${board.title ? ` (${board.title})` : ""}:`,
-        ...board.prompts.map((p, i) => `*Scene ${i + 1} — ${roleLabel(i + 1)}*\n${block(p)}`),
-        "",
-        `Generate all ${board.prompts.length} with gpt-image-2 and drop them here in scene order (comment \`scene N\` to target a slot). Motion prompts follow once they are all in. \`retry\` rewrites them.`,
-      ].join("\n")
-    );
-
+    // Stage + prompts land BEFORE the card, because postCard moves pickerTs onto it and a
+    // fast checkmark would otherwise race a job that has neither.
     const fresh = (await getLatestJobByThread(threadTs)) ?? job;
     await updateJob(fresh, {
       stage: "hs_await_images",
@@ -417,6 +411,20 @@ async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow
         hs_image_prompts_posted: true,
       },
     });
+
+    const block = (p: string) => `\`\`\`\n${p}\n\`\`\``;
+    const carded = (await getLatestJobByThread(threadTs)) ?? fresh;
+    await postCard(
+      carded,
+      [
+        `Copy locked. *Image prompts for ${workflow.name}*, built from it${board.title ? ` (${board.title})` : ""}:`,
+        ...board.prompts.map((p, i) => `*Scene ${i + 1} — ${roleLabel(i + 1)}*\n${block(p)}`),
+        "",
+        `React ✅ and I'll generate all ${board.prompts.length} with gpt-image-2 right here, then write the motion prompts.`,
+        "Or generate them yourself and drop them in scene order (comment `scene N` to target a slot). `retry` rewrites the prompts.",
+      ].join("\n"),
+      ["white_check_mark"]
+    );
   } catch (e) {
     console.error("[hook-studio] scene image prompts from copy failed:", (e as Error).message);
     await post(
@@ -644,6 +652,95 @@ async function postStoryboards(job: ContentJob, workflow: Workflow): Promise<voi
   }
 }
 
+// ---- step 5b: generate the scene images in-thread ----------------------------------------------
+
+/**
+ * The checkmark on the scene-prompt card: generate every scene image that is still missing
+ * with gpt-image-2, drop them into the thread, and go straight on to the motion prompts.
+ *
+ * Passes `allowWhenPaused` deliberately. IMAGE_GEN_ENABLED exists to stop UNATTENDED lanes
+ * (crons, auto-reel) from spending credits on their own; an operator reacting to a card is
+ * the explicit request that switch was never meant to block, and `allowWhenPaused` was left
+ * in GenerateImagesOpts for exactly this seam. Nothing else here bypasses it.
+ */
+async function generateSceneImages(job: ContentJob, workflow: Workflow): Promise<void> {
+  const { slack_channel: channel, slack_thread_ts: threadTs } = job;
+  const slots = (job.data.prompt_slots ?? []).map((s) => ({ ...s }));
+  const prompts = (job.data.hs_image_prompt_options ?? []).map((o) => o.prompt);
+  // Only the empty slots, so a re-react retries the failures instead of redoing the set.
+  const todo = slots
+    .map((s, i) => ({ i, scene: s.scene, prompt: prompts[i] ?? "" }))
+    .filter((t) => !slots[t.i].image_url && t.prompt);
+
+  if (!todo.length) {
+    await post(
+      channel,
+      threadTs,
+      slots.length && slots.every((s) => s.image_url)
+        ? "Every scene already has an image. Reply `review` to keep going."
+        : "I have no prompts to generate from here. Reply `retry` to rewrite them."
+    );
+    return;
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    await post(
+      channel,
+      threadTs,
+      "I can't generate: OPENAI_API_KEY is not set on this deployment. Generate them yourself and drop them here, or set the key in Vercel and react again."
+    );
+    return;
+  }
+
+  await post(channel, threadTs, `Generating ${todo.length} image${todo.length === 1 ? "" : "s"} with gpt-image-2. Give it a minute.`);
+
+  // Generated together (3 images, well inside the 300s budget), then handled in scene order
+  // so the thread reads top to bottom. generateImages already retries each prompt once.
+  const results = await Promise.all(
+    todo.map((t) =>
+      generateImages({ prompts: [t.prompt], aspect: "9:16", allowWhenPaused: true })
+        .then((r) => r[0] ?? null)
+        .catch((e) => {
+          console.error(`[hook-studio] scene ${t.scene} generation threw:`, (e as Error).message);
+          return null;
+        })
+    )
+  );
+
+  const failed: number[] = [];
+  for (let n = 0; n < todo.length; n++) {
+    const t = todo[n];
+    const img = results[n];
+    const url = img ? await uploadToReels(img.buffer, img.mimetype) : null;
+    if (!img || !url) {
+      failed.push(t.scene);
+      continue;
+    }
+    slots[t.i] = { ...slots[t.i], image_url: url };
+    // The slot is already saved, so an upload failure must not read as a lost image:
+    // fall back to the public URL rather than silently showing nothing.
+    const shown = await slack
+      .uploadFile(channel, `scene-${t.scene}.png`, img.buffer, img.mimetype, threadTs)
+      .catch(() => null);
+    if (!shown) await post(channel, threadTs, `*Scene ${t.scene}* (couldn't attach it here): ${url}`);
+  }
+
+  const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+  await updateJob(fresh, { data: { ...fresh.data, prompt_slots: slots } });
+
+  if (failed.length) {
+    await post(
+      channel,
+      threadTs,
+      `Scene ${failed.join(", ")} didn't come back. React ✅ again to retry just those, or drop the image yourself (comment \`scene N\`).`
+    );
+  }
+  if (slots.length && slots.every((s) => s.image_url)) {
+    await post(channel, threadTs, "All scene images in. Writing motion prompts...");
+    const filled = (await getLatestJobByThread(threadTs)) ?? fresh;
+    await postMotionPrompts(filled, workflow);
+  }
+}
+
 // ---- step 6: motion prompts (Seedance, prompts only) ------------------------------------------
 
 async function postMotionPrompts(job: ContentJob, workflow: Workflow): Promise<void> {
@@ -836,7 +933,8 @@ const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   hs_workflow: "Pick a workflow by number (or react ✅ for the top pick), or `cancel`.",
   hs_options:
     "Pick a copy option 1-5 on the copy card (react or type the number, or paste your own copy block) and I'll post one image prompt per scene. `retry` re-runs the options, `cancel` ends it.",
-  hs_await_images: "Waiting on the scene images. Upload them into this thread (comment `scene N` to target a slot).",
+  hs_await_images:
+    "React ✅ (or reply `generate`) and I'll make the scene images with gpt-image-2. Or upload your own into this thread (comment `scene N` to target a slot). `retry` rewrites the prompts.",
   hs_anim:
     "Reply `animate` and I'll generate the clips, drop them here, then ask before rendering. Or drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
   hs_review: "React ✅ or reply `render` to render. Paste a new copy block, drop a replacement image with `scene N`, or `motion N <text>` to change things.",
@@ -998,6 +1096,11 @@ export async function handleHookStudioReply(args: {
         );
         return true;
       }
+      // Typed twin of the checkmark, for when the card has scrolled out of reach.
+      if (/^\s*generate(\s+images?)?\s*$/i.test(text) && workflow) {
+        bg(job, "Image generation", generateSceneImages(job, workflow));
+        return true;
+      }
       break;
     }
     case "hs_anim": {
@@ -1107,6 +1210,9 @@ export async function handleHookStudioReaction(args: {
       return true;
     case "hs_options":
       if (keycap) await lockCopyOption(job, keycap);
+      return true;
+    case "hs_await_images":
+      if (approve && workflow) bg(job, "Image generation", generateSceneImages(job, workflow));
       return true;
     case "hs_anim":
       if (approve && workflow) bg(job, "Review", postReview(job, workflow));
