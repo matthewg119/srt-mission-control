@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
+import { applyLeadDisposition } from "@/lib/lead-disposition";
+import { DISPOSITION_BY_ACTION_ID } from "@/lib/lead-thread";
 import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel } from "@/lib/ai-intel/execute-action";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
@@ -23,14 +26,29 @@ export async function POST(req: NextRequest) {
   const timestamp = req.headers.get("x-slack-request-timestamp") || "";
   const signature = req.headers.get("x-slack-signature") || "";
 
-  if (signingSecret && timestamp && signature) {
-    const now = Math.floor(Date.now() / 1000);
-    if (Math.abs(now - parseInt(timestamp, 10)) > 300) {
-      return NextResponse.json({ error: "stale_request" }, { status: 403 });
-    }
-    if (!slack.verifySignature(signingSecret, timestamp, rawBody, signature)) {
-      return NextResponse.json({ error: "bad_signature" }, { status: 403 });
-    }
+  // Mandatory, not best-effort: these buttons mutate contact records and fire
+  // conversion events to Meta, so an unsigned request must never reach a handler.
+  if (!signingSecret) {
+    console.error("[slack/actions] SLACK_SIGNING_SECRET not set — rejecting");
+    return NextResponse.json({ error: "not_configured" }, { status: 403 });
+  }
+  if (!timestamp || !signature) {
+    return NextResponse.json({ error: "unsigned_request" }, { status: 403 });
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - parseInt(timestamp, 10)) > 300) {
+    return NextResponse.json({ error: "stale_request" }, { status: 403 });
+  }
+  // verifySignature uses timingSafeEqual, which throws when the two buffers
+  // differ in length — i.e. on a malformed header rather than a wrong one.
+  let signatureOk = false;
+  try {
+    signatureOk = slack.verifySignature(signingSecret, timestamp, rawBody, signature);
+  } catch {
+    signatureOk = false;
+  }
+  if (!signatureOk) {
+    return NextResponse.json({ error: "bad_signature" }, { status: 403 });
   }
 
   const params = new URLSearchParams(rawBody);
@@ -91,6 +109,10 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return openEditModal({ slackTs, channel, userId, triggerId: payload.trigger_id ?? "" });
     case "sms_create_channel":
       return createSmsChannelFromSlack({ slackTs, channel, userId, contactId: action.value });
+    case "lead_dnq":
+    case "lead_booked_call":
+    case "lead_converted":
+      return leadDispositionAction({ actionId: action.action_id, channel, userId, contactId: action.value });
     case "imsg_send":
       return sendSuggestion({ slackTs, channel, userId });
     case "imsg_regenerate":
@@ -119,6 +141,56 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
     default:
       return NextResponse.json({ ok: true });
   }
+}
+
+/**
+ * DNQ / Booked Call / Converted on a #hot-leads message.
+ *
+ * Slack kills the interaction at 3 seconds and every other handler here is
+ * awaited before the 200, so the Supabase write plus the Meta CRM round-trip
+ * goes in waitUntil. The message redraw happens inside applyLeadDisposition,
+ * which is what the user actually sees confirm the click.
+ */
+async function leadDispositionAction(args: {
+  actionId: string;
+  channel: string;
+  userId: string;
+  contactId: string;
+}): Promise<NextResponse> {
+  const disposition = DISPOSITION_BY_ACTION_ID[args.actionId];
+  if (!disposition || !args.contactId) return NextResponse.json({ ok: true });
+
+  waitUntil(
+    applyLeadDisposition({
+      contactId: args.contactId,
+      disposition,
+      slackUserId: args.userId,
+    })
+      .then(async (result) => {
+        if (!result.ok) {
+          await slack.postEphemeral(
+            args.channel,
+            args.userId,
+            `⚠️ Could not record that outcome: ${result.reason ?? "unknown"}`
+          );
+          return;
+        }
+        // Only surface the Meta half when it failed on a lead that should have
+        // reported. Success is already visible in the redrawn message.
+        if (!result.metaSent && result.reason !== "no_fb_lead_id") {
+          await slack.postEphemeral(
+            args.channel,
+            args.userId,
+            `Outcome saved, but Meta did not accept the conversion event: ${result.reason ?? "unknown"}`
+          );
+        }
+      })
+      .catch((err) =>
+        console.error("[slack/actions] lead disposition failed:", err instanceof Error ? err.message : err)
+      )
+  );
+
+  return NextResponse.json({ ok: true });
 }
 
 async function approveAction(args: { slackTs: string; channel: string; userId: string }): Promise<NextResponse> {

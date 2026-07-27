@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/db";
+import { slack } from "@/lib/slack-bot";
 import { ingestLead } from "@/lib/lead-intake";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 
@@ -50,8 +51,11 @@ export async function GET(request: NextRequest) {
 function verifySignature(rawBody: string, header: string | null): boolean {
   const appSecret = process.env.FB_APP_SECRET;
   if (!appSecret) {
-    console.warn("[FB Lead] FB_APP_SECRET not set — accepting unverified payload");
-    return true;
+    // Fail CLOSED. Accepting unverified payloads left this endpoint open to
+    // anyone who knew the URL, and the "secret is missing" case is a
+    // misconfiguration we want to hear about, not silently paper over.
+    console.error("[FB Lead] FB_APP_SECRET not set — rejecting payload");
+    return false;
   }
   if (!header?.startsWith("sha256=")) return false;
 
@@ -126,16 +130,88 @@ function extractWebsite(fields: Record<string, string>, questions: LeadGenQuesti
   return "";
 }
 
-/** Meta does not guarantee once-only delivery, and it retries on any non-200. */
+/** A lead left in `processing` for longer than this is treated as stalled and
+ *  may be replayed. Long enough to cover a slow Graph call, short enough that a
+ *  retry is still useful. */
+const REPLAY_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * Every failure in this route returns 200 to Meta, because a non-200 only buys
+ * a retry of something that will fail identically. That used to mean a dropped
+ * lead left nothing but a console line while Meta's dashboard read 100%
+ * healthy. Anything that costs us a lead now says so in #hot-leads and leaves a
+ * queryable row behind.
+ */
+async function alertLeadFailure(reason: string, context: Record<string, unknown>): Promise<void> {
+  console.error(`[FB Lead] ${reason}`, context);
+
+  await supabaseAdmin
+    .from("system_logs")
+    .insert({
+      event_type: "facebook_lead_error",
+      description: `Facebook lead dropped: ${reason}`.slice(0, 300),
+      metadata: { reason, ...context },
+    })
+    .then(undefined, () => {});
+
+  const channel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+  if (!channel) return;
+
+  const detail = Object.entries(context)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
+
+  try {
+    await slack.postMessage(
+      channel,
+      `:rotating_light: *Facebook lead dropped:* ${reason}${detail ? `\n${detail}` : ""}`
+    );
+  } catch (err) {
+    console.error("[FB Lead] failure alert could not be posted:", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Meta does not guarantee once-only delivery, and it retries on any non-200, so
+ * the same leadgen_id can arrive more than once.
+ *
+ * Dedup is two-phase: a row is written as `processing` before the work starts
+ * and flipped to `done` only once the lead is actually in the CRM. A row that
+ * is not `done` and has gone stale means the lead failed somewhere downstream,
+ * so we let it through again rather than skipping it forever, which is what the
+ * old write-then-work order did.
+ */
 async function alreadyProcessed(leadgenId: string): Promise<boolean> {
   const { data } = await supabaseAdmin
     .from("system_logs")
-    .select("id")
+    .select("id, created_at, metadata")
     .eq("event_type", "facebook_lead")
     .eq("metadata->>leadgen_id", leadgenId)
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  return !!data;
+
+  if (!data) return false;
+  if ((data.metadata as { status?: string } | null)?.status === "done") return true;
+
+  // Still in flight: skip, so two concurrent deliveries don't both run. Once it
+  // has clearly stalled, treat it as replayable.
+  return Date.now() - new Date(data.created_at as string).getTime() < REPLAY_AFTER_MS;
+}
+
+/** Claim this leadgen_id before doing any work. Returns the row id to finish. */
+async function markProcessing(leadgenId: string, formId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from("system_logs")
+    .insert({
+      event_type: "facebook_lead",
+      description: `Facebook Lead Ad: processing ${leadgenId}`,
+      metadata: { status: "processing", leadgen_id: leadgenId, form_id: formId },
+    })
+    .select("id")
+    .maybeSingle();
+  return (data?.id as string) ?? null;
 }
 
 async function processLeadgen(value: Record<string, unknown>): Promise<void> {
@@ -149,6 +225,10 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
 
   const pageToken = process.env.FB_PAGE_ACCESS_TOKEN || "";
   const formId = String(value.form_id ?? "");
+
+  // Claim the lead before any slow work, so a duplicate delivery doesn't run in
+  // parallel. Finished below, once we know whether it actually landed.
+  const logId = await markProcessing(leadgenId, formId);
 
   let fields: Record<string, string> = {};
   let adName = "";
@@ -170,8 +250,14 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
     };
 
     if (lead.error) {
-      // Almost always Leads Access not granted to this app, or an expired page token.
-      console.error("[FB Lead] Graph API error:", lead.error.message);
+      // Almost always Leads Access not granted to this app, or an expired page
+      // token. Either way field_data comes back empty and the lead is lost, so
+      // this is the single most important thing in the route to shout about.
+      await alertLeadFailure("Graph API rejected the lead fetch (check Leads Access and the page token)", {
+        leadgen_id: leadgenId,
+        graph_error: lead.error.message,
+        has_page_token: Boolean(pageToken),
+      });
     }
 
     for (const f of lead.field_data ?? []) {
@@ -181,7 +267,10 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
     adsetName = lead.adset_name ?? "";
     campaignName = lead.campaign_name ?? "";
   } catch (err) {
-    console.error("[FB Lead] Graph API fetch failed:", err instanceof Error ? err.message : err);
+    await alertLeadFailure("Graph API fetch threw", {
+      leadgen_id: leadgenId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     fields = {};
   }
 
@@ -210,6 +299,9 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
       email,
       phone,
       website,
+      // The join key back to the ad. Without it the disposition buttons have
+      // nothing to report against, since a lead ad never sets fbc/fbclid.
+      fbLeadId: leadgenId,
       source: "facebook_lead",
       zohoLeadSource: ZOHO_LEAD_SOURCE,
       noteTitle: "Facebook Lead Ad",
@@ -227,30 +319,40 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
     });
     contactId = result.contactId;
   } else {
-    console.warn(`[FB Lead] ${leadgenId} has neither email nor phone — logging only`);
+    // Nearly always a downstream symptom of the Graph fetch above returning
+    // nothing, so the lead exists on Meta's side but never reaches the CRM.
+    await alertLeadFailure("lead had neither email nor phone, so it was not ingested", {
+      leadgen_id: leadgenId,
+      form_id: formId,
+      field_keys: Object.keys(fields).join(", ") || "(none returned)",
+    });
   }
 
-  // Log BEFORE the audit: this row is the dedup key, and the audit is the slow part.
-  // field_data keys are kept raw so a form's real field ids are visible when the
-  // website mapping needs checking.
-  await supabaseAdmin
-    .from("system_logs")
-    .insert({
-      event_type: "facebook_lead",
-      description: `Facebook Lead Ad: ${name} (${email || phone || "no contact"})`,
-      metadata: {
-        leadgen_id: leadgenId,
-        form_id: formId,
-        contact_id: contactId,
-        name,
-        email,
-        phone,
-        website,
-        campaign: campaignName,
-        field_keys: Object.keys(fields),
-      },
-    })
-    .then(undefined, () => {});
+  // Finish the claim from markProcessing. Only `done` suppresses a replay, so a
+  // lead that never reached the CRM stays retryable. field_data keys are kept
+  // raw so a form's real field ids are visible when the website mapping needs
+  // checking. Written before the audit, which is the slow part.
+  if (logId) {
+    await supabaseAdmin
+      .from("system_logs")
+      .update({
+        description: `Facebook Lead Ad: ${name} (${email || phone || "no contact"})`,
+        metadata: {
+          status: contactId ? "done" : "failed",
+          leadgen_id: leadgenId,
+          form_id: formId,
+          contact_id: contactId,
+          name,
+          email,
+          phone,
+          website,
+          campaign: campaignName,
+          field_keys: Object.keys(fields),
+        },
+      })
+      .eq("id", logId)
+      .then(undefined, () => {});
+  }
 
   if (website && email) {
     await runAuditPipeline({
@@ -270,8 +372,15 @@ export async function POST(request: NextRequest) {
   const rawBody = await request.text();
 
   if (!verifySignature(rawBody, request.headers.get("x-hub-signature-256"))) {
-    console.error("[FB Lead] signature verification failed — dropping payload");
     // Still 200: a non-200 makes Meta retry, and a bad signature won't improve.
+    // Alerted because the usual cause is FB_APP_SECRET drifting out of sync
+    // with the app after a rotation, which silently eats every lead.
+    waitUntil(
+      alertLeadFailure("webhook signature verification failed", {
+        has_app_secret: Boolean(process.env.FB_APP_SECRET),
+        signature_present: Boolean(request.headers.get("x-hub-signature-256")),
+      })
+    );
     return NextResponse.json({ ok: true });
   }
 

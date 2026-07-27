@@ -32,6 +32,9 @@ export interface IngestLeadInput {
   city?: string;
   /** Internal origin tag written to contacts.source, e.g. "audit" | "pdf" | "facebook_lead". */
   source: string;
+  /** Meta's leadgen_id. The only join key back to the ad for Conversions API
+   *  for Leads — a lead ad never touches the site, so there is no fbc/fbclid. */
+  fbLeadId?: string;
   /** What shows in Zoho's Lead Source picklist. */
   zohoLeadSource: string;
   /** Rendered into both the Zoho note and the Slack thread reply. */
@@ -75,6 +78,7 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
   const website = input.website?.trim() || "";
   const businessName = input.businessName?.trim() || "";
   const city = input.city?.trim() || "";
+  const fbLeadId = input.fbLeadId?.trim() || "";
   const leadName = [firstName, lastName].filter(Boolean).join(" ") || businessName || email || phone;
 
   // ── Supabase contact upsert ──
@@ -94,6 +98,7 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
           ...(phone ? { phone, mobile_phone: phone } : {}),
           ...(email ? { email } : {}),
           ...(website ? { website } : {}),
+          ...(fbLeadId ? { fb_lead_id: fbLeadId } : {}),
           source: input.source,
           updated_at: new Date().toISOString(),
         })
@@ -109,6 +114,7 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
           mobile_phone: phone || null,
           business_name: businessName || null,
           website: website || null,
+          fb_lead_id: fbLeadId || null,
           source: input.source,
         })
         .select("id")

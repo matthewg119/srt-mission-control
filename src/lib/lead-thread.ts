@@ -40,6 +40,21 @@ const INITIAL_KEY_FIELDS = [
   "application_completion_pct",
 ] as const;
 
+/** Lead outcomes reported back to Meta so the ad algorithm optimizes for quality
+ *  rather than volume. Slack-only by design: these deliberately do NOT write
+ *  Zoho Lead_Status, which would round-trip through /api/webhooks/zoho-lead. */
+export const LEAD_DISPOSITIONS = {
+  dnq: { actionId: "lead_dnq", label: "Did Not Qualify", button: "⛔ DNQ", style: "danger" },
+  booked_call: { actionId: "lead_booked_call", label: "Booked a Call", button: "📅 Booked Call", style: "primary" },
+  converted: { actionId: "lead_converted", label: "Converted", button: "💰 Converted", style: "primary" },
+} as const;
+
+export type LeadDisposition = keyof typeof LEAD_DISPOSITIONS;
+
+export const DISPOSITION_BY_ACTION_ID = Object.fromEntries(
+  Object.entries(LEAD_DISPOSITIONS).map(([key, meta]) => [meta.actionId, key as LeadDisposition])
+) as Record<string, LeadDisposition>;
+
 interface DiffEntry {
   label: string;
   from: unknown;
@@ -155,7 +170,67 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
     ],
   });
 
+  // Outcome row. Once one is picked the buttons are replaced by the result, so
+  // the message always shows the current disposition and can't be clicked twice.
+  const disposition = contact.disposition as LeadDisposition | null;
+  if (disposition && LEAD_DISPOSITIONS[disposition]) {
+    const at = contact.disposition_at
+      ? new Date(String(contact.disposition_at)).toLocaleString("en-US", { timeZone: "America/New_York" })
+      : null;
+    const by = contact.disposition_by ? `<@${contact.disposition_by}>` : "someone";
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `${LEAD_DISPOSITIONS[disposition].button} · marked *${LEAD_DISPOSITIONS[disposition].label}* by ${by}${at ? ` · ${at} ET` : ""}`,
+        },
+      ],
+    });
+  } else {
+    blocks.push({
+      type: "actions",
+      elements: Object.entries(LEAD_DISPOSITIONS).map(([, meta]) => ({
+        type: "button",
+        action_id: meta.actionId,
+        text: { type: "plain_text", text: meta.button, emoji: true },
+        style: meta.style,
+        value: String(contact.id),
+      })),
+    });
+  }
+
   return blocks;
+}
+
+/**
+ * Re-render the top-level lead message in place from current DB state. Used
+ * after a disposition button is clicked so the message shows the outcome and
+ * the buttons disappear. Never throws — a Slack hiccup must not undo the write
+ * that already happened.
+ */
+export async function refreshLeadMessage(contactId: string): Promise<void> {
+  try {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("*")
+      .eq("id", contactId)
+      .single();
+
+    if (!contact?.slack_thread_ts) return;
+    const channel = contact.slack_channel || process.env.SLACK_HOT_LEADS_CHANNEL || "";
+    if (!channel) return;
+
+    const fallbackText = `🔥 New Lead — ${contact.first_name || ""} ${contact.last_name || ""} (${contact.email || "no email"})`;
+    await slack.updateMessage(
+      channel,
+      contact.slack_thread_ts,
+      fallbackText,
+      formatInitialBlocks(contact as ContactRow)
+    );
+  } catch (err) {
+    console.error("[lead-thread] refreshLeadMessage failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 /** Format a thread reply for an update event. */

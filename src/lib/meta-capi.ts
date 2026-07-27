@@ -43,6 +43,11 @@ export interface MetaUserData {
   clientIpAddress?: string;
   clientUserAgent?: string;
   externalId?: string; // contact ID
+  /** Meta's 15-17 digit leadgen_id, for Conversions API CRM events. NOT hashed.
+   *  The only way to attribute a Facebook Lead Ad: the lead never visits the
+   *  site, so there is no fbc/fbp/fbclid to match on. Meta rejects the event if
+   *  the id is not a real lead id. */
+  leadId?: string;
 }
 
 export interface MetaEvent {
@@ -70,6 +75,7 @@ function buildUserDataPayload(userData: MetaUserData): Record<string, unknown> {
   if (userData.externalId) d.external_id = [sha256(userData.externalId.trim())];
 
   // These are NOT hashed
+  if (userData.leadId) d.lead_id = userData.leadId;
   if (userData.fbc) d.fbc = userData.fbc;
   if (userData.fbp) d.fbp = userData.fbp;
   if (userData.clientIpAddress) d.client_ip_address = userData.clientIpAddress;
