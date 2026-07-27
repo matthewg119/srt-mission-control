@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/audit-watchdog",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/cron/stale-deals",
