@@ -29,17 +29,17 @@ const BUCKETS: Record<string, { name: string; brief: string }> = {
   invisible: {
     name: "\"You're invisible\" consequence",
     brief:
-      "the cost of not being in the answer: an empty modern medical clinic waiting room with rows of empty chairs and dust in afternoon light; or a silent, dated telephone on a quiet front desk with nobody around; or a doctor in a white coat alone in an empty exam room, bored, scrolling a phone. Stillness and missed opportunity.",
+      "the cost of not being in the answer, shot as an empty place: rows of empty waiting-room chairs with dust turning in afternoon light; a dated telephone silent on an unattended front desk; an exam room lit and ready with nobody in it; a stack of printed SEO reports going soft under a cold monitor glow. Stillness and missed opportunity, nobody in frame.",
   },
   machine: {
     name: "\"The machine decides\" abstraction",
     brief:
-      "the AI making the choice: glowing answer text streaming across a dark screen with one clinic name lit brighter than the rest; or a directory of clinics as floating cards in dark space, most dim and grey, a single card lighting up gold and rising forward. Clean, futuristic, cinematic — the local clinic is the one that stays dark.",
+      "the AI making the choice: glowing answer text streaming across a dark screen with one clinic name lit brighter than the rest; a directory of clinics as floating cards in dark space, most dim and grey, one lighting up and rising forward; an LED grid where a single dot is lit; a web of string connecting printed index cards, one card face-up and blank. Clean, futuristic, cinematic, the local clinic is the one that stays dark.",
   },
   patient: {
     name: "Patient-side wrapper",
     brief:
-      "the moment of intent from the patient's side: POV from inside a car at a stoplight, a hand holding a phone searching, blurred street behind; or a close-up of hands holding a glowing phone in a waiting room, patient chairs blurred behind, natural window light.",
+      "the moment of intent, shot through the objects rather than the person: a phone in a windshield mount at a stoplight showing a search, wet street blurred beyond the glass; a phone face-up on an empty waiting-room chair with the screen lit; a chat interface glowing outside a darkened clinic storefront at night. The device and the room tell it, no one holds anything.",
   },
 };
 
@@ -110,10 +110,13 @@ async function logIdeas(channel: string, slot: string, ideas: BrollIdea[]): Prom
   }
 }
 
-function buildSystem(vertical: Vertical, avoid: string[]): string {
+export function buildSystem(vertical: Vertical, avoid: string[]): string {
   const beliefLines = vertical.beliefs
     .filter((b) => OPENABLE_BELIEFS.includes(b.n))
     .map((b) => `  ${b.n}. ${b.label ? `(${b.label}) ` : ""}${stripEmDashes(b.text)}`);
+  // The avatar's subject law (what may be in the shot) vs style_token (how it looks).
+  const subjectRules = vertical.visual_rules ?? [];
+  const negativeTail = vertical.image_negative ? `${stripEmDashes(vertical.image_negative)} ` : "";
   return [
     `You write short-form B-ROLL SHOT IDEAS for a ${vertical.business_descriptor}.`,
     "The narrative is always the same: when a man in his city asks AI (ChatGPT, Perplexity,",
@@ -144,14 +147,24 @@ function buildSystem(vertical: Vertical, avoid: string[]): string {
     "  citations are off-site; $99/month telehealth vs $169+ local; ~$876M raised by Ro; one",
     "  clinic per market; the 2005 Google Maps window (42% click the local pack).",
     "",
+    ...(subjectRules.length
+      ? [
+          "SUBJECT RULES for every CINEMATIC image_prompt (a violation kills the idea):",
+          ...subjectRules.map((r) => `- ${stripEmDashes(r)}`),
+          "",
+        ]
+      : []),
     "For CINEMATIC ideas (buckets invisible / machine / patient):",
-    "- image_prompt: one vivid still-image prompt in this exact look, ending with 'no on-screen",
-    `  text, logos, or watermarks in the image, 9:16 vertical'. Look: ${stripEmDashes(vertical.style_token)}`,
+    "- image_prompt: one vivid still-image prompt obeying the SUBJECT RULES, in this exact",
+    "  order: the look verbatim, then the scene, then the closing guards. Nothing after them.",
+    `  Look (open with this, word for word): ${stripEmDashes(vertical.style_token)}`,
+    `  Close with (word for word): ${negativeTail}no on-screen text, logos, or watermarks in the image, 9:16 vertical.`,
     "- motion_prompt: ONE Seedance motion line, camera/subject motion only, under 20 words, no",
     "  em dashes, no on-screen text.",
     "",
     "For the NAPKIN idea (bucket 'napkin') — a bird's-eye shot of hands + paper + a Sharpie the",
-    "operator films himself, no actors, no clinic:",
+    "operator films himself, no actors, no clinic. The SUBJECT RULES above do NOT apply to it:",
+    "it is live footage the operator shoots, not a generated image, and his hands are the point:",
     "- sketch_script: what the hand draws, step by step, to make ONE point visually in ~8",
     "  seconds (e.g. write '10 blue links' in a column, cross it all out with one stroke, draw",
     "  a single box beside it labeled '1 AI answer').",
@@ -209,7 +222,12 @@ export async function runBrollSuggestionDrop(args: {
   const user = [
     "Return exactly 3 ideas, one per slot below, in this order. Use the given bucket for each;",
     "pick a different belief for each; make the three hooks feel distinct.",
-    ...plan.map((p, i) => `Slot ${i + 1}: bucket "${p.bucket}".`),
+    // Each bucket's authored subject direction. This used to be dropped on the floor (only
+    // the bucket key was sent), which is why the model kept inventing people as subjects.
+    ...plan.map((p, i) => {
+      const brief = BUCKETS[p.bucket]?.brief;
+      return `Slot ${i + 1}: bucket "${p.bucket}".${brief ? ` Shoot ${brief}` : ""}`;
+    }),
     "Return JSON only.",
   ].join("\n");
 

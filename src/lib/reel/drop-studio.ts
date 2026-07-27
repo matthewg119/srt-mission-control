@@ -972,6 +972,14 @@ export async function generateDropPrompts(
     "no on-screen text, never em dashes.",
     `Style DNA: ${stripEmDashes(dna)}`,
     ...(workflow.visual_rules?.length ? ["Visual rules:", ...workflow.visual_rules.map((r) => `- ${r}`)] : []),
+    // The avatar's own subject law goes LAST and wins: a channel can share a workflow
+    // library whose rules were written for a different avatar's shoots.
+    ...(vertical.visual_rules?.length
+      ? [
+          "Avatar visual rules (these WIN over the workflow visual rules on any conflict):",
+          ...vertical.visual_rules.map((r) => `- ${r}`),
+        ]
+      : []),
     frames.length
       ? `You are shown ${frames.length} reference photo(s) of the exact look the operator wants. Ground materials, wear, lighting, and realism on them.`
       : "",
@@ -1000,9 +1008,12 @@ export async function generateDropPrompts(
   });
 
   const groups: DropPromptsResult["groups"] = scenes.map((role, i) => ({ scene: i + 1, role, prompts: [] }));
+  // The rules above steer the sentence Claude writes; this tail is what the IMAGE model
+  // reads, so the avatar's negative rides along on the finished prompt too.
+  const negative = vertical.image_negative ? `${stripEmDashes(vertical.image_negative).replace(/[.\s]+$/, "")}. ` : "";
   for (const p of data.prompts.slice(0, count)) {
     const idx = Math.min(Math.max(p.scene, 1), scenes.length) - 1;
-    const full = `${dna.replace(/[.\s]+$/, "")}. ${stripEmDashes(p.action).replace(/[.\s]+$/, "")}. No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
+    const full = `${dna.replace(/[.\s]+$/, "")}. ${stripEmDashes(p.action).replace(/[.\s]+$/, "")}. ${negative}No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
     groups[idx].prompts.push(full);
   }
   return { groups };

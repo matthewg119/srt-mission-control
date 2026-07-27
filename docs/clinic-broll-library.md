@@ -20,21 +20,32 @@ shallow depth of field, 35mm film look, soft natural / cool clinical light, rest
 them into Higgsfield/Seedance. `motion_prompt` = one Seedance line, camera/subject motion only,
 under 20 words, no em dashes.
 
+**No people, ever.** Not a face, a body, a pair of hands, or a silhouette. The clinic avatar
+carries this as `visual_rules` + `image_negative` in `src/config/verticals.ts`, and it is
+injected into every image-prompt system prompt. Generated clinic-owner portraits read as stock
+and never get used; the empty room and the lit screen carry the point harder. If a human would
+be the subject, shoot the object or the room instead. (The napkin explainer below is the one
+exception, and only because it is footage the operator shoots himself.)
+
 ### 1. "You're invisible" consequence
 The cost of not being in the answer. Empty, still, missed-opportunity mood.
 - *Empty waiting room* — "Cinematic wide shot of an empty modern medical clinic waiting room, rows of empty chairs, soft afternoon light through blinds, dust particles floating, no people, still and quiet, muted color grade, shallow depth of field, 35mm film look."
 - *Aging front-desk phone* — "An empty front desk at a medical practice, a silent telephone sitting on the counter, warm overhead lighting, nobody around, sense of stillness and missed opportunity, cinematic, shallow focus."
-- *Doctor scrolling, bored* — "A doctor in a white coat sitting alone in an empty exam room, scrolling on a phone, bored expression, cool clinical lighting, wide shot showing the emptiness of the room, moody cinematic tone."
+- *Exam room, lit and unused* — "An exam room lit and ready with nobody in it, paper on the table unwrinkled, cool clinical light, wide shot holding the emptiness, moody cinematic tone, no people in the image."
+- *Reports going cold* — "Close-up of a stack of printed SEO reports on a clinical desk, slightly out of focus, a cold blue monitor glow behind them with nothing legible on screen, no people in the image."
 
 ### 2. "The machine decides" abstraction
 The AI making the choice; the local clinic stays dark.
 - *AI answer streaming* — "Abstract visualization of an AI answering a question, glowing text streaming across a dark screen, clean futuristic UI, blue and white light, one clinic name illuminating brighter than the others in a list, cinematic depth, high detail."
 - *Directory of cards* — "A digital directory of medical clinics displayed as floating cards in dark space, most cards dim and grey, a single card lighting up gold and rising forward, sleek modern interface, cinematic lighting."
+- *The connection web* — "Close-up of a tangled web of thin white threads on a dark matte surface, each thread connecting small printed index cards face-down, one card in the centre face-up and blank, cool blue-grey light raking from the side, clinical and cold."
+- *One dot lit* — "Macro shot of a dense black LED dot grid receding into shadow, a single dot lit warm amber near the centre, everything else dark, cinematic and cold."
 
 ### 3. Patient-side wrapper
-The moment of intent, from the patient's side.
-- *Stoplight search* — "POV shot from inside a car at a stoplight, a hand holding a smartphone, searching on the screen, soft daylight, blurred street background, realistic, vertical format."
-- *Phone in the waiting room* — "Close-up of a person's hands holding a phone in a waiting room, screen glowing, patient chairs blurred in background, natural window light, cinematic shallow depth of field."
+The moment of intent, told through the device and the room rather than the person.
+- *Stoplight search* — "POV from inside a car stopped at a light, a phone in a windshield mount showing a search result, wet street and tail lights blurred beyond the glass, soft daylight, no people in the image."
+- *Phone on the empty chair* — "Close-up of a phone lying face-up on an empty waiting-room chair, screen lit, rows of empty chairs blurred behind it, natural window light, cinematic shallow depth of field, no people in the image."
+- *Answer outside the door* — "A glowing chat interface panel floating outside a darkened clinic storefront at night, wet pavement reflecting the light, the clinic interior dim behind the glass, no people in the image."
 
 ## The napkin explainer (film it yourself)
 The cheapest B-roll there is: phone on a tripod pointing straight **down** at a desk, all the

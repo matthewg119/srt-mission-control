@@ -561,6 +561,14 @@ export async function generateStoryboardOptions(args: {
     "Each action is ONE sentence: subject + action + setting. No camera or style boilerplate",
     "(the style DNA is prepended separately), no on-screen text, never em dashes.",
     ...(workflow.visual_rules?.length ? ["Visual rules:", ...workflow.visual_rules.map((r) => `- ${r}`)] : []),
+    // The avatar's own subject law goes LAST and wins. The clinic borrows the pest workflow
+    // library, whose rules talk about gloved hands and suburban job sites.
+    ...(args.owner.visual_rules?.length
+      ? [
+          "Avatar visual rules (these WIN over the workflow visual rules on any conflict):",
+          ...args.owner.visual_rules.map((r) => `- ${r}`),
+        ]
+      : []),
     "",
     avatarBlock(args.owner),
     "",
@@ -587,8 +595,11 @@ export async function generateStoryboardOptions(args: {
       ),
   });
 
+  // The rules above steer the sentence Claude writes; this tail is what the IMAGE model
+  // reads, so the avatar's negative rides along on the finished prompt too.
+  const negative = args.owner.image_negative ? `${stripEmDashes(args.owner.image_negative).replace(/[.\s]+$/, "")}. ` : "";
   const assemble = (action: string) =>
-    `${dna.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
+    `${dna.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. ${negative}No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
   return data.options.slice(0, optionCount).map((o) => ({
     title: stripEmDashes(o.title).trim(),
     prompts: o.prompts.slice(0, args.scenes.length).map(assemble),

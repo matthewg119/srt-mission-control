@@ -85,6 +85,15 @@ export interface Vertical {
   soul_id?: string; // Higgsfield Soul for character consistency
   cta_formats: string[];
   gold_examples: PovGoldExample[]; // few-shot anchor (replaces POV_GOLD_EXAMPLES)
+  // Subject law for this avatar's images — the avatar-level twin of Workflow.visual_rules.
+  // style_token says HOW a shot looks (grade, lens); these say WHAT may be in it. Injected
+  // into every image-prompt system prompt AFTER the workflow's own rules, and they win on
+  // conflict: the clinic borrows the pest workflow library, whose rules talk about gloved
+  // hands and job sites.
+  visual_rules?: string[];
+  // Appended to the FINAL assembled prompt string. The rules above steer the model writing
+  // the scene; this reaches the image model itself, so it is the last guard.
+  image_negative?: string;
 
   // Drop-studio wiring (docs/2026-07-10-drop-channel-verticals.sql). These come from the
   // DB row ONLY — never from a seed — because seedFor(unknownId) returns the pest seed and
@@ -739,6 +748,18 @@ const TRT_CLINIC_AI: Vertical = {
   soul_id: undefined,
   cta_formats: ["Reply with your city", "Free AI Visibility Audit", "DM the word AUDIT"],
   gold_examples: [],
+  // Object b-roll only. Generated clinic-owner portraits read as stock and the operator will
+  // not shoot them; empty rooms and lit screens carry the "you are not in the answer" point
+  // better than a man standing at a front desk.
+  visual_rules: [
+    "No people. No faces, no bodies, no hands, no silhouettes, no reflection of a person. If a human would be the subject, shoot the object or the room instead.",
+    "The subject is always a thing or a place: documents, printouts, index cards, screens, a phone face-down on a surface, monitors, chat interfaces, waiting rooms, hallways, exam rooms, storefronts, signage, parking lots at night, textures, fog, light.",
+    "Shot vocabulary that works: overhead flat-lay on a dark matte surface; a web of string connecting printed cards; a magnifier over printed pages; a lit clinic interior seen from a wet street at night; a neon medical cross in fog; a screen glowing in a dark room; an LED grid with one dot lit; a desk with printed reports and a phone face-down.",
+    "Absence carries the meaning: the room with nobody in it, the phone nobody is holding, the chair nobody is sitting in.",
+    "Paper and screens are welcome as props, but never ask for readable words on them: describe the lettering as out of focus, too small to read, or turned away. The headline overlay is the only text anyone should be able to read, and generated lettering comes out garbled anyway.",
+    "Every shot must leave clear space for the timed headline overlays.",
+  ],
+  image_negative: "No people, faces, hands, or human figures in the image.",
   drop_mode: "broll_suggestions",
 };
 
@@ -822,10 +843,14 @@ function mergeRowOverSeed(seed: Vertical, row: VerticalRow): Vertical {
     // drop_mode is a normal field (not sensitive wiring): a DB value wins, else the seed's
     // (so trt_clinic_ai stays "broll_suggestions" even if a row is inserted without it).
     drop_mode: pick(row.drop_mode, seed.drop_mode ?? null),
-    // Scene pools are not DB columns yet, so they always inherit the seed.
+    // Scene pools and the subject contract are not DB columns yet, so they always inherit
+    // the seed. Deliberately NOT pick()'d: seedFor(unknownId) returns the pest seed, and a
+    // new avatar must not silently inherit another avatar's banned-subject law.
     scenes: seed.scenes,
     scene_variations: seed.scene_variations,
     style_version: seed.style_version,
+    visual_rules: seed.visual_rules,
+    image_negative: seed.image_negative,
   };
 }
 
