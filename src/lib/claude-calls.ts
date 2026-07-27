@@ -155,6 +155,60 @@ export interface ClaudeJSONResult<T> {
   model: ClaudeModel;
 }
 
+/** Pull the JSON value out of a response that thought out loud before answering.
+ *
+ *  Even with "return ONLY valid JSON" in the system prompt, a model handed a genuinely awkward
+ *  task (fitting 7 pasted lines into 8 labeled boxes) sometimes reasons in prose first and then
+ *  emits the object. That used to be an unrecoverable parse error. Scan for the first `{` or `[`
+ *  and walk to its matching close, respecting strings and escapes, so the preamble is dropped and
+ *  the payload survives. Returns the input untouched when it already parses or nothing balances,
+ *  so a real malformed response still reports as a parse error. */
+function salvageJSON(text: string): string {
+  try {
+    JSON.parse(text);
+    return text;
+  } catch {
+    // fall through to the scan
+  }
+  const start = text.search(/[{[]/);
+  if (start === -1) return text;
+  const open = text[start];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      if (inString) escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) {
+        const candidate = text.slice(start, i + 1);
+        try {
+          JSON.parse(candidate);
+          return candidate;
+        } catch {
+          return text;
+        }
+      }
+    }
+  }
+  return text;
+}
+
 export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<ClaudeJSONResult<T>> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -202,7 +256,7 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
       .map((c) => c.text ?? "")
       .join("")
       .trim();
-    const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+    const cleaned = salvageJSON(raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim());
     return { json, cleaned };
   };
 

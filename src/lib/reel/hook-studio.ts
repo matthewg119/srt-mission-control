@@ -3,11 +3,12 @@
 // hook lines (optionally naming a workflow, e.g. "with workflow 2") and the bot walks the
 // whole video into existence in the thread:
 //
-//   hook text -> 6 hook-image prompt options (3 Meta-glasses POV + 3 bot picks)
-//             + 3 complete-copy options sized to the workflow's boxes
-//   -> operator drops the generated hook image (+ optionally edited copy, same message)
-//   -> 3 storyboard prompt sets for the remaining scenes, continuous with the hook image
+//   hook text -> 5 complete-copy options sized to the workflow's boxes
+//   -> operator locks one (react a number) or pastes his own block
+//   -> ONE image prompt per scene, written from that locked copy
 //   -> operator drops the scene images -> motion prompts (Seedance, prompts only)
+//   (an image dropped BEFORE copy locks still takes the older hook-first route: that image
+//    anchors the look and postStoryboards writes the remaining scenes to continue it)
 //   -> "Seems like we have everything we need" full shot-by-shot review
 //   -> checkmark/`render` -> finishDropRender (existing render + sales-letter pipeline)
 //
@@ -59,7 +60,6 @@ import { loadWorkflow, type Workflow } from "@/config/workflows";
 import { workflowRenderBuild } from "@/lib/reel/render-dispatch";
 import { getMotionAdapter } from "@/lib/reel/motion-adapter";
 import { uploadToReels } from "@/lib/reel/pov";
-import { POV_GLASSES_TOKEN } from "@/config/pov-style";
 import {
   loadVertical,
   dropOwnerVerticalId,
@@ -77,6 +77,20 @@ function model(): ClaudeModel {
 async function post(channel: string, threadTs: string, text: string): Promise<string | null> {
   const res = await slack.postThreadReply(channel, threadTs, text).catch(() => null);
   return ((res as { ts?: string } | null)?.ts as string) ?? null;
+}
+
+/** Run a step in the background with its failure made VISIBLE. A bare waitUntil(promise) puts
+ *  the work outside every error handler (the route's .catch is attached to the outer closure,
+ *  which resolves as soon as the handler returns), so a throw used to leave the thread silent
+ *  and the job parked on its stage. Anything detached from a handler goes through here. */
+function bg(job: ContentJob, label: string, p: Promise<unknown>): void {
+  waitUntil(
+    p.catch(async (e) => {
+      const msg = (e as Error).message ?? String(e);
+      console.error(`[hook-studio] ${label} failed:`, msg);
+      await post(job.slack_channel, job.slack_thread_ts, `${label} failed (${msg.slice(0, 140)}). Reply \`retry\`.`).catch(() => {});
+    })
+  );
 }
 
 /** Post a card that TAKES reactions: seed the emojis, move pickerTs to it. Plain status
@@ -235,94 +249,13 @@ export async function handleHookStudioStart(args: {
   );
 }
 
-// ---- step 2: 6 hook-image prompts + 3 complete-copy options ----------------------------------
+// ---- step 2: the complete-copy options card ---------------------------------------------------
 
-interface HookImagePrompts {
-  meta_pov: string[];
-  bot_pick: string[];
-}
-
-/** 6 first-frame (hook shot) image prompts: 3 in live Meta-glasses POV, 3 in the bot's own
- *  preferred compositions. The hook TEXT is context for meaning only, never baked in. */
-async function generateHookImagePrompts(args: {
-  owner: Vertical; // the avatar the copy speaks to (meaning)
-  workflow: Workflow; // carries the look (style_dna + visual_rules + reference frames)
-  lookVertical: Vertical; // dna fallback when the workflow has none
-  hookLines: string[];
-  copy?: StructuredCopyLine[]; // the locked copy, when known — grounds the scenes in the real script
-}): Promise<HookImagePrompts> {
-  const { workflow } = args;
-  const dna = (workflow.style_dna ?? "").trim() || args.lookVertical.style_token;
-  const metaDna = /\b(pov|meta glasses|first.person)\b/i.test(dna) ? dna : POV_GLASSES_TOKEN;
-  const frames = await loadReferenceFrames(workflow.vertical_id, { workflowId: workflow.id, limit: 4 });
-
-  interface Gen {
-    meta_pov: string[];
-    bot_pick: string[];
-  }
-  const system = [
-    "You write image-generation prompts for the FIRST frame (the hook shot) of a short vertical",
-    `video built through the "${workflow.name}" workflow.`,
-    `Audience avatar: ${args.owner.name} (${args.owner.business_descriptor}).`,
-    "The on-screen hook text below is added later as an overlay, NEVER baked into the image; it",
-    "tells you the MEANING the image must dramatize.",
-    "",
-    "Return 6 scene actions:",
-    "- meta_pov: 3 live first-person Meta-glasses moments that make the hook text land.",
-    "- bot_pick: 3 of your own preferred scenes (any composition: b-roll, symbolic, cinematic)",
-    "  that visually dramatize the hook's meaning.",
-    "Each action is ONE sentence: subject + action + setting. No camera or style boilerplate",
-    "(the style DNA is prepended separately), no on-screen text, never em dashes.",
-    ...(workflow.visual_rules?.length ? ["Visual rules:", ...workflow.visual_rules.map((r) => `- ${r}`)] : []),
-    frames.length
-      ? `You are shown ${frames.length} reference photo(s) of the exact look the operator wants. Ground materials, wear, lighting, and realism on them.`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const { data } = await callClaudeJSON<Gen>({
-    model: model(),
-    system,
-    user: [
-      "The hook text (overlay, for meaning):",
-      ...args.hookLines.map((l) => `- ${l}`),
-      ...(args.copy?.length
-        ? [
-            "",
-            "The full locked copy this video carries (dramatize the whole script, not just the hook):",
-            ...args.copy.map((c) => `- ${c.label}: ${c.text}`),
-          ]
-        : []),
-      "",
-      "Return the actions as JSON.",
-    ].join("\n"),
-    images: frames.length ? frames : undefined,
-    maxTokens: 1400,
-    temperature: 0.85,
-    schemaHint: '{ "meta_pov": [string], "bot_pick": [string] }',
-    validate: (v: unknown): v is Gen =>
-      typeof v === "object" &&
-      v !== null &&
-      Array.isArray((v as Gen).meta_pov) &&
-      Array.isArray((v as Gen).bot_pick) &&
-      [...(v as Gen).meta_pov, ...(v as Gen).bot_pick].every((s) => typeof s === "string"),
-  });
-
-  const assemble = (base: string, action: string) =>
-    `${base.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
-  return {
-    meta_pov: data.meta_pov.slice(0, 3).map((a) => assemble(metaDna, a)),
-    bot_pick: data.bot_pick.slice(0, 3).map((a) => assemble(dna, a)),
-  };
-}
-
-/** Post the copy-options picker card (shared by the hook-first and authored-scene paths). */
+/** Post the copy-options picker card (shared by the copy-first and authored-scene paths). */
 async function postCopyOptionsCard(
   job: ContentJob,
   workflow: Workflow,
-  variants: Array<Array<{ key: string; label: string; text: string }>>,
-  authored = false
+  variants: Array<Array<{ key: string; label: string; text: string }>>
 ): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   if (variants.length) {
@@ -332,14 +265,10 @@ async function postCopyOptionsCard(
       job,
       [
         `*Complete video copy* — ${variants.length} options for *${workflow.name}*'s ${B} text slot${B === 1 ? "" : "s"}.`,
-        authored
-          ? `React ${caps.map((_, i) => `${i + 1}️⃣`).join("/")} to lock one (or paste an edited version instead):`
-          : `React ${caps.map((_, i) => `${i + 1}️⃣`).join("/")} to lock one (or paste an edited version with the image instead):`,
+        `React ${caps.map((_, i) => `${i + 1}️⃣`).join("/")} to lock one (or paste an edited version instead):`,
         ...variants.flatMap((v, i) => [`*Option ${i + 1}:*`, ...v.map((c) => `  *${c.label}:* ${c.text}`)]),
         "",
-        authored
-          ? "Lock a copy option (react a number, or paste your own copy block) and I'll post the image prompts to generate."
-          : "Lock a copy option (react a number, or paste your own copy block) and I'll write the hook-image prompts to generate.",
+        "Lock a copy option (react a number, or paste your own copy block) and I'll post the image prompts to generate.",
       ].join("\n"),
       caps
     );
@@ -348,10 +277,8 @@ async function postCopyOptionsCard(
       channel,
       threadTs,
       workflow.copy_structure?.length
-        ? authored
-          ? "Could not write the copy options. Paste your own copy block to continue (or reply `retry`)."
-          : "Could not write the copy options. Paste your own copy block with the hook image (or reply `retry`)."
-        : "This workflow has free-form copy boxes. Drop the hook image + your copy lines (label, hook, payoff, cta) in one message."
+        ? "Could not write the copy options. Paste your own copy block to continue (or reply `retry`)."
+        : "This workflow has free-form copy boxes. Paste your copy lines (label, hook, payoff, cta) to continue."
     );
   }
 }
@@ -384,7 +311,7 @@ async function postAuthoredSceneOptions(job: ContentJob, workflow: Workflow): Pr
       authored_prompts_posted: false,
     },
   });
-  await postCopyOptionsCard(job, workflow, variants, true);
+  await postCopyOptionsCard(job, workflow, variants);
 }
 
 /** Post the workflow's OWN per-scene image prompts (each enriched with its visual_rules), one
@@ -418,8 +345,8 @@ async function postHookOptions(job: ContentJob, workflow: Workflow): Promise<voi
   const owner = await loadVertical(dropOwnerVerticalId(drop));
   const S = shotCount(workflow);
 
-  // The hook-image prompts are DEFERRED until copy is locked, so they can be written from the
-  // actual chosen copy (see postHookImagePromptsFromCopy). Here we only write the copy options.
+  // The image prompts are DEFERRED until copy is locked, so they can be written from the
+  // actual chosen copy (see postSceneImagePromptsFromCopy). Here we only write the copy options.
   let variants: Array<Array<{ key: string; label: string; text: string }>> = [];
   try {
     variants = await generateStructuredCopyVariants({ vertical: owner, workflow, hookLines, count: 5 });
@@ -441,53 +368,62 @@ async function postHookOptions(job: ContentJob, workflow: Workflow): Promise<voi
   await postCopyOptionsCard(job, workflow, variants);
 }
 
-/** After copy is locked (legacy hook-first path): write the 6 hook-image prompts FROM the locked
- *  copy so they dramatize the real script, post them, and hold for the generated hook image. On a
- *  Claude error, fall back to the plain "drop the hook image" nudge so the session never stalls. */
-async function postHookImagePromptsFromCopy(job: ContentJob, workflow: Workflow): Promise<void> {
+/** After copy is locked: write ONE image prompt per scene FROM the locked copy, post them as a
+ *  single card in scene order, and move to hs_await_images. The operator generates all of them
+ *  externally and drops them into the thread; once every slot is filled the file-drop handler
+ *  fires postMotionPrompts, so Seedance prompts follow with no extra step.
+ *  On a Claude error, fall back to a plain nudge so the session never stalls. */
+async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
-  const hookLines = job.data.hook_lines ?? [];
+  const S = shotCount(workflow);
+  const scenes = Array.from({ length: S }, (_, i) => i + 1);
+  const roles = workflow.copy_structure ?? [];
+  const roleLabel = (scene: number) =>
+    roles.find((r) => r.shot === scene)?.label ?? (scene === 1 ? "Hook" : `Scene ${scene}`);
+
   try {
     const drop = await loadVertical(job.vertical_id);
     const owner = await loadVertical(dropOwnerVerticalId(drop));
-    const prompts = await generateHookImagePrompts({ owner, workflow, lookVertical: drop, hookLines, copy });
+    const [board] = await generateStoryboardOptions({
+      owner,
+      workflow,
+      lookVertical: drop,
+      copy,
+      hookImage: null,
+      scenes,
+      optionCount: 1,
+    });
+    if (!board?.prompts.length) throw new Error("no prompts returned");
 
     const block = (p: string) => `\`\`\`\n${p}\n\`\`\``;
     await post(
       channel,
       threadTs,
       [
-        "Copy locked. Here are hook image prompts built from it.",
-        "*Hook image prompts, Meta glasses live POV* (generate ONE with gpt-image-2, then drop it here):",
-        ...prompts.meta_pov.map((p, i) => `Option ${i + 1}:\n${block(p)}`),
-      ].join("\n")
-    );
-    await post(
-      channel,
-      threadTs,
-      [
-        "*Hook image prompts, my picks:*",
-        ...prompts.bot_pick.map((p, i) => `Option ${i + 4}:\n${block(p)}`),
+        `Copy locked. *Image prompts for ${workflow.name}*, built from it${board.title ? ` (${board.title})` : ""}:`,
+        ...board.prompts.map((p, i) => `*Scene ${i + 1} — ${roleLabel(i + 1)}*\n${block(p)}`),
         "",
-        "Generate ONE with gpt-image-2 and drop it here to continue.",
+        `Generate all ${board.prompts.length} with gpt-image-2 and drop them here in scene order (comment \`scene N\` to target a slot). Motion prompts follow once they are all in. \`retry\` rewrites them.`,
       ].join("\n")
     );
 
     const fresh = (await getLatestJobByThread(threadTs)) ?? job;
     await updateJob(fresh, {
+      stage: "hs_await_images",
       data: {
         ...fresh.data,
-        hs_image_prompt_options: [
-          ...prompts.meta_pov.map((p) => ({ kind: "meta_pov" as const, prompt: p })),
-          ...prompts.bot_pick.map((p) => ({ kind: "bot_pick" as const, prompt: p })),
-        ],
+        hs_image_prompt_options: board.prompts.map((p) => ({ kind: "bot_pick" as const, prompt: p })),
         hs_image_prompts_posted: true,
       },
     });
   } catch (e) {
-    console.error("[hook-studio] hook image prompts from copy failed:", (e as Error).message);
-    await post(channel, threadTs, "Copy locked. Drop the generated hook image here to continue.");
+    console.error("[hook-studio] scene image prompts from copy failed:", (e as Error).message);
+    await post(
+      channel,
+      threadTs,
+      `Copy locked, but I could not write the image prompts (${(e as Error).message.slice(0, 140)}). Reply \`retry\`, or drop your ${S} scene images here anyway.`
+    );
   }
 }
 
@@ -525,13 +461,13 @@ async function maybeAdvanceFromOptions(job: ContentJob, workflow: Workflow): Pro
     return;
   }
 
-  // Legacy hook-first: the hook image (slot 1) must be in before storyboards. With no image yet,
-  // write the hook-image prompts from the now-locked copy (once), instead of the old silent stall.
+  // Copy-first: no image yet, so write one prompt per scene from the now-locked copy (once)
+  // and hold at hs_await_images for all of them.
   if (!slots[0]?.image_url) {
     if (!job.data.hs_image_prompts_posted) {
-      await postHookImagePromptsFromCopy(job, workflow);
+      await postSceneImagePromptsFromCopy(job, workflow);
     } else {
-      await post(job.slack_channel, job.slack_thread_ts, "Copy updated. Drop the generated hook image here to continue.");
+      await post(job.slack_channel, job.slack_thread_ts, "Copy updated. Drop the generated scene images here to continue.");
     }
     return;
   }
@@ -558,17 +494,25 @@ async function fetchImageInput(url: string): Promise<ClaudeImageInput | null> {
   return { media_type: mt, data: buf.toString("base64") };
 }
 
-/** 3 DISTINCT storyboard options for the scenes that still need images, each continuing the
- *  chosen hook image's exact look, depicting the copy that lands on each shot. */
-async function generateStoryboardOptions(args: {
+/** Storyboard prompt sets for a run of scenes, depicting the copy that lands on each shot.
+ *
+ *  Two callers, one generator:
+ *  - hook-image-first (`hookImage` set): 3 DISTINCT options for the scenes still missing an
+ *    image, each continuing the chosen hook image's exact look.
+ *  - copy-first (`hookImage` null, `optionCount` 1): ONE prompt per scene for the whole video,
+ *    written straight off the locked copy, with the look grounded on the workflow's reference
+ *    frames instead of a hook image. */
+export async function generateStoryboardOptions(args: {
   owner: Vertical;
   workflow: Workflow;
   lookVertical: Vertical;
   copy: StructuredCopyLine[];
   hookImage: ClaudeImageInput | null;
   scenes: number[]; // 1-based scene indexes still needing an image
+  optionCount?: number;
 }): Promise<Array<{ title: string; prompts: string[] }>> {
   const { workflow } = args;
+  const optionCount = args.optionCount ?? 3;
   const dna = (workflow.style_dna ?? "").trim() || args.lookVertical.style_token;
   const roles = workflow.copy_structure ?? [];
   const copyByShot = args.scenes.map((scene) => {
@@ -582,17 +526,38 @@ async function generateStoryboardOptions(args: {
     return `Scene ${scene} carries: ${lines.length ? lines.join(" | ") : "no on-screen line"}`;
   });
 
+  // With no hook image to anchor the look, ground it on the workflow's reference frames
+  // (the workflow's own approved frames in content_examples).
+  const frames = args.hookImage
+    ? [args.hookImage]
+    : await loadReferenceFrames(workflow.vertical_id, { workflowId: workflow.id, limit: 4 }).catch(() => []);
+
   interface Gen {
     options: Array<{ title: string; prompts: string[] }>;
   }
+  const continuation = args.hookImage
+    ? [
+        `Scene 1 (the hook shot) is DONE and you are shown it. Return ${optionCount} DISTINCT`,
+        `storyboard option(s) for scene(s) ${args.scenes.join(", ")}. Each option: a short title +`,
+        `exactly ${args.scenes.length} scene action(s), in that scene order.`,
+        "Every action must CONTINUE the hook image's exact look (same location arc, lighting, lens,",
+        "wardrobe, time of day) while depicting the copy that lands on that scene. The options must",
+        "differ in setting/arc, not wording.",
+      ]
+    : [
+        `No image exists yet. Return ${optionCount} storyboard option(s) covering scene(s)`,
+        `${args.scenes.join(", ")} — the WHOLE video. Each option: a short title + exactly`,
+        `${args.scenes.length} scene action(s), in that scene order.`,
+        "Scene 1 is the hook and has to earn the scroll-stop on its own. The scenes must read as one",
+        "continuous shoot: same location arc, lighting, lens, wardrobe, and time of day throughout,",
+        "each depicting the copy that lands on it.",
+        ...(frames.length
+          ? ["You are shown reference photo(s) of the exact look wanted. Ground materials, wear, lighting, and realism on them."]
+          : []),
+      ];
   const system = [
-    `You write image-generation prompts for the remaining scenes of a "${workflow.name}" video.`,
-    `Scene 1 (the hook shot) is DONE${args.hookImage ? " and you are shown it" : ""}. Return 3 DISTINCT`,
-    `storyboard options for scene(s) ${args.scenes.join(", ")}. Each option: a short title + exactly`,
-    `${args.scenes.length} scene action(s), in that scene order.`,
-    "Every action must CONTINUE the hook image's exact look (same location arc, lighting, lens,",
-    "wardrobe, time of day) while depicting the copy that lands on that scene. The 3 options must",
-    "differ in setting/arc, not wording.",
+    `You write image-generation prompts for the scenes of a "${workflow.name}" video.`,
+    ...continuation,
     "Each action is ONE sentence: subject + action + setting. No camera or style boilerplate",
     "(the style DNA is prepended separately), no on-screen text, never em dashes.",
     ...(workflow.visual_rules?.length ? ["Visual rules:", ...workflow.visual_rules.map((r) => `- ${r}`)] : []),
@@ -609,7 +574,7 @@ async function generateStoryboardOptions(args: {
     model: model(),
     system,
     user: "Return the storyboard options as JSON.",
-    images: args.hookImage ? [args.hookImage] : undefined,
+    images: frames.length ? frames : undefined,
     maxTokens: 1600,
     temperature: 0.9,
     schemaHint: '{ "options": [{ "title": string, "prompts": [string] }] }',
@@ -624,7 +589,7 @@ async function generateStoryboardOptions(args: {
 
   const assemble = (action: string) =>
     `${dna.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
-  return data.options.slice(0, 3).map((o) => ({
+  return data.options.slice(0, optionCount).map((o) => ({
     title: stripEmDashes(o.title).trim(),
     prompts: o.prompts.slice(0, args.scenes.length).map(assemble),
   }));
@@ -791,7 +756,7 @@ async function startHookRender(job: ContentJob, workflow: Workflow): Promise<voi
     await post(job.slack_channel, job.slack_thread_ts, "Missing copy or images, nothing to render yet.");
     return;
   }
-  waitUntil(finishDropRender(job, workflow, copy, images, job.data.mode_videos ?? []));
+  bg(job, "Render", finishDropRender(job, workflow, copy, images, job.data.mode_videos ?? []));
 }
 
 /** The v2 "animate-directly" branch: animate every scene image with its motion prompt via
@@ -859,7 +824,7 @@ async function autoAnimateScenes(job: ContentJob, workflow: Workflow): Promise<v
 const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   hs_workflow: "Pick a workflow by number (or react ✅ for the top pick), or `cancel`.",
   hs_options:
-    "Pick a copy option 1-5 on the copy card (react or type the number, or paste your own copy block), then drop the generated hook image here. `retry` re-runs the options, `cancel` ends it.",
+    "Pick a copy option 1-5 on the copy card (react or type the number, or paste your own copy block) and I'll post one image prompt per scene. `retry` re-runs the options, `cancel` ends it.",
   hs_await_images: "Waiting on the scene images. Upload them into this thread (comment `scene N` to target a slot).",
   hs_anim:
     "Reply `animate` and I'll generate the clips, drop them here, then ask before rendering. Or drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
@@ -933,7 +898,9 @@ export async function handleHookStudioReply(args: {
         return true;
       }
       await post(channel, job.slack_thread_ts, "Writing the sales letter...");
-      waitUntil(
+      bg(
+        job,
+        "Sales letter",
         (async () => {
           const { caption, beliefInstalled, note } = await writeSalesLetterFor(job, workflow, copy);
           await post(channel, job.slack_thread_ts, note);
@@ -956,38 +923,48 @@ export async function handleHookStudioReply(args: {
 
   switch (job.stage) {
     case "hs_workflow": {
-      const n = /^\s*(\d)\s*$/.exec(text)?.[1];
+      // Two digits: the menu is well past 10 workflows now, and reactions cap at 5 keycaps,
+      // so typing is the only way to reach the back half of the list.
+      const n = /^\s*(\d{1,2})\s*$/.exec(text)?.[1];
       if (n) {
-        waitUntil(pickMenuWorkflow(job, parseInt(n, 10)));
+        bg(job, "Workflow pick", pickMenuWorkflow(job, parseInt(n, 10)));
         return true;
       }
       break;
     }
     case "hs_options": {
-      const n = /^\s*(\d)\s*$/.exec(text)?.[1];
+      const n = /^\s*(\d{1,2})\s*$/.exec(text)?.[1];
       if (n) {
         await lockCopyOption(job, parseInt(n, 10));
         return true;
       }
       if (/^\s*retry\s*$/i.test(text) && workflow) {
-        waitUntil(postHookOptions(job, workflow));
+        bg(job, "Copy options", postHookOptions(job, workflow));
         return true;
       }
       if (splitLines(text).length >= 2 && workflow) {
+        // Awaited, NOT detached: the route already runs this handler inside waitUntil with a
+        // 300s budget, and a nested waitUntil put the fit outside every error handler — a
+        // throw from fitCopy's Claude call died silently and left the job parked here forever.
         await post(channel, job.slack_thread_ts, "Fitting your copy to the boxes...");
-        waitUntil(
-          (async () => {
-            const copy = await fitCopy(job, workflow, text);
-            if (!copy.length) {
-              await post(channel, job.slack_thread_ts, "Could not fit that copy to this workflow's boxes.");
-              return;
-            }
-            const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
-            await updateJob(fresh, { data: { ...fresh.data, structured_copy: copy } });
-            await post(channel, job.slack_thread_ts, ["Copy locked:", ...copy.map((c) => `*${c.label}:* ${c.text}`)].join("\n"));
-            await maybeAdvanceFromOptions(fresh, workflow);
-          })()
-        );
+        try {
+          const copy = await fitCopy(job, workflow, text);
+          if (!copy.length) {
+            await post(channel, job.slack_thread_ts, "Could not fit that copy to this workflow's boxes.");
+            return true;
+          }
+          const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
+          await updateJob(fresh, { data: { ...fresh.data, structured_copy: copy } });
+          await post(channel, job.slack_thread_ts, ["Copy locked:", ...copy.map((c) => `*${c.label}:* ${c.text}`)].join("\n"));
+          await maybeAdvanceFromOptions(fresh, workflow);
+        } catch (e) {
+          console.error("[hook-studio] copy fit failed:", (e as Error).message);
+          await post(
+            channel,
+            job.slack_thread_ts,
+            `Could not fit that copy (${(e as Error).message.slice(0, 140)}). Paste it again, or react 1-${(job.data.hs_copy_options ?? []).length || 5} on the copy card to use one of my options.`
+          );
+        }
         return true;
       }
       break;
@@ -1000,18 +977,25 @@ export async function handleHookStudioReply(args: {
         return true;
       }
       if (/^\s*retry\s*$/i.test(text) && workflow) {
-        waitUntil(postStoryboards(job, workflow));
+        // Nothing dropped yet means these are the copy-first scene prompts; rewrite those.
+        // Once the hook image is in, retry means the storyboards for the remaining scenes.
+        const anyImage = (job.data.prompt_slots ?? []).some((s) => s.image_url);
+        bg(
+          job,
+          anyImage ? "Storyboards" : "Image prompts",
+          anyImage ? postStoryboards(job, workflow) : postSceneImagePromptsFromCopy(job, workflow)
+        );
         return true;
       }
       break;
     }
     case "hs_anim": {
       if (/^\s*animate(\s+all)?\s*$/i.test(text) && workflow) {
-        waitUntil(autoAnimateScenes(job, workflow));
+        bg(job, "Auto-animate", autoAnimateScenes(job, workflow));
         return true;
       }
       if (/^\s*(review|render|still)\s*$/i.test(text) && workflow) {
-        waitUntil(postReview(job, workflow));
+        bg(job, "Review", postReview(job, workflow));
         return true;
       }
       if (motionEdit) {
@@ -1036,23 +1020,25 @@ export async function handleHookStudioReply(args: {
         while (motions.length <= i) motions.push("");
         motions[i] = stripEmDashes(motionEdit[2]).trim();
         await updateJob(job, { data: { ...job.data, final_animation_prompts: motions } });
-        waitUntil(postReview(job, workflow));
+        bg(job, "Review", postReview(job, workflow));
         return true;
       }
       if (splitLines(text).length >= 2 && workflow) {
+        // Same shape as the hs_options paste branch above: awaited, never detached.
         await post(channel, job.slack_thread_ts, "Refitting your copy...");
-        waitUntil(
-          (async () => {
-            const copy = await fitCopy(job, workflow, text);
-            if (!copy.length) {
-              await post(channel, job.slack_thread_ts, "Could not fit that copy to this workflow's boxes.");
-              return;
-            }
-            const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
-            await updateJob(fresh, { data: { ...fresh.data, structured_copy: copy } });
-            await postReview(fresh, workflow);
-          })()
-        );
+        try {
+          const copy = await fitCopy(job, workflow, text);
+          if (!copy.length) {
+            await post(channel, job.slack_thread_ts, "Could not fit that copy to this workflow's boxes.");
+            return true;
+          }
+          const fresh = (await getLatestJobByThread(job.slack_thread_ts)) ?? job;
+          await updateJob(fresh, { data: { ...fresh.data, structured_copy: copy } });
+          await postReview(fresh, workflow);
+        } catch (e) {
+          console.error("[hook-studio] copy refit failed:", (e as Error).message);
+          await post(channel, job.slack_thread_ts, `Could not refit that copy (${(e as Error).message.slice(0, 140)}). Paste it again.`);
+        }
         return true;
       }
       break;
@@ -1105,14 +1091,14 @@ export async function handleHookStudioReaction(args: {
   const workflow = await loadJobWorkflow(job);
   switch (job.stage) {
     case "hs_workflow":
-      if (approve) waitUntil(pickMenuWorkflow(job, 1));
-      else if (keycap) waitUntil(pickMenuWorkflow(job, keycap));
+      if (approve) bg(job, "Workflow pick", pickMenuWorkflow(job, 1));
+      else if (keycap) bg(job, "Workflow pick", pickMenuWorkflow(job, keycap));
       return true;
     case "hs_options":
       if (keycap) await lockCopyOption(job, keycap);
       return true;
     case "hs_anim":
-      if (approve && workflow) waitUntil(postReview(job, workflow));
+      if (approve && workflow) bg(job, "Review", postReview(job, workflow));
       return true;
     case "hs_review":
       if (approve && workflow) await startHookRender(job, workflow);
@@ -1172,9 +1158,9 @@ export async function handleHookStudioFileDrop(args: {
     await updateJob(job, { data: { ...job.data, mode_videos: videos } });
     const filled = videos.filter(Boolean).length;
     if (filled >= total && workflow) {
-      waitUntil(postReview(job, workflow));
+      bg(job, "Review", postReview(job, workflow));
     } else if (job.stage === "hs_review" && workflow) {
-      waitUntil(postReview(job, workflow));
+      bg(job, "Review", postReview(job, workflow));
     } else {
       await post(channel, threadTs, `${filled} of ${total} clip(s) in. Drop the rest, or react ✅ / reply \`review\` to continue.`);
     }
@@ -1219,7 +1205,7 @@ export async function handleHookStudioFileDrop(args: {
       if (copy.length) {
         await maybeAdvanceFromOptions(job, workflow);
       } else {
-        await post(channel, threadTs, "Hook image in. React 1-3 on the copy card or paste your copy to continue.");
+        await post(channel, threadTs, "Image in. React 1-5 on the copy card or paste your copy to continue.");
       }
       return true;
     }
@@ -1227,7 +1213,7 @@ export async function handleHookStudioFileDrop(args: {
       const filled = slots.filter((s) => s.image_url).length;
       if (slots.every((s) => s.image_url)) {
         await post(channel, threadTs, "All scene images in. Writing motion prompts...");
-        waitUntil(postMotionPrompts(job, workflow));
+        bg(job, "Motion prompts", postMotionPrompts(job, workflow));
       } else {
         await post(channel, threadTs, `${filled} of ${slots.length} scene image(s) in.`);
       }
@@ -1236,7 +1222,7 @@ export async function handleHookStudioFileDrop(args: {
     case "hs_anim":
     case "hs_review": {
       await post(channel, threadTs, "Image swapped. Use `motion N <text>` if its motion prompt needs to change.");
-      if (job.stage === "hs_review") waitUntil(postReview(job, workflow));
+      if (job.stage === "hs_review") bg(job, "Review", postReview(job, workflow));
       return true;
     }
     default: {
