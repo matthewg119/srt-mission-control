@@ -8,13 +8,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Daily backstop for the Audit Engine. The worker now processes all batches in
+// Hourly backstop for the Audit Engine. The worker now processes all batches in
 // one invocation, so stalls are rare (only a 300s timeout or lambda crash). This
-// cron — daily, the max frequency allowed on the Vercel Hobby plan — sweeps for
-// any run still stuck at status:"running" and either finalizes it (all runs
-// present) or re-kicks the worker from the first incomplete batch. Re-kicks are
-// idempotent (the worker deletes a batch's prior rows before writing), so a
-// recovery never double-counts or corrupts the score. Also callable on demand.
+// cron sweeps for any run still stuck at status:"running" and either finalizes
+// it (all runs present) or re-kicks the worker from the first incomplete batch.
+// Re-kicks are idempotent (the worker deletes a batch's prior rows before
+// writing), so a recovery never double-counts or corrupts the score. Also
+// callable on demand.
+//
+// Hourly, not daily: public free-audit leads are waiting on this report, and a
+// stall used to mean a next-morning delivery.
 
 const STALL_MINUTES = 3;
 const ROWS_PER_BATCH = BATCH_SIZE * 2; // 4 prompts x 2 engines = 8

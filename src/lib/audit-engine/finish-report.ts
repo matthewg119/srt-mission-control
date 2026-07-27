@@ -94,12 +94,18 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
     }
   }
 
-  // Public free-audit leads: create an Outlook DRAFT (founder hits send) + ping #hot-leads.
+  // Public free-audit leads: create an Outlook DRAFT (founder hits send) + ping
+  // #hot-leads. The draft and the ping are in SEPARATE try blocks on purpose —
+  // a lapsed Microsoft token used to throw before the ping was sent, so a
+  // finished audit produced no notification at all instead of a notification
+  // without a draft link.
   if (report.requester_email) {
+    const name = report.client_name || report.business_type || report.website;
+    const reportUrl = `${appUrl()}/r/${report.slug}`;
+    let draftLink: string | null = null;
+
     try {
       if (!pdfBuffer) pdfBuffer = generateScorecardPDF(report, view, weighted);
-      const reportUrl = `${appUrl()}/r/${report.slug}`;
-      const name = report.client_name || report.business_type || report.website;
       const { subject, body } = await draftInitialEmail(report, view);
       const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(body)}</div>`;
 
@@ -115,21 +121,56 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
           },
         ],
       });
-
-      const hot = process.env.SLACK_HOT_LEADS_CHANNEL || "";
-      if (hot) {
-        const who = report.requester_name ? `${report.requester_name} · ` : "";
-        await slack
-          .postMessage(
-            hot,
-            `:large_green_circle: *AI audit ready — Outlook draft prepared* — *${name}* scored ${report.score ?? weighted.score}/100\n` +
-              `Lead: ${who}${report.requester_email}\n` +
-              `<${draft.webLink}|✉️ Open draft in Outlook> · <${reportUrl}|📊 View report>`
-          )
-          .catch(() => {});
-      }
+      draftLink = draft.webLink ?? null;
     } catch (e) {
-      console.error("[finishReport] outlook draft / hot-leads failed:", (e as Error).message);
+      console.error("[finishReport] outlook draft failed:", (e as Error).message);
+    }
+
+    try {
+      const headline = draftLink
+        ? ":large_green_circle: *AI audit ready — Outlook draft prepared*"
+        : ":large_green_circle: *AI audit ready* (Outlook draft failed, reconnect Microsoft 365)";
+      const who = report.requester_name ? `${report.requester_name} · ` : "";
+      const links = [
+        draftLink ? `<${draftLink}|✉️ Open draft in Outlook>` : null,
+        `<${reportUrl}|📊 View report>`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const text =
+        `${headline} — *${name}* scored ${report.score ?? weighted.score}/100\n` +
+        `Lead: ${who}${report.requester_email}\n` +
+        links;
+
+      await postLeadNotification(report, text);
+    } catch (e) {
+      console.error("[finishReport] hot-leads post failed:", (e as Error).message);
     }
   }
+}
+
+/** Reply inside the lead's existing #hot-leads thread when we know it, so the
+ *  audit result sits under the lead that triggered it. Falls back to a
+ *  top-level post (Slack-triggered /audit runs have no contact). */
+async function postLeadNotification(report: AuditReportRow, text: string): Promise<void> {
+  const fallbackChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+
+  if (report.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("slack_thread_ts, slack_channel")
+      .eq("id", report.contact_id)
+      .maybeSingle();
+
+    if (contact?.slack_thread_ts) {
+      await slack.postThreadReply(
+        contact.slack_channel || fallbackChannel,
+        contact.slack_thread_ts,
+        text
+      );
+      return;
+    }
+  }
+
+  if (fallbackChannel) await slack.postMessage(fallbackChannel, text);
 }

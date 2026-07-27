@@ -25,6 +25,9 @@ export interface RunAuditPipelineParams {
   requesterName?: string;
   requesterEmail?: string;
   requesterPhone?: string;
+  /** Links the report to the #hot-leads thread opened by ingestLead, so the
+   *  finished report replies under the lead instead of posting standalone. */
+  contactId?: string;
   /** Public intake has no one to ask for a city — proceed on the best guess instead of blocking. */
   allowLowConfidenceCity?: boolean;
   onNeedsCity?: (website: string, bestGuess: string | null) => Promise<void>;
@@ -36,7 +39,34 @@ export interface RunAuditPipelineResult {
   reportId?: string;
 }
 
+/** Minutes within which a repeat request for the same website+email is treated
+ *  as a double submit rather than a genuine re-audit. A full run is 40 model
+ *  calls, so a stray second beacon is expensive. */
+const DEDUP_WINDOW_MINUTES = 30;
+
+async function findRecentReport(website: string, email?: string): Promise<string | null> {
+  if (!email) return null;
+  const cutoff = new Date(Date.now() - DEDUP_WINDOW_MINUTES * 60_000).toISOString();
+  const { data } = await supabaseAdmin
+    .from("audit_reports")
+    .select("id")
+    .eq("website", website)
+    .eq("requester_email", email)
+    .in("status", ["classifying", "running", "done"])
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
 export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<RunAuditPipelineResult> {
+  const duplicateOf = await findRecentReport(params.website, params.requesterEmail);
+  if (duplicateOf) {
+    console.log(`[run-audit-pipeline] skipping duplicate for ${params.website} (report ${duplicateOf})`);
+    return { ok: true, reportId: duplicateOf };
+  }
+
   let research;
   try {
     research = await researchWebsite(params.website);
@@ -80,6 +110,7 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       requester_name: params.requesterName ?? null,
       requester_email: params.requesterEmail ?? null,
       requester_phone: params.requesterPhone ?? null,
+      contact_id: params.contactId ?? null,
       slack_channel_id: channel.id,
     })
     .select("*")

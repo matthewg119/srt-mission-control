@@ -25,6 +25,9 @@ export interface AuditReportRow {
   requester_name: string | null;
   requester_email: string | null;
   requester_phone: string | null;
+  /** contacts.id when the report came from a public lead, so finishReport can
+   *  reply inside that lead's #hot-leads thread instead of posting standalone. */
+  contact_id: string | null;
   slack_channel_id: string | null;
   slack_thread_ts: string | null;
   // The last set of 3 choose-from email options posted to the thread; a "1/2/3" reply turns

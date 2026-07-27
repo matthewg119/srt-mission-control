@@ -32,6 +32,18 @@ Internal operations portal for SRT Agency (business financing brokerage). AI-fir
 - `src/config/pipeline.ts` — Two pipelines: New Deals + Active Deals
 
 ### Lead Capture (from srtagency.com)
+- `src/lib/lead-intake.ts` — **the shared inbound-lead stack.** `ingestLead()` does
+  Supabase contact upsert → Zoho lead (search-then-create, never duplicates) → #hot-leads
+  top-level post + detail reply in that thread → Speed-to-Lead, and returns the contact id.
+  `enrichLead()` appends to a lead that already exists (Zoho note + same-thread reply).
+  Used by `/api/leads/funnel`, `/api/audit/public-intake` and `/api/leads/facebook` —
+  add new funnels here rather than copying the sequence a fourth time.
+- `src/app/api/leads/funnel/route.ts` — /aivisibility funnel → ingestLead
+- `src/app/api/leads/facebook/route.ts` — Meta Lead Ads webhook → ingestLead + auto-audit.
+  Verifies X-Hub-Signature-256, then acks inside Meta's **5-second** window and does all
+  work in `waitUntil` (a slow response gets the app unsubscribed from the Page).
+  Website comes from the form's field ids: set the question's Field ID to `website` in
+  Ads Manager, otherwise the route resolves it from `GET /{form_id}?fields=questions{key,label}`.
 - `src/app/api/leads/capture/route.ts` — Contact form → Supabase contact + deal
 - `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create + Zoho + Slack, 100% enrich + PDF + OneDrive + Zoho)
 
@@ -80,6 +92,9 @@ META_ADS_TOKEN=            # System-user token with ads_management (Custom Audie
 META_AD_ACCOUNT_ID=        # Numeric ad account id (route prefixes act_). Used to create the exclusion audience.
 META_AUDIENCE_ID=          # "SRT - CRM Master Exclusion" audience id (from /api/admin/create-exclusion-audience)
 META_ADS_API_VERSION=      # Optional, defaults to v21.0
+FB_APP_SECRET=             # App Secret. Signs Lead Ads webhooks (X-Hub-Signature-256).
+FB_WEBHOOK_VERIFY_TOKEN=   # Must match the Verify Token in App Dashboard → Webhooks → Page.
+FB_PAGE_ACCESS_TOKEN=      # System User token w/ leads_retrieval. ALSO needs Leads Access granted to the app.
 IMAGE_GEN_ENABLED=         # "true" re-enables AUTO image generation; unset = prompt-first mode (Matthew pastes the images in Slack)
 IMAGE_PROVIDER=            # Image provider override; code default is openai (gpt-image-2 DIRECT from OpenAI)
 POV_IMAGE_PROVIDER=        # POV/workflow-path override; code default openai
