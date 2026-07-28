@@ -48,6 +48,9 @@ export async function generateVideo(prompt: string, imageUrl: string): Promise<s
       duration: 4,
       image_url: imageUrl,
     }),
+    // Bounded: pollVideo's deadline only applies BETWEEN requests, so an unbounded socket
+    // here would hang past it and take the caller's whole function budget with it.
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
@@ -67,6 +70,7 @@ export async function pollVideo(jobId: string, maxWaitMs = 240_000): Promise<str
   while (Date.now() - start < maxWaitMs) {
     const res = await fetch(`${BASE}/video-generation/${jobId}`, {
       headers: { "xi-api-key": key() },
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!res.ok) {

@@ -874,7 +874,11 @@ async function startHookRender(job: ContentJob, workflow: Workflow): Promise<voi
  *  hs_review handler renders through the render_spec build (not stitchClipsRemote) so the clips
  *  land on the workflow's beat-synced timeline with their audio ducked under the song. A shot
  *  whose clip fails keeps its still, so a partial failure still renders. */
-async function autoAnimateScenes(job: ContentJob, workflow: Workflow): Promise<void> {
+async function autoAnimateScenes(
+  job: ContentJob,
+  workflow: Workflow,
+  opts: { force?: boolean } = {}
+): Promise<void> {
   const { slack_channel: channel, slack_thread_ts: threadTs } = job;
   const copy = (job.data.structured_copy ?? []) as StructuredCopyLine[];
   const images = slotImages(job);
@@ -884,26 +888,64 @@ async function autoAnimateScenes(job: ContentJob, workflow: Workflow): Promise<v
     return;
   }
 
-  await post(channel, threadTs, `Animating ${images.length} scene(s) with Seedance... this runs in parallel and takes a few minutes.`);
+  // Resume: keep clips already animated and only work the empty slots, so a second
+  // `animate` costs only what is actually missing (this is also what makes a killed
+  // invocation recoverable rather than a total loss).
+  const existing = opts.force ? [] : ((job.data.mode_videos ?? []) as Array<string | null>);
+  const videos: Array<string | null> = images.map((_, i) => existing[i] ?? null);
+  const todo = images.map((url, i) => ({ i, url })).filter((t) => !videos[t.i]);
+
+  if (!todo.length) {
+    await post(channel, threadTs, "Every scene already has a clip. React ✅ or reply `render` to render.");
+    await updateJob(job, { stage: "hs_review", data: { ...job.data, mode_videos: videos } });
+    return;
+  }
+
+  const done = images.length - todo.length;
+  await post(
+    channel,
+    threadTs,
+    `Animating ${todo.length} scene(s) with Seedance${done ? ` (${done} already done)` : ""}... this runs in parallel and takes a few minutes.`
+  );
   const motion = getMotionAdapter();
 
-  // Animate every image in parallel; post each finished clip into the thread. A failed shot
-  // resolves to null and keeps its still.
-  const videos = await Promise.all(
-    images.map(async (imageUrl, i) => {
+  // Persist each clip the INSTANT it lands. The whole step shares one 300s function budget
+  // with the animation polling, and a killed lambda neither resolves nor rejects — so a
+  // single write at the end (what this used to do) threw away finished, already-uploaded
+  // clips. Writes are serialised through one chain because the scenes run concurrently and
+  // each does a read-modify-write of the same mode_videos array.
+  let saveChain: Promise<void> = Promise.resolve();
+  const saveClip = (index: number, url: string): Promise<void> => {
+    saveChain = saveChain.then(async () => {
+      const fresh = (await getLatestJobByThread(threadTs)) ?? job;
+      const merged = [...((fresh.data.mode_videos ?? []) as Array<string | null>)];
+      while (merged.length < images.length) merged.push(null);
+      merged[index] = url;
+      await updateJob(fresh, { data: { ...fresh.data, mode_videos: merged } });
+    });
+    return saveChain;
+  };
+
+  // Animate every missing image in parallel; post each finished clip into the thread. A
+  // failed shot stays null and keeps its still.
+  await Promise.allSettled(
+    todo.map(async ({ i, url: imageUrl }) => {
       try {
         const buffer = await motion.animate(imageUrl, motions[i] ?? "");
         // Drop the clip into the thread so the operator sees each animated scene.
         await slack.uploadFile(channel, `scene-${i + 1}.mp4`, buffer, "video/mp4", threadTs).catch(() => null);
         // Durable URL for the render service to fetch.
-        return await uploadToReels(buffer, "video/mp4");
+        const stored = await uploadToReels(buffer, "video/mp4");
+        if (!stored) throw new Error("clip generated but could not be stored");
+        videos[i] = stored;
+        await saveClip(i, stored);
       } catch (e) {
         console.error(`[hook-studio] scene ${i + 1} animation failed:`, (e as Error).message);
         await post(channel, threadTs, `Scene ${i + 1} did not animate (${(e as Error).message.slice(0, 160)}) - it will render as the still.`);
-        return null;
       }
     })
   );
+  await saveChain.catch((e) => console.error("[hook-studio] clip persist failed:", (e as Error).message));
 
   if (!videos.some(Boolean)) {
     await post(channel, threadTs, "No clips animated, so nothing to render. Reply `review` to render the stills as-is, or `animate` to try again.");
@@ -913,6 +955,7 @@ async function autoAnimateScenes(job: ContentJob, workflow: Workflow): Promise<v
   // Hold at the render gate: store the clips and ask before rendering. ✅ / `render` on the
   // card below routes through the existing hs_review handler -> startHookRender.
   const filled = videos.filter(Boolean).length;
+  const missing = videos.map((v, i) => (v ? null : i + 1)).filter(Boolean) as number[];
   const fresh = (await getLatestJobByThread(threadTs)) ?? job;
   await updateJob(fresh, { stage: "hs_review", data: { ...fresh.data, mode_videos: videos } });
   const freshest = (await getLatestJobByThread(threadTs)) ?? fresh;
@@ -920,6 +963,9 @@ async function autoAnimateScenes(job: ContentJob, workflow: Workflow): Promise<v
     freshest,
     [
       `${filled} of ${images.length} clip(s) animated and posted above.`,
+      ...(missing.length
+        ? [`Scene ${missing.join(", ")} will render as the still. Reply \`animate\` to retry just those.`]
+        : []),
       "Render the final video now? React ✅ or reply `render`.",
       "`motion N <text>` rewrites a prompt, `cancel` ends it.",
     ].join("\n"),
@@ -936,8 +982,9 @@ const HS_NUDGES: Partial<Record<ContentJob["stage"], string>> = {
   hs_await_images:
     "React ✅ (or reply `generate`) and I'll make the scene images with gpt-image-2. Or upload your own into this thread (comment `scene N` to target a slot). `retry` rewrites the prompts.",
   hs_anim:
-    "Reply `animate` and I'll generate the clips, drop them here, then ask before rendering. Or drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
-  hs_review: "React ✅ or reply `render` to render. Paste a new copy block, drop a replacement image with `scene N`, or `motion N <text>` to change things.",
+    "Reply `animate` and I'll generate the clips for any scene still missing one (`animate all` redoes every scene), drop them here, then ask before rendering. Or drop your own Seedance clips, react ✅ or reply `review` to continue with the stills, or `motion N <text>` to rewrite a prompt.",
+  hs_review:
+    "React ✅ or reply `render` to render. `animate` retries any scene still without a clip. Paste a new copy block, drop a replacement image with `scene N`, or `motion N <text>` to change things.",
   dr_render: "Rendering now. Reply `render` to retry if it fails.",
 };
 
@@ -1029,6 +1076,8 @@ export async function handleHookStudioReply(args: {
 
   const workflow = await loadJobWorkflow(job);
   const motionEdit = /^\s*motion\s+(\d{1,2})\s+([\s\S]+)$/i.exec(text);
+  // `animate` fills only the scenes still missing a clip; `animate all` forces a full redo.
+  const animateCmd = /^\s*animate(\s+all)?\s*$/i.exec(text);
 
   switch (job.stage) {
     case "hs_workflow": {
@@ -1104,8 +1153,8 @@ export async function handleHookStudioReply(args: {
       break;
     }
     case "hs_anim": {
-      if (/^\s*animate(\s+all)?\s*$/i.test(text) && workflow) {
-        bg(job, "Auto-animate", autoAnimateScenes(job, workflow));
+      if (animateCmd && workflow) {
+        bg(job, "Auto-animate", autoAnimateScenes(job, workflow, { force: Boolean(animateCmd[1]) }));
         return true;
       }
       if (/^\s*(review|render|still)\s*$/i.test(text) && workflow) {
@@ -1126,6 +1175,12 @@ export async function handleHookStudioReply(args: {
     case "hs_review": {
       if (/^\s*(render|still|go)\s*$/i.test(text) && workflow) {
         await startHookRender(job, workflow);
+        return true;
+      }
+      // The partial-render gate tells the operator to reply `animate` to retry the scenes
+      // that fell through, so it has to work from here too, not only at hs_anim.
+      if (animateCmd && workflow) {
+        bg(job, "Auto-animate", autoAnimateScenes(job, workflow, { force: Boolean(animateCmd[1]) }));
         return true;
       }
       if (motionEdit && workflow) {

@@ -34,7 +34,7 @@ export type MotionEngine = "veo" | "seedance" | "fal";
 // ---- shared helpers --------------------------------------------------------------
 
 async function downloadMp4(url: string): Promise<Buffer> {
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`motion: clip download failed (${res.status}) for ${url.slice(0, 120)}`);
   return Buffer.from(await res.arrayBuffer());
 }
@@ -80,7 +80,24 @@ function statusOf(json: Record<string, unknown>): string {
 }
 
 const VIDEO_POLL_INTERVAL_MS = 5_000;
-const VIDEO_POLL_TIMEOUT_MS = 300_000;
+/**
+ * MUST stay comfortably under the caller's function budget. Every caller runs inside
+ * /api/slack/events, whose maxDuration is 300s. This used to be 300_000 — the same number —
+ * so a slow job could never fail gracefully: the lambda was killed before the adapter could
+ * throw, which meant no error, no partial save, and no Slack message (see the 2026-07-27
+ * hook-studio stall). The remaining ~60s is what the caller needs to upload the clips,
+ * persist them, and post its card. Same convention as the render lane's
+ * AbortSignal.timeout(290000).
+ */
+const VIDEO_POLL_TIMEOUT_MS = 240_000;
+/** Per-request ceilings, so one hung socket cannot block past the poll deadline: the loop
+ *  guard only runs BETWEEN fetches, so without these it is advisory only. */
+const SUBMIT_TIMEOUT_MS = 30_000;
+const STATUS_TIMEOUT_MS = 20_000;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+/** Consecutive non-ok status polls tolerated before giving up. A 429/5xx storm used to be
+ *  swallowed by `continue`, burning the whole timeout with zero diagnostics. */
+const MAX_CONSECUTIVE_POLL_FAILURES = 6;
 
 // ---- VeoAdapter (default, proven) ------------------------------------------------
 
@@ -134,6 +151,7 @@ class SeedanceAdapter implements MotionAdapter {
       method: "POST",
       headers,
       body: JSON.stringify(submitBody),
+      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     });
     if (!submitRes.ok) {
       throw new Error(`seedance submit failed (${submitRes.status}): ${(await submitRes.text()).slice(0, 300)}`);
@@ -148,10 +166,23 @@ class SeedanceAdapter implements MotionAdapter {
     if (!jobId) throw new Error(`seedance: no job id in response: ${JSON.stringify(submitJson).slice(0, 300)}`);
 
     const start = Date.now();
-    while (Date.now() - start < VIDEO_POLL_TIMEOUT_MS) {
+    let failures = 0;
+    // Sleep first, then re-check the deadline: with the guard alone the last iteration could
+    // enter at t=timeout-1ms and still run a full interval plus a status fetch past it.
+    for (;;) {
       await new Promise((r) => setTimeout(r, VIDEO_POLL_INTERVAL_MS));
-      const stRes = await fetch(`${HIGGSFIELD_HOST}/requests/${jobId}/status`, { headers });
-      if (!stRes.ok) continue;
+      if (Date.now() - start >= VIDEO_POLL_TIMEOUT_MS) break;
+      const stRes = await fetch(`${HIGGSFIELD_HOST}/requests/${jobId}/status`, {
+        headers,
+        signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+      }).catch(() => null);
+      if (!stRes?.ok) {
+        if (++failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw new Error(`seedance job ${jobId}: ${failures} consecutive status failures (last ${stRes?.status ?? "network"})`);
+        }
+        continue;
+      }
+      failures = 0;
       const stJson = (await stRes.json()) as Record<string, unknown>;
       const status = statusOf(stJson);
       if (status === "completed" || status === "succeeded") {
@@ -163,7 +194,7 @@ class SeedanceAdapter implements MotionAdapter {
         throw new Error(`seedance job ${jobId} ended: ${status}`);
       }
     }
-    throw new Error(`seedance job ${jobId} timed out`);
+    throw new Error(`seedance job ${jobId} timed out after ${Math.round(VIDEO_POLL_TIMEOUT_MS / 1000)}s`);
   }
 }
 
@@ -190,6 +221,7 @@ class FalAdapter implements MotionAdapter {
       method: "POST",
       headers,
       body: JSON.stringify(submitBody),
+      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     });
     if (!submitRes.ok) {
       throw new Error(`fal submit failed (${submitRes.status}): ${(await submitRes.text()).slice(0, 300)}`);
@@ -202,14 +234,26 @@ class FalAdapter implements MotionAdapter {
     }
 
     const start = Date.now();
-    while (Date.now() - start < VIDEO_POLL_TIMEOUT_MS) {
+    let failures = 0;
+    // Sleep first, then re-check the deadline (see the note in SeedanceAdapter).
+    for (;;) {
       await new Promise((r) => setTimeout(r, VIDEO_POLL_INTERVAL_MS));
-      const stRes = await fetch(statusUrl, { headers });
-      if (!stRes.ok) continue;
+      if (Date.now() - start >= VIDEO_POLL_TIMEOUT_MS) break;
+      const stRes = await fetch(statusUrl, {
+        headers,
+        signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+      }).catch(() => null);
+      if (!stRes?.ok) {
+        if (++failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw new Error(`fal job: ${failures} consecutive status failures (last ${stRes?.status ?? "network"})`);
+        }
+        continue;
+      }
+      failures = 0;
       const stJson = (await stRes.json()) as Record<string, unknown>;
       const status = ((stJson.status as string) || "").toUpperCase();
       if (status === "COMPLETED") {
-        const finalRes = await fetch(responseUrl, { headers });
+        const finalRes = await fetch(responseUrl, { headers, signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
         if (!finalRes.ok) throw new Error(`fal: result fetch failed (${finalRes.status})`);
         const finalJson = (await finalRes.json()) as Record<string, unknown>;
         const url = deepFindUrl(finalJson);
@@ -220,7 +264,7 @@ class FalAdapter implements MotionAdapter {
         throw new Error(`fal job ended: ${status}`);
       }
     }
-    throw new Error("fal job timed out");
+    throw new Error(`fal job timed out after ${Math.round(VIDEO_POLL_TIMEOUT_MS / 1000)}s`);
   }
 }
 
