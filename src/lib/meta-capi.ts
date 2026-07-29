@@ -3,10 +3,22 @@ import { createHash } from "crypto";
 const API_VERSION = "v21.0";
 
 function getConfig() {
+  // A test code on production is silently catastrophic: Meta accepts the event,
+  // returns 200, and files it under Events Manager -> Test Events, where it is
+  // ignored for optimization, attribution and reporting. Nothing errors, so the
+  // ads just quietly stop learning. The env var alone is therefore not enough
+  // authority to set it — production hard-disables it whatever the value is.
+  const isProduction = process.env.VERCEL_ENV === "production";
+  const testCode = process.env.META_CAPI_TEST_CODE || "";
+
+  if (isProduction && testCode) {
+    console.warn("[Meta CAPI] META_CAPI_TEST_CODE is set on production — ignoring it. Remove it from the Production env.");
+  }
+
   return {
     pixelId: process.env.META_PIXEL_ID || "",
     accessToken: process.env.META_CAPI_TOKEN || "",
-    testCode: process.env.META_CAPI_TEST_CODE || "",
+    testCode: isProduction ? "" : testCode,
   };
 }
 
@@ -110,6 +122,7 @@ export async function sendEvent(
         ...(event.customData ? { custom_data: event.customData } : {}),
       },
     ],
+    // Preview/Development only — getConfig() blanks this on production.
     ...(testCode ? { test_event_code: testCode } : {}),
   };
 

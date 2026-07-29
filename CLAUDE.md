@@ -88,6 +88,10 @@ SLACK_CEO_CHANNEL=         # Slack channel ID for CEO pulse reports
 TELEGRAM_BOT_TOKEN=        # Telegram bot (from @BotFather)
 TELEGRAM_USER_ID=          # Allowed Telegram user ID
 NEXT_PUBLIC_APP_URL=       # https://mission.srtagency.com
+META_CAPI_TEST_CODE=       # Preview/Development ONLY. On Production it routes every CAPI event into
+                           # Events Manager > Test Events, where Meta ignores it for optimization,
+                           # attribution and reporting — and returns 200, so nothing ever errors.
+                           # getConfig() in meta-capi.ts hard-disables it when VERCEL_ENV=production.
 META_ADS_TOKEN=            # System-user token with ads_management (Custom Audience sync). NOT META_CAPI_TOKEN.
 META_AD_ACCOUNT_ID=        # Numeric ad account id (route prefixes act_). Used to create the exclusion audience.
 META_AUDIENCE_ID=          # "SRT - CRM Master Exclusion" audience id (from /api/admin/create-exclusion-audience)
