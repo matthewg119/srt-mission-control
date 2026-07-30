@@ -16,12 +16,17 @@ export function capitalizeSentenceStarts(body: string): string {
   return body
     .split("\n")
     .map((line) =>
-      line
-        // Start of a line.
-        .replace(/^(\s*)([a-z])/, (_m, ws: string, ch: string) => ws + ch.toUpperCase())
-        // After a sentence terminator. Requires the space, so "e.g. x" and "cellunetics.com"
-        // are untouched (no terminator+space+letter pattern inside a domain).
-        .replace(/([.!?])(\s+)([a-z])/g, (_m, p: string, ws: string, ch: string) => p + ws + ch.toUpperCase())
+      // A line that IS a link is not a sentence. Capitalizing it produced
+      // "Https://www.srtagency.com/preview/cellunetics" in a real draft, which looks broken
+      // to the reader even though the scheme is case-insensitive.
+      /^\s*(?:https?:\/\/|www\.)/i.test(line)
+        ? line
+        : line
+            // Start of a line.
+            .replace(/^(\s*)([a-z])/, (_m, ws: string, ch: string) => ws + ch.toUpperCase())
+            // After a sentence terminator. Requires the space, so "e.g. x" and
+            // "cellunetics.com" are untouched (no terminator+space+letter inside a domain).
+            .replace(/([.!?])(\s+)([a-z])/g, (_m, p: string, ws: string, ch: string) => p + ws + ch.toUpperCase())
     )
     .join("\n");
 }

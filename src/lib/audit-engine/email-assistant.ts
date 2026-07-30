@@ -138,7 +138,7 @@ function prePitchRules(redesignUrl: string | null): string {
     redesignUrl
       ? "5. Under 180 words for the body. The extra room over a linkless email exists ONLY for concrete specifics about what you built them, nothing else."
       : "5. Under 120 words for the body.",
-    "6. End with a one-line sign-off (first name, then the agency name on its own line). No signature block, no title, no phone.",
+    `6. ${SIGNOFF_RULE}`,
     "The whole email is a door knock, not the pitch. Everything of value is deliberately withheld until they say yes.",
   ].join("\n");
 }
@@ -156,6 +156,29 @@ export const PARAGRAPH_RULES = [
   "No bold, no italics, no asterisks, no markdown of any kind. No bullet lists. No headers.",
   "The test: if it would look strange typed by a person in Outlook, it is wrong.",
 ].join("\n");
+
+/**
+ * Who cold outreach is signed by.
+ *
+ * Not left to the model: it invented "Matthew" on one draft and omitted the sign-off entirely
+ * on the next, from the same prompt. The name is stated in the prompt AND appended in code if
+ * the model drops it, so every email in a sequence closes the same way. Change these two
+ * values if outreach ever goes out under a different name.
+ */
+export const OUTREACH_SIGNATURE = { name: "Dan", agency: "SRT Agency" };
+
+export const SIGNOFF_RULE = `End with exactly this sign-off, on its own two lines, nothing after it:\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}\nNo title, no phone number, no signature block, no postscript.`;
+
+/**
+ * Guarantee the sign-off. A cold email that just stops after the question reads like a draft
+ * someone forgot to finish, and that is what shipped when the model omitted it.
+ */
+export function ensureSignoff(body: string): string {
+  const trimmed = body.trimEnd();
+  const tail = trimmed.slice(-120).toLowerCase();
+  if (tail.includes(OUTREACH_SIGNATURE.agency.toLowerCase())) return trimmed;
+  return `${trimmed}\n\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}`;
+}
 
 /** How the sentences themselves sound. Extracted from the reference email below. */
 export const VOICE_RULES = [
@@ -697,7 +720,7 @@ export async function draftPermissionEmail(
 
   return {
     subject: subject.text,
-    body: polished.body,
+    body: ensureSignoff(polished.body),
     removedLinks: [...subject.removed, ...body.removed],
     formatNote: polished.note,
   };
@@ -761,5 +784,5 @@ export async function draftRevealMessage(
 
   const parsed = parseSubjectAndBody(text);
   const polished = await polishBody(noDashes(parsed.body), { allowEmphasis: true });
-  return { subject: noDashes(parsed.subject), body: polished.body };
+  return { subject: noDashes(parsed.subject), body: ensureSignoff(polished.body) };
 }

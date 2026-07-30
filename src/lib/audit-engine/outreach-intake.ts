@@ -27,6 +27,8 @@ import {
   VOICE_RULES,
   PERMISSION_EXAMPLE_WITH_REDESIGN,
   PERMISSION_EXAMPLE_NO_REDESIGN,
+  SIGNOFF_RULE,
+  ensureSignoff,
   type EmailOption,
   type LinkPolicy,
 } from "./email-assistant";
@@ -214,7 +216,7 @@ function intakeDraftSystem(redesignUrl: string | null): string {
     redesignUrl
       ? "5. Under 180 words for the body. The extra room over a linkless email exists ONLY for concrete specifics about what you built them."
       : "5. Under 120 words for the body.",
-    "6. End with a one-line sign-off (first name, then the agency name on its own line). No signature block.",
+    `6. ${SIGNOFF_RULE}`,
     'Subject line: short and specific, naming the business and the engine, for example "Cellunetics + ChatGPT". No score, no numbers, no bait, no question mark.',
     "Do NOT use em dashes or en dashes anywhere, and never ' - ' as a connector. Use commas and periods. Ranges use 'to'.",
     PARAGRAPH_RULES,
@@ -290,7 +292,7 @@ export async function draftFromIntake(
     draft: {
       label: "Email 1 · permission",
       subject: subject.text.trim(),
-      body: polished.body.trim(),
+      body: ensureSignoff(polished.body),
     },
     extracted: {
       prospect_name: cleanText(data.prospect_name),
@@ -362,7 +364,7 @@ export async function revisePreviousDraft(
   const polished = await polishBody(body.text, { allowEmphasis: !isPermissionStage });
 
   return {
-    draft: { label: previous.label, subject: subject.text.trim(), body: polished.body.trim() },
+    draft: { label: previous.label, subject: subject.text.trim(), body: ensureSignoff(polished.body) },
     extracted: { prospect_name: null, prospect_email: null, redesign_url: null },
     removedLinks: [...subject.removed, ...body.removed],
     formatNote: polished.note,
