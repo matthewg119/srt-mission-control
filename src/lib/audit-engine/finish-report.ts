@@ -22,6 +22,7 @@ import { buildReportView, computeWeightedScore, type ReportView, type WeightedSc
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
+import { companiesConflict } from "@/lib/company-identity";
 import { microsoft } from "@/lib/microsoft";
 
 function appUrl(): string {
@@ -30,6 +31,23 @@ function appUrl(): string {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** The company this report is about, resolved the same way everywhere it is displayed. */
+function displayName(report: AuditReportRow): string {
+  return report.client_name || report.business_type || report.website;
+}
+
+/**
+ * One scorecard filename for both the Slack upload and the Outlook attachment.
+ *
+ * These used to be built by two different expressions, so the Slack file was named after the
+ * CATEGORY ("AI Visibility Scorecard - electrical control panel design...") while the emailed
+ * one was named after the COMPANY. Reading the two side by side looked exactly like a
+ * scorecard for the wrong business, which cost a real investigation.
+ */
+function scorecardFileName(report: AuditReportRow): string {
+  return `AI Visibility Scorecard - ${displayName(report)}.pdf`;
 }
 
 export async function failReport(row: AuditReportRow, message: string): Promise<void> {
@@ -84,8 +102,7 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
   if (report.slack_channel_id && report.slack_thread_ts) {
     try {
       pdfBuffer = generateScorecardPDF(report, view, weighted);
-      const fileName = `AI Visibility Scorecard - ${report.business_type ?? report.website}.pdf`;
-      await slack.uploadFilePDF(report.slack_channel_id, fileName, pdfBuffer, report.slack_thread_ts);
+      await slack.uploadFilePDF(report.slack_channel_id, scorecardFileName(report), pdfBuffer, report.slack_thread_ts);
 
       // Intake card, NOT finished drafts. A cold prospect's email 1 depends on things only
       // Matthew knows (who the recipient is, what to mention, whether a free redesign was
@@ -104,11 +121,21 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
   // finished audit produced no notification at all instead of a notification
   // without a draft link.
   if (report.requester_email) {
-    const name = report.client_name || report.business_type || report.website;
+    const name = displayName(report);
     const reportUrl = `${appUrl()}/r/${report.slug}`;
     let draftLink: string | null = null;
 
     try {
+      // Everything below (recipient, PDF, filename, subject, body) must descend from ONE
+      // report row. It does today, and this assert is the net for whoever later adds a second
+      // query to this block: an email addressed to one company carrying another company's
+      // scorecard is the worst output this system could produce.
+      if (view.reportId !== report.id) {
+        throw new Error(
+          `report/view mismatch: view was built for ${view.reportId} but the draft is for ${report.id}. Refusing to create a draft.`
+        );
+      }
+
       if (!pdfBuffer) pdfBuffer = generateScorecardPDF(report, view, weighted);
       const { subject, body } = await draftInitialEmail(report, view);
       const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(body)}</div>`;
@@ -119,7 +146,7 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
         body: htmlBody,
         attachments: [
           {
-            name: `AI Visibility Scorecard - ${name}.pdf`,
+            name: scorecardFileName(report),
             contentType: "application/pdf",
             contentBytes: pdfBuffer.toString("base64"),
           },
@@ -162,15 +189,36 @@ async function postLeadNotification(report: AuditReportRow, text: string): Promi
   if (report.contact_id) {
     const { data: contact } = await supabaseAdmin
       .from("contacts")
-      .select("slack_thread_ts, slack_channel")
+      .select("slack_thread_ts, slack_channel, website, business_name")
       .eq("id", report.contact_id)
       .maybeSingle();
 
-    if (contact?.slack_thread_ts) {
+    // Never post one company's audit into another company's thread. Contacts are matched on
+    // email or phone, so a shared front-desk line or one person handling two businesses can
+    // still land a report on a contact that describes someone else. lead-intake now refuses to
+    // reuse a conflicting contact, but rows linked before that fix are still out there.
+    const conflict =
+      contact &&
+      companiesConflict(
+        { website: contact.website, businessName: contact.business_name },
+        { website: report.website, businessName: report.client_name }
+      );
+
+    if (contact?.slack_thread_ts && !conflict) {
       await slack.postThreadReply(
         contact.slack_channel || fallbackChannel,
         contact.slack_thread_ts,
         text
+      );
+      return;
+    }
+
+    if (conflict && fallbackChannel) {
+      await slack.postMessage(
+        fallbackChannel,
+        `${text}\n\n:warning: Posted here instead of the lead's thread: that contact is recorded as ` +
+          `*${contact?.business_name || contact?.website || "another business"}*, not *${displayName(report)}*. ` +
+          `Worth checking whether two businesses got merged onto one contact.`
       );
       return;
     }

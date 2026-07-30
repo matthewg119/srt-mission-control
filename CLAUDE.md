@@ -167,11 +167,45 @@ pitch emails any more. Three stages, and they must not bleed into each other:
 | **belief** — the original ladder + objection replies | `BELIEF_SEQUENCE`, `draftSequenceEmail`, `draftObjectionReply` | Yes. Unchanged, post-reveal only. |
 
 Email 1's only job is to earn a "yes, send it." An email that shows the loss AND links the
-audit AND links a free redesign AND names a price AND asks for 15 minutes makes five asks of a
-stranger and lands in spam. **If a free homepage redesign was built for the prospect, its link
-belongs in the reveal, never in email 1** — it is the reward for saying yes, not the hook.
-`PRE_PITCH_RULES` states the constraints and `stripLinks()` enforces the no-links one
-structurally, the same way `noDashes()` enforces the em-dash ban.
+audit AND names a price AND asks for 15 minutes makes five asks of a stranger and lands in
+spam. `prePitchRules()` states the constraints and `enforceLinkPolicy()` makes the link rule
+structural, the same way `noDashes()` enforces the em-dash ban.
+
+**The one-link exception (2026-07-30).** Permission-stage email 1 may carry **exactly one**
+link, and only when it is the free redesign built for that prospect (`redesign_url`). The
+report link, the Loom, pricing and calendar links all stay behind the yes. The distinction is
+the point: a redesign link is *the finding made tangible* and costs the reader nothing to look
+at, while a report link is *homework we are asking them to do*. Enforced as a **count, not a
+whitelist** — `LinkPolicy` is `none` / `redesign_only` / `any`, so a URL nobody anticipated
+(a Calendly, an invented link) fails exactly the way the report link does. Anything stripped is
+reported in Slack above the draft, never silently. Nudges 2 to 5 get `none` even when a
+redesign exists: they are bumps on a thread that already carried it.
+
+The single-ask rule is absolute and survives the exception. Email 1 ends with one question and
+one only. No price, no meeting request, no "worth 15 minutes", no secondary CTA, even with the
+redesign link present.
+
+**Voice and shape** live in `PERMISSION_EXAMPLE_WITH_REDESIGN` / `..._NO_REDESIGN` (few-shot),
+`VOICE_RULES` and `PARAGRAPH_RULES`. What made the early drafts read like a bot was shape, not
+word choice: one sentence per paragraph with a blank line between each. `format-guard.ts`
+enforces the mechanical half (capitalize sentence starts, strip emphasis) and, when the
+detector trips, runs ONE reflow pass whose output is accepted only if its **word multiset is
+identical** to the input's. That check is what makes "change not a word" structural rather than
+hopeful; a reflow that edited anything is discarded and noted in Slack.
+
+Mechanism-explanation nuance: the reference email *does* explain mechanism, concretely and
+about work already done for them ("an FAQ built around the questions engineers ask, your
+certifications marked up so ChatGPT can cite them"). What is banned in email 1 is the abstract
+lecture ("AI engines don't answer from memory, they retrieve and cite 3 to 5 names"). A
+stranger did not sign up for a seminar.
+
+**Vertical hygiene.** `marketFactsFor(report)` gates the "230 million health and wellness
+questions" stat in CODE on `business_type`/`vertical_slug`/`buyer_persona`. It used to ship
+unconditionally on the objection path, which is the default branch for any free text in an
+audit thread, so a control panel shop could be told about health questions. A prose guard
+("fits health verticals only") is not a guard. The compliance line says "customers, clients"
+and never "patients", and `classify.ts` carries an industrial `buyer_persona` example alongside
+the clinic one because that persona is piped verbatim into every outreach email.
 
 Consequence: the fixed 5-minute-video `CTA_LINE` does **not** appear in cold email 1. It still
 applies to the reveal, the belief ladder, and the public-lead lane.
@@ -207,7 +241,15 @@ parsed into fields, because a parser that guessed would drop half the instructio
   `audit_reports.site_signals` and surfaced as an intake suggestion. Takes the **newest**
   copyright year on the page, never the first match, so a stale year in one template is not
   reported as "last updated" when a current one exists elsewhere.
-- Outreach columns: `docs/2026-07-29-audit-outreach-intake.sql` (add-only).
+- Outreach columns: `docs/2026-07-29-audit-outreach-intake.sql` (add-only),
+  `docs/2026-07-30-audit-thread-unique.sql` (unique index on `slack_thread_ts`).
+- `src/lib/company-identity.ts` — `companiesConflict()`, shared by `lead-intake.ts` and
+  `finish-report.ts`. It answers "do these two records positively describe DIFFERENT
+  companies", and only fires when **both** sides carry the field, so the funding funnels
+  (which pass no website) match exactly as they always did. `findContact` used to match on
+  phone-OR-email alone and then overwrite `business_name`/`website`, so a shared front-desk
+  line or one person handling two businesses collapsed them onto one contact and the audit
+  result landed in the wrong `#hot-leads` thread.
 - `src/app/api/audit/slack/route.ts` — the slash-command endpoint (register `/audit` in the
   Slack app config pointing here — that step isn't code). Low-confidence city is the ONLY
   path that asks Matthew a follow-up question; everything else resolves automatically.

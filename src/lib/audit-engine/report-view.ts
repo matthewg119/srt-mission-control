@@ -51,6 +51,10 @@ export interface WeightedScore {
 }
 
 export interface ReportView {
+  /** The audit_reports row this view was built from. Lets a consumer that pairs a view with a
+   *  report (finish-report.ts, before creating an Outlook draft with a scorecard attached)
+   *  prove they describe the same business rather than assume it. */
+  reportId: string;
   prompts: PromptRowView[];
   blockStats: BlockStat[];
   citedDomains: CitedDomain[];
@@ -165,6 +169,7 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], cli
     .slice(0, MAX_MOST_RECOMMENDED);
 
   return {
+    reportId: report.id,
     prompts,
     blockStats,
     citedDomains,

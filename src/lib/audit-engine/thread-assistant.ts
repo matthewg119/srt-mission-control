@@ -35,6 +35,7 @@ import {
   draftEmailOptions,
   draftPermissionEmail,
   draftRevealMessage,
+  linkWarning,
   BELIEF_SEQUENCE,
   PERMISSION_SEQUENCE,
   type EmailOption,
@@ -69,9 +70,18 @@ export async function postOptions(
   );
 }
 
+/** What the guards had to do to a draft, surfaced above it so it is never silent. */
+interface DraftGuards {
+  removedLinks?: string[];
+  formatNote?: string | null;
+}
+
 /**
  * Post ONE finished draft. Stored as a single-element pending_drafts so the existing "1"
  * picker and Outlook path work unchanged, and so a later revision has something to edit.
+ *
+ * Guard output goes ABOVE the draft, not below: a stripped link can leave an awkward
+ * half-sentence, and that has to be read before the copy is, not after.
  */
 async function postSingleDraft(
   report: AuditReportRow,
@@ -79,13 +89,17 @@ async function postSingleDraft(
   threadTs: string,
   header: string,
   draft: EmailOption,
-  footer: string
+  footer: string,
+  guards: DraftGuards = {}
 ): Promise<void> {
   await supabaseAdmin.from("audit_reports").update({ pending_drafts: [draft] }).eq("id", report.id);
+  const warnings = [linkWarning(guards.removedLinks ?? []), guards.formatNote ? `:warning: ${guards.formatNote}.` : null]
+    .filter(Boolean)
+    .join("\n");
   await slack.postThreadReply(
     channel,
     threadTs,
-    `${header}\n\nSubject: ${draft.subject}\n\n${draft.body}\n\n_${footer}_`
+    `${header}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_${footer}_`
   );
 }
 
@@ -217,7 +231,8 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         args.threadTs,
         `:envelope: Nudge ${step}${touch ? ` · ${touch.day} · ${touch.name}` : ""} (no links, no price, one ask):`,
         { label: `Nudge ${step}`, subject: draft.subject, body: draft.body },
-        "Reply *1* for the Outlook draft, or tell me what to change."
+        "Reply *1* for the Outlook draft, or tell me what to change.",
+        { removedLinks: draft.removedLinks, formatNote: draft.formatNote }
       );
       return true;
     }
@@ -266,7 +281,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
 
     // --- Free text: meaning depends on where the thread is ----------------------
     if (report.outreach_stage === "awaiting_intake") {
-      const { draft, extracted } = await draftFromIntake(report, view, text);
+      const { draft, extracted, removedLinks, formatNote } = await draftFromIntake(report, view, text);
       await supabaseAdmin
         .from("audit_reports")
         .update({
@@ -283,16 +298,17 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
       const captured = [
         extracted.prospect_name ? `to ${extracted.prospect_name}` : null,
         extracted.prospect_email,
-        extracted.redesign_url ? "redesign saved for the reveal" : null,
+        extracted.redesign_url ? "redesign link in play" : null,
       ].filter(Boolean);
 
       await postSingleDraft(
         { ...report, pending_drafts: [draft] },
         args.channel,
         args.threadTs,
-        `:envelope: *Email 1* · pre-pitch, one finding, no links, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}`,
+        `:envelope: *Email 1* · pre-pitch, one finding, one ask, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}`,
         draft,
-        "Reply *1* for the Outlook draft, or tell me what to change (\"tighter\", \"drop the score line\")."
+        "Reply *1* for the Outlook draft, or tell me what to change (\"tighter\", \"drop the score line\").",
+        { removedLinks, formatNote }
       );
       return true;
     }
@@ -300,14 +316,15 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     if (report.outreach_stage === "drafted") {
       const previous = (report.pending_drafts ?? [])[0];
       if (previous) {
-        const revised = await revisePreviousDraft(report, view, previous, text);
+        const { draft: revised, removedLinks, formatNote } = await revisePreviousDraft(report, view, previous, text);
         await postSingleDraft(
           report,
           args.channel,
           args.threadTs,
           `:pencil2: *${revised.label}* · revised:`,
           revised,
-          "Reply *1* for the Outlook draft, or keep telling me what to change."
+          "Reply *1* for the Outlook draft, or keep telling me what to change.",
+          { removedLinks, formatNote }
         );
         return true;
       }

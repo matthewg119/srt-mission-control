@@ -3,23 +3,9 @@
 // or LLM-based matching: the no-fabrication guarantee depends on this being
 // simple enough to verify by eye against a raw response.
 
-const GENERIC_SUFFIXES = [
-  "llc", "inc", "incorporated", "co", "company", "corp", "corporation",
-  "clinic", "clinics", "group", "studio", "studios", "spa", "center", "centre",
-  "shop", "store", "boutique", "associates", "partners", "pllc", "pc", "ltd",
-];
-
-function stripSuffixes(name: string): string {
-  const suffixPattern = new RegExp(`\\b(${GENERIC_SUFFIXES.join("|")})\\.?\\s*$`, "i");
-  let stripped = name.trim();
-  // Strip repeatedly in case of "X Clinic LLC" style double suffixes.
-  for (let i = 0; i < 3; i++) {
-    const next = stripped.replace(suffixPattern, "").trim().replace(/[,\-]+$/, "").trim();
-    if (next === stripped) break;
-    stripped = next;
-  }
-  return stripped;
-}
+// The suffix list lives in company-identity.ts, shared with the inbound-lead stack's
+// same-company check so the two can never drift apart.
+import { stripSuffixes } from "@/lib/company-identity";
 
 function bareDomain(domainOrUrl: string): string {
   try {

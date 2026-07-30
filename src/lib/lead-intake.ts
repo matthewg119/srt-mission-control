@@ -14,6 +14,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
+import { companiesConflict, type CompanyIdentity } from "@/lib/company-identity";
 import {
   createLead as zohoCreateLead,
   updateLead as zohoUpdateLead,
@@ -53,8 +54,22 @@ export interface IngestLeadResult {
   threadTs: string | null;
 }
 
-/** Find an existing contact by email, falling back to either phone column. */
-async function findContact(email: string, phone: string) {
+/** How many email/phone matches to consider before giving up and creating a new contact. */
+const CONTACT_CANDIDATES = 5;
+
+/**
+ * Find an existing contact by email, falling back to either phone column — but never reuse one
+ * that belongs to a DIFFERENT company.
+ *
+ * Matching on phone-or-email alone collapsed genuinely separate businesses onto one contact:
+ * a shared front-desk line, or one person who requests audits for two of their companies. The
+ * row's business_name/website then got overwritten by whichever lead landed last, and
+ * downstream that contact's Slack thread received the other company's results.
+ *
+ * Conflict is judged by companiesConflict(), which only fires when BOTH sides carry the field.
+ * The funding funnels pass no website or business name, so they match exactly as they did.
+ */
+async function findContact(email: string, phone: string, identity: CompanyIdentity) {
   const filters: string[] = [];
   if (email) filters.push(`email.ilike.${email}`);
   if (phone) filters.push(`phone.eq.${phone}`, `mobile_phone.eq.${phone}`);
@@ -62,12 +77,26 @@ async function findContact(email: string, phone: string) {
 
   const { data } = await supabaseAdmin
     .from("contacts")
-    .select("id, zoho_lead_id")
+    .select("id, zoho_lead_id, website, business_name")
     .or(filters.join(","))
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data ?? null;
+    .limit(CONTACT_CANDIDATES);
+
+  const candidates = data ?? [];
+  // Newest first, so the most recent compatible contact still wins as before.
+  for (const c of candidates) {
+    if (!companiesConflict({ website: c.website, businessName: c.business_name }, identity)) {
+      return { id: c.id as string, zoho_lead_id: c.zoho_lead_id as string | null };
+    }
+  }
+
+  if (candidates.length > 0) {
+    console.warn(
+      `[lead-intake] ${candidates.length} contact match(es) on email/phone, all a different company than ` +
+        `${identity.businessName || identity.website}. Creating a separate contact rather than overwriting one.`
+    );
+  }
+  return null;
 }
 
 export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResult> {
@@ -85,7 +114,7 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
   let contactId: string | null = null;
   let existingZohoId: string | null = null;
   try {
-    const existing = await findContact(email, phone);
+    const existing = await findContact(email, phone, { website, businessName });
     if (existing) {
       contactId = existing.id;
       existingZohoId = existing.zoho_lead_id || null;

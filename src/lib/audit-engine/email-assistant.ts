@@ -35,6 +35,7 @@
 // them, sending it is the fulfillment, so there is no permission to earn.
 
 import { callClaudeText, callClaudeJSON } from "@/lib/claude-calls";
+import { polishBody } from "./format-guard";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
 
@@ -116,17 +117,106 @@ export const PERMISSION_SEQUENCE = [
   },
 ];
 
-/** Emails that must not sell. Overrides CTA_RULE and SUBJECT_STYLE for the permission stage. */
-const PRE_PITCH_RULES = [
-  "HARD CONSTRAINTS, these override every other instruction about calls to action:",
-  "1. NO URLs, links, or attachments of any kind. Not the report link, not a calendar link, nothing. If you catch yourself writing a link, the email is wrong.",
-  "2. NO price, no package, no monthly figure, no mention of what the service costs or includes.",
-  "3. NO meeting ask, NO call ask, NO video ask. Do NOT offer a walkthrough, a 5 minute video, or 15 minutes. The ONLY thing this email asks for is permission to send the breakdown over.",
-  "4. Exactly ONE finding. Do not list three facts. A stranger who reads two findings reads a pitch.",
-  "5. Under 120 words for the body. Plain text, as if typed in Outlook. No bullet lists, no bold, no headers.",
-  "6. End with a one-line sign-off (first name, then the agency name on its own line). No signature block, no title, no phone.",
-  "The whole email is a door knock, not the pitch. Everything of value is deliberately withheld until they say yes.",
+/**
+ * Emails that must not sell. Overrides CTA_RULE and SUBJECT_STYLE for the permission stage.
+ *
+ * The link rule is conditional, and that exception is deliberate. A REDESIGN link is the
+ * finding made tangible: it costs the reader nothing to look at, it proves the work was
+ * already done, and it has earned a same-day reply from a cold prospect. A REPORT link is
+ * homework we are asking them to do, which is why it stays behind the yes. So: zero links by
+ * default, exactly one when a redesign exists, and never both.
+ */
+function prePitchRules(redesignUrl: string | null): string {
+  return [
+    "HARD CONSTRAINTS, these override every other instruction about calls to action:",
+    redesignUrl
+      ? `1. EXACTLY ONE link is allowed in this email, and it is this one: ${redesignUrl}\nThat is the free redesign built for this prospect, and including it is encouraged: it is the finding made tangible, not a pitch. NO OTHER URL may appear. Not the audit report link, not a Loom, not a pricing page, not a calendar link. Two links makes it an advertisement.`
+      : "1. NO URLs, links, or attachments of any kind. Not the report link, not a calendar link, nothing. If you catch yourself writing a link, the email is wrong.",
+    "2. NO price, no package, no monthly figure, no mention of what the service costs or includes.",
+    "3. ONE ASK, and it is the last line. The email ends with a single question they can answer in one word, and that question is permission to send the breakdown. No meeting ask, no call ask, no video ask, no walkthrough, no 5 minute video, no 'worth 15 minutes'. No second CTA of any kind, and this holds even when the redesign link is present. If there are two question marks aimed at the reader, the email is wrong.",
+    "4. Exactly ONE finding. Do not list three facts. A stranger who reads two findings reads a pitch.",
+    redesignUrl
+      ? "5. Under 180 words for the body. The extra room over a linkless email exists ONLY for concrete specifics about what you built them, nothing else."
+      : "5. Under 120 words for the body.",
+    "6. End with a one-line sign-off (first name, then the agency name on its own line). No signature block, no title, no phone.",
+    "The whole email is a door knock, not the pitch. Everything of value is deliberately withheld until they say yes.",
+  ].join("\n");
+}
+
+/**
+ * Paragraph shape. This is the single biggest reason a draft reads like a bot: one sentence
+ * per paragraph with a blank line between each. format-guard.ts enforces the mechanical half
+ * (capitalization, no emphasis marks) and reflows when this is ignored.
+ */
+export const PARAGRAPH_RULES = [
+  "FORMATTING, this is what separates a human email from a generated one:",
+  "Group related sentences into paragraphs of 2 to 4 sentences. A paragraph is a unit of thought, not a line of text. Do NOT put every sentence on its own line with a blank line between them.",
+  "At most ONE single-sentence paragraph in the whole email, and only when that sentence earns the emphasis.",
+  "Every sentence starts with a capital letter, including the ones that follow a colon.",
+  "No bold, no italics, no asterisks, no markdown of any kind. No bullet lists. No headers.",
+  "The test: if it would look strange typed by a person in Outlook, it is wrong.",
 ].join("\n");
+
+/** How the sentences themselves sound. Extracted from the reference email below. */
+export const VOICE_RULES = [
+  "VOICE:",
+  "Open with what you did, not who you are. No introduction, no company blurb.",
+  "The finding is a number. State it once, without adjectives. Not 'shockingly low', not 'only', just the number.",
+  "Name the mechanism concretely. Credibility lives in specifics about THIS business, never in claims about your expertise or your process.",
+  "Banned words: game-changer, revolutionary, cutting-edge, unlock, leverage, transform, supercharge, seamless.",
+  "No flattery opener. No apologizing for the cold contact, no 'sorry to bother you', no 'I know you're busy'.",
+  "Close on a single question the prospect can answer with one word.",
+].join("\n");
+
+/**
+ * The reference email for permission-stage email 1 WITH a redesign in play. Given to the model
+ * as a few-shot to match rhythm and paragraph density, explicitly not wording.
+ *
+ * Stored with the em dashes of the original normalized to house style, since noDashes() would
+ * rewrite them anyway and a few-shot that violates a hard rule teaches the wrong thing.
+ *
+ * Note what this example DOES do: it explains mechanism. That is allowed, because the mechanism
+ * here is concrete and about work already done for them (an FAQ built around the questions
+ * engineers ask, certifications marked up, service area named). What stays banned in email 1 is
+ * the abstract lecture, "AI engines don't answer from memory, they retrieve and cite 3 to 5
+ * names" — that is a seminar, and a stranger did not sign up for it.
+ */
+export const PERMISSION_EXAMPLE_WITH_REDESIGN = `Raul,
+
+I ran Cellunetics through the AI engines to see what comes back when someone in Miami asks where to get a UL 508A panel built. You came up in 4 of 20 searches. Rather than just send you the bad news, I rebuilt your homepage so you could see the fix next to the problem:
+
+https://www.srtagency.com/preview/cellunetics
+
+Nothing owed, nothing to sign. It's a concept, built from your own work.
+
+The reason it's built the way it is: AI engines pull from pages that answer the questions buyers actually type, in a format a machine can read. Yours has an FAQ section written around the questions engineers ask before they call, your certifications marked up so ChatGPT can cite them, and your service area named where it needs to be.
+
+I also put together the full breakdown of which shops the engines name in Miami instead of you. Want me to send it?
+
+Dan
+SRT Agency`;
+
+/** Same rhythm, same closing question, no link. Used when no redesign was built. */
+export const PERMISSION_EXAMPLE_NO_REDESIGN = `Raul,
+
+I ran Cellunetics through the AI engines to see what comes back when someone in Miami asks where to get a UL 508A panel built. You came up in 4 of 20 searches, and Custom Controls Technology took most of the rest. I took a screenshot of it.
+
+There's also one thing on your own site working against you there, which is the part most shops never find on their own. It took about a day to put the whole breakdown together.
+
+Want me to send it over? It's yours to keep either way.
+
+Dan
+SRT Agency`;
+
+/** The few-shot block, matched to whether a redesign exists for this prospect. */
+function permissionExample(redesignUrl: string | null): string {
+  return [
+    "REFERENCE EMAIL. Match its rhythm, its paragraph density and its restraint. Do NOT reuse its wording, its business, or its details:",
+    "---",
+    redesignUrl ? PERMISSION_EXAMPLE_WITH_REDESIGN : PERMISSION_EXAMPLE_NO_REDESIGN,
+    "---",
+  ].join("\n");
+}
 
 /** Permission-stage subject lines are the quiet kind: no score, no claim, no bait. */
 const PRE_PITCH_SUBJECT_STYLE =
@@ -171,7 +261,9 @@ export function reportContext(report: AuditReportRow, view: ReportView): string 
 }
 
 const COMPLIANCE_RULES = [
-  "NEVER guarantee customers, patients, sales, or revenue. Only visibility and citations, which are verifiable and measured.",
+  // Deliberately says "clients", not "patients". This block is unconditional across every
+  // vertical, and a control panel shop reading about patients is an instantly dead deal.
+  "NEVER guarantee customers, clients, sales, or revenue. Only visibility and citations, which are verifiable and measured.",
   "NEVER invent a stat, screenshot, or competitor name that is not in the context given (the report context, or the approved market facts when provided).",
   "No medical or regulated-industry outcome claims of any kind.",
   "Month-to-month framing. Never imply a long-term contract or lock-in.",
@@ -186,15 +278,39 @@ const STYLE_RULES = [
   "Surface urgency that is already true in the data. Never manufacture it: no countdowns, no fake 'spots left', no expiring discounts. The prospect has been burned by exactly those tricks and will catch them.",
 ].join("\n");
 
-// Curated, sourced market facts the sequence emails may cite when they fit the
-// vertical. Given to the model so it can reference the shift WITHOUT inventing.
-const APPROVED_MARKET_FACTS = [
-  "APPROVED MARKET FACTS (general industry facts, not measured about this specific business). Cite only when they fit the vertical, and never attribute them to the business as if measured on them:",
+// Curated, sourced market facts the sequence emails may cite. Given to the model so it can
+// reference the shift WITHOUT inventing.
+const UNIVERSAL_MARKET_FACTS = [
   "- The transaction layer: OpenAI added Instant Checkout in ChatGPT (with Stripe) so people can buy directly inside the chat, and is building dedicated retailer experiences inside ChatGPT, with Walmart making roughly 200,000 products available to buy there. In January 2026 Google announced its own agentic-commerce protocol with partners including Walmart, Target and Shopify.",
   "- Roughly 85% of what AI cites about a business comes from third-party sources (reviews, directories, comparison pages), not the business's own website.",
-  "- About 230 million people ask ChatGPT health and wellness questions every week (OpenAI, Jan 2026). Fits health, medical-supply and wellness verticals only.",
   "- Do NOT transplant the '45% vs 6% of consumers use AI to find local businesses' stat onto online or national businesses. It is specifically about LOCAL business discovery.",
-].join("\n");
+];
+
+const HEALTH_MARKET_FACT =
+  "- About 230 million people ask ChatGPT health and wellness questions every week (OpenAI, Jan 2026).";
+
+const HEALTH_VERTICAL_RE = /health|medic|clinic|wellness|dental|derm|therap|hormone|trt|med ?spa|medspa|pharma|doctor|physician|surg|chiro|vet|nurse|psych|recovery|rehab|hospice|fertility|weight loss/i;
+
+/**
+ * Market facts for THIS business, with the health stat gated in CODE rather than by a prompt
+ * sentence asking nicely.
+ *
+ * It used to ship unconditionally on the objection path, which is the default branch for any
+ * free text in an audit thread. That meant an industrial prospect could be told about the
+ * questions people ask ChatGPT about their health, which ends a control-panel deal on the spot.
+ * A prose guard ("fits health verticals only") is not a guard.
+ */
+function marketFactsFor(report: AuditReportRow): string {
+  const haystack = `${report.business_type ?? ""} ${report.vertical_slug ?? ""} ${report.buyer_persona ?? ""}`;
+  const facts = [...UNIVERSAL_MARKET_FACTS];
+  if (HEALTH_VERTICAL_RE.test(haystack)) facts.push(HEALTH_MARKET_FACT);
+
+  return [
+    "APPROVED MARKET FACTS (general industry facts, not measured about this specific business). Cite only when they fit the vertical, and never attribute them to the business as if measured on them:",
+    ...facts,
+    "Do not cite any statistic that is not on this list. In particular, never reach for a statistic from an industry this business is not in.",
+  ].join("\n");
+}
 
 const SUBJECT_LINE_INSTRUCTION =
   "Output format: first line is exactly `Subject: <the subject line>`, then one blank line, then the email body. Nothing before the Subject line, no markdown. The subject line itself must also contain no em dashes.";
@@ -260,36 +376,97 @@ export function noDashes(s: string): string {
 }
 
 /**
- * Removes URLs from a permission-stage body. The model is told not to write one; this makes
- * "no links in email 1" structurally true instead of merely requested, the same way noDashes
- * guarantees the em-dash rule.
+ * How many links a draft is allowed to carry, and which one.
  *
- * Only strips actual links (http/https, protocol-relative, www., and Slack's <url|label>
- * form). A bare domain in prose is left alone on purpose: "your site" and "cellunetics.com"
- * read naturally in a sentence and are not links a client would click out of the email.
+ *   none           permission stage with no redesign built. Zero URLs.
+ *   redesign_only  permission stage with a redesign. Exactly that URL, nothing else.
+ *   any            reveal and belief stages, where links are the whole point.
+ *
+ * Enforced as a COUNT rather than a blocklist, so a URL nobody anticipated (a Calendly, a
+ * pricing page, a link the model invented) fails the same way the report link does.
  */
-export function stripLinks(s: string): string {
-  const URL_RE = /\b(?:https?:\/\/|\/\/|www\.)\S+/gi;
+export type LinkPolicy =
+  | { mode: "none" }
+  | { mode: "redesign_only"; url: string }
+  | { mode: "any" };
+
+export function linkPolicyFor(report: AuditReportRow): LinkPolicy {
+  if (report.outreach_stage === "revealed") return { mode: "any" };
+  return report.redesign_url ? { mode: "redesign_only", url: report.redesign_url } : { mode: "none" };
+}
+
+const URL_RE = /\b(?:https?:\/\/|\/\/|www\.)[^\s<>()[\]"']+/gi;
+
+/** Loose identity for URL comparison: protocol, www. and trailing slash are all noise here. */
+function normalizeUrl(raw: string): string {
+  return raw
+    .trim()
+    .replace(/[.,;:!?)\]]+$/, "") // trailing sentence punctuation the regex swept up
+    .replace(/^https?:\/\//i, "")
+    .replace(/^\/\//, "")
+    .replace(/^www\./i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+export interface LinkPolicyResult {
+  text: string;
+  /** URLs removed because the policy didn't allow them. Surfaced in Slack, never silent. */
+  removed: string[];
+}
+
+/**
+ * Apply a LinkPolicy to a draft. The model is told the rule; this makes it structurally true,
+ * the same way noDashes() guarantees the em-dash ban.
+ *
+ * Only real links are touched (http/https, protocol-relative, www., and Slack's <url|label>
+ * form). A bare domain in prose is left alone on purpose: "cellunetics.com" reads naturally in
+ * a sentence and is not something a reader clicks out of the email.
+ */
+export function enforceLinkPolicy(s: string, policy: LinkPolicy): LinkPolicyResult {
+  if (policy.mode === "any") return { text: s, removed: [] };
+
+  const allowed = policy.mode === "redesign_only" ? normalizeUrl(policy.url) : null;
+  const removed: string[] = [];
+  let keptAllowed = false;
 
   const lines = s
     .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/gi, "$2") // Slack link markup -> its label
     .split("\n")
     .map((line) => {
-      const had = URL_RE.test(line);
       URL_RE.lastIndex = 0;
-      if (!had) return line;
+      if (!URL_RE.test(line)) return line;
+      URL_RE.lastIndex = 0;
+
       const cleaned = line
-        .replace(URL_RE, "")
+        .replace(URL_RE, (match) => {
+          // Keep the first occurrence of the allowed URL; everything else goes, including a
+          // second copy of the allowed one (two links still reads as an advertisement).
+          if (allowed && !keptAllowed && normalizeUrl(match) === allowed) {
+            keptAllowed = true;
+            return match;
+          }
+          removed.push(match);
+          return "";
+        })
         .replace(/[ \t]{2,}/g, " ")
         .replace(/[ \t]+([.,!?])/g, "$1")
         .trimEnd();
-      // A line whose whole payload WAS the link ("Full audit: <url>") is now a dangling
+
+      // A line whose whole payload WAS a stripped link ("Full audit: <url>") is now a dangling
       // label, so drop it rather than leave a stub in an email Matthew might paste as-is.
       return /^\s*$/.test(cleaned) || /[:\-–—]$/.test(cleaned.trim()) ? null : cleaned;
     })
     .filter((line): line is string => line !== null);
 
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { text: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim(), removed };
+}
+
+/** Slack warning for a draft that broke its link policy. Null when it was clean. */
+export function linkWarning(removed: string[]): string | null {
+  if (removed.length === 0) return null;
+  const shown = [...new Set(removed.map((u) => normalizeUrl(u)))].slice(0, 3).join(", ");
+  return `:warning: Stripped ${removed.length} link${removed.length > 1 ? "s" : ""} that shouldn't be in a pre-pitch email: ${shown}. Check the sentence${removed.length > 1 ? "s" : ""} they were in before sending.`;
 }
 
 // The three cold-email archetypes Matthew picks between (matches the A/B/C he likes).
@@ -319,7 +496,7 @@ export async function draftEmailOptions(report: AuditReportRow, view: ReportView
       `Draft EMAIL ${belief.n}, "${belief.name}", for a prospect who already saw email 1.`,
       `Every option installs this ONE belief: ${belief.belief}`,
       "Give 3 options that install that same belief through different angles and subject lines. Where it fits, make at least one option lead with the competitor-urgency framing. Do not re-stack the other emails' angles.",
-      belief.n === 3 ? APPROVED_MARKET_FACTS : "",
+      belief.n === 3 ? marketFactsFor(report) : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -328,7 +505,7 @@ export async function draftEmailOptions(report: AuditReportRow, view: ReportView
       "The prospect replied. Draft 3 reply options, each a genuinely different approach that moves the deal forward (not reworded twins).",
       "Belief mechanisms you may draw from:",
       BELIEF_SEQUENCE.map((b) => `${b.n}. ${b.name}: ${b.belief}`).join("\n"),
-      APPROVED_MARKET_FACTS,
+      marketFactsFor(report),
       `The prospect said:\n"${k.prospectSaid}"`,
     ].join("\n");
   } else {
@@ -390,7 +567,7 @@ export async function draftSequenceEmail(report: AuditReportRow, view: ReportVie
       "Install only this one mechanism. Do not re-stack the earlier emails' angles. You may add at most one genuinely new finding from the report if it strengthens the point.",
       "Use the business's own real audit numbers below wherever they strengthen the point. Keep the voice of the founder who ran the research personally on THIS business.",
       belief.n === 3
-        ? APPROVED_MARKET_FACTS
+        ? marketFactsFor(report)
         : "You generally rely on the business's own audit data below; only reach for outside facts if clearly appropriate for this vertical.",
       "Under 170 words for the body. Plain text ready to paste.",
       CTA_RULE,
@@ -415,7 +592,7 @@ export async function draftObjectionReply(report: AuditReportRow, view: ReportVi
       "You write reply emails for SRT Agency LLC's AI-visibility audit offer. Matthew (the founder) pastes what a prospect actually said; you draft the reply that best moves the deal forward.",
       "The belief mechanisms available to draw from (pick whichever fits the objection, not necessarily in order):",
       sequenceSummary,
-      APPROVED_MARKET_FACTS,
+      marketFactsFor(report),
       "Use the business's own real audit numbers below wherever relevant. Match the tone of someone who already did specific research on THIS business, not a canned rebuttal.",
       "Under 170 words for the body. Plain text ready to paste.",
       CTA_RULE,
@@ -436,13 +613,24 @@ export async function draftObjectionReply(report: AuditReportRow, view: ReportVi
 /** The shared identity + mechanism preamble every permission-stage email opens from. */
 const PERMISSION_PERSONA = [
   "You write the cold pre-outreach for SRT Agency LLC ('Scaling Revenue Together'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
-  "Mechanism you understand and they do not: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and name 3 to 5 businesses. A business that is not in what gets retrieved is invisible to that buyer no matter how good its work or prices are.",
+  "Background for YOU, not material to recite: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and name 3 to 5 businesses. A business that is not in what gets retrieved is invisible to that buyer no matter how good its work or prices are.",
+  "Do NOT explain that mechanism to the reader. A stranger did not sign up for a seminar, and an unsolicited explanation of how AI search works is the fastest way to read as a template. You may only get concrete: name what you found, or name what you built them. Specifics earn the reply, theory does not.",
   "This prospect never asked to hear from you. So the email is NOT the pitch and NOT the delivery. It is a door knock that earns the right to send the breakdown.",
+  "Write in the buyer language of THIS business's own industry. Never import vocabulary from another one: a control panel shop has buyers and plant engineers, not patients or clients.",
 ].join("\n");
 
+/** A permission-stage draft plus what the guards had to do to it, for the Slack footer. */
+export interface GuardedDraft extends EmailDraft {
+  /** URLs the link policy removed. Empty when the draft obeyed. */
+  removedLinks: string[];
+  /** Set when the paragraph reflow was attempted and rejected. */
+  formatNote: string | null;
+}
+
 /**
- * One permission-stage email (step 1 to 5 of PERMISSION_SEQUENCE). No links, no price, no
- * meeting ask, one finding — enforced in the prompt AND scrubbed by stripLinks afterward.
+ * One permission-stage email (step 1 to 5 of PERMISSION_SEQUENCE). One finding, one ask, no
+ * price — stated in the prompt and then enforced afterward by the link policy and the format
+ * guard, because a model under a word limit drifts back to one-line stanzas and stray links.
  *
  * `intakeAnswers` is Matthew's free-text reply to the intake card, passed through verbatim
  * as instructions that outrank the generic guidance. That is the whole point of the intake:
@@ -453,14 +641,20 @@ export async function draftPermissionEmail(
   view: ReportView,
   step: number,
   intakeAnswers?: string | null
-): Promise<EmailDraft> {
+): Promise<GuardedDraft> {
   const touch = PERMISSION_SEQUENCE.find((t) => t.n === step);
   if (!touch) {
     return {
       subject: "",
       body: `There's no permission email ${step}. The pre-pitch ladder runs 1 to ${PERMISSION_SEQUENCE.length} (try "nudge 2" through "nudge ${PERMISSION_SEQUENCE.length}"). Once they say yes, reply "reveal" and I'll write the message that actually hands everything over.`,
+      removedLinks: [],
+      formatNote: null,
     };
   }
+
+  // The redesign link is only email 1's to use. A nudge is a bump on a thread they have
+  // already seen it in, so re-pasting it there reads like a second pitch.
+  const redesignUrl = touch.n === 1 ? report.redesign_url : null;
 
   const { text } = await callClaudeText({
     model: model(),
@@ -471,12 +665,17 @@ export async function draftPermissionEmail(
       touch.n > 1
         ? "They have already had the earlier emails and have not replied. Do not restate the whole pitch, do not sound wounded, and do not add a second ask. This is a reply on the same thread."
         : "This is the very first touch. They have never heard of you.",
-      PRE_PITCH_RULES,
+      prePitchRules(redesignUrl),
+      PARAGRAPH_RULES,
+      VOICE_RULES,
       PRE_PITCH_SUBJECT_STYLE,
       STYLE_RULES,
       SUBJECT_LINE_INSTRUCTION,
       COMPLIANCE_RULES,
-    ].join("\n"),
+      touch.n === 1 ? permissionExample(redesignUrl) : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
     user: [
       `Report context (use the real numbers and real competitor names, never invent one):\n${reportContext(report, view)}`,
       intakeAnswers
@@ -486,14 +685,21 @@ export async function draftPermissionEmail(
     ]
       .filter(Boolean)
       .join("\n"),
-    maxTokens: 700,
+    maxTokens: 900,
     temperature: 0.6,
   });
 
   const parsed = parseSubjectAndBody(text);
+  const policy: LinkPolicy = redesignUrl ? { mode: "redesign_only", url: redesignUrl } : { mode: "none" };
+  const subject = enforceLinkPolicy(noDashes(parsed.subject), { mode: "none" });
+  const body = enforceLinkPolicy(noDashes(parsed.body), policy);
+  const polished = await polishBody(body.text, { allowEmphasis: false });
+
   return {
-    subject: stripLinks(noDashes(parsed.subject)),
-    body: stripLinks(noDashes(parsed.body)),
+    subject: subject.text,
+    body: polished.body,
+    removedLinks: [...subject.removed, ...body.removed],
+    formatNote: polished.note,
   };
 }
 
@@ -536,6 +742,9 @@ export async function draftRevealMessage(
       "The free work is a gift with no strings, and it must read that way. Say plainly that there is nothing to sign and nothing owed. Never imply the offer is contingent on them taking it.",
       "Under 200 words. Plain text ready to paste. Keep the same subject thread they replied on, so the subject line is a 're: ' of the original.",
       "Never guarantee customers, revenue or rankings. Only visibility and citations, which are measured.",
+      PARAGRAPH_RULES,
+      "One exception to the formatting rules above, and only one: the price line may be bold. Nothing else in the email may be.",
+      VOICE_RULES,
       STYLE_RULES,
       SUBJECT_LINE_INSTRUCTION,
       COMPLIANCE_RULES,
@@ -551,5 +760,6 @@ export async function draftRevealMessage(
   });
 
   const parsed = parseSubjectAndBody(text);
-  return { subject: noDashes(parsed.subject), body: noDashes(parsed.body) };
+  const polished = await polishBody(noDashes(parsed.body), { allowEmphasis: true });
+  return { subject: noDashes(parsed.subject), body: polished.body };
 }

@@ -90,7 +90,10 @@ function buildSystemPrompt(): string {
     "3. Only if is_local is true: determine city_detected — the city/region the business actually serves customers from — with city_confidence 'high' only if you have a clear signal ",
     "   (schema.org address/areaServed, a footer/contact address, a phone area code plus explicit city mention, etc). If you cannot find a confident signal, ",
     "   set city_confidence to 'low' and city_detected to your best guess or null — do NOT guess with false confidence. If is_local is false, set city_detected to null and city_confidence to 'low' (it's simply not applicable).",
-    "4. Write buyer_persona: one line, who buys and what hurts them, in the buyer's own words (e.g. 'a man in his 40s quietly worried his low energy is 'just aging'' — not 'premium hormone optimization solutions').",
+    // Two examples from deliberately unrelated industries. buyer_persona is the one free-text
+    // field the model invents, and it gets piped verbatim into every outreach email, so a
+    // single medical example here used to pull industrial personas toward clinic vocabulary.
+    "4. Write buyer_persona: one line, who buys and what hurts them, in the buyer's own words. Write it in the vocabulary of THIS business's own industry, never another one (e.g. for a clinic: 'a man in his 40s quietly worried his low energy is just aging'; for a control panel shop: 'a plant engineer whose line is down and who needs a UL 508A panel built right the first time'). Not marketing language like 'premium hormone optimization solutions'.",
     "5. Generate exactly 20 prompts a real buyer would type into ChatGPT/Perplexity/Google AI when researching this exact business type, split across 4 blocks:",
     "   - SERVICIO (~8): high-intent service search, e.g. 'best {business_type} in {city}' for a local business, or 'best place to buy {product} online' for a non-local one. Include the detected city in every one of these ONLY if is_local is true AND city_confidence is 'high' — never invent a geo-modifier for a national/online business.",
     "   - COMPARATIVO (~4): local vs. online/chain, or brand vs. brand comparisons — or, for non-local businesses, this-store vs. a marketplace/competitor. Include the city only under the same condition as above.",
