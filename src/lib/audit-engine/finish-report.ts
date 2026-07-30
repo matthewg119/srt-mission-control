@@ -3,9 +3,15 @@
 // out of api/audit/process/route.ts so the watchdog cron can also finalize a
 // run whose final self-chain hop dropped (the common stall).
 //
-// Public free-audit leads (requester_email set) get an OUTLOOK DRAFT (the
-// founder reviews and hits send — never auto-sent) plus a #hot-leads ping.
-// Internal /audit runs get the PDF + a copy/paste draft in the report thread.
+// The two lanes end differently on purpose:
+//
+// Public free-audit leads (requester_email set) ASKED for the report, so sending
+// it is the fulfillment: they get an OUTLOOK DRAFT (the founder reviews and hits
+// send — never auto-sent) plus a #hot-leads ping.
+//
+// Internal /audit runs are COLD, so nothing is written yet. They get the PDF plus
+// an intake card in the thread, and email 1 is drafted from Matthew's answers
+// under the pre-pitch doctrine (see email-assistant.ts / outreach-intake.ts).
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
@@ -14,8 +20,8 @@ import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/sla
 import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
 import { buildReportView, computeWeightedScore, type ReportView, type WeightedScore } from "@/lib/audit-engine/report-view";
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
-import { draftInitialEmail, draftEmailOptions } from "@/lib/audit-engine/email-assistant";
-import { postOptions } from "@/lib/audit-engine/thread-assistant";
+import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
+import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
 import { microsoft } from "@/lib/microsoft";
 
 function appUrl(): string {
@@ -81,14 +87,12 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
       const fileName = `AI Visibility Scorecard - ${report.business_type ?? report.website}.pdf`;
       await slack.uploadFilePDF(report.slack_channel_id, fileName, pdfBuffer, report.slack_thread_ts);
 
-      const options = await draftEmailOptions(report, view, { kind: "initial" });
-      await postOptions(
-        report,
-        report.slack_channel_id,
-        report.slack_thread_ts,
-        "✉️ Draft outreach, 3 angles to choose from (show the loss / verification first / competitor urgency):",
-        options
-      );
+      // Intake card, NOT finished drafts. A cold prospect's email 1 depends on things only
+      // Matthew knows (who the recipient is, what to mention, whether a free redesign was
+      // built), so the bot asks first and writes one draft from the answers. See
+      // outreach-intake.ts, and the pre-pitch doctrine at the top of email-assistant.ts.
+      const questions = await buildIntakeQuestions(report, view);
+      await postIntakeCard(report, report.slack_channel_id, report.slack_thread_ts, questions);
     } catch (e) {
       console.error("[finishReport] scorecard/thread post failed:", (e as Error).message);
     }

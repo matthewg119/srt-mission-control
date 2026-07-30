@@ -8,6 +8,12 @@ export type AuditReportStatus = "classifying" | "awaiting_city" | "running" | "d
 export type AuditEngine = "openai" | "perplexity";
 export type AuditRunStatus = "pending" | "ok" | "no_data";
 
+/** Cold-outreach stage for a finished report's Slack thread. `awaiting_intake` = the intake
+ *  card is posted and the next free-text reply is its answers; `drafted` = a draft is queued
+ *  and free text is an edit to it; `revealed` = everything has been handed over, so free text
+ *  is the prospect talking. See thread-assistant.ts. */
+export type OutreachStage = "awaiting_intake" | "drafted" | "revealed";
+
 export interface AuditReportRow {
   id: string;
   slug: string;
@@ -34,6 +40,22 @@ export interface AuditReportRow {
   // the chosen one into an Outlook draft. Shape mirrors EmailOption in email-assistant.ts
   // (kept inline here to avoid a type import cycle).
   pending_drafts: Array<{ label: string; subject: string; body: string }> | null;
+  // ── Cold-outreach state (docs/2026-07-29-audit-outreach-intake.sql) ──
+  // Where this thread is in the pre-pitch -> reveal flow. Null on public
+  // form-fill leads, which skip the intake entirely.
+  outreach_stage: OutreachStage | null;
+  /** The intake questions actually asked. Mirrors IntakeQuestion in outreach-intake.ts. */
+  intake_questions: Array<{ n: number; ask: string; source: "fixed" | "audit" }> | null;
+  /** Matthew's reply to them, verbatim. Read as prose by every later drafter. */
+  intake_answers: string | null;
+  /** The human being written to. A cold /audit run has no contact row. */
+  prospect_name: string | null;
+  prospect_email: string | null;
+  /** Reveal-only assets: withheld from every permission-stage email by design. */
+  redesign_url: string | null;
+  loom_url: string | null;
+  /** The "one thing on your site working against you" hook (site-signals.ts). */
+  site_signals: Array<{ kind: string; detail: string }> | null;
   error: string | null;
   created_at: string;
   updated_at: string;

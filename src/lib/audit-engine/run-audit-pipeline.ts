@@ -11,6 +11,7 @@ import { classifyBusiness } from "./classify";
 import { generateSlug } from "./slug";
 import { getOrCreateAuditChannel } from "./audit-channel";
 import { formatPromptDrop } from "./slack-format";
+import { detectSiteSignals } from "./site-signals";
 import type { AuditReportRow } from "./types";
 
 function appUrl(): string {
@@ -93,6 +94,20 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
   const channel = await getOrCreateAuditChannel();
   const slug = await generateSlug();
 
+  // The "one thing working against you" hook for cold email 1, computed from the homepage
+  // markup we already have. Best-effort: a regex surprise here must never sink an audit.
+  let siteSignals: ReturnType<typeof detectSiteSignals> = [];
+  try {
+    siteSignals = detectSiteSignals({
+      html: research.homepageHtml,
+      website: research.website,
+      schemaHints: research.schemaHints,
+      currentYear: new Date().getFullYear(),
+    });
+  } catch (e) {
+    console.error("[run-audit-pipeline] site-signal scan failed:", (e as Error).message);
+  }
+
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from("audit_reports")
     .insert({
@@ -112,6 +127,7 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       requester_phone: params.requesterPhone ?? null,
       contact_id: params.contactId ?? null,
       slack_channel_id: channel.id,
+      site_signals: siteSignals,
     })
     .select("*")
     .single();

@@ -149,13 +149,65 @@ zero vertical-specific hardcoding anywhere in this feature.
   no city/geo-modifiers forced onto them), city (+ confidence, only when is_local), buyer_persona,
   20 buyer-language prompts across 4 blocks, and hypothesized competitors.
 - `src/lib/audit-engine/pdf-scorecard.ts` — branded one-page PDF scorecard (jsPDF, same header/
-  palette as `pdf-generator.ts`), `src/lib/audit-engine/email-assistant.ts` — a 5-email
-  belief-installation sequence grounded in `Desktop/AEO aduit/SRT_Audit_SOP_Universal.md` +
-  `SRT_Sales_Letter.md` (the-gap → differentiation → risk-reversal → ROI math → close), and
-  `src/lib/audit-engine/thread-assistant.ts` — a reply in the report's Slack thread ("email 2",
-  or pasting what the prospect said) drafts the next email. Wired into `src/app/api/slack/events/route.ts`
-  gated by `channel === AUDIT_CHANNEL_ID` first (cheap check before any DB lookup). Every draft
-  is posted for Matthew to review — nothing is ever sent automatically.
+  palette as `pdf-generator.ts`), `src/lib/audit-engine/email-assistant.ts` — the email
+  drafters, grounded in `Desktop/AEO aduit/SRT_Audit_SOP_Universal.md` + `SRT_Sales_Letter.md`,
+  and `src/lib/audit-engine/thread-assistant.ts` — the Slack-thread router. Wired into
+  `src/app/api/slack/events/route.ts` gated by `channel === AUDIT_CHANNEL_ID` first (cheap
+  check before any DB lookup). Every draft is posted for Matthew to review — nothing is ever
+  sent automatically.
+
+### Cold outreach: PRE-PITCH, then PITCH (2026-07-29) — read before touching email 1
+A cold prospect never asked for any of this, so a finished audit does **not** post finished
+pitch emails any more. Three stages, and they must not bleed into each other:
+
+| Stage | Who writes it | Carries links / price? |
+|---|---|---|
+| **permission** — email 1 + nudges 2 to 5 (D0/D+1/D+2/D+4/D+7) | `PERMISSION_SEQUENCE`, `draftPermissionEmail`, `outreach-intake.ts` | **No.** One finding, one ask: "mind if I send it over?" |
+| **reveal** — fires when they say yes | `draftRevealMessage` | **Yes.** Report link, the free redesign concept, the Loom, the price, all at once. |
+| **belief** — the original ladder + objection replies | `BELIEF_SEQUENCE`, `draftSequenceEmail`, `draftObjectionReply` | Yes. Unchanged, post-reveal only. |
+
+Email 1's only job is to earn a "yes, send it." An email that shows the loss AND links the
+audit AND links a free redesign AND names a price AND asks for 15 minutes makes five asks of a
+stranger and lands in spam. **If a free homepage redesign was built for the prospect, its link
+belongs in the reveal, never in email 1** — it is the reward for saying yes, not the hook.
+`PRE_PITCH_RULES` states the constraints and `stripLinks()` enforces the no-links one
+structurally, the same way `noDashes()` enforces the em-dash ban.
+
+Consequence: the fixed 5-minute-video `CTA_LINE` does **not** appear in cold email 1. It still
+applies to the reveal, the belief ladder, and the public-lead lane.
+
+The one exception is `draftInitialEmail`, used only for public free-audit leads
+(`requester_email` set) who filled out a form and asked for the report. For them sending it IS
+the fulfillment, so there is no permission to earn and that path is untouched.
+
+**The intake step** (`src/lib/audit-engine/outreach-intake.ts`): when a cold audit finishes,
+`finishReport` posts an intake card instead of drafts — four hardcoded slots (recipient's name,
+their email, anything to mention or keep out, is a free redesign in play) plus one or two
+questions Claude writes from that report's actual findings. Matthew answers in free text in the
+thread and gets **one** finished draft. The answers are stored verbatim in `intake_answers` and
+passed to every later drafter as instructions that outrank the generic guidance; they are never
+parsed into fields, because a parser that guessed would drop half the instruction.
+
+**Thread commands** on a finished report (`handleAuditThreadReply`, keyed on `outreach_stage`):
+
+| Reply | Does |
+|---|---|
+| free text at `awaiting_intake` | the intake answers → one email 1 draft |
+| free text at `drafted` | revises that draft in place ("tighter", "drop the score line") |
+| `1` / `send it` | Outlook draft, To = `prospect_email ?? requester_email` |
+| `nudge 2` .. `nudge 5` | next pre-pitch touch, still link-free |
+| `redesign <url>` / `loom <url>` | stores the asset for the reveal |
+| `reveal` (optionally `reveal $299/mo, setup waived`) | the hand-everything-over message |
+| `email 2` .. `email 5` | the old 3-option belief ladder (post-reveal) |
+| free text at `revealed` | treated as the prospect talking → objection replies |
+
+- `src/lib/audit-engine/site-signals.ts` — the "one thing on your site working against you"
+  hook (stale copyright year, no viewport, http, no schema, no phone), computed from the
+  homepage HTML `site-research.ts` already fetched. No extra request. Stored on
+  `audit_reports.site_signals` and surfaced as an intake suggestion. Takes the **newest**
+  copyright year on the page, never the first match, so a stale year in one template is not
+  reported as "last updated" when a current one exists elsewhere.
+- Outreach columns: `docs/2026-07-29-audit-outreach-intake.sql` (add-only).
 - `src/app/api/audit/slack/route.ts` — the slash-command endpoint (register `/audit` in the
   Slack app config pointing here — that step isn't code). Low-confidence city is the ONLY
   path that asks Matthew a follow-up question; everything else resolves automatically.

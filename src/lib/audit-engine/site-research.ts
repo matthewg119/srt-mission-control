@@ -23,6 +23,10 @@ export interface SiteResearch {
   pages: ResearchedPage[];
   bodyText: string; // combined, budget-truncated
   schemaHints: Record<string, unknown>[]; // parsed LocalBusiness/Organization JSON-LD blocks
+  /** Raw homepage markup. Kept so site-signals.ts can look for things the text
+   *  extraction throws away (copyright year, viewport meta, tel: links) without
+   *  re-fetching the page. Not given to the classifier — that reads bodyText. */
+  homepageHtml: string;
 }
 
 function normalizeUrl(input: string): string {
@@ -123,5 +127,5 @@ export async function researchWebsite(websiteInput: string): Promise<SiteResearc
   const combined = pages.map((p) => p.text).join("\n\n");
   const bodyText = combined.slice(0, TEXT_BUDGET_CHARS);
 
-  return { website, title, metaDescription, siteName, headings, pages, bodyText, schemaHints };
+  return { website, title, metaDescription, siteName, headings, pages, bodyText, schemaHints, homepageHtml };
 }

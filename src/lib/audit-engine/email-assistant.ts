@@ -8,6 +8,31 @@
 // prospect could verify themselves. Each email installs ONE belief, never a
 // stacked pile of scarcity. Every draft is posted to Slack for Matthew to
 // review/edit — this module never sends anything to a customer itself.
+//
+// ── PRE-PITCH, THEN PITCH (the doctrine that governs cold outreach) ──────────
+// A cold prospect never asked for any of this, so there are three stages and
+// they must not bleed into each other:
+//
+//   1. PERMISSION (PERMISSION_SEQUENCE, draftPermissionEmail) — email 1 plus four
+//      nudges. Each one carries ONE finding and ONE ask: "mind if I send it over?"
+//      No links. No price. No meeting or video ask. The email does not deliver
+//      the audit, it earns the right to.
+//   2. REVEAL (draftRevealMessage) — fires only once they say yes, in the same
+//      thread. THIS is where everything lands at once: report link, scorecard,
+//      the free homepage redesign concept, the Loom, the price. If a free
+//      redesign was built for this prospect it belongs HERE. It is the reward
+//      for saying yes, never the hook that opens the conversation.
+//   3. BELIEF (BELIEF_SEQUENCE, draftSequenceEmail, draftObjectionReply) — the
+//      original ladder, unchanged. Only sensible after the reveal, because every
+//      rung of it assumes they have seen the report.
+//
+// Why: an email that shows the loss AND links the audit AND links a free
+// redesign AND names a price AND asks for 15 minutes makes five asks of a
+// stranger and lands in spam. One ask converts. The rest is the payoff.
+//
+// draftInitialEmail below is the ONE exception and stays a full pitch: it serves
+// public free-audit leads who filled out a form and asked for the report. For
+// them, sending it is the fulfillment, so there is no permission to earn.
 
 import { callClaudeText, callClaudeJSON } from "@/lib/claude-calls";
 import type { AuditReportRow } from "./types";
@@ -49,6 +74,64 @@ export const BELIEF_SEQUENCE = [
   },
 ];
 
+// The pre-pitch ladder. Five touches whose ONLY job is a yes to "can I send it
+// over?" — nothing here delivers the audit, and nothing here sells. Cadence is
+// D0 / D+1 / D+2 / D+4 / D+7, all as replies on the same subject so the thread
+// stays one conversation.
+export const PERMISSION_SEQUENCE = [
+  {
+    n: 1,
+    day: "D0",
+    name: "The gap and the ask",
+    job:
+      "Open with the single most checkable finding: you asked an AI engine the real question their buyer types, and a competitor came back instead of them. Say you have a screenshot. Then hint (do NOT explain) that you also found one thing on their own site working against them there. Ask permission to send the breakdown, and make clear the scorecard is theirs to keep either way.",
+  },
+  {
+    n: 2,
+    day: "D+1",
+    name: "Short bump",
+    job:
+      "Three or four sentences, no new argument. Restate what the breakdown actually shows (which names the engine gives when someone in their market asks, and why theirs is not one of them) and ask again if you should drop it here. This one is deliberately the shortest email in the sequence.",
+  },
+  {
+    n: 3,
+    day: "D+2",
+    name: "The stakes",
+    job:
+      "Explain WHY you bothered checking, without any numbers you cannot source. Buyers no longer start on Google, they ask an AI to shortlist for them and then call two or three names. So they get called after the decision is mostly made, if at all. Close by saying the breakdown is ready whenever they want it.",
+  },
+  {
+    n: 4,
+    day: "D+4",
+    name: "The number, and the absolution",
+    job:
+      "Lead with one specific finding from the audit, stated flatly. Then absolve them of it immediately and sincerely: it is not a reflection of their work or their years in the trade, it is a signals problem, and signals are fixable. Nobody built their business to be readable by a machine. Say you show exactly why in the breakdown, and to say the word.",
+  },
+  {
+    n: 5,
+    day: "D+7",
+    name: "The clean exit",
+    job:
+      "Short, light, a little self-aware ('am I chasing a ghost here?'). Last try. The scorecard is done and theirs free either way, a thumbs up gets it sent, and if it is not for them that is genuinely fine and the emails stop. Give a real out, do not add a new argument.",
+  },
+];
+
+/** Emails that must not sell. Overrides CTA_RULE and SUBJECT_STYLE for the permission stage. */
+const PRE_PITCH_RULES = [
+  "HARD CONSTRAINTS, these override every other instruction about calls to action:",
+  "1. NO URLs, links, or attachments of any kind. Not the report link, not a calendar link, nothing. If you catch yourself writing a link, the email is wrong.",
+  "2. NO price, no package, no monthly figure, no mention of what the service costs or includes.",
+  "3. NO meeting ask, NO call ask, NO video ask. Do NOT offer a walkthrough, a 5 minute video, or 15 minutes. The ONLY thing this email asks for is permission to send the breakdown over.",
+  "4. Exactly ONE finding. Do not list three facts. A stranger who reads two findings reads a pitch.",
+  "5. Under 120 words for the body. Plain text, as if typed in Outlook. No bullet lists, no bold, no headers.",
+  "6. End with a one-line sign-off (first name, then the agency name on its own line). No signature block, no title, no phone.",
+  "The whole email is a door knock, not the pitch. Everything of value is deliberately withheld until they say yes.",
+].join("\n");
+
+/** Permission-stage subject lines are the quiet kind: no score, no claim, no bait. */
+const PRE_PITCH_SUBJECT_STYLE =
+  'Email 1\'s subject is short, lowercase-ish and specific, naming the business and the engine, for example "Cellunetics + ChatGPT". No score, no numbers, no claim, no question mark, no curiosity bait. Every later email in this sequence is a reply on that SAME subject, so prefix it with "re: " and change nothing else.';
+
 function model(): "claude-sonnet-4-6" {
   return "claude-sonnet-4-6";
 }
@@ -57,7 +140,7 @@ function today(): string {
   return new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 }
 
-function reportContext(report: AuditReportRow, view: ReportView): string {
+export function reportContext(report: AuditReportRow, view: ReportView): string {
   const topCompetitors =
     view.mostRecommended
       .slice(0, 3)
@@ -68,13 +151,18 @@ function reportContext(report: AuditReportRow, view: ReportView): string {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
 
   const name = report.client_name || report.business_type || report.website;
+  const signals = (report.site_signals ?? []).map((s) => `- ${s.detail}`).join("\n");
   return [
     `Business: ${name}, a ${report.business_type ?? "unknown category"} (${report.website})${report.city ? ", " + report.city : ""}`,
+    report.prospect_name ? `Writing to: ${report.prospect_name}` : "",
     `Buyer persona: ${report.buyer_persona ?? "unknown"}`,
     `AI Visibility Score: ${report.score ?? 0}/100`,
     `ABSENT from ${absent} of ${view.totalPrompts} of the highest-intent buyer questions (appeared in only ${view.totalMentioned}). Frame the ${absent} present tense: those buyer conversations are happening right now without them.`,
     `Names the AI recommends instead: ${topCompetitors}`,
     missedExample ? `Example of a question they are missing: "${missedExample.prompt}"` : "",
+    signals
+      ? `Things found on their OWN site working against them (verified in their markup, safe to state as fact):\n${signals}`
+      : "",
     `Full report link: ${baseUrl}/r/${report.slug}`,
     `Today's date (for the "snapshot dated" line): ${today()}`,
   ]
@@ -167,8 +255,41 @@ export interface EmailOption {
 
 // Belt-and-suspenders dash strip (the model is already told, but this guarantees it). Turns
 // em/en dashes and " - " connectors into commas; leaves hyphenated words and 3-5 style intact.
-function noDashes(s: string): string {
+export function noDashes(s: string): string {
   return s.replace(/\s*[—–]\s*/g, ", ").replace(/ - /g, ", ");
+}
+
+/**
+ * Removes URLs from a permission-stage body. The model is told not to write one; this makes
+ * "no links in email 1" structurally true instead of merely requested, the same way noDashes
+ * guarantees the em-dash rule.
+ *
+ * Only strips actual links (http/https, protocol-relative, www., and Slack's <url|label>
+ * form). A bare domain in prose is left alone on purpose: "your site" and "cellunetics.com"
+ * read naturally in a sentence and are not links a client would click out of the email.
+ */
+export function stripLinks(s: string): string {
+  const URL_RE = /\b(?:https?:\/\/|\/\/|www\.)\S+/gi;
+
+  const lines = s
+    .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/gi, "$2") // Slack link markup -> its label
+    .split("\n")
+    .map((line) => {
+      const had = URL_RE.test(line);
+      URL_RE.lastIndex = 0;
+      if (!had) return line;
+      const cleaned = line
+        .replace(URL_RE, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/[ \t]+([.,!?])/g, "$1")
+        .trimEnd();
+      // A line whose whole payload WAS the link ("Full audit: <url>") is now a dangling
+      // label, so drop it rather than leave a stub in an email Matthew might paste as-is.
+      return /^\s*$/.test(cleaned) || /[:\-–—]$/.test(cleaned.trim()) ? null : cleaned;
+    })
+    .filter((line): line is string => line !== null);
+
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // The three cold-email archetypes Matthew picks between (matches the A/B/C he likes).
@@ -308,4 +429,127 @@ export async function draftObjectionReply(report: AuditReportRow, view: ReportVi
     temperature: 0.6,
   });
   return parseSubjectAndBody(text);
+}
+
+// ── Stage 1: PERMISSION ──────────────────────────────────────────────────────
+
+/** The shared identity + mechanism preamble every permission-stage email opens from. */
+const PERMISSION_PERSONA = [
+  "You write the cold pre-outreach for SRT Agency LLC ('Scaling Revenue Together'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
+  "Mechanism you understand and they do not: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and name 3 to 5 businesses. A business that is not in what gets retrieved is invisible to that buyer no matter how good its work or prices are.",
+  "This prospect never asked to hear from you. So the email is NOT the pitch and NOT the delivery. It is a door knock that earns the right to send the breakdown.",
+].join("\n");
+
+/**
+ * One permission-stage email (step 1 to 5 of PERMISSION_SEQUENCE). No links, no price, no
+ * meeting ask, one finding — enforced in the prompt AND scrubbed by stripLinks afterward.
+ *
+ * `intakeAnswers` is Matthew's free-text reply to the intake card, passed through verbatim
+ * as instructions that outrank the generic guidance. That is the whole point of the intake:
+ * "mention their 2012 site", "don't bring up the score", "his name is Raul, he goes by Raul".
+ */
+export async function draftPermissionEmail(
+  report: AuditReportRow,
+  view: ReportView,
+  step: number,
+  intakeAnswers?: string | null
+): Promise<EmailDraft> {
+  const touch = PERMISSION_SEQUENCE.find((t) => t.n === step);
+  if (!touch) {
+    return {
+      subject: "",
+      body: `There's no permission email ${step}. The pre-pitch ladder runs 1 to ${PERMISSION_SEQUENCE.length} (try "nudge 2" through "nudge ${PERMISSION_SEQUENCE.length}"). Once they say yes, reply "reveal" and I'll write the message that actually hands everything over.`,
+    };
+  }
+
+  const { text } = await callClaudeText({
+    model: model(),
+    system: [
+      PERMISSION_PERSONA,
+      `This is touch ${touch.n} of ${PERMISSION_SEQUENCE.length} (${touch.day}), "${touch.name}".`,
+      `Its job: ${touch.job}`,
+      touch.n > 1
+        ? "They have already had the earlier emails and have not replied. Do not restate the whole pitch, do not sound wounded, and do not add a second ask. This is a reply on the same thread."
+        : "This is the very first touch. They have never heard of you.",
+      PRE_PITCH_RULES,
+      PRE_PITCH_SUBJECT_STYLE,
+      STYLE_RULES,
+      SUBJECT_LINE_INSTRUCTION,
+      COMPLIANCE_RULES,
+    ].join("\n"),
+    user: [
+      `Report context (use the real numbers and real competitor names, never invent one):\n${reportContext(report, view)}`,
+      intakeAnswers
+        ? `\nMatthew's instructions for this outreach. These OUTRANK the generic guidance above, follow them literally:\n"""\n${intakeAnswers}\n"""`
+        : "",
+      `\nWrite permission email ${touch.n} now.`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    maxTokens: 700,
+    temperature: 0.6,
+  });
+
+  const parsed = parseSubjectAndBody(text);
+  return {
+    subject: stripLinks(noDashes(parsed.subject)),
+    body: stripLinks(noDashes(parsed.body)),
+  };
+}
+
+// ── Stage 2: REVEAL ──────────────────────────────────────────────────────────
+
+/** Default terms when Matthew doesn't pass any with the `reveal` command. */
+const DEFAULT_REVEAL_TERMS =
+  "$399 per month, month to month, and anything built for them is theirs to keep whether they stay or leave";
+
+/**
+ * The message that fires when they say yes. This is the ONLY place in the cold lane where
+ * links, the scorecard, the free redesign concept and the price all appear, and they appear
+ * together in one message rather than dribbled across a sequence.
+ *
+ * `terms` is free text from the thread (`reveal $299/mo, setup waived`) because the offer
+ * moves per deal and a hardcoded price would quietly go stale.
+ */
+export async function draftRevealMessage(
+  report: AuditReportRow,
+  view: ReportView,
+  terms?: string | null
+): Promise<EmailDraft> {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+  const assets = [
+    `The audit report link (include it, framed as where they can see which questions they are missing and who is taking those answers): ${baseUrl}/r/${report.slug}`,
+    report.redesign_url
+      ? `A homepage redesign concept that was BUILT FOR THEM already, free, nothing owed and nothing to sign. Include this link and frame it as "I didn't want to just hand you a list of problems": ${report.redesign_url}`
+      : "No redesign concept was built for this prospect, so do not mention or imply one.",
+    report.loom_url
+      ? `A short Loom walking through both. Include this link: ${report.loom_url}`
+      : "No Loom recorded yet, so do not reference a video.",
+  ].join("\n");
+
+  const { text } = await callClaudeText({
+    model: model(),
+    system: [
+      "You write the delivery message for SRT Agency LLC ('Scaling Revenue Together'), an AI-search-visibility agency, at the single best moment in the whole sequence: the prospect just said yes, send it.",
+      "Because they asked, this message withholds nothing. It is the one place where the report link, anything built for them, and the price all land at once. Everything before this was a door knock.",
+      "Structure: one warm opening line that delivers on the promise, then each asset with one sentence of framing, then the offer in plain terms, then a single low-friction next step (a one-word reply). Do NOT re-argue the gap. They already agreed to look. Re-selling here is the mistake.",
+      "The free work is a gift with no strings, and it must read that way. Say plainly that there is nothing to sign and nothing owed. Never imply the offer is contingent on them taking it.",
+      "Under 200 words. Plain text ready to paste. Keep the same subject thread they replied on, so the subject line is a 're: ' of the original.",
+      "Never guarantee customers, revenue or rankings. Only visibility and citations, which are measured.",
+      STYLE_RULES,
+      SUBJECT_LINE_INSTRUCTION,
+      COMPLIANCE_RULES,
+    ].join("\n"),
+    user: [
+      `Report context:\n${reportContext(report, view)}`,
+      `\nWhat you are handing over:\n${assets}`,
+      `\nThe offer, state it in these terms and invent nothing beyond them:\n${terms?.trim() || DEFAULT_REVEAL_TERMS}`,
+      `\nWrite the reveal message now.`,
+    ].join("\n"),
+    maxTokens: 900,
+    temperature: 0.6,
+  });
+
+  const parsed = parseSubjectAndBody(text);
+  return { subject: noDashes(parsed.subject), body: noDashes(parsed.body) };
 }
