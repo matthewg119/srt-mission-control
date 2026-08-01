@@ -109,7 +109,12 @@ SLACK_FOLLOWUPS_CHANNEL=   # #followups_channel id. Home of the Follow-Up Operat
 OUTREACH_MAILBOX=          # matthew@srtagency.com. The mailbox whose Sent Items are swept.
 OUTREACH_EXCLUDE_DOMAINS=  # Optional comma list. srtagency.com is always excluded.
 MAPS_PULL_ENABLED=         # Unset = Google Maps prospecting stays PAUSED. "1" resumes it.
-AUDIT_SIGNATURE_NAME=      # Outlook signature for audit pitches. Default "AI Visibility".
+AUDIT_SIGNATURE_NAME=      # Outlook signature BLOCK name for audit pitches. Default "AI Ops"
+                           # (its rendered content reads "Matthew Garcia / AI Visibility - SRT",
+                           # so naming it after the content would not find it).
+OUTREACH_SIGNATURE_NAME=   # Who cold outreach is SIGNED by, two plain lines. Default "Matthew
+                           # Garcia". Different thing from AUDIT_SIGNATURE_NAME above.
+OUTREACH_SIGNATURE_AGENCY= # Default "SRT Agency".
 AUDIT_AUTOSEND_ENABLED=    # Unset = lead pitches NEVER send themselves. "1" arms the timer.
 AUDIT_AUTOSEND_MINUTES=    # Optional, default 5. Only meaningful when the above is on.
 ```
@@ -238,6 +243,7 @@ parsed into fields, because a parser that guessed would drop half the instructio
 | free text at `awaiting_intake` | the intake answers → one email 1 draft |
 | free text at `drafted` | revises that draft in place ("tighter", "drop the score line") |
 | `1` / `send it` | Outlook draft, To = `prospect_email ?? requester_email` |
+| `loom` (bare, no url) | the Loom recording plan: 20 prompts + a six-beat sheet. `loom <url>` still stores the video |
 | `nudge 2` .. `nudge 5` | next pre-pitch touch, still link-free |
 | `redesign <url>` / `loom <url>` | stores the asset for the reveal |
 | `reveal` (optionally `reveal $299/mo, setup waived`) | the hand-everything-over message |
@@ -320,6 +326,43 @@ Nothing was deleted; re-add the two cron entries and set the env var to resume. 
 now reads `json.errorMessage` first — Outscraper returns `{"error": true, "errorMessage": "..."}`
 and the old code coerced that boolean to `"true"`, which is why every failed pull logged a bare
 `true` for a week with no diagnosable cause.
+
+### The Loom beat sheet (2026-08-01)
+`src/lib/audit-engine/loom-beatsheet.ts`. Reply `loom` in a finished audit thread and the agent
+computes the recording plan from that run's real data: block 1 is the 20 prompts exactly as run
+(blank line between each so they paste into a temporary chat without merging), block 2 is a
+six-beat sheet at a 4:00 target. Bullets of six words or fewer, because Matthew improvises
+better than he reads. Only four things are quoted verbatim: the competitor line with its count,
+the score line, the price and start-time line, and the CTA.
+
+**The point of the file is `PROMPT_TRAMPA`**, the prompt where the business ranks best. The
+prospect checks that one himself right after the video, so opening with it kills the video and
+ignoring it makes the rest look staged. It is delivered early as a concession, and PRE-FLIGHT
+flags it as DO NOT OPEN WITH before recording starts.
+
+Four things it refuses to invent, each backed by a real gap in the data:
+- **Rank.** There is no position column, and `recommended[]` order is incidental, not
+  contractual, so index+1 there would be fiction. `deriveRank()` re-derives it from
+  `raw_response`, the only place the ordered list actually exists, and returns null when it
+  cannot. The beat then prints with no number rather than a plausible one.
+- **Engines.** `enginesWithData(runs)` treats an engine with zero `status === "ok"` rows as not
+  having run. `ReportView` cannot answer this because `engineCell` collapses "no run row" and
+  "run failed" into the same `no_data`.
+- **Branded wins.** A branded prompt returns the business for the trivial reason that it names
+  it. `PROMPT_TRAMPA` is picked from organic prompts only. When `client_name` is null it
+  **refuses outright**, because `buildAliases` then falls back to `business_type` and every
+  prompt containing the category phrase would look branded.
+- **Price tier.** Nothing in the pipeline records recurring-vs-one-time; only `block` and the
+  prompt text exist. One Claude call infers it and PRE-FLIGHT labels the pattern line as a read,
+  not a measured finding.
+
+`site_signals` is handled three ways on purpose: a finding, `[]` (scan ran, site clean, so the
+beat is cut), and `null` (never scanned, so no site claim is allowed). Those must not read the
+same on camera.
+
+**Every draft footer now prints the whole command menu** (`THREAD_COMMANDS` in
+`thread-assistant.ts`, the single copy). The old footer named only "1", which left every other
+command in the router undiscoverable unless you already knew it existed.
 
 ### Instant lead pitch (public free-audit leads only)
 `src/lib/audit-engine/lead-pitch.ts`. A form lead ASKED for the report, so sending it is

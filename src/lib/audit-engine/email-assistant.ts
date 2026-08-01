@@ -162,19 +162,46 @@ export const PARAGRAPH_RULES = [
  *
  * Not left to the model: it invented "Matthew" on one draft and omitted the sign-off entirely
  * on the next, from the same prompt. The name is stated in the prompt AND appended in code if
- * the model drops it, so every email in a sequence closes the same way. Change these two
- * values if outreach ever goes out under a different name.
+ * the model drops it, so every email in a sequence closes the same way.
+ *
+ * Env-overridable because it has changed once already. NOT to be confused with
+ * AUDIT_SIGNATURE_NAME, which names the Outlook signature BLOCK that lead-pitch.ts fetches:
+ * that is an HTML block with a logo, this is two lines of plain text at the end of a cold email.
  */
-export const OUTREACH_SIGNATURE = { name: "Dan", agency: "SRT Agency" };
+export const OUTREACH_SIGNATURE = {
+  name: process.env.OUTREACH_SIGNATURE_NAME || "Matthew Garcia",
+  agency: process.env.OUTREACH_SIGNATURE_AGENCY || "SRT Agency",
+};
+
+/** Sign-offs that used to ship and must be rewritten wherever they still appear, including
+ *  drafts already sitting in pending_drafts that a revision pass would otherwise preserve. */
+const STALE_SIGNOFF_NAMES = ["Dan"];
 
 export const SIGNOFF_RULE = `End with exactly this sign-off, on its own two lines, nothing after it:\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}\nNo title, no phone number, no signature block, no postscript.`;
 
 /**
- * Guarantee the sign-off. A cold email that just stops after the question reads like a draft
- * someone forgot to finish, and that is what shipped when the model omitted it.
+ * Guarantee the sign-off, and repair a stale one.
+ *
+ * The append-if-missing half exists because a cold email that just stops after the question
+ * reads like a draft someone forgot to finish, and that is what shipped when the model omitted
+ * it. The REPLACE half exists because the old test only looked for the agency line, so a body
+ * already signed "Dan / SRT Agency" sailed through untouched: every revision of an existing
+ * draft kept sending mail from a person who does not work here.
  */
 export function ensureSignoff(body: string): string {
-  const trimmed = body.trimEnd();
+  let trimmed = body.trimEnd();
+
+  for (const stale of STALE_SIGNOFF_NAMES) {
+    if (stale === OUTREACH_SIGNATURE.name) continue;
+    // Anchored to the end and to its own line, so a prospect actually named Dan in the body
+    // is never rewritten. Only the sign-off block itself matches.
+    const pattern = new RegExp(
+      `\\n${stale}\\s*\\n\\s*${OUTREACH_SIGNATURE.agency.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`,
+      "i"
+    );
+    trimmed = trimmed.replace(pattern, `\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}`);
+  }
+
   const tail = trimmed.slice(-120).toLowerCase();
   if (tail.includes(OUTREACH_SIGNATURE.agency.toLowerCase())) return trimmed;
   return `${trimmed}\n\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}`;
@@ -216,8 +243,8 @@ The reason it's built the way it is: AI engines pull from pages that answer the 
 
 I also put together the full breakdown of which shops the engines name in Miami instead of you. Want me to send it?
 
-Dan
-SRT Agency`;
+${OUTREACH_SIGNATURE.name}
+${OUTREACH_SIGNATURE.agency}`;
 
 /** Same rhythm, same closing question, no link. Used when no redesign was built. */
 export const PERMISSION_EXAMPLE_NO_REDESIGN = `Raul,
@@ -228,8 +255,8 @@ There's also one thing on your own site working against you there, which is the 
 
 Want me to send it over? It's yours to keep either way.
 
-Dan
-SRT Agency`;
+${OUTREACH_SIGNATURE.name}
+${OUTREACH_SIGNATURE.agency}`;
 
 /** The few-shot block, matched to whether a redesign exists for this prospect. */
 function permissionExample(redesignUrl: string | null): string {

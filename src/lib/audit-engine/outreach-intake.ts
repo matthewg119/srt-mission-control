@@ -169,6 +169,8 @@ export interface IntakeDraftResult {
   removedLinks: string[];
   /** Set when the paragraph reflow was attempted and rejected. */
   formatNote: string | null;
+  /** Set when the recipient's name in the draft does not appear in what Matthew typed. */
+  nameWarning: string | null;
 }
 
 /**
@@ -253,6 +255,60 @@ function cleanText(v: string | null | undefined): string | null {
   return trimmed.length > 0 && trimmed.toLowerCase() !== "null" ? trimmed : null;
 }
 
+/** Letters and digits only, lowercased, so punctuation and spacing cannot mask a real typo. */
+function nameKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/gi, "");
+}
+
+/**
+ * A person's name is the one thing in a cold email that must be exactly right, and it is the
+ * one thing the model has no source for except Matthew's typed answer.
+ *
+ * This shipped once: he typed "Jose Luis" and the draft opened "Jose Liuis,". Nothing caught
+ * it because the name is produced by the SAME generation that writes the body, and nothing
+ * ever compared the two against the answers. Worse, a bad name is then stored on the row and
+ * injected as authoritative into every later draft and into the follow-up operator.
+ *
+ * So: a name that does not appear verbatim in what he typed is not trusted. Each word is
+ * checked, because "Dr. Mehta" is a legitimate greeting drawn from "Dr Mehta runs the clinic",
+ * while a single word that appears nowhere is a transcription error.
+ */
+function verifyNameAgainstAnswers(
+  name: string | null,
+  greeting: string | null,
+  answers: string
+): { trusted: string | null; warning: string | null } {
+  const haystack = nameKey(answers);
+
+  const unsupported = (candidate: string): string[] =>
+    candidate
+      .split(/\s+/)
+      .map((w) => w.replace(/[.,]/g, ""))
+      .filter((w) => w.length >= 3 && !/^(dr|mr|mrs|ms|the)$/i.test(w))
+      .filter((w) => !haystack.includes(nameKey(w)));
+
+  const badInGreeting = greeting ? unsupported(greeting) : [];
+  const badInField = name ? unsupported(name) : [];
+  const bad = [...new Set([...badInGreeting, ...badInField])];
+
+  if (!bad.length) return { trusted: name, warning: null };
+
+  return {
+    trusted: badInField.length ? null : name,
+    warning:
+      `:warning: The name in this draft does not match what you typed: ${bad.map((b) => `"${b}"`).join(", ")} ` +
+      `${bad.length === 1 ? "appears" : "appear"} nowhere in your answers. Check the greeting before sending.`,
+  };
+}
+
+/** The name the draft actually greets, from a first line like "Jose Luis," or "Hi Dr. Mehta,". */
+function greetingName(body: string): string | null {
+  const first = body.trimStart().split("\n")[0]?.trim() ?? "";
+  const m = first.match(/^(?:hi|hey|hello|dear)?\s*,?\s*([^,]{1,60}),\s*$/i);
+  const captured = m?.[1]?.trim();
+  return captured && /[a-z]/i.test(captured) ? captured : null;
+}
+
 /**
  * Turn Matthew's free-text answers into ONE finished email 1.
  *
@@ -287,15 +343,22 @@ export async function draftFromIntake(
   const subject = enforceLinkPolicy(noDashes(data.subject), { mode: "none" });
   const body = enforceLinkPolicy(noDashes(data.body), policy);
   const polished = await polishBody(body.text, { allowEmphasis: false });
+  const signedBody = ensureSignoff(polished.body);
+
+  const nameCheck = verifyNameAgainstAnswers(
+    cleanText(data.prospect_name),
+    greetingName(signedBody),
+    answers
+  );
 
   return {
     draft: {
       label: "Email 1 · permission",
       subject: subject.text.trim(),
-      body: ensureSignoff(polished.body),
+      body: signedBody,
     },
     extracted: {
-      prospect_name: cleanText(data.prospect_name),
+      prospect_name: nameCheck.trusted,
       prospect_email: cleanText(data.prospect_email),
       // Prefer what the model pulled out; fall back to the raw scan so a link Matthew pasted
       // is still stored for the reveal even if the model omitted the field.
@@ -303,6 +366,7 @@ export async function draftFromIntake(
     },
     removedLinks: [...subject.removed, ...body.removed],
     formatNote: polished.note,
+    nameWarning: nameCheck.warning,
   };
 }
 
@@ -363,10 +427,19 @@ export async function revisePreviousDraft(
   const body = enforceLinkPolicy(noDashes(data.body), policy);
   const polished = await polishBody(body.text, { allowEmphasis: !isPermissionStage });
 
+  const signedBody = ensureSignoff(polished.body);
+
+  // A revision rewrites the greeting too, so the name check has to run again here. The stored
+  // answers are the reference; when there are none there is nothing to check against.
+  const nameCheck = report.intake_answers
+    ? verifyNameAgainstAnswers(null, greetingName(signedBody), report.intake_answers)
+    : { warning: null };
+
   return {
-    draft: { label: previous.label, subject: subject.text.trim(), body: ensureSignoff(polished.body) },
+    draft: { label: previous.label, subject: subject.text.trim(), body: signedBody },
     extracted: { prospect_name: null, prospect_email: null, redesign_url: null },
     removedLinks: [...subject.removed, ...body.removed],
     formatNote: polished.note,
+    nameWarning: nameCheck.warning,
   };
 }

@@ -35,7 +35,9 @@ export function autoSendEnabled(): boolean {
  * pitch with no sign-off is worse than one with a slightly stale one.
  */
 export async function auditSignatureHtml(): Promise<string> {
-  const name = process.env.AUDIT_SIGNATURE_NAME || "AI Visibility";
+  // "AI Ops" is the block's name in Outlook's signature list; its rendered content reads
+  // "Matthew Garcia / AI Visibility - SRT". Naming it after the content would not find it.
+  const name = process.env.AUDIT_SIGNATURE_NAME || "AI Ops";
   const fromOutlook = await microsoft.getSignatureByName(name).catch(() => null);
   if (fromOutlook) return fromOutlook;
   console.warn(`[lead-pitch] Outlook signature "${name}" not found, using the repo fallback`);

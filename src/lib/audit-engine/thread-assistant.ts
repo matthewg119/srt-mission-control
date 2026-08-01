@@ -41,6 +41,7 @@ import {
   type EmailOption,
 } from "./email-assistant";
 import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDraft } from "./outreach-intake";
+import { buildLoomBeatSheet } from "./loom-beatsheet";
 import type { AuditReportRow, AuditRunRow } from "./types";
 
 function escapeHtml(s: string): string {
@@ -50,6 +51,19 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+
+/**
+ * The command menu, printed under EVERY draft.
+ *
+ * It used to be a one-liner naming only "1", which meant every other command in this router
+ * was undiscoverable unless you already knew it existed. Nobody memorizes a command table they
+ * see once, so the full list ships with each card and this constant is the only copy of it.
+ */
+export const THREAD_COMMANDS = [
+  "*1* Outlook draft  ·  *loom* beat sheet + prompt list  ·  *nudge 2-5* next pre-pitch touch",
+  "*reveal* they said yes  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
+  "Anything else you type edits the draft.",
+].join("\n");
 
 /** Persist the 3 options on the report row and post them to the thread as a numbered card. */
 export async function postOptions(
@@ -66,7 +80,7 @@ export async function postOptions(
   await slack.postThreadReply(
     channel,
     threadTs,
-    `${header}\n\n_Reply *1*, *2*, or *3* in this thread and I'll create the Outlook draft for you to send._\n\n${body}`
+    `${header}\n\n_Reply *1*, *2*, or *3* and I'll create the Outlook draft._\n${THREAD_COMMANDS}\n\n${body}`
   );
 }
 
@@ -74,6 +88,7 @@ export async function postOptions(
 interface DraftGuards {
   removedLinks?: string[];
   formatNote?: string | null;
+  nameWarning?: string | null;
 }
 
 /**
@@ -93,13 +108,19 @@ async function postSingleDraft(
   guards: DraftGuards = {}
 ): Promise<void> {
   await supabaseAdmin.from("audit_reports").update({ pending_drafts: [draft] }).eq("id", report.id);
-  const warnings = [linkWarning(guards.removedLinks ?? []), guards.formatNote ? `:warning: ${guards.formatNote}.` : null]
+  const warnings = [
+    guards.nameWarning ?? null,
+    linkWarning(guards.removedLinks ?? []),
+    guards.formatNote ? `:warning: ${guards.formatNote}.` : null,
+  ]
     .filter(Boolean)
     .join("\n");
   await slack.postThreadReply(
     channel,
     threadTs,
-    `${header}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_${footer}_`
+    // The footer is NOT italicized here any more: it is now a multi-line command menu, and
+    // Slack's mrkdwn does not carry _italics_ across a newline.
+    `${header}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n${footer}`
   );
 }
 
@@ -111,7 +132,7 @@ async function createOutlookDraftFromPick(report: AuditReportRow, channel: strin
     await slack.postThreadReply(
       channel,
       threadTs,
-      `I don't have option ${pick} queued in this thread. Reply "questions" to redo the intake, "nudge 2" (through nudge ${PERMISSION_SEQUENCE.length}) for the next pre-pitch touch, or paste the prospect's reply and I'll draft from that.`
+      `I don't have option ${pick} queued in this thread.\n\n${THREAD_COMMANDS}`
     );
     return;
   }
@@ -208,6 +229,15 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
       return true;
     }
 
+    // --- The Loom recording plan ------------------------------------------------
+    // Deliberately AFTER the asset match above, so "loom <url>" still stores the video and a
+    // bare "loom" asks for the beat sheet. Two blocks, nothing else, no preamble.
+    if (/^(loom|beat sheet|beatsheet|guion|guión)\??$/i.test(text)) {
+      const { message, refusal } = await buildLoomBeatSheet(report, view, runs);
+      await slack.postThreadReply(args.channel, args.threadTs, message ?? `:warning: ${refusal}`);
+      return true;
+    }
+
     // --- Redo the intake --------------------------------------------------------
     if (/^(questions|intake|restart intake|ask me)\??$/i.test(text)) {
       await restartIntake(report, args.channel, args.threadTs, view);
@@ -231,7 +261,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         args.threadTs,
         `:envelope: Nudge ${step}${touch ? ` · ${touch.day} · ${touch.name}` : ""} (no links, no price, one ask):`,
         { label: `Nudge ${step}`, subject: draft.subject, body: draft.body },
-        "Reply *1* for the Outlook draft, or tell me what to change.",
+        THREAD_COMMANDS,
         { removedLinks: draft.removedLinks, formatNote: draft.formatNote }
       );
       return true;
@@ -248,7 +278,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         report.loom_url ? null : "no Loom saved (`loom <url>`)",
       ].filter(Boolean);
       const footer = [
-        "Reply *1* for the Outlook draft, or tell me what to change.",
+        THREAD_COMMANDS,
         missing.length > 0 ? `Not included: ${missing.join(", ")}.` : "",
         terms ? "" : "Offer terms defaulted, reply `reveal $299/mo, setup waived` to change them.",
       ]
@@ -281,7 +311,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
 
     // --- Free text: meaning depends on where the thread is ----------------------
     if (report.outreach_stage === "awaiting_intake") {
-      const { draft, extracted, removedLinks, formatNote } = await draftFromIntake(report, view, text);
+      const { draft, extracted, removedLinks, formatNote, nameWarning } = await draftFromIntake(report, view, text);
       await supabaseAdmin
         .from("audit_reports")
         .update({
@@ -307,8 +337,8 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         args.threadTs,
         `:envelope: *Email 1* · pre-pitch, one finding, one ask, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}`,
         draft,
-        "Reply *1* for the Outlook draft, or tell me what to change (\"tighter\", \"drop the score line\").",
-        { removedLinks, formatNote }
+        THREAD_COMMANDS,
+        { removedLinks, formatNote, nameWarning }
       );
       return true;
     }
@@ -316,15 +346,15 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     if (report.outreach_stage === "drafted") {
       const previous = (report.pending_drafts ?? [])[0];
       if (previous) {
-        const { draft: revised, removedLinks, formatNote } = await revisePreviousDraft(report, view, previous, text);
+        const { draft: revised, removedLinks, formatNote, nameWarning } = await revisePreviousDraft(report, view, previous, text);
         await postSingleDraft(
           report,
           args.channel,
           args.threadTs,
           `:pencil2: *${revised.label}* · revised:`,
           revised,
-          "Reply *1* for the Outlook draft, or keep telling me what to change.",
-          { removedLinks, formatNote }
+          THREAD_COMMANDS,
+          { removedLinks, formatNote, nameWarning }
         );
         return true;
       }
