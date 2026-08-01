@@ -69,9 +69,22 @@ export async function submitMapsSearch(
 
   try {
     const res = await fetch(url, { headers: { "X-API-KEY": apiKey } });
-    const json = (await res.json()) as { id?: string; error?: string; message?: string };
+    const json = (await res.json()) as {
+      id?: string;
+      // Outscraper returns {"error": true, "errorMessage": "..."} — reading
+      // `error` first coerced that boolean to "true" and threw the real reason
+      // away, which is why every failed pull logged a bare `true`. Read the
+      // message field first and only accept `error` when it is a string.
+      error?: string | boolean;
+      errorMessage?: string;
+      message?: string;
+    };
     if (!res.ok || !json.id) {
-      return { ok: false, error: json.error || json.message || `http_${res.status}` };
+      const detail =
+        json.errorMessage
+        || (typeof json.error === "string" ? json.error : null)
+        || json.message;
+      return { ok: false, error: detail || `http_${res.status}` };
     }
     return { ok: true, requestId: json.id };
   } catch (err) {

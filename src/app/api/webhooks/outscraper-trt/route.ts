@@ -50,7 +50,14 @@ export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   const runIdParam = url.searchParams.get("run");
   const token = url.searchParams.get("token");
-  const followups = process.env.SLACK_TRT_CHANNEL || process.env.SLACK_FOLLOWUPS_CHANNEL || "";
+  // Maps prospecting is PAUSED (2026-07-31). Route A no longer submits jobs, but
+  // Outscraper can replay an old callback. Set MAPS_PULL_ENABLED=1 to resume.
+  if (process.env.MAPS_PULL_ENABLED !== "1") {
+    return NextResponse.json({ ok: true, paused: "maps_pull_disabled" });
+  }
+
+  // #ceo, never #followups: that channel belongs to the Follow-Up Operator now.
+  const followups = process.env.SLACK_TRT_CHANNEL || process.env.SLACK_CEO_CHANNEL || "";
   const limitPerQuery = Math.max(1, Number(process.env.TRT_LIMIT_PER_QUERY) || 40);
 
   const expected = process.env.OUTSCRAPER_WEBHOOK_SECRET || "";

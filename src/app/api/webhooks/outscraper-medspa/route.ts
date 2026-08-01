@@ -46,7 +46,13 @@ export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   const runIdParam = url.searchParams.get("run");
   const token = url.searchParams.get("token");
-  const followups = process.env.SLACK_MEDSPA_CHANNEL || process.env.SLACK_FOLLOWUPS_CHANNEL || "";
+  // Maps prospecting is PAUSED (2026-07-31). Guards a replayed callback.
+  if (process.env.MAPS_PULL_ENABLED !== "1") {
+    return NextResponse.json({ ok: true, paused: "maps_pull_disabled" });
+  }
+
+  // #ceo, never #followups: that channel belongs to the Follow-Up Operator now.
+  const followups = process.env.SLACK_MEDSPA_CHANNEL || process.env.SLACK_CEO_CHANNEL || "";
   const limitPerZip = Math.max(1, Number(process.env.MEDSPA_LIMIT_PER_ZIP) || 20);
 
   const expected = process.env.OUTSCRAPER_WEBHOOK_SECRET || "";

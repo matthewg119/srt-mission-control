@@ -58,7 +58,16 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const followups = process.env.SLACK_TRT_CHANNEL || process.env.SLACK_FOLLOWUPS_CHANNEL || "";
+  // Maps prospecting is PAUSED (2026-07-31). The cron entry is gone from
+  // vercel.json; this guard covers a manual hit. Set MAPS_PULL_ENABLED=1 in
+  // Vercel to resume. Nothing was deleted. See CLAUDE.md "Follow-Up Operator".
+  if (process.env.MAPS_PULL_ENABLED !== "1") {
+    return NextResponse.json({ ok: true, paused: "maps_pull_disabled" });
+  }
+
+  // Falls back to #ceo, never #followups: that channel is now the Follow-Up
+  // Operator's home and a stray prospecting post would corrupt the digest.
+  const followups = process.env.SLACK_TRT_CHANNEL || process.env.SLACK_CEO_CHANNEL || "";
   const queriesPerRun = Math.max(1, Number(process.env.TRT_QUERIES_PER_RUN) || 15);
   const limitPerQuery = Math.max(1, Number(process.env.TRT_LIMIT_PER_QUERY) || 40);
   const webhookBase = process.env.OUTSCRAPER_TRT_WEBHOOK_URL

@@ -138,6 +138,23 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return bridgeCommandAction({ actionId: action.action_id, channel, slackTs, userId });
     case "bridge_status":
       return bridgeStatusAction({ channel, slackTs });
+    case "audit_send_now":
+    case "audit_hold":
+      return auditPitchAction({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userId,
+        reportId: action.value ?? "",
+      });
+    case "fo_track":
+    case "fo_ignore":
+      return followupTrackAction({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        prospectId: action.value ?? "",
+      });
     default:
       return NextResponse.json({ ok: true });
   }
@@ -751,6 +768,88 @@ async function sequenceCancel(args: {
     args.channel,
     args.slackTs,
     `🚫 Workflow cancelled for *${enrollment.contact_name ?? "Contact"}* by <@${args.userId}>. No more emails will be sent.`
+  );
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Send or hold the pitch drafted for a public free-audit lead.
+ *
+ * Send fires the Outlook draft as-is, so any edit made in Outlook first goes out
+ * with it. Hold parks the row, which also cancels the auto-send timer if that
+ * switch is ever turned on.
+ */
+async function auditPitchAction(args: {
+  actionId: string; channel: string; slackTs: string; userId: string; reportId: string;
+}): Promise<NextResponse> {
+  if (!args.reportId) return NextResponse.json({ ok: true });
+
+  const { sendAuditPitch } = await import("@/lib/audit-engine/lead-pitch");
+
+  if (args.actionId === "audit_hold") {
+    await supabaseAdmin
+      .from("audit_reports")
+      .update({ auto_send_state: "held", auto_send_at: null })
+      .eq("id", args.reportId)
+      .neq("auto_send_state", "sent");
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      `✋ Held by <@${args.userId}>. The draft is still in your Outlook, nothing will send itself.`
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  const res = await sendAuditPitch(args.reportId, `slack:${args.userId}`);
+  const message =
+    res.outcome === "sent"
+      ? `🚀 Sent by <@${args.userId}>. Enrolled in the follow-up ladder, next touch tomorrow.`
+      : res.outcome === "already_sent"
+        ? "✅ Already sent, nothing to do."
+        : res.outcome === "held"
+          ? "✋ This one is on hold. Un-hold it in Outlook and send from there."
+          : res.outcome === "no_draft"
+            ? "⚠️ No Outlook draft on this report, so there is nothing to send."
+            : `⚠️ Send failed: ${res.detail ?? "unknown error"}`;
+
+  await slack.postThreadReply(args.channel, args.slackTs, message);
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Follow-Up Operator: vouch for (or dismiss) an address the Outlook sweep found
+ * with no audit behind it. Tracking is what makes a row schedulable — until
+ * this fires, an unconfirmed prospect is never drafted for and never due.
+ */
+async function followupTrackAction(args: {
+  actionId: string; channel: string; slackTs: string; prospectId: string;
+}): Promise<NextResponse> {
+  if (!args.prospectId) return NextResponse.json({ ok: true });
+
+  const { updateProspect, getProspectById } = await import("@/lib/followup-operator/prospects");
+  const { nextTouchAt, snapTo9amET } = await import("@/lib/followup-operator/cadence");
+
+  const p = await getProspectById(args.prospectId);
+  if (!p) {
+    await slack.postThreadReply(args.channel, args.slackTs, "⚠️ That prospect is no longer in the pipeline.");
+    return NextResponse.json({ ok: true });
+  }
+
+  if (args.actionId === "fo_ignore") {
+    await updateProspect(p.id, { paused: true });
+    await slack.postThreadReply(args.channel, args.slackTs, `✖ Ignored. *${p.email}* stays out of the board.`);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Start the ladder from the pitch that was actually sent, not from now.
+  const anchor = p.first_sent_at ? new Date(p.first_sent_at) : new Date();
+  const due = nextTouchAt(p.step, anchor) ?? snapTo9amET(new Date(Date.now() + 24 * 60 * 60 * 1000));
+  await updateProspect(p.id, { confirmed: true, next_touch_at: due.toISOString() });
+
+  await slack.postThreadReply(
+    args.channel,
+    args.slackTs,
+    `✅ Tracking *${p.email}*. Next touch ${due.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long" })}.`
   );
   return NextResponse.json({ ok: true });
 }

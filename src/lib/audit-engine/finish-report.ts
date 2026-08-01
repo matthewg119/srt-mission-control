@@ -14,7 +14,7 @@
 // under the pre-pitch doctrine (see email-assistant.ts / outreach-intake.ts).
 
 import { supabaseAdmin } from "@/lib/db";
-import { slack } from "@/lib/slack-bot";
+import { slack, SlackBlock } from "@/lib/slack-bot";
 import { buildAliases } from "@/lib/audit-engine/mention-match";
 import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/slack-format";
 import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
@@ -24,13 +24,18 @@ import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
 import { companiesConflict } from "@/lib/company-identity";
 import { microsoft } from "@/lib/microsoft";
+import { waitUntil } from "@vercel/functions";
+import {
+  AUTOSEND_MINUTES,
+  auditSignatureHtml,
+  autoSendEnabled,
+  buildPitchBlocks,
+  buildPitchHtml,
+  sendAuditPitch,
+} from "@/lib/audit-engine/lead-pitch";
 
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /** The company this report is about, resolved the same way everywhere it is displayed. */
@@ -124,6 +129,9 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
     const name = displayName(report);
     const reportUrl = `${appUrl()}/r/${report.slug}`;
     let draftLink: string | null = null;
+    let draftSubject: string | null = null;
+    let draftBody: string | null = null;
+    let autoSendAt: Date | null = null;
 
     try {
       // Everything below (recipient, PDF, filename, subject, body) must descend from ONE
@@ -138,7 +146,11 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
 
       if (!pdfBuffer) pdfBuffer = generateScorecardPDF(report, view, weighted);
       const { subject, body } = await draftInitialEmail(report, view);
-      const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(body)}</div>`;
+      // The signature comes from Outlook by name so it can be edited there
+      // without a deploy. A pitch that goes out unsigned reads as a robot.
+      const htmlBody = buildPitchHtml(body, await auditSignatureHtml());
+      draftSubject = subject;
+      draftBody = body;
 
       const draft = await microsoft.createDraft({
         to: report.requester_email,
@@ -153,29 +165,54 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
         ],
       });
       draftLink = draft.webLink ?? null;
+
+      // The draft id is what the Send button and the auto-send backstop act on:
+      // sending the stored draft means what goes out is exactly what was
+      // reviewed, including any edit made in Outlook first.
+      if (autoSendEnabled()) autoSendAt = new Date(Date.now() + AUTOSEND_MINUTES * 60_000);
+      await supabaseAdmin
+        .from("audit_reports")
+        .update({
+          draft_message_id: draft.id,
+          auto_send_state: "pending",
+          auto_send_at: autoSendAt ? autoSendAt.toISOString() : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", report.id);
     } catch (e) {
       console.error("[finishReport] outlook draft failed:", (e as Error).message);
     }
 
     try {
-      const headline = draftLink
-        ? ":large_green_circle: *AI audit ready — Outlook draft prepared*"
-        : ":large_green_circle: *AI audit ready* (Outlook draft failed, reconnect Microsoft 365)";
-      const who = report.requester_name ? `${report.requester_name} · ` : "";
-      const links = [
-        draftLink ? `<${draftLink}|✉️ Open draft in Outlook>` : null,
-        `<${reportUrl}|📊 View report>`,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      const text =
-        `${headline} — *${name}* scored ${report.score ?? weighted.score}/100\n` +
-        `Lead: ${who}${report.requester_email}\n` +
-        links;
-
-      await postLeadNotification(report, text);
+      const blocks = buildPitchBlocks({
+        report,
+        score: report.score ?? weighted.score,
+        companyName: name,
+        reportUrl,
+        draftLink,
+        subject: draftSubject,
+        bodyPreview: draftBody,
+        autoSendAt,
+      });
+      const fallback = `AI audit ready — ${name} scored ${report.score ?? weighted.score}/100, lead ${report.requester_email}`;
+      await postLeadNotification(report, fallback, blocks);
     } catch (e) {
       console.error("[finishReport] hot-leads post failed:", (e as Error).message);
+    }
+
+    // Fast path for auto-send: hold this invocation open rather than waiting for
+    // a cron, because Vercel Hobby crons only run daily. The row is still the
+    // source of truth, so a cold start here costs latency, not the send.
+    if (autoSendAt && draftLink) {
+      const delay = Math.max(0, autoSendAt.getTime() - Date.now());
+      waitUntil(
+        new Promise<void>((resolve) => setTimeout(resolve, delay)).then(async () => {
+          const res = await sendAuditPitch(report.id, "auto-send timer");
+          if (res.outcome === "sent") {
+            await postLeadNotification(report, `🚀 Auto-sent the pitch to ${report.requester_email}.`).catch(() => {});
+          }
+        })
+      );
     }
   }
 }
@@ -183,7 +220,11 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
 /** Reply inside the lead's existing #hot-leads thread when we know it, so the
  *  audit result sits under the lead that triggered it. Falls back to a
  *  top-level post (Slack-triggered /audit runs have no contact). */
-async function postLeadNotification(report: AuditReportRow, text: string): Promise<void> {
+async function postLeadNotification(
+  report: AuditReportRow,
+  text: string,
+  blocks?: SlackBlock[]
+): Promise<void> {
   const fallbackChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
 
   if (report.contact_id) {
@@ -208,7 +249,8 @@ async function postLeadNotification(report: AuditReportRow, text: string): Promi
       await slack.postThreadReply(
         contact.slack_channel || fallbackChannel,
         contact.slack_thread_ts,
-        text
+        text,
+        blocks
       );
       return;
     }
@@ -224,5 +266,5 @@ async function postLeadNotification(report: AuditReportRow, text: string): Promi
     }
   }
 
-  if (fallbackChannel) await slack.postMessage(fallbackChannel, text);
+  if (fallbackChannel) await slack.postMessage(fallbackChannel, text, blocks);
 }

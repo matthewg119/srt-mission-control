@@ -37,6 +37,12 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // Maps prospecting is PAUSED (2026-07-31): no new leads arrive, so there is
+  // nothing to enrich. Set MAPS_PULL_ENABLED=1 to resume alongside the pull.
+  if (process.env.MAPS_PULL_ENABLED !== "1") {
+    return NextResponse.json({ ok: true, paused: "maps_pull_disabled" });
+  }
+
   const started = Date.now();
   const batchLimit = Math.max(1, Number(process.env.TRT_EMAIL_CRON_LIMIT) || 25);
 

@@ -77,12 +77,8 @@
       "schedule": "30 21 * * *"
     },
     {
-      "path": "/api/cron/pull-trt",
-      "schedule": "0 7 * * *"
-    },
-    {
-      "path": "/api/cron/enrich-trt-emails",
-      "schedule": "0 9 * * *"
+      "path": "/api/cron/followup-digest",
+      "schedule": "0 13 * * *"
     }
   ]
 }

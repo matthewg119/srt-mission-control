@@ -105,6 +105,13 @@ POV_IMAGE_PROVIDER=        # POV/workflow-path override; code default openai
 OPENAI_API_KEY=            # gpt-image-2 (ALL image generation + edits)
 OPENAI_IMAGE_QUALITY=      # Optional: low | medium | high (default high)
 HF_CREDENTIALS=            # Higgsfield key — Seedance 2.0 ANIMATION ONLY (images no longer route through it)
+SLACK_FOLLOWUPS_CHANNEL=   # #followups_channel id. Home of the Follow-Up Operator digest.
+OUTREACH_MAILBOX=          # matthew@srtagency.com. The mailbox whose Sent Items are swept.
+OUTREACH_EXCLUDE_DOMAINS=  # Optional comma list. srtagency.com is always excluded.
+MAPS_PULL_ENABLED=         # Unset = Google Maps prospecting stays PAUSED. "1" resumes it.
+AUDIT_SIGNATURE_NAME=      # Outlook signature for audit pitches. Default "AI Visibility".
+AUDIT_AUTOSEND_ENABLED=    # Unset = lead pitches NEVER send themselves. "1" arms the timer.
+AUDIT_AUTOSEND_MINUTES=    # Optional, default 5. Only meaningful when the above is on.
 ```
 
 ## Image generation rules (2026-07-03)
@@ -153,8 +160,10 @@ zero vertical-specific hardcoding anywhere in this feature.
   drafters, grounded in `Desktop/AEO aduit/SRT_Audit_SOP_Universal.md` + `SRT_Sales_Letter.md`,
   and `src/lib/audit-engine/thread-assistant.ts` — the Slack-thread router. Wired into
   `src/app/api/slack/events/route.ts` gated by `channel === AUDIT_CHANNEL_ID` first (cheap
-  check before any DB lookup). Every draft is posted for Matthew to review — nothing is ever
-  sent automatically.
+  check before any DB lookup). Every draft is posted for Matthew to review. **Cold outreach is
+  never sent automatically.** The ONE lane that can send unattended is the public free-audit
+  lead pitch, and only when `AUDIT_AUTOSEND_ENABLED=1` — see "Instant lead pitch" below. It
+  ships with that switch unset, so today nothing sends itself.
 
 ### Cold outreach: PRE-PITCH, then PITCH (2026-07-29) — read before touching email 1
 A cold prospect never asked for any of this, so a finished audit does **not** post finished
@@ -265,6 +274,82 @@ parsed into fields, because a parser that guessed would drop half the instructio
 - `#ai-visibility-audits` Slack channel is created once via `slack.createChannel()`
   (`src/lib/audit-engine/audit-channel.ts`) — paste the logged id into `AUDIT_CHANNEL_ID`
   after the first run, same convention as `SLACK_CEO_CHANNEL`/`SLACK_HOT_LEADS_CHANNEL`.
+
+## SRT Follow-Up Operator (2026-07-31)
+Everything after the pitch is sent. `#followups_channel` used to carry the Google Maps clinic
+scrape; it is now the operator's home. A digest posts at 09:00 ET (`0 13 * * *`,
+`/api/cron/followup-digest`) with HOT / CALL LIST / EMAIL DUE / WAITING, and every prospect
+gets its OWN thread there.
+
+**Two threads per prospect, on purpose.** The audit thread in `#ai-visibility-audits` keeps the
+report, the scorecard and the intake conversation, and `audit_reports.slack_thread_ts` carries a
+UNIQUE index that belongs to it. The operator thread lives on
+`outreach_prospects.slack_thread_ts`, its own column with its own partial unique index. Each
+links to the other; neither fights the other's schema.
+
+- `src/lib/followup-operator/sent-sweep.ts` — reads Outlook **Sent Items** via
+  `microsoft.listMessages`, so pitches Matthew types himself are tracked too, not just drafts
+  this system generated. Idempotent on `graph_message_id`: the window deliberately overlaps the
+  previous run and a re-seen message leaves the clock alone. It filters on `receivedDateTime`,
+  not `sentDateTime`, because `listMessages` hardcodes `$orderby=receivedDateTime desc` and
+  Graph rejects a filter and sort on two different date properties.
+- `src/lib/followup-operator/cadence.ts` — turns `PERMISSION_SEQUENCE[].day` from a prompt
+  label into real scheduling. `stepOffsets()` derives `[0,1,2,4,7]` from the sequence itself, so
+  editing the ladder in `email-assistant.ts` reschedules the operator with it. Due dates anchor
+  on `first_sent_at`, never on the last touch, so a nudge approved two days late does not drag
+  the whole ladder.
+- **Never two channels on one prospect in one day.** `hasOutboundTouchToday` gates the digest;
+  a prospect already touched today silently moves to tomorrow. The single exception is an
+  unanswered call, logged with `metadata.counts_as_touch = false`, because a call nobody picked
+  up is not a touch that landed and the text and email after it are the whole point of dialing.
+- Unrecognized recipients enroll as `confirmed = false` and are **never** scheduled or drafted
+  for until Matthew taps ✅ Track (`fo_track` / `fo_ignore` in `api/slack/actions`).
+- `src/lib/followup-operator/operator-rules.ts` — the doctrine as constants, same precedent as
+  `VOICE_RULES` / `PARAGRAPH_RULES`. `bannedPhraseWarnings()` catches "just checking in" and
+  friends in CODE and surfaces the hit above the draft, the way `linkWarning()` does. Text
+  number is 336-833-2303, NOT the NAP number.
+- Tables: `outreach_prospects`, `outreach_touches`, `outreach_sweep_state` —
+  `docs/2026-07-31-followup-operator.sql`. `outreach_touches` is append-only, which is what
+  `audit_reports.pending_drafts` never was (it is overwritten on every draft).
+
+**Maps prospecting is PAUSED.** `pull-trt` / `enrich-trt-emails` are out of `vercel.json`, and
+`pull-trt`, `pull-medspa` and both `outscraper-*` webhooks return early unless
+`MAPS_PULL_ENABLED=1`. Their Slack fallback moved from `SLACK_FOLLOWUPS_CHANNEL` to
+`SLACK_CEO_CHANNEL` so a replayed Outscraper callback can never post into the digest channel.
+Nothing was deleted; re-add the two cron entries and set the env var to resume. `outscraper.ts`
+now reads `json.errorMessage` first — Outscraper returns `{"error": true, "errorMessage": "..."}`
+and the old code coerced that boolean to `"true"`, which is why every failed pull logged a bare
+`true` for a week with no diagnosable cause.
+
+### Instant lead pitch (public free-audit leads only)
+`src/lib/audit-engine/lead-pitch.ts`. A form lead ASKED for the report, so sending it is
+fulfillment, not cold outreach — that is why this lane may send at all and why cold `/audit`
+runs are untouched by it.
+
+When `finishReport` finishes a report with `requester_email`, it drafts the pitch
+(`draftInitialEmail`), signs it, attaches the scorecard PDF, stores `draft_message_id`, and
+posts a card to the lead's `#hot-leads` thread with **✅ Send it** / **✋ Hold**
+(`audit_send_now` / `audit_hold`). Send fires the stored Outlook draft via
+`microsoft.sendDraft`, so what goes out is byte for byte what was reviewed, including any edit
+made in Outlook first. A send also enrolls the recipient in the Follow-Up Operator, so the
+ladder starts from a real send instead of waiting for tomorrow's sweep.
+
+- **Signature:** `auditSignatureHtml()` reads the Outlook signature named by
+  `AUDIT_SIGNATURE_NAME` (default `AI Visibility`) via `microsoft.getSignatureByName`, the same
+  pattern as `submit-to-lenders.ts` and its "Submission" signature, falling back to
+  `EMAIL_SIGNATURE_HTML`. Editable in Outlook without a deploy. Confirm the exact stored name
+  with `GET /api/debug/signature?name=AI Visibility`.
+- **Auto-send is built and OFF.** `AUDIT_AUTOSEND_ENABLED` unset = disabled, and while it is
+  off the card has no countdown and nothing sends itself. When enabled, the row is stamped
+  `auto_send_at = now + AUDIT_AUTOSEND_MINUTES` (default 5) and a `waitUntil` timer sends it;
+  `flushDueAutoSends()` in the daily digest is the backstop for a timer lost to a cold start.
+  Vercel Hobby crons are daily only, so the timer cannot be a cron — the ROW is the source of
+  truth and the in-process timer is only the fast path.
+- **`auto_send_state` is a claim flag** (`pending` / `sent` / `held`). `sendAuditPitch` claims
+  the row with a conditional update BEFORE calling Graph, so the button, the timer and the
+  backstop can all race and only one send happens. A Graph failure puts it back to `pending`.
+- `microsoft.sendDraft` passes `rawResponse: true`: `/send` returns 202 with an EMPTY body, and
+  parsing that as JSON would throw after a successful send and invite a duplicate retry.
 
 ## Channels Connected
 - **Web dashboard** — mission.srtagency.com/dashboard/chat

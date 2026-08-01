@@ -1088,4 +1088,19 @@ export const microsoft = {
     const result = await graphRequest(path, { method: "POST", body: JSON.stringify(message) });
     return { id: result.id as string, webLink: result.webLink as string };
   },
+
+  /**
+   * Send a draft that already exists, by message id.
+   *
+   * Sending the draft rather than composing a fresh message is what makes the
+   * approval card honest: what goes out is byte for byte what Matthew saw in
+   * Outlook, including any edit he made there before tapping Send.
+   */
+  async sendDraft(messageId: string, mailbox?: string): Promise<void> {
+    const base = mailbox ? `/users/${encodeURIComponent(mailbox)}` : "/me";
+    // 202 Accepted with an EMPTY body, so rawResponse: true. Without it
+    // graphRequest calls res.json() on nothing and throws after a successful send,
+    // which would look like a failure and invite a duplicate retry.
+    await graphRequest(`${base}/messages/${messageId}/send`, { method: "POST", rawResponse: true });
+  },
 };

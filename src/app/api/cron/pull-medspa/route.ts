@@ -31,7 +31,14 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const followups = process.env.SLACK_MEDSPA_CHANNEL || process.env.SLACK_FOLLOWUPS_CHANNEL || "";
+  // Maps prospecting is PAUSED (2026-07-31). This route was already unscheduled;
+  // the guard covers a manual hit. Set MAPS_PULL_ENABLED=1 to resume.
+  if (process.env.MAPS_PULL_ENABLED !== "1") {
+    return NextResponse.json({ ok: true, paused: "maps_pull_disabled" });
+  }
+
+  // #ceo, never #followups: that channel belongs to the Follow-Up Operator now.
+  const followups = process.env.SLACK_MEDSPA_CHANNEL || process.env.SLACK_CEO_CHANNEL || "";
   const zipsPerRun = Math.max(1, Number(process.env.MEDSPA_ZIPS_PER_RUN) || 25);
   const limitPerZip = Math.max(1, Number(process.env.MEDSPA_LIMIT_PER_ZIP) || 20);
   const webhookBase = process.env.OUTSCRAPER_MEDSPA_WEBHOOK_URL
