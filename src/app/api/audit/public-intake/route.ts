@@ -3,7 +3,7 @@
 // Same trust model as /api/leads/funnel: server-to-server only, x-funnel-secret
 // gated with the existing FUNNEL_NOTIFY_SECRET (no new secret needed).
 //
-// Two payload shapes, discriminated by `stage`:
+// Three payload shapes, discriminated by `stage`:
 //
 //   "lead" (the default, and what /contact sends with no stage at all) — the
 //     full inbound-lead stack via ingestLead (Supabase contact + Zoho lead +
@@ -13,6 +13,14 @@
 //
 //   "answers" — the two post-lead quiz answers, joined on email. Appends to the
 //     lead that already exists. Never starts a second audit.
+//
+//   "partial" — the /PDF med spa guide funnel, which collects contact details
+//     across three points instead of one. Goes through ingestLead, NOT
+//     enrichLead: enrichLead can only write a Zoho note, and this funnel asks
+//     for the phone on its last screen, so the phone would never reach the Zoho
+//     Phone field or Speed-to-Lead. ingestLead matches the existing contact on
+//     email and updates it, so calling it more than once per lead is safe. It
+//     never starts an audit; only "lead" does.
 //
 // Unlike the Slack /audit command, this has no thread to ask a follow-up
 // question in — so a low-confidence city doesn't block the run, it just
@@ -28,6 +36,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const ZOHO_LEAD_SOURCE = "AI Visibility Audit";
+const ZOHO_LEAD_SOURCE_GUIDE = "Med Spa Guide";
+
+/** The /PDF funnel and the /audit funnel both land here; keep them separable in Zoho. */
+function zohoLeadSourceFor(source: string): string {
+  return source === "pdf" ? ZOHO_LEAD_SOURCE_GUIDE : ZOHO_LEAD_SOURCE;
+}
 
 function clean(v: unknown, max = 200): string {
   if (v === undefined || v === null) return "";
@@ -70,6 +84,39 @@ const BREAKS_LABELS: Record<string, string> = {
   followup: "Follow-up",
   nothing: "Nothing, could handle it",
 };
+// /PDF guide funnel only.
+const B1_LABELS: Record<string, string> = {
+  yes_checked: "Has asked ChatGPT, and checked whether their clinic came up",
+  yes_unchecked: "Has asked ChatGPT, but never checked their own clinic",
+  no: "Did not know patients ask AI for a provider",
+};
+const BINARY_LABELS: Record<string, string> = {
+  map: "Thought AI names most clinics, like a map",
+  one_to_three: "Knew AI names only one to three",
+};
+const PLAN_LABELS: Record<string, string> = {
+  yes: "YES, wants the personalized implementation plan",
+  no: "No, guide only",
+};
+
+/** The belief answers, rendered for Slack and the Zoho note. Blanks are dropped downstream. */
+function beliefLines(body: Record<string, unknown>): string[] {
+  const b1 = clean(body.b1, 40);
+  const paying = clean(body.paying, 40);
+  const payingOther = clean(body.payingOther, 80);
+  const breaks = clean(body.breaks, 40);
+  const binary = clean(body.binary, 40);
+  return [
+    b1 ? `Asked ChatGPT themselves: ${B1_LABELS[b1] ?? b1}` : "",
+    paying
+      ? `Pays anyone to bring patients in: ${PAYING_LABELS[paying] ?? paying}${
+          payingOther ? `, ${payingOther}` : ""
+        }`
+      : "",
+    breaks ? `Breaks first at 20 new patients: ${BREAKS_LABELS[breaks] ?? breaks}` : "",
+    binary ? `How many clinics AI names: ${BINARY_LABELS[binary] ?? binary}` : "",
+  ];
+}
 
 export async function POST(req: NextRequest) {
   const secret = process.env.FUNNEL_NOTIFY_SECRET;
@@ -116,6 +163,63 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, matched: found });
   }
 
+  // ── /PDF guide funnel: progress posts either side of the lead. No audit. ──
+  if (stage === "partial") {
+    if (!email || !isEmail(email)) {
+      return NextResponse.json({ ok: false, error: "missing_or_invalid_email" }, { status: 400 });
+    }
+    const step = clean(body.step, 20) === "complete" ? "complete" : "contact";
+    const partialSource = clean(body.source, 40) || "pdf";
+    const partialRaw = clean(body.website, 200);
+    const partialSite = isUrl(partialRaw)
+      ? partialRaw.startsWith("http")
+        ? partialRaw
+        : `https://${partialRaw}`
+      : "";
+    const partialName = clean(body.name, 80).split(" ").filter(Boolean);
+    const partialPhone = clean(body.phone, 20).replace(/[^\d+]/g, "");
+    const partialConsentTs = clean(body.consentTs, 40);
+    const wantsPlan = clean(body.wantsPlan, 10);
+    const qStagePartial = clean(body.qStage, 40);
+    const qInvestPartial = clean(body.qInvest, 40);
+
+    const isComplete = step === "complete";
+    // A phone only exists on the complete step, and only when they asked for the
+    // plan. ingestLead fires Speed-to-Lead off its presence, which is exactly the
+    // behaviour we want: a guide reader who hands over a number is a hot lead.
+    const { contactId: partialContactId } = await ingestLead({
+      firstName: partialName[0] || "",
+      lastName: partialName.slice(1).join(" ") || "",
+      email,
+      phone: partialPhone,
+      website: partialSite,
+      source: partialSource,
+      zohoLeadSource: zohoLeadSourceFor(partialSource),
+      noteTitle: isComplete ? "Med spa guide, funnel completed" : "Med spa guide, funnel started",
+      headline: isComplete
+        ? ":white_check_mark: *Guide funnel completed.* Everything below is their own words from the questions."
+        : `:page_facing_up: *Med spa guide requested* for ${partialSite || "their site"}. Still answering the questions.`,
+      detailLines: isComplete
+        ? [
+            wantsPlan ? `Personalized plan: ${PLAN_LABELS[wantsPlan] ?? wantsPlan}` : "",
+            partialPhone ? `Phone: ${partialPhone}` : "No phone given (guide only)",
+            body.smsConsent === true
+              ? `SMS consent: agreed${partialConsentTs ? ` at ${partialConsentTs}` : ""}`
+              : "SMS consent: not given",
+            ...beliefLines(body),
+            `Funnel: /${partialSource}`,
+          ]
+        : [
+            partialSite ? `Website: ${partialSite}` : "",
+            qStagePartial ? `Stage: ${STAGE_LABELS[qStagePartial] ?? qStagePartial}` : "",
+            qInvestPartial ? `Ready to invest: ${INVEST_LABELS[qInvestPartial] ?? qInvestPartial}` : "",
+            `Funnel: /${partialSource}`,
+          ],
+    });
+
+    return NextResponse.json({ ok: true, step, contactId: partialContactId });
+  }
+
   // ── The lead itself. ──
   const name = clean(body.name, 80);
   const phone = clean(body.phone, 20).replace(/[^\d+]/g, "");
@@ -141,6 +245,8 @@ export async function POST(req: NextRequest) {
   const source = clean(body.source, 40) || "audit";
   const consentTs = clean(body.consentTs, 40);
 
+  const isGuide = source === "pdf";
+
   // Awaited, not backgrounded: the whole point is that the lead is in Slack and
   // Zoho before the audit starts, so a pipeline failure can never swallow it.
   const { contactId } = await ingestLead({
@@ -150,16 +256,22 @@ export async function POST(req: NextRequest) {
     phone,
     website,
     source,
-    zohoLeadSource: ZOHO_LEAD_SOURCE,
-    noteTitle: "Free AI Visibility Audit request",
-    headline: `:mag: *AI visibility audit running now* on ${website}. The report lands in this thread in a few minutes.`,
+    zohoLeadSource: zohoLeadSourceFor(source),
+    noteTitle: isGuide ? "Med spa guide request" : "Free AI Visibility Audit request",
+    headline: isGuide
+      ? `:mag: *Audit running now* on ${website} to build their guide. The report goes to #ai-visibility-audits; this thread keeps the lead and their answers.`
+      : `:mag: *AI visibility audit running now* on ${website}. The report lands in this thread in a few minutes.`,
     detailLines: [
       `Website: ${website}`,
       qStage ? `Stage: ${STAGE_LABELS[qStage] ?? qStage}` : "",
       qInvest ? `Ready to invest: ${INVEST_LABELS[qInvest] ?? qInvest}` : "",
-      body.smsConsent === true
-        ? `SMS consent: agreed${consentTs ? ` at ${consentTs}` : ""}`
-        : "SMS consent: not given",
+      ...(isGuide
+        ? beliefLines(body)
+        : [
+            body.smsConsent === true
+              ? `SMS consent: agreed${consentTs ? ` at ${consentTs}` : ""}`
+              : "SMS consent: not given",
+          ]),
       `Funnel: /${source}`,
     ],
   });
@@ -173,6 +285,7 @@ export async function POST(req: NextRequest) {
       requesterEmail: email,
       requesterPhone: phone || undefined,
       contactId: contactId ?? undefined,
+      leadSource: source,
       allowLowConfidenceCity: true,
       onError: async (message) => console.error("[audit/public-intake] pipeline error:", message),
     })

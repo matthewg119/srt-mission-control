@@ -29,6 +29,11 @@ export interface RunAuditPipelineParams {
   /** Links the report to the #hot-leads thread opened by ingestLead, so the
    *  finished report replies under the lead instead of posting standalone. */
   contactId?: string;
+  /** Which public funnel produced this lead ("audit" | "pdf" | "contact"). Persisted on the
+   *  row rather than kept in memory because finishReport runs in a DIFFERENT request
+   *  (/api/audit/process) and only ever sees the audit_reports row. It routes the pitch card
+   *  and decides whether the drafted email carries the med spa guide. */
+  leadSource?: string;
   /** Public intake has no one to ask for a city — proceed on the best guess instead of blocking. */
   allowLowConfidenceCity?: boolean;
   onNeedsCity?: (website: string, bestGuess: string | null) => Promise<void>;
@@ -126,6 +131,7 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       requester_email: params.requesterEmail ?? null,
       requester_phone: params.requesterPhone ?? null,
       contact_id: params.contactId ?? null,
+      lead_source: params.leadSource ?? null,
       slack_channel_id: channel.id,
       site_signals: siteSignals,
     })

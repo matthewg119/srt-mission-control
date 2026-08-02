@@ -103,7 +103,7 @@ export async function finishReport(row: AuditReportRow): Promise<void> {
 async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView, weighted: WeightedScore): Promise<void> {
   let pdfBuffer: Buffer | null = null;
 
-  // Internal /audit runs (have a Slack thread): PDF + copy/paste draft in-thread.
+  // Every run with a Slack thread gets the PDF in #ai-visibility-audits.
   if (report.slack_channel_id && report.slack_thread_ts) {
     try {
       pdfBuffer = generateScorecardPDF(report, view, weighted);
@@ -113,8 +113,15 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
       // Matthew knows (who the recipient is, what to mention, whether a free redesign was
       // built), so the bot asks first and writes one draft from the answers. See
       // outreach-intake.ts, and the pre-pitch doctrine at the top of email-assistant.ts.
-      const questions = await buildIntakeQuestions(report, view);
-      await postIntakeCard(report, report.slack_channel_id, report.slack_thread_ts, questions);
+      //
+      // Skipped for the /PDF guide funnel: that lead filled out a form and asked for the
+      // guide, so there is no permission to earn and draftInitialEmail already writes the
+      // email. An intake card there would ask Matthew to author cold outreach to someone
+      // who is already expecting a reply.
+      if (!isGuideLead(report)) {
+        const questions = await buildIntakeQuestions(report, view);
+        await postIntakeCard(report, report.slack_channel_id, report.slack_thread_ts, questions);
+      }
     } catch (e) {
       console.error("[finishReport] scorecard/thread post failed:", (e as Error).message);
     }
@@ -148,7 +155,9 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
       const { subject, body } = await draftInitialEmail(report, view);
       // The signature comes from Outlook by name so it can be edited there
       // without a deploy. A pitch that goes out unsigned reads as a robot.
-      const htmlBody = buildPitchHtml(body, await auditSignatureHtml());
+      // buildPitchHtml escapes the body, so the guide CTA has to ride in ahead of
+      // the signature rather than be concatenated onto the body text.
+      const htmlBody = buildPitchHtml(body, guideCtaHtml(report) + (await auditSignatureHtml()));
       draftSubject = subject;
       draftBody = body;
 
@@ -217,6 +226,32 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
   }
 }
 
+/** srtagency.com/PDF, the med spa free-guide funnel. */
+function isGuideLead(report: AuditReportRow): boolean {
+  return report.lead_source === "pdf";
+}
+
+/**
+ * The guide the /PDF funnel promised, delivered with the report rather than as a
+ * separate email: the page tells them it is built around their actual website, and
+ * the report is the part that actually is. No URL configured means no CTA at all,
+ * because a dead link in a fulfillment email is worse than a missing one.
+ */
+function guideCtaHtml(report: AuditReportRow): string {
+  const url = process.env.MEDSPA_GUIDE_URL || "";
+  if (!isGuideLead(report) || !url) return "";
+  const safe = url.replace(/"/g, "&quot;");
+  return (
+    `<div style="margin:24px 0;padding:20px;background:#F7FAFC;border-left:4px solid #00C9A7;` +
+    `font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">` +
+    `<p style="margin:0 0 12px">Here is the guide you asked for, alongside the report above.</p>` +
+    `<a href="${safe}" style="display:inline-block;padding:12px 24px;background:#1B65A7;color:#ffffff;` +
+    `text-decoration:none;border-radius:8px;font-weight:600">Download the guide</a>` +
+    `<p style="margin:12px 0 0;font-size:12px;color:#4A5568">Or paste this into your browser: ${safe}</p>` +
+    `</div>`
+  );
+}
+
 /** Reply inside the lead's existing #hot-leads thread when we know it, so the
  *  audit result sits under the lead that triggered it. Falls back to a
  *  top-level post (Slack-triggered /audit runs have no contact). */
@@ -226,6 +261,14 @@ async function postLeadNotification(
   blocks?: SlackBlock[]
 ): Promise<void> {
   const fallbackChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+
+  // Guide leads split the two jobs across two channels on purpose: #hot-leads keeps the
+  // lead and their funnel answers, and everything to do with drafting and sending the
+  // report lives in #ai-visibility-audits, under the thread this run already opened.
+  if (isGuideLead(report) && report.slack_channel_id && report.slack_thread_ts) {
+    await slack.postThreadReply(report.slack_channel_id, report.slack_thread_ts, text, blocks);
+    return;
+  }
 
   if (report.contact_id) {
     const { data: contact } = await supabaseAdmin

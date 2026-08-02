@@ -34,6 +34,10 @@ export interface AuditReportRow {
   /** contacts.id when the report came from a public lead, so finishReport can
    *  reply inside that lead's #hot-leads thread instead of posting standalone. */
   contact_id: string | null;
+  /** Which public funnel produced this lead ("audit" | "pdf" | "contact"), null for cold
+   *  /audit runs. finishReport runs in a different request and only sees this row, so the
+   *  funnel has to be persisted here rather than passed through in memory. */
+  lead_source: string | null;
   slack_channel_id: string | null;
   slack_thread_ts: string | null;
   // The last set of 3 choose-from email options posted to the thread; a "1/2/3" reply turns
