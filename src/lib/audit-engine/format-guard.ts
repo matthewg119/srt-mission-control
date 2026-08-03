@@ -1,10 +1,12 @@
 // Makes a draft look like a person typed it in Outlook.
 //
-// The tell that gives these emails away is not word choice, it is shape: one sentence per
-// paragraph with a blank line between each. The prompt asks for 2 to 4 sentence paragraphs and
-// PARAGRAPH_RULES states it plainly, but a model under a word limit reliably drifts back to
-// one-line stanzas. So the mechanical rules are enforced here in code, and the semantic one
-// (which sentences belong together) gets a reflow pass that is verified word-for-word.
+// The shape that actually gets sent is one sentence per paragraph with a blank line between
+// each. That is not a bot tell — it is how a cold email reads on a phone, where a four-sentence
+// block is a wall and gets skimmed past. Every draft that shipped dense was hand-split before
+// sending, so the density the model produces under a word limit is the defect, not the fix.
+//
+// This file used to enforce the opposite (group into 2 to 4 sentence paragraphs) on the theory
+// that stanzas read generated. Reversed 2026-08-03 against the sent corpus.
 //
 // Nothing in this file may change wording. Capitalization and emphasis markers are formatting;
 // everything else either regroups existing text or is rejected.
@@ -64,8 +66,14 @@ function hasTerminator(paragraph: string): boolean {
   return /[.!?]/.test(paragraph);
 }
 
+/** At this many sentences a paragraph reads as a block and gets skimmed. Two short sentences
+ *  may share a paragraph when they are genuinely one thought, so the floor is three. */
+const DENSE_PARAGRAPH_SENTENCES = 3;
+
 export interface ParagraphSmell {
-  /** Paragraphs of exactly one sentence. More than one of these is the bot tell. */
+  /** Paragraphs of 3+ sentences. Any of these is the tell, and the reason drafts get hand-split. */
+  denseParas: number;
+  /** Paragraphs of exactly one sentence. Reported for the Slack note, never a failure. */
   singleSentenceParas: number;
   totalParas: number;
   hasBullets: boolean;
@@ -90,15 +98,16 @@ export function paragraphSmell(body: string): ParagraphSmell {
 
   const counted = body_.filter((p) => !isBareUrlLine(p));
   return {
+    denseParas: counted.filter((p) => sentenceCount(p) >= DENSE_PARAGRAPH_SENTENCES).length,
     singleSentenceParas: counted.filter((p) => sentenceCount(p) === 1).length,
     totalParas: counted.length,
     hasBullets,
   };
 }
 
-/** More than one single-sentence paragraph, or any bullet, means it reads like a bot. */
+/** Any multi-sentence block, or any bullet, means it will be hand-split before it goes out. */
 export function needsReflow(smell: ParagraphSmell): boolean {
-  return smell.singleSentenceParas > 1 || smell.hasBullets;
+  return smell.denseParas > 0 || smell.hasBullets;
 }
 
 /** Comparable word bag, so "did the model rewrite anything" is a real check and not a vibe. */
@@ -122,12 +131,13 @@ export interface ReflowResult {
 }
 
 /**
- * Regroup sentences into paragraphs without changing a single word.
+ * Split dense paragraphs into one sentence each, without changing a single word.
  *
  * The instruction alone is not trustworthy — a model asked to reformat will happily "improve" a
  * sentence on the way through. So the result is accepted only if its word multiset is identical
  * to the input's. If the model edited anything, the original is kept and the caller is told.
- * That check is what makes "change not a word" structural rather than hopeful.
+ * That check is what makes "change not a word" structural rather than hopeful, and it holds in
+ * this direction for the same reason it held in the old one: splitting only moves line breaks.
  */
 export async function reflowParagraphs(body: string): Promise<ReflowResult> {
   let candidate: string;
@@ -135,9 +145,9 @@ export async function reflowParagraphs(body: string): Promise<ReflowResult> {
     const { text } = await callClaudeText({
       model: "claude-sonnet-4-6",
       system: [
-        "You regroup the paragraphs of an email. You are a formatter, not an editor.",
-        "Group related sentences into paragraphs of 2 to 4 sentences. A paragraph is a unit of thought, not a line of text.",
-        "At most ONE single-sentence paragraph, and only where that sentence earns the emphasis.",
+        "You re-break the paragraphs of an email. You are a formatter, not an editor.",
+        "Put each sentence on its own paragraph, with a blank line between each one.",
+        "Two very short sentences may stay together ONLY when they are one thought and neither stands alone. When in doubt, split them.",
         "Keep the greeting on its own line and the sign-off on its own lines. A line that is only a URL stays on its own line.",
         "ABSOLUTE RULE: do not change a single word. Add nothing, delete nothing, reorder no sentences, fix no spelling, change no punctuation. You may only add and remove line breaks.",
         "Return only the reformatted email body. No preamble, no code fences, no commentary.",
@@ -153,7 +163,7 @@ export async function reflowParagraphs(body: string): Promise<ReflowResult> {
 
   if (!candidate) return { body, reflowed: false, note: "paragraph reflow came back empty, posting as written" };
   if (wordBag(candidate) !== wordBag(body)) {
-    return { body, reflowed: false, note: "paragraph reflow altered the wording, so it was discarded. The paragraphs below are still one sentence each" };
+    return { body, reflowed: false, note: "paragraph reflow altered the wording, so it was discarded. The paragraphs below are still multi-sentence blocks and need splitting by hand" };
   }
   return { body: candidate, reflowed: true, note: null };
 }
@@ -179,6 +189,6 @@ export async function polishBody(body: string, opts: PolishOptions): Promise<Pol
   if (!needsReflow(paragraphSmell(out))) return { body: out, note: null };
 
   const reflow = await reflowParagraphs(out);
-  // Capitalization can shift when sentences merge into a paragraph, so run it once more.
+  // A sentence promoted to its own paragraph starts a new line, so run capitalization once more.
   return { body: capitalizeSentenceStarts(reflow.body), note: reflow.note };
 }

@@ -12,6 +12,7 @@ import { generateSlug } from "./slug";
 import { getOrCreateAuditChannel } from "./audit-channel";
 import { formatPromptDrop } from "./slack-format";
 import { detectSiteSignals } from "./site-signals";
+import { checkRobots, type RobotsCheck } from "./robots-check";
 import type { AuditReportRow } from "./types";
 
 function appUrl(): string {
@@ -113,6 +114,15 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
     console.error("[run-audit-pipeline] site-signal scan failed:", (e as Error).message);
   }
 
+  // Does robots.txt lock the AI crawlers out? Tri-state on purpose (see robots-check.ts):
+  // null = never ran, so nothing downstream may claim anything about their crawler access.
+  let robotsCheck: RobotsCheck = null;
+  try {
+    robotsCheck = await checkRobots(research.website);
+  } catch (e) {
+    console.error("[run-audit-pipeline] robots check failed:", (e as Error).message);
+  }
+
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from("audit_reports")
     .insert({
@@ -134,6 +144,7 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       lead_source: params.leadSource ?? null,
       slack_channel_id: channel.id,
       site_signals: siteSignals,
+      robots_check: robotsCheck,
     })
     .select("*")
     .single();

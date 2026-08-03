@@ -3,6 +3,8 @@
 // site-research.ts so API routes and UI components can import just the shapes.
 
 import type { AuditBlock, AuditPrompt, LikelyCompetitor } from "./classify";
+// Type-only, and robots-check.ts imports nothing, so this cannot create a cycle.
+import type { RobotsFinding } from "./robots-check";
 
 export type AuditReportStatus = "classifying" | "awaiting_city" | "running" | "done" | "failed";
 export type AuditEngine = "openai" | "perplexity";
@@ -60,6 +62,20 @@ export interface AuditReportRow {
   loom_url: string | null;
   /** The "one thing on your site working against you" hook (site-signals.ts). */
   site_signals: Array<{ kind: string; detail: string }> | null;
+  // ── Pitch v2 (docs/2026-08-03-pitch-v2.sql) ──
+  /** Which AI crawlers robots.txt blocks. Same tri-state contract as site_signals: null = the
+   *  check never ran and NO claim may be made, [] = ran and clean, non-empty = findings.
+   *  Shape mirrors RobotsFinding in robots-check.ts. */
+  robots_check: RobotsFinding[] | null;
+  /** Beliefs installed in this thread + the options last offered. Shape: SeedLedger in
+   *  seed-ledger.ts. Null on any report written before seeding existed. */
+  seed_ledger: { installed: Array<{ belief: string; stage: string; line: string; at: string }>; offered: Array<{ belief: string; label: string; line: string }> } | null;
+  /** "en" | "es" — the language of the CALL, which is the language the drafts are written in.
+   *  Null means nobody has said, and the drafter asks in-thread rather than guessing. */
+  call_language: string | null;
+  /** Google Business Profile stats, used only to choose B1 vs B4. Null when unknown. */
+  gbp_rating: number | null;
+  gbp_reviews: number | null;
   error: string | null;
   created_at: string;
   updated_at: string;

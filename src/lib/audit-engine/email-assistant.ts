@@ -117,6 +117,183 @@ export const PERMISSION_SEQUENCE = [
   },
 ];
 
+// ── The belief seed bank (SRT_Belief_Seeding_Module.md) ─────────────────────
+//
+// A SEPARATE axis from BELIEF_SEQUENCE above. BELIEF_SEQUENCE says which EMAIL comes next in the
+// post-reveal ladder; a seed says which single belief a given draft installs, and it is the one
+// or two sentences that pre-sell what the Loom is going to show. The two compose: a permission
+// email is stage "permission" AND carries seed B1.
+//
+// The module's five subtlety rules, which every line here obeys and every generated option must:
+//   1. ONE belief per email, never two.
+//   2. At most 2 new sentences on top of the skeleton.
+//   3. The seed describes the BUYER'S world and never mentions us. If the line could appear in
+//      one of our own ads, it is not a seed.
+//   4. Assertions, not arguments. Declare the behavior; the audit numbers do the proving. Never
+//      explain the seed ("this matters because...").
+//   5. Hedged by design: "more and more", never "nobody uses Google anymore". The absolute is
+//      what breaks trust and takes the rest of the email down with it.
+
+export type BeliefId = "B1" | "B2" | "B3" | "B4" | "B5" | "B6";
+
+export interface BeliefSeed {
+  id: BeliefId;
+  /** Short handle for the Slack card and the SEED LOG. */
+  name: string;
+  /** Approved line, English. `{city}` is substituted in code so no placeholder can ship. */
+  en: string;
+  /** Approved line, Spanish. Same substitution. */
+  es: string;
+}
+
+export const BELIEF_SEEDS: BeliefSeed[] = [
+  {
+    id: "B1",
+    name: "the call comes out of the chat",
+    en: "More and more, that search never touches Google. They ask ChatGPT, it hands them three or four names, and the call comes straight out of that conversation.",
+    es: "Hoy muchas de esas busquedas ya no pasan por Google. La persona le pregunta a ChatGPT, recibe 3 o 4 nombres, y de esa misma conversacion sale la llamada.",
+  },
+  {
+    id: "B2",
+    name: "it is not a map of everyone",
+    en: "AI doesn't show a map of everyone. It names a few and simply never mentions the rest.",
+    es: "La IA no muestra un mapa con todos. Recomienda a unos por nombre y al resto simplemente no los menciona.",
+  },
+  {
+    id: "B3",
+    name: "this is you, today",
+    en: "This isn't the market in general. These are your area's searches, run today, from a clean account.",
+    es: "Esto no es el mercado en general. Son las busquedas de su zona, corridas hoy, desde una cuenta neutral.",
+  },
+  {
+    id: "B4",
+    name: "different game, different winners",
+    en: "None of your Google strength carries over here. You can rank first there and still not exist in the answer. Different game, different winners.",
+    es: "Nada de su fuerza en Google se traslada aqui. Puede estar primero ahi y aun asi no existir en la respuesta. Juego distinto, ganadores distintos.",
+  },
+  {
+    id: "B5",
+    name: "fixable, and there is a window",
+    en: "It's fixable, and it's three moves, not a rebuild. Nobody in {city} has made them yet.",
+    es: "Se corrige, y son tres movimientos, no una reconstruccion. Todavia nadie en {city} los ha hecho.",
+  },
+  {
+    id: "B6",
+    name: "no risk to looking",
+    en: "The report is yours whether we ever talk again or not.",
+    es: "El reporte es suyo, lo tomemos o no.",
+  },
+];
+
+/**
+ * The three beliefs offered under a cold draft, in order.
+ *
+ * B1, B4 and B5 by default: behavior, then why their Google position does not save them, then
+ * that it is fixable in three moves. That trio is what pre-sells a four-minute video, because
+ * each one is a question the video answers. The rest of the bank backfills as beliefs get used
+ * up, so a thread never re-offers a seed already installed.
+ */
+const PRESELL_DEFAULT_ORDER: BeliefId[] = ["B1", "B4", "B5", "B3", "B2", "B6"];
+
+export function preSellBeliefsFor(exclude: BeliefId[] = []): BeliefSeed[] {
+  const used = new Set(exclude);
+  const picked = PRESELL_DEFAULT_ORDER.filter((id) => !used.has(id)).slice(0, 3);
+  // Every belief already installed: offer the default trio again rather than an empty card, and
+  // let the linter's ledger rule be the thing that objects.
+  const ids = picked.length ? picked : PRESELL_DEFAULT_ORDER.slice(0, 3);
+  return ids.map((id) => BELIEF_SEEDS.find((b) => b.id === id)!);
+}
+
+export interface PreSellOption {
+  belief: BeliefId;
+  /** Short handle shown on the Slack card. */
+  label: string;
+  /** One or two sentences, ready to paste above the ask. */
+  line: string;
+}
+
+/** Fill `{city}` from the report, falling back to wording that needs no city at all. */
+function seedLine(seed: BeliefSeed, report: AuditReportRow, language: "en" | "es"): string {
+  const raw = language === "es" ? seed.es : seed.en;
+  if (!raw.includes("{city}")) return raw;
+  if (report.city) return raw.replace(/\{city\}/g, report.city);
+  return language === "es"
+    ? raw.replace(/Todavia nadie en \{city\} los ha hecho\./, "Todavia casi nadie los ha hecho.")
+    : raw.replace(/Nobody in \{city\} has made them yet\./, "Almost nobody has made them yet.");
+}
+
+/**
+ * Three pre-sell lines to paste above the ask, one belief each.
+ *
+ * Matthew picks one. The point is that the ask carries pull: a permission email with no seed
+ * asks a stranger to want a video for no stated reason, and a seed is the reason without ever
+ * naming us or arguing the case.
+ *
+ * The approved bank is the floor, not the ceiling: the model may bend a line toward this
+ * business's own findings (rule 3 in the module allows a minor variation), but it may not invent
+ * a new belief. If the call fails or comes back malformed, the bank lines ship verbatim, because
+ * an empty pre-sell block is worse than an unpersonalized one.
+ */
+export async function draftPreSellOptions(
+  report: AuditReportRow,
+  view: ReportView,
+  opts: { exclude?: BeliefId[]; language?: "en" | "es" } = {}
+): Promise<PreSellOption[]> {
+  const language = opts.language ?? "en";
+  const seeds = preSellBeliefsFor(opts.exclude ?? []);
+  const fallback: PreSellOption[] = seeds.map((s) => ({
+    belief: s.id,
+    label: s.name,
+    line: noDashes(seedLine(s, report, language)),
+  }));
+
+  try {
+    const { data } = await callClaudeJSON<{ options: Array<{ belief: string; line: string }> }>({
+      model: model(),
+      system: [
+        "You write the one pre-sell line that sits just above the ask in a cold outreach email for SRT Agency's AI-visibility audit.",
+        "Its job: make the reader want the four-minute video, by stating a fact about how buying now works in their world. It is the setup for the video, not a pitch for it.",
+        "Return EXACTLY one option per approved belief given below, in the same order, keeping each belief's id.",
+        "HARD RULES, these override everything else:",
+        "1. ONE belief per line. Never blend two.",
+        "2. One or two sentences. Never three.",
+        "3. The line describes the BUYER'S world and NEVER mentions SRT, us, our service, an audit, a report, or a video. If the sentence could appear in our own advertisement, rewrite it.",
+        "4. Assertions, not arguments. Declare the behavior and stop. Never explain why it matters, never write 'this matters because', never ask a question.",
+        "5. Hedge. 'More and more', 'a lot of', 'often'. NEVER an absolute like 'nobody uses Google anymore' or 'everyone asks AI now'. An absolute kills the credibility of the whole email.",
+        "6. Stay close to the approved line. You may bend it toward this business's own findings, but you may not replace its belief with a different one.",
+        language === "es" ? "Write in Spanish." : "Write in English.",
+        STYLE_RULES,
+        COMPLIANCE_RULES,
+      ].join("\n"),
+      user: [
+        "Approved lines, one per belief:",
+        ...seeds.map((s) => `${s.id} (${s.name}): ${seedLine(s, report, language)}`),
+        "",
+        `Report context:\n${reportContext(report, view)}`,
+        "",
+        'Return JSON: {"options":[{"belief":"B1","line":"..."}]}',
+      ].join("\n"),
+      maxTokens: 900,
+      temperature: 0.5,
+      validate: (p): p is { options: Array<{ belief: string; line: string }> } =>
+        !!p &&
+        Array.isArray((p as { options?: unknown }).options) &&
+        (p as { options: unknown[] }).options.length === seeds.length,
+    });
+
+    return seeds.map((s, i) => {
+      const written = data.options.find((o) => o.belief === s.id) ?? data.options[i];
+      const line = typeof written?.line === "string" ? written.line.trim() : "";
+      // A line that came back with a placeholder, empty, or over-long is not usable. Ship the
+      // approved one rather than a broken one; nothing here is worth a retry.
+      const usable = line && !/\{[a-z_]+\}/i.test(line) && line.length <= 320;
+      return { belief: s.id, label: s.name, line: usable ? noDashes(line) : fallback[i].line };
+    });
+  } catch {
+    return fallback;
+  }
+}
+
 /**
  * Emails that must not sell. Overrides CTA_RULE and SUBJECT_STYLE for the permission stage.
  *
@@ -133,7 +310,7 @@ function prePitchRules(redesignUrl: string | null): string {
       ? `1. EXACTLY ONE link is allowed in this email, and it is this one: ${redesignUrl}\nThat is the free redesign built for this prospect, and including it is encouraged: it is the finding made tangible, not a pitch. NO OTHER URL may appear. Not the audit report link, not a Loom, not a pricing page, not a calendar link. Two links makes it an advertisement.`
       : "1. NO URLs, links, or attachments of any kind. Not the report link, not a calendar link, nothing. If you catch yourself writing a link, the email is wrong.",
     "2. NO price, no package, no monthly figure, no mention of what the service costs or includes.",
-    "3. ONE ASK, and it is the last line. The email ends with a single question they can answer in one word, and that question is permission to send the breakdown. No meeting ask, no call ask, no video ask, no walkthrough, no 5 minute video, no 'worth 15 minutes'. No second CTA of any kind, and this holds even when the redesign link is present. If there are two question marks aimed at the reader, the email is wrong.",
+    "3. ONE ASK, and it is the last line. The email ends with a single question they can answer in one word, and that question is permission to send it over. What 'it' covers may include the breakdown AND the short video, because those are one delivery and one ask, not two. Still no meeting ask, no call ask, no walkthrough, no 'worth 15 minutes', and no second CTA of any kind, and this holds even when the redesign link is present. If there are two question marks aimed at the reader, the email is wrong.",
     "4. Exactly ONE finding. Do not list three facts. A stranger who reads two findings reads a pitch.",
     redesignUrl
       ? "5. Under 180 words for the body. The extra room over a linkless email exists ONLY for concrete specifics about what you built them, nothing else."
@@ -144,14 +321,16 @@ function prePitchRules(redesignUrl: string | null): string {
 }
 
 /**
- * Paragraph shape. This is the single biggest reason a draft reads like a bot: one sentence
- * per paragraph with a blank line between each. format-guard.ts enforces the mechanical half
- * (capitalization, no emphasis marks) and reflows when this is ignored.
+ * Paragraph shape. Every draft that shipped in dense blocks was hand-split before it was sent,
+ * so the shape below is the one that actually goes out. format-guard.ts enforces the mechanical
+ * half (capitalization, no emphasis marks) and re-breaks anything that comes back as a block.
+ *
+ * Reversed 2026-08-03. This previously asked for 2 to 4 sentence paragraphs.
  */
 export const PARAGRAPH_RULES = [
   "FORMATTING, this is what separates a human email from a generated one:",
-  "Group related sentences into paragraphs of 2 to 4 sentences. A paragraph is a unit of thought, not a line of text. Do NOT put every sentence on its own line with a blank line between them.",
-  "At most ONE single-sentence paragraph in the whole email, and only when that sentence earns the emphasis.",
+  "One sentence per paragraph, with a blank line between each. The reader is on a phone, and a four-line block gets skipped.",
+  "Two very short sentences may share a paragraph ONLY when they are one thought and neither stands on its own. When in doubt, split them.",
   "Every sentence starts with a capital letter, including the ones that follow a colon.",
   "No bold, no italics, no asterisks, no markdown of any kind. No bullet lists. No headers.",
   "The test: if it would look strange typed by a person in Outlook, it is wrong.",
@@ -207,10 +386,33 @@ export function ensureSignoff(body: string): string {
   return `${trimmed}\n\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}`;
 }
 
-/** How the sentences themselves sound. Extracted from the reference email below. */
+/**
+ * Drop the plain-text agency line, keeping the name.
+ *
+ * Only for the Outlook path. Outlook renders Matthew's own signature block under the draft body
+ * ("Matthew Garcia / AI Visibility - SRT"), so the two plain-text lines put the agency on screen
+ * twice — which is exactly what he deleted by hand before sending the last one. The Slack copy
+ * block has no signature under it and keeps both lines, so this is not done at draft time.
+ *
+ * Anchored to the very end and to its own line, so an agency name that appears in the body is
+ * never touched.
+ */
+export function stripAgencyLine(body: string): string {
+  const agency = OUTREACH_SIGNATURE.agency.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return body.trimEnd().replace(new RegExp(`\\n[ \\t]*${agency}[ \\t]*$`, "i"), "");
+}
+
+/**
+ * How the sentences themselves sound. Extracted from the reference email below, plus the four
+ * cuts made by hand to the last draft that shipped (2026-08-03). Each of those cuts was the
+ * same instinct: the model adds scaffolding around the finding, and the finding is the email.
+ */
 export const VOICE_RULES = [
   "VOICE:",
   "Open with what you did, not who you are. No introduction, no company blurb.",
+  "Go straight from what you ran to the reversal. Do NOT open by conceding what is working ('on the branded questions you came back clean, 3 of 3, that part is working'). It buries the finding and costs you the first four lines.",
+  "No meta-transitions. Never announce the point before making it: 'the reversal is what I wanted to flag', 'what I wanted to show you', 'here is the part that matters'. Cut the sentence and state the thing.",
+  "No dates and no week-stamping. 'A full breakdown', never 'a full breakdown dated August 3'. Not 'those conversations happened this week'. The screenshots carry the recency; saying it out loud sounds like a mail merge.",
   "The finding is a number. State it once, without adjectives. Not 'shockingly low', not 'only', just the number.",
   "Name the mechanism concretely. Credibility lives in specifics about THIS business, never in claims about your expertise or your process.",
   "Banned words: game-changer, revolutionary, cutting-edge, unlock, leverage, transform, supercharge, seamless.",

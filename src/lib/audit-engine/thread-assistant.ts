@@ -34,14 +34,25 @@ import { buildAliases } from "./mention-match";
 import {
   draftEmailOptions,
   draftPermissionEmail,
+  draftPreSellOptions,
   draftRevealMessage,
   linkWarning,
+  stripAgencyLine,
   BELIEF_SEQUENCE,
   PERMISSION_SEQUENCE,
   type EmailOption,
+  type PreSellOption,
 } from "./email-assistant";
 import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDraft } from "./outreach-intake";
 import { buildLoomBeatSheet } from "./loom-beatsheet";
+import {
+  draftWithLint,
+  formatLintFindings,
+  lintDraft,
+  retryInstruction,
+  type LintInput,
+} from "./draft-linter";
+import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs } from "./seed-ledger";
 import type { AuditReportRow, AuditRunRow } from "./types";
 
 function escapeHtml(s: string): string {
@@ -61,8 +72,8 @@ function escapeHtml(s: string): string {
  */
 export const THREAD_COMMANDS = [
   "*1* Outlook draft  ·  *loom* beat sheet + prompt list  ·  *nudge 2-5* next pre-pitch touch",
-  "*reveal* they said yes  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
-  "Anything else you type edits the draft.",
+  "*seed 1-3* install that pre-sell line  ·  *reveal* they said yes  ·  *questions* redo intake",
+  "*redesign <url>* / *loom <url>* store an asset  ·  anything else you type edits the draft.",
 ].join("\n");
 
 /** Persist the 3 options on the report row and post them to the thread as a numbered card. */
@@ -82,6 +93,31 @@ export async function postOptions(
     threadTs,
     `${header}\n\n_Reply *1*, *2*, or *3* and I'll create the Outlook draft._\n${THREAD_COMMANDS}\n\n${body}`
   );
+}
+
+/** Everything the linter needs that comes off the report row rather than out of the draft. */
+function lintContext(report: AuditReportRow): Pick<LintInput, "robots" | "siteSignals" | "alreadyInstalled"> {
+  return {
+    robots: report.robots_check ?? null,
+    siteSignals: report.site_signals ?? null,
+    alreadyInstalled: installedBeliefs(readLedger(report)),
+  };
+}
+
+/**
+ * Put the chosen pre-sell line in as its own paragraph directly above the ask.
+ *
+ * The module's placement rule: the seed goes BEFORE the evidence so it frames what follows, and
+ * the ask is the last thing the reader sees. Anchoring on the last paragraph containing a
+ * question mark finds the ask without needing to know how it was worded, and falls back to
+ * "just before the sign-off" for a draft that somehow ends without one.
+ */
+function spliceSeedAboveAsk(body: string, line: string): string {
+  const paras = body.split(/\n\s*\n/);
+  let idx = paras.findLastIndex((p) => p.includes("?"));
+  if (idx < 0) idx = Math.max(0, paras.length - 1);
+  paras.splice(idx, 0, line.trim());
+  return paras.join("\n\n");
 }
 
 /** What the guards had to do to a draft, surfaced above it so it is never silent. */
@@ -105,9 +141,12 @@ async function postSingleDraft(
   header: string,
   draft: EmailOption,
   footer: string,
-  guards: DraftGuards = {}
+  guards: DraftGuards = {},
+  preSell: PreSellOption[] = []
 ): Promise<void> {
   await supabaseAdmin.from("audit_reports").update({ pending_drafts: [draft] }).eq("id", report.id);
+  // Remember which three lines this card offered, so a later "seed 2" knows what 2 meant.
+  if (preSell.length > 0) await saveOffered(report.id, readLedger(report), preSell);
   const warnings = [
     guards.nameWarning ?? null,
     linkWarning(guards.removedLinks ?? []),
@@ -120,8 +159,21 @@ async function postSingleDraft(
     threadTs,
     // The footer is NOT italicized here any more: it is now a multi-line command menu, and
     // Slack's mrkdwn does not carry _italics_ across a newline.
-    `${header}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n${footer}`
+    `${header}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n${formatPreSell(preSell)}${footer}`
   );
+}
+
+/**
+ * The three pre-sell lines, printed under the draft for Matthew to paste one in above the ask.
+ *
+ * Deliberately NOT spliced into the draft body. Which belief to install is a read on the
+ * prospect that the audit data cannot make, and a line pasted in by hand is one he has actually
+ * chosen. The belief id is shown so a thread never installs the same one twice by accident.
+ */
+function formatPreSell(options: PreSellOption[]): string {
+  if (options.length === 0) return "";
+  const lines = options.map((o, i) => `*${i + 1}*  \`${o.belief}\` _${o.label}_\n${o.line}`).join("\n\n");
+  return `:seedling: *Pre-sell · paste one in above the ask*\n${lines}\n\n`;
 }
 
 /** Turn the chosen stored option into an Outlook draft and confirm with the open-in-Outlook link. */
@@ -141,7 +193,10 @@ async function createOutlookDraftFromPick(report: AuditReportRow, channel: strin
     // person who requested a public free audit). A cold /audit run only ever has the former,
     // and before it existed those drafts opened with an empty To.
     const to = report.prospect_email ?? report.requester_email ?? undefined;
-    const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(chosen.body)}</div>`;
+    // Outlook renders Matthew's signature block under the body, so the plain-text agency line
+    // would print the agency twice. He deletes it by hand every time; do it here instead.
+    const outlookBody = stripAgencyLine(chosen.body);
+    const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(outlookBody)}</div>`;
     const draft = await microsoft.createDraft({
       to,
       subject: chosen.subject,
@@ -262,7 +317,67 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         `:envelope: Nudge ${step}${touch ? ` · ${touch.day} · ${touch.name}` : ""} (no links, no price, one ask):`,
         { label: `Nudge ${step}`, subject: draft.subject, body: draft.body },
         THREAD_COMMANDS,
-        { removedLinks: draft.removedLinks, formatNote: draft.formatNote }
+        { removedLinks: draft.removedLinks, formatNote: draft.formatNote },
+        await draftPreSellOptions(report, view, { exclude: installedBeliefs(readLedger(report)) })
+      );
+      return true;
+    }
+
+    // --- Install one of the offered pre-sell lines ------------------------------
+    const seedMatch = text.match(/^seed\s+([1-9]\d*)$/i);
+    if (seedMatch) {
+      const pick = parseInt(seedMatch[1], 10);
+      const ledger = readLedger(report);
+      const chosen = ledger.offered[pick - 1];
+      const current = (report.pending_drafts ?? [])[0];
+
+      if (!chosen) {
+        await slack.postThreadReply(
+          args.channel,
+          args.threadTs,
+          `I don't have pre-sell line ${pick} for this thread. Redraft and I'll offer three fresh ones.`
+        );
+        return true;
+      }
+      if (!current) {
+        await slack.postThreadReply(args.channel, args.threadTs, "There's no draft queued here to put that line into.");
+        return true;
+      }
+
+      const seeded = { ...current, body: spliceSeedAboveAsk(current.body, chosen.line) };
+      // Lint against the ledger as it stands BEFORE the install, or rule 7 would fire on the
+      // very belief being installed.
+      const check = lintDraft({
+        body: seeded.body,
+        subject: seeded.subject,
+        stage: "draft-1",
+        installs: [chosen.belief],
+        ...lintContext(report),
+      });
+      if (!check.ok) {
+        await slack.postThreadReply(
+          args.channel,
+          args.threadTs,
+          `:no_entry: Adding ${chosen.belief} there breaks the draft rules, so I left it alone.\n\n${formatLintFindings(check.findings)}`
+        );
+        return true;
+      }
+
+      const installed = await installSeed(report, pick, "draft 1");
+      if (!installed) {
+        await slack.postThreadReply(args.channel, args.threadTs, `Couldn't record that seed. Try redrafting.`);
+        return true;
+      }
+      await supabaseAdmin.from("audit_reports").update({ pending_drafts: [seeded] }).eq("id", report.id);
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        `:seedling: *${chosen.belief} installed* · ${chosen.label}\n\nSubject: ${seeded.subject}\n\n${seeded.body}\n\n${THREAD_COMMANDS}`
+      );
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        formatSeedLog(installed.ledger.installed[installed.ledger.installed.length - 1], installed.ledger)
       );
       return true;
     }
@@ -311,7 +426,23 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
 
     // --- Free text: meaning depends on where the thread is ----------------------
     if (report.outreach_stage === "awaiting_intake") {
-      const { draft, extracted, removedLinks, formatNote, nameWarning } = await draftFromIntake(report, view, text);
+      // Generate, lint, retry. The intake answers already outrank the generic guidance in this
+      // drafter, so appending the rejection reasons to them is how attempt 2 learns what
+      // attempt 1 got wrong.
+      const gated = await draftWithLint(
+        (attempt, previous) =>
+          draftFromIntake(report, view, attempt === 0 ? text : `${text}\n\n${retryInstruction(previous)}`),
+        (r) => ({ body: r.draft.body, subject: r.draft.subject, stage: "draft-1", ...lintContext(report) })
+      );
+      if (!gated.draft) {
+        await slack.postThreadReply(
+          args.channel,
+          args.threadTs,
+          `:no_entry: I couldn't get email 1 past the draft rules in ${gated.attempts} attempts, so I'm not posting it.\n\n${formatLintFindings(gated.findings)}\n\nTell me how you'd rather put it and I'll redraft.`
+        );
+        return true;
+      }
+      const { draft, extracted, removedLinks, formatNote, nameWarning } = gated.draft;
       await supabaseAdmin
         .from("audit_reports")
         .update({
@@ -338,7 +469,8 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         `:envelope: *Email 1* · pre-pitch, one finding, one ask, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}`,
         draft,
         THREAD_COMMANDS,
-        { removedLinks, formatNote, nameWarning }
+        { removedLinks, formatNote, nameWarning },
+        await draftPreSellOptions(report, view, { exclude: installedBeliefs(readLedger(report)) })
       );
       return true;
     }
@@ -354,7 +486,8 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
           `:pencil2: *${revised.label}* · revised:`,
           revised,
           THREAD_COMMANDS,
-          { removedLinks, formatNote, nameWarning }
+          { removedLinks, formatNote, nameWarning },
+          await draftPreSellOptions(report, view, { exclude: installedBeliefs(readLedger(report)) })
         );
         return true;
       }
