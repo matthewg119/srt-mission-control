@@ -90,22 +90,12 @@ const B1_LABELS: Record<string, string> = {
   yes_unchecked: "Has asked ChatGPT, but never checked their own clinic",
   no: "Did not know patients ask AI for a provider",
 };
-const BINARY_LABELS: Record<string, string> = {
-  map: "Thought AI names most clinics, like a map",
-  one_to_three: "Knew AI names only one to three",
-};
-const PLAN_LABELS: Record<string, string> = {
-  yes: "YES, wants the personalized implementation plan",
-  no: "No, guide only",
-};
-
 /** The belief answers, rendered for Slack and the Zoho note. Blanks are dropped downstream. */
 function beliefLines(body: Record<string, unknown>): string[] {
   const b1 = clean(body.b1, 40);
   const paying = clean(body.paying, 40);
   const payingOther = clean(body.payingOther, 80);
   const breaks = clean(body.breaks, 40);
-  const binary = clean(body.binary, 40);
   return [
     b1 ? `Asked ChatGPT themselves: ${B1_LABELS[b1] ?? b1}` : "",
     paying
@@ -114,7 +104,6 @@ function beliefLines(body: Record<string, unknown>): string[] {
         }`
       : "",
     breaks ? `Breaks first at 20 new patients: ${BREAKS_LABELS[breaks] ?? breaks}` : "",
-    binary ? `How many clinics AI names: ${BINARY_LABELS[binary] ?? binary}` : "",
   ];
 }
 
@@ -178,15 +167,15 @@ export async function POST(req: NextRequest) {
       : "";
     const partialName = clean(body.name, 80).split(" ").filter(Boolean);
     const partialPhone = clean(body.phone, 20).replace(/[^\d+]/g, "");
-    const partialConsentTs = clean(body.consentTs, 40);
-    const wantsPlan = clean(body.wantsPlan, 10);
     const qStagePartial = clean(body.qStage, 40);
     const qInvestPartial = clean(body.qInvest, 40);
 
     const isComplete = step === "complete";
-    // A phone only exists on the complete step, and only when they asked for the
-    // plan. ingestLead fires Speed-to-Lead off its presence, which is exactly the
-    // behaviour we want: a guide reader who hands over a number is a hot lead.
+    // The complete step deliberately carries no phone: the lead beacon already
+    // delivered it and fired Speed-to-Lead, so re-sending would only bounce off
+    // the 30 minute cooldown. Do NOT reintroduce a "no phone given" line here,
+    // it would read as fact on every guide lead while their number sits in the
+    // lead card two messages up.
     const { contactId: partialContactId } = await ingestLead({
       firstName: partialName[0] || "",
       lastName: partialName.slice(1).join(" ") || "",
@@ -195,20 +184,12 @@ export async function POST(req: NextRequest) {
       website: partialSite,
       source: partialSource,
       zohoLeadSource: zohoLeadSourceFor(partialSource),
-      noteTitle: isComplete ? "Med spa guide, funnel completed" : "Med spa guide, funnel started",
+      noteTitle: isComplete ? "Clinic guide, funnel completed" : "Clinic guide, funnel started",
       headline: isComplete
         ? ":white_check_mark: *Guide funnel completed.* Everything below is their own words from the questions."
-        : `:page_facing_up: *Med spa guide requested* for ${partialSite || "their site"}. Still answering the questions.`,
+        : `:page_facing_up: *Clinic guide requested* for ${partialSite || "their site"}. Still answering the questions.`,
       detailLines: isComplete
-        ? [
-            wantsPlan ? `Personalized plan: ${PLAN_LABELS[wantsPlan] ?? wantsPlan}` : "",
-            partialPhone ? `Phone: ${partialPhone}` : "No phone given (guide only)",
-            body.smsConsent === true
-              ? `SMS consent: agreed${partialConsentTs ? ` at ${partialConsentTs}` : ""}`
-              : "SMS consent: not given",
-            ...beliefLines(body),
-            `Funnel: /${partialSource}`,
-          ]
+        ? [...beliefLines(body), `Funnel: /${partialSource}`]
         : [
             partialSite ? `Website: ${partialSite}` : "",
             qStagePartial ? `Stage: ${STAGE_LABELS[qStagePartial] ?? qStagePartial}` : "",
@@ -257,7 +238,7 @@ export async function POST(req: NextRequest) {
     website,
     source,
     zohoLeadSource: zohoLeadSourceFor(source),
-    noteTitle: isGuide ? "Med spa guide request" : "Free AI Visibility Audit request",
+    noteTitle: isGuide ? "Clinic guide request" : "Free AI Visibility Audit request",
     headline: isGuide
       ? `:mag: *Audit running now* on ${website} to build their guide. The report goes to #ai-visibility-audits; this thread keeps the lead and their answers.`
       : `:mag: *AI visibility audit running now* on ${website}. The report lands in this thread in a few minutes.`,
@@ -265,13 +246,16 @@ export async function POST(req: NextRequest) {
       `Website: ${website}`,
       qStage ? `Stage: ${STAGE_LABELS[qStage] ?? qStage}` : "",
       qInvest ? `Ready to invest: ${INVEST_LABELS[qInvest] ?? qInvest}` : "",
-      ...(isGuide
-        ? beliefLines(body)
-        : [
-            body.smsConsent === true
-              ? `SMS consent: agreed${consentTs ? ` at ${consentTs}` : ""}`
-              : "SMS consent: not given",
-          ]),
+      // The /PDF funnel stopped asking for SMS consent, so it always posts false.
+      // Say so plainly rather than silently: this contact is callable, not textable.
+      isGuide
+        ? "SMS consent: not collected (guide funnel asks for the number only)"
+        : body.smsConsent === true
+          ? `SMS consent: agreed${consentTs ? ` at ${consentTs}` : ""}`
+          : "SMS consent: not given",
+      // Guide leads answer the belief questions AFTER this beacon, so these are
+      // empty here and arrive on the stage:"partial" step:"complete" post.
+      ...(isGuide ? beliefLines(body) : []),
       `Funnel: /${source}`,
     ],
   });
