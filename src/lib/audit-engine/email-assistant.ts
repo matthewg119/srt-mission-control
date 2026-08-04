@@ -35,6 +35,7 @@
 // them, sending it is the fulfillment, so there is no permission to earn.
 
 import { callClaudeText, callClaudeJSON } from "@/lib/claude-calls";
+import { VIDEO_LENGTH_LABEL } from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
@@ -195,9 +196,13 @@ export const BELIEF_SEEDS: BeliefSeed[] = [
  */
 const PRESELL_DEFAULT_ORDER: BeliefId[] = ["B1", "B4", "B5", "B3", "B2", "B6"];
 
-export function preSellBeliefsFor(exclude: BeliefId[] = []): BeliefSeed[] {
+export function preSellBeliefsFor(exclude: BeliefId[] = [], preferred?: BeliefId): BeliefSeed[] {
   const used = new Set(exclude);
-  const picked = PRESELL_DEFAULT_ORDER.filter((id) => !used.has(id)).slice(0, 3);
+  // `preferred` comes from selectBelief(): when their Google profile is strong, or they bragged
+  // about their ranking on the call, B4 goes first because leading with absence to someone proud
+  // of their reviews reads as an insult they can immediately disprove.
+  const order = preferred ? [preferred, ...PRESELL_DEFAULT_ORDER.filter((id) => id !== preferred)] : PRESELL_DEFAULT_ORDER;
+  const picked = order.filter((id) => !used.has(id)).slice(0, 3);
   // Every belief already installed: offer the default trio again rather than an empty card, and
   // let the linter's ledger rule be the thing that objects.
   const ids = picked.length ? picked : PRESELL_DEFAULT_ORDER.slice(0, 3);
@@ -237,10 +242,10 @@ function seedLine(seed: BeliefSeed, report: AuditReportRow, language: "en" | "es
 export async function draftPreSellOptions(
   report: AuditReportRow,
   view: ReportView,
-  opts: { exclude?: BeliefId[]; language?: "en" | "es" } = {}
+  opts: { exclude?: BeliefId[]; language?: "en" | "es"; preferred?: BeliefId } = {}
 ): Promise<PreSellOption[]> {
   const language = opts.language ?? "en";
-  const seeds = preSellBeliefsFor(opts.exclude ?? []);
+  const seeds = preSellBeliefsFor(opts.exclude ?? [], opts.preferred);
   const fallback: PreSellOption[] = seeds.map((s) => ({
     belief: s.id,
     label: s.name,
@@ -310,7 +315,7 @@ function prePitchRules(redesignUrl: string | null): string {
       ? `1. EXACTLY ONE link is allowed in this email, and it is this one: ${redesignUrl}\nThat is the free redesign built for this prospect, and including it is encouraged: it is the finding made tangible, not a pitch. NO OTHER URL may appear. Not the audit report link, not a Loom, not a pricing page, not a calendar link. Two links makes it an advertisement.`
       : "1. NO URLs, links, or attachments of any kind. Not the report link, not a calendar link, nothing. If you catch yourself writing a link, the email is wrong.",
     "2. NO price, no package, no monthly figure, no mention of what the service costs or includes.",
-    "3. ONE ASK, and it is the last line. The email ends with a single question they can answer in one word, and that question is permission to send it over. What 'it' covers may include the breakdown AND the short video, because those are one delivery and one ask, not two. Still no meeting ask, no call ask, no walkthrough, no 'worth 15 minutes', and no second CTA of any kind, and this holds even when the redesign link is present. If there are two question marks aimed at the reader, the email is wrong.",
+    `3. DO NOT WRITE THE CLOSE. The email ends with these two paragraphs, which are appended for you in code:\n"${PERMISSION_CLOSE[0]}"\n"${PERMISSION_CLOSE[1]}"\nStop after your last finding. Do not write your own version of them, do not offer the video in your own words, and do not ask a question anywhere. Anything you write that is trying to be the close gets deleted, so a sentence spent on it is a sentence wasted. No meeting ask, no call ask, no 'worth 15 minutes', no second CTA of any kind, and this holds even when the redesign link is present.`,
     "4. Exactly ONE finding. Do not list three facts. A stranger who reads two findings reads a pitch.",
     redesignUrl
       ? "5. Under 180 words for the body. The extra room over a linkless email exists ONLY for concrete specifics about what you built them, nothing else."
@@ -387,6 +392,52 @@ export function ensureSignoff(body: string): string {
 }
 
 /**
+ * How every permission-stage email ends. Two paragraphs, in this order, always.
+ *
+ * This is a CONSTANT and not a prompt instruction because the model rewrites it every time it is
+ * merely asked for — and a hand-edit produced "I recorded a video full breakdown is yours to keep
+ * either way", which is two sentences collapsed into one broken one. The close is the highest
+ * leverage part of a cold email and the least worth improvising, so it is assembled here.
+ *
+ * Why this exact shape: the give ("yours to keep either way") lands BEFORE the ask, so the ask is
+ * the last thing read and costs the reader nothing to say yes to. The video length is stated
+ * because "a video" is an unknown commitment and "4 min" is a decision they can make instantly.
+ */
+export const PERMISSION_CLOSE = [
+  `I recorded a ${VIDEO_LENGTH_LABEL} video with the breakdown, it is yours to keep either way.`,
+  "Want me to send it over?",
+];
+
+/** Anything the model wrote that was TRYING to be the close, so it gets replaced not duplicated. */
+const CLOSE_ATTEMPT_RE =
+  /^(?:i (?:recorded|made|put together|shot)\b.*|(?:the )?(?:full )?breakdown\b.*|want me to\b.*|mind if i\b.*|should i\b.*|can i\b.*|happy to\b.*|.*\byours to keep\b.*)$/i;
+
+/**
+ * Guarantee the close, replacing whatever the model reached for instead.
+ *
+ * Runs before ensureSignoff, so the order is always: findings, close, sign-off. Paragraphs that
+ * were attempting the close are dropped rather than left in place, otherwise the email ends with
+ * two competing asks — and two question marks aimed at the reader is the exact failure
+ * prePitchRules rule 3 exists to prevent.
+ */
+export function ensurePermissionClose(body: string): string {
+  const paras = body.trimEnd().split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+
+  // The sign-off block is whatever trails the last real sentence. Hold it aside so the close
+  // slots in above it rather than after the name.
+  const signoffAt = paras.findIndex(
+    (p, i) => i > 0 && !/[.!?]/.test(p) && p.length < 60 && p.toLowerCase().includes(OUTREACH_SIGNATURE.name.split(" ")[0].toLowerCase())
+  );
+  const signoff = signoffAt >= 0 ? paras.splice(signoffAt) : [];
+
+  // Drop the model's own attempt at a close, but only from the tail: an early sentence about
+  // what was recorded is part of the finding, not the ask.
+  while (paras.length > 1 && CLOSE_ATTEMPT_RE.test(paras[paras.length - 1])) paras.pop();
+
+  return [...paras, ...PERMISSION_CLOSE, ...signoff].join("\n\n");
+}
+
+/**
  * Drop the plain-text agency line, keeping the name.
  *
  * Only for the Outlook path. Outlook renders Matthew's own signature block under the draft body
@@ -448,26 +499,44 @@ I also put together the full breakdown of which shops the engines name in Miami 
 ${OUTREACH_SIGNATURE.name}
 ${OUTREACH_SIGNATURE.agency}`;
 
-/** Same rhythm, same closing question, no link. Used when no redesign was built. */
-export const PERMISSION_EXAMPLE_NO_REDESIGN = `Raul,
+/**
+ * The reference email, no link. This is a real one that was sent, reproduced exactly.
+ *
+ * Six beats, one sentence each: what I ran and for whom, their number, who took the rest, that
+ * it is happening now, the site tease, and then it STOPS. The close is appended in code, which
+ * is why the example ends where it does and says so.
+ *
+ * Note what it does NOT do: no concession opener, no transition sentence, no date, no
+ * "this week", no adjectives on the number. Every one of those was cut by hand from an earlier
+ * draft, and the shape below is what was left.
+ */
+export const PERMISSION_EXAMPLE_NO_REDESIGN = `Angel,
 
-I ran Cellunetics through the AI engines to see what comes back when someone in Miami asks where to get a UL 508A panel built. You came up in 4 of 20 searches, and Custom Controls Technology took most of the rest. I took a screenshot of it.
+I ran Orlando Amusements through the AI engines to see what comes back when a parent in the Orlando suburbs searches for a bounce house rental with delivery and setup.
 
-There's also one thing on your own site working against you there, which is the part most shops never find on their own. It took about a day to put the whole breakdown together.
+You came back in 10 of 20 of those searches.
 
-Want me to send it over? It's yours to keep either way.
+Too The Moon Bounce Co came back in 9 of them.
 
-${OUTREACH_SIGNATURE.name}
-${OUTREACH_SIGNATURE.agency}`;
+Those conversations are happening right now.
+
+There is also one thing on your own site working against you there, and it is the part most rental companies never catch on their own.
+
+[STOP HERE. The close and the sign-off are appended automatically.]`;
 
 /** The few-shot block, matched to whether a redesign exists for this prospect. */
 function permissionExample(redesignUrl: string | null): string {
   return [
-    "REFERENCE EMAIL. Match its rhythm, its paragraph density and its restraint. Do NOT reuse its wording, its business, or its details:",
+    "REFERENCE EMAIL. Match its rhythm, its one-sentence paragraphs and its restraint. Do NOT reuse its wording, its business, or its details:",
     "---",
     redesignUrl ? PERMISSION_EXAMPLE_WITH_REDESIGN : PERMISSION_EXAMPLE_NO_REDESIGN,
     "---",
-  ].join("\n");
+    redesignUrl
+      ? ""
+      : "Note where it stops. You write the findings and nothing after them; the close is appended for you.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** Permission-stage subject lines are the quiet kind: no score, no claim, no bait. */
@@ -949,7 +1018,7 @@ export async function draftPermissionEmail(
 
   return {
     subject: subject.text,
-    body: ensureSignoff(polished.body),
+    body: ensureSignoff(ensurePermissionClose(polished.body)),
     removedLinks: [...subject.removed, ...body.removed],
     formatNote: polished.note,
   };

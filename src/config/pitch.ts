@@ -20,6 +20,17 @@ export const RANKING_BRAG_PATTERNS: RegExp[] = [
   /\bbuen(?:a|as)? (?:posicion|posiciones|seo)\b/i,
 ];
 
+// ── The permission-stage close ──────────────────────────────────────────────
+/**
+ * How long the Loom is, as it is said in the email.
+ *
+ * Stated rather than left vague on purpose: "a video" is an unknown commitment a stranger has to
+ * weigh, "4 min" is a decision they can make in one second. Change it here if the recordings
+ * stop landing near four minutes, because the email promising one length and the video being
+ * another is the kind of small dishonesty that costs the reply.
+ */
+export const VIDEO_LENGTH_LABEL = "4 min";
+
 // ── Draft linter ────────────────────────────────────────────────────────────
 
 /** Auto-retries before the failure reason is posted instead of the draft. */

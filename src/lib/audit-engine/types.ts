@@ -76,6 +76,9 @@ export interface AuditReportRow {
   /** Google Business Profile stats, used only to choose B1 vs B4. Null when unknown. */
   gbp_rating: number | null;
   gbp_reviews: number | null;
+  /** The Loom transcript, pasted in-thread after recording. The delivery email is REFUSED until
+   *  this exists, so its two timestamps are read off what was actually said. */
+  loom_transcript: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;

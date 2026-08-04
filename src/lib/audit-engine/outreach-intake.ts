@@ -29,6 +29,7 @@ import {
   PERMISSION_EXAMPLE_NO_REDESIGN,
   SIGNOFF_RULE,
   ensureSignoff,
+  ensurePermissionClose,
   type EmailOption,
   type LinkPolicy,
 } from "./email-assistant";
@@ -343,7 +344,7 @@ export async function draftFromIntake(
   const subject = enforceLinkPolicy(noDashes(data.subject), { mode: "none" });
   const body = enforceLinkPolicy(noDashes(data.body), policy);
   const polished = await polishBody(body.text, { allowEmphasis: false });
-  const signedBody = ensureSignoff(polished.body);
+  const signedBody = ensureSignoff(ensurePermissionClose(polished.body));
 
   const nameCheck = verifyNameAgainstAnswers(
     cleanText(data.prospect_name),
@@ -427,7 +428,9 @@ export async function revisePreviousDraft(
   const body = enforceLinkPolicy(noDashes(data.body), policy);
   const polished = await polishBody(body.text, { allowEmphasis: !isPermissionStage });
 
-  const signedBody = ensureSignoff(polished.body);
+  // A revision must not be able to talk the close out of the email. The reveal and later stages
+  // have their own endings, so this only applies while we are still asking permission.
+  const signedBody = ensureSignoff(isPermissionStage ? ensurePermissionClose(polished.body) : polished.body);
 
   // A revision rewrites the greeting too, so the name check has to run again here. The stored
   // answers are the reference; when there are none there is nothing to check against.

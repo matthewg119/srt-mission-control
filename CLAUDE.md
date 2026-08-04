@@ -281,6 +281,87 @@ parsed into fields, because a parser that guessed would drop half the instructio
   (`src/lib/audit-engine/audit-channel.ts`) — paste the logged id into `AUDIT_CHANNEL_ID`
   after the first run, same convention as `SLACK_CEO_CHANNEL`/`SLACK_HOT_LEADS_CHANNEL`.
 
+### Pitch pipeline v2 (2026-08-03) — belief seeding, the linter, the crawler check
+Specs vendored into `docs/specs/`. Migrations: `2026-08-03-pitch-v2.sql`,
+`2026-08-03-niche-briefs.sql`, `2026-08-03-brief-and-transcript.sql`.
+
+**Draft shape was inverted, deliberately.** `format-guard.ts` used to treat one-sentence
+paragraphs as the bot tell and reflow them into 2-4 sentence blocks. Every draft was then
+hand-split before sending, so the rule was backwards: `needsReflow()` now fires on **dense**
+paragraphs (3+ sentences) and the reflow *splits*. `wordBag()`'s multiset check is unchanged and
+still discards any reflow that edited a word — splitting only moves line breaks. `VOICE_RULES`
+also bans the concession opener, meta-transitions ("the reversal is what I wanted to flag"),
+and dates or week-stamping in the body. `stripAgencyLine()` drops the plain-text agency line at
+Outlook conversion only, because Outlook renders the signature block underneath.
+
+**The close is a constant, not a prompt instruction** (`PERMISSION_CLOSE`). Every permission-stage
+email ends with exactly these two paragraphs, appended by `ensurePermissionClose()`:
+
+> I recorded a 4 min video with the breakdown, it is yours to keep either way.
+>
+> Want me to send it over?
+
+The give lands BEFORE the ask, so the ask is the last thing read and costs nothing to say yes to,
+and the length is stated because "a video" is an unknown commitment while "4 min" is an instant
+decision. It is code rather than a prompt line because the model rewrote it every time it was
+merely asked, and a hand-edit once shipped "I recorded a video full breakdown is yours to keep
+either way" — two sentences collapsed into one. `prePitchRules()` rule 3 now tells the model to
+**stop after its last finding**; anything it writes that is trying to be the close is stripped, so
+a revision cannot talk the ask out of the email. Linter rule `missing-close` rejects a draft that
+lost it, or that aims more than one question mark at the reader. Length label:
+`VIDEO_LENGTH_LABEL` in `src/config/pitch.ts`. `PERMISSION_EXAMPLE_NO_REDESIGN` is a real sent
+email and ends with an explicit STOP marker for the same reason.
+
+**Two belief axes, and they compose.** `BELIEF_SEQUENCE` (unchanged) is which EMAIL comes next in
+the post-reveal ladder. `BELIEF_SEEDS` (B1 to B6, from `SRT_Belief_Seeding_Module.md`) is which
+single belief a given draft installs. Every cold draft prints three pre-sell lines, one belief
+each; `seed 1-3` splices the chosen one above the ask, re-lints, and writes a SEED LOG. The
+ledger lives on `audit_reports.seed_ledger`, **not** by re-parsing Slack, so an edited message
+cannot lose an entry. A belief already installed is never offered again — except on the objection
+branch, where the broken link is re-seeded on purpose.
+
+**The linter rejects, it does not warn** (`draft-linter.ts`). Two auto-retries, feeding the
+rejection reasons back into the drafter, then it posts the failure instead of the draft. Rules:
+one belief exactly, draft-1 length, the site tease, banned jargon, absolutes, unfilled
+`{variables}`, re-seeded beliefs. Word lists in `src/config/pitch.ts`. `GEO`/`AEO`/`SERP`/`LLM`
+are matched **case-sensitively** so "Georgia" does not trip the jargon rule.
+
+> ‼️ The "something on your own site" tease has **two** possible backers and needs only one:
+> a `site_signals` finding (stale copyright, missing markup — what the shipped hook has always
+> meant) **or** a `robots_check` verdict of `devastating`. Gating it on robots alone rejects
+> every legitimate draft.
+
+**Training bots are not search bots** (`robots-check.ts`). Blocking `GPTBot` or `Google-Extended`
+is a TRAINING opt-out and does **not** remove them from today's answers. Only a blocked
+`OAI-SearchBot` / `PerplexityBot` / `Claude-SearchBot` earns "your site blocks ChatGPT" — saying
+it otherwise is caught by anyone technical in five seconds. `robots_check` is tri-state exactly
+like `site_signals`: null (never ran, no claim allowed), `[]` (clean, beat is CUT), findings.
+`analyzeRobotsTxt()` is pure and honours real precedence: stacked `User-agent:` lines share one
+rule block, and a bot's own group overrides `User-agent: *`.
+
+**Niche-level, cached 30 days** in `niche_briefs`, keyed on `vertical_slug` falling back to
+`business_type`. Two landscapers have the same avatars; only the scorecard differs, so prospect
+#2 in a vertical is instant. `avatars` = 3 worst / 3 best / the pick (recurring > big one-time >
+volume; "more customers" is never a valid pick; a reposition is flagged because it IS the angle).
+`brief` = the rest of the intel brief, researched with the server-side `web_search_20260209` tool
+under `allowed_domains: ["reddit.com"]` and `max_uses` — Reddit-first enforced structurally, not
+by asking. Supplying `tools` to `callClaudeJSON` disables the Haiku fallback, which does not
+support that tool version.
+
+**The dream-lead image** (`dream-lead.ts`). `image` writes the paste-ready ChatGPT prompt using
+the picked avatar's own `aiQuestion`, with the preset chosen by trade (SPLIT_SCREEN medical/dental
+/aesthetic · BOOKING_ALERT hospitality · INBOX_FORM commercial/B2B · PHONE_ALERT everything else).
+The preset regexes are **prefix matches with no trailing `\b`** — adding one silently breaks every
+stem in the list. It refuses without `client_name`, never prints a dollar figure, and never names
+a competitor who failed them. On camera the image is the TARGET ("the exact kind of inquiry we
+point at your phone"), never a lead that arrived: AI generates the future, screenshots the present.
+
+**The delivery email is gated on the transcript** (`delivery-email.ts`), per the playbook. No
+transcript in-thread, no draft — the email quotes two timestamps and the strongest moment, and
+without it both are invented. `looksLikeTranscript()` is mechanical (length + 3 or more distinct
+timestamps) precisely so it cannot be talked into passing. The quoted stamps snap to the nearest
+one that actually appears in this recording rather than the beat sheet's 1:15 / 3:15 targets.
+
 ## SRT Follow-Up Operator (2026-07-31)
 Everything after the pitch is sent. `#followups_channel` used to carry the Google Maps clinic
 scrape; it is now the operator's home. A digest posts at 09:00 ET (`0 13 * * *`,

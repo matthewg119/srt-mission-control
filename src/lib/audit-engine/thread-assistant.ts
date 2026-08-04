@@ -39,12 +39,17 @@ import {
   linkWarning,
   stripAgencyLine,
   BELIEF_SEQUENCE,
+  PERMISSION_CLOSE,
   PERMISSION_SEQUENCE,
   type EmailOption,
   type PreSellOption,
 } from "./email-assistant";
 import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDraft } from "./outreach-intake";
 import { buildLoomBeatSheet } from "./loom-beatsheet";
+import { buildDreamLeadPrompt, PRESET_ALIASES } from "./dream-lead";
+import { getNicheAvatars, formatAvatarsCard } from "./niche-avatars";
+import { getIntelBrief, formatBriefMarkdown } from "./intel-brief";
+import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
 import {
   draftWithLint,
   formatLintFindings,
@@ -52,7 +57,7 @@ import {
   retryInstruction,
   type LintInput,
 } from "./draft-linter";
-import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs } from "./seed-ledger";
+import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, selectBelief } from "./seed-ledger";
 import type { AuditReportRow, AuditRunRow } from "./types";
 
 function escapeHtml(s: string): string {
@@ -71,9 +76,10 @@ function escapeHtml(s: string): string {
  * see once, so the full list ships with each card and this constant is the only copy of it.
  */
 export const THREAD_COMMANDS = [
-  "*1* Outlook draft  ·  *loom* beat sheet + prompt list  ·  *nudge 2-5* next pre-pitch touch",
-  "*seed 1-3* install that pre-sell line  ·  *reveal* they said yes  ·  *questions* redo intake",
-  "*redesign <url>* / *loom <url>* store an asset  ·  anything else you type edits the draft.",
+  "*1* Outlook draft  ·  *seed 1-3* install a pre-sell line  ·  *nudge 2-5* next touch  ·  *reveal* they said yes",
+  "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt  ·  *loom* beat sheet",
+  "*delivery* + transcript = hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
+  "Anything else you type edits the draft.",
 ].join("\n");
 
 /** Persist the 3 options on the report row and post them to the thread as a numbered card. */
@@ -105,16 +111,19 @@ function lintContext(report: AuditReportRow): Pick<LintInput, "robots" | "siteSi
 }
 
 /**
- * Put the chosen pre-sell line in as its own paragraph directly above the ask.
+ * Put the chosen pre-sell line in as its own paragraph directly above the close.
  *
- * The module's placement rule: the seed goes BEFORE the evidence so it frames what follows, and
- * the ask is the last thing the reader sees. Anchoring on the last paragraph containing a
- * question mark finds the ask without needing to know how it was worded, and falls back to
- * "just before the sign-off" for a draft that somehow ends without one.
+ * Anchored on the FIRST line of PERMISSION_CLOSE ("I recorded a 4 min video...") rather than on
+ * the question mark. Anchoring on the "?" would drop the seed between the video line and the
+ * ask, splitting the close in half — the give and the question have to stay adjacent, because
+ * the give is what makes the question free to answer.
+ *
+ * Falls back to just above the sign-off for a draft that somehow has no close.
  */
-function spliceSeedAboveAsk(body: string, line: string): string {
+function spliceSeedAboveClose(body: string, line: string): string {
   const paras = body.split(/\n\s*\n/);
-  let idx = paras.findLastIndex((p) => p.includes("?"));
+  let idx = paras.findIndex((p) => p.trim() === PERMISSION_CLOSE[0]);
+  if (idx < 0) idx = paras.findLastIndex((p) => p.includes("?"));
   if (idx < 0) idx = Math.max(0, paras.length - 1);
   paras.splice(idx, 0, line.trim());
   return paras.join("\n\n");
@@ -318,7 +327,139 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         { label: `Nudge ${step}`, subject: draft.subject, body: draft.body },
         THREAD_COMMANDS,
         { removedLinks: draft.removedLinks, formatNote: draft.formatNote },
-        await draftPreSellOptions(report, view, { exclude: installedBeliefs(readLedger(report)) })
+        await draftPreSellOptions(report, view, {
+          exclude: installedBeliefs(readLedger(report)),
+          // Puts B4 first when their Google profile is strong or they bragged about it at intake.
+          preferred: selectBelief(report, readLedger(report)).id,
+          language: report.call_language === "es" ? "es" : "en",
+        })
+      );
+      return true;
+    }
+
+    // --- The delivery email, gated on the transcript ----------------------------
+    // The playbook rule: no transcript, no draft. Two forms are accepted — `delivery` on its own
+    // (which looks for a transcript already pasted in the thread) and the transcript pasted with
+    // the word `delivery` on the first line.
+    const deliveryMatch = text.match(/^(?:delivery|entrega|deliver)\b\s*([\s\S]*)$/i);
+    if (deliveryMatch) {
+      const pasted = deliveryMatch[1]?.trim() ?? "";
+      const stored = report.loom_transcript ?? "";
+      const transcript = pasted.length > stored.length ? pasted : stored;
+
+      if (!transcript) {
+        await slack.postThreadReply(
+          args.channel,
+          args.threadTs,
+          [
+            ":no_entry: I won't draft the delivery email without the Loom transcript.",
+            "",
+            "Not a technicality: the email quotes two timestamps and the strongest moment of the video. Without the transcript I'd be inventing both, and a prospect who clicks 3:15 and finds something else there stops believing the rest of it.",
+            "",
+            "Paste the transcript here (Loom · ⋯ · Copy transcript) and I'll draft it.",
+          ].join("\n")
+        );
+        return true;
+      }
+
+      const check = looksLikeTranscript(transcript);
+      if (!check.ok) {
+        await slack.postThreadReply(args.channel, args.threadTs, `:no_entry: ${check.reason}`);
+        return true;
+      }
+
+      if (pasted && pasted !== stored) {
+        await supabaseAdmin.from("audit_reports").update({ loom_transcript: pasted }).eq("id", report.id);
+      }
+
+      const draft = await draftDeliveryEmail(report, transcript, check);
+      await postSingleDraft(
+        report,
+        args.channel,
+        args.threadTs,
+        `:inbox_tray: *Delivery* · quoting ${draft.scorecardStamp} (score) and ${draft.closeStamp} (close), both read off the transcript`,
+        { label: "Delivery", subject: draft.subject, body: draft.body },
+        THREAD_COMMANDS
+      );
+      return true;
+    }
+
+    // --- The niche intel brief (A-E, G). Reddit-first, cached per niche ---------
+    const briefMatch = text.match(/^brief\s*(fresh|new|regenerate)?$/i);
+    if (briefMatch) {
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        `:mag: Researching ${report.business_type ?? "this niche"} on Reddit. This takes a minute.`
+      );
+      const result = await getIntelBrief(report, { force: !!briefMatch[1] });
+      const md = formatBriefMarkdown(result, report);
+      const b = result.brief;
+      await slack.uploadFile(
+        args.channel,
+        `intel-brief-${result.nicheKey.replace(/[^a-z0-9]+/gi, "-")}.md`,
+        Buffer.from(md, "utf8"),
+        "text/markdown",
+        args.threadTs
+      );
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        [
+          `:brain: *Intel brief · ${report.business_type ?? result.nicheKey}*${result.cached ? ` _(reused, ${result.ageDays}d old)_` : ""}`,
+          `Loudest pain: *"${b.pains[0]?.says ?? "n/a"}"*`,
+          b.horrorStories[0] ? `Best cold-open hook: _${b.horrorStories[0].hook}_` : null,
+          b.objections[0] ? `They'll be afraid of: "${b.objections[0].fear}"` : null,
+          "",
+          "`avatars` for the 3 worst / 3 best · `brief fresh` to re-research.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+      return true;
+    }
+
+    // --- 3 worst / 3 best / the pick, cached per niche --------------------------
+    const avatarsMatch = text.match(/^avatars?\s*(fresh|new|regenerate)?$/i);
+    if (avatarsMatch) {
+      const result = await getNicheAvatars(report, view, { force: !!avatarsMatch[1] });
+      await slack.postThreadReply(args.channel, args.threadTs, formatAvatarsCard(result, report));
+      return true;
+    }
+
+    // --- The dream-lead image prompt (page 1 of the doc, and the Loom cold open) -
+    const dreamMatch = text.match(/^(?:dreamlead|dream lead|image)\s*([1-3])?\s*(phone|inbox|form|split|booking|order)?$/i);
+    if (dreamMatch) {
+      const override = dreamMatch[2] ? PRESET_ALIASES[dreamMatch[2].toLowerCase()] : undefined;
+      // Which of the niche's three best customers this picture is of. Defaults to the pick.
+      const avatars = await getNicheAvatars(report, view).catch(() => null);
+      const wanted = dreamMatch[1] ? parseInt(dreamMatch[1], 10) : avatars?.avatars.pick;
+      const hint = avatars && wanted ? avatars.avatars.best[wanted - 1] : undefined;
+      const built = await buildDreamLeadPrompt(report, view, override, hint);
+      if (!built.ok) {
+        await slack.postThreadReply(args.channel, args.threadTs, `:warning: ${built.reason}`);
+        return true;
+      }
+      const v = built.variables;
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        [
+          `:framed_picture: *Dream lead* · \`${built.preset}\` _(${built.presetWhy})_`,
+          hint ? `_From the niche set: best customer #${wanted}, ${hint.label}._` : "_Derived from the questions they're missing. Run \`avatars\` first for the full 3 worst / 3 best._",
+          `*Avatar:* ${v.avatar}`,
+          `*Ticket signal:* ${v.ticketSignal}`,
+          `*They ask AI:* "${v.avatarQuestion}"`,
+          "",
+          "Paste into ChatGPT image mode. Regenerate until every word on screen is spelled right, then use it as page 1 of the doc and the first thing on screen in the Loom.",
+          "",
+          "```",
+          built.prompt,
+          "```",
+          "",
+          ":warning: On camera this is the TARGET, never a result: _\"this is the exact kind of inquiry we point at your phone.\"_ Never present it as a lead that already came in.",
+          `Other presets: \`image phone\` · \`image inbox\` · \`image split\` · \`image booking\``,
+        ].join("\n")
       );
       return true;
     }
@@ -344,7 +485,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         return true;
       }
 
-      const seeded = { ...current, body: spliceSeedAboveAsk(current.body, chosen.line) };
+      const seeded = { ...current, body: spliceSeedAboveClose(current.body, chosen.line) };
       // Lint against the ledger as it stands BEFORE the install, or rule 7 would fire on the
       // very belief being installed.
       const check = lintDraft({
@@ -470,7 +611,12 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         draft,
         THREAD_COMMANDS,
         { removedLinks, formatNote, nameWarning },
-        await draftPreSellOptions(report, view, { exclude: installedBeliefs(readLedger(report)) })
+        await draftPreSellOptions(report, view, {
+          exclude: installedBeliefs(readLedger(report)),
+          // Puts B4 first when their Google profile is strong or they bragged about it at intake.
+          preferred: selectBelief(report, readLedger(report)).id,
+          language: report.call_language === "es" ? "es" : "en",
+        })
       );
       return true;
     }
@@ -487,7 +633,12 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
           revised,
           THREAD_COMMANDS,
           { removedLinks, formatNote, nameWarning },
-          await draftPreSellOptions(report, view, { exclude: installedBeliefs(readLedger(report)) })
+          await draftPreSellOptions(report, view, {
+          exclude: installedBeliefs(readLedger(report)),
+          // Puts B4 first when their Google profile is strong or they bragged about it at intake.
+          preferred: selectBelief(report, readLedger(report)).id,
+          language: report.call_language === "es" ? "es" : "en",
+        })
         );
         return true;
       }

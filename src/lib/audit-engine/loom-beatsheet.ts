@@ -15,6 +15,7 @@
 
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { buildAliases } from "./mention-match";
+import { robotsVerdict, searchBotFindings, type RobotsVerdict } from "./robots-check";
 import type { AuditReportRow, AuditRunRow } from "./types";
 import type { ReportView, PromptRowView } from "./report-view";
 
@@ -92,6 +93,11 @@ export interface BeatSheetFacts {
   siteFinding: string | null;
   siteScanned: boolean;
   worstBlock: { block: string; mentioned: number; total: number } | null;
+  /** Which second-gap beat the robots result authorizes, if any. See robots-check.ts. */
+  robotsVerdict: RobotsVerdict;
+  /** The bot to point at on screen, e.g. "OAI-SearchBot". Null when there is nothing to show. */
+  robotsBot: string | null;
+  robotsEngine: string | null;
 }
 
 /** Buy-intent wording, strongest first. Used to rank candidate opening prompts. */
@@ -259,6 +265,15 @@ export async function buildLoomBeatSheet(
   const siteScanned = Array.isArray(report.site_signals);
   const siteFinding = siteScanned && report.site_signals?.length ? report.site_signals[0].detail : null;
 
+  // The second gap has two possible sources and they are not equal. A blocked SEARCH crawler is
+  // the devastating version (they are locked out of the answers being given today); a blocked
+  // TRAINING crawler is a much smaller, precise point that must say "training" out loud. Neither
+  // exists on most sites, in which case the site scan supplies the beat, and if that is clean too
+  // the beat is CUT rather than filled with something invented.
+  const robots = report.robots_check ?? null;
+  const verdict = robotsVerdict(robots);
+  const robotsFinding = verdict === "none" ? null : searchBotFindings(robots)[0] ?? robots?.[0] ?? null;
+
   const facts: BeatSheetFacts = {
     company,
     score: report.score ?? 0,
@@ -274,6 +289,9 @@ export async function buildLoomBeatSheet(
     siteFinding,
     siteScanned,
     worstBlock,
+    robotsVerdict: verdict,
+    robotsBot: robotsFinding?.bot ?? null,
+    robotsEngine: robotsFinding?.engine ?? null,
   };
 
   return { message: renderBeatSheet(report, view, facts), refusal: null };
@@ -317,45 +335,66 @@ function renderBeatSheet(report: AuditReportRow, view: ReportView, f: BeatSheetF
         `· skip the concession, go to the gap`,
       ];
 
-  const siteBeat = f.siteFinding
-    ? [`· on screen: ${f.siteFinding}`, `· tie to ${f.worstBlock?.block.toLowerCase() ?? "the weak category"}`, `· "paying to be invisible"`]
-    : f.siteScanned
-      ? [`· site scan found nothing to show`, `· stay on the engine results`, `· cut this beat if thin`]
-      : [`· site was never scanned`, `· do not claim a site finding`, `· cut this beat`];
+  // Priority: a blocked SEARCH crawler beats every other second-gap material, because it is the
+  // one finding the owner can see on their own screen in ten seconds and cannot argue with.
+  const siteBeat =
+    f.robotsVerdict === "devastating"
+      ? [
+          `· open ${report.website.replace(/\/$/, "")}/robots.txt ON SCREEN`,
+          `· point at the line blocking ${f.robotsBot}`,
+          `· "that's the crawler ${f.robotsEngine} reads pages with"`,
+          `· "you've locked yourself out of your own front door"`,
+          `· "one-line fix, and it's the first thing we'd do"`,
+        ]
+      : f.robotsVerdict === "soft"
+        ? [
+            `· OPTIONAL beat, only if the scorecard felt thin`,
+            `· ${f.robotsBot} is blocked, which is TRAINING only`,
+            `· say out loud: "that is not why you're missing from today's answers"`,
+            `· never say "your site blocks ChatGPT" here, it is not true`,
+            f.siteFinding ? `· stronger option: ${f.siteFinding}` : `· otherwise cut this beat`,
+          ]
+        : f.siteFinding
+          ? [`· on screen: ${f.siteFinding}`, `· tie to ${f.worstBlock?.block.toLowerCase() ?? "the weak category"}`, `· "paying to be invisible"`]
+          : f.siteScanned
+            ? [`· site scan found nothing to show`, `· stay on the engine results`, `· cut this beat if thin`]
+            : [`· site was never scanned`, `· do not claim a site finding`, `· cut this beat`];
 
   const block2 = [
     `*LOOM BEAT SHEET* · target 4:00, hard stop 5:00`,
     ``,
-    `*[0:00-0:20] COLD OPEN*`,
-    `· their site already on screen`,
-    `· what they see in 4 minutes`,
-    `· no introduction`,
+    `*[0:00-0:20] COLD OPEN*  _installs B1_`,
+    `· dream-lead image full screen (run \`image\`)`,
+    `· who they are, the ticket detail`,
+    `· read the line: "I asked ChatGPT... and ${f.company} came up"`,
+    `· "the exact kind of inquiry we point at your phone"`,
+    `· their site enters on the next beat, no introduction`,
     ``,
     ...trampaBeat,
     ``,
-    `*[0:40-1:15] THE GAP, LIVE*`,
+    `*[0:40-1:15] THE GAP, LIVE*  _installs B2_`,
     `· run: ${shortPrompt(f.apertura)}`,
     `· read the names out loud`,
     `· "${f.company} is not there"`,
     `· then run: ${shortPrompt(f.ticketAlto)}`,
     ``,
-    `*[1:15-2:15] SCORECARD*`,
+    `*[1:15-2:15] SCORECARD*  _installs B3_  :stopwatch: _email timestamp_`,
     `· open the PDF`,
     `· "${f.score} out of 100, showed up in ${f.appeared} of ${f.total}"`,
     `· ${competitorLine}`,
     `· the pattern, not the number`,
     `· "this report is yours either way"`,
     ``,
-    `*[2:15-2:55] SECOND GAP, THEIR SITE*`,
+    `*[2:15-2:45] SECOND GAP, THEIR SITE*  _installs B4_${f.robotsVerdict === "none" ? "  · CUT" : f.robotsVerdict === "soft" ? "  · OPTIONAL" : ""}`,
     ...siteBeat,
     ``,
-    `*[2:55-3:30] THE THREE FIXES*`,
+    `*[2:45-3:15] THE THREE FIXES*  _installs B5_`,
     `· absolve first: not their fault`,
     `· fix 1, fix 2, fix 3`,
     `· each with something on screen`,
     `· zero jargon`,
     ``,
-    `*[3:30-4:00] CLOSE*`,
+    `*[3:15-4:00] CLOSE*  _installs B6_  :stopwatch: _email timestamp_`,
     `· qualifier: who this works for`,
     `· "{price}/mo, running in {days} days"`,
     `· "reply I'm in and I'll send the link"`,
@@ -373,13 +412,18 @@ function renderBeatSheet(report: AuditReportRow, view: ReportView, f: BeatSheetF
       : `[ ] No organic win exists, do not imply one`,
     `[ ] Engines to name out loud: ${f.engines.join(", ")}`,
     brandedCount ? `[ ] ${brandedCount} branded prompts, they do not count as wins` : null,
+    `[ ] Dream-lead image generated and on screen for 0:00 (\`image\`)`,
     `[ ] Price and start days decided`,
     `[ ] PDF open in a tab`,
+    f.robotsVerdict === "soft"
+      ? `[ ] robots.txt blocks ${f.robotsBot}, TRAINING only. Do NOT say "your site blocks ${f.robotsEngine}"`
+      : null,
     f.patternIsInferred ? `[ ] The pattern line is a read, not a measured finding` : null,
     ``,
     `*TIMESTAMPS FOR THE DELIVERY EMAIL*`,
-    f.siteFinding ? `2:15 — ${f.siteFinding}` : `0:40 — where the engines send their buyers instead`,
-    `3:30 — what it costs and how it starts`,
+    `1:15 — their AI Visibility Score, ${f.score} out of 100`,
+    `3:15 — exactly how we close the gap, and what it costs`,
+    `_These are the two the delivery email quotes. Paste the Loom transcript in this thread after recording and the real ones get read off it._`,
   ]
     .filter(Boolean)
     .join("\n");

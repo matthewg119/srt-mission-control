@@ -20,10 +20,11 @@ import {
   SKELETON_BODY_SENTENCES,
 } from "@/config/pitch";
 import { robotsVerdict, type RobotsCheck } from "./robots-check";
-import type { BeliefId } from "./email-assistant";
+import { PERMISSION_CLOSE, type BeliefId } from "./email-assistant";
 
 export type LintRule =
   | "seed-log"
+  | "missing-close"
   | "draft-1-length"
   | "robots-tease"
   | "banned-jargon"
@@ -124,6 +125,25 @@ export function lintDraft(input: LintInput): LintResult {
   }
 
   const hasTease = input.hasWebsiteTease ?? mentionsOwnSiteIssue(input.body);
+
+  // 1b — a permission-stage email ends with the standard close, and with exactly one question.
+  // ensurePermissionClose() appends it in code, so a failure here means something downstream
+  // edited it back out, and a revision that quietly drops the ask is the worst way to lose a
+  // reply: the email still reads fine and simply never asks for anything.
+  if (input.stage === "draft-1" || input.stage === "nudge") {
+    for (const line of PERMISSION_CLOSE) {
+      if (!input.body.includes(line)) {
+        findings.push({ rule: "missing-close", detail: `The close is missing or altered. It must contain, on its own line: "${line}"` });
+      }
+    }
+    const questions = (input.body.match(/\?/g) ?? []).length;
+    if (questions > 1) {
+      findings.push({
+        rule: "missing-close",
+        detail: `${questions} question marks aimed at the reader. A permission email asks exactly once, and the ask is the close.`,
+      });
+    }
+  }
 
   // 2 — draft 1 must stay within the control skeleton plus the seed's allowance.
   if (input.stage === "draft-1") {

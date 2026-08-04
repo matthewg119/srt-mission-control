@@ -34,6 +34,15 @@ export interface ClaudeJSONOptions<T> {
    * exhausted on a transient error. Defaults to a Haiku fallback.
    */
   fallbackModels?: ClaudeModel[];
+  /**
+   * Server-side tools, passed straight through, e.g.
+   * `[{ type: "web_search_20260209", name: "web_search", max_uses: 8 }]`.
+   *
+   * Anthropic runs these; there is no client-side execution loop. Supplying any tool disables
+   * the automatic Haiku fallback (see resolveModels) because Haiku does not support the current
+   * web_search tool version.
+   */
+  tools?: unknown[];
 }
 
 // --- Transient-error retry + model fallback ---------------------------------
@@ -71,6 +80,8 @@ interface AnthropicRequestBody {
   temperature: number;
   system: string;
   messages: Array<{ role: string; content: unknown }>;
+  /** Server-side tool definitions, e.g. web_search. Omitted entirely when unused. */
+  tools?: unknown[];
 }
 
 /**
@@ -142,7 +153,11 @@ async function fetchAnthropicWithRetry(
 }
 
 /** Build the ordered model list: primary first, then de-duped fallbacks. */
-function resolveModels(primary: ClaudeModel, fallbacks?: ClaudeModel[]): ClaudeModel[] {
+function resolveModels(primary: ClaudeModel, fallbacks?: ClaudeModel[], hasTools = false): ClaudeModel[] {
+  // A tool-using call must not silently fall back to Haiku: it does not support the
+  // web_search_20260209 tool version, so the "fallback" would 400 rather than degrade. Better to
+  // fail on the primary model with a real error than to swap in one that cannot do the job.
+  if (hasTools) return [primary, ...(fallbacks ?? []).filter((m) => m !== primary)];
   const list = fallbacks ?? [DEFAULT_FALLBACK_MODEL];
   return [primary, ...list.filter((m) => m !== primary)];
 }
@@ -237,7 +252,8 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
       ]
     : opts.user;
 
-  const models = resolveModels(opts.model, opts.fallbackModels);
+  const hasTools = Boolean(opts.tools && opts.tools.length > 0);
+  const models = resolveModels(opts.model, opts.fallbackModels, hasTools);
 
   // One request attempt at a given token budget: fetch, extract text, strip fences.
   const attempt = async (maxTokens: number) => {
@@ -248,6 +264,7 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
         temperature: opts.temperature ?? 0.2,
         system: systemWithHint,
         messages: [{ role: "user", content: userContent }],
+        ...(hasTools ? { tools: opts.tools } : {}),
       },
       models
     );
