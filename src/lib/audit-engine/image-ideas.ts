@@ -137,10 +137,16 @@ export async function buildImageIdeas(report: AuditReportRow, avatar: BestAvatar
   }));
 }
 
-/** The Slack card. Numbered, because the number is the command. */
-export function formatIdeasCard(ideas: ImageIdea[], avatar: BestAvatar, avatarIndex: number): string {
+/**
+ * The Slack card. Numbered, because the number is the command.
+ *
+ * `avatarIndex` is null when the niche set failed to build and the customer was derived from the
+ * audit instead. There was no menu, so there is no number to name, and claiming "customer #1"
+ * would imply a choice that never happened.
+ */
+export function formatIdeasCard(ideas: ImageIdea[], avatar: BestAvatar, avatarIndex: number | null): string {
   return [
-    `:framed_picture: *The picture · for customer #${avatarIndex}, ${avatar.label}*`,
+    `:framed_picture: *The picture · for ${avatarIndex ? `customer #${avatarIndex}, ` : ""}${avatar.label}*`,
     `_They ask AI: "${avatar.aiQuestion}"_`,
     "",
     "Six ways the same inquiry lands. Pick the one that looks like how this owner actually gets work.",

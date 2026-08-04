@@ -26,6 +26,36 @@ Internal operations portal for SRT Agency (business financing brokerage). AI-fir
 - `src/app/api/telegram/webhook/route.ts` — Telegram endpoint (same AI, same tools)
 - `src/lib/telegram.ts` — Telegram Bot API client
 
+### `callClaudeJSON` — the shared JSON generator (`src/lib/claude-calls.ts`)
+Every structured generator in the app goes through it, so its recovery behaviour is worth knowing
+before adding a new one. Three escalating recoveries, in order:
+
+1. **Transient status** (429/529/5xx) → exponential backoff, then fall back across models.
+2. **`stop_reason: "max_tokens"`** → retry once at double the budget, capped at 8000.
+3. **Validation failure** → ONE correction retry (2026-08-04). The model gets its own rejected
+   answer back plus `describeInvalid()`'s reason, and is asked to fix only what is wrong. Same move
+   `draft-linter.ts` makes for drafts. It exists because discarding an otherwise-correct generation
+   over one wrong field is this helper's most expensive failure mode.
+
+`camelizeKeys` is the ready-made `coerce` for any camelCase schema. Models drift into snake_case
+with no warning and for no reason: the intel brief returned `why_it_hurts`, and therefore
+`horror_stories` / `night_questions`, on a run whose research was perfectly good, and the whole
+generation was thrown away over it.
+
+Two optional hooks make step 3 work, and a generator with a non-trivial shape should supply both:
+- **`coerce`** repairs a near-miss *before* validation (a 0-based index where the schema wanted
+  1-based, a number sent as a string). Return the input untouched for anything ambiguous.
+- **`describeInvalid`** names the failed check. Without it the error is "failed validation" plus
+  `cleaned.slice(0, 500)` — and the broken field is rarely in the first 500 characters, which is
+  exactly why the `pick: 0` bug below looked like correct output.
+
+**The correction retry is skipped when `tools` are present**, deliberately. The assistant turn would
+have to replay the `server_tool_use` / `web_search_tool_result` blocks verbatim and only text blocks
+are kept, so the rebuilt conversation would be malformed — and it would re-run every search. It is
+also skipped when the response text is empty, since the API rejects an empty assistant turn.
+**Consequence: `coerce` is the ONLY defence a tool-using generator has**, so `intel-brief.ts` leans
+on it harder than anything else does.
+
 ### CRM Integration
 - `src/lib/zoho.ts` — Zoho CRM v5 API client (leads CRUD, PDF attachment, search)
 - `src/lib/microsoft.ts` — Microsoft Graph API (email, OneDrive, OAuth)
@@ -344,10 +374,28 @@ rule block, and a bot's own group overrides `User-agent: *`.
 `business_type`. Two landscapers have the same avatars; only the scorecard differs, so prospect
 #2 in a vertical is instant. `avatars` = 3 worst / 3 best / the pick (recurring > big one-time >
 volume; "more customers" is never a valid pick; a reposition is flagged because it IS the angle).
-`brief` = the rest of the intel brief, researched with the server-side `web_search_20260209` tool
-under `allowed_domains: ["reddit.com"]` and `max_uses` — Reddit-first enforced structurally, not
-by asking. Supplying `tools` to `callClaudeJSON` disables the Haiku fallback, which does not
-support that tool version.
+
+**`pick` counts from 1, and the model does not reliably know that** (2026-08-04). It returned a
+zero-based index and took out two live prospects: a fully correct set (3 worst, 3 best, right keys,
+not truncated) was thrown away because one field read `0`. `validate` was right to reject it —
+`formatAvatarsCard` does `best[pick - 1]`, so `0` reads `best[-1]` and crashes — so the fix is the
+contract, not the check: a `schemaHint` (which lands in the SYSTEM prompt, unlike the shape example
+that used to sit on the last line of the user message), the rule stated in words, and `coerceAvatars`
+mapping `0` to `1`. Anything still outside 1..3 is left to fail, because clamping a `7` would
+silently pick a customer the model did not choose and `pickWhy` would describe someone else.
+`brief` = the rest of the intel brief, researched with the server-side `web_search_20260209` tool.
+Supplying `tools` to `callClaudeJSON` disables the Haiku fallback, which does not support that tool
+version.
+
+> ‼️ **Reddit-first is dead and must not be re-added** (2026-08-04). Reddit blocks Anthropic's
+> crawler, so `allowed_domains: ["reddit.com"]` is now rejected at request validation:
+> `400 ... The following domains are not accessible to our user agent: ['reddit.com']`. It is not a
+> transient status, so nothing retries it, and every `brief` failed outright. The guarantee had to
+> invert: `blocked_domains: BRIEF_BLOCKED_DOMAINS` (`src/config/pitch.ts`) plus prompt steering
+> toward owner-to-owner talk. A blocklist is genuinely weaker than an allowlist, so
+> `sourceDomains()` reads the hostnames back off the URLs the brief was required to cite and the
+> Slack card prints them: a brief built from trade press must never be mistaken for one built from
+> owners talking to each other.
 
 **The dream-lead image** (`dream-lead.ts`). `image` writes the paste-ready ChatGPT prompt using
 the picked avatar's own `aiQuestion`, with the preset chosen by trade (SPLIT_SCREEN medical/dental
@@ -446,6 +494,15 @@ in `src/config/pitch.ts` is null, and turning it on is a decision someone makes 
 than a sentence a model wrote. `LOOM_PRICE_LABEL` / `LOOM_START_WINDOW` are constants for the same
 reason `PERMISSION_CLOSE` is: a video that says a different number than the invoice cannot be
 walked back.
+
+**The wizard never dead-ends on a failed avatar set** (2026-08-04). It used to stop after the
+pre-flight and tell him to run `avatars` and try again, which landed on the same failure and left no
+route to the picture or the script. Now it skips the menu and carries on against the customer
+`buildDreamLeadPrompt` derives from the questions the business is ABSENT from — the pre-wizard
+behaviour, which is sound. A failed niche set costs the three-way CHOICE, not the recording. The
+stand-in is stored on `loom_state.derivedAvatar` rather than re-derived, so the picture, the script
+and a later `script` all describe the same customer, and `avatarIndex` stays null because there was
+no menu to pick from (claiming "customer #1" would imply a choice nobody made).
 
 **`dream-lead.ts` gained two presets** that `choosePreset` will never pick automatically, `CRM_CARD`
 and `TEXT_THREAD`. They are only reachable from the six-idea card or `image crm` / `image text`,

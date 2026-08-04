@@ -104,3 +104,35 @@ export const BANNED_ABSOLUTES: Array<{ pattern: RegExp; detail: string }> = [
 // ── Niche intel brief cache (Phase 3) ───────────────────────────────────────
 export const NICHE_BRIEF_TTL_DAYS = 30;
 export const NICHE_BRIEF_MAX_SEARCHES = 8;
+
+/**
+ * Domains the intel brief must not research from.
+ *
+ * The brief used to enforce its source quality the strong way, `allowed_domains: ["reddit.com"]`,
+ * so the model physically could not cite an agency blog. Reddit now blocks Anthropic's crawler and
+ * that allowlist is rejected with a 400 before any search runs, so the guarantee had to invert:
+ * search broadly, block the worst.
+ *
+ * What is on this list and why: sites that rank for "<trade> worst customers" while being written
+ * BY someone selling software or marketing TO that trade. They read authoritative and contain
+ * nothing an owner actually said, which is the exact failure mode the allowlist existed to prevent.
+ * A blocklist is weaker than an allowlist and the Slack card says so out loud.
+ */
+export const BRIEF_BLOCKED_DOMAINS = [
+  "hubspot.com",
+  "semrush.com",
+  "ahrefs.com",
+  "wix.com",
+  "squarespace.com",
+  "godaddy.com",
+  "shopify.com",
+  "indeed.com",
+  "ziprecruiter.com",
+  "housecallpro.com",
+  "jobber.com",
+  "servicetitan.com",
+  "thumbtack.com",
+  "angi.com",
+  "homeadvisor.com",
+  "yelp.com",
+];

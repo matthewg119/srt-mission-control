@@ -91,6 +91,13 @@ export interface AuditReportRow {
     stage: "avatar" | "image" | "done";
     /** 1-based index into NicheAvatars.best. Set once the avatar is picked. */
     avatarIndex?: number;
+    /**
+     * The audit-derived stand-in, used when the niche set could not be built.
+     *
+     * Stored rather than re-derived so the picture step, the script and a later `script` all
+     * describe the same customer. There is no index because there was no menu to pick from.
+     */
+    derivedAvatar?: { label: string; ticket: string; whyHighRoi: string; aiQuestion: string };
     /** The six image ideas as they were offered, so a "4" later knows what 4 meant. */
     ideas?: Array<{ preset: string; label: string; line: string }>;
     /** Per-recording overrides from `loom $499` / `loom $299/mo, 45 days`. */

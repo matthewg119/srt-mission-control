@@ -29,6 +29,23 @@ export interface ClaudeJSONOptions<T> {
   documents?: ClaudeDocumentInput[];
   validate?: (parsed: unknown) => parsed is T;
   /**
+   * Repair a near-miss BEFORE validation runs.
+   *
+   * For the class of failure where the model understood the task and got one field's convention
+   * wrong: a 0-based index where the schema wanted 1-based, a number sent as a string. Throwing
+   * away a correct answer over that costs a whole generation. Return the input untouched for
+   * anything you are not sure how to repair, and let validate reject it.
+   */
+  coerce?: (parsed: unknown) => unknown;
+  /**
+   * Why this payload was rejected, in words. Fed back to the model verbatim on the correction
+   * retry below, and used in the thrown error instead of 500 characters of raw JSON.
+   *
+   * Without it, a validation failure reports "failed validation" and an excerpt that usually looks
+   * completely fine, because the broken field is rarely in the first 500 characters.
+   */
+  describeInvalid?: (parsed: unknown) => string;
+  /**
    * Ordered list of models to try. The primary `model` is always tried first;
    * any models here are tried (with full retry) only after the primary is
    * exhausted on a transient error. Defaults to a Haiku fallback.
@@ -224,6 +241,28 @@ function salvageJSON(text: string): string {
   return text;
 }
 
+/**
+ * Recursively rewrite snake_case object keys to camelCase. Ready-made `coerce` for any generator
+ * whose schema is camelCase.
+ *
+ * Models drift into snake_case for no reason and with no warning: the intel brief returned
+ * `why_it_hurts` and `horror_stories` on a run whose content was perfectly good, and the whole
+ * generation was discarded over it. Keys that are already camelCase pass through untouched, so
+ * this is safe to apply to any camelCase schema.
+ *
+ * It matters most for TOOL-USING calls, which cannot take the correction retry below and so have
+ * no second chance at all.
+ */
+export function camelizeKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(camelizeKeys);
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase())] = camelizeKeys(v);
+  }
+  return out;
+}
+
 export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<ClaudeJSONResult<T>> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -256,14 +295,16 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
   const models = resolveModels(opts.model, opts.fallbackModels, hasTools);
 
   // One request attempt at a given token budget: fetch, extract text, strip fences.
-  const attempt = async (maxTokens: number) => {
+  // `followUp` appends the model's own rejected answer plus a correction instruction, turning the
+  // single-turn call into a three-turn one. Empty for every normal attempt.
+  const attempt = async (maxTokens: number, followUp: Array<{ role: string; content: unknown }> = []) => {
     const json = await fetchAnthropicWithRetry(
       apiKey,
       {
         max_tokens: maxTokens,
         temperature: opts.temperature ?? 0.2,
         system: systemWithHint,
-        messages: [{ role: "user", content: userContent }],
+        messages: [{ role: "user", content: userContent }, ...followUp],
         ...(hasTools ? { tools: opts.tools } : {}),
       },
       models
@@ -274,29 +315,39 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
       .join("")
       .trim();
     const cleaned = salvageJSON(raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim());
-    return { json, cleaned };
+    return { json, raw, cleaned };
   };
 
-  // Parse + validate; returns an error string instead of throwing so the caller can
-  // decide whether the failure is worth a retry (truncation) or terminal.
+  // Parse, repair, validate. Returns an error string instead of throwing so the caller can decide
+  // whether the failure is worth a retry (truncation, a repairable field) or terminal.
+  // `reason` is set only for a VALIDATION failure, which is the one a correction retry can fix —
+  // a parse error usually means truncation, and re-asking would not help.
   const parseAndValidate = (
     cleaned: string
-  ): { ok: true; parsed: T } | { ok: false; error: string } => {
+  ): { ok: true; parsed: T } | { ok: false; error: string; reason: string | null } => {
     let parsed: unknown;
     try {
       parsed = JSON.parse(cleaned);
     } catch (e) {
-      return { ok: false, error: `Claude JSON parse error: ${(e as Error).message}\nRaw: ${cleaned.slice(0, 500)}` };
+      return { ok: false, error: `Claude JSON parse error: ${(e as Error).message}\nRaw: ${cleaned.slice(0, 500)}`, reason: null };
     }
+    if (opts.coerce) parsed = opts.coerce(parsed);
     if (opts.validate && !opts.validate(parsed)) {
-      return { ok: false, error: `Claude response failed validation. Raw: ${cleaned.slice(0, 500)}` };
+      const reason = opts.describeInvalid?.(parsed) ?? "";
+      return {
+        ok: false,
+        error: reason
+          ? `Claude response failed validation: ${reason}`
+          : `Claude response failed validation. Raw: ${cleaned.slice(0, 500)}`,
+        reason: reason || "it did not match the required shape",
+      };
     }
     return { ok: true, parsed: parsed as T };
   };
 
   const MAX_RETRY_TOKENS = 8000;
   let requestedTokens = opts.maxTokens ?? 2048;
-  let { json, cleaned } = await attempt(requestedTokens);
+  let { json, raw, cleaned } = await attempt(requestedTokens);
   let result = parseAndValidate(cleaned);
 
   // Anthropic returns stop_reason:"max_tokens" when the model was cut off mid-output. That
@@ -306,7 +357,30 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
     const bigger = Math.min(requestedTokens * 2, MAX_RETRY_TOKENS);
     console.warn(`[claude] response truncated at max_tokens=${requestedTokens}; retrying once at ${bigger}`);
     requestedTokens = bigger;
-    ({ json, cleaned } = await attempt(bigger));
+    ({ json, raw, cleaned } = await attempt(bigger));
+    result = parseAndValidate(cleaned);
+  }
+
+  // A CORRECTION retry: the model produced parseable JSON of the wrong shape. Hand its own answer
+  // back with the reason and ask for a fix. This is the same move draft-linter.ts makes for drafts,
+  // and it exists because throwing away an otherwise-correct generation over one wrong field is
+  // the most expensive failure mode this helper has.
+  //
+  // NOT done when tools are in play. The assistant turn would have to replay the server_tool_use
+  // and web_search_tool_result blocks verbatim and we only keep the text ones, so the reconstructed
+  // conversation would be malformed — and it would re-run every search. Tool calls keep failing
+  // with a real reason instead.
+  // `raw` must be non-empty: the API rejects an assistant turn with empty content, so a blank
+  // response has to fall through to the throw rather than becoming a 400.
+  if (!result.ok && result.reason && raw && !hasTools && json.stop_reason !== "max_tokens") {
+    console.warn(`[claude] validation failed (${result.reason}); asking once for a correction`);
+    ({ json, raw, cleaned } = await attempt(requestedTokens, [
+      { role: "assistant", content: raw },
+      {
+        role: "user",
+        content: `That JSON was rejected: ${result.reason}. Fix only what is wrong and return the corrected JSON. No preamble, no code fences.`,
+      },
+    ]));
     result = parseAndValidate(cleaned);
   }
 

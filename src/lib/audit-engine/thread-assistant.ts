@@ -50,7 +50,7 @@ import { buildLoomScript } from "./loom-script";
 import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
 import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead";
 import { getNicheAvatars, formatAvatarsCard, type BestAvatar } from "./niche-avatars";
-import { getIntelBrief, formatBriefMarkdown } from "./intel-brief";
+import { getIntelBrief, formatBriefMarkdown, sourceDomains } from "./intel-brief";
 import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
 import {
   draftWithLint,
@@ -278,6 +278,38 @@ async function bestAvatars(report: AuditReportRow, view: ReportView): Promise<Be
   }
 }
 
+/**
+ * The stand-in customer, for when the niche set cannot be built.
+ *
+ * `buildDreamLeadPrompt` with no avatarHint already derives one from the money questions this
+ * business is ABSENT from (dream-lead.ts, `absentMoneyQuestions`) — that was the behaviour before
+ * the wizard existed and it is sound. Reusing it means a failed niche set costs the three-way
+ * CHOICE, not the recording, which is the whole point: a dead end here leaves him with a
+ * pre-flight and no way to reach the picture or the script.
+ */
+async function derivedAvatar(report: AuditReportRow, view: ReportView): Promise<BestAvatar | null> {
+  const built = await buildDreamLeadPrompt(report, view);
+  if (!built.ok) return null;
+  return {
+    label: built.variables.avatar,
+    ticket: built.variables.ticketSignal,
+    whyHighRoi: "Derived from the buyer questions this business is missing from.",
+    aiQuestion: built.variables.avatarQuestion,
+  };
+}
+
+/** Who this recording is aimed at: the customer picked from the menu, or the derived stand-in. */
+async function resolveLoomAvatar(
+  report: AuditReportRow,
+  view: ReportView
+): Promise<{ avatar: BestAvatar; index: number | null } | null> {
+  const state = report.loom_state;
+  if (state?.derivedAvatar) return { avatar: state.derivedAvatar, index: null };
+  if (!state?.avatarIndex) return null;
+  const best = await bestAvatars(report, view);
+  return best ? { avatar: best[state.avatarIndex - 1], index: state.avatarIndex } : null;
+}
+
 /** Step 1: the prompts to paste, what not to say, and the three customers to choose between. */
 async function startLoomWizard(
   report: AuditReportRow,
@@ -294,23 +326,51 @@ async function startLoomWizard(
   }
 
   const overrides = parseLoomOverrides(rest);
+  const carry = { price: overrides.price ?? undefined, window: overrides.window ?? undefined };
   await slack.postThreadReply(channel, threadTs, renderPreflight(view, facts));
 
   let result;
   try {
     result = await getNicheAvatars(report, view);
   } catch (e) {
+    // Skip the menu rather than stopping. One customer, derived from the audit, and straight on
+    // to the picture — he still gets everything he needs to record.
+    const fallback = await derivedAvatar(report, view);
+    if (!fallback) {
+      await slack.postThreadReply(
+        channel,
+        threadTs,
+        `:warning: I have the prompts and the pre-flight, but I can't build a customer for this one: ${(e as Error).message}\n\nReply \`avatars fresh\` to retry the niche set.`
+      );
+      return;
+    }
     await slack.postThreadReply(
       channel,
       threadTs,
-      `:warning: I have the prompts and the pre-flight, but the customer set failed to build: ${(e as Error).message}\n\nReply \`avatars\` to retry, then \`loom\` again.`
+      [
+        `:warning: The 3-worst / 3-best set failed to build, so there is nothing to choose between: ${(e as Error).message}`,
+        `Carrying on with the customer derived from the questions they're missing. Reply \`avatars fresh\` later if you want the full set.`,
+      ].join("\n")
     );
+    const ideas = await buildImageIdeas(report, fallback);
+    await supabaseAdmin
+      .from("audit_reports")
+      .update({
+        loom_state: {
+          ...carry,
+          stage: "image",
+          derivedAvatar: fallback,
+          ideas: ideas.map((i) => ({ preset: i.preset, label: i.label, line: i.line })),
+        },
+      })
+      .eq("id", report.id);
+    await slack.postThreadReply(channel, threadTs, formatIdeasCard(ideas, fallback, null));
     return;
   }
 
   await supabaseAdmin
     .from("audit_reports")
-    .update({ loom_state: { stage: "avatar", price: overrides.price ?? undefined, window: overrides.window ?? undefined } })
+    .update({ loom_state: { ...carry, stage: "avatar" } })
     .eq("id", report.id);
 
   await slack.postThreadReply(
@@ -342,14 +402,14 @@ async function advanceLoomWizard(
   n: number
 ): Promise<void> {
   const state = report.loom_state;
-  const best = await bestAvatars(report, view);
-  if (!best) {
-    await slack.postThreadReply(channel, threadTs, ":warning: I couldn't rebuild the customer set for this niche. Reply `avatars fresh`, then `loom` again.");
-    return;
-  }
 
   // Step 2: pick the customer, offer the six pictures.
   if (state?.stage === "avatar") {
+    const best = await bestAvatars(report, view);
+    if (!best) {
+      await slack.postThreadReply(channel, threadTs, ":warning: I couldn't rebuild the customer set for this niche. Reply `loom` to start again and I'll carry on without the menu.");
+      return;
+    }
     if (n > 3) {
       await slack.postThreadReply(channel, threadTs, "There are three customers to choose from. Reply *1*, *2* or *3*.");
       return;
@@ -373,13 +433,13 @@ async function advanceLoomWizard(
 
   // Step 3: pick the picture, get the prompt and the script.
   const idea = state?.ideas?.[n - 1];
-  const avatarIndex = state?.avatarIndex ?? null;
-  if (!idea || !avatarIndex) {
+  const resolved = await resolveLoomAvatar(report, view);
+  if (!idea || !resolved) {
     await slack.postThreadReply(channel, threadTs, "I've lost track of which options those were. Reply `loom` to start again.");
     return;
   }
+  const { avatar, index: avatarIndex } = resolved;
 
-  const avatar = best[avatarIndex - 1];
   const built = await buildDreamLeadPrompt(report, view, idea.preset as Preset, avatar);
   if (!built.ok) {
     // The menu is left standing on purpose: a refusal here is about THIS preset, and another
@@ -393,7 +453,7 @@ async function advanceLoomWizard(
     channel,
     threadTs,
     [
-      `:framed_picture: *${idea.label}* · for customer #${avatarIndex}, ${avatar.label}`,
+      `:framed_picture: *${idea.label}* · for ${avatarIndex ? `customer #${avatarIndex}, ` : ""}${avatar.label}`,
       `*Ticket signal:* ${v.ticketSignal}`,
       `*They ask AI:* "${v.avatarQuestion}"`,
       "",
@@ -413,7 +473,7 @@ async function advanceLoomWizard(
     .update({ loom_state: { ...state, stage: "done", ideas: undefined } })
     .eq("id", report.id);
 
-  await postLoomScript(report, channel, threadTs, view, runs, avatarIndex, { ...state });
+  await postLoomScript(report, channel, threadTs, view, runs, resolved, { ...state });
 }
 
 /** Build the read-aloud script and upload it as a .txt. */
@@ -423,10 +483,10 @@ async function postLoomScript(
   threadTs: string,
   view: ReportView,
   runs: AuditRunRow[],
-  avatarIndex: number | null,
+  resolved: { avatar: BestAvatar; index: number | null } | null,
   overrides: { price?: string; window?: string } = {}
 ): Promise<void> {
-  if (!avatarIndex) {
+  if (!resolved) {
     await slack.postThreadReply(
       channel,
       threadTs,
@@ -441,13 +501,7 @@ async function postLoomScript(
     return;
   }
 
-  const best = await bestAvatars(report, view);
-  if (!best) {
-    await slack.postThreadReply(channel, threadTs, ":warning: I couldn't rebuild the customer set for this niche. Reply `avatars fresh`, then `loom` again.");
-    return;
-  }
-
-  const script = await buildLoomScript(report, view, facts, best[avatarIndex - 1], {
+  const script = await buildLoomScript(report, view, facts, resolved.avatar, {
     price: overrides.price ?? report.loom_state?.price ?? null,
     window: overrides.window ?? report.loom_state?.window ?? null,
   });
@@ -458,7 +512,7 @@ async function postLoomScript(
     threadTs,
     [
       `:page_facing_up: *The script* · read it out loud, paste the screenshots over the top.`,
-      `Aimed at customer #${avatarIndex}, ${best[avatarIndex - 1].label}. Target 4 minutes.`,
+      `Aimed at ${resolved.index ? `customer #${resolved.index}, ` : ""}${resolved.avatar.label}. Target 4 minutes.`,
       "",
       "Reply `script` to rebuild it, or `loom` to start over with a different customer.",
       "After recording, paste the transcript here and reply `delivery` for the hand-over email.",
@@ -544,7 +598,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     // Note there is no `guion` alias here: `guion` is one of the loom triggers above and would
     // never reach this line.
     if (/^(script|full script)\??$/i.test(text)) {
-      await postLoomScript(report, args.channel, args.threadTs, view, runs, report.loom_state?.avatarIndex ?? null);
+      await postLoomScript(report, args.channel, args.threadTs, view, runs, await resolveLoomAvatar(report, view));
       return true;
     }
 
@@ -648,6 +702,9 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         "text/markdown",
         args.threadTs
       );
+      // Where it read matters now that Reddit is unreachable and the source rule is a blocklist
+      // rather than an allowlist. A brief built from trade press must not read like owner talk.
+      const domains = sourceDomains(b);
       await slack.postThreadReply(
         args.channel,
         args.threadTs,
@@ -656,6 +713,9 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
           `Loudest pain: *"${b.pains[0]?.says ?? "n/a"}"*`,
           b.horrorStories[0] ? `Best cold-open hook: _${b.horrorStories[0].hook}_` : null,
           b.objections[0] ? `They'll be afraid of: "${b.objections[0].fear}"` : null,
+          domains.length
+            ? `_Quotes came from: ${domains.join(", ")}._`
+            : "_No quoted source survived, so treat the stories as the market pattern only._",
           "",
           "`avatars` for the 3 worst / 3 best · `brief fresh` to re-research.",
         ]

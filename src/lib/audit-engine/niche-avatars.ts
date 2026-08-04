@@ -16,7 +16,7 @@
 // had. A strategic reposition (residential -> commercial contracts, cleanings -> implants) IS
 // allowed to be the pick, and when it is, the reposition is the pitch angle.
 
-import { callClaudeJSON } from "@/lib/claude-calls";
+import { callClaudeJSON, camelizeKeys } from "@/lib/claude-calls";
 import { supabaseAdmin } from "@/lib/db";
 import { NICHE_BRIEF_TTL_DAYS } from "@/config/pitch";
 import type { AuditReportRow } from "./types";
@@ -73,6 +73,27 @@ function isFresh(createdAt: string): { fresh: boolean; ageDays: number } {
   return { fresh: ageDays < NICHE_BRIEF_TTL_DAYS, ageDays };
 }
 
+/**
+ * The one repairable near-miss, and why it is worth repairing.
+ *
+ * `pick` is documented as 1-based and consumed as `best[pick - 1]`, but the model returns a
+ * ZERO-based index often enough that it took out two live prospects in a row: a fully correct set
+ * (3 worst, 3 best, right keys, not truncated) was thrown away because one field read 0. A 0 has
+ * exactly one sensible reading, the first item, so it is mapped rather than rejected.
+ *
+ * Anything still outside 1..3 is left alone to fail. Clamping a 7 would silently pick a customer
+ * the model did not choose, and `pickWhy` would then describe someone else.
+ */
+function coerceAvatars(p: unknown): unknown {
+  // camelizeKeys first: this generator has not drifted into snake_case yet, but the intel brief
+  // did on a run whose content was fine, and the two share a prompt style.
+  const o = camelizeKeys(p) as Record<string, unknown>;
+  if (!o || typeof o !== "object") return o;
+  const n = typeof o.pick === "string" ? Number(o.pick.trim()) : o.pick;
+  if (typeof n === "number" && Number.isFinite(n)) o.pick = n === 0 ? 1 : n;
+  return o;
+}
+
 function validate(p: unknown): p is NicheAvatars {
   const o = p as NicheAvatars;
   return (
@@ -86,6 +107,29 @@ function validate(p: unknown): p is NicheAvatars {
     o.pick <= 3 &&
     o.best.every((b) => typeof b?.aiQuestion === "string" && b.aiQuestion.length > 0)
   );
+}
+
+/**
+ * Which check failed, in words.
+ *
+ * Fed back to the model on the correction retry, and printed in Slack instead of the first 500
+ * characters of raw JSON. That excerpt is what made the `pick: 0` failure undiagnosable: the
+ * broken field was 4,000 characters in, so the error showed nothing but correct output.
+ */
+function describeInvalid(p: unknown): string {
+  if (!p || typeof p !== "object") return "the response was not a JSON object";
+  const o = p as Partial<NicheAvatars>;
+  const problems: string[] = [];
+  if (!Array.isArray(o.worst)) problems.push("worst was missing or not an array");
+  else if (o.worst.length !== 3) problems.push(`worst had ${o.worst.length} entries, expected exactly 3`);
+  if (!Array.isArray(o.best)) problems.push("best was missing or not an array");
+  else if (o.best.length !== 3) problems.push(`best had ${o.best.length} entries, expected exactly 3`);
+  if (typeof o.pick !== "number") problems.push(`pick was ${JSON.stringify(o.pick)}, expected the number 1, 2 or 3`);
+  else if (o.pick < 1 || o.pick > 3) problems.push(`pick was ${o.pick}, expected 1, 2 or 3 counting from 1`);
+  if (Array.isArray(o.best) && !o.best.every((b) => typeof b?.aiQuestion === "string" && b.aiQuestion.length > 0)) {
+    problems.push("every entry in best needs a non-empty aiQuestion");
+  }
+  return problems.join("; ") || "it did not match the required shape";
 }
 
 /**
@@ -131,7 +175,9 @@ export async function getNicheAvatars(
       "",
       "BEST: judge on HIGHEST return for LOWEST effort, in this order: recurring contracts beat big one-time jobs, and big one-time jobs beat volume. For each give the label, the ticket and how often it recurs, why it is high return for low effort (margin, predictability, one decision maker meaning many jobs), and the exact question that buyer types into an AI engine.",
       "",
-      "PICK one of the three best and say why in two or three sentences. Prefer recurring revenue. If the pick would move this business into work it does not currently present itself as doing, set is_reposition true and say so plainly, because the reposition is the whole pitch angle.",
+      "PICK one of the three best and say why in two or three sentences. Prefer recurring revenue. If the pick would move this business into work it does not currently present itself as doing, set isReposition true and say so plainly, because the reposition is the whole pitch angle.",
+      "",
+      'IMPORTANT: `pick` counts from 1. The first entry in `best` is 1, the second is 2, the third is 3. It is NOT a zero-based array index, so 0 is never a valid answer.',
       "",
       "NEVER pick 'more customers', 'more leads' or 'more visibility'. That is not an idea the owner has not already had.",
       "Be concrete about this trade. Generic advice that would fit any business is a failed answer.",
@@ -152,6 +198,14 @@ export async function getNicheAvatars(
       .join("\n"),
     maxTokens: 2600,
     temperature: 0.6,
+    // The shape belongs in the SYSTEM prompt, which is what schemaHint does. It used to appear
+    // only on the last line of the user message, the weakest place to state a contract.
+    schemaHint:
+      '{ "worst": [{ "label": string, "whyItHurts": string, "economics": string, "ownersSay": string }] (exactly 3), ' +
+      '"best": [{ "label": string, "ticket": string, "whyHighRoi": string, "aiQuestion": string }] (exactly 3), ' +
+      '"pick": 1 | 2 | 3 (counts from 1, NOT a zero-based index), "pickWhy": string, "isReposition": boolean }',
+    coerce: coerceAvatars,
+    describeInvalid,
     validate,
   });
 
