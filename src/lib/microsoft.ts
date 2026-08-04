@@ -516,18 +516,24 @@ export const microsoft = {
   },
 
   /**
-   * Send a threaded HTML reply to an existing message so it lands in the same
-   * conversation as the original (Re: subject + In-Reply-To headers handled by
-   * Graph). Uses createReply → PATCH body → send. When `mailbox` is set the reply
-   * originates from that shared mailbox (the message must live in that mailbox).
-   * Recipients default to the original sender; pass `to` to override.
+   * Build a threaded HTML reply and LEAVE IT AS A DRAFT, returning its id and web link.
+   *
+   * createReply is the only supported way to thread an outbound message. Graph rejects
+   * `conversationId` on POST /messages, and `internetMessageHeaders` only accepts X- prefixed
+   * custom headers, so `In-Reply-To` / `References` cannot be set by hand. Handing Graph the
+   * original message id is what makes the reply land in the same conversation, and it writes the
+   * `Re:` subject itself — which is also why the caller never has to recover the original subject.
+   *
+   * Stopping at the draft is the point: every outbound email in this app is reviewed before it
+   * sends. Pair with `sendDraft`.
    */
-  async sendReplyHtml(params: {
+  async createReplyDraft(params: {
     messageId: string;
     html: string;
     mailbox?: string;
     to?: string | string[];
-  }): Promise<void> {
+    attachments?: Array<{ name: string; contentType: string; contentBytes: string }>;
+  }): Promise<{ id: string; webLink: string }> {
     const token = await getValidAccessToken();
     const base = params.mailbox
       ? `${GRAPH_URL}/users/${encodeURIComponent(params.mailbox)}`
@@ -540,7 +546,7 @@ export const microsoft = {
       headers,
     });
     if (!createRes.ok) throw new Error(`createReply failed: ${await createRes.text()}`);
-    const draft = (await createRes.json()) as { id?: string };
+    const draft = (await createRes.json()) as { id?: string; webLink?: string };
     if (!draft.id) throw new Error("createReply returned no draft id");
 
     // 2) Set our HTML body (and optionally override recipients).
@@ -553,9 +559,42 @@ export const microsoft = {
     });
     if (!patchRes.ok) throw new Error(`reply draft patch failed: ${await patchRes.text()}`);
 
-    // 3) Send it.
-    const sendRes = await fetch(`${base}/messages/${draft.id}/send`, { method: "POST", headers });
-    if (!sendRes.ok) throw new Error(`reply send failed: ${await sendRes.text()}`);
+    // 3) Attachments go on separately. createReply gives no way to include them, and PATCHing an
+    // `attachments` array onto an existing message is ignored by Graph.
+    for (const att of params.attachments ?? []) {
+      const attRes = await fetch(`${base}/messages/${draft.id}/attachments`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: att.name,
+          contentType: att.contentType,
+          contentBytes: att.contentBytes,
+        }),
+      });
+      if (!attRes.ok) throw new Error(`reply attachment failed: ${await attRes.text()}`);
+    }
+
+    return { id: draft.id, webLink: draft.webLink ?? "" };
+  },
+
+  /**
+   * Send a threaded HTML reply to an existing message so it lands in the same
+   * conversation as the original (Re: subject + In-Reply-To headers handled by
+   * Graph). When `mailbox` is set the reply originates from that shared mailbox
+   * (the message must live in that mailbox). Recipients default to the original
+   * sender; pass `to` to override.
+   *
+   * Thin wrapper over createReplyDraft so there is ONE implementation of the createReply dance.
+   */
+  async sendReplyHtml(params: {
+    messageId: string;
+    html: string;
+    mailbox?: string;
+    to?: string | string[];
+  }): Promise<void> {
+    const draft = await microsoft.createReplyDraft(params);
+    await microsoft.sendDraft(draft.id, params.mailbox);
   },
 
   /** Reply to an email */

@@ -45,7 +45,16 @@ export interface AuditReportRow {
   // The last set of 3 choose-from email options posted to the thread; a "1/2/3" reply turns
   // the chosen one into an Outlook draft. Shape mirrors EmailOption in email-assistant.ts
   // (kept inline here to avoid a type import cycle).
-  pending_drafts: Array<{ label: string; subject: string; body: string }> | null;
+  // `replyToMessageId` turns the "1" picker into a Graph createReply instead of a fresh message,
+  // so the delivery email lands on the thread that started the conversation. `attachScorecard`
+  // regenerates the PDF at draft time rather than storing a copy on the row.
+  pending_drafts: Array<{
+    label: string;
+    subject: string;
+    body: string;
+    replyToMessageId?: string;
+    attachScorecard?: boolean;
+  }> | null;
   // ── Cold-outreach state (docs/2026-07-29-audit-outreach-intake.sql) ──
   // Where this thread is in the pre-pitch -> reveal flow. Null on public
   // form-fill leads, which skip the intake entirely.

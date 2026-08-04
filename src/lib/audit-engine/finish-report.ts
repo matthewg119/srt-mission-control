@@ -51,7 +51,7 @@ function displayName(report: AuditReportRow): string {
  * one was named after the COMPANY. Reading the two side by side looked exactly like a
  * scorecard for the wrong business, which cost a real investigation.
  */
-function scorecardFileName(report: AuditReportRow): string {
+export function scorecardFileName(report: AuditReportRow): string {
   return `AI Visibility Scorecard - ${displayName(report)}.pdf`;
 }
 

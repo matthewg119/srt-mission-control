@@ -55,6 +55,45 @@ export const LOOM_TEXT_NUMBER = "336-833-2303";
  */
 export const LOOM_CLIENT_COUNT_CLAIM: string | null = null;
 
+// ── The Loom delivery email ─────────────────────────────────────────────────
+
+/** Rule 2. The body is a hand-over, not a second pitch. */
+export const DELIVERY_MAX_WORDS = 200;
+
+/**
+ * Rule 7. Both lines must survive into every delivery email, appended if the model drops them.
+ *
+ * Same precedent as PERMISSION_CLOSE: a model merely ASKED to include a line rewrites it every
+ * time. The first is the whole reason a cold prospect keeps reading; the second is what turns the
+ * report from a claim into something they can check in thirty seconds without talking to us, which
+ * is worth more than any sentence we could write about it.
+ */
+export const DELIVERY_REQUIRED_LINES = [
+  "yours to keep either way",
+  "run any of those questions yourself in an incognito window",
+];
+
+/**
+ * Rule 4. Anything here is a promise this business cannot make and does not measure.
+ *
+ * The audit reports VISIBILITY. It does not predict customers, calls, jobs or revenue, and nothing
+ * in the pipeline could support such a number. These are checked against the TRANSCRIPT (where a
+ * hit is flagged, because the video is already recorded and the email cannot unsay it) and against
+ * the DRAFT (where a hit is rejected, because that one we can still fix).
+ *
+ * Deliberately broad. A false positive costs one glance at a flag; a false negative puts a promise
+ * we cannot keep in writing.
+ */
+export const DELIVERY_BANNED_PROMISES: Array<{ pattern: RegExp; detail: string }> = [
+  { pattern: /\b(?:more|extra|additional|new)\s+(?:customers?|clients?|patients?|jobs?|leads?|calls?|bookings?|business)\b/i, detail: "promises more customers, jobs, leads or calls" },
+  { pattern: /\b\d+\s*(?:to|-)?\s*\d*\s*(?:more\s+)?(?:customers?|clients?|patients?|jobs?|leads?|calls?)\b/i, detail: "names a number of customers, jobs or calls" },
+  { pattern: /\b(?:grow|double|triple|increase|boost|scale)\s+(?:your|their)?\s*(?:business|revenue|sales|income|bookings?|customers?)\b/i, detail: "promises growth in revenue or sales" },
+  { pattern: /\b(?:guarantee|guaranteed|promise)\b/i, detail: "uses the word guarantee or promise" },
+  { pattern: /\b(?:you'?ll|you will|this will)\s+(?:get|win|land|close|make)\b/i, detail: "predicts what they will get, win or close" },
+  { pattern: /\b(?:ROI|return on investment|pays? for itself)\b/i, detail: "claims a return on investment" },
+  { pattern: /\b(?:more|extra)\s+(?:revenue|money|sales|income)\b/i, detail: "promises more revenue or money" },
+];
+
 // ── Draft linter ────────────────────────────────────────────────────────────
 
 /** Auto-retries before the failure reason is posted instead of the draft. */

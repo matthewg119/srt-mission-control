@@ -52,6 +52,10 @@ import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead"
 import { getNicheAvatars, formatAvatarsCard, type BestAvatar } from "./niche-avatars";
 import { getIntelBrief, formatBriefMarkdown, sourceDomains } from "./intel-brief";
 import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
+import { resolveReplyAnchor } from "./reply-anchor";
+import { generateScorecardPDF } from "./pdf-scorecard";
+import { scorecardFileName } from "./finish-report";
+import { computeWeightedScore } from "./report-view";
 import {
   draftWithLint,
   formatLintFindings,
@@ -188,6 +192,20 @@ function formatPreSell(options: PreSellOption[]): string {
   return `:seedling: *Pre-sell · paste one in above the ask*\n${lines}\n\n`;
 }
 
+/** The scorecard, rendered fresh, as a Graph fileAttachment. */
+async function scorecardAttachment(report: AuditReportRow): Promise<{ name: string; contentType: string; contentBytes: string }> {
+  const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", report.id);
+  const runs = (runsData ?? []) as AuditRunRow[];
+  const aliases = buildAliases(report.client_name ?? report.business_type ?? report.website, report.website);
+  const view = buildReportView(report, runs, aliases);
+  const pdf = generateScorecardPDF(report, view, computeWeightedScore(view));
+  return {
+    name: scorecardFileName(report),
+    contentType: "application/pdf",
+    contentBytes: pdf.toString("base64"),
+  };
+}
+
 /** Turn the chosen stored option into an Outlook draft and confirm with the open-in-Outlook link. */
 async function createOutlookDraftFromPick(report: AuditReportRow, channel: string, threadTs: string, pick: number): Promise<void> {
   const drafts = report.pending_drafts ?? [];
@@ -209,16 +227,22 @@ async function createOutlookDraftFromPick(report: AuditReportRow, channel: strin
     // would print the agency twice. He deletes it by hand every time; do it here instead.
     const outlookBody = stripAgencyLine(chosen.body);
     const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(outlookBody)}</div>`;
-    const draft = await microsoft.createDraft({
-      to,
-      subject: chosen.subject,
-      body: htmlBody,
-    });
+
+    // The scorecard is regenerated here rather than stored on the row: it is derived from the
+    // runs, so a fresh render can never disagree with the report the email links to.
+    const attachments = chosen.attachScorecard ? [await scorecardAttachment(report)] : undefined;
+
+    const draft = chosen.replyToMessageId
+      ? await microsoft.createReplyDraft({ messageId: chosen.replyToMessageId, html: htmlBody, to, attachments })
+      : await microsoft.createDraft({ to, subject: chosen.subject, body: htmlBody, attachments });
+
     const noRecipient = to ? "" : "\nNo recipient on file, so add the To address in Outlook before sending.";
+    const threaded = chosen.replyToMessageId ? ", as a reply on the original thread" : "";
+    const attached = attachments ? ", scorecard attached" : "";
     await slack.postThreadReply(
       channel,
       threadTs,
-      `:envelope_with_arrow: Outlook draft created${drafts.length > 1 ? ` for option ${pick}` : ""} (${chosen.label})${to ? ` to ${to}` : ""}. <${draft.webLink}|Open in Outlook>${noRecipient}`
+      `:envelope_with_arrow: Outlook draft created${drafts.length > 1 ? ` for option ${pick}` : ""} (${chosen.label})${to ? ` to ${to}` : ""}${threaded}${attached}. <${draft.webLink}|Open in Outlook>${noRecipient}`
     );
   } catch (e) {
     await slack.postThreadReply(channel, threadTs, `:warning: Couldn't create the Outlook draft: ${(e as Error).message}`).catch(() => {});
@@ -672,14 +696,46 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
         await supabaseAdmin.from("audit_reports").update({ loom_transcript: pasted }).eq("id", report.id);
       }
 
-      const draft = await draftDeliveryEmail(report, transcript, check);
+      const anchor = await resolveReplyAnchor(report);
+      const draft = await draftDeliveryEmail(report, view, transcript, check);
+      const flags = [...draft.flags];
+
+      // Rule 1 wants a reply on the original thread. Without an anchor it still goes out, as a new
+      // message, said out loud rather than discovered later in Outlook.
+      if (!anchor) {
+        flags.push(
+          "No encontré el correo original en Outlook, así que esto sale como mensaje nuevo y no como respuesta en el hilo. Revisa el asunto antes de enviar."
+        );
+      }
+
+      const subject = anchor?.subject ? `re: ${anchor.subject.replace(/^re:\s*/i, "")}` : draft.subject;
+
       await postSingleDraft(
         report,
         args.channel,
         args.threadTs,
-        `:inbox_tray: *Delivery* · quoting ${draft.scorecardStamp} (score) and ${draft.closeStamp} (close), both read off the transcript`,
-        { label: "Delivery", subject: draft.subject, body: draft.body },
+        [
+          `:inbox_tray: *Delivery* · ${draft.scorecardStamp} (score) and ${draft.closeStamp} (price), both read off the transcript`,
+          anchor
+            ? `_Replies on the existing thread (found via ${anchor.source}). Outlook writes the Re: line itself._`
+            : `_No thread found, this will go as a new message._`,
+        ].join("\n"),
+        {
+          label: "Delivery",
+          subject,
+          body: draft.body,
+          replyToMessageId: anchor?.messageId,
+          attachScorecard: true,
+        },
         THREAD_COMMANDS
+      );
+
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        flags.length
+          ? [":warning: *FLAGS*", ...flags.map((f) => `• ${f}`)].join("\n")
+          : ":warning: *FLAGS*\nSin flags."
       );
       return true;
     }

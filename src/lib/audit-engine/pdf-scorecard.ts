@@ -17,7 +17,8 @@ const MUTED: [number, number, number] = [150, 162, 180]; // ~text-secondary
 const CARD_BORDER: [number, number, number] = [45, 55, 78];
 const RED: [number, number, number] = [231, 76, 60];
 
-const BLOCK_LABEL: Record<string, string> = {
+/** The four blocks as a buyer would name them. Exported: the delivery email says them out loud. */
+export const BLOCK_LABEL: Record<string, string> = {
   MARCA: "Brand",
   SERVICIO: "Service",
   INFO: "Info",

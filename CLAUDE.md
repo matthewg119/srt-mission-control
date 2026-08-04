@@ -406,10 +406,50 @@ a competitor who failed them. On camera the image is the TARGET ("the exact kind
 point at your phone"), never a lead that arrived: AI generates the future, screenshots the present.
 
 **The delivery email is gated on the transcript** (`delivery-email.ts`), per the playbook. No
-transcript in-thread, no draft — the email quotes two timestamps and the strongest moment, and
-without it both are invented. `looksLikeTranscript()` is mechanical (length + 3 or more distinct
-timestamps) precisely so it cannot be talked into passing. The quoted stamps snap to the nearest
-one that actually appears in this recording rather than the beat sheet's 1:15 / 3:15 targets.
+transcript in-thread, no draft — the email quotes two timestamps and figures the reader can check,
+and without it both are invented. `looksLikeTranscript()` is mechanical (length + 3 or more distinct
+timestamps) precisely so it cannot be talked into passing.
+
+**Transcript for tone, report for numbers** (rebuilt 2026-08-04). The two are handed to the model
+separately and labelled that way, because the one failure this email cannot survive is a figure that
+disagrees with the PDF attached to it. Where they conflict the report wins and the conflict is
+FLAGGED, never smoothed over. Rules live in `delivery-guards.ts` as pure functions, not in the
+prompt — a prose guard is not a guard:
+
+| Guard | Rule |
+|---|---|
+| `competitorsWhereAbsent` | the money-gap number. **NOT `view.mostRecommended`** — see below |
+| `spokenPromises` | customers / jobs / leads / revenue. Flagged in the transcript, REJECTED in the draft |
+| `numberConflicts` | "N out of 100", "N of 20", "came up N times" diffed against the report |
+| `verifyStamp` | a stamp the model returns must literally appear in the transcript |
+| `replyPhrase` | the exact words he told them to reply with, or null and a flag |
+
+> ‼️ `competitorsWhereAbsent` and `view.mostRecommended` are different numbers and must never be
+> reconciled. `mostRecommended` counts `audit_runs` ROWS, so a competitor named by both engines on
+> one prompt counts 2, the ceiling is 40, and it never checks whether the client appeared — right
+> for "who owns the answers", which is why `email-assistant.ts` renders it as "cited 6x". The
+> delivery email says "came up in N of the questions you're missing from", which has to survive the
+> prospect opening the report and counting, so it is prompt-level, absent-only and excludes branded
+> prompts.
+
+**It replies on the real thread.** `microsoft.createReplyDraft` (Graph `/createReply`, factored out
+of `sendReplyHtml` so there is one implementation) leaves the reply as a DRAFT for review. Graph
+writes the `Re:` subject and the `In-Reply-To` / `References` headers, which is the only supported
+way to thread: Graph rejects `conversationId` on POST /messages and `internetMessageHeaders` only
+accepts `X-` prefixed keys. `pending_drafts[].replyToMessageId` carries it through the existing "1"
+picker, so nothing else about that flow changed.
+
+`resolveReplyAnchor` (`reply-anchor.ts`) finds the message to reply to: `outreach_prospects`, then
+`outreach_touches` (append-only, **scoped by `prospect_id`** — that table is not keyed by email, and
+filtering it on direction/channel alone returns some other prospect's thread), then a live
+`searchMessagesWithAddress`. That last one is not an edge case: the first two are written by the
+daily Sent Items sweep, so they are empty between sending email 1 and the next morning, which is
+exactly when a Loom gets recorded. No anchor found is not fatal — it sends as a new message and says
+so in the flags.
+
+**FLAGS are Spanish and Slack-only**, never part of the email: promises the video made, figures the
+video got wrong, a missing reply phrase, an invented timestamp, a thread that could not be found.
+`Sin flags.` when clean.
 
 ## SRT Follow-Up Operator (2026-07-31)
 Everything after the pitch is sent. `#followups_channel` used to carry the Google Maps clinic

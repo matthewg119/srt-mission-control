@@ -354,12 +354,20 @@ export const PARAGRAPH_RULES = [
  */
 export const OUTREACH_SIGNATURE = {
   name: process.env.OUTREACH_SIGNATURE_NAME || "Matthew Garcia",
-  agency: process.env.OUTREACH_SIGNATURE_AGENCY || "SRT Agency",
+  agency: process.env.OUTREACH_SIGNATURE_AGENCY || "Search Retrieval Tactics",
 };
 
 /** Sign-offs that used to ship and must be rewritten wherever they still appear, including
  *  drafts already sitting in pending_drafts that a revision pass would otherwise preserve. */
 const STALE_SIGNOFF_NAMES = ["Dan"];
+
+/** Agency lines that used to ship. Same job as STALE_SIGNOFF_NAMES, for the second line.
+ *
+ *  This exists because ensureSignoff() decides "is this already signed?" by looking for the
+ *  CURRENT agency in the tail. Renaming the agency (SRT Agency -> Search Retrieval Tactics,
+ *  2026-08-04) makes every already-drafted body fail that test, so without a repair pass a
+ *  revision would append a SECOND sign-off under the first one. */
+const STALE_SIGNOFF_AGENCIES = ["SRT Agency", "Scaling Revenue Together"];
 
 export const SIGNOFF_RULE = `End with exactly this sign-off, on its own two lines, nothing after it:\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}\nNo title, no phone number, no signature block, no postscript.`;
 
@@ -374,13 +382,23 @@ export const SIGNOFF_RULE = `End with exactly this sign-off, on its own two line
  */
 export function ensureSignoff(body: string): string {
   let trimmed = body.trimEnd();
+  const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Rename the agency line FIRST, so the stale-name pass below (which matches against the
+  // CURRENT agency) still recognises a sign-off written under the old brand.
+  for (const staleAgency of STALE_SIGNOFF_AGENCIES) {
+    if (staleAgency === OUTREACH_SIGNATURE.agency) continue;
+    // Anchored to the end and to its own line, so an agency named in the body is never rewritten.
+    const pattern = new RegExp(`\\n${escapeRe(staleAgency)}\\s*$`, "i");
+    trimmed = trimmed.replace(pattern, `\n${OUTREACH_SIGNATURE.agency}`);
+  }
 
   for (const stale of STALE_SIGNOFF_NAMES) {
     if (stale === OUTREACH_SIGNATURE.name) continue;
     // Anchored to the end and to its own line, so a prospect actually named Dan in the body
     // is never rewritten. Only the sign-off block itself matches.
     const pattern = new RegExp(
-      `\\n${stale}\\s*\\n\\s*${OUTREACH_SIGNATURE.agency.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`,
+      `\\n${stale}\\s*\\n\\s*${escapeRe(OUTREACH_SIGNATURE.agency)}\\s*$`,
       "i"
     );
     trimmed = trimmed.replace(pattern, `\n${OUTREACH_SIGNATURE.name}\n${OUTREACH_SIGNATURE.agency}`);
@@ -662,7 +680,7 @@ export async function draftInitialEmail(report: AuditReportRow, view: ReportView
   const { text } = await callClaudeText({
     model: model(),
     system: [
-      "You write EMAIL 1 of SRT Agency LLC's AI-visibility outreach. SRT ('Scaling Revenue Together') is an AI-search-visibility agency.",
+      "You write EMAIL 1 of SRT Agency LLC's AI-visibility outreach. SRT ('Search Retrieval Tactics') is an AI-search-visibility agency.",
       "Mechanism: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and cite 3 to 5 names. If a business is not in what gets retrieved, that buyer never sees it, no matter how good its site or prices are.",
       "This is a cold first touch. Install exactly ONE belief: present-tense loss. Do not stack scarcity or pile on outside facts. A first email that stacks reads desperate.",
       "Lead by reframing the audit result as an ongoing bleed, present tense, using their OWN real numbers. For example: 'Right now, X of the 20 highest-intent questions in your category get answered without {business} in them. That is not a future risk. It is the state of every buyer conversation happening this week.' Use the real absent-count and the real competitor names that show up instead, with their citation counts if given.",
@@ -688,6 +706,14 @@ export interface EmailOption {
   label: string;
   subject: string;
   body: string;
+  /**
+   * When set, the "1" picker builds a Graph reply DRAFT anchored on this message instead of a
+   * fresh one, so the email lands on the existing conversation and Graph writes the Re: subject
+   * and threading headers itself. Set by the delivery email; absent everywhere else.
+   */
+  replyToMessageId?: string;
+  /** Regenerate and attach the scorecard PDF when the Outlook draft is created. */
+  attachScorecard?: boolean;
 }
 
 // Belt-and-suspenders dash strip (the model is already told, but this guarantees it). Turns
@@ -840,7 +866,7 @@ export async function draftEmailOptions(report: AuditReportRow, view: ReportView
   const { data } = await callClaudeJSON<{ options: EmailOption[] }>({
     model: model(),
     system: [
-      "You write cold outreach and reply emails for SRT Agency LLC's AI-visibility audit offer. SRT ('Scaling Revenue Together') is an AI-search-visibility agency. AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory: they retrieve a few pages and cite 3 to 5 names. A business not in what gets retrieved is invisible to that buyer no matter how good its site or prices.",
+      "You write cold outreach and reply emails for SRT Agency LLC's AI-visibility audit offer. SRT ('Search Retrieval Tactics') is an AI-search-visibility agency. AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory: they retrieve a few pages and cite 3 to 5 names. A business not in what gets retrieved is invisible to that buyer no matter how good its site or prices.",
       "Write as the specific person who personally ran this audit on THIS business, not a template.",
       "Return EXACTLY 3 options. Each option has a short 2 to 4 word angle label, a subject line, and a plain-text body ready to paste. The 3 must be genuinely different angles.",
       task,
@@ -933,7 +959,7 @@ export async function draftObjectionReply(report: AuditReportRow, view: ReportVi
 
 /** The shared identity + mechanism preamble every permission-stage email opens from. */
 const PERMISSION_PERSONA = [
-  "You write the cold pre-outreach for SRT Agency LLC ('Scaling Revenue Together'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
+  "You write the cold pre-outreach for SRT Agency LLC ('Search Retrieval Tactics'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
   "Background for YOU, not material to recite: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and name 3 to 5 businesses. A business that is not in what gets retrieved is invisible to that buyer no matter how good its work or prices are.",
   "Do NOT explain that mechanism to the reader. A stranger did not sign up for a seminar, and an unsolicited explanation of how AI search works is the fastest way to read as a template. You may only get concrete: name what you found, or name what you built them. Specifics earn the reply, theory does not.",
   "This prospect never asked to hear from you. So the email is NOT the pitch and NOT the delivery. It is a door knock that earns the right to send the breakdown.",
@@ -1057,7 +1083,7 @@ export async function draftRevealMessage(
   const { text } = await callClaudeText({
     model: model(),
     system: [
-      "You write the delivery message for SRT Agency LLC ('Scaling Revenue Together'), an AI-search-visibility agency, at the single best moment in the whole sequence: the prospect just said yes, send it.",
+      "You write the delivery message for SRT Agency LLC ('Search Retrieval Tactics'), an AI-search-visibility agency, at the single best moment in the whole sequence: the prospect just said yes, send it.",
       "Because they asked, this message withholds nothing. It is the one place where the report link, anything built for them, and the price all land at once. Everything before this was a door knock.",
       "Structure: one warm opening line that delivers on the promise, then each asset with one sentence of framing, then the offer in plain terms, then a single low-friction next step (a one-word reply). Do NOT re-argue the gap. They already agreed to look. Re-selling here is the mistake.",
       "The free work is a gift with no strings, and it must read that way. Say plainly that there is nothing to sign and nothing owed. Never imply the offer is contingent on them taking it.",

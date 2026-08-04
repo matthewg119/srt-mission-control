@@ -1,26 +1,57 @@
-// The delivery email: the one that actually hands over the Loom, same day they say yes.
+// The delivery email: the one that hands over the Loom, the report and the price in a single
+// message, as a reply on the thread that started the conversation.
 //
-// THE GATE, and it is the whole point of this file (SRT_Loom_Playbook.md): the agent refuses to
-// draft this until the Loom TRANSCRIPT has been pasted into the thread. Without it the email
-// quotes timestamps and "the best moment of the video" from imagination, and a prospect who
-// clicks 3:15 and finds something else there stops believing the rest. With it, the two
-// timestamps are read off what was actually said.
+// THE GATE, and it remains the whole point of this file (SRT_Loom_Playbook.md): the agent refuses
+// to draft until the Loom TRANSCRIPT has been pasted into the thread. Without it the timestamps and
+// "the best moment of the video" come from imagination, and a prospect who clicks 3:15 and finds
+// something else there stops believing the rest of it.
 //
-// The two moments the playbook wants quoted:
-//   ~1:15  the scorecard, "at 1:15 I show your AI Visibility Score"
-//   ~3:15  the close,     "at 3:15, exactly how we close the gap, and what it costs"
+// ── The division of labour, which is the design ─────────────────────────────
+// The TRANSCRIPT supplies tone, the two moments, and the exact words he used to ask for a reply.
+// The REPORT supplies every figure. They are handed to the model separately and labelled that way,
+// because the failure this email cannot survive is a number that does not match the PDF attached to
+// it. Where they disagree, the report wins and the disagreement is flagged rather than smoothed
+// over: a video that said "50 out of 100" over a report that says 40 is something Matthew needs to
+// know before he hits send, not something to paper over.
 //
-// Those are the TARGET times. What ships in the email is what the transcript actually shows,
-// because a recording never lands exactly on the beat sheet.
+// ── Two things this email will not do ───────────────────────────────────────
+//   1. Promise customers, jobs, leads or revenue. Nothing in the pipeline measures or predicts any
+//      of those. If the RECORDING made such a promise it is flagged and NOT repeated, because the
+//      video is already watched and the email cannot unsay it, but it can decline to put it in
+//      writing. See DELIVERY_BANNED_PROMISES.
+//   2. Quote a timestamp that is not in the transcript. verifyStamp is mechanical for the same
+//      reason looksLikeTranscript is.
+//
+// Everything stated as a rule lives in delivery-guards.ts as a pure function. A prose guard is not
+// a guard.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
+import {
+  DELIVERY_MAX_WORDS,
+  DELIVERY_REQUIRED_LINES,
+  LOOM_PRICE_LABEL,
+  LOOM_TEXT_NUMBER,
+} from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import { ensureSignoff, noDashes } from "./email-assistant";
+import { BLOCK_LABEL } from "./pdf-scorecard";
+import {
+  competitorsWhereAbsent,
+  numberConflicts,
+  replyPhrase,
+  spokenPromises,
+  verifyStamp,
+  wordCount,
+} from "./delivery-guards";
+import type { ReportView } from "./report-view";
 import type { AuditReportRow } from "./types";
 
 /** A transcript is a wall of timestamped lines. Anything shorter is somebody typing "transcript". */
 const MIN_TRANSCRIPT_CHARS = 400;
 const TIMESTAMP_RE = /(?:^|[\s(\[])(\d{1,2}:\d{2}(?::\d{2})?)/g;
+
+/** Rule 10. Square brackets, never braces: lintDraft rule 6 rejects a surviving {placeholder}. */
+export const THUMBNAIL_MARKER = "[LOOM THUMBNAIL, paste the clickable preview here]";
 
 export interface TranscriptCheck {
   ok: boolean;
@@ -72,61 +103,194 @@ export interface DeliveryDraft {
   body: string;
   scorecardStamp: string;
   closeStamp: string;
+  /** Spanish, for Slack only. Never part of the email. */
+  flags: string[];
+}
+
+interface ModelOut {
+  subject: string;
+  body: string;
+  scoreStamp: string;
+  priceStamp: string;
+}
+
+function reportUrl(slug: string): string {
+  return `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/r/${slug}`;
+}
+
+/**
+ * The figures, and only the figures. Handed to the model as the sole source of numbers.
+ */
+function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name: string; count: number } | null): string {
+  const blocks = view.blockStats
+    .map((b) => `${BLOCK_LABEL[b.block] ?? b.block}: ${b.mentioned} of ${b.total}`)
+    .join(" · ");
+  const site = report.site_signals?.[0]?.detail ?? null;
+
+  return [
+    `Company: ${report.client_name ?? report.website}`,
+    `Writing to: ${report.prospect_name ?? "the owner"}`,
+    report.city ? `City: ${report.city}` : "",
+    `Score: ${report.score ?? 0} out of 100`,
+    `Appeared in ${view.totalMentioned} of ${view.totalPrompts} buyer questions`,
+    `By category: ${blocks}`,
+    topAbsent
+      ? `Top competitor in the questions they are MISSING from: ${topAbsent.name}, in ${topAbsent.count} of those questions`
+      : "No competitor was named often enough in the missing questions to quote",
+    `Report link: ${reportUrl(report.slug)}`,
+    `Price: ${LOOM_PRICE_LABEL}`,
+    `Phone for questions: ${LOOM_TEXT_NUMBER}`,
+    site ? `Thing on their own site: ${site}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Put back anything the model dropped.
+ *
+ * Same move as ensurePermissionClose: these two lines are the difference between an email that
+ * asks for something and one that gives something first, and a model merely ASKED to include them
+ * rewrites or loses them often enough that hoping is not a strategy.
+ */
+function ensureRequiredLines(body: string, reportLink: string): string {
+  const lower = body.toLowerCase();
+  const additions: string[] = [];
+  if (!lower.includes(DELIVERY_REQUIRED_LINES[0])) {
+    additions.push("The full report is attached and it is yours to keep either way.");
+  }
+  if (!lower.includes("incognito")) {
+    additions.push(`You can run any of those questions yourself in an incognito window and see the same thing: ${reportLink}`);
+  }
+  return additions.length ? `${body.trimEnd()}\n\n${additions.join("\n\n")}` : body;
 }
 
 export async function draftDeliveryEmail(
   report: AuditReportRow,
+  view: ReportView,
   transcript: string,
   check: TranscriptCheck
 ): Promise<DeliveryDraft> {
-  // 1:15 and 3:15 are the beat sheet's targets; snap each to a timestamp that genuinely appears
-  // in this recording rather than quoting a moment the video may not have.
-  const scorecardStamp = nearestStamp(check.stamps, 75) ?? "1:15";
-  const closeStamp = nearestStamp(check.stamps, 195) ?? "3:15";
+  const flags: string[] = [];
 
-  const { data } = await callClaudeJSON<{ subject: string; body: string }>({
+  const absent = competitorsWhereAbsent(view);
+  const topAbsent = absent[0] ?? null;
+  const facts = factsBlock(report, view, topAbsent);
+
+  // Rule 4, against the RECORDING. A hit here is information, not a blocker: it already happened.
+  const promises = spokenPromises(transcript);
+  for (const p of promises) {
+    flags.push(`El video ${p.detail}${p.at ? ` en ${p.at}` : ""}: "${p.phrase}". No lo repetí en el correo.`);
+  }
+
+  // Rule 5.
+  const conflicts = numberConflicts(transcript, {
+    score: report.score ?? 0,
+    appeared: view.totalMentioned,
+    totalPrompts: view.totalPrompts,
+    competitorCount: topAbsent?.count ?? null,
+  });
+  for (const c of conflicts) {
+    flags.push(`El video dice "${c.said}"${c.at ? ` en ${c.at}` : ""} pero el reporte dice ${c.actual}. Usé el reporte.`);
+  }
+
+  // Rule 9.
+  const phrase = replyPhrase(transcript);
+  if (!phrase) {
+    flags.push('El video no dice una frase de respuesta exacta. Dejé [CONFIRMAR LA FRASE DE RESPUESTA] en el cierre.');
+  }
+
+  const { data } = await callClaudeJSON<ModelOut>({
     model: "claude-sonnet-4-6",
     system: [
-      "You write the email that delivers a 4-minute video to a prospect who just said yes to receiving it.",
+      "You write the email that delivers a recorded video, the report and the price to a prospect, in one message.",
       "",
-      "This is a reply in an existing thread, so no reintroduction and no restating the pitch. They already agreed. The job is to hand it over and get out of the way.",
+      "This is a REPLY on an existing thread. No reintroduction, no restating the pitch, no new subject.",
       "",
-      "Structure:",
-      "1. One line: here it is.",
-      `2. The two timestamps, using EXACTLY these: "${scorecardStamp}" for their score, and "${closeStamp}" for how the gap gets closed and what it costs.`,
-      "3. One line naming the single strongest moment in the transcript, in the prospect's terms.",
-      "4. The scorecard is attached and theirs to keep either way.",
-      "5. No new ask beyond watching it.",
+      "STRUCTURE:",
+      "1. Open on the gap. Where they appear versus where they disappear, and that the questions they disappear from are the ones with the bigger jobs behind them. NEVER open with a question they already win.",
+      "2. The competitor, named, with the count from the FIGURES below.",
+      "3. The two timestamps: where the score and findings are shown, and where the price and the next step are covered.",
+      "4. The report is attached and theirs to keep either way, and they can re-run any question themselves in an incognito window.",
+      "5. Close: the price, the exact phrase to reply with, what happens after they reply, and the phone number for questions.",
       "",
       "HARD RULES:",
-      "1. Use ONLY the two timestamps given above. Never invent a third.",
-      "2. Everything you describe must actually be in the transcript below. If the video never said it, it does not go in the email.",
-      "3. One sentence per paragraph, blank line between each.",
-      "4. No em dashes. No jargon: no AEO, GEO, LLM, schema, citations, entities, algorithm, SERP.",
-      "5. Under 130 words.",
-      "Return JSON: {\"subject\":\"...\",\"body\":\"...\"}",
+      `1. Under ${DELIVERY_MAX_WORDS} words. Plain text. ONE call to action.`,
+      "2. EVERY number comes from the FIGURES block. The transcript is for tone and timing ONLY. If the transcript states a different number, the FIGURES are correct and you use those.",
+      "3. Never promise customers, jobs, leads, calls or revenue, and never repeat such a promise from the transcript. This audit reports visibility only.",
+      "4. scoreStamp and priceStamp must be timestamps that literally appear in the transcript.",
+      "5. One sentence per paragraph, blank line between each.",
+      "6. No em dashes. No jargon: no AEO, GEO, LLM, schema, citations, entities, algorithm, SERP. Say it the way a contractor would.",
+      "7. Do not paste a raw video link. The line introducing the video must be exactly this marker on its own line:",
+      `   ${THUMBNAIL_MARKER}`,
+      "8. Write the subject as \"re: \" followed by the original subject if you are given one, otherwise leave subject as an empty string.",
+      'Return JSON: {"subject":"...","body":"...","scoreStamp":"M:SS","priceStamp":"M:SS"}',
     ].join("\n"),
     user: [
-      `Business: ${report.client_name ?? report.website}`,
-      `Writing to: ${report.prospect_name ?? "the owner"}`,
-      `Subject should stay on the existing thread: "${report.client_name ?? "your business"} + ChatGPT"`,
+      "FIGURES, the only source of numbers:",
+      facts,
       "",
-      "Loom transcript:",
-      transcript.slice(0, 12000),
-    ].join("\n"),
-    maxTokens: 900,
+      phrase
+        ? `The exact phrase he asked them to reply with, use it verbatim: "${phrase}"`
+        : "He did not state a reply phrase in the video. Write [CONFIRMAR LA FRASE DE RESPUESTA] where it belongs.",
+      promises.length
+        ? `\nDo NOT repeat these, he said them on camera but they are not claims we make: ${promises.map((p) => `"${p.phrase}"`).join(", ")}`
+        : "",
+      "",
+      "TRANSCRIPT, for tone and timestamps only, never for figures:",
+      transcript.slice(0, 14000),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    maxTokens: 1400,
     temperature: 0.5,
-    validate: (p): p is { subject: string; body: string } => {
+    validate: (p): p is ModelOut => {
       const o = p as Record<string, unknown>;
-      return !!o && typeof o.subject === "string" && typeof o.body === "string";
+      return (
+        !!o &&
+        typeof o.subject === "string" &&
+        typeof o.body === "string" &&
+        typeof o.scoreStamp === "string" &&
+        typeof o.priceStamp === "string" &&
+        wordCount(o.body) <= DELIVERY_MAX_WORDS &&
+        spokenPromises(o.body).length === 0
+      );
+    },
+    describeInvalid: (p) => {
+      const o = p as Partial<ModelOut>;
+      const problems: string[] = [];
+      for (const k of ["subject", "body", "scoreStamp", "priceStamp"] as const) {
+        if (typeof o[k] !== "string") problems.push(`${k} was missing`);
+      }
+      if (typeof o.body === "string") {
+        const n = wordCount(o.body);
+        if (n > DELIVERY_MAX_WORDS) problems.push(`the body is ${n} words, the limit is ${DELIVERY_MAX_WORDS}`);
+        const inDraft = spokenPromises(o.body);
+        if (inDraft.length) {
+          problems.push(`the body ${inDraft[0].detail} ("${inDraft[0].phrase}"), which this audit cannot promise. Remove it, do not soften it`);
+        }
+      }
+      return problems.join("; ") || "it did not match the required shape";
     },
   });
 
+  // Rule 3, verified rather than trusted. The old code snapped both stamps to the beat sheet's
+  // 1:15 / 3:15 targets; the model now finds them by MEANING, which is better when it works and
+  // needs checking when it does not.
+  const score = verifyStamp(data.scoreStamp, check.stamps, nearestStamp(check.stamps, 75));
+  const close = verifyStamp(data.priceStamp, check.stamps, nearestStamp(check.stamps, 195));
+  for (const [label, v] of [["del score", score], ["del precio", close]] as const) {
+    if (v.invented) flags.push(`El modelo citó ${v.invented} para el momento ${label}, y ese tiempo no existe en la transcripción. Lo cambié por ${v.stamp ?? "ninguno"}.`);
+  }
+
   const polished = await polishBody(noDashes(data.body), { allowEmphasis: false });
+  const withLines = ensureRequiredLines(polished.body, reportUrl(report.slug));
+
   return {
     subject: noDashes(data.subject).trim(),
-    body: ensureSignoff(polished.body),
-    scorecardStamp,
-    closeStamp,
+    body: ensureSignoff(withLines),
+    scorecardStamp: score.stamp ?? "1:15",
+    closeStamp: close.stamp ?? "3:15",
+    flags,
   };
 }
