@@ -31,6 +31,30 @@ export const RANKING_BRAG_PATTERNS: RegExp[] = [
  */
 export const VIDEO_LENGTH_LABEL = "4 min";
 
+// ── The Loom script ─────────────────────────────────────────────────────────
+/**
+ * The offer, as it is said out loud in the recording.
+ *
+ * Constants rather than prompt instructions for the same reason PERMISSION_CLOSE is: a model asked
+ * to "mention the price" rewrites it every take, and a video that says a different number than the
+ * invoice is the one mistake that cannot be walked back. Override per recording with `loom $499`.
+ */
+export const LOOM_PRICE_LABEL = "$299 / month";
+export const LOOM_START_WINDOW = "60 to 90 days";
+
+/** The number Matthew reads on camera. Same one as operator-rules.ts, NOT the NAP number. */
+export const LOOM_TEXT_NUMBER = "336-833-2303";
+
+/**
+ * A volume promise ("50 to 100 new clients"), or null for no promise at all.
+ *
+ * Null by default and that is deliberate. Nothing in the audit pipeline records or predicts a
+ * number of customers, so a figure said on camera would be invented, and the same honesty rule
+ * that stops dream-lead.ts presenting the image as a real lead applies to a sentence read aloud
+ * over it. Set this to a string only if the claim is one worth owning.
+ */
+export const LOOM_CLIENT_COUNT_CLAIM: string | null = null;
+
 // ── Draft linter ────────────────────────────────────────────────────────────
 
 /** Auto-retries before the failure reason is posted instead of the draft. */

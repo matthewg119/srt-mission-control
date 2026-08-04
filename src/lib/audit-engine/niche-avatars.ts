@@ -178,8 +178,14 @@ export async function getNicheAvatars(
   return { avatars: generated, cached: false, nicheKey: nicheKey ?? "(uncached)", ageDays: 0 };
 }
 
-/** The Slack card. Worst first: it is what earns the right to name the good one. */
-export function formatAvatarsCard(result: AvatarsResult, report: AuditReportRow): string {
+/**
+ * The Slack card. Worst first: it is what earns the right to name the good one.
+ *
+ * `footer` is overridden by the `loom` wizard, where the same card is a question rather than a
+ * reference: there the three best customers are a menu and the reply picks one, so telling the
+ * reader to run `image 2` would be pointing at the wrong command.
+ */
+export function formatAvatarsCard(result: AvatarsResult, report: AuditReportRow, footer?: string): string {
   const a = result.avatars;
   const pick = a.best[a.pick - 1];
   const provenance = result.cached
@@ -205,7 +211,7 @@ export function formatAvatarsCard(result: AvatarsResult, report: AuditReportRow)
       ? "_This moves them into work they don't currently present as doing. That reposition IS the pitch angle: it lands as an idea, not a service._"
       : "",
     "",
-    "`image` builds the dream-lead picture for the pick · `image 2` / `image 3` for another one.",
+    footer ?? "`image` builds the dream-lead picture for the pick · `image 2` / `image 3` for another one.",
   ]
     .filter((l) => l !== "")
     .join("\n");

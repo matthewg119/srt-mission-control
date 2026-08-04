@@ -45,9 +45,11 @@ import {
   type PreSellOption,
 } from "./email-assistant";
 import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDraft } from "./outreach-intake";
-import { buildLoomBeatSheet } from "./loom-beatsheet";
-import { buildDreamLeadPrompt, PRESET_ALIASES } from "./dream-lead";
-import { getNicheAvatars, formatAvatarsCard } from "./niche-avatars";
+import { computeBeatSheetFacts, renderPreflight } from "./loom-beatsheet";
+import { buildLoomScript } from "./loom-script";
+import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
+import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead";
+import { getNicheAvatars, formatAvatarsCard, type BestAvatar } from "./niche-avatars";
 import { getIntelBrief, formatBriefMarkdown } from "./intel-brief";
 import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
 import {
@@ -77,7 +79,8 @@ function escapeHtml(s: string): string {
  */
 export const THREAD_COMMANDS = [
   "*1* Outlook draft  ·  *seed 1-3* install a pre-sell line  ·  *nudge 2-5* next touch  ·  *reveal* they said yes",
-  "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt  ·  *loom* beat sheet",
+  "*loom* pick the customer, then the picture, then get the script  ·  *script* just the script again",
+  "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt straight up",
   "*delivery* + transcript = hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
   "Anything else you type edits the draft.",
 ].join("\n");
@@ -251,6 +254,218 @@ function unwrapSlackUrl(raw: string): string {
   return (m ? m[1] : raw).trim();
 }
 
+// ── The `loom` wizard ────────────────────────────────────────────────────────
+// Three steps, because each one is a decision that changes the next. Who the recording is aimed
+// at decides what the picture shows, and the picture decides how the script opens. Asking all
+// three at once produced what it produced before: a beat sheet that said "run `image`" and left
+// the operator to go find the avatars behind a second command he never ran.
+
+/** Pull a per-recording price and start window out of `loom $499, 45 days`. */
+function parseLoomOverrides(rest: string): { price: string | null; window: string | null } {
+  const price = rest.match(/\$\s?[\d,]+(?:\s*\/\s*(?:mo|month|monthly))?/i)?.[0]?.trim() ?? null;
+  const window = rest.match(/\d+\s*(?:to|-|–)\s*\d+\s*days?|\b\d+\s*days?\b/i)?.[0]?.trim() ?? null;
+  return { price, window };
+}
+
+/** The niche's three best customers, or null when the set can't be built. */
+async function bestAvatars(report: AuditReportRow, view: ReportView): Promise<BestAvatar[] | null> {
+  try {
+    const result = await getNicheAvatars(report, view);
+    return result.avatars.best;
+  } catch (e) {
+    console.error("[loom] avatars failed:", (e as Error).message);
+    return null;
+  }
+}
+
+/** Step 1: the prompts to paste, what not to say, and the three customers to choose between. */
+async function startLoomWizard(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  view: ReportView,
+  runs: AuditRunRow[],
+  rest: string
+): Promise<void> {
+  const { facts, refusal } = await computeBeatSheetFacts(report, view, runs);
+  if (!facts) {
+    await slack.postThreadReply(channel, threadTs, `:warning: ${refusal}`);
+    return;
+  }
+
+  const overrides = parseLoomOverrides(rest);
+  await slack.postThreadReply(channel, threadTs, renderPreflight(view, facts));
+
+  let result;
+  try {
+    result = await getNicheAvatars(report, view);
+  } catch (e) {
+    await slack.postThreadReply(
+      channel,
+      threadTs,
+      `:warning: I have the prompts and the pre-flight, but the customer set failed to build: ${(e as Error).message}\n\nReply \`avatars\` to retry, then \`loom\` again.`
+    );
+    return;
+  }
+
+  await supabaseAdmin
+    .from("audit_reports")
+    .update({ loom_state: { stage: "avatar", price: overrides.price ?? undefined, window: overrides.window ?? undefined } })
+    .eq("id", report.id);
+
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    formatAvatarsCard(
+      result,
+      report,
+      [
+        `:dart: *Who are we recording for?*`,
+        `Reply *1*, *2* or *3* and I'll show you six ways to picture that customer, then write the script.`,
+        overrides.price || overrides.window
+          ? `_This run: ${[overrides.price, overrides.window].filter(Boolean).join(", ")}._`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    )
+  );
+}
+
+/** Steps 2 and 3: the digit means the customer, then the picture. */
+async function advanceLoomWizard(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  view: ReportView,
+  runs: AuditRunRow[],
+  n: number
+): Promise<void> {
+  const state = report.loom_state;
+  const best = await bestAvatars(report, view);
+  if (!best) {
+    await slack.postThreadReply(channel, threadTs, ":warning: I couldn't rebuild the customer set for this niche. Reply `avatars fresh`, then `loom` again.");
+    return;
+  }
+
+  // Step 2: pick the customer, offer the six pictures.
+  if (state?.stage === "avatar") {
+    if (n > 3) {
+      await slack.postThreadReply(channel, threadTs, "There are three customers to choose from. Reply *1*, *2* or *3*.");
+      return;
+    }
+    const avatar = best[n - 1];
+    const ideas = await buildImageIdeas(report, avatar);
+    await supabaseAdmin
+      .from("audit_reports")
+      .update({
+        loom_state: {
+          ...state,
+          stage: "image",
+          avatarIndex: n,
+          ideas: ideas.map((i) => ({ preset: i.preset, label: i.label, line: i.line })),
+        },
+      })
+      .eq("id", report.id);
+    await slack.postThreadReply(channel, threadTs, formatIdeasCard(ideas, avatar, n));
+    return;
+  }
+
+  // Step 3: pick the picture, get the prompt and the script.
+  const idea = state?.ideas?.[n - 1];
+  const avatarIndex = state?.avatarIndex ?? null;
+  if (!idea || !avatarIndex) {
+    await slack.postThreadReply(channel, threadTs, "I've lost track of which options those were. Reply `loom` to start again.");
+    return;
+  }
+
+  const avatar = best[avatarIndex - 1];
+  const built = await buildDreamLeadPrompt(report, view, idea.preset as Preset, avatar);
+  if (!built.ok) {
+    // The menu is left standing on purpose: a refusal here is about THIS preset, and another
+    // one may well build. Clearing it would make him restart the whole wizard to find that out.
+    await slack.postThreadReply(channel, threadTs, `:warning: ${built.reason}\n\nPick a different one, or reply \`loom\` to start again.`);
+    return;
+  }
+
+  const v = built.variables;
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `:framed_picture: *${idea.label}* · for customer #${avatarIndex}, ${avatar.label}`,
+      `*Ticket signal:* ${v.ticketSignal}`,
+      `*They ask AI:* "${v.avatarQuestion}"`,
+      "",
+      "Paste this straight into Higgsfield or ChatGPT image mode. Regenerate until every word on screen is spelled right.",
+      "",
+      "```",
+      built.prompt,
+      "```",
+      "",
+      ":warning: On camera this is the TARGET, never a result: _\"this is the exact kind of inquiry we point at your phone.\"_ Never present it as a lead that already came in.",
+    ].join("\n")
+  );
+
+  // Release the digits back to the email picker, but keep the avatar so `script` still works.
+  await supabaseAdmin
+    .from("audit_reports")
+    .update({ loom_state: { ...state, stage: "done", ideas: undefined } })
+    .eq("id", report.id);
+
+  await postLoomScript(report, channel, threadTs, view, runs, avatarIndex, { ...state });
+}
+
+/** Build the read-aloud script and upload it as a .txt. */
+async function postLoomScript(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  view: ReportView,
+  runs: AuditRunRow[],
+  avatarIndex: number | null,
+  overrides: { price?: string; window?: string } = {}
+): Promise<void> {
+  if (!avatarIndex) {
+    await slack.postThreadReply(
+      channel,
+      threadTs,
+      "I don't know who this recording is aimed at yet. Reply `loom` and pick the customer first."
+    );
+    return;
+  }
+
+  const { facts, refusal } = await computeBeatSheetFacts(report, view, runs);
+  if (!facts) {
+    await slack.postThreadReply(channel, threadTs, `:warning: ${refusal}`);
+    return;
+  }
+
+  const best = await bestAvatars(report, view);
+  if (!best) {
+    await slack.postThreadReply(channel, threadTs, ":warning: I couldn't rebuild the customer set for this niche. Reply `avatars fresh`, then `loom` again.");
+    return;
+  }
+
+  const script = await buildLoomScript(report, view, facts, best[avatarIndex - 1], {
+    price: overrides.price ?? report.loom_state?.price ?? null,
+    window: overrides.window ?? report.loom_state?.window ?? null,
+  });
+
+  await slack.uploadFile(channel, script.fileName, Buffer.from(script.text, "utf8"), "text/plain", threadTs);
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `:page_facing_up: *The script* · read it out loud, paste the screenshots over the top.`,
+      `Aimed at customer #${avatarIndex}, ${best[avatarIndex - 1].label}. Target 4 minutes.`,
+      "",
+      "Reply `script` to rebuild it, or `loom` to start over with a different customer.",
+      "After recording, paste the transcript here and reply `delivery` for the hand-over email.",
+    ].join("\n")
+  );
+}
+
 export async function handleAuditThreadReply(args: { channel: string; threadTs: string; text: string }): Promise<boolean> {
   const { data: reportData } = await supabaseAdmin
     .from("audit_reports")
@@ -268,9 +483,15 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
 
   const text = args.text.trim();
 
+  // What a bare digit MEANS in this thread. The `loom` wizard posts a numbered menu and the
+  // number is the command, so while one is pending it wins over the email picker below. The
+  // state is cleared to "done" once the image is chosen, and digits go straight back to meaning
+  // the Outlook draft. Same precedent as drop-studio.ts, where a digit is read against job.stage.
+  const loomPending = report.loom_state?.stage === "avatar" || report.loom_state?.stage === "image";
+
   // "1" / "2" / "3" / "send it" → create the Outlook draft from what's queued.
   const pickMatch = text.match(/^([123])$/);
-  if (pickMatch) {
+  if (pickMatch && !loomPending) {
     await createOutlookDraftFromPick(report, args.channel, args.threadTs, parseInt(pickMatch[1], 10));
     return true;
   }
@@ -286,19 +507,44 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
 
   try {
     // --- Attach the assets the reveal needs -------------------------------------
-    const assetMatch = text.match(/^(redesign|loom)\s+(\S+)$/i);
+    // The URL is required to LOOK like one. It used to be \S+, which meant `loom $499` stored
+    // "$499" as the recording's URL and silently ate the price override below.
+    const assetMatch = text.match(/^(redesign|loom)\s+(<?https?:\/\/\S+)$/i);
     if (assetMatch) {
       const field = assetMatch[1].toLowerCase() === "redesign" ? "redesign_url" : "loom_url";
       await attachAsset(report, args.channel, args.threadTs, field, unwrapSlackUrl(assetMatch[2]));
       return true;
     }
 
-    // --- The Loom recording plan ------------------------------------------------
-    // Deliberately AFTER the asset match above, so "loom <url>" still stores the video and a
-    // bare "loom" asks for the beat sheet. Two blocks, nothing else, no preamble.
-    if (/^(loom|beat sheet|beatsheet|guion|guión)\??$/i.test(text)) {
-      const { message, refusal } = await buildLoomBeatSheet(report, view, runs);
-      await slack.postThreadReply(args.channel, args.threadTs, message ?? `:warning: ${refusal}`);
+    // --- The Loom wizard, step 1: the prompts, the pre-flight, pick the customer ---
+    // Deliberately AFTER the asset match above, so "loom <url>" still stores the video.
+    const loomMatch = text.match(/^(?:loom|beat sheet|beatsheet|guion|guión)\b\s*([^?]*)\??$/i);
+    if (loomMatch) {
+      await startLoomWizard(report, args.channel, args.threadTs, view, runs, loomMatch[1] ?? "");
+      return true;
+    }
+
+    // --- The Loom wizard, steps 2 and 3: the digits ------------------------------
+    const loomPick = loomPending ? text.match(/^([1-6])$/) : null;
+    if (loomPick) {
+      await advanceLoomWizard(report, args.channel, args.threadTs, view, runs, parseInt(loomPick[1], 10));
+      return true;
+    }
+
+    // --- Abandon a half-finished wizard ------------------------------------------
+    // Without this, walking away mid-wizard leaves the menu pending forever and a "1" typed
+    // days later to make an Outlook draft silently picks a customer instead.
+    if (loomPending && /^(cancel|nevermind|never mind|stop)\??$/i.test(text)) {
+      await supabaseAdmin.from("audit_reports").update({ loom_state: null }).eq("id", report.id);
+      await slack.postThreadReply(args.channel, args.threadTs, "Dropped the loom menu. *1* means the Outlook draft again.");
+      return true;
+    }
+
+    // --- Rebuild the script without redoing the wizard ---------------------------
+    // Note there is no `guion` alias here: `guion` is one of the loom triggers above and would
+    // never reach this line.
+    if (/^(script|full script)\??$/i.test(text)) {
+      await postLoomScript(report, args.channel, args.threadTs, view, runs, report.loom_state?.avatarIndex ?? null);
       return true;
     }
 
@@ -428,7 +674,9 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     }
 
     // --- The dream-lead image prompt (page 1 of the doc, and the Loom cold open) -
-    const dreamMatch = text.match(/^(?:dreamlead|dream lead|image)\s*([1-3])?\s*(phone|inbox|form|split|booking|order)?$/i);
+    const dreamMatch = text.match(
+      /^(?:dreamlead|dream lead|image)\s*([1-3])?\s*(phone|inbox|form|split|booking|order|crm|dashboard|text|sms)?$/i
+    );
     if (dreamMatch) {
       const override = dreamMatch[2] ? PRESET_ALIASES[dreamMatch[2].toLowerCase()] : undefined;
       // Which of the niche's three best customers this picture is of. Defaults to the pick.
@@ -458,7 +706,8 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
           "```",
           "",
           ":warning: On camera this is the TARGET, never a result: _\"this is the exact kind of inquiry we point at your phone.\"_ Never present it as a lead that already came in.",
-          `Other presets: \`image phone\` · \`image inbox\` · \`image split\` · \`image booking\``,
+          `Other presets: \`image phone\` · \`image inbox\` · \`image split\` · \`image booking\` · \`image crm\` · \`image text\``,
+          `Or reply \`loom\` to pick the customer and the picture together, and get the script with it.`,
         ].join("\n")
       );
       return true;

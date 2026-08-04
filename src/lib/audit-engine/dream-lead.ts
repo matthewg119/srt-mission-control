@@ -24,7 +24,15 @@ import { lintDraft } from "./draft-linter";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
 
-export type Preset = "PHONE_ALERT" | "INBOX_FORM" | "SPLIT_SCREEN" | "BOOKING_ALERT";
+/**
+ * Which surface the inquiry lands on.
+ *
+ * The first four are the ones `choosePreset` picks between automatically by trade. CRM_CARD and
+ * TEXT_THREAD exist only to be chosen by hand from the `loom` wizard's six-idea card: they are
+ * real inbound surfaces, but neither is ever the safe automatic default (not every owner runs a
+ * CRM, and a texted inquiry is a claim about how that business takes leads).
+ */
+export type Preset = "PHONE_ALERT" | "INBOX_FORM" | "SPLIT_SCREEN" | "BOOKING_ALERT" | "CRM_CARD" | "TEXT_THREAD";
 
 /**
  * Which surface this owner actually watches.
@@ -77,6 +85,10 @@ export const PRESET_ALIASES: Record<string, Preset> = {
   split: "SPLIT_SCREEN",
   booking: "BOOKING_ALERT",
   order: "BOOKING_ALERT",
+  crm: "CRM_CARD",
+  dashboard: "CRM_CARD",
+  text: "TEXT_THREAD",
+  sms: "TEXT_THREAD",
 };
 
 /** The scene block for the chosen preset. Only one ever ships, so nothing is left to delete. */
@@ -90,6 +102,10 @@ function sceneObjective(preset: Preset, business: string): string {
       return `A split composition. LEFT SIDE: a realistic lead-form submission branded ${business}, with clearly labeled fields. RIGHT SIDE: an iPhone lock screen showing the same lead arriving as a notification for ${business}, with two or three small qualification badges.`;
     case "BOOKING_ALERT":
       return `A phone held in one hand showing a large incoming booking or order notification for ${business}, with the order details, headcount and date visible on screen.`;
+    case "CRM_CARD":
+      return `A laptop or desktop monitor showing one new lead open as a card in a simple, believable CRM or jobs dashboard branded ${business}. The card shows the inquiry text alongside clearly labeled fields down one side, with a plain list of other jobs behind it. Realistic interface, no invented product logos, an office softly blurred behind the screen.`;
+    case "TEXT_THREAD":
+      return `A hand holding a phone showing a text message conversation, opened to a new thread from an unknown number. The customer has sent one long message asking about work, and there is a short reply bubble from ${business} underneath. The business name is visible at the top of the thread as the contact or business label. Natural light, everything outside the screen softly blurred.`;
   }
 }
 
@@ -129,8 +145,11 @@ function absentMoneyQuestions(view: ReportView): string[] {
 
 function renderPrompt(v: DreamLeadVariables, preset: Preset): string {
   const where = v.city ? ` in ${v.city}` : "";
+  // The presets whose whole point is labeled fields. TEXT_THREAD and the two notification
+  // presets are deliberately excluded: a phone alert with a field table on it is not a thing
+  // anyone has ever seen, and the uncanny detail is what makes an image read as generated.
   const formFields =
-    preset === "SPLIT_SCREEN" || preset === "INBOX_FORM"
+    preset === "SPLIT_SCREEN" || preset === "INBOX_FORM" || preset === "CRM_CARD"
       ? [
           "",
           "FIELDS",

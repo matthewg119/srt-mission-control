@@ -79,6 +79,24 @@ export interface AuditReportRow {
   /** The Loom transcript, pasted in-thread after recording. The delivery email is REFUSED until
    *  this exists, so its two timestamps are read off what was actually said. */
   loom_transcript: string | null;
+  /**
+   * The pending step of the `loom` wizard (docs/2026-08-04-audit-loom-state.sql).
+   *
+   * This is what decides whether a bare "2" in the thread means "avatar 2" or "email option 2".
+   * Null means no menu is pending, which is what every row written before the wizard existed
+   * means, and why a bare digit keeps creating the Outlook draft on an old thread.
+   */
+  loom_state: {
+    /** "done" keeps avatarIndex around for `script` while releasing the digits back to email. */
+    stage: "avatar" | "image" | "done";
+    /** 1-based index into NicheAvatars.best. Set once the avatar is picked. */
+    avatarIndex?: number;
+    /** The six image ideas as they were offered, so a "4" later knows what 4 meant. */
+    ideas?: Array<{ preset: string; label: string; line: string }>;
+    /** Per-recording overrides from `loom $499` / `loom $299/mo, 45 days`. */
+    price?: string;
+    window?: string;
+  } | null;
   error: string | null;
   created_at: string;
   updated_at: string;

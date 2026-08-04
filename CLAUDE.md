@@ -243,7 +243,8 @@ parsed into fields, because a parser that guessed would drop half the instructio
 | free text at `awaiting_intake` | the intake answers → one email 1 draft |
 | free text at `drafted` | revises that draft in place ("tighter", "drop the score line") |
 | `1` / `send it` | Outlook draft, To = `prospect_email ?? requester_email` |
-| `loom` (bare, no url) | the Loom recording plan: 20 prompts + a six-beat sheet. `loom <url>` still stores the video |
+| `loom` (bare, no url) | starts the 3-step recording wizard: 20 prompts + PRE-FLIGHT + pick the customer, then the picture, then the script `.txt`. `loom <url>` still stores the video |
+| `script` | rebuild the script `.txt` for the customer already picked |
 | `nudge 2` .. `nudge 5` | next pre-pitch touch, still link-free |
 | `redesign <url>` / `loom <url>` | stores the asset for the reveal |
 | `reveal` (optionally `reveal $299/mo, setup waived`) | the hand-everything-over message |
@@ -408,13 +409,52 @@ now reads `json.errorMessage` first — Outscraper returns `{"error": true, "err
 and the old code coerced that boolean to `"true"`, which is why every failed pull logged a bare
 `true` for a week with no diagnosable cause.
 
-### The Loom beat sheet (2026-08-01)
-`src/lib/audit-engine/loom-beatsheet.ts`. Reply `loom` in a finished audit thread and the agent
-computes the recording plan from that run's real data: block 1 is the 20 prompts exactly as run
-(blank line between each so they paste into a temporary chat without merging), block 2 is a
-six-beat sheet at a 4:00 target. Bullets of six words or fewer, because Matthew improvises
-better than he reads. Only four things are quoted verbatim: the competitor line with its count,
-the score line, the price and start-time line, and the CTA.
+### The Loom wizard (2026-08-01, rebuilt 2026-08-04)
+Reply `loom` in a finished audit thread. Three steps, because each decision changes the next:
+
+| Step | Reply | What comes back |
+|---|---|---|
+| 1 | `loom` (or `loom $499, 45 days`) | the 20 prompts exactly as run (blank line between each so they paste into a temporary chat without merging), PRE-FLIGHT, and the 3 worst / 3 best customers as a menu |
+| 2 | `1` / `2` / `3` | six image ideas for that customer, one line each (`image-ideas.ts`) |
+| 3 | `1` .. `6` | the paste-ready image prompt, then the read-aloud script as a `.txt` upload |
+
+Plus `script` to rebuild the `.txt` without redoing the wizard, and `cancel` to drop a
+half-finished menu.
+
+**A bare digit means different things at different moments, and the order is load-bearing.**
+`audit_reports.loom_state` (`docs/2026-08-04-audit-loom-state.sql`) holds the pending menu, and the
+`/^([123])$/` email picker is guarded on it (`loomPending`) rather than being moved. Null state,
+which is what every pre-wizard row has, means a digit still creates the Outlook draft. Step 3 sets
+the stage to `"done"` rather than clearing the row, so `script` still knows who the recording is
+aimed at while the digits go back to meaning email. Same precedent as `drop-studio.ts`, where a
+digit is read against `job.stage`.
+
+**The six-beat timing sheet is gone.** It was six-word bullets written on the theory that Matthew
+improvises better than he reads; in practice it meant re-deciding the same pitch's wording every
+recording. `loom-script.ts` renders his own script instead, filled from this run's data, read out
+loud with screenshots pasted over the top. What survives in Slack is PRE-FLIGHT, because it carries
+the things a script cannot: DO NOT OPEN WITH, which engines returned data, the branded-prompt count.
+
+**`computeBeatSheetFacts()` is exported separately from `renderPreflight()`** so the script and the
+card consume the same facts. Recomputing would mean a second price-tier Claude call and, worse, a
+PRE-FLIGHT flagging one prompt as DO NOT OPEN WITH while the script opens on a different one.
+
+**Two claims the script will not make.** The image is introduced as the TARGET, never as a lead that
+arrived, matching the doctrine in `dream-lead.ts`. And there is no forecast of how many customers
+this produces, because nothing in the pipeline measures or predicts one: `LOOM_CLIENT_COUNT_CLAIM`
+in `src/config/pitch.ts` is null, and turning it on is a decision someone makes on purpose rather
+than a sentence a model wrote. `LOOM_PRICE_LABEL` / `LOOM_START_WINDOW` are constants for the same
+reason `PERMISSION_CLOSE` is: a video that says a different number than the invoice cannot be
+walked back.
+
+**`dream-lead.ts` gained two presets** that `choosePreset` will never pick automatically, `CRM_CARD`
+and `TEXT_THREAD`. They are only reachable from the six-idea card or `image crm` / `image text`,
+because neither is a safe default (not every owner runs a CRM, and a texted inquiry is a claim about
+how that business takes leads). The divergence axis for the six is *where the inquiry physically
+lands*, not what it looks like: six renders of a phone notification make the picker decoration.
+
+**`redesign|loom <url>` now requires an actual URL** (`https?://`). It was `\S+`, so `loom $499`
+stored "$499" as the recording's URL and ate the price override.
 
 **The point of the file is `PROMPT_TRAMPA`**, the prompt where the business ranks best. The
 prospect checks that one himself right after the video, so opening with it kills the video and
