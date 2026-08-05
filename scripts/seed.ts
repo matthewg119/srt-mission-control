@@ -12,7 +12,7 @@ async function seed() {
   const knowledgeEntries = [
     {
       title: "Company Overview",
-      content: "SRT Agency LLC (Scaling Revenue Together) is an AI-first business financing brokerage. We connect small business owners with the right financing through our network of lending partners. We are NOT a direct lender. Website: srtagency.com. Portal: mission.srtagency.com. CRM: GoHighLevel. Phone: Quo. Email: Microsoft 365. Team: Matthew (CEO/Founder) — strategy, marketing, key relationships. Benjamin (Sales) — daily lead conversions, target 3-7 per day.",
+      content: "SRT Agency LLC (Search Retrieval Tactics) is an AI-first business financing brokerage. We connect small business owners with the right financing through our network of lending partners. We are NOT a direct lender. Website: srtagency.com. Portal: mission.srtagency.com. CRM: GoHighLevel. Phone: Quo. Email: Microsoft 365. Team: Matthew (CEO/Founder) — strategy, marketing, key relationships. Benjamin (Sales) — daily lead conversions, target 3-7 per day.",
       category: "General",
       tags: ["company", "overview", "team"],
     },

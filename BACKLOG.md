@@ -28,7 +28,7 @@
 - [x] Contact form → GHL integration
 - [x] Apply form restructure (name/email first, then business details)
 - [x] Apply form end screen (PDF download, WhatsApp, email, next steps)
-- [x] Website rebrand: "Scaling Revenue Together" header
+- [x] Website rebrand: "Search Retrieval Tactics" header (was "Scaling Revenue Together", renamed 2026-08-04)
 - [x] Phone number updated to (833) 365-4477
 - [x] WhatsApp button linked
 - [x] Brand assets generator (profile pic, cover, wallpaper)

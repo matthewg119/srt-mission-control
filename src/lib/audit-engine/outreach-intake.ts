@@ -204,7 +204,7 @@ const PROSPECT_FIELDS_INSTRUCTION = [
  */
 function intakeDraftSystem(redesignUrl: string | null): string {
   return [
-    "You write the cold pre-outreach for SRT Agency LLC ('Scaling Revenue Together'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
+    "You write the cold pre-outreach for SRT Agency LLC ('Search Retrieval Tactics'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
     "Background for YOU, not material to recite: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and name 3 to 5 businesses. A business that is not in what gets retrieved is invisible to that buyer no matter how good its work or prices are.",
     "Do NOT explain that mechanism to the reader. A stranger did not sign up for a seminar. You may only get concrete: name what you found, or name what you built them. Specifics earn the reply, theory does not.",
     "Write in the buyer language of THIS business's own industry. Never import vocabulary from another one: a control panel shop has buyers and plant engineers, not patients or clients.",

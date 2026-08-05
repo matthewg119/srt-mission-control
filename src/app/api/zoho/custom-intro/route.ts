@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 // Custom-intro generator for the SRT Auto-Dialer "Scaling Revenue Together"
+// (the dialer template kept its original name; the brand is now "Search Retrieval Tactics")
 // template. The dialer POSTs a zoho_lead_id; this builds the lead's merchant
 // context (Zoho notes + Supabase amount/revenue/industry/use-of-funds) and asks
 // Claude for ONE personalized line, which the dialer drops into its editable box

@@ -13,12 +13,12 @@ export const EMAIL_SIGNATURE_HTML = `
 <table cellpadding="0" cellspacing="0" border="0" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #333333;">
   <tr>
     <td style="padding-bottom: 1px;">
-      <span style="font-size: 16px; font-weight: 700; color: #e8792b;">Matthew Gabriel</span>
+      <span style="font-size: 16px; font-weight: 700; color: #e8792b;">Matthew Garcia</span>
     </td>
   </tr>
   <tr>
     <td style="padding-bottom: 10px;">
-      <span style="font-size: 12px; color: #666666;">Senior Capital Specialist</span>
+      <span style="font-size: 12px; color: #666666;">AI Visibility Specialist</span>
     </td>
   </tr>
   <tr>
@@ -29,7 +29,7 @@ export const EMAIL_SIGNATURE_HTML = `
             <img src="${SRT_LOGO_URL}" width="28" height="30" alt="SRT Agency" style="display: block; border: 0;" />
           </td>
           <td style="vertical-align: middle;">
-            <span style="font-size: 14px; font-weight: 700; color: #0d1b2a; line-height: 1;">Scaling Revenue Together</span>
+            <span style="font-size: 14px; font-weight: 700; color: #0d1b2a; line-height: 1;">Search Retrieval Tactics</span>
           </td>
         </tr>
       </table>
@@ -37,7 +37,7 @@ export const EMAIL_SIGNATURE_HTML = `
   </tr>
   <tr>
     <td style="padding-bottom: 10px;">
-      <span style="font-size: 12px; color: #666666;">T: </span><a href="tel:+17862822937" style="font-size: 12px; color: #333333; text-decoration: none;">(786) 282-2937</a><span style="font-size: 12px; color: #cccccc;"> | </span><span style="font-size: 12px; color: #666666;">F: </span><span style="font-size: 12px; color: #333333;">(252) 556-1444</span>
+      <span style="font-size: 12px; color: #666666;">T: </span><a href="tel:+13368332303" style="font-size: 12px; color: #333333; text-decoration: none;">336-833-2303</a>
     </td>
   </tr>
   <tr>
@@ -45,7 +45,7 @@ export const EMAIL_SIGNATURE_HTML = `
       <table cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="background: #2ee6a8; border-radius: 5px; padding: 10px 24px;">
-            <a href="https://srtagency.com/apply" style="color: #0d1b2a; text-decoration: none; font-size: 13px; font-weight: 700; letter-spacing: 1px;">Apply Now &#8594;</a>
+            <a href="https://srtagency.com/audit" style="color: #0d1b2a; text-decoration: none; font-size: 13px; font-weight: 700; letter-spacing: 1px;">Get your free AI audit &#8594;</a>
           </td>
         </tr>
       </table>
@@ -83,7 +83,7 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * The Outlook "S" signature (Matthew Garcia / Senior Capital Strategist),
+ * The Outlook "S" signature (Matthew Garcia / AI Visibility Specialist),
  * captured once from a real OWA-composed message and stored server-side.
  *
  * Microsoft Graph does NOT expose Outlook roaming signatures, so the dialer's
@@ -106,7 +106,7 @@ export const SIGNATURE_S_HTML = `
       </tr>
       <tr>
         <td style="text-align:left; padding-bottom:10px;">
-          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px; color:rgb(102,102,102);">Senior Capital Strategist</div>
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px; color:rgb(102,102,102);">AI Visibility Specialist</div>
         </td>
       </tr>
       <tr>
@@ -118,7 +118,7 @@ export const SIGNATURE_S_HTML = `
                   <img alt="SRT Agency" width="28" height="30" src="${SRT_LOGO_URL}" style="width:28px; height:30px; display:block; border:0;" />
                 </td>
                 <td style="vertical-align:middle;">
-                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:rgb(13,27,42);"><span style="line-height:1; font-weight:700;">Scaling Revenue Together</span></div>
+                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:rgb(13,27,42);"><span style="line-height:1; font-weight:700;">Search Retrieval Tactics</span></div>
                 </td>
               </tr>
             </tbody>
@@ -127,7 +127,7 @@ export const SIGNATURE_S_HTML = `
       </tr>
       <tr>
         <td style="text-align:left; padding-bottom:10px;">
-          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px;"><span style="color:rgb(102,102,102);">T: </span><span style="color:rgb(51,51,51);">(786) 282-2937</span><span style="color:rgb(204,204,204);">&nbsp;| </span><span style="color:rgb(102,102,102);">F: </span><span style="color:rgb(51,51,51);">(252) 556-1444</span></div>
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:12px;"><span style="color:rgb(102,102,102);">T: </span><a href="tel:+13368332303" style="color:rgb(51,51,51); text-decoration:none;">336-833-2303</a></div>
         </td>
       </tr>
       <tr>
@@ -136,7 +136,7 @@ export const SIGNATURE_S_HTML = `
             <tbody>
               <tr>
                 <td style="border-radius:5px; background-color:rgb(46,230,168); padding:10px 24px;">
-                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:13px; color:rgb(13,27,42);"><span style="letter-spacing:1px; font-weight:700;"><a href="https://srtagency.com/capital" style="color:rgb(13,27,42); text-decoration:none;">Start Now&nbsp;&#8594;</a></span></div>
+                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:13px; color:rgb(13,27,42);"><span style="letter-spacing:1px; font-weight:700;"><a href="https://srtagency.com/audit" style="color:rgb(13,27,42); text-decoration:none;">Get your free AI audit&nbsp;&#8594;</a></span></div>
                 </td>
               </tr>
             </tbody>
@@ -188,7 +188,7 @@ export const SIGNATURE_SUBMISSION_HTML = `
                   <img alt="SRT Agency" width="28" height="30" src="${SRT_LOGO_URL}" style="width:28px; height:30px; display:block; border:0;" />
                 </td>
                 <td style="vertical-align:middle;">
-                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:rgb(13,27,42);"><span style="line-height:1; font-weight:700;">Scaling Revenue Together</span></div>
+                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:rgb(13,27,42);"><span style="line-height:1; font-weight:700;">Search Retrieval Tactics</span></div>
                 </td>
               </tr>
             </tbody>
@@ -206,7 +206,7 @@ export const SIGNATURE_SUBMISSION_HTML = `
             <tbody>
               <tr>
                 <td style="border-radius:5px; background-color:rgb(46,230,168); padding:10px 24px;">
-                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:13px; color:rgb(13,27,42);"><span style="letter-spacing:1px; font-weight:700;"><a href="https://srtagency.com/apply" style="color:rgb(13,27,42); text-decoration:none;">Apply Now&nbsp;&#8594;</a></span></div>
+                  <div style="font-family:Arial,Helvetica,sans-serif; font-size:13px; color:rgb(13,27,42);"><span style="letter-spacing:1px; font-weight:700;"><a href="https://srtagency.com" style="color:rgb(13,27,42); text-decoration:none;">srtagency.com&nbsp;&#8594;</a></span></div>
                 </td>
               </tr>
             </tbody>
@@ -270,7 +270,7 @@ export function generateSignatureHtml(params: SignatureParams): string {
             <img src="${SRT_LOGO_URL}" width="28" height="30" alt="SRT Agency" style="display: block; border: 0;" />
           </td>
           <td style="vertical-align: middle;">
-            <span style="font-size: 14px; font-weight: 700; color: #0d1b2a; line-height: 1;">Scaling Revenue Together</span>
+            <span style="font-size: 14px; font-weight: 700; color: #0d1b2a; line-height: 1;">Search Retrieval Tactics</span>
           </td>
         </tr>
       </table>
@@ -286,7 +286,7 @@ export function generateSignatureHtml(params: SignatureParams): string {
       <table cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="background: #2ee6a8; border-radius: 5px; padding: 10px 24px;">
-            <a href="https://srtagency.com/apply" style="color: #0d1b2a; text-decoration: none; font-size: 13px; font-weight: 700; letter-spacing: 1px;">Apply Now &#8594;</a>
+            <a href="https://srtagency.com/audit" style="color: #0d1b2a; text-decoration: none; font-size: 13px; font-weight: 700; letter-spacing: 1px;">Get your free AI audit &#8594;</a>
           </td>
         </tr>
       </table>
