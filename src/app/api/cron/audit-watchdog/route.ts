@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { finishReport } from "@/lib/audit-engine/finish-report";
-import { TOTAL_PROMPTS, BATCH_SIZE } from "@/lib/audit-engine/types";
+import { TOTAL_PROMPTS, BATCH_SIZE, ENGINES_PER_PROMPT } from "@/lib/audit-engine/types";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
 
 export const runtime = "nodejs";
@@ -22,7 +22,7 @@ export const maxDuration = 300;
 // tempted to make this hourly again needs to upgrade the plan first.
 
 const STALL_MINUTES = 3;
-const ROWS_PER_BATCH = BATCH_SIZE * 2; // 4 prompts x 2 engines = 8
+const ROWS_PER_BATCH = BATCH_SIZE * ENGINES_PER_PROMPT; // 4 prompts x 1 engine = 4
 
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
@@ -62,7 +62,7 @@ async function handle(req: NextRequest) {
 
   await Promise.allSettled(
     stalled.map(async (row) => {
-      const expected = (row.prompts?.length || TOTAL_PROMPTS) * 2;
+      const expected = (row.prompts?.length || TOTAL_PROMPTS) * ENGINES_PER_PROMPT;
       const { count } = await supabaseAdmin
         .from("audit_runs")
         .select("id", { count: "exact", head: true })

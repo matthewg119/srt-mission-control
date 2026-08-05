@@ -18,6 +18,9 @@ import { slack, SlackBlock } from "@/lib/slack-bot";
 import { buildAliases } from "@/lib/audit-engine/mention-match";
 import { formatFinalMessage, formatFailureMessage } from "@/lib/audit-engine/slack-format";
 import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
+import { BATCH_SIZE } from "@/lib/audit-engine/types";
+import type { AuditPrompt } from "@/lib/audit-engine/classify";
+import { runBatch } from "@/lib/audit-engine/run-batch";
 import { buildReportView, computeWeightedScore, type ReportView, type WeightedScore } from "@/lib/audit-engine/report-view";
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
@@ -72,11 +75,92 @@ export async function failReport(row: AuditReportRow, message: string): Promise<
   }
 }
 
-export async function finishReport(row: AuditReportRow): Promise<void> {
-  const { data: runsData } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", row.id);
-  const runs = (runsData ?? []) as AuditRunRow[];
+/** Prompts with no usable answer — nothing was measured for them, whatever the reason. */
+function unmeasuredPrompts(row: AuditReportRow, runs: AuditRunRow[]): AuditPrompt[] {
+  const answered = new Set(runs.filter((r) => r.status === "ok").map((r) => r.prompt));
+  return (row.prompts ?? []).filter((p) => !answered.has(p.prompt));
+}
 
+/** The failure the engine hit most often, quoted verbatim so Slack names the real cause
+ *  ("You have no credits remaining") instead of a generic "the scan failed".
+ *
+ *  Only counts engines we still run. A report from before Perplexity was dropped carries 20
+ *  OpenAI errors and 20 dead-key Perplexity ones, and a plain count ties — so it could just as
+ *  easily quote a retired engine's error as the reason the scan we actually run failed. */
+function dominantError(runs: AuditRunRow[]): string | null {
+  const counts = new Map<string, number>();
+  for (const r of runs) {
+    if (r.status === "ok" || !r.error || r.engine !== "openai") continue;
+    counts.set(r.error, (counts.get(r.error) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  for (const [message, n] of counts) {
+    if (!best || n > (counts.get(best) ?? 0)) best = message;
+  }
+  return best;
+}
+
+/**
+ * A report is publishable only when EVERY prompt has an answer.
+ *
+ * This gate exists because of 2026-08-05: the OpenAI balance hit zero, all 20 prompts came back
+ * `no_data`, and the report still shipped as a finished 0/100 scorecard reading "appeared in 0 of
+ * 20 buyer questions" — a fabricated finding, posted to Slack, with outreach queued on top of it.
+ * A `no_data` cell has `mentioned: null`, which is falsy, so report-view.ts scores an outage
+ * exactly like real invisibility.
+ *
+ * Full coverage rather than a percentage is deliberate: it keeps the scoring math honest without
+ * having to teach the score the difference between absent and unknown. Loosen this to a threshold
+ * and computeWeightedScore must start excluding unmeasured prompts from its denominator, or a
+ * partial outage quietly deflates a real business's score.
+ */
+export async function finishReport(row: AuditReportRow): Promise<void> {
+  const loadRuns = async () => {
+    const { data } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", row.id);
+    return (data ?? []) as AuditRunRow[];
+  };
+
+  const total = row.prompts?.length ?? 0;
+  if (total === 0) {
+    await failReport(row, "The scan produced no questions to run, so there is nothing to score.");
+    return;
+  }
+
+  let runs = await loadRuns();
   const aliases = buildAliases(row.client_name ?? row.business_type ?? row.website, row.website);
+
+  // One repair pass over just the prompts that came back empty. runBatch deletes before it
+  // writes, so this cannot double-count, and transient timeouts heal here.
+  //
+  // Only worth attempting when the gaps are a MINORITY. Past that it is not flakiness, it is the
+  // engine being down for everyone — retrying 20 dead calls buys nothing and, at 45s each, can
+  // burn the route's 300s budget and get the lambda killed mid-repair. The 2026-08-05 outage was
+  // exactly this shape, so it now fails in seconds instead.
+  let missing = unmeasuredPrompts(row, runs);
+  if (missing.length > 0 && missing.length <= total / 2) {
+    console.warn(`[finishReport] ${row.id}: ${missing.length}/${total} prompts with no data, running repair pass`);
+    try {
+      for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+        await runBatch(row, aliases, missing.slice(i, i + BATCH_SIZE));
+      }
+      runs = await loadRuns();
+      missing = unmeasuredPrompts(row, runs);
+    } catch (e) {
+      console.error("[finishReport] repair pass failed:", (e as Error).message);
+    }
+  }
+
+  if (missing.length > 0) {
+    const cause = dominantError(runs);
+    await failReport(
+      row,
+      `The scan could not be completed: ${missing.length} of ${total} questions returned no data` +
+        `${cause ? ` (${cause})` : ""}. No scorecard was produced, because scoring an unanswered ` +
+        `question as "you did not appear" would invent a finding. Fix the cause, then re-run with /audit ${row.website}.`
+    );
+    return;
+  }
+
   const view = buildReportView(row, runs, aliases);
   const weighted = computeWeightedScore(view);
 
@@ -107,7 +191,24 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
   if (report.slack_channel_id && report.slack_thread_ts) {
     try {
       pdfBuffer = generateScorecardPDF(report, view, weighted);
-      await slack.uploadFilePDF(report.slack_channel_id, scorecardFileName(report), pdfBuffer, report.slack_thread_ts);
+      // uploadFilePDF RETURNS {ok:false,error} rather than throwing, so an unchecked call
+      // leaves a thread that looks completely normal with no scorecard attached to it.
+      const upload = await slack.uploadFilePDF(
+        report.slack_channel_id,
+        scorecardFileName(report),
+        pdfBuffer,
+        report.slack_thread_ts
+      );
+      if (!upload?.ok) {
+        console.error(`[finishReport] scorecard upload failed for ${report.id}:`, JSON.stringify(upload));
+        await slack
+          .postThreadReply(
+            report.slack_channel_id,
+            report.slack_thread_ts,
+            `:warning: The scorecard PDF failed to upload (\`${upload?.error ?? "unknown error"}\`). The report is still at ${appUrl()}/r/${report.slug}`
+          )
+          .catch(() => {});
+      }
 
       // Intake card, NOT finished drafts. A cold prospect's email 1 depends on things only
       // Matthew knows (who the recipient is, what to mention, whether a free redesign was
@@ -118,7 +219,9 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
       // guide, so there is no permission to earn and draftInitialEmail already writes the
       // email. An intake card there would ask Matthew to author cold outreach to someone
       // who is already expecting a reply.
-      if (!isGuideLead(report)) {
+      //
+      // Widened 2026-08-05 to cover /scan for the same reason. See skipsIntakeCard.
+      if (!skipsIntakeCard(report)) {
         const questions = await buildIntakeQuestions(report, view);
         await postIntakeCard(report, report.slack_channel_id, report.slack_thread_ts, questions);
       }
@@ -229,6 +332,22 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
 /** srtagency.com/PDF, the med spa free-guide funnel. */
 function isGuideLead(report: AuditReportRow): boolean {
   return report.lead_source === "pdf";
+}
+
+/**
+ * Funnels where the person ASKED for the report, so there is no permission to earn and the
+ * intake card would be asking Matthew to write cold outreach to someone already expecting a
+ * reply. Governs the intake card only.
+ *
+ * `scan` joined `pdf` on 2026-08-05: a /scan lead pasted their own URL, watched the run and
+ * typed their email to get the result, which is the same shape as the guide funnel.
+ *
+ * `audit` is deliberately NOT here even though it is arguably also inbound. That funnel has
+ * been posting intake cards since July and Matthew works from them; changing it is a decision
+ * about his workflow, not a bug fix, and it does not belong in a /scan change.
+ */
+function skipsIntakeCard(report: AuditReportRow): boolean {
+  return isGuideLead(report) || report.lead_source === "scan";
 }
 
 /**

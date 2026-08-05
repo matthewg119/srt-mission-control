@@ -39,6 +39,19 @@ export interface RunAuditPipelineParams {
   allowLowConfidenceCity?: boolean;
   onNeedsCity?: (website: string, bestGuess: string | null) => Promise<void>;
   onError?: (message: string) => Promise<void>;
+  /**
+   * Fired the moment the audit_reports row exists, BEFORE the Slack post and before the
+   * batch kick-off.
+   *
+   * This function does not return until the ENTIRE audit is finished: the kick-off fetch
+   * below is awaited (it has to be, see the comment there), and /api/audit/process runs every
+   * batch and then finishReport before it responds. So `reportId` in the return value arrives
+   * minutes late, which is useless to a caller that needs to show progress or link a row.
+   * /scan uses this to attach its session to the report within ~30s instead of ~5 minutes.
+   *
+   * Best-effort: a throw here must not sink an audit that is otherwise fine.
+   */
+  onReportCreated?: (reportId: string) => Promise<void>;
 }
 
 export interface RunAuditPipelineResult {
@@ -47,8 +60,8 @@ export interface RunAuditPipelineResult {
 }
 
 /** Minutes within which a repeat request for the same website+email is treated
- *  as a double submit rather than a genuine re-audit. A full run is 40 model
- *  calls, so a stray second beacon is expensive. */
+ *  as a double submit rather than a genuine re-audit. A full run is 20 engine
+ *  calls plus classification, so a stray second beacon is expensive. */
 const DEDUP_WINDOW_MINUTES = 30;
 
 async function findRecentReport(website: string, email?: string): Promise<string | null> {
@@ -155,6 +168,15 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
   }
 
   const report = inserted as AuditReportRow;
+
+  // Announce the row before anything slow happens to it. See onReportCreated's doc comment:
+  // everything below this line, including the awaited kick-off, takes minutes.
+  try {
+    await params.onReportCreated?.(report.id);
+  } catch (e) {
+    console.error("[run-audit-pipeline] onReportCreated failed:", (e as Error).message);
+  }
+
   const { text: dropText } = formatPromptDrop(report);
   const posted = await slack.postMessage(channel.id, dropText);
   const threadTs = (posted as { ts?: string }).ts;

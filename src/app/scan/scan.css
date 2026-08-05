@@ -1,0 +1,644 @@
+/*
+ * /scan design system.
+ *
+ * Token values and naming are lifted from explee.com's shipped stylesheet
+ * (shadcn/ui naming, --radius .625rem, Geist Sans + Geist Mono, forced dark).
+ * Everything is scoped under .scan-root on purpose: Mission Control's own
+ * midnight/ocean/reef theme owns :root, and the app's layout hard-sets
+ * font-family on <body> inline, which is why .scan-root re-declares it rather
+ * than inheriting.
+ *
+ * The one deliberate divergence from explee: --accent-brand is SRT reef
+ * (#00C9A7) rather than their emerald #10b981, so the page still reads as ours.
+ */
+
+/*
+ * globals.css sets `body { background: #0B1426 }` (Mission Control midnight).
+ * .scan-root paints its own background, but anything outside it still shows
+ * navy: overscroll/rubber-banding, and any gap past the end of the content.
+ * Repaint the body itself on the pages that use this theme.
+ */
+body:has(.scan-root) {
+  background: #0a0a0a;
+}
+
+.scan-root {
+  --background: #0a0a0a;
+  --foreground: #d6d6d6;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --popover: #171717;
+  --primary: #e5e5e5;
+  --primary-foreground: #171717;
+  --secondary: #262626;
+  --secondary-foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a1a1a1;
+  --accent: #262626;
+  --accent-foreground: #fafafa;
+  --destructive: #ff6568;
+  --success: #35cb90;
+  --warning: #f7c15f;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #737373;
+
+  --accent-brand: #00c9a7;
+  --accent-brand-dim: rgba(0, 201, 167, 0.14);
+
+  --radius: 0.625rem;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+.scan-root *,
+.scan-root *::before,
+.scan-root *::after {
+  box-sizing: border-box;
+}
+
+.scan-mono {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ── Landing ─────────────────────────────────────────────────────────────── */
+
+.scan-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 3rem 1.25rem;
+  text-align: center;
+  position: relative;
+}
+
+/* The faint dotted field behind explee's hero. Pure CSS, no image request. */
+.scan-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(ellipse 70% 55% at 50% 42%, #000 35%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 42%, #000 35%, transparent 100%);
+  pointer-events: none;
+}
+
+.scan-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.scan-h1 {
+  font-size: clamp(2.25rem, 6vw, 4.25rem);
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+  font-weight: 500;
+  color: #fff;
+  max-width: 20ch;
+  margin: 0 auto;
+}
+
+.scan-h1 em {
+  font-style: normal;
+  color: var(--accent-brand);
+}
+
+.scan-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.75rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--secondary);
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+
+.scan-sub {
+  margin: 1.5rem auto 0;
+  max-width: 62ch;
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--muted-foreground);
+}
+
+.scan-form {
+  margin-top: 2rem;
+  width: min(560px, 100%);
+}
+
+.scan-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.4rem 0.4rem 1.1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 0.35rem);
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+
+.scan-input-wrap:focus-within {
+  border-color: var(--accent-brand);
+  box-shadow: 0 0 0 4px var(--accent-brand-dim);
+}
+
+.scan-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: #fff;
+  font-size: 1rem;
+  padding: 0.7rem 0;
+}
+
+.scan-input::placeholder {
+  color: #6b6b6b;
+}
+
+.scan-submit {
+  flex-shrink: 0;
+  padding: 0.7rem 1.25rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent-brand);
+  color: #04231e;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.scan-submit:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.scan-submit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.scan-error {
+  margin-top: 0.85rem;
+  font-size: 0.875rem;
+  color: var(--destructive);
+}
+
+.scan-trust {
+  margin-top: 2.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  justify-content: center;
+  font-size: 0.8125rem;
+  color: #6f6f6f;
+}
+
+.scan-trust span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ── Run view shell ──────────────────────────────────────────────────────── */
+
+.scan-shell {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  min-height: 100vh;
+}
+
+@media (max-width: 900px) {
+  .scan-shell {
+    grid-template-columns: 1fr;
+  }
+  .scan-sidebar {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.scan-sidebar {
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.scan-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.scan-logo-mark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+
+.scan-logo-mark i {
+  display: block;
+  width: 3px;
+  border-radius: 1px;
+  background: #1b65a7;
+}
+
+.scan-logo-mark i:nth-child(1) { height: 8px; }
+.scan-logo-mark i:nth-child(2) { height: 12px; }
+.scan-logo-mark i:nth-child(3) { height: 16px; background: var(--accent-brand); }
+
+.scan-side-step {
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+}
+
+.scan-side-step .tick {
+  color: var(--accent-brand);
+}
+
+.scan-side-step.is-pending {
+  color: #4d4d4d;
+}
+
+.scan-side-divider {
+  height: 1px;
+  background: var(--border);
+}
+
+.scan-company {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.scan-company-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.scan-avatar {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.scan-company-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-company-body {
+  margin-top: 0.7rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.scan-pill {
+  display: inline-block;
+  margin-top: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--secondary);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+/* ── Step rail ───────────────────────────────────────────────────────────── */
+
+.scan-main {
+  padding: 1.5rem 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.scan-rail {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 1080px;
+  margin-bottom: 2.5rem;
+}
+
+.scan-rail-node {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 30px;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  color: #5c5c5c;
+  border: 1px solid transparent;
+  transition: all 0.3s var(--ease);
+}
+
+.scan-rail-node .num {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 0.6875rem;
+  color: #5c5c5c;
+}
+
+.scan-rail-node.is-done .num {
+  border-color: var(--accent-brand);
+  color: var(--accent-brand);
+}
+
+.scan-rail-node.is-active {
+  background: var(--secondary);
+  border-color: var(--border);
+  color: #fff;
+  padding-right: 0.85rem;
+}
+
+.scan-rail-node.is-active .num {
+  border-color: transparent;
+  background: var(--accent-brand);
+  color: #04231e;
+}
+
+.scan-rail-label {
+  white-space: nowrap;
+}
+
+.scan-rail-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  min-width: 12px;
+}
+
+.scan-rail-line.is-done {
+  background: rgba(0, 201, 167, 0.4);
+}
+
+@media (max-width: 900px) {
+  .scan-rail {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .scan-rail::-webkit-scrollbar { display: none; }
+}
+
+/* ── Stage card ──────────────────────────────────────────────────────────── */
+
+.scan-card {
+  width: 100%;
+  max-width: 1080px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 0.25rem);
+  padding: 1.5rem;
+  animation: scanRise 0.42s var(--ease) both;
+}
+
+@keyframes scanRise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-card,
+  .scan-row { animation: none !important; }
+}
+
+.scan-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.75rem;
+}
+
+@media (max-width: 760px) {
+  .scan-cols { grid-template-columns: 1fr; }
+}
+
+.scan-label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6f6f6f;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.scan-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--secondary);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--accent-brand);
+}
+
+.scan-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.875rem;
+  color: var(--foreground);
+  margin-bottom: 0.4rem;
+  animation: scanRow 0.3s var(--ease) both;
+}
+
+@keyframes scanRow {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.scan-row img {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
+.scan-row .dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #4d4d4d;
+}
+
+.scan-row-strong {
+  background: var(--secondary);
+  color: #fff;
+  font-weight: 500;
+}
+
+.scan-block-tag {
+  margin-left: auto;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  color: #5c5c5c;
+  flex-shrink: 0;
+}
+
+/* ── Progress ────────────────────────────────────────────────────────────── */
+
+.scan-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--secondary);
+  overflow: hidden;
+  margin-top: 1rem;
+}
+
+.scan-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent-brand);
+  transition: width 0.5s var(--ease);
+}
+
+/* 40 ticks, one per engine call. Capped at 20 columns (2 rows) and given a max
+ * width so they stay recognisable SQUARES on a wide card: stretched across
+ * 1000px they render as dashes and stop reading as a count. */
+.scan-engine-grid {
+  display: grid;
+  grid-template-columns: repeat(20, 1fr);
+  gap: 5px;
+  margin-top: 1rem;
+  max-width: 420px;
+}
+
+.scan-tick {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--secondary);
+  transition: background 0.4s var(--ease);
+}
+
+.scan-tick.on {
+  background: var(--accent-brand);
+}
+
+.scan-spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  border-top-color: var(--accent-brand);
+  animation: scanSpin 0.75s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+@keyframes scanSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Result + gate ───────────────────────────────────────────────────────── */
+
+.scan-score {
+  font-size: 3.5rem;
+  line-height: 1;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.03em;
+}
+
+.scan-score small {
+  font-size: 1rem;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.scan-gate {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.scan-gate input {
+  flex: 1;
+  min-width: 200px;
+  padding: 0.7rem 0.85rem;
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  color: #fff;
+  font-size: 0.9375rem;
+  outline: none;
+}
+
+.scan-gate input:focus {
+  border-color: var(--accent-brand);
+}
+
+.scan-note {
+  margin-top: 0.85rem;
+  font-size: 0.8125rem;
+  color: #6f6f6f;
+  line-height: 1.6;
+}
+
+.scan-link {
+  color: var(--accent-brand);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.scan-link:hover {
+  text-decoration: underline;
+}

@@ -201,7 +201,7 @@ export async function computeBeatSheetFacts(
     return { facts: null, refusal: `No engine returned usable data for ${company}. There is nothing to record.` };
   }
 
-  const answered = view.prompts.filter((p) => p.engines.openai.status === "ok" || p.engines.perplexity.status === "ok");
+  const answered = view.prompts.filter((p) => p.engines.openai.status === "ok");
   if (answered.length < view.totalPrompts) {
     return {
       facts: null,

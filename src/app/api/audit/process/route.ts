@@ -1,5 +1,5 @@
 // Internal batch worker for the Audit Engine. Processes ALL remaining batches
-// (4 prompts x 2 engines each) within a SINGLE invocation — no cross-invocation
+// (4 prompts, one OpenAI call each) within a SINGLE invocation — no cross-invocation
 // self-chaining. The old waitUntil(fetch(next batch)) hop was silently dropped
 // by Vercel after the response returned, stalling runs at status:"running"
 // forever. ~5 batches fit comfortably under maxDuration=300. Writes are
@@ -8,12 +8,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { runOpenAI, runPerplexity, withMention } from "@/lib/audit-engine/run-prompts";
 import { buildAliases } from "@/lib/audit-engine/mention-match";
-import { extractRecommendedBatch } from "@/lib/audit-engine/extract-recommended";
+import { runBatch } from "@/lib/audit-engine/run-batch";
 import { BATCH_SIZE, TOTAL_PROMPTS } from "@/lib/audit-engine/types";
-import type { AuditReportRow, AuditEngine } from "@/lib/audit-engine/types";
-import type { AuditPrompt } from "@/lib/audit-engine/classify";
+import type { AuditReportRow } from "@/lib/audit-engine/types";
 import { finishReport, failReport } from "@/lib/audit-engine/finish-report";
 
 export const runtime = "nodejs";
@@ -23,61 +21,6 @@ export const maxDuration = 300;
 function checkAuth(req: NextRequest): boolean {
   const secret = process.env.AUDIT_INTERNAL_SECRET;
   return !!secret && req.headers.get("x-audit-secret") === secret;
-}
-
-// Runs one batch (4 prompts x 2 engines) idempotently and bumps the heartbeat.
-async function runBatch(row: AuditReportRow, aliases: string[], promptsInBatch: AuditPrompt[]): Promise<void> {
-  const perPrompt = await Promise.all(
-    promptsInBatch.map(async (p, idx) => {
-      const [openaiResult, perplexityResult] = await Promise.all([
-        runOpenAI(p.prompt, row.city).then((r) => withMention(r, aliases)),
-        runPerplexity(p.prompt, row.city).then((r) => withMention(r, aliases)),
-      ]);
-      return { prompt: p, idx, openaiResult, perplexityResult };
-    })
-  );
-
-  // One cheap extraction call for the whole batch — pulls the 0-5 business names
-  // each "ok" response actually named, for display.
-  const extractionItems = perPrompt.flatMap(({ idx, openaiResult, perplexityResult }) => [
-    ...(openaiResult.status === "ok" ? [{ id: `${idx}:openai`, text: openaiResult.raw }] : []),
-    ...(perplexityResult.status === "ok" ? [{ id: `${idx}:perplexity`, text: perplexityResult.raw }] : []),
-  ]);
-  const recommendedMap = await extractRecommendedBatch(extractionItems);
-
-  // Idempotent: clear any prior rows for these prompts before writing, so a
-  // re-kick (daily watchdog) never double-counts audit_runs (score corruption).
-  const batchPromptTexts = promptsInBatch.map((p) => p.prompt);
-  await supabaseAdmin.from("audit_runs").delete().eq("report_id", row.id).in("prompt", batchPromptTexts);
-
-  await Promise.all(
-    perPrompt.flatMap(({ prompt: p, idx, openaiResult, perplexityResult }) => {
-      const engineResults: Array<{ engine: AuditEngine; result: typeof openaiResult }> = [
-        { engine: "openai", result: openaiResult },
-        { engine: "perplexity", result: perplexityResult },
-      ];
-
-      return engineResults.map(({ engine, result }) =>
-        supabaseAdmin.from("audit_runs").insert({
-          report_id: row.id,
-          block: p.block,
-          prompt: p.prompt,
-          engine,
-          mentioned: result.status === "ok" ? result.mentioned : null,
-          status: result.status,
-          raw_response: result.raw,
-          citations: result.citations,
-          recommended: recommendedMap[`${idx}:${engine}`] ?? [],
-          latency_ms: result.latencyMs,
-          error: result.status === "no_data" ? result.error : null,
-        })
-      );
-    })
-  );
-
-  // Heartbeat: mark progress so the daily watchdog can tell a live run from a
-  // stalled one, and a recovery knows how far the run got.
-  await supabaseAdmin.from("audit_reports").update({ updated_at: new Date().toISOString() }).eq("id", row.id);
 }
 
 export async function POST(req: NextRequest) {

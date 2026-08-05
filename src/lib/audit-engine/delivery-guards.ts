@@ -24,11 +24,11 @@ export interface AbsentCompetitor {
  * Competitors counted ONLY in the buyer questions the client is missing from.
  *
  * ‼️ THIS IS NOT `view.mostRecommended`, AND THE TWO MUST NOT BE RECONCILED. That one counts
- * audit_runs ROWS: a prompt has up to two runs (openai, perplexity), so one competitor named by
- * both engines on one prompt counts 2, the ceiling is 40 rather than 20, and it never looks at
- * whether the client appeared. It is the right number for "who owns the answers", which is why
- * email-assistant.ts renders it as "cited 6x", and it is the WRONG number for the sentence this
- * email is built on.
+ * audit_runs ROWS and never looks at whether the client appeared. It is the right number for
+ * "who owns the answers", which is why email-assistant.ts renders it as "cited 6x", and it is
+ * the WRONG number for the sentence this email is built on. (Before Perplexity was dropped the
+ * two also differed in ceiling — 40 rows against 20 prompts. They no longer do, which makes them
+ * easier than ever to conflate. Still don't.)
  *
  * "Allied Service Pro came up in 6 of the questions you're missing from" has to survive the
  * prospect opening the report and counting. So: prompt-level, deduped by prompt, and only over

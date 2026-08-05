@@ -99,6 +99,7 @@ on it harder than anything else does.
 | chat_messages | Individual chat messages (web + Telegram) |
 | integrations | API configs (AI priorities, Microsoft 365 tokens) |
 | knowledge_entries | AI knowledge base (custom context for the Office Manager) |
+| scan_sessions | Public /scan funnel: session → report link, rate-limit ledger, domain cache |
 
 ## Environment Variables
 ```
@@ -147,6 +148,9 @@ OUTREACH_SIGNATURE_NAME=   # Who cold outreach is SIGNED by, two plain lines. De
 OUTREACH_SIGNATURE_AGENCY= # Default "SRT Agency".
 AUDIT_AUTOSEND_ENABLED=    # Unset = lead pitches NEVER send themselves. "1" arms the timer.
 AUDIT_AUTOSEND_MINUTES=    # Optional, default 5. Only meaningful when the above is on.
+SCAN_IP_SALT=              # Salt for hashing /scan client IPs. Optional but SET IT: the default
+                           # is a constant, which makes the ip_hash column a rainbow-table away
+                           # from being a plaintext visitor log.
 ```
 
 ## Image generation rules (2026-07-03)
@@ -450,6 +454,131 @@ so in the flags.
 **FLAGS are Spanish and Slack-only**, never part of the email: promises the video made, figures the
 video got wrong, a missing reply phrase, an invented timestamp, a thread that could not be found.
 `Sin flags.` when clean.
+
+## /scan — the self-serve public funnel (2026-08-05)
+`srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
+agent steps run, trade an email for the report. It is a FRONT END over the audit engine — no
+new pipeline, no second copy of anything. Migration: `docs/2026-08-05-scan-sessions.sql`.
+
+| Step | Backed by |
+|---|---|
+| 1 research · 2 competitors · 3 questions | `runAuditPipeline()` (research → classify → row) |
+| 4 ask the engines | `/api/audit/process`, counted off `audit_runs` |
+| 5 score · 6 report | `audit_reports.status = done` → `/r/[slug]` |
+
+**`scan_sessions` exists because the row arrives too late.** `runAuditPipeline()` spends 15-30s
+on `researchWebsite()` + `classifyBusiness()` BEFORE it inserts its `audit_reports` row, and the
+page needs an id to poll within ~200ms of the paste. The session row is created first, returned
+immediately, and linked via `report_id` once the pipeline gets that far. It also carries the
+rate-limit ledger (`ip_hash`) and the cache key (`domain`).
+
+**Steps are DERIVED, never asserted.** `buildStatusPayload()` reads `activeStep` off the report
+row and a count of `audit_runs` — same no-fabrication rule as `report-view.ts`. A stalled
+pipeline stalls the UI. The `revealed` counter in `scan-run.tsx` is presentation only: steps 1-3
+all become true in one poll (that chain writes nothing until the end), so the card walks them a
+beat apart, clamped so it can never run ahead of what the server confirmed. Do not "fix" a
+seemingly-stuck step with a timer.
+
+> ‼️ **`onReportCreated` is why the stepped UI exists at all.** `runAuditPipeline()` does not
+> return when the report row is inserted; it **awaits** the kick-off fetch, and
+> `/api/audit/process` runs every batch and then `finishReport` before responding. So its return
+> value arrives minutes late. Setting `scan_sessions.report_id` from that return value (the
+> original build) meant the page showed a step-1 spinner for the entire run and then jumped to
+> the score: steps 2 to 6 were unreachable code. The callback fires right after the insert, ~15s
+> in. Anything else that needs the row id early must use it too, not the return value.
+
+> ‼️ **`fetchCache = "force-no-store"` on every /scan route, and it is load-bearing.**
+> supabase-js calls the global `fetch`, which Next patches, so reads land in the DATA cache.
+> `dynamic = "force-dynamic"` governs the ROUTE cache and does not cover it. Symptom when
+> missing: the DB has `report_id` set and `status: running`, and the status endpoint keeps
+> answering `researching` / step 1 from a snapshot seconds old. On `/claim` it is worse than
+> cosmetic, since a stale "not yet claimed" creates a second contact, Zoho lead and Slack thread.
+
+**The email gate is asked DURING the run, not on the score screen, and that is not a conversion
+tweak.** `finish-report.ts` reads `requester_email` off the report row when the run ENDS, and the
+drafted email, the scorecard PDF and the ✅ Send it / ✋ Hold card all hang off it. An address
+supplied after `status: done` is inert: it writes a column nothing reads again. Moving the gate
+back to the end silently switches the whole fulfilment lane off while still displaying "we email
+the scorecard too". `skipsIntakeCard()` also covers `scan`, so a scan lead gets fulfilment rather
+than a cold permission-stage intake card.
+
+**The status payload deliberately carries no `slug`.** `/r/[slug]` is unauthenticated, so
+returning it from a public endpoint would hand out the report while the UI politely asks for an
+email. `GET /api/scan/[id]/claim` issues the URL, and only for a session that already has a
+`contact_id`.
+
+**This is the only unauthenticated route in the app that spends money** — one classify plus 40
+engine calls per accepted request. Three gates, cheapest first, and they must stay in this order:
+`normalizeTarget()` (junk + private hosts, no DB) → `findCachedSession()` (same domain within 7
+days returns the old session) → `countRecentScansForIp()` (3/IP/day). `failed` sessions are
+deliberately excluded from the cache: a site that was down an hour ago deserves a real retry.
+
+> ‼️ This is the **only** place an arbitrary user-supplied URL gets fetched server-side. Every
+> other crawler entry point is fed a domain from Zoho, Outscraper, or a form behind a shared
+> secret. Two halves, and they are split for a mechanical reason: `normalize.ts` is pure and
+> isomorphic because `scan-form.tsx` imports it for inline validation, so a top-level
+> `dns/promises` import there fails the browser bundle and tsc will not catch it. The resolver
+> check lives in `public-host.ts` (server only). A literal blocklist alone is not a defence
+> against a resolver: `169.254.169.254.nip.io` has a dot and a real TLD and passes every text
+> check, so `assertPublicHost()` resolves the name and rejects private answers, failing closed.
+> `isPrivateIp` and `isPrivateHost` must stay separate predicates: the latter rejects ALL bare
+> IPs as "not a business website", and feeding resolved addresses through it rejects every
+> domain on earth.
+>
+> `clientIpFrom()` reads `req.ip` / `x-vercel-forwarded-for`, never `x-forwarded-for[0]`. Vercel
+> APPENDS the real IP to a client-supplied header, so index 0 is the attacker's own string and
+> the per-IP cap is bypassed by rotating it. `hashIp()` never stores a raw IP: that column is a
+> rate-limit ledger, not a visitor log (`SCAN_IP_SALT`).
+>
+> The read-then-insert race is closed in the DATABASE, not the check: a partial unique index on
+> `domain where status in ('researching','running')` (`docs/2026-08-05-scan-sessions-unique.sql`).
+> On conflict, `start/route.ts` re-reads and hands the loser the winner's session, so the race
+> resolves into a cache hit. `findCachedSession()` also drops sessions stuck in `researching`
+> past `RESEARCH_TIMEOUT_MINUTES`, because `audit-watchdog` only knows about `audit_reports` and
+> would otherwise leave a dead row serving the same infinite spinner to everyone for a week.
+
+**Client/server split.** `src/lib/scan/steps.ts` holds `SCAN_STEPS` + the wire types and imports
+NOTHING server-side; `session.ts` holds everything touching Supabase. Importing `SCAN_STEPS` from
+`session.ts` in the client component dragged `supabaseAdmin` and `node:crypto` into the browser
+bundle (129 kB → 3.66 kB after the split). Keep them apart.
+
+**Theme.** `src/app/scan/scan.css`, scoped to `.scan-root`. Token values and naming are explee.com's
+(shadcn naming, `--radius .625rem`, Geist Sans + Geist Mono via the `geist` package, forced dark),
+with `--accent-brand` swapped to SRT reef `#00C9A7`. Scoped because the root layout owns `:root`
+AND hard-sets `font-family` inline on `<body>`, which is why `.scan-root` re-declares it.
+
+**Every scan posts a prompt drop into `#ai-visibility-audits`** via `runAuditPipeline`, so the
+channel is now fed by strangers, not just `/audit` runs. The rate limit plus the domain cache is
+what bounds that. `lead_source = "scan"`; the email gate calls `ingestLead()` and back-fills
+`requester_email` onto the report only when it is still blank — a report already belonging to a
+lead is never reassigned.
+
+## /v2 — the srtagency.com rebuild, PREVIEW ONLY (2026-08-05)
+`mission.srtagency.com/v2`. An explee-styled rebuild of the marketing site, built to be looked
+at and argued about, not shipped. **The live site is untouched**: srtagency.com is still the
+static `srt-agwb` repo, nothing there links here, and the layout carries `noindex, nofollow`
+plus a sticky PREVIEW ribbon so a half-finished rebuild can never be mistaken for the real one
+or outrank it.
+
+Shares one design system with `/scan`: `v2/layout.tsx` applies **both** `.scan-root` (the token
+block, from `scan/scan.css`) and `.v2-root` (sections, from `v2/v2.css`). The hero embeds the
+real `<ScanForm/>`, so the demo's input actually runs a scan.
+
+**Everything factual on the page is lifted from the live site, deliberately.** Pricing and all
+six FAQ entries are verbatim from srtagency.com's `FAQPage` JSON-LD; the three statistics are the
+cleared ones from `llms.txt`, each rendered with its citation inline. That is so the preview
+cannot quietly promise something the real site does not.
+
+> ‼️ **The testimonials section renders a visible placeholder, not testimonials.** Explee runs a
+> carousel in that slot and there are no real client quotes to put in it. Nothing was invented.
+> A fabricated testimonial on an agency whose entire pitch is "you can verify this yourself" is
+> the one thing that would sink the pitch, so the slot stays empty until real quotes exist.
+
+Copy constraints, same as the rest of SRT's output: no em dashes, no outcome claims (verifiable
+visibility only, never customers or revenue), no statistic without a source.
+
+`body:has(.scan-root)` in `scan.css` repaints the body: `globals.css` sets `#0B1426` on `body`,
+so overscroll and any gap past the content showed Mission Control navy behind the black page.
 
 ## SRT Follow-Up Operator (2026-07-31)
 Everything after the pitch is sent. `#followups_channel` used to carry the Google Maps clinic

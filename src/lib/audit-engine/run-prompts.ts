@@ -1,11 +1,14 @@
-// Engine runners for the Audit Engine — OpenAI (Responses API + web_search) and
-// Perplexity (sonar). Plain `fetch`, no SDK, matching every other external-API
-// call in this codebase (see claude-calls.ts).
+// Engine runner for the Audit Engine — OpenAI (Responses API + web_search).
+// Plain `fetch`, no SDK, matching every other external-API call in this codebase
+// (see claude-calls.ts). Perplexity was removed on 2026-08-05; see AuditEngine
+// in types.ts for why.
 //
 // NO FABRICATED DATA RULE lives here: the only possible return shapes are
 // {status:"ok", ...a real response} or {status:"no_data", raw:null, citations:[]}.
 // There is no code path that can produce a guessed `mentioned` value — callers
 // must treat `no_data` as "unknown", never coerce it to `mentioned:false`.
+// finish-report.ts enforces the other half: a report that has no usable data for
+// every prompt is failed, never published with the gaps scored as absences.
 
 import { isMentioned } from "./mention-match";
 
@@ -40,13 +43,20 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-/** Runs `call` up to 1 retry; returns EngineNoData (never throws) on final failure. */
+/** Runs `call` up to 1 retry; returns EngineNoData (never throws) on final failure.
+ *
+ *  An EMPTY body counts as a failure, not as an answer. A 200 whose text is blank tells us
+ *  nothing about whether the business is named, but `status:"ok"` + `mentioned:false` reads
+ *  downstream as a CONFIRMED absence and scores as a miss — fabricating the exact finding
+ *  this file's header rule exists to prevent. Retrying is also the right move: a blank
+ *  Responses payload is usually a truncated or tool-only turn. */
 async function withOneRetry(call: () => Promise<{ raw: string; citations: string[] }>): Promise<EngineResult> {
   const start = Date.now();
   let lastError = "unknown error";
   for (let attempt = 0; attempt <= RETRIES_PER_ENGINE; attempt++) {
     try {
       const { raw, citations } = await call();
+      if (!raw.trim()) throw new Error("empty response body");
       return { status: "ok", mentioned: false, raw, citations, latencyMs: Date.now() - start };
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
@@ -118,36 +128,5 @@ export async function runOpenAI(prompt: string, city: string | null): Promise<En
     }
 
     return { raw: textParts.join("\n").trim(), citations: [...citations] };
-  });
-}
-
-// --- Perplexity sonar ---------------------------------------------------------
-
-interface PerplexityBody {
-  choices?: Array<{ message?: { content?: string } }>;
-  citations?: string[];
-  error?: { message?: string };
-}
-
-export async function runPerplexity(prompt: string, city: string | null): Promise<EngineResult> {
-  const apiKey = process.env.PERPLEXITY_API_KEY;
-  if (!apiKey) return { status: "no_data", raw: null, citations: [], latencyMs: 0, error: "PERPLEXITY_API_KEY not set" };
-
-  return withOneRetry(async () => {
-    const content = city ? `I'm in ${city}. ${prompt}` : prompt;
-    const res = await fetchWithTimeout("https://api.perplexity.ai/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: model("PERPLEXITY_AUDIT_MODEL", "sonar"),
-        messages: [{ role: "user", content }],
-      }),
-    });
-
-    const json = (await res.json()) as PerplexityBody;
-    if (!res.ok) throw new Error(json.error?.message || `Perplexity API error (${res.status})`);
-
-    const raw = json.choices?.[0]?.message?.content ?? "";
-    return { raw: raw.trim(), citations: json.citations ?? [] };
   });
 }

@@ -7,7 +7,13 @@ import type { AuditBlock, AuditPrompt, LikelyCompetitor } from "./classify";
 import type { RobotsFinding } from "./robots-check";
 
 export type AuditReportStatus = "classifying" | "awaiting_city" | "running" | "done" | "failed";
-export type AuditEngine = "openai" | "perplexity";
+/** The engines a NEW run may use. Perplexity was dropped on 2026-08-05: its key had been
+ *  rejected since the engine shipped on 2026-07-23, so it never once returned data and every
+ *  scorecard printed a dead "Perplexity: no data" column that also dragged the score down. */
+export type AuditEngine = "openai";
+/** What the `audit_runs.engine` COLUMN can hold. Rows written before 2026-08-05 still say
+ *  "perplexity", so anything reading history must widen to this, not to AuditEngine. */
+export type AuditRunEngine = AuditEngine | "perplexity";
 export type AuditRunStatus = "pending" | "ok" | "no_data";
 
 /** Cold-outreach stage for a finished report's Slack thread. `awaiting_intake` = the intake
@@ -123,7 +129,7 @@ export interface AuditRunRow {
   report_id: string;
   block: AuditBlock;
   prompt: string;
-  engine: AuditEngine;
+  engine: AuditRunEngine;
   mentioned: boolean | null;
   status: AuditRunStatus;
   raw_response: string | null;
@@ -138,3 +144,7 @@ export interface AuditRunRow {
 export const TOTAL_PROMPTS = 20;
 export const BATCH_SIZE = 4;
 export const TOTAL_BATCHES = Math.ceil(TOTAL_PROMPTS / BATCH_SIZE);
+/** One audit_runs row per prompt per engine. Was 2 until Perplexity was dropped. Anything
+ *  deriving "how many rows should exist" (the watchdog's resume arithmetic) must use this
+ *  rather than a literal, or a complete run reads as permanently incomplete. */
+export const ENGINES_PER_PROMPT = 1;

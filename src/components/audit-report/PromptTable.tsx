@@ -37,7 +37,7 @@ function RecommendedChip({ item }: { item: RecommendedNameView }) {
 }
 
 function PromptRow({ row }: { row: PromptRowView }) {
-  const hasSnippet = row.engines.openai.snippet || row.engines.perplexity.snippet;
+  const hasSnippet = Boolean(row.engines.openai.snippet);
 
   return (
     <details className="group rounded-lg border border-surface-border bg-surface open:bg-surface-hover">
@@ -53,7 +53,6 @@ function PromptRow({ row }: { row: PromptRowView }) {
           </span>
           <span className="flex shrink-0 gap-1.5">
             <EngineChip label="ChatGPT" cell={row.engines.openai} />
-            <EngineChip label="Perplexity" cell={row.engines.perplexity} />
           </span>
         </div>
         {row.recommended.length > 0 && (
@@ -70,12 +69,6 @@ function PromptRow({ row }: { row: PromptRowView }) {
             <p>
               <span className="font-semibold text-text-primary">ChatGPT: </span>
               {row.engines.openai.snippet}
-            </p>
-          )}
-          {row.engines.perplexity.snippet && (
-            <p>
-              <span className="font-semibold text-text-primary">Perplexity: </span>
-              {row.engines.perplexity.snippet}
             </p>
           )}
         </div>

@@ -96,7 +96,7 @@ function drawFooter(doc: jsPDF, reportUrl: string) {
   doc.setFontSize(7);
   doc.setFont("helvetica", "normal");
   setColor(doc, "text", MUTED);
-  doc.text("Run via official OpenAI & Perplexity APIs, neutral account, no personalization. We report visibility, not customers or revenue.", PAGE_W / 2, FOOTER_Y + 4, { align: "center" });
+  doc.text("Run via the official OpenAI API with web search, neutral account, no personalization. We report visibility, not customers or revenue.", PAGE_W / 2, FOOTER_Y + 4, { align: "center" });
   setColor(doc, "text", REEF);
   doc.text(`View the live report: ${reportUrl}`, PAGE_W / 2, FOOTER_Y + 8, { align: "center" });
 }
@@ -298,10 +298,8 @@ function drawPromptBlock(state: PageState, p: PromptRowView, reportUrl: string):
   const headerHeight = promptLines.length * 4.4 + (p.isBranded ? 4 : 0) + 6;
 
   const snippetLines: string[] = [];
-  const openaiText = p.engines.openai.snippet ? `ChatGPT: ${p.engines.openai.snippet}` : "";
-  const perplexityText = p.engines.perplexity.snippet ? `Perplexity: ${p.engines.perplexity.snippet}` : "";
-  for (const t of [openaiText, perplexityText]) {
-    if (t) snippetLines.push(...doc.splitTextToSize(t, CONTENT_W - 4));
+  if (p.engines.openai.snippet) {
+    snippetLines.push(...doc.splitTextToSize(`ChatGPT: ${p.engines.openai.snippet}`, CONTENT_W - 4));
   }
   const recommendedLine = p.recommended.length > 0 ? `Recommended: ${p.recommended.map((r) => r.name).join(", ")}` : "";
 
@@ -329,9 +327,7 @@ function drawPromptBlock(state: PageState, p: PromptRowView, reportUrl: string):
   }
   y += 2;
 
-  let chipX = MARGIN + 3;
-  chipX += engineLabel(doc, chipX, y, "ChatGPT", p.engines.openai.status, p.engines.openai.mentioned);
-  engineLabel(doc, chipX, y, "Perplexity", p.engines.perplexity.status, p.engines.perplexity.mentioned);
+  engineLabel(doc, MARGIN + 3, y, "ChatGPT", p.engines.openai.status, p.engines.openai.mentioned);
   y += 5;
 
   if (recommendedLine) {

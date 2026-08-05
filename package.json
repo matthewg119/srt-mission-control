@@ -43,6 +43,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "ffmpeg-static": "^5.3.0",
+    "geist": "^1.7.2",
     "jspdf": "^4.2.0",
     "lucide-react": "^0.575.0",
     "next": "14.2.28",

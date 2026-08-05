@@ -22,8 +22,8 @@ export interface PromptRowView {
   prompt: string;
   appeared: boolean;
   isBranded: boolean; // true when the business's own name is already in the prompt text
-  engines: { openai: EngineCellView; perplexity: EngineCellView };
-  recommended: RecommendedNameView[]; // deduped across both engines, capped for display
+  engines: { openai: EngineCellView };
+  recommended: RecommendedNameView[]; // deduped, capped for display
 }
 
 export interface BlockStat {
@@ -114,21 +114,20 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], cli
   const prompts: PromptRowView[] = report.prompts.map((p) => {
     const promptRuns = runsByPrompt.get(p.prompt) ?? [];
     const openaiRun = promptRuns.find((r) => r.engine === "openai");
-    const perplexityRun = promptRuns.find((r) => r.engine === "perplexity");
     const openai = engineCell(openaiRun, clientAliases);
-    const perplexity = engineCell(perplexityRun, clientAliases);
 
-    const recommendedNames = dedupeNames([...(openaiRun?.recommended ?? []), ...(perplexityRun?.recommended ?? [])]).slice(
-      0,
-      MAX_RECOMMENDED_PER_PROMPT
-    );
+    const recommendedNames = dedupeNames(openaiRun?.recommended ?? []).slice(0, MAX_RECOMMENDED_PER_PROMPT);
 
     return {
       block: p.block,
       prompt: p.prompt,
-      appeared: Boolean(openai.mentioned || perplexity.mentioned),
+      // `mentioned` is null on a no_data cell, which is falsy — so this reads as "did not
+      // appear" for a prompt that was never actually measured. That is only safe because
+      // finish-report.ts refuses to publish a report with any unmeasured prompt. If that gate
+      // is ever loosened, this line has to start distinguishing absent from unknown.
+      appeared: Boolean(openai.mentioned),
       isBranded: isMentioned(p.prompt, clientAliases),
-      engines: { openai, perplexity },
+      engines: { openai },
       recommended: recommendedNames.map((name) => ({ name, isClient: isClientName(name, clientAliases) })),
     };
   });
