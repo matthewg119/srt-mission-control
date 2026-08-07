@@ -144,6 +144,28 @@ function getAgentType(channel: string): string {
 
 export async function POST(request: NextRequest) {
   try {
+    // ── Slack timeout retries are DROPPED, before anything else runs ──────────────
+    //
+    // Slack retries any event it does not get a 200 for within THREE SECONDS, up to three times.
+    // Almost every interesting command in this router blows through that: `call` and `close` are
+    // a Sonnet generation plus, on a cold niche, a second one for the avatars; `loom`, `brief` and
+    // `delivery` are the same shape. They are awaited inline (the handler's boolean return decides
+    // routing), so the socket stays open for 30 to 90 seconds while Slack has already given up.
+    //
+    // Every retry re-entered the handler and re-ran the whole generation. That is three cards
+    // posted into the thread, three times the token spend, and three racing writes to
+    // pending_drafts on one reply. maxDuration is 300 so the FIRST invocation is still running and
+    // will still post: the retry has nothing to add and can only duplicate it.
+    //
+    // Scoped to `http_timeout` deliberately. A retry for any other reason means Slack got an error
+    // rather than silence, and re-delivering that is the recovery path working as intended.
+    const retryNum = request.headers.get("x-slack-retry-num");
+    const retryReason = request.headers.get("x-slack-retry-reason");
+    if (retryNum && retryReason === "http_timeout") {
+      console.log(`[slack/events] Dropping timeout retry #${retryNum}; the original invocation is still running.`);
+      return NextResponse.json({ ok: true, skipped: "timeout_retry" });
+    }
+
     const rawBody = await request.text();
 
     // Verify signature
