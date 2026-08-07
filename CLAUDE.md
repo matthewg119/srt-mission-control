@@ -742,7 +742,9 @@ justification when the whole reason it works is that it is a tiny favour asked q
 **`points` is exactly 3 and the shape is fixed**: the number, then ONE of those questions made
 concrete as a person the owner can picture, then why that customer beats the one they get today
 (named against the anti-ICP). An owner cannot picture "visibility gaps"; he can picture a property
-manager looking for rental turnover work. That is the whole call.
+manager looking for rental turnover work. That is the whole call. They are spoken BULLETS, one
+sentence and 20 words each (`MAX_POINT_WORDS`), enforced — a live run returned three sentences in
+point 2, which is two of the three points crammed into one and unreadable off a phone.
 
 `videoHasGoneOut()` is now one warning line in the header, not a section: `call` is the "they have
 not seen it" call by definition, but the row cannot prove nobody pressed play, so the handoff to
@@ -754,13 +756,47 @@ not seen it" call by definition, but the row cannot prove nobody pressed play, s
 > price conversation on Thursday, which is not a thing to discover with the phone already ringing.
 
 The `followupEmail` on the follow-up card is the same job without the phone call, and it goes
-through `lintSpoken` with the speech: a price or a reach claim is no more acceptable written down,
-and a sent email outlives an improvised sentence.
+through `lintSpoken`'s CONTENT guards with the speech: a price or a reach claim is no more
+acceptable written down, and a sent email outlives an improvised sentence. It is deliberately NOT
+in `followupSpoken`, only in `followupWritten`, because it is paragraphs and would fail the
+one-breath word limit on every run the moment that limit became a rejection.
+
+> ‼️ **The 25-word limit is REAL on `call`, and it used to be decorative.** A live card shipped
+> with its own ":warning: 12 line(s) run past 25 words" printed on top of it, which is a note
+> telling him it is unusable while he dials off it anyway. `followupSpeechProblems()` now fails
+> the generation, so `callClaudeJSON`'s correction retry fires with the offending lines quoted back
+> at the model by word count.
+>
+> **And it still cannot leave him with nothing.** That helper THROWS after its one retry, and the
+> thread router turns a throw into "⚠️ Couldn't draft that" with no card. So `validate` is a
+> closure that keeps the last payload whose SHAPE was right (`followupShapeOk`); if the retry still
+> cannot get the lines short, `buildFollowupScript` catches, posts that script, and `lintSpoken`
+> prints the warning banner above it. Zero extra API calls: it is what the retry already returned.
+> A genuine shape failure has nothing kept and rethrows as before.
+>
+> `close` is unchanged and still WARNS only. It is read by someone who has already had the whole
+> conversation once, and its seven closes are a much more expensive generation to re-ask for.
+
+> ‼️ **`intake_answers` is filtered before it reaches the brief** (`usefulIntakeAnswers`). At
+> `awaiting_intake` EVERY free-text reply is stored as the intake answer, so a word typed in the
+> belief that it was a command is kept verbatim and outranks everything generic from then on. A
+> live brief printed `MY NOTES: draft`, and the brief is the only grounding the live coach has for
+> the whole call. It gates the WHOLE blob, never line by line: the real answer is four replies to
+> the four intake slots, so it legitimately contains lines like `Fran`, an email address and `yes`,
+> and a per-line word count would gut it. Applied in `buildCallFacts`, so `factsPrompt` and
+> `buildCoachNotes` are cleaned by one call and cannot disagree about what Matthew said.
 
 > ‼️ **The reply move is the point of a follow-up call.** Getting them to open email 1 and hit
 > reply while he is still on the phone is what keeps everything after it out of spam, and it is
-> the whole reason to dial rather than email again. It is section 4, starred, and `validateFollowup`
+> the whole reason to dial rather than email again. It is section 4, starred, and `followupShapeOk`
 > rejects a script that omits it.
+>
+> **It is spoken ONCE.** `REPLY_ASK_LINE` is the constant, and around it sit two NAMED fields,
+> `whileTheyLook` and `ifTheyWont`. They were one `replyFallback` array whose first slot was
+> described in prose, and the model restated the ask there every single time, so the card printed
+> it twice. Three layers now: the prompt quotes the constant and bans the word "reply" in both
+> slots, `restatesReplyAsk()` fails the generation into the correction retry, and
+> `formatFollowupScript` drops any survivor. A named field is a stronger contract than "line 1".
 
 > ‼️ **The follow-up brief WITHHOLDS the price rather than saying "don't quote it".** The COACH
 > NOTES are read by a model that is trying to be helpful mid-call; a number sitting in its context
@@ -806,9 +842,11 @@ and he can jump to "number 5" mid-call without reading labels. `coerce` re-sorts
 the model emitted back into `OBJECTIONS` order. A third response reads as pressure.
 
 **There is no guarantee on this offer**, so `HARD_LINES` bans guarantee and risk-reversal language
-outright, and `lintScript()` re-checks it in code along with promises of customers/revenue and any
-suggestion to fund this personally. Findings post ABOVE the script, same as `linkWarning()`. Over-
-long lines are warned about, not rejected: a script with one clumsy line still beats no script.
+outright, and `lintSpoken()` re-checks it in code along with promises of customers/revenue and any
+suggestion to fund this personally. Findings post ABOVE the script, same as `linkWarning()`. On
+`close`, over-long lines are still warned about rather than rejected, because a script with one
+clumsy line still beats no script; on `call` they are rejected first and only warned about if the
+correction retry could not fix them (see the box above).
 
 ### SRT Call Coach backend (`/api/call-coach/*`)
 The Chrome extension lives in a SEPARATE repo (`Desktop/Code/live call coach srt`) and deploys

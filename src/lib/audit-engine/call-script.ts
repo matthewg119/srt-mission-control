@@ -82,9 +82,22 @@ const PUSHBACKS = [
   { key: "howmuch", label: "How much is it", angle: "DO NOT QUOTE A PRICE ON THIS CALL. Nothing is being sold yet. The video is free and theirs to keep. Deflect honestly: let them see the work first, then price is a real conversation." },
 ] as const;
 
-/** Max spoken words in one line. Past this it cannot be said in one breath and gets read aloud
- *  badly, which is worse than not having the line. Enforced as a warning, not a rejection. */
+/**
+ * Max spoken words in one line. Past this it cannot be said in one breath and gets read aloud
+ * badly, which is worse than not having the line.
+ *
+ * On the FOLLOW-UP card this is enforced, not warned about: a real run shipped with its own
+ * ":warning: 12 line(s) run past 25 words" printed above it, which is a card telling him it is
+ * broken while he dials off it anyway. See followupSpeechProblems. The closing card still warns only.
+ */
 const MAX_SPOKEN_WORDS = 25;
+
+/**
+ * The three points are held tighter than everything else, because they are the only lines said to
+ * someone who has not read the email and has no reason yet to keep listening. The shape Matthew
+ * asks for runs 11 to 14 words: "We found 12 buyer questions where you're not showing up at all."
+ */
+const MAX_POINT_WORDS = 20;
 
 /** The seven objections, fixed. They are NOT model-chosen: a fixed set means the card always has
  *  the same shape, so mid-call he can jump to "number 5" without reading the labels. */
@@ -175,10 +188,25 @@ interface FollowupScript {
    * question behind it, then why that particular customer is worth more than the one they get
    * today. Abstract findings do not survive a phone call; "property managers looking for a
    * flooring contractor for rental units" does, because the owner can picture the person.
+   *
+   * They are BULLETS, one sentence each, said with a breath between. A live run returned three
+   * sentences in one point ("...in Citrus County. That is a recurring contract, 10 to 30 units a
+   * year, one invoice contact, no emotional design decisions.") which is two of the three points
+   * crammed into the second one, and unreadable off a phone. Enforced in followupSpeechProblems.
    */
   points: string[];
-  /** Two lines around the constant reply ask: cover while they hunt, and the dated fallback. */
-  replyFallback: string[];
+  /**
+   * What he says WHILE they hunt for the email: who it is from, where to look.
+   *
+   * REPLY_ASK_LINE has just been spoken verbatim, so this must NOT restate it. It was one array
+   * (`replyFallback`) whose first slot was described in prose as "what he says while they are
+   * hunting"; the model restated the ask there every time and the card printed it twice. A named
+   * field is a stronger contract than line 1 of a list.
+   */
+  whileTheyLook: string;
+  /** The fallback if they will not do it on the phone: a specific day and time he calls back,
+   *  never an open ended "I'll follow up". Also must not restate the ask. */
+  ifTheyWont: string;
   pushback: Pushback[];
   voicemail: string[];
   textMessage: string[];
@@ -296,6 +324,52 @@ function whatTheySaw(report: AuditReportRow): string[] {
   return seen;
 }
 
+/**
+ * Router commands that end up stored as the intake answer.
+ *
+ * At `awaiting_intake` EVERY free-text reply in the thread is the intake answer, so a word typed
+ * in the belief that it is a command is kept verbatim and outranks everything generic from then on.
+ * A live run stored the literal string "draft" and the coach brief printed `MY NOTES: draft`, which
+ * a model reading that brief mid-call has no way to recognise as noise.
+ */
+const INTAKE_JUNK = new Set([
+  "draft", "drafts", "1", "2", "3", "send", "send it", "sendit", "call", "close", "closing",
+  "followup", "follow up", "loom", "script", "full script", "reveal", "delivery", "deliver",
+  "image", "avatars", "avatars fresh", "questions", "intake", "ask me", "restart intake",
+  "yes", "no", "ok", "okay", "go", "cancel", "stop", "nevermind", "never mind", "test", "testing",
+  "na", "n/a", "none", "-", ".",
+]);
+
+/**
+ * The intake answers, or nothing.
+ *
+ * Gates the WHOLE blob rather than filtering line by line, and that is deliberate. The real answer
+ * is four free-text replies to the four intake slots, so it legitimately contains lines like
+ * "Fran", "fran@americanstone.com" and "yes"; a per-line word count would gut a perfectly good
+ * answer. What actually goes wrong is the opposite shape, one stray token standing alone, so that
+ * is the only thing rejected.
+ *
+ * Applied in buildCallFacts so `factsPrompt` and `buildCoachNotes` are cleaned by one call and
+ * cannot disagree about what Matthew said, the same reason CallFacts is assembled once for both.
+ */
+export function usefulIntakeAnswers(raw: string | null): string | null {
+  const text = (raw ?? "").trim();
+  if (!text) return null;
+
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length > 1) return text;
+
+  const bare = lines[0].toLowerCase().replace(/[.!?,]+$/, "").trim();
+  if (INTAKE_JUNK.has(bare)) return null;
+  // `nudge 2`, `email 3` — a numbered command is junk for the same reason the bare word is.
+  if (/^(nudge|email|seed)\s+\d+$/.test(bare)) return null;
+  // Too small to be an instruction. A one-word answer costs the ICP framing nothing and the
+  // greeting name comes from prospect_name / loom_state.greetName, never from here.
+  if (wordsIn(bare) < 3 && bare.length < 15) return null;
+
+  return text;
+}
+
 export async function buildCallFacts(report: AuditReportRow, view: ReportView): Promise<CallFacts> {
   const weighted = computeWeightedScore(view);
   const { icp, antiIcp, isReposition } = await resolveAvatars(report, view);
@@ -322,7 +396,7 @@ export async function buildCallFacts(report: AuditReportRow, view: ReportView): 
     redesignUrl: report.redesign_url,
     loomUrl: report.loom_url,
     installedBeliefs: readLedger(report).installed.map((i) => i.belief),
-    intakeAnswers: report.intake_answers,
+    intakeAnswers: usefulIntakeAnswers(report.intake_answers),
     reportUrl: report.slug ? `https://mission.srtagency.com/r/${report.slug}` : null,
     language: report.call_language === "es" ? "es" : "en",
   };
@@ -437,23 +511,69 @@ function coerce(p: unknown): unknown {
   return o;
 }
 
+// ── The shape of a spoken line ──────────────────────────────────────────────────
+// Pure, and shared by the validators and the linter so the rule that REJECTS a script and the
+// rule that WARNS about one can never drift apart.
+
+function wordsIn(line: string): number {
+  return line.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Sentences, for the one-breath rule. Split on terminal punctuation followed by something that
+ *  starts a new sentence, so "10 to 30 units a year" and "Mr. Ruiz" do not read as two. */
+function sentencesIn(line: string): string[] {
+  return line
+    .trim()
+    .split(/(?<=[.?!])\s+(?=["'(]?[A-Z0-9])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** A bracketed stage direction is read, not said, so none of the speech rules apply to it. */
+function isDirection(line: string): boolean {
+  return line.trim().startsWith("[");
+}
+
+function overLong(lines: string[], cap = MAX_SPOKEN_WORDS): string[] {
+  return lines.filter((l) => !isDirection(l) && wordsIn(l) > cap);
+}
+
+/**
+ * Is this line the reply ask again?
+ *
+ * REPLY_ASK_LINE is spoken verbatim immediately before both of the lines this guards, and the ask
+ * only works because it is small, made once, and followed by silence. Neither "what he says while
+ * they hunt for the email" nor "the dated callback" has any business containing a reply verb, so
+ * the test is exactly that and nothing cleverer.
+ */
+function restatesReplyAsk(line: string): boolean {
+  return /\b(reply|replies|replying|respond|write back|fire back|shoot (?:me )?back|send (?:me )?back|hit reply)\b/i.test(line);
+}
+
 /**
  * Lines that are too long to say, and hard-line violations that survived the prompt.
  *
- * Reported above the script rather than rejecting it. A prose guard is not a guard, but a script
- * with one over-long line is still usable and refusing to post it would leave him with nothing to
- * dial on. The guarantee and personal-funding checks are the exception worth shouting about, so
- * they are flagged separately and prominently.
+ * Reported above the script rather than rejecting it, and on the follow-up card this is now the
+ * SALVAGE path: strict validation already rejected the over-long lines once and asked for a
+ * correction, so anything still here survived that. A script with one clumsy line is still usable
+ * and refusing to post it would leave him with nothing to dial on. The guarantee and
+ * personal-funding checks are the exception worth shouting about, so they are flagged separately
+ * and prominently.
+ *
+ * `spoken` is what he SAYS; `written` is that plus anything sent in his words. The one-breath rule
+ * applies only to speech, because an email body is paragraphs and would fail it on every run. The
+ * content guards apply to both: a price or a reach claim is no more acceptable written down, and a
+ * sent email outlives an improvised sentence.
  */
-function lintSpoken(spoken: string[], opts: { noPrice?: boolean } = {}): string[] {
+function lintSpoken(spoken: string[], written: string[], opts: { noPrice?: boolean } = {}): string[] {
   const warnings: string[] = [];
 
-  const longLines = spoken.filter((l) => l.split(/\s+/).length > MAX_SPOKEN_WORDS);
+  const longLines = overLong(spoken);
   if (longLines.length) {
     warnings.push(`:warning: ${longLines.length} line(s) run past ${MAX_SPOKEN_WORDS} words. Cut them down before dialing, they cannot be said in one breath.`);
   }
 
-  const all = spoken.join(" ").toLowerCase();
+  const all = written.join(" ").toLowerCase();
   const guarantee = ["risk-free", "risk free", "money-back", "money back", "guarantee", "guaranteed", "refund", "if it doesn't work you don't pay"];
   const hits = guarantee.filter((g) => all.includes(g));
   if (hits.length) {
@@ -468,7 +588,7 @@ function lintSpoken(spoken: string[], opts: { noPrice?: boolean } = {}): string[
   // Follow-up stage only. Quoting a number to someone who has not seen the work is the fastest
   // way to turn a free video into a sales call, and it is the one thing this stage cannot undo.
   if (opts.noPrice) {
-    const priced = spoken.filter((l) => /\$\s?\d|\bper month\b|\ba month\b|\bmonthly fee\b|\bretainer\b/i.test(l));
+    const priced = written.filter((l) => /\$\s?\d|\bper month\b|\ba month\b|\bmonthly fee\b|\bretainer\b/i.test(l));
     if (priced.length) {
       warnings.push(`:rotating_light: A PRICE is quoted on a follow-up call (${priced.length} line(s)). Nothing is being sold yet. Cut it, the video is free.`);
     }
@@ -476,7 +596,7 @@ function lintSpoken(spoken: string[], opts: { noPrice?: boolean } = {}): string[
 
   // The reach claim the audit cannot back. "In front of 500 more people" is not measured anywhere
   // in this pipeline, and it is exactly the kind of number a prospect asks you to show your work on.
-  const reach = spoken.filter((l) => /in front of\s+[\d,]+|\b[\d,]{3,}\s+(more\s+)?(people|customers|buyers|homeowners|searches|views|impressions)\b/i.test(l));
+  const reach = written.filter((l) => /in front of\s+[\d,]+|\b[\d,]{3,}\s+(more\s+)?(people|customers|buyers|homeowners|searches|views|impressions)\b/i.test(l));
   if (reach.length) {
     warnings.push(`:rotating_light: An audience/reach number is claimed (${reach.length} line(s)). Nothing measures that. Use the absent-question count instead.`);
   }
@@ -497,7 +617,15 @@ export function videoHasGoneOut(f: CallFacts): boolean {
   return Boolean(f.loomUrl) || f.seen.some((s) => s.toLowerCase().includes("loom") || s.toLowerCase().includes("reveal"));
 }
 
-function validateFollowup(p: unknown): p is FollowupScript {
+/**
+ * The SHAPE of a follow-up card: the fields exist, the fixed counts are right.
+ *
+ * Split from the speech rules below because the two failures deserve different endings. A missing
+ * `pushback` array is unrecoverable and should surface as an error; a bullet that runs three words
+ * long is a card he can still dial off. `buildFollowupScript` keeps the last shape-valid payload
+ * and posts it with a warning banner rather than leaving him with nothing.
+ */
+function followupShapeOk(p: unknown): p is FollowupScript {
   const o = p as FollowupScript;
   return (
     !!o &&
@@ -505,9 +633,60 @@ function validateFollowup(p: unknown): p is FollowupScript {
     o.opener.length > 0 &&
     Array.isArray(o.points) &&
     o.points.length === 3 &&
+    typeof o.whileTheyLook === "string" &&
+    o.whileTheyLook.trim().length > 0 &&
+    typeof o.ifTheyWont === "string" &&
+    o.ifTheyWont.trim().length > 0 &&
     Array.isArray(o.pushback) &&
     o.pushback.length === PUSHBACK_COUNT
   );
+}
+
+/**
+ * How the card has to SOUND. Every one of these is a real defect from one live run.
+ *
+ * Rejected so `callClaudeJSON` runs its correction retry with `describeInvalidFollowup`'s reason,
+ * rather than warned about above a card that is already broken. This is the whole point of fixing
+ * the limit: the previous card shipped with ":warning: 12 line(s) run past 25 words" printed on
+ * top of it, which is a note telling him it is unusable while he dials off it anyway.
+ */
+function followupSpeechProblems(s: FollowupScript): string[] {
+  const problems: string[] = [];
+
+  const long = overLong(followupSpoken(s));
+  if (long.length) {
+    problems.push(
+      `${long.length} spoken line(s) run past ${MAX_SPOKEN_WORDS} words and cannot be said in one breath. ` +
+        `The worst is ${wordsIn(long[0])} words: "${long[0]}". ` +
+        `Rewrite each one shorter. Where the section has a fixed number of lines, CUT it back, do not split it into more lines.`
+    );
+  }
+
+  const fatPoints = s.points.filter((p) => wordsIn(p) > MAX_POINT_WORDS);
+  if (fatPoints.length) {
+    problems.push(
+      `${fatPoints.length} of the 3 points run past ${MAX_POINT_WORDS} words (worst: ${wordsIn(fatPoints[0])}). ` +
+        `They are spoken bullets, not paragraphs. Say less.`
+    );
+  }
+  const multiPoints = s.points.filter((p) => sentencesIn(p).length > 1);
+  if (multiPoints.length) {
+    problems.push(
+      `${multiPoints.length} of the 3 points contain more than one sentence, e.g. "${multiPoints[0]}". ` +
+        `Each point is exactly ONE sentence. If it has two sentences you have put two of the three points into one, so move the second one where it belongs.`
+    );
+  }
+
+  for (const [field, line] of [["whileTheyLook", s.whileTheyLook], ["ifTheyWont", s.ifTheyWont]] as const) {
+    if (restatesReplyAsk(line)) {
+      problems.push(
+        `${field} asks them to reply again: "${line}". The rep has ALREADY said the ask, word for word, immediately before this line. ` +
+          `Do not restate it. ${field === "whileTheyLook" ? "This line assumes they are already looking for the email." : "This line is only the dated callback."}`
+      );
+    }
+  }
+
+  return problems;
 }
 
 function describeInvalidFollowup(p: unknown): string {
@@ -517,12 +696,18 @@ function describeInvalidFollowup(p: unknown): string {
   if (!Array.isArray(o.opener) || o.opener.length === 0) problems.push("opener was missing or empty");
   if (!Array.isArray(o.points)) problems.push("points was missing or not an array");
   else if (o.points.length !== 3) problems.push(`points had ${o.points.length}, expected exactly 3: the number, the one real buyer question, then why that customer beats the one they get today`);
+  if (typeof o.whileTheyLook !== "string" || !o.whileTheyLook.trim()) problems.push("whileTheyLook was missing: one line, what he says while they hunt for the email");
+  if (typeof o.ifTheyWont !== "string" || !o.ifTheyWont.trim()) problems.push("ifTheyWont was missing: one line, the dated callback if they will not do it on the phone");
   if (!Array.isArray(o.pushback)) problems.push("pushback was missing");
   else if (o.pushback.length !== PUSHBACK_COUNT) problems.push(`pushback had ${o.pushback.length}, expected exactly ${PUSHBACK_COUNT}, one per key given`);
+
+  // Only reachable once the shape is right, so the speech rules are the reason it failed.
+  if (!problems.length && followupShapeOk(p)) problems.push(...followupSpeechProblems(p));
+
   return problems.join("; ") || "it did not match the required shape";
 }
 
-const FOLLOWUP_LISTS = ["opener", "points", "replyFallback", "voicemail", "textMessage", "dontSay"] as const;
+const FOLLOWUP_LISTS = ["opener", "points", "voicemail", "textMessage", "dontSay"] as const;
 
 function coerceFollowup(p: unknown): unknown {
   const o = camelizeKeys(p) as Record<string, unknown>;
@@ -538,6 +723,13 @@ function coerceFollowup(p: unknown): unknown {
     else if (!Array.isArray(o[key])) o[key] = [];
     else o[key] = (o[key] as unknown[]).filter((l): l is string => typeof l === "string");
   }
+  // Both are ONE line, and a model that reads "one line" sometimes sends a one-item array anyway.
+  // Flattening it is exactly the near-miss coerce exists for; validate still rejects an empty one.
+  for (const key of ["whileTheyLook", "ifTheyWont"] as const) {
+    const v = o[key];
+    if (typeof v === "string") continue;
+    o[key] = Array.isArray(v) ? v.filter((l): l is string => typeof l === "string").join(" ") : "";
+  }
   if (Array.isArray(o.pushback)) {
     o.pushback = (o.pushback as Pushback[]).map((x) => ({
       ...x,
@@ -547,15 +739,25 @@ function coerceFollowup(p: unknown): unknown {
   return o;
 }
 
-/** Every spoken line on a follow-up card, for the linter. */
+/**
+ * Every line the rep SAYS on a follow-up card.
+ *
+ * The email body is deliberately NOT here. It is paragraphs, so measuring it against a one-breath
+ * word limit would fail every run the moment that limit became a rejection rather than a warning.
+ * It goes through the content guards instead, in followupWritten below.
+ */
 function followupSpoken(s: FollowupScript): string[] {
   return [
-    ...s.opener, ...s.points, ...s.replyFallback, ...s.voicemail, ...s.textMessage,
+    ...s.opener, ...s.points, s.whileTheyLook, s.ifTheyWont, ...s.voicemail, ...s.textMessage,
     ...s.pushback.flatMap((p) => p.responses),
-    // The email goes through the same guards as the speech. A price or a reach claim is no more
-    // acceptable written down, and this one is sent rather than improvised, so it lasts longer.
-    s.followupEmail.body,
-  ].filter((l) => typeof l === "string" && !l.trim().startsWith("["));
+  ].filter((l) => typeof l === "string" && l.trim() !== "" && !isDirection(l));
+}
+
+/** Everything that goes out in his words, spoken or sent. The email goes through the same content
+ *  guards as the speech: a price or a reach claim is no more acceptable written down, and this one
+ *  is sent rather than improvised, so it lasts longer. */
+function followupWritten(s: FollowupScript): string[] {
+  return [...followupSpoken(s), s.followupEmail.body].filter((l) => typeof l === "string" && l.trim() !== "");
 }
 
 export async function buildFollowupScript(
@@ -565,6 +767,26 @@ export async function buildFollowupScript(
 ): Promise<{ facts: CallFacts; script: FollowupScript; warnings: string[] }> {
   const facts = await buildCallFacts(report, view);
   const videoSent = videoHasGoneOut(facts);
+
+  /**
+   * The speech rules reject, and this is what stops that leaving him with nothing.
+   *
+   * callClaudeJSON runs ONE correction retry on a validation failure and then THROWS, and the
+   * thread router turns a throw into ":warning: Couldn't draft that" with no card at all. That is
+   * the wrong ending for a bullet that runs three words long. So the validator keeps the last
+   * payload whose SHAPE was right: if the retry still cannot get the lines short, that script is
+   * posted with lintSpoken's warning banner above it instead of nothing. Costs no extra API call,
+   * because it is exactly what the correction retry already returned.
+   *
+   * Held on an object rather than a bare `let` so the assignment inside the closure is visible to
+   * the catch below, and scoped per call so two Slack handlers cannot see each other's scripts.
+   */
+  const kept: { script: FollowupScript | null } = { script: null };
+  const validate = (p: unknown): p is FollowupScript => {
+    if (!followupShapeOk(p)) return false;
+    kept.script = p;
+    return followupSpeechProblems(p).length === 0;
+  };
 
   const { data } = await callClaudeJSON<FollowupScript>({
     model: "claude-sonnet-4-6",
@@ -597,7 +819,8 @@ export async function buildFollowupScript(
       "- NEVER estimate reach, traffic, calls, leads or 'people you'll get in front of'. Nothing in the audit measures that. The honest version is how many of their buyers' questions they are absent from, and that number is in FACTS.",
       "",
       "STYLE",
-      `- Every spoken line is what the rep SAYS OUT LOUD, first person, under ${MAX_SPOKEN_WORDS} words.`,
+      `- Every spoken line is what the rep SAYS OUT LOUD, first person, under ${MAX_SPOKEN_WORDS} words. This is checked and a card that breaks it is sent back.`,
+      "- ONE sentence per bullet. If a bullet has two sentences in it, it is two bullets. Where the section has a fixed number of lines, cut it back to one sentence instead of adding a line.",
       "- A line in [square brackets] is a stage direction, not speech.",
       "- Never write a name placeholder. If the person's name is unknown, write the line without a name.",
       "- Quote their real buyer questions verbatim. Use the real numbers. Nothing generic.",
@@ -618,13 +841,18 @@ export async function buildFollowupScript(
       "",
       "Write the card:",
       `- opener: 2 lines, ending on a question. ${openerAngle(facts)}`,
-      "- points: EXACTLY 3 bullets, and they carry the whole call. This is the insight from an email he has not read yet, so it has to land spoken, in this order:",
+      `- points: EXACTLY 3 SPOKEN BULLETS, and they carry the whole call. ONE sentence each, under ${MAX_POINT_WORDS} words each, said one after the other with a breath between. Not paragraphs. In this order:`,
       "    (1) the number: how many real buyer questions they do not show up in at all.",
       "    (2) ONE of those questions, made concrete as a PERSON the owner can picture, tied to the high-value customer in FACTS.",
-      "    (3) why THAT customer is worth more than the one they get today, naming the low-value customer as the contrast.",
-      '    Shape to hit: "We found 12 buyer questions where you are not showing up at all. One of them is property managers looking for a flooring contractor for rental units. That is a recurring contract, not a one-time sale, and it is the opposite of the $89 backsplash shopper."',
+      "    (3) why THAT customer is worth more than the one they get today, named against the low-value customer in FACTS as the contrast.",
+      "    Exactly this shape. Three sentences, three bullets, nothing longer:",
+      '      "We found 12 buyer questions where you are not showing up at all."',
+      '      "One of them is property managers looking for a flooring contractor for rental units."',
+      '      "That is a recurring contract, not a one time $89 backsplash."',
+      "    If one of your bullets has two sentences in it, you have put two of the three points into one. Move the second one where it belongs.",
       "    Concrete beats abstract every time. An owner cannot picture 'visibility gaps', he can picture a property manager. Use the real absent questions and the real customer labels from FACTS, in his words, not ours.",
-      "- replyFallback: exactly 2 lines. The rep is about to say, verbatim: \"" + REPLY_ASK_LINE + "\" Write (1) what he says while they are hunting for the email, including where to look, and (2) the fallback if they will not do it on the phone, which is a specific day and time he calls back, never an open ended 'I'll follow up'.",
+      "- whileTheyLook: ONE line. The rep has JUST said, word for word: \"" + REPLY_ASK_LINE + "\" Do NOT restate, rephrase, shorten or summarise that ask, and do not use the word 'reply' at all. It has been made, once, and saying it twice is the most common mistake in this slot. Your line assumes they are already looking: who the email is from, what the subject line is, tell them to check promotions or spam.",
+      "- ifTheyWont: ONE line. Only the fallback for someone who will not do it while on the phone: a specific day and time he calls back. Never an open ended 'I'll follow up'. Do not re-ask for the reply here either.",
       `- pushback: exactly ${PUSHBACK_COUNT} entries, one per key below, in this order. Each has TWO short spoken responses worded for THIS business, and each gets back to the same ask: send the video.`,
       ...PUSHBACKS.map((p) => `    key "${p.key}" = "${p.label}" -> ${p.angle}`),
       "- voicemail: 3 lines, under 20 seconds total, ends with a specific callback window. Never 'just checking in'.",
@@ -637,15 +865,26 @@ export async function buildFollowupScript(
     maxTokens: 4000,
     temperature: 0.6,
     schemaHint:
-      '{ "opener": string[], "points": string[] (EXACTLY 3), "replyFallback": string[] (exactly 2), ' +
+      `{ "opener": string[], "points": string[] (EXACTLY 3, one sentence each, under ${MAX_POINT_WORDS} words each), ` +
+      '"whileTheyLook": string (ONE line), "ifTheyWont": string (ONE line), ' +
       `"pushback": [{ "key": string, "responses": [string, string] }] (exactly ${PUSHBACK_COUNT}, keys in the given order), ` +
       '"voicemail": string[], "textMessage": string[], "followupEmail": { "subject": string, "body": string }, "dontSay": string[] }',
     coerce: coerceFollowup,
     describeInvalid: describeInvalidFollowup,
-    validate: validateFollowup,
+    validate,
+  }).catch((e: Error) => {
+    // Shape was never right, so there is nothing worth posting: fail the way every other command
+    // in the thread fails.
+    if (!kept.script) throw e;
+    console.warn(`[call-script] follow-up card still broke the speech rules after the correction retry (${e.message}); posting it with warnings`);
+    return { data: kept.script };
   });
 
-  return { facts, script: data, warnings: lintSpoken(followupSpoken(data), { noPrice: true }) };
+  return {
+    facts,
+    script: data,
+    warnings: lintSpoken(followupSpoken(data), followupWritten(data), { noPrice: true }),
+  };
 }
 
 export async function buildCallScript(
@@ -721,9 +960,13 @@ export async function buildCallScript(
     ...data.surface, ...data.ask, ...data.yesButLater, ...data.onYes, ...data.onNo,
     ...data.voicemail, ...data.textMessage,
     ...data.closes.flatMap((c) => c.responses),
-  ].filter((l) => typeof l === "string" && !l.trim().startsWith("["));
+  ].filter((l) => typeof l === "string" && !isDirection(l));
 
-  return { facts, script: data, warnings: lintSpoken(spoken) };
+  // The closing card still WARNS about over-long lines rather than rejecting them. It is read
+  // mid-call by someone who has already had the whole conversation once, so a clumsy line costs
+  // less there than it does on a cold opener, and its seven closes are a much more expensive
+  // generation to re-ask for. Nothing written goes out with it, so spoken and written are the same.
+  return { facts, script: data, warnings: lintSpoken(spoken, spoken) };
 }
 
 /**
@@ -848,7 +1091,10 @@ export function formatFollowupScript(
     ["THE FRAME*  _say it early, it's what makes them relax_", `• ${NOT_SELLING_LINE}`],
     [
       "GET THE REPLY, ON THE PHONE*  _the whole reason you dialled_",
-      [`• ${REPLY_ASK_LINE}`, bullets(s.replyFallback)].filter(Boolean).join("\n"),
+      // The ask is spoken ONCE. `restatesReplyAsk` already failed the generation that put it in
+      // either of these two slots and asked for a correction, so this is the last line of defence
+      // rather than the only one: whatever comes back, the card cannot print the ask twice.
+      bullets([REPLY_ASK_LINE, ...[s.whileTheyLook, s.ifTheyWont].filter((l) => l?.trim() && !restatesReplyAsk(l))]),
     ],
     ["IF THEY PUSH BACK*", pushCard],
   ];
