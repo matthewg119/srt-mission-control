@@ -726,10 +726,27 @@ phone script, `close` is the selling script. **The VERB picks it and nothing els
 | what they have | email 1, or the video with no reaction yet | they watched it and they're warm |
 | the goal | earn "send it over", or find out if they watched it | remove one obstacle, then paperwork |
 | price | **never quoted**, withheld from the brief entirely | quoted, no guarantee |
-| sections | 3 openers, [video gate], why, flow, reply move, 5 stalls, **+ a send-instead email** | 10 sections, 7 closes |
+| sections | open, 3 points, the frame, the reply ask, 5 stalls, **+ a send-instead email** | 10 sections, 7 closes |
 
-`call` **branches** on `videoHasGoneOut()` rather than escalating: once the recording is out the
-card opens on "did you get through it", and the yes branch tells him to stop and type `close`.
+**The follow-up card is deliberately SHORT.** It carried three selectable openers, a "twenty
+second why" and a flow section, and all three went: picking between framings in the first two
+seconds of a live call is not a decision there is time to make, and once the card reads top to
+bottom as the conversation, a separate flow section is the same content twice.
+
+**Two lines are CONSTANTS, not prompt instructions** (`NOT_SELLING_LINE`, `REPLY_ASK_LINE`), the
+same precedent as `PERMISSION_CLOSE`. The model rewrote both every time it was merely asked, and
+always the same way: "I'm not selling you anything" became "I'm not here to sell you anything
+today", which is a salesperson's sentence and lands as one, and the reply ask kept growing a
+justification when the whole reason it works is that it is a tiny favour asked quickly.
+
+**`points` is exactly 3 and the shape is fixed**: the number, then ONE of those questions made
+concrete as a person the owner can picture, then why that customer beats the one they get today
+(named against the anti-ICP). An owner cannot picture "visibility gaps"; he can picture a property
+manager looking for rental turnover work. That is the whole call.
+
+`videoHasGoneOut()` is now one warning line in the header, not a section: `call` is the "they have
+not seen it" call by definition, but the row cannot prove nobody pressed play, so the handoff to
+`close` is stated once and dropped.
 
 > ‼️ **`call` must never auto-escalate to closing, and it used to.** Keying off `loom_url` was
 > wrong twice over: a stored recording proves the video was MADE, not watched, so it opened selling

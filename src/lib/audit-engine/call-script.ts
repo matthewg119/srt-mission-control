@@ -99,44 +99,34 @@ const OBJECTIONS = [
 ] as const;
 
 /**
- * Three genuinely different ways to open, so he can read the first two seconds and pick.
+ * The two lines that are CONSTANTS, not prompt instructions.
  *
- * Divergent by ANGLE, not by wording. Three polite variations of the same sentence are a
- * decoration; these open on three different things (a gift, a finding, a straight question) and
- * fail in three different ways, so if one gets a flat "not interested" the next call has somewhere
- * else to go.
+ * Same precedent as PERMISSION_CLOSE in email-assistant.ts, and for the same reason: the model
+ * rewrote both of these every single time it was merely asked to include them, and the rewrites
+ * were always worse in the same way. "I'm not selling you anything" became "I'm not here to sell
+ * you anything today", which is a salesperson's sentence and lands as one. And the reply ask kept
+ * growing a justification, when the entire reason it works is that it is a tiny favour asked
+ * quickly and then followed by silence.
  *
- * The redesign opener is only offered when a redesign actually exists. It is the strongest one
- * available because it leads with something already built and free, which is the only opener that
- * costs the listener nothing to say yes to.
+ * These are the words that get spoken. The model writes around them.
  */
-function openerAngles(f: CallFacts): Array<{ key: string; label: string; angle: string }> {
-  const redesign = {
-    key: "redesign",
-    label: "The free site",
-    angle:
-      "Lead with the redesign that already exists and is theirs free, no strings, use it or don't. Ask if they saw it. This opens on a gift, not a pitch, so there is nothing to say no to. Do NOT paste the URL into the spoken line, he says it, not reads it.",
-  };
-  const finding = {
-    key: "finding",
-    label: "The finding",
-    angle:
-      "Lead with what came back when the engines were asked. Use the real absent count and, if there is one, the competitor that came back instead. One number, said plainly, then stop talking.",
-  };
-  const direct = {
-    key: "direct",
-    label: "Straight up",
-    angle:
-      "No hook, no cleverness. Say who he is, say he sent something, ask if it landed. This is the one that works on people who hate being sold to, and it is the only opener that survives a prospect who has already screened two calls today.",
-  };
-  const curiosity = {
-    key: "curiosity",
-    label: "The question",
-    angle:
-      "Open on a question about THEIR business that only someone who looked would ask, using their real buyer language from the absent prompts. Earns the next thirty seconds instead of asking for them.",
-  };
+const NOT_SELLING_LINE = "I'm not selling you anything on this call. I just want to get you the video.";
+const REPLY_ASK_LINE =
+  "Can you pull up that email real quick and just fire back one word? Clears your spam filter and I can send it straight through.";
 
-  return f.redesignUrl ? [redesign, finding, direct] : [finding, direct, curiosity];
+/**
+ * How the call opens. ONE opener, not a menu.
+ *
+ * There used to be three, chosen live. That was wrong for a card he reads while the phone is
+ * already ringing: picking between three framings in the first two seconds of a call is a decision
+ * he does not have time to make, and having them there made the top of the card the longest part
+ * of it. The redesign angle wins whenever a redesign exists, because leading with something already
+ * built and free is the only opener that costs the listener nothing to say yes to.
+ */
+function openerAngle(f: CallFacts): string {
+  return f.redesignUrl
+    ? "Lead with the free redesign that already exists. Ask if they saw it, and make clear it is theirs either way, no strings. This opens on a gift, not a pitch, so there is nothing to say no to. He SAYS it, he does not read out a URL."
+    : "Say who he is and that he sent something over, then go straight to the finding. No hook, no cleverness. This has to survive a prospect who has already screened two calls today.";
 }
 
 /** Non-negotiable. Stated to the model, and the last three are re-checked in code by lintScript. */
@@ -171,28 +161,24 @@ interface CloseBranch {
   rebox: string;
 }
 
-interface Opener {
-  /** Which of the three angles this is. Fixed keys so the card is always numbered the same. */
-  key: string;
-  lines: string[];
-}
-
 interface Pushback {
   key: string;
   responses: string[];
-  rebox: string;
 }
 
 interface FollowupScript {
-  openers: Opener[];
-  /** Only when the video has gone out. Empty otherwise, and the section is not rendered. */
-  videoAsk: string;
-  ifWatched: string[];
-  ifNotWatched: string[];
-  ifLater: string[];
-  why: string[];
-  flow: string[];
-  replyMove: string[];
+  opener: string[];
+  /**
+   * Exactly three, and they carry the whole call.
+   *
+   * The shape is fixed because it is what makes a stranger listen: a number, then ONE real buyer
+   * question behind it, then why that particular customer is worth more than the one they get
+   * today. Abstract findings do not survive a phone call; "property managers looking for a
+   * flooring contractor for rental units" does, because the owner can picture the person.
+   */
+  points: string[];
+  /** Two lines around the constant reply ask: cover while they hunt, and the dated fallback. */
+  replyFallback: string[];
   pushback: Pushback[];
   voicemail: string[];
   textMessage: string[];
@@ -515,13 +501,10 @@ function validateFollowup(p: unknown): p is FollowupScript {
   const o = p as FollowupScript;
   return (
     !!o &&
-    Array.isArray(o.openers) &&
-    o.openers.length === 3 &&
-    o.openers.every((x) => Array.isArray(x?.lines) && x.lines.length > 0) &&
-    Array.isArray(o.replyMove) &&
-    o.replyMove.length > 0 &&
-    Array.isArray(o.flow) &&
-    o.flow.length > 0 &&
+    Array.isArray(o.opener) &&
+    o.opener.length > 0 &&
+    Array.isArray(o.points) &&
+    o.points.length === 3 &&
     Array.isArray(o.pushback) &&
     o.pushback.length === PUSHBACK_COUNT
   );
@@ -531,25 +514,19 @@ function describeInvalidFollowup(p: unknown): string {
   if (!p || typeof p !== "object") return "the response was not a JSON object";
   const o = p as Partial<FollowupScript>;
   const problems: string[] = [];
-  if (!Array.isArray(o.openers)) problems.push("openers was missing or not an array");
-  else if (o.openers.length !== 3) problems.push(`openers had ${o.openers.length}, expected exactly 3, one per key given`);
-  else if (!o.openers.every((x) => Array.isArray(x?.lines) && x.lines.length > 0)) problems.push("every opener needs a non-empty lines array");
-  if (!Array.isArray(o.flow) || o.flow.length === 0) problems.push("flow was missing or empty");
-  if (!Array.isArray(o.replyMove) || o.replyMove.length === 0) problems.push("replyMove was missing or empty, and it is the most important section on the card");
+  if (!Array.isArray(o.opener) || o.opener.length === 0) problems.push("opener was missing or empty");
+  if (!Array.isArray(o.points)) problems.push("points was missing or not an array");
+  else if (o.points.length !== 3) problems.push(`points had ${o.points.length}, expected exactly 3: the number, the one real buyer question, then why that customer beats the one they get today`);
   if (!Array.isArray(o.pushback)) problems.push("pushback was missing");
   else if (o.pushback.length !== PUSHBACK_COUNT) problems.push(`pushback had ${o.pushback.length}, expected exactly ${PUSHBACK_COUNT}, one per key given`);
   return problems.join("; ") || "it did not match the required shape";
 }
 
-const FOLLOWUP_LISTS = [
-  "why", "flow", "replyMove", "voicemail", "textMessage", "dontSay",
-  "ifWatched", "ifNotWatched", "ifLater",
-] as const;
+const FOLLOWUP_LISTS = ["opener", "points", "replyFallback", "voicemail", "textMessage", "dontSay"] as const;
 
 function coerceFollowup(p: unknown): unknown {
   const o = camelizeKeys(p) as Record<string, unknown>;
   if (!o || typeof o !== "object") return o;
-  if (typeof o.videoAsk !== "string") o.videoAsk = "";
   const email = o.followupEmail as { subject?: unknown; body?: unknown } | undefined;
   o.followupEmail = {
     subject: typeof email?.subject === "string" ? email.subject : "",
@@ -561,17 +538,10 @@ function coerceFollowup(p: unknown): unknown {
     else if (!Array.isArray(o[key])) o[key] = [];
     else o[key] = (o[key] as unknown[]).filter((l): l is string => typeof l === "string");
   }
-  if (Array.isArray(o.openers)) {
-    o.openers = (o.openers as Opener[]).map((x) => ({
-      ...x,
-      lines: Array.isArray(x?.lines) ? x.lines.filter((l): l is string => typeof l === "string") : [],
-    }));
-  }
   if (Array.isArray(o.pushback)) {
     o.pushback = (o.pushback as Pushback[]).map((x) => ({
       ...x,
       responses: Array.isArray(x?.responses) ? x.responses.filter((r): r is string => typeof r === "string") : [],
-      rebox: typeof x?.rebox === "string" ? x.rebox : "",
     }));
   }
   return o;
@@ -580,9 +550,7 @@ function coerceFollowup(p: unknown): unknown {
 /** Every spoken line on a follow-up card, for the linter. */
 function followupSpoken(s: FollowupScript): string[] {
   return [
-    ...s.openers.flatMap((o) => o.lines),
-    ...s.ifWatched, ...s.ifNotWatched, ...s.ifLater,
-    ...s.why, ...s.flow, ...s.replyMove, ...s.voicemail, ...s.textMessage,
+    ...s.opener, ...s.points, ...s.replyFallback, ...s.voicemail, ...s.textMessage,
     ...s.pushback.flatMap((p) => p.responses),
     // The email goes through the same guards as the speech. A price or a reach claim is no more
     // acceptable written down, and this one is sent rather than improvised, so it lasts longer.
@@ -596,7 +564,6 @@ export async function buildFollowupScript(
   extraContext: string
 ): Promise<{ facts: CallFacts; script: FollowupScript; warnings: string[] }> {
   const facts = await buildCallFacts(report, view);
-  const angles = openerAngles(facts);
   const videoSent = videoHasGoneOut(facts);
 
   const { data } = await callClaudeJSON<FollowupScript>({
@@ -647,25 +614,18 @@ export async function buildFollowupScript(
         ? `FROM MATTHEW, this outranks the generic guidance:\n${extraContext.trim()}`
         : "No extra context. Assume they have not replied to email 1.",
       "",
+      "This card is SHORT. He reads it with the phone already ringing, so every line has to earn its place. Do not pad.",
+      "",
       "Write the card:",
-      `- openers: exactly 3, one per key below, in this order. Each is 2 or 3 spoken lines and ends on a question. They must be genuinely DIFFERENT approaches, not three wordings of the same thing.`,
-      ...angles.map((a) => `    key "${a.key}" (${a.label}) -> ${a.angle}`),
-      videoSent
-        ? '- videoAsk: ONE direct question asking if they got through the video. Give them an easy out so a no is not embarrassing.'
-        : '- videoAsk: return an empty string "". No video has been sent, so there is nothing to ask about.',
-      videoSent
-        ? "- ifWatched: 3 lines. What stood out, one line confirming they understood the actual gap, and one line that reads their temperature without pitching. If they are warm the rep stops and switches scripts, so the last line hands off rather than closing."
-        : '- ifWatched: return an empty array [].',
-      videoSent
-        ? "- ifNotWatched: 3 lines. The 20 second verbal version of the single biggest finding, using one real number. ONE finding, not a summary. End on a question that gets their reaction."
-        : '- ifNotWatched: return an empty array [].',
-      videoSent
-        ? "- ifLater: 2 lines treating 'I'll watch it later' as the stall it is, getting the real reaction now, and pinning a specific day and time to speak again."
-        : '- ifLater: return an empty array [].',
-      "- why: 3 or 4 bullets. The twenty second version of what was found and why it matters to them, in their language. One real number. This is what he says after the opener lands.",
-      "- flow: 5 or 6 lines showing the actual ORDER the conversation should go, opener to ask, each line either what he says or a [stage direction]. This is the spine of the call, so it has to read as one continuous conversation and not a list of tactics.",
-      "- replyMove: 4 lines. THE MOST IMPORTANT SECTION. (1) the ask to pull up the email and reply right now, framed as a favour and explicitly tiny, one word is fine. (2) what he says while they are hunting for it, including where to look if they can't find it. (3) what he says the moment they reply. (4) the fallback if they will not do it on the phone, which is a specific time he will call back, never an open ended 'I'll follow up'.",
-      `- pushback: exactly ${PUSHBACK_COUNT} entries, one per key below, in this order. Each has TWO spoken responses worded for THIS business and a 'rebox' bracketed line on how to get back to the ask.`,
+      `- opener: 2 lines, ending on a question. ${openerAngle(facts)}`,
+      "- points: EXACTLY 3 bullets, and they carry the whole call. This is the insight from an email he has not read yet, so it has to land spoken, in this order:",
+      "    (1) the number: how many real buyer questions they do not show up in at all.",
+      "    (2) ONE of those questions, made concrete as a PERSON the owner can picture, tied to the high-value customer in FACTS.",
+      "    (3) why THAT customer is worth more than the one they get today, naming the low-value customer as the contrast.",
+      '    Shape to hit: "We found 12 buyer questions where you are not showing up at all. One of them is property managers looking for a flooring contractor for rental units. That is a recurring contract, not a one-time sale, and it is the opposite of the $89 backsplash shopper."',
+      "    Concrete beats abstract every time. An owner cannot picture 'visibility gaps', he can picture a property manager. Use the real absent questions and the real customer labels from FACTS, in his words, not ours.",
+      "- replyFallback: exactly 2 lines. The rep is about to say, verbatim: \"" + REPLY_ASK_LINE + "\" Write (1) what he says while they are hunting for the email, including where to look, and (2) the fallback if they will not do it on the phone, which is a specific day and time he calls back, never an open ended 'I'll follow up'.",
+      `- pushback: exactly ${PUSHBACK_COUNT} entries, one per key below, in this order. Each has TWO short spoken responses worded for THIS business, and each gets back to the same ask: send the video.`,
       ...PUSHBACKS.map((p) => `    key "${p.key}" = "${p.label}" -> ${p.angle}`),
       "- voicemail: 3 lines, under 20 seconds total, ends with a specific callback window. Never 'just checking in'.",
       "- textMessage: 3 lines max, references the finding, one question, no pitch, no link.",
@@ -677,10 +637,8 @@ export async function buildFollowupScript(
     maxTokens: 4000,
     temperature: 0.6,
     schemaHint:
-      '{ "openers": [{ "key": string, "lines": string[] }] (exactly 3, keys in the given order), ' +
-      '"videoAsk": string, "ifWatched": string[], "ifNotWatched": string[], "ifLater": string[], ' +
-      '"why": string[], "flow": string[], "replyMove": string[], ' +
-      `"pushback": [{ "key": string, "responses": [string, string], "rebox": string }] (exactly ${PUSHBACK_COUNT}, keys in the given order), ` +
+      '{ "opener": string[], "points": string[] (EXACTLY 3), "replyFallback": string[] (exactly 2), ' +
+      `"pushback": [{ "key": string, "responses": [string, string] }] (exactly ${PUSHBACK_COUNT}, keys in the given order), ` +
       '"voicemail": string[], "textMessage": string[], "followupEmail": { "subject": string, "body": string }, "dontSay": string[] }',
     coerce: coerceFollowup,
     describeInvalid: describeInvalidFollowup,
@@ -861,21 +819,8 @@ export function formatFollowupScript(
   s: FollowupScript,
   warnings: string[]
 ): { script: string; notes: string } {
-  const angles = openerAngles(f);
   const section = (heading: string, lines: string[]): string =>
     lines.length ? `${heading}\n${bullets(lines)}` : "";
-
-  const openerCard = s.openers
-    .map((o, i) => {
-      const a = angles.find((x) => x.key === o.key) ?? angles[i];
-      const label = `*${String.fromCharCode(65 + i)} · ${a.label}*`;
-      const lines = o.lines.map((l) => {
-        const t = noDashes(l.trim());
-        return t.startsWith("[") ? `    _${t}_` : `    • ${t}`;
-      });
-      return [label, ...lines].join("\n");
-    })
-    .join("\n\n");
 
   const pushCard = s.pushback
     .map((p, i) => {
@@ -883,49 +828,30 @@ export function formatFollowupScript(
       return [
         `*${i + 1}. "${def.label}"*`,
         ...p.responses.map((r) => `    • ${noDashes(r.trim())}`),
-        p.rebox ? `    _${noDashes(p.rebox.trim()).replace(/^\[|\]$/g, "")}_` : "",
-      ].filter(Boolean).join("\n");
+      ].join("\n");
     })
     .join("\n\n");
 
   const header = [
     `:telephone_receiver: *Follow-up call · ${f.company}*${f.prospect ? ` · ${f.prospect}` : ""}`,
-    `_Absent from ${pctText(f.organicAppeared, f.organicTotal)} buyer questions · goal: ${
-      videoHasGoneOut(f) ? "find out if they watched it" : "earn \"send it over\" + a reply"
-    } · nothing is sold here, that's_ \`close\``,
-  ].join("\n");
+    `_Absent from ${pctText(f.organicAppeared, f.organicTotal)} buyer questions · one job: get the reply, send the video · not selling_`,
+    // One line, not a section. `call` is the "they have not seen it" call by definition, but the
+    // row cannot prove they never pressed play, so the handoff is stated and then dropped.
+    videoHasGoneOut(f)
+      ? ":warning: _The video already went out. If they say they watched it, stop and type_ `close`_._"
+      : "",
+  ].filter(Boolean).join("\n");
 
-  const videoSent = videoHasGoneOut(f);
-
-  // Built as (heading, body) pairs and numbered afterwards. The video gate only exists once the
-  // recording has gone out, so a fixed 1-to-7 would leave a hole in the middle of the card on
-  // every pre-video call, which reads as a rendering bug at exactly the wrong moment.
   const blocks: Array<[string, string]> = [
-    ["PICK AN OPENER*  _three different angles, read the first two seconds and choose_", openerCard],
+    ["OPEN*", bullets(s.opener)],
+    ["THE THREE POINTS*  _what's in the email he hasn't read_", bullets(s.points)],
+    ["THE FRAME*  _say it early, it's what makes them relax_", `• ${NOT_SELLING_LINE}`],
+    [
+      "GET THE REPLY, ON THE PHONE*  _the whole reason you dialled_",
+      [`• ${REPLY_ASK_LINE}`, bullets(s.replyFallback)].filter(Boolean).join("\n"),
+    ],
+    ["IF THEY PUSH BACK*", pushCard],
   ];
-
-  if (videoSent && s.videoAsk) {
-    blocks.push([
-      "DID THEY WATCH IT*",
-      [
-        `• ${noDashes(s.videoAsk)}`,
-        section("*if yes*", s.ifWatched),
-        section("*if no*", s.ifNotWatched),
-        section("*if 'later'*", s.ifLater),
-        "_They watched it and they're warm? Stop here and type_ `close` _for the selling script._",
-      ].filter((l) => l !== "").join("\n"),
-    ]);
-  }
-
-  blocks.push(["THE TWENTY SECOND WHY*", bullets(s.why)]);
-  blocks.push(["THE FLOW*  _the order the call should actually go_", bullets(s.flow)]);
-  blocks.push([
-    videoSent
-      ? "GET A REPLY BEFORE YOU HANG UP*  _keeps the next email out of spam_"
-      : "GET THE REPLY, ON THE PHONE*  _this is the point of the call_",
-    bullets(s.replyMove),
-  ]);
-  blocks.push(["IF THEY PUSH BACK*", pushCard]);
   if (s.voicemail.length || s.textMessage.length) {
     blocks.push([
       "NO ANSWER*",
@@ -937,7 +863,7 @@ export function formatFollowupScript(
   const body = blocks
     .filter(([, content]) => content.trim() !== "")
     .map(([heading, content], i) => {
-      const star = heading.startsWith("GET THE REPLY") || heading.startsWith("GET A REPLY") ? ":star: " : "";
+      const star = heading.startsWith("GET THE REPLY") ? ":star: " : "";
       return `${star}*${i + 1} · ${heading}\n${content}`;
     })
     .join("\n\n");
