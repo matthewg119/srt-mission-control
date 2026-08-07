@@ -86,7 +86,7 @@ export const THREAD_COMMANDS = [
   "*1* Outlook draft  ·  *seed 1-3* install a pre-sell line  ·  *nudge 2-5* next touch  ·  *reveal* they said yes",
   "*loom* pick the customer, then the picture, then get the script  ·  *script* just the script again",
   "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt straight up",
-  "*delivery* + transcript = hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
+  "*paste the Loom transcript* = the hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
   "*call* follow-up phone script + a send-instead email  ·  *close* the selling script once they've seen the video  ·  *call: <context>* aims it",
   "Anything else you type edits the draft.",
 ].join("\n");
@@ -616,7 +616,8 @@ async function postLoomScript(
         : `:warning: No name on this one, so it opens on the trade instead. Reply \`loom <name>\` to fix that.`,
       "",
       "Reply `script` to rebuild it, or `loom` to start over with a different customer.",
-      "After recording, paste the transcript here and reply `delivery` for the hand-over email.",
+      "After recording, just paste the transcript here (with timestamps on) and the hand-over email drafts itself.",
+      "Then `call` for the follow-up phone script, and `close` once they've watched it.",
     ].join("\n")
   );
 }
@@ -779,10 +780,45 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     // (which looks for a transcript already pasted in the thread) and the transcript pasted with
     // the word `delivery` on the first line.
     const deliveryMatch = text.match(/^(?:delivery|entrega|deliver)\b\s*([\s\S]*)$/i);
-    if (deliveryMatch) {
-      const pasted = deliveryMatch[1]?.trim() ?? "";
+
+    // A bare pasted transcript IS the command. Recording the Loom and then pasting the transcript
+    // is the natural next move, and having to remember to type `delivery` above it is a rule the
+    // thread can enforce for itself. Without this the paste falls through to the stage branches
+    // below, where at `drafted` it reads as an instruction to revise the draft and at `revealed`
+    // as the prospect talking: both spend a Claude call producing nonsense from a transcript.
+    //
+    // Safe to route on because looksLikeTranscript is MECHANICAL, not a judgement: 400+ characters
+    // AND three or more distinct timestamps. No draft revision ("tighter, cut the last line") and
+    // no pasted objection can clear that bar, which is the same property that makes it a
+    // trustworthy gate on the email itself.
+    const bareCheck = deliveryMatch ? null : looksLikeTranscript(text);
+    const barePaste = bareCheck?.ok ? text : null;
+
+    // A near miss gets told why instead of being silently rewritten as a draft edit. The usual
+    // cause is copying from Loom with timestamps turned off, and the recovery is one click, but
+    // only if he finds out that is what happened. Requires at least one stamp so a genuinely long
+    // instruction never lands here.
+    if (bareCheck && !bareCheck.ok && bareCheck.stamps.length >= 1 && text.length >= 400) {
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        `:no_entry: That looks like a transcript, but ${bareCheck.reason}\n\n_If you meant to edit the draft instead, say it in a line or two._`
+      );
+      return true;
+    }
+
+    if (deliveryMatch || barePaste) {
+      const pasted = barePaste ?? deliveryMatch?.[1]?.trim() ?? "";
       const stored = report.loom_transcript ?? "";
       const transcript = pasted.length > stored.length ? pasted : stored;
+
+      if (barePaste) {
+        await slack.postThreadReply(
+          args.channel,
+          args.threadTs,
+          ":memo: Got the transcript. Drafting the delivery email."
+        );
+      }
 
       if (!transcript) {
         await slack.postThreadReply(
