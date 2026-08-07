@@ -118,6 +118,13 @@ export interface AuditReportRow {
     /** Per-recording overrides from `loom $499` / `loom $299/mo, 45 days`. */
     price?: string;
     window?: string;
+    /**
+     * The name read on camera, from `loom Fran`. Overrides prospect_name.
+     *
+     * Stored so a later bare `script` rebuild greets the same person. A cold /audit run has no
+     * contact row, so this is often the only place the owner's name exists.
+     */
+    greetName?: string;
   } | null;
   error: string | null;
   created_at: string;

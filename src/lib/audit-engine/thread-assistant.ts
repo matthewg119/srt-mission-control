@@ -48,8 +48,9 @@ import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDr
 import { computeBeatSheetFacts, renderPreflight } from "./loom-beatsheet";
 import { buildLoomScript } from "./loom-script";
 import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
+import { buildCallScript, buildFollowupScript, detectMode, formatCallScript, formatFollowupScript, type CallMode } from "./call-script";
 import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead";
-import { getNicheAvatars, formatAvatarsCard, type BestAvatar } from "./niche-avatars";
+import { getNicheAvatars, formatAvatarsCard, type BestAvatar, type NicheAvatars } from "./niche-avatars";
 import { getIntelBrief, formatBriefMarkdown, sourceDomains } from "./intel-brief";
 import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
 import { resolveReplyAnchor } from "./reply-anchor";
@@ -86,6 +87,7 @@ export const THREAD_COMMANDS = [
   "*loom* pick the customer, then the picture, then get the script  ·  *script* just the script again",
   "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt straight up",
   "*delivery* + transcript = hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
+  "*call* the phone script for wherever they are  ·  *followup* / *close* force which one  ·  *call: <context>* aims it",
   "Anything else you type edits the draft.",
 ].join("\n");
 
@@ -284,18 +286,40 @@ function unwrapSlackUrl(raw: string): string {
 // three at once produced what it produced before: a beat sheet that said "run `image`" and left
 // the operator to go find the avatars behind a second command he never ran.
 
-/** Pull a per-recording price and start window out of `loom $499, 45 days`. */
-function parseLoomOverrides(rest: string): { price: string | null; window: string | null } {
-  const price = rest.match(/\$\s?[\d,]+(?:\s*\/\s*(?:mo|month|monthly))?/i)?.[0]?.trim() ?? null;
+/**
+ * Pull a per-recording price, start window and name out of `loom Fran, $499, 45 days`.
+ *
+ * The name is whatever is left once the price and the window have been taken out, and only when
+ * that remainder looks like a name: one or two words, letters only. That keeps `loom` bare and
+ * `loom $349, 45 days` working exactly as before, and means a typo lands as "no name given"
+ * rather than as a stranger's name read out on camera.
+ */
+function parseLoomOverrides(rest: string): { price: string | null; window: string | null; name: string | null } {
+  const rawPrice = rest.match(/\$\s?[\d,]+(?:\s*\/\s*(?:mo|month|monthly))?/i)?.[0]?.trim() ?? null;
   const window = rest.match(/\d+\s*(?:to|-|–)\s*\d+\s*days?|\b\d+\s*days?\b/i)?.[0]?.trim() ?? null;
-  return { price, window };
+
+  let remainder = rest;
+  for (const part of [rawPrice, window]) if (part) remainder = remainder.replace(part, " ");
+  remainder = remainder.replace(/[,;]/g, " ").trim();
+
+  // A word that is obviously a command is not a name. Nothing here is a `loom` subcommand today,
+  // but `avatars fresh` exists, so `loom fresh` is the kind of thing that gets typed by analogy,
+  // and the cost of guessing wrong is a video that opens "Hey fresh,".
+  const NOT_A_NAME = /^(?:fresh|again|new|redo|retry|help|please|ok|okay|cancel|stop|script|es|en)$/i;
+  const looksLikeName = /^[a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*)?$/i.test(remainder) && !NOT_A_NAME.test(remainder);
+
+  // `[\d,]+` swallows the separator in `loom $349, 45 days`, and the price is read out loud and
+  // printed on the invoice line, so "$349," is not a cosmetic problem.
+  const price = rawPrice?.replace(/[,\s]+$/, "") || null;
+
+  return { price, window, name: looksLikeName ? remainder : null };
 }
 
-/** The niche's three best customers, or null when the set can't be built. */
-async function bestAvatars(report: AuditReportRow, view: ReportView): Promise<BestAvatar[] | null> {
+/** The niche's avatar set, or null when it can't be built. */
+async function nicheSet(report: AuditReportRow, view: ReportView): Promise<NicheAvatars | null> {
   try {
     const result = await getNicheAvatars(report, view);
-    return result.avatars.best;
+    return result.avatars;
   } catch (e) {
     console.error("[loom] avatars failed:", (e as Error).message);
     return null;
@@ -322,16 +346,53 @@ async function derivedAvatar(report: AuditReportRow, view: ReportView): Promise<
   };
 }
 
-/** Who this recording is aimed at: the customer picked from the menu, or the derived stand-in. */
+/**
+ * Who this recording is aimed at: the customer picked from the menu, or the derived stand-in.
+ *
+ * The whole set comes back alongside the pick, because the script's opening line names two
+ * customers to attract AND two to avoid, and the ones to avoid only exist in `worst`. On the
+ * derived path there is no set, so the script says nothing about who to avoid.
+ */
 async function resolveLoomAvatar(
   report: AuditReportRow,
   view: ReportView
-): Promise<{ avatar: BestAvatar; index: number | null } | null> {
+): Promise<{ avatar: BestAvatar; index: number | null; avatars: NicheAvatars | null } | null> {
   const state = report.loom_state;
-  if (state?.derivedAvatar) return { avatar: state.derivedAvatar, index: null };
+  if (state?.derivedAvatar) return { avatar: state.derivedAvatar, index: null, avatars: null };
   if (!state?.avatarIndex) return null;
-  const best = await bestAvatars(report, view);
-  return best ? { avatar: best[state.avatarIndex - 1], index: state.avatarIndex } : null;
+  const set = await nicheSet(report, view);
+  return set ? { avatar: set.best[state.avatarIndex - 1], index: state.avatarIndex, avatars: set } : null;
+}
+
+/**
+ * The follow-up / closing CALL script, plus the paste block for the SRT Call Coach extension.
+ *
+ * Posted as TWO messages rather than one. The coach notes are a copy target, not something to
+ * read: Slack puts a copy button on a fenced block, and burying that block under ten sections of
+ * script means scrolling past the whole card to reach it every time he dials.
+ */
+async function postCallScript(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  view: ReportView,
+  extraContext: string,
+  forcedMode: CallMode | null
+): Promise<void> {
+  const mode = forcedMode ?? detectMode(report);
+
+  if (mode === "followup") {
+    const { facts, script, warnings } = await buildFollowupScript(report, view, extraContext);
+    const { script: card, notes } = formatFollowupScript(facts, script, warnings);
+    await slack.postThreadReply(channel, threadTs, card);
+    await slack.postThreadReply(channel, threadTs, notes);
+    return;
+  }
+
+  const { facts, script, warnings } = await buildCallScript(report, view, extraContext);
+  const { script: card, notes } = formatCallScript(facts, script, warnings);
+  await slack.postThreadReply(channel, threadTs, card);
+  await slack.postThreadReply(channel, threadTs, notes);
 }
 
 /** Step 1: the prompts to paste, what not to say, and the three customers to choose between. */
@@ -350,7 +411,11 @@ async function startLoomWizard(
   }
 
   const overrides = parseLoomOverrides(rest);
-  const carry = { price: overrides.price ?? undefined, window: overrides.window ?? undefined };
+  const carry = {
+    price: overrides.price ?? undefined,
+    window: overrides.window ?? undefined,
+    greetName: overrides.name ?? undefined,
+  };
   await slack.postThreadReply(channel, threadTs, renderPreflight(view, facts));
 
   let result;
@@ -429,8 +494,8 @@ async function advanceLoomWizard(
 
   // Step 2: pick the customer, offer the six pictures.
   if (state?.stage === "avatar") {
-    const best = await bestAvatars(report, view);
-    if (!best) {
+    const set = await nicheSet(report, view);
+    if (!set) {
       await slack.postThreadReply(channel, threadTs, ":warning: I couldn't rebuild the customer set for this niche. Reply `loom` to start again and I'll carry on without the menu.");
       return;
     }
@@ -438,7 +503,7 @@ async function advanceLoomWizard(
       await slack.postThreadReply(channel, threadTs, "There are three customers to choose from. Reply *1*, *2* or *3*.");
       return;
     }
-    const avatar = best[n - 1];
+    const avatar = set.best[n - 1];
     const ideas = await buildImageIdeas(report, avatar);
     await supabaseAdmin
       .from("audit_reports")
@@ -497,7 +562,11 @@ async function advanceLoomWizard(
     .update({ loom_state: { ...state, stage: "done", ideas: undefined } })
     .eq("id", report.id);
 
-  await postLoomScript(report, channel, threadTs, view, runs, resolved, { ...state });
+  await postLoomScript(report, channel, threadTs, view, runs, resolved, {
+    price: state?.price,
+    window: state?.window,
+    greetName: state?.greetName,
+  });
 }
 
 /** Build the read-aloud script and upload it as a .txt. */
@@ -507,8 +576,8 @@ async function postLoomScript(
   threadTs: string,
   view: ReportView,
   runs: AuditRunRow[],
-  resolved: { avatar: BestAvatar; index: number | null } | null,
-  overrides: { price?: string; window?: string } = {}
+  resolved: { avatar: BestAvatar; index: number | null; avatars: NicheAvatars | null } | null,
+  overrides: { price?: string; window?: string; greetName?: string } = {}
 ): Promise<void> {
   if (!resolved) {
     await slack.postThreadReply(
@@ -525,10 +594,17 @@ async function postLoomScript(
     return;
   }
 
+  const greetName = overrides.greetName ?? report.loom_state?.greetName ?? null;
   const script = await buildLoomScript(report, view, facts, resolved.avatar, {
     price: overrides.price ?? report.loom_state?.price ?? null,
     window: overrides.window ?? report.loom_state?.window ?? null,
+    avatars: resolved.avatars,
+    greetName,
   });
+
+  // Whether it opens on a name is the first thing to check, so say which one it used. On a cold
+  // /audit run there is no contact row and this is blank until he types it.
+  const named = greetName ?? report.prospect_name ?? report.requester_name ?? null;
 
   await slack.uploadFile(channel, script.fileName, Buffer.from(script.text, "utf8"), "text/plain", threadTs);
   await slack.postThreadReply(
@@ -537,6 +613,9 @@ async function postLoomScript(
     [
       `:page_facing_up: *The script* · read it out loud, paste the screenshots over the top.`,
       `Aimed at ${resolved.index ? `customer #${resolved.index}, ` : ""}${resolved.avatar.label}. Target 4 minutes.`,
+      named
+        ? `Opens on *${named}*. Wrong name? Reply \`loom <name>\` and I'll rebuild it.`
+        : `:warning: No name on this one, so it opens on the trade instead. Reply \`loom <name>\` to fix that.`,
       "",
       "Reply `script` to rebuild it, or `loom` to start over with a different customer.",
       "After recording, paste the transcript here and reply `delivery` for the hand-over email.",
@@ -621,8 +700,42 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     // --- Rebuild the script without redoing the wizard ---------------------------
     // Note there is no `guion` alias here: `guion` is one of the loom triggers above and would
     // never reach this line.
-    if (/^(script|full script)\??$/i.test(text)) {
-      await postLoomScript(report, args.channel, args.threadTs, view, runs, await resolveLoomAvatar(report, view));
+    //
+    // `script Fran` takes the name too, because the name is the one thing likely to be wrong on
+    // the first build (a cold /audit run has no contact row) and making him redo all three wizard
+    // steps to fix a greeting is how he ends up recording it wrong instead.
+    const scriptCmd = text.match(/^(?:script|full script)(?:\s+([a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*)?))?\??$/i);
+    if (scriptCmd) {
+      const greetName = scriptCmd[1]?.trim();
+      if (greetName && report.loom_state) {
+        await supabaseAdmin
+          .from("audit_reports")
+          .update({ loom_state: { ...report.loom_state, greetName } })
+          .eq("id", report.id);
+      }
+      await postLoomScript(report, args.channel, args.threadTs, view, runs, await resolveLoomAvatar(report, view), {
+        greetName,
+      });
+      return true;
+    }
+
+    // --- The call script ---------------------------------------------------------
+    // Context has to come after a COLON, and that is not a style choice. The bare-word form is
+    // exact for the same reason: at `revealed`, free text is the PROSPECT talking, and "call me
+    // next quarter" is one of the most common things a prospect says. A `call\s+(.*)` pattern
+    // would eat that stall and hand back a script instead of the objection reply it needs.
+    //
+    // The VERB picks the script. `call` reads the stage off the row, which is what he types
+    // day to day; `followup` and `close` force it, for the cases the row cannot know about
+    // (he sent the video by hand, or they replied to the email and the row hasn't caught up).
+    // Guessing wrong in the closing direction is the expensive one: a seven-close card quoting
+    // price handling at someone who has only ever seen one cold email.
+    const callCmd = text.match(/^(call|followup|follow[ -]?up|closing|close)\s*(?::\s*(.+))?\??$/i);
+    if (callCmd) {
+      const verb = callCmd[1].toLowerCase().replace(/[ -]/g, "");
+      const forced: CallMode | null =
+        verb === "followup" ? "followup" : verb === "close" || verb === "closing" ? "closing" : null;
+      await postCallScript(report, args.channel, args.threadTs, view, callCmd[2] ?? "", forced);
       return true;
     }
 

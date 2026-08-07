@@ -711,6 +711,109 @@ same on camera.
 `thread-assistant.ts`, the single copy). The old footer named only "1", which left every other
 command in the router undiscoverable unless you already knew it existed.
 
+### The call script (2026-08-06) — `call` in a finished audit thread
+Reply `call` (or `call: watched the loom, says price` to aim it) and the thread returns the phone
+script to dial off, then a fenced COACH NOTES block on its own message.
+`src/lib/audit-engine/call-script.ts`. Every other command in this folder produces something
+WRITTEN; this is the only one whose output is spoken live, which is why it is bullets under 25
+words rather than paragraphs.
+
+**TWO scripts, and picking the wrong one is the expensive failure.** `detectMode()` reads the row:
+`outreach_stage === "revealed"` or a stored `loom_url`/`loom_transcript` means CLOSING, anything
+else means FOLLOWUP. The verb overrides it, because the row cannot know he sent the video by hand:
+`call` auto-detects, `followup` and `close` force it.
+
+| | followup | closing |
+|---|---|---|
+| what they have | email 1, nothing else | everything: video, report, price |
+| the goal | earn "yes, send it" **and get a REPLY on the phone** | remove one obstacle, then paperwork |
+| price | **never quoted**, withheld from the brief entirely | quoted, no guarantee |
+| sections | 3 divergent openers, the why, the flow, the reply move, 5 stalls | 10 sections, 7 closes |
+
+> ‼️ **The reply move is the point of a follow-up call.** Getting them to open email 1 and hit
+> reply while he is still on the phone is what keeps everything after it out of spam, and it is
+> the whole reason to dial rather than email again. It is section 4, starred, and `validateFollowup`
+> rejects a script that omits it.
+
+> ‼️ **The follow-up brief WITHHOLDS the price rather than saying "don't quote it".** The COACH
+> NOTES are read by a model that is trying to be helpful mid-call; a number sitting in its context
+> is one it will eventually reach for when someone asks "how much". Absent beats forbidden.
+
+**Openers diverge by ANGLE, not wording** — three phrasings of one sentence is decoration. They
+open on a gift, a finding and a straight question, and fail differently, so a flat no on one leaves
+the next call somewhere to go. The redesign opener is offered only when `redesign_url` exists and
+is the strongest available: it leads with something already built and free, so there is nothing to
+say no to.
+
+**`lintSpoken` rejects invented reach.** "In front of 500 more people" is not measured anywhere in
+this pipeline and is exactly the claim a prospect asks you to show your work on, which is fatal for
+a pitch whose whole basis is "you can verify this yourself". The honest number is how many of their
+buyers' questions they are absent from, and that is the one the script uses.
+
+**The script is written by Claude; the COACH NOTES are built in CODE.** That split is the whole
+design. The notes block is pasted into the SRT Call Coach extension, where it grounds every live
+suggestion for the rest of the call, so one hallucinated figure there would not be one bad line,
+it would be forty minutes of confident wrong coaching. `buildCoachNotes()` assembles it from
+`computeWeightedScore` + `view.mostRecommended` + the absent organic prompts by hand and the model
+never touches a number. Same no-fabrication rule as `run-prompts.ts`, applied to speech.
+
+Grounded entirely in what is already persisted, so there is **no new table and no migration**:
+ICP/anti-ICP from `niche_briefs.avatars`, the gap from `view.prompts` where `!isBranded &&
+!appeared`, price from `LOOM_PRICE_LABEL` (or the `loom_state.price` override, because a video
+that said $499 makes $499 the price on the call), what they have already seen from
+`outreach_stage` / `loom_url` / `redesign_url`, and `intake_answers` as instructions that outrank
+everything generic.
+
+**When the Loom wizard already picked a customer, the call names THAT one.** `resolveAvatars()`
+prefers `loom_state.derivedAvatar`, then `loom_state.avatarIndex`, and only then a fresh pick.
+Switching customers would contradict the recording they just watched.
+
+> ‼️ **Context has to come after a COLON, and the bare form is exact.** At `revealed`, free text
+> is the PROSPECT talking, and "call me next quarter" is one of the most common stalls there is.
+> A `call\s+(.*)` pattern eats that and hands back a script instead of the objection reply it
+> needs. The branch also sits ABOVE the `drafted` free-text branch, or `call` reads as a draft edit.
+
+**Seven closes, two responses each, never a third** — four circumstance stalls, two other-people,
+one self, fixed rather than model-chosen so the card is numbered identically for every prospect
+and he can jump to "number 5" mid-call without reading labels. `coerce` re-sorts whatever order
+the model emitted back into `OBJECTIONS` order. A third response reads as pressure.
+
+**There is no guarantee on this offer**, so `HARD_LINES` bans guarantee and risk-reversal language
+outright, and `lintScript()` re-checks it in code along with promises of customers/revenue and any
+suggestion to fund this personally. Findings post ABOVE the script, same as `linkWarning()`. Over-
+long lines are warned about, not rejected: a script with one clumsy line still beats no script.
+
+### SRT Call Coach backend (`/api/call-coach/*`)
+The Chrome extension lives in a SEPARATE repo (`Desktop/Code/live call coach srt`) and deploys
+separately; this repo owns its prompt, its playbook and its auth. Routes: `suggest` (the prompt +
+Claude Haiku 4.5 SSE proxy), `deepgram-token` (mints an ElevenLabs realtime token, the name is
+legacy), `playbook` (GET bearer / POST `x-playbook-secret`), `session`, `transcript`.
+
+**It is a CLOSING coach, not the old MCA funding coach** (rebuilt 2026-08-06). `STATIC_RULES` in
+`suggest/route.ts` is the closing doctrine: the three buckets, isolate-before-you-answer, at most
+two closes per obstacle, never drop the price (smaller scope instead), stop selling on the yes.
+Every funding reference is gone; on a call where the pitch already happened, "what's your monthly
+revenue" is not a question anyone asks.
+
+**Three system blocks, and the order is load-bearing.** `STATIC_RULES` carries
+`cache_control: ephemeral` and must stay first and byte-identical or the cache never hits; the
+playbook block is second; the CALL BRIEF is third. The brief is `callContext` from the request,
+capped at `MAX_BRIEF_CHARS`, and it is the pasted COACH NOTES from `call` above. It is framed as
+"the ONLY numbers that exist" because without that the model rounds 37/100 into "under 40%" and
+invents a competitor.
+
+**The close checklist replaced the prequal fields**: `watchedVideo`, `mainGoal`, `mainConcern`,
+`decisionMaker`, `budgetFit`, `nextStep`. Still exactly six, because the extension's grid, its
+additive merge and its streaming parser are all shape-driven. The JSON output contract
+(`suggestions[].text/category/continuations[]`, `qualification`, `notes`) is unchanged, which is
+what let the whole streaming parser stay untouched.
+
+**Fallback suggestions are prospect-agnostic on purpose.** They render when Claude is unreachable,
+knowing nothing about who is on the phone, so anything specific would be a fabrication shown at
+the exact moment nobody is checking. Pure mechanics only, no score, no price, no guarantee. There
+is a second copy in the extension's `api-client.ts` for when this whole app is unreachable; keep
+the two in step.
+
 ### Instant lead pitch (public free-audit leads only)
 `src/lib/audit-engine/lead-pitch.ts`. A form lead ASKED for the report, so sending it is
 fulfillment, not cold outreach — that is why this lane may send at all and why cold `/audit`

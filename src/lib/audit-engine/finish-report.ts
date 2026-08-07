@@ -31,7 +31,7 @@ import { waitUntil } from "@vercel/functions";
 import {
   AUTOSEND_MINUTES,
   auditSignatureHtml,
-  autoSendEnabled,
+  autoSendArmedFor,
   buildPitchBlocks,
   buildPitchHtml,
   sendAuditPitch,
@@ -281,7 +281,11 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
       // The draft id is what the Send button and the auto-send backstop act on:
       // sending the stored draft means what goes out is exactly what was
       // reviewed, including any edit made in Outlook first.
-      if (autoSendEnabled()) autoSendAt = new Date(Date.now() + AUTOSEND_MINUTES * 60_000);
+      // Per-source since 2026-08-06, so the paid med spa lane can send itself without
+      // arming unattended sends for /scan and /PDF. See autoSendArmedFor.
+      if (autoSendArmedFor(report.lead_source)) {
+        autoSendAt = new Date(Date.now() + AUTOSEND_MINUTES * 60_000);
+      }
       await supabaseAdmin
         .from("audit_reports")
         .update({
@@ -342,12 +346,22 @@ function isGuideLead(report: AuditReportRow): boolean {
  * `scan` joined `pdf` on 2026-08-05: a /scan lead pasted their own URL, watched the run and
  * typed their email to get the result, which is the same shape as the guide funnel.
  *
+ * `medspa_paid` joined on 2026-08-06 and is the strongest case of all: they gave us money for
+ * this specific report. An intake card there would ask Matthew to author a cold first-touch
+ * email to a paying customer.
+ *
  * `audit` is deliberately NOT here even though it is arguably also inbound. That funnel has
  * been posting intake cards since July and Matthew works from them; changing it is a decision
  * about his workflow, not a bug fix, and it does not belong in a /scan change.
+ *
+ * ‼️ Add new inbound sources HERE, never to isGuideLead(). That predicate has two other
+ * callers, guideCtaHtml() and the /PDF Slack routing, so widening it would staple the free med
+ * spa guide CTA onto a paid report and send its notification to the wrong channel.
  */
+const INBOUND_LEAD_SOURCES = new Set(["scan", "medspa_paid"]);
+
 function skipsIntakeCard(report: AuditReportRow): boolean {
-  return isGuideLead(report) || report.lead_source === "scan";
+  return isGuideLead(report) || INBOUND_LEAD_SOURCES.has(report.lead_source ?? "");
 }
 
 /**

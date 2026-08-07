@@ -345,6 +345,14 @@ export function renderPreflight(view: ReportView, f: BeatSheetFacts): string {
     f.robotsVerdict === "soft"
       ? `[ ] robots.txt blocks ${f.robotsBot}, TRAINING only. Do NOT say "your site blocks ${f.robotsEngine}"`
       : null,
+    // The site beat is no longer in the script, which was a length decision, not a decision that
+    // these stopped mattering. A blocked search crawler is the strongest finding some audits
+    // produce, so it is offered here rather than dropped: his call whether to say it on camera.
+    f.robotsVerdict === "devastating" && f.robotsBot
+      ? `[ ] OFF SCRIPT, worth saying: their robots.txt blocks ${f.robotsBot}, the crawler ${f.robotsEngine ?? "the engine"} reads pages with`
+      : f.siteFinding
+        ? `[ ] OFF SCRIPT, worth saying: ${f.siteFinding}`
+        : null,
     f.patternIsInferred ? `[ ] The pattern line is a read, not a measured finding` : null,
     `[ ] The image is the TARGET, never a lead that already arrived`,
   ]

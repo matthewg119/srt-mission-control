@@ -27,6 +27,42 @@ export function autoSendEnabled(): boolean {
 }
 
 /**
+ * Lead sources allowed to auto-send even while the GLOBAL switch is off.
+ *
+ * Added 2026-08-06 for the paid med spa lane. Someone who has just paid $39 for a
+ * report cannot sit behind a manual "Send it" tap, but arming
+ * AUDIT_AUTOSEND_ENABLED to fix that would also start sending unattended for every
+ * /scan and /PDF lead, which is a behaviour change nobody asked for.
+ *
+ * Set AUDIT_AUTOSEND_SOURCES=medspa_paid and leave AUDIT_AUTOSEND_ENABLED unset.
+ */
+function autoSendSources(): string[] {
+  return (process.env.AUDIT_AUTOSEND_SOURCES || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Is auto-send armed for THIS report? */
+export function autoSendArmedFor(leadSource: string | null | undefined): boolean {
+  if (autoSendEnabled()) return true;
+  return autoSendSources().includes(leadSource ?? "");
+}
+
+/**
+ * Is auto-send armed for anything at all?
+ *
+ * The backstop sweep needs this rather than autoSendEnabled(): with only a per-source
+ * arm set, the global is off, and gating the sweep on the global would mean a paid
+ * report whose in-process timer was lost to a cold start never sends. The sweep only
+ * ever touches rows already stamped `pending` with a due `auto_send_at`, and only an
+ * armed report gets stamped, so this cannot widen what sends.
+ */
+export function autoSendArmedForAnything(): boolean {
+  return autoSendEnabled() || autoSendSources().length > 0;
+}
+
+/**
  * The signature that goes on every audit pitch.
  *
  * Read from Outlook by display name so Matthew can edit it in Outlook without a
@@ -253,7 +289,7 @@ async function enrollSentPitch(reportId: string): Promise<void> {
  * it cannot resurrect something that was held or already sent.
  */
 export async function flushDueAutoSends(): Promise<{ sent: number; checked: number }> {
-  if (!autoSendEnabled()) return { sent: 0, checked: 0 };
+  if (!autoSendArmedForAnything()) return { sent: 0, checked: 0 };
 
   const { data } = await supabaseAdmin
     .from("audit_reports")
