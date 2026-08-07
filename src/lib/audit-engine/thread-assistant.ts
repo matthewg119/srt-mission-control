@@ -48,7 +48,7 @@ import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDr
 import { computeBeatSheetFacts, renderPreflight } from "./loom-beatsheet";
 import { buildLoomScript } from "./loom-script";
 import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
-import { buildCallScript, buildFollowupScript, detectMode, formatCallScript, formatFollowupScript, type CallMode } from "./call-script";
+import { buildCallScript, buildFollowupScript, formatCallScript, formatFollowupScript, type CallMode } from "./call-script";
 import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead";
 import { getNicheAvatars, formatAvatarsCard, type BestAvatar, type NicheAvatars } from "./niche-avatars";
 import { getIntelBrief, formatBriefMarkdown, sourceDomains } from "./intel-brief";
@@ -87,7 +87,7 @@ export const THREAD_COMMANDS = [
   "*loom* pick the customer, then the picture, then get the script  ·  *script* just the script again",
   "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt straight up",
   "*delivery* + transcript = hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
-  "*call* the phone script for wherever they are  ·  *followup* / *close* force which one  ·  *call: <context>* aims it",
+  "*call* follow-up phone script + a send-instead email  ·  *close* the selling script once they've seen the video  ·  *call: <context>* aims it",
   "Anything else you type edits the draft.",
 ].join("\n");
 
@@ -377,10 +377,8 @@ async function postCallScript(
   threadTs: string,
   view: ReportView,
   extraContext: string,
-  forcedMode: CallMode | null
+  mode: CallMode
 ): Promise<void> {
-  const mode = forcedMode ?? detectMode(report);
-
   if (mode === "followup") {
     const { facts, script, warnings } = await buildFollowupScript(report, view, extraContext);
     const { script: card, notes } = formatFollowupScript(facts, script, warnings);
@@ -725,17 +723,19 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
     // next quarter" is one of the most common things a prospect says. A `call\s+(.*)` pattern
     // would eat that stall and hand back a script instead of the objection reply it needs.
     //
-    // The VERB picks the script. `call` reads the stage off the row, which is what he types
-    // day to day; `followup` and `close` force it, for the cases the row cannot know about
-    // (he sent the video by hand, or they replied to the email and the row hasn't caught up).
-    // Guessing wrong in the closing direction is the expensive one: a seven-close card quoting
-    // price handling at someone who has only ever seen one cold email.
+    // The VERB picks the script, and nothing else does. `call` is ALWAYS the follow-up; `close`
+    // is the only thing that produces a selling script.
+    //
+    // This used to auto-escalate to closing once a `loom_url` existed, and that was wrong twice
+    // over. A stored recording proves the video was MADE, not watched, so it opened selling to
+    // people who never pressed play. And it made one word mean a gentle follow-up on Monday and a
+    // price conversation on Thursday, which is not a thing to discover with the phone ringing.
+    // The follow-up card branches on the video instead, and its yes branch says to type `close`.
     const callCmd = text.match(/^(call|followup|follow[ -]?up|closing|close)\s*(?::\s*(.+))?\??$/i);
     if (callCmd) {
       const verb = callCmd[1].toLowerCase().replace(/[ -]/g, "");
-      const forced: CallMode | null =
-        verb === "followup" ? "followup" : verb === "close" || verb === "closing" ? "closing" : null;
-      await postCallScript(report, args.channel, args.threadTs, view, callCmd[2] ?? "", forced);
+      const mode: CallMode = verb === "close" || verb === "closing" ? "closing" : "followup";
+      await postCallScript(report, args.channel, args.threadTs, view, callCmd[2] ?? "", mode);
       return true;
     }
 

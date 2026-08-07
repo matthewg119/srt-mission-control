@@ -48,6 +48,22 @@ import type { AuditReportRow } from "./types";
  */
 export type CallMode = "followup" | "closing";
 
+/**
+ * The three commands, and the handoff between them.
+ *
+ *   loom    writes the recording: the beat sheet, the customer, the script.
+ *   call    the follow-up phone script. ALWAYS the follow-up, never the close.
+ *   close   the selling script, and the only thing that produces one.
+ *
+ * `call` deliberately does NOT escalate itself once a Loom exists. It branches instead: when the
+ * video has gone out, the card opens on "did you get through it", and the yes branch hands off to
+ * `close` rather than trying to be both. Auto-escalating on `loom_url` was the earlier behaviour
+ * and it was wrong twice over. A stored recording says the video was MADE, not that anyone watched
+ * it, so it would open selling to someone who never pressed play; and it made the same word mean a
+ * gentle follow-up on Monday and a price conversation on Thursday, which is not something you want
+ * to discover with the phone already ringing.
+ */
+
 /** How many objection branches the CLOSING script carries. Seven is the whole map in
  *  closing-brain.md: four circumstance stalls, two other-people, one self. Fewer leaves a live
  *  gap; more starts inventing objections nobody in this vertical actually says. */
@@ -169,12 +185,19 @@ interface Pushback {
 
 interface FollowupScript {
   openers: Opener[];
+  /** Only when the video has gone out. Empty otherwise, and the section is not rendered. */
+  videoAsk: string;
+  ifWatched: string[];
+  ifNotWatched: string[];
+  ifLater: string[];
   why: string[];
   flow: string[];
   replyMove: string[];
   pushback: Pushback[];
   voicemail: string[];
   textMessage: string[];
+  /** The send-instead-of-dial option: same job as the call, three lines, no pitch. */
+  followupEmail: { subject: string; body: string };
   dontSay: string[];
 }
 
@@ -481,10 +504,11 @@ function lintSpoken(spoken: string[], opts: { noPrice?: boolean } = {}): string[
  * so the next call is a close. A stored `loom_url` means the recording exists and went out. Any
  * other state means the only thing they have is email 1, and the call is a follow-up.
  */
-export function detectMode(report: AuditReportRow): CallMode {
-  if (report.outreach_stage === "revealed") return "closing";
-  if (report.loom_url || report.loom_transcript) return "closing";
-  return "followup";
+/** Has the recording actually gone out? Decides whether the call opens on a video gate or on the
+ *  reply move. A `loom_url` means it exists and was handed over; it does NOT mean they watched it,
+ *  which is exactly the question the gate asks. */
+export function videoHasGoneOut(f: CallFacts): boolean {
+  return Boolean(f.loomUrl) || f.seen.some((s) => s.toLowerCase().includes("loom") || s.toLowerCase().includes("reveal"));
 }
 
 function validateFollowup(p: unknown): p is FollowupScript {
@@ -517,11 +541,20 @@ function describeInvalidFollowup(p: unknown): string {
   return problems.join("; ") || "it did not match the required shape";
 }
 
-const FOLLOWUP_LISTS = ["why", "flow", "replyMove", "voicemail", "textMessage", "dontSay"] as const;
+const FOLLOWUP_LISTS = [
+  "why", "flow", "replyMove", "voicemail", "textMessage", "dontSay",
+  "ifWatched", "ifNotWatched", "ifLater",
+] as const;
 
 function coerceFollowup(p: unknown): unknown {
   const o = camelizeKeys(p) as Record<string, unknown>;
   if (!o || typeof o !== "object") return o;
+  if (typeof o.videoAsk !== "string") o.videoAsk = "";
+  const email = o.followupEmail as { subject?: unknown; body?: unknown } | undefined;
+  o.followupEmail = {
+    subject: typeof email?.subject === "string" ? email.subject : "",
+    body: typeof email?.body === "string" ? email.body : "",
+  };
   for (const key of FOLLOWUP_LISTS) {
     if (o[key] === undefined || o[key] === null) o[key] = [];
     else if (typeof o[key] === "string") o[key] = [o[key]];
@@ -548,8 +581,12 @@ function coerceFollowup(p: unknown): unknown {
 function followupSpoken(s: FollowupScript): string[] {
   return [
     ...s.openers.flatMap((o) => o.lines),
+    ...s.ifWatched, ...s.ifNotWatched, ...s.ifLater,
     ...s.why, ...s.flow, ...s.replyMove, ...s.voicemail, ...s.textMessage,
     ...s.pushback.flatMap((p) => p.responses),
+    // The email goes through the same guards as the speech. A price or a reach claim is no more
+    // acceptable written down, and this one is sent rather than improvised, so it lasts longer.
+    s.followupEmail.body,
   ].filter((l) => typeof l === "string" && !l.trim().startsWith("["));
 }
 
@@ -560,6 +597,7 @@ export async function buildFollowupScript(
 ): Promise<{ facts: CallFacts; script: FollowupScript; warnings: string[] }> {
   const facts = await buildCallFacts(report, view);
   const angles = openerAngles(facts);
+  const videoSent = videoHasGoneOut(facts);
 
   const { data } = await callClaudeJSON<FollowupScript>({
     model: "claude-sonnet-4-6",
@@ -567,13 +605,19 @@ export async function buildFollowupScript(
       "You write the bullet card a rep reads off his phone while dialing a prospect who got ONE cold email and has not replied.",
       "",
       "WHAT THIS CALL IS, AND IS NOT",
-      "- SRT ran an AI visibility audit on this business and emailed ONE finding, with no links and no price. That is all they have. There is no video yet, no report link, no proposal.",
-      "- The ONLY goal is to earn 'yes, send it over'. NOTHING IS BEING SOLD ON THIS CALL.",
+      videoSent
+        ? "- SRT ran an AI visibility audit on this business, emailed a finding, and the 4 minute video HAS ALREADY GONE OUT. Whether they actually watched it is unknown, and finding that out is the first job of the call."
+        : "- SRT ran an AI visibility audit on this business and emailed ONE finding, with no links and no price. That is all they have. There is no video yet, no report link, no proposal.",
+      videoSent
+        ? "- The goal is to find out if they watched it and to surface the ONE real reaction. NOTHING IS BEING SOLD ON THIS CALL: if they watched it and they are warm, the rep switches to a separate closing script, so do NOT try to close here."
+        : "- The ONLY goal is to earn 'yes, send it over'. NOTHING IS BEING SOLD ON THIS CALL.",
       "- DO NOT quote a price. DO NOT ask for a meeting. DO NOT ask for a decision. DO NOT pitch the service.",
       "- The video is FREE and theirs to keep either way. Say that, it is what makes yes cheap.",
       "",
       "THE MOVE THAT MATTERS MOST",
-      "Getting them to open that email and hit REPLY while he is still on the phone. A real reply from their address is what stops everything after it landing in spam, and it is the whole reason he called instead of just emailing again. It has to feel like a small favour, not a hoop: one word back is enough.",
+      videoSent
+        ? "Finding out whether they pressed play, honestly, without making them feel caught out. Most people did not watch it and will be slightly embarrassed, so the line has to give them an easy out ('no rush if you haven't') and then get the 20 second verbal version in anyway."
+        : "Getting them to open that email and hit REPLY while he is still on the phone. A real reply from their address is what stops everything after it landing in spam, and it is the whole reason he called instead of just emailing again. It has to feel like a small favour, not a hoop: one word back is enough.",
       "",
       "HOW TO TALK",
       "- Acknowledge, never disagree. Repeat their words back before responding.",
@@ -606,6 +650,18 @@ export async function buildFollowupScript(
       "Write the card:",
       `- openers: exactly 3, one per key below, in this order. Each is 2 or 3 spoken lines and ends on a question. They must be genuinely DIFFERENT approaches, not three wordings of the same thing.`,
       ...angles.map((a) => `    key "${a.key}" (${a.label}) -> ${a.angle}`),
+      videoSent
+        ? '- videoAsk: ONE direct question asking if they got through the video. Give them an easy out so a no is not embarrassing.'
+        : '- videoAsk: return an empty string "". No video has been sent, so there is nothing to ask about.',
+      videoSent
+        ? "- ifWatched: 3 lines. What stood out, one line confirming they understood the actual gap, and one line that reads their temperature without pitching. If they are warm the rep stops and switches scripts, so the last line hands off rather than closing."
+        : '- ifWatched: return an empty array [].',
+      videoSent
+        ? "- ifNotWatched: 3 lines. The 20 second verbal version of the single biggest finding, using one real number. ONE finding, not a summary. End on a question that gets their reaction."
+        : '- ifNotWatched: return an empty array [].',
+      videoSent
+        ? "- ifLater: 2 lines treating 'I'll watch it later' as the stall it is, getting the real reaction now, and pinning a specific day and time to speak again."
+        : '- ifLater: return an empty array [].',
       "- why: 3 or 4 bullets. The twenty second version of what was found and why it matters to them, in their language. One real number. This is what he says after the opener lands.",
       "- flow: 5 or 6 lines showing the actual ORDER the conversation should go, opener to ask, each line either what he says or a [stage direction]. This is the spine of the call, so it has to read as one continuous conversation and not a list of tactics.",
       "- replyMove: 4 lines. THE MOST IMPORTANT SECTION. (1) the ask to pull up the email and reply right now, framed as a favour and explicitly tiny, one word is fine. (2) what he says while they are hunting for it, including where to look if they can't find it. (3) what he says the moment they reply. (4) the fallback if they will not do it on the phone, which is a specific time he will call back, never an open ended 'I'll follow up'.",
@@ -613,15 +669,19 @@ export async function buildFollowupScript(
       ...PUSHBACKS.map((p) => `    key "${p.key}" = "${p.label}" -> ${p.angle}`),
       "- voicemail: 3 lines, under 20 seconds total, ends with a specific callback window. Never 'just checking in'.",
       "- textMessage: 3 lines max, references the finding, one question, no pitch, no link.",
+      "- followupEmail: { subject, body }. The send-instead-of-dial option, for a day with no time to call. Body is 3 or 4 SHORT paragraphs, one sentence each, blank line between them. It does the same job as the call and nothing more: reference the finding, " +
+        (videoSent ? "ask whether they got a chance to watch it" : "ask permission to send the video") +
+        ". No links, no price, no attachments, exactly ONE question mark in the whole thing, and never the words 'just checking in' or 'circling back'. Do not sign it, the signature is added automatically.",
       "- dontSay: 3 lines. The three things most likely to lose THIS specific prospect at this stage.",
     ].join("\n"),
     maxTokens: 4000,
     temperature: 0.6,
     schemaHint:
       '{ "openers": [{ "key": string, "lines": string[] }] (exactly 3, keys in the given order), ' +
+      '"videoAsk": string, "ifWatched": string[], "ifNotWatched": string[], "ifLater": string[], ' +
       '"why": string[], "flow": string[], "replyMove": string[], ' +
       `"pushback": [{ "key": string, "responses": [string, string], "rebox": string }] (exactly ${PUSHBACK_COUNT}, keys in the given order), ` +
-      '"voicemail": string[], "textMessage": string[], "dontSay": string[] }',
+      '"voicemail": string[], "textMessage": string[], "followupEmail": { "subject": string, "body": string }, "dontSay": string[] }',
     coerce: coerceFollowup,
     describeInvalid: describeInvalidFollowup,
     validate: validateFollowup,
@@ -830,30 +890,74 @@ export function formatFollowupScript(
 
   const header = [
     `:telephone_receiver: *Follow-up call · ${f.company}*${f.prospect ? ` · ${f.prospect}` : ""}`,
-    `_Absent from ${pctText(f.organicAppeared, f.organicTotal)} buyer questions · goal: get a REPLY on the phone · nothing is sold on this call_`,
+    `_Absent from ${pctText(f.organicAppeared, f.organicTotal)} buyer questions · goal: ${
+      videoHasGoneOut(f) ? "find out if they watched it" : "earn \"send it over\" + a reply"
+    } · nothing is sold here, that's_ \`close\``,
   ].join("\n");
+
+  const videoSent = videoHasGoneOut(f);
+
+  // Built as (heading, body) pairs and numbered afterwards. The video gate only exists once the
+  // recording has gone out, so a fixed 1-to-7 would leave a hole in the middle of the card on
+  // every pre-video call, which reads as a rendering bug at exactly the wrong moment.
+  const blocks: Array<[string, string]> = [
+    ["PICK AN OPENER*  _three different angles, read the first two seconds and choose_", openerCard],
+  ];
+
+  if (videoSent && s.videoAsk) {
+    blocks.push([
+      "DID THEY WATCH IT*",
+      [
+        `• ${noDashes(s.videoAsk)}`,
+        section("*if yes*", s.ifWatched),
+        section("*if no*", s.ifNotWatched),
+        section("*if 'later'*", s.ifLater),
+        "_They watched it and they're warm? Stop here and type_ `close` _for the selling script._",
+      ].filter((l) => l !== "").join("\n"),
+    ]);
+  }
+
+  blocks.push(["THE TWENTY SECOND WHY*", bullets(s.why)]);
+  blocks.push(["THE FLOW*  _the order the call should actually go_", bullets(s.flow)]);
+  blocks.push([
+    videoSent
+      ? "GET A REPLY BEFORE YOU HANG UP*  _keeps the next email out of spam_"
+      : "GET THE REPLY, ON THE PHONE*  _this is the point of the call_",
+    bullets(s.replyMove),
+  ]);
+  blocks.push(["IF THEY PUSH BACK*", pushCard]);
+  if (s.voicemail.length || s.textMessage.length) {
+    blocks.push([
+      "NO ANSWER*",
+      [section("_voicemail_", s.voicemail), section("_text_", s.textMessage)].filter(Boolean).join("\n"),
+    ]);
+  }
+  blocks.push(["DON'T SAY*", bullets(s.dontSay)]);
+
+  const body = blocks
+    .filter(([, content]) => content.trim() !== "")
+    .map(([heading, content], i) => {
+      const star = heading.startsWith("GET THE REPLY") || heading.startsWith("GET A REPLY") ? ":star: " : "";
+      return `${star}*${i + 1} · ${heading}\n${content}`;
+    })
+    .join("\n\n");
+
+  const email = s.followupEmail.body
+    ? [
+        "",
+        ":email: *Or just send this instead*  _same job, no phone call_",
+        `Subject: ${noDashes(s.followupEmail.subject)}`,
+        "",
+        noDashes(s.followupEmail.body),
+      ].join("\n")
+    : "";
 
   const script = [
     header,
     warnings.length ? `\n${warnings.join("\n")}` : "",
     "",
-    "*1 · PICK AN OPENER*  _three different angles, read the first two seconds and choose_",
-    openerCard,
-    "",
-    section("*2 · THE TWENTY SECOND WHY*", s.why),
-    "",
-    section("*3 · THE FLOW*  _the order the call should actually go_", s.flow),
-    "",
-    section(":star: *4 · GET THE REPLY, ON THE PHONE*  _this is the point of the call_", s.replyMove),
-    "",
-    "*5 · IF THEY PUSH BACK*",
-    pushCard,
-    "",
-    s.voicemail.length || s.textMessage.length ? "*6 · NO ANSWER*" : "",
-    section("_voicemail_", s.voicemail),
-    section("_text_", s.textMessage),
-    "",
-    section("*7 · DON'T SAY*", s.dontSay),
+    body,
+    email,
   ]
     .filter((l) => l !== "")
     .join("\n");

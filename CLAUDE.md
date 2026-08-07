@@ -718,17 +718,27 @@ script to dial off, then a fenced COACH NOTES block on its own message.
 WRITTEN; this is the only one whose output is spoken live, which is why it is bullets under 25
 words rather than paragraphs.
 
-**TWO scripts, and picking the wrong one is the expensive failure.** `detectMode()` reads the row:
-`outreach_stage === "revealed"` or a stored `loom_url`/`loom_transcript` means CLOSING, anything
-else means FOLLOWUP. The verb overrides it, because the row cannot know he sent the video by hand:
-`call` auto-detects, `followup` and `close` force it.
+**The three commands are one pipeline:** `loom` writes the recording, `call` is the follow-up
+phone script, `close` is the selling script. **The VERB picks it and nothing else does.**
 
-| | followup | closing |
+| | `call` (followup) | `close` (closing) |
 |---|---|---|
-| what they have | email 1, nothing else | everything: video, report, price |
-| the goal | earn "yes, send it" **and get a REPLY on the phone** | remove one obstacle, then paperwork |
+| what they have | email 1, or the video with no reaction yet | they watched it and they're warm |
+| the goal | earn "send it over", or find out if they watched it | remove one obstacle, then paperwork |
 | price | **never quoted**, withheld from the brief entirely | quoted, no guarantee |
-| sections | 3 divergent openers, the why, the flow, the reply move, 5 stalls | 10 sections, 7 closes |
+| sections | 3 openers, [video gate], why, flow, reply move, 5 stalls, **+ a send-instead email** | 10 sections, 7 closes |
+
+`call` **branches** on `videoHasGoneOut()` rather than escalating: once the recording is out the
+card opens on "did you get through it", and the yes branch tells him to stop and type `close`.
+
+> ‼️ **`call` must never auto-escalate to closing, and it used to.** Keying off `loom_url` was
+> wrong twice over: a stored recording proves the video was MADE, not watched, so it opened selling
+> to people who never pressed play; and it made one word mean a gentle follow-up on Monday and a
+> price conversation on Thursday, which is not a thing to discover with the phone already ringing.
+
+The `followupEmail` on the follow-up card is the same job without the phone call, and it goes
+through `lintSpoken` with the speech: a price or a reach claim is no more acceptable written down,
+and a sent email outlives an improvised sentence.
 
 > ‼️ **The reply move is the point of a follow-up call.** Getting them to open email 1 and hit
 > reply while he is still on the phone is what keeps everything after it out of spam, and it is
