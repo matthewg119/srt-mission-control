@@ -84,6 +84,52 @@ function emptyTruth(report: AuditReportRow, email: string | null, notes: string[
   };
 }
 
+/**
+ * The prospect's address, from wherever it actually is.
+ *
+ * `prospect_email` is only written when the intake captured it, and plenty of live reports have it
+ * null while the conversation is unmistakably real: Grey Seal sat at `drafted` with a null address.
+ * Reading only that column meant the Outlook check silently no-opped on exactly the threads it
+ * exists for, and reported "nothing has been sent" for a prospect who had been emailed twice.
+ *
+ * Three fallbacks, cheapest first. All best-effort; a miss returns null and the caller says so
+ * rather than treating unknown as empty.
+ */
+async function resolveProspectEmail(report: AuditReportRow): Promise<string | null> {
+  const direct = (report.prospect_email ?? report.requester_email ?? "").trim().toLowerCase();
+  if (direct) return direct;
+
+  // The outreach prospect row, which the Sent Items sweep writes even when the intake never did.
+  try {
+    const { data } = await supabaseAdmin
+      .from("outreach_prospects")
+      .select("email")
+      .eq("audit_report_id", report.id)
+      .maybeSingle();
+    const found = (data?.email as string | undefined)?.trim().toLowerCase();
+    if (found) return found;
+  } catch {
+    /* best effort */
+  }
+
+  // The linked Supabase contact.
+  if (report.contact_id) {
+    try {
+      const { data } = await supabaseAdmin
+        .from("contacts")
+        .select("email")
+        .eq("id", report.contact_id)
+        .maybeSingle();
+      const found = (data?.email as string | undefined)?.trim().toLowerCase();
+      if (found) return found;
+    } catch {
+      /* best effort */
+    }
+  }
+
+  return null;
+}
+
 function daysBetween(a: string, b: string): number {
   return Math.floor((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000);
 }
@@ -116,14 +162,35 @@ export async function readThreadTruth(
   report: AuditReportRow,
   opts: { force?: boolean } = {}
 ): Promise<ThreadTruth> {
-  const email = (report.prospect_email ?? report.requester_email ?? null)?.trim().toLowerCase() ?? null;
-
   const cached = !opts.force ? readCache(report) : null;
   if (cached) return cached;
 
+  const email = await resolveProspectEmail(report);
+  const truth = await readMailboxThread(email, report.outreach_stage ?? null);
+  if (email) void writeCache(report.id, truth);
+  return truth;
+}
+
+/**
+ * The same read, for an address with no audit behind it.
+ *
+ * Split out because most Zoho leads have no audit report, and the first version returned
+ * "no audit thread, so nothing was checked" for a lead that had three emails sitting in the
+ * mailbox. Whether we have contacted someone is a fact about the MAILBOX, not about whether we
+ * happened to run a scan on them, and a cold-call brief that wrongly implies first contact is
+ * exactly the brief that gets him caught out in the opening sentence.
+ *
+ * `storedStage` is passed rather than a whole row so this can be called with nothing but an email.
+ */
+export async function readMailboxThread(
+  email: string | null,
+  storedStage: string | null = null
+): Promise<ThreadTruth> {
+  const stub = { outreach_stage: storedStage } as AuditReportRow;
+
   if (!email) {
-    return emptyTruth(report, null, [
-      "No prospect email on this report, so nothing could be read from Outlook.",
+    return emptyTruth(stub, null, [
+      "No email address is on file for this prospect anywhere, so the mailbox could not be checked. This says we cannot tell whether they were contacted, NOT that they were not.",
     ]);
   }
 
@@ -132,7 +199,7 @@ export async function readThreadTruth(
     found = await microsoft.searchMessagesWithAddress(email, 50);
   } catch (e) {
     // Non-fatal on purpose. A Graph outage should degrade the brief, not block the whole thread.
-    return emptyTruth(report, email, [
+    return emptyTruth(stub, email, [
       `Outlook could not be read (${(e as Error).message}). Treating the thread as unknown rather than as empty.`,
     ]);
   }
@@ -177,7 +244,7 @@ export async function readThreadTruth(
   // `revealed` is the one stage the row knows better than the mailbox: it means Matthew explicitly
   // handed over price, report and video, which is a decision, not an observable event.
   let derivedStage: DerivedStage;
-  if (report.outreach_stage === "revealed") derivedStage = "revealed";
+  if (storedStage === "revealed") derivedStage = "revealed";
   else if (theyReplied) derivedStage = "replied";
   else if (outbound.length > 0) derivedStage = "sent_no_reply";
   else derivedStage = "not_sent";
@@ -195,13 +262,12 @@ export async function readThreadTruth(
     derivedStage,
     anchorMessageId: anchor?.id ?? null,
     anchorSubject: anchor?.subject ?? null,
-    conflictsWithStoredStage: conflicts(report.outreach_stage ?? null, derivedStage),
-    storedStage: report.outreach_stage ?? null,
+    conflictsWithStoredStage: conflicts(storedStage, derivedStage),
+    storedStage,
     notes,
     readAt: now,
   };
 
-  void writeCache(report.id, truth);
   return truth;
 }
 

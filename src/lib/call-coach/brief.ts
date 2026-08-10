@@ -19,7 +19,12 @@ import { companiesConflict, normalizeHost } from "@/lib/company-identity";
 import { buildZohoOnlyContext, type ZohoOnlySnapshot } from "@/lib/ai-intel/merchant-context";
 import { buildCallFacts, buildCoachNotes } from "@/lib/audit-engine/call-script";
 import { loadReportView } from "@/lib/audit-engine/report-view";
-import { readThreadTruth, formatThreadTruth, type ThreadTruth } from "@/lib/audit-engine/thread-truth";
+import {
+  readThreadTruth,
+  readMailboxThread,
+  formatThreadTruth,
+  type ThreadTruth,
+} from "@/lib/audit-engine/thread-truth";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
 import { decideCallType, callTypeLabel, type CoachCallType } from "./call-type";
 import { whoLine, type CallTarget } from "./resolve-target";
@@ -96,15 +101,30 @@ async function findReport(target: CallTarget): Promise<AuditReportRow | null> {
   return null;
 }
 
-export async function buildCallBrief(target: CallTarget): Promise<CallBrief> {
-  const report = await findReport(target);
+export async function buildCallBrief(input: CallTarget): Promise<CallBrief> {
+  const report = await findReport(input);
 
-  // The mailbox, once. It decides the call type AND supplies the block the coach reads, so it is
-  // never skipped even when there is no audit: an email may have gone out by hand.
-  let truth: ThreadTruth | null = null;
-  if (report) {
-    truth = await readThreadTruth(report).catch(() => null);
-  }
+  // The WHO line is the mechanism that makes a misidentified lead obvious in the first five
+  // seconds, so it cannot read "unknown business". Plenty of real Zoho leads have an empty
+  // `Company` (Facebook lead ads and form fills often only capture a person), and the name is
+  // usually sitting right there on the audit report or in the website host.
+  const target: CallTarget = {
+    ...input,
+    businessName: input.businessName ?? report?.client_name ?? hostLabel(input.website) ?? null,
+    website: input.website ?? report?.website ?? null,
+  };
+
+  // The mailbox, once, ALWAYS.
+  //
+  // Whether we have contacted someone is a fact about the mailbox, not about whether an audit
+  // happens to exist. The first cut only read it when there was a report, so a Zoho lead with
+  // three emails already sent came back as "nothing was checked" and the brief implied a first
+  // touch. That is the brief that gets him caught out in the opening sentence.
+  const truth: ThreadTruth | null = report
+    ? await readThreadTruth(report).catch(() => null)
+    : target.email
+      ? await readMailboxThread(target.email).catch(() => null)
+      : null;
 
   const { data: prospect } = target.email
     ? await supabaseAdmin
@@ -171,6 +191,13 @@ function zohoOnlyNumbers(): string {
     "- What you CAN say is what we do and what we find for businesses like theirs, in general terms, with no numbers attached to THEM.",
     "- If he needs numbers for this prospect, the honest answer is that the audit has not been run yet and it takes about ten minutes.",
   ].join("\n");
+}
+
+/** "GroveCityDental.com" -> "grovecitydental.com". Last resort for a nameless record: a host is a
+ *  weak label but it is checkable on screen, which "unknown business" is not. */
+function hostLabel(website: string | null | undefined): string | null {
+  const host = normalizeHost(website ?? null);
+  return host || null;
 }
 
 function crmBlock(z: ZohoOnlySnapshot): string {
