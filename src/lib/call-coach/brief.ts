@@ -108,10 +108,18 @@ export async function buildCallBrief(input: CallTarget): Promise<CallBrief> {
   // seconds, so it cannot read "unknown business". Plenty of real Zoho leads have an empty
   // `Company` (Facebook lead ads and form fills often only capture a person), and the name is
   // usually sitting right there on the audit report or in the website host.
+  //
+  // `??` is wrong here and was: Zoho returns an EMPTY STRING for an unset text field, not null, and
+  // `"" ?? x` is `""`. Every fallback below was therefore dead for exactly the records that needed
+  // it, and the WHO line rendered "unknown business" for real leads. `blank()` treats empty as
+  // absent, which is what "no company on this record" actually means.
   const target: CallTarget = {
     ...input,
-    businessName: input.businessName ?? report?.client_name ?? hostLabel(input.website) ?? null,
-    website: input.website ?? report?.website ?? null,
+    businessName: blank(input.businessName) ?? blank(report?.client_name) ?? hostLabel(input.website ?? report?.website) ?? null,
+    website: blank(input.website) ?? blank(report?.website) ?? null,
+    personName: blank(input.personName) ?? null,
+    email: blank(input.email) ?? blank(report?.prospect_email) ?? blank(report?.requester_email) ?? null,
+    phone: blank(input.phone) ?? null,
   };
 
   // The mailbox, once, ALWAYS.
@@ -191,6 +199,12 @@ function zohoOnlyNumbers(): string {
     "- What you CAN say is what we do and what we find for businesses like theirs, in general terms, with no numbers attached to THEM.",
     "- If he needs numbers for this prospect, the honest answer is that the audit has not been run yet and it takes about ten minutes.",
   ].join("\n");
+}
+
+/** Zoho returns "" for unset text fields, so every `??` chain over Zoho data needs this. */
+function blank(v: string | null | undefined): string | null {
+  const t = (v ?? "").trim();
+  return t.length > 0 ? t : null;
 }
 
 /** "GroveCityDental.com" -> "grovecitydental.com". Last resort for a nameless record: a host is a

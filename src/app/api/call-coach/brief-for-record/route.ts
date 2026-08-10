@@ -20,6 +20,12 @@ import { getLead, getDeal } from "@/lib/zoho";
 
 const MODULES: ZohoModule[] = ["Leads", "Deals", "Contacts", "Accounts"];
 
+/** Zoho returns "" for unset text fields, never null, so `??` chains over it silently keep blanks. */
+function str(v: unknown): string | null {
+  const t = typeof v === "string" ? v.trim() : "";
+  return t.length > 0 ? t : null;
+}
+
 /** Either lane opens the door. The dialer has no per-rep key and never will. */
 async function authorize(req: NextRequest): Promise<{ userId: string | null } | null> {
   const key = extractApiKey(req);
@@ -58,14 +64,12 @@ export async function POST(req: NextRequest) {
     const base: CallTarget = {
       module,
       recordId,
-      businessName:
-        (rec.Company as string | undefined) ??
-        (rec.Deal_Name as string | undefined) ??
-        null,
-      personName: [rec.First_Name, rec.Last_Name].filter(Boolean).join(" ").trim() || null,
-      email: (rec.Email as string | undefined) ?? null,
-      phone: (rec.Phone as string | undefined) ?? null,
-      website: (rec.Website as string | undefined) ?? null,
+      // Zoho gives "" for unset text fields, so `??` never falls through. See blank() in brief.ts.
+      businessName: str(rec.Company) ?? str(rec.Deal_Name),
+      personName: [str(rec.First_Name), str(rec.Last_Name)].filter(Boolean).join(" ") || null,
+      email: str(rec.Email),
+      phone: str(rec.Phone) ?? str(rec.Mobile),
+      website: str(rec.Website),
       contactId: null,
       // The id came from the caller's own page, so there is nothing to be uncertain about.
       confidence: "exact",

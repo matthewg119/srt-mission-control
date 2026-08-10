@@ -54,6 +54,18 @@ function digits(s: string | null | undefined): string {
   return (s ?? "").replace(/\D/g, "");
 }
 
+/**
+ * Zoho returns an EMPTY STRING for an unset text field, never null.
+ *
+ * So `rec.Company ?? rec.Deal_Name` keeps the empty Company and never reaches Deal_Name, and every
+ * downstream "did we get a name" check passes on a blank. Anything reading a Zoho field goes
+ * through here.
+ */
+function blank(v: unknown): string | null {
+  const t = typeof v === "string" ? v.trim() : "";
+  return t.length > 0 ? t : null;
+}
+
 function fromRecord(
   ref: ZohoRecordRef,
   rec: ZohoApiRecord,
@@ -64,19 +76,19 @@ function fromRecord(
   // `Company` off a Deal gives a nameless target. Same shape mismatch resolveRecord handles in
   // smart-followup.ts.
   const business =
-    (rec.Company as string | undefined) ??
-    (rec.Account_Name as { name?: string } | string | undefined as { name?: string })?.name ??
-    (rec.Deal_Name as string | undefined) ??
+    blank(rec.Company) ??
+    blank((rec.Account_Name as { name?: string } | undefined)?.name) ??
+    blank(rec.Deal_Name) ??
     null;
 
   return {
     module: ref.module,
     recordId: ref.recordId,
     businessName: business,
-    personName: [rec.First_Name, rec.Last_Name].filter(Boolean).join(" ").trim() || null,
-    email: (rec.Email as string | undefined) ?? null,
-    phone: (rec.Phone as string | undefined) ?? (rec.Mobile as string | undefined) ?? null,
-    website: (rec.Website as string | undefined) ?? null,
+    personName: [blank(rec.First_Name), blank(rec.Last_Name)].filter(Boolean).join(" ") || null,
+    email: blank(rec.Email),
+    phone: blank(rec.Phone) ?? blank(rec.Mobile),
+    website: blank(rec.Website),
     contactId: null,
     confidence,
     source,
