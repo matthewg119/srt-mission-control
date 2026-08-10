@@ -854,24 +854,97 @@ separately; this repo owns its prompt, its playbook and its auth. Routes: `sugge
 Claude Haiku 4.5 SSE proxy), `deepgram-token` (mints an ElevenLabs realtime token, the name is
 legacy), `playbook` (GET bearer / POST `x-playbook-secret`), `session`, `transcript`.
 
-**It is a CLOSING coach, not the old MCA funding coach** (rebuilt 2026-08-06). `STATIC_RULES` in
-`suggest/route.ts` is the closing doctrine: the three buckets, isolate-before-you-answer, at most
-two closes per obstacle, never drop the price (smaller scope instead), stop selling on the yes.
-Every funding reference is gone; on a call where the pitch already happened, "what's your monthly
-revenue" is not a question anyone asks.
+**It is a sales coach, not the old MCA funding coach** (rebuilt 2026-08-06, widened 2026-08-10).
+`STATIC_RULES` in `suggest/route.ts` is the doctrine: the three buckets,
+isolate-before-you-answer, at most two closes per obstacle, stop selling on the yes. Every funding
+reference is gone.
 
-**Three system blocks, and the order is load-bearing.** `STATIC_RULES` carries
+**Two modes, and the brief is the ONLY signal that picks them** (2026-08-10). `callContext`
+non-empty means WARM (already worked, pitch happened, remove one obstacle); empty means COLD
+(first conversation, may not have opened the email, discover the pain from scratch, full close if
+it is real, fall back to "reply 1 to the email" plus a dated follow-up). It used to be
+closing-only, which meant a cold dial opened with "what stood out to you most in that audit" to
+someone who had never read it. **Do not try to infer the mode from the transcript** — that is the
+bug this replaced.
+
+**The pain gate outranks everything except HARD LINES.** No named pain, no report: no video, no
+report, no implementation plan, no price until the owner has said something is wrong. The brief
+satisfies it in WARM; nothing satisfies it in COLD except the owner saying it.
+
+**CLOSER is the spine and it runs in order** (Clarify, Label, Overview, Sell, Explain, Reinforce).
+All 3 suggestions target the CURRENT stage, three angles on it rather than three stages. Something
+volunteered from a later stage is recorded as a letter-tagged note, not chased. The one exception
+is R: the moment they say yes, jump there and stop selling.
+
+**FOUR system blocks now, and the order is load-bearing.** `STATIC_RULES` carries
 `cache_control: ephemeral` and must stay first and byte-identical or the cache never hits; the
-playbook block is second; the CALL BRIEF is third. The brief is `callContext` from the request,
-capped at `MAX_BRIEF_CHARS`, and it is the pasted COACH NOTES from `call` above. It is framed as
-"the ONLY numbers that exist" because without that the model rounds 37/100 into "under 40%" and
-invents a competitor.
+`MODE` + `CALL LANGUAGE` + `PRICE` block is second (it selects which half of the cached rules
+applies, so it has to be read before the rest); the playbook is third; the CALL BRIEF is fourth.
+Anything that varies per call belongs in block two, never in `STATIC_RULES`. The brief
+is `callContext`, capped at `MAX_BRIEF_CHARS`, and it is the pasted COACH NOTES from `call` above.
+It is framed as "the ONLY numbers that exist" because without that the model rounds 37/100 into
+"under 40%" and invents a competitor.
 
-**The close checklist replaced the prequal fields**: `watchedVideo`, `mainGoal`, `mainConcern`,
-`decisionMaker`, `budgetFit`, `nextStep`. Still exactly six, because the extension's grid, its
-additive merge and its streaming parser are all shape-driven. The JSON output contract
-(`suggestions[].text/category/continuations[]`, `qualification`, `notes`) is unchanged, which is
-what let the whole streaming parser stay untouched.
+**Language is decided in CODE** (`src/lib/call-coach-language.ts`, pure, same precedent as
+`delivery-guards.ts`). It scores the last 5 turns on Spanish/English function words plus Spanish
+orthography and emits `CALL LANGUAGE: en | es | mixed`. A prompt line alone does not survive a
+Spanglish call: one English sentence flips the model back and it stays there. Defaults to `en` on
+thin evidence, deliberately, because sprinkling Spanish at an English-only prospect is a worse
+failure than switching a beat late. Words common to both languages ("no", "me", "son", "solo") are
+excluded from both sets rather than assigned to one.
+
+> ‼️ **The $349 lever is a CODE gate, not a prompt rule, and it had to become one.**
+> `src/lib/call-coach-price-gate.ts` decides whether the discount exists on this request;
+> `priceBlock()` then writes the PRICE paragraph, and when it is locked **the string "349" is not
+> in the request at all.**
+>
+> It started as a prompt rule ("never before an isolate plus two failed responses") and **leaked
+> the number on the FIRST price objection in 2 of 3 live runs** — once as an entire "here's what I
+> can do: 349 a month" card, with the invented figure "cuts the first year cost in half" attached.
+> The cause is structural: the model reads its own 3 suggestions as an escalating sequence and
+> helpfully supplies step three. No amount of emphasis fixed it; withholding the number did, 0/3
+> leaks locked and 3/3 offers once unlocked.
+>
+> Same doctrine as the follow-up COACH NOTES, which already **withhold** the price rather than
+> forbidding it: absent beats forbidden. A number sitting in a helpful model's context is one it
+> will eventually reach for.
+>
+> `priceLeverUnlocked()` requires BOTH that the owner raised money twice AND that Matthew answered
+> it twice after the first time. Owner-mentions alone would unlock on "how much" followed by
+> "that's a lot", before anything had actually been tried. It reads the **full** history the
+> extension sends, not the 5 turns rendered into the transcript, or the lever would re-lock the
+> moment the objection scrolled out of the window. `MONEY_RE` covers both languages.
+>
+> $499/mo is the price either way. Locked, the only answer to a request for less is a smaller
+> scope. Unlocked, $349/mo is real and stated as a real price, with the bans on invented deadlines
+> and fake scarcity intact, and neither figure may be turned into a third one by arithmetic.
+
+**The close checklist IS the six CLOSER stages** (2026-08-10): `clarify`, `label`, `overview`,
+`sell`, `explain`, `reinforce`. They replaced `watchedVideo` / `mainGoal` / `mainConcern` /
+`decisionMaker` / `budgetFit` / `nextStep`; the last two live on as letter-tagged `notes` entries
+(`E: partner has to sign off`). Still exactly six, because the extension's grid, its additive
+merge and its streaming parser are all shape-driven. The JSON output contract
+(`suggestions[].text/category/continuations[]`, `qualification`, `notes`) is otherwise unchanged,
+which is what let the whole streaming parser stay untouched.
+
+> The extension deploys separately. On a skew its `mergeQualification` iterates its own key list
+> and ignores unknown keys, so a mismatch shows a blank checklist rather than crashing. Ship both
+> the same day anyway.
+
+**Em dashes are stripped in the EXTENSION, not here.** This route proxies the Anthropic SSE stream
+through untouched, and buffering it to rewrite text would cost the streaming TTFT the design
+exists for. `speakable()` in the extension's `api-client.ts` does it where the JSON is already
+parsed. The prompt also asks for no em dashes, but the code strip is the guarantee, and live runs
+confirm the model still emits them anyway.
+
+> ‼️ **`max_tokens` is 1400, up from 800, and the old value failed SILENTLY.** `qualification` and
+> `notes` are emitted AFTER `suggestions` in the JSON, so a long response does not lose its third
+> card, it loses the CHECKLIST and the NOTES entirely, and the extension's tolerant parser renders
+> the surviving cards as if nothing happened. Real responses land at 660 to 840 output tokens, so
+> 800 was clipping regularly. Spanish made it systematic: the same answer runs meaningfully longer,
+> so a Spanish call would have shipped with a permanently empty checklist and no diagnosable cause.
+> Nothing is billed for tokens that are not generated and TTFT is unaffected, so the headroom is
+> free. Do not tighten this back to "save money".
 
 **Fallback suggestions are prospect-agnostic on purpose.** They render when Claude is unreachable,
 knowing nothing about who is on the phone, so anything specific would be a fabrication shown at
