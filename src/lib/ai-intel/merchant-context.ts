@@ -261,3 +261,78 @@ export function whyThisLead(ctx: MerchantContext): string {
   if (ctx.recent_sends.length) bits.push(`${ctx.recent_sends.length} prior sends`);
   return `${who} — ${bits.join(" · ")}`;
 }
+
+// ── Zoho-only context ────────────────────────────────────────────────────
+/**
+ * The same picture for a lead that has NO Supabase contact row.
+ *
+ * `buildMerchantContext` returns null in that case, and that case is not an edge: a cold Zoho lead
+ * that never came through a funnel has no `contacts` row by definition, and those are most of the
+ * leads Matthew dials. Without this the Call Coach brief would be empty for exactly the calls where
+ * he most needs to know who he is talking to.
+ *
+ * Deliberately narrow. Two reads, in parallel, both non-fatal. Nothing here is on a cron; it is on
+ * the critical path of a live dial, so a slow enrichment is a worse answer than a thin one.
+ *
+ * Zoho Calls / Activities are NOT read. `getLeadNotes` is the only notes surface in the repo, and
+ * the notes are where Matthew's own call write-ups live, which is the part that matters. Adding an
+ * Activities fetch here would cost a round trip on every single dial.
+ */
+export interface ZohoOnlySnapshot {
+  module: string;
+  record_id: string;
+  company: string | null;
+  person: string | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  lead_status: string | null;
+  lead_source: string | null;
+  lead_owner: string | null;
+  last_activity: string | null;
+  days_since_modified: number | null;
+  notes: NoteDigest[];
+}
+
+export async function buildZohoOnlyContext(
+  module: string,
+  recordId: string
+): Promise<ZohoOnlySnapshot | null> {
+  const [rec, notes] = await Promise.all([
+    getLead(recordId).catch((e) => {
+      console.error("[merchant-context] zoho-only lead fetch failed:", (e as Error).message);
+      return null;
+    }),
+    // Same swallow-and-return-[] contract getLeadNotes already has. A lead with no notes and a
+    // lead whose notes could not be read look identical here, which is acceptable: neither can
+    // produce a claim, and the brief says "no notes" either way.
+    getLeadNotes(recordId, 8).catch(() => [] as Awaited<ReturnType<typeof getLeadNotes>>),
+  ]);
+
+  if (!rec) return null;
+
+  const modified = (rec.Modified_Time as string | undefined) ?? null;
+  const owner = rec.Owner as { name?: string } | undefined;
+
+  return {
+    module,
+    record_id: recordId,
+    company: (rec.Company as string | undefined) ?? null,
+    person: [rec.First_Name, rec.Last_Name].filter(Boolean).join(" ").trim() || null,
+    email: (rec.Email as string | undefined) ?? null,
+    phone: (rec.Phone as string | undefined) ?? null,
+    website: (rec.Website as string | undefined) ?? null,
+    lead_status: (rec.Lead_Status as string | undefined) ?? null,
+    lead_source: (rec.Lead_Source as string | undefined) ?? null,
+    lead_owner: owner?.name ?? null,
+    last_activity: modified,
+    days_since_modified: modified
+      ? Math.floor((Date.now() - new Date(modified).getTime()) / 86_400_000)
+      : null,
+    notes: notes.map((n) => ({
+      title: n.Note_Title ?? "",
+      content: (n.Note_Content ?? "").slice(0, 800),
+      modified_at: n.Modified_Time ?? n.Created_Time ?? "",
+    })),
+  };
+}
