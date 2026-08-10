@@ -25,9 +25,9 @@ import {
   PERMISSION_SEQUENCE,
   PARAGRAPH_RULES,
   VOICE_RULES,
-  PERMISSION_EXAMPLE_WITH_REDESIGN,
-  PERMISSION_EXAMPLE_NO_REDESIGN,
-  SIGNOFF_RULE,
+  prePitchRules,
+  permissionExample,
+  PERMISSION_CLOSE,
   ensureSignoff,
   ensurePermissionClose,
   type EmailOption,
@@ -175,6 +175,119 @@ export interface IntakeDraftResult {
 }
 
 /**
+ * Router commands that end up stored as the intake answer.
+ *
+ * At `awaiting_intake` EVERY free-text reply in the thread is the intake answer, so a word typed
+ * in the belief that it is a command is kept verbatim and outranks everything generic from then on.
+ * A live run stored the literal string "draft" and the coach brief printed `MY NOTES: draft`, which
+ * a model reading that brief mid-call has no way to recognise as noise.
+ */
+const INTAKE_JUNK = new Set([
+  "draft", "drafts", "1", "2", "3", "send", "send it", "sendit", "call", "close", "closing",
+  "followup", "follow up", "loom", "script", "full script", "reveal", "delivery", "deliver",
+  "image", "avatars", "avatars fresh", "questions", "intake", "ask me", "restart intake",
+  "yes", "no", "ok", "okay", "go", "cancel", "stop", "nevermind", "never mind", "test", "testing",
+  "na", "n/a", "none", "-", ".",
+]);
+
+/**
+ * The intake answers, or nothing.
+ *
+ * Gates the WHOLE blob rather than filtering line by line, and that is deliberate. The real answer
+ * is four free-text replies to the four intake slots, so it legitimately contains lines like
+ * "Fran", "fran@americanstone.com" and "yes"; a per-line word count would gut a perfectly good
+ * answer. What actually goes wrong is the opposite shape, one stray token standing alone, so that
+ * is the only thing rejected.
+ *
+ * It lives HERE, next to the column it guards, rather than in call-script.ts where it was written
+ * (2026-08-10). It was only ever applied in buildCallFacts, so it cleaned the live-call brief and
+ * nothing else: the drafters, which are what write the email that actually goes to the prospect,
+ * read the raw column. Every reader now goes through this, so they cannot disagree about what
+ * Matthew said. It is applied on WRITE and on READ, because rows written before this existed still
+ * carry whatever was typed.
+ */
+export function usefulIntakeAnswers(raw: string | null): string | null {
+  const text = (raw ?? "").trim();
+  if (!text) return null;
+
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length > 1) return text;
+
+  const bare = lines[0].toLowerCase().replace(/[.!?,]+$/, "").trim();
+  if (INTAKE_JUNK.has(bare)) return null;
+  // `nudge 2`, `email 3` — a numbered command is junk for the same reason the bare word is.
+  if (/^(nudge|email|seed)\s+\d+$/.test(bare)) return null;
+  // Too small to be an instruction. A one-word answer costs the ICP framing nothing and the
+  // greeting name comes from prospect_name / loom_state.greetName, never from here.
+  if (bare.split(/\s+/).filter(Boolean).length < 3 && bare.length < 15) return null;
+
+  return text;
+}
+
+/** The subset of a Slack file event this module needs. Structural, so no import from the route. */
+export interface IntakeImage {
+  mimetype?: string;
+  url_private?: string;
+  url_private_download?: string;
+}
+
+/**
+ * Read the screenshots attached to a thread reply, as text.
+ *
+ * The audit lane used to forward only `text` and then return, which short-circuited the
+ * image-capable handler further down the route, so an attached file was discarded in silence. The
+ * reply that exposed it was "draft pelase jossana guerrero" with a contact card pasted underneath:
+ * the recipient's email was in the picture, the picture was dropped, and the Outlook draft would
+ * have gone out with an empty To even if the draft itself had survived the linter.
+ *
+ * Transcribes rather than interprets. What comes back is appended to the intake answers, and the
+ * answers are quoted to the drafter as instructions that outrank everything generic, so a model
+ * summarizing what it thinks the picture MEANS would be putting its own guesses in that position.
+ * Returns null on any failure: a screenshot that could not be read must not take the draft with it.
+ */
+export async function readIntakeImages(files: IntakeImage[]): Promise<string | null> {
+  const images = files.filter((f) => (f.mimetype ?? "").startsWith("image/")).slice(0, 4);
+  if (images.length === 0) return null;
+
+  try {
+    const decoded = (
+      await Promise.all(
+        images.map(async (f) => {
+          const url = f.url_private ?? f.url_private_download;
+          if (!url) return null;
+          const buf = await slack.downloadFile(url);
+          return { media_type: (f.mimetype ?? "image/png").split(";")[0], data: buf.toString("base64") };
+        })
+      )
+    ).filter((i): i is { media_type: string; data: string } => i !== null);
+    if (decoded.length === 0) return null;
+
+    const { data } = await callClaudeJSON<{ text: string }>({
+      model: MODEL,
+      system: [
+        "You transcribe screenshots that a sales founder pasted into a Slack thread while answering intake questions about who to email.",
+        "Report ONLY what is legibly written in the image: names, roles, email addresses, phone numbers, company names, and any other visible text.",
+        "Transcribe characters exactly, especially email addresses and spellings of names. Do not correct what looks like a typo, do not complete a partial address, and do not infer a person's role from context.",
+        "Do not describe the image, do not summarize it, and do not add anything that is not written in it. If nothing readable is there, return an empty string.",
+      ].join("\n"),
+      user: "Transcribe the readable text in these images.",
+      images: decoded,
+      maxTokens: 700,
+      temperature: 0,
+      schemaHint: '{ "text": string }',
+      validate: (v: unknown): v is { text: string } =>
+        typeof v === "object" && v !== null && typeof (v as { text?: unknown }).text === "string",
+    });
+
+    const text = data.text.trim();
+    return text.length > 0 ? text : null;
+  } catch (e) {
+    console.error("[outreach-intake] could not read attached image:", (e as Error).message);
+    return null;
+  }
+}
+
+/**
  * First URL in Matthew's intake answers.
  *
  * Needed because the redesign link usually arrives IN the answers ("4. yes, https://...") and
@@ -196,11 +309,19 @@ const PROSPECT_FIELDS_INSTRUCTION = [
 ].join("\n");
 
 /**
- * Shared no-sell constraints for the intake drafter, kept in sync with prePitchRules().
+ * The intake drafter's system prompt.
  *
- * The link rule is conditional on whether a redesign exists for this prospect: a redesign link
- * is the finding made tangible and is allowed as the email's ONE link, while the report link
- * stays behind the yes because it is homework we would be asking them to do.
+ * The hard constraints and the few-shot are CALLED from email-assistant.ts rather than restated
+ * here. They used to be a hand-copied second version, and the copy went stale in the worst
+ * possible place: prePitchRules() rule 3 says "DO NOT WRITE THE CLOSE... do not ask a question
+ * anywhere", because ensurePermissionClose() appends the ask in code. This file's rule 3 said the
+ * opposite, "ONE ASK, and it is the last line: a single question". So the model wrote an ask, the
+ * code appended a second one, and draft-linter.ts rejected the result for having two question
+ * marks — three attempts, every time, with no phrasing that could have satisfied both. Email 1 for
+ * a live prospect was unreachable for six days.
+ *
+ * A comment claiming the two blocks are "kept in sync" is what was there before. Sharing the
+ * function is what actually makes it true.
  */
 function intakeDraftSystem(redesignUrl: string | null): string {
   return [
@@ -209,17 +330,7 @@ function intakeDraftSystem(redesignUrl: string | null): string {
     "Do NOT explain that mechanism to the reader. A stranger did not sign up for a seminar. You may only get concrete: name what you found, or name what you built them. Specifics earn the reply, theory does not.",
     "Write in the buyer language of THIS business's own industry. Never import vocabulary from another one: a control panel shop has buyers and plant engineers, not patients or clients.",
     `You are writing EMAIL 1, "${PERMISSION_SEQUENCE[0].name}". Its job: ${PERMISSION_SEQUENCE[0].job}`,
-    "HARD CONSTRAINTS, these override everything else:",
-    redesignUrl
-      ? `1. EXACTLY ONE link is allowed, and it is this one: ${redesignUrl}\nThat is the free redesign built for this prospect. Including it is encouraged: it is the finding made tangible, and it costs the reader nothing to look at. NO OTHER URL may appear. Not the audit report link, not a Loom, not a pricing page, not a calendar link. Two links makes it an advertisement.`
-      : "1. NO URLs or links of any kind. Not the report link, not a calendar link, nothing. If a redesign is being built but is not live yet, hint that you found something on their site working against them and hold everything else back.",
-    "2. NO price, no package, no monthly figure.",
-    "3. ONE ASK, and it is the last line: a single question they can answer in one word, asking permission to send the breakdown. No meeting ask, no call ask, no video ask, no 'worth 15 minutes', no second CTA of any kind, and this holds even when the redesign link is present. Two question marks aimed at the reader means the email is wrong.",
-    "4. Exactly ONE finding. Not three facts. A stranger who reads two findings reads a pitch.",
-    redesignUrl
-      ? "5. Under 180 words for the body. The extra room over a linkless email exists ONLY for concrete specifics about what you built them."
-      : "5. Under 120 words for the body.",
-    `6. ${SIGNOFF_RULE}`,
+    prePitchRules(redesignUrl),
     'Subject line: short and specific, naming the business and the engine, for example "Cellunetics + ChatGPT". No score, no numbers, no bait, no question mark.',
     "Do NOT use em dashes or en dashes anywhere, and never ' - ' as a connector. Use commas and periods. Ranges use 'to'.",
     PARAGRAPH_RULES,
@@ -227,10 +338,7 @@ function intakeDraftSystem(redesignUrl: string | null): string {
     // Says "clients", never "patients": this block ships for every vertical.
     "Never guarantee customers, clients, sales or revenue. Never invent a statistic, a screenshot or a competitor name that is not in the findings given.",
     PROSPECT_FIELDS_INSTRUCTION,
-    "REFERENCE EMAIL. Match its rhythm, its paragraph density and its restraint. Do NOT reuse its wording, its business, or its details:",
-    "---",
-    redesignUrl ? PERMISSION_EXAMPLE_WITH_REDESIGN : PERMISSION_EXAMPLE_NO_REDESIGN,
-    "---",
+    permissionExample(redesignUrl),
   ].join("\n");
 }
 
@@ -321,8 +429,11 @@ function greetingName(body: string): string | null {
 export async function draftFromIntake(
   report: AuditReportRow,
   view: ReportView,
-  answers: string
+  rawAnswers: string
 ): Promise<IntakeDraftResult> {
+  // Junk in, junk out, and it stays: whatever lands here is quoted to the model as instructions
+  // that outrank everything generic, and is then stored on the row for every later drafter.
+  const answers = usefulIntakeAnswers(rawAnswers) ?? "";
   const redesignUrl = report.redesign_url ?? redesignFromAnswers(answers);
 
   const { data } = await callClaudeJSON<RawIntakeDraft>({
@@ -331,7 +442,11 @@ export async function draftFromIntake(
     user: [
       `Audit findings (use the real numbers and real competitor names, never invent one):\n${reportContext(report, view)}`,
       `\nThe questions asked:\n${questionBlock(report)}`,
-      `\nMatthew's answers, verbatim. These OUTRANK the generic guidance, follow them literally. If he says to mention something, mention it. If he says to leave something out, it does not appear:\n"""\n${answers}\n"""`,
+      answers
+        ? `\nMatthew's answers, verbatim. These OUTRANK the generic guidance, follow them literally. If he says to mention something, mention it. If he says to leave something out, it does not appear:\n"""\n${answers}\n"""`
+        : // Said plainly, because an empty """ """ block reads as an answer that happened to be
+          // blank and the model fills the silence: it invents a recipient and greets them by name.
+          `\nMatthew has NOT answered the intake questions. There is no recipient name and no email address. Write email 1 from the audit findings alone, open straight into the first sentence with NO greeting line, and return null for prospect_name and prospect_email. Do not invent a name, a role, or a contact.`,
       `\nReturn email 1 as JSON.`,
     ].join("\n"),
     maxTokens: 1600,
@@ -385,6 +500,16 @@ export async function revisePreviousDraft(
 ): Promise<IntakeDraftResult> {
   const policy = linkPolicyFor(report);
   const isPermissionStage = policy.mode !== "any";
+  const priorAnswers = usefulIntakeAnswers(report.intake_answers);
+
+  // Stated the same way prePitchRules() states it, and for the same reason: ensurePermissionClose()
+  // appends the ask below, so a revision that writes its own leaves the email with two. This block
+  // used to say "its only ask is permission to send the breakdown, asked once, as the last line",
+  // which reads as an instruction to write one.
+  const closeRule =
+    "The last two paragraphs are the close and they are APPENDED IN CODE, not by you:\n" +
+    `"${PERMISSION_CLOSE[0]}"\n"${PERMISSION_CLOSE[1]}"\n` +
+    "They are already on the draft below. Leave them exactly as they are, do not reword them, do not move them, and do not write an ask of your own anywhere. Do not put a question mark anywhere else in the email.";
 
   const { data } = await callClaudeJSON<{ subject: string; body: string }>({
     model: MODEL,
@@ -392,9 +517,9 @@ export async function revisePreviousDraft(
       "You revise a cold outreach email for SRT Agency LLC, an AI-search-visibility agency, on the founder's instruction.",
       "Change what he asked for and leave everything else alone. This is an edit, not a rewrite: if he says to cut a line, cut that line and do not restructure the email around it.",
       policy.mode === "none"
-        ? "This email is in the PERMISSION stage, so the constraints still hold no matter what: no URLs or links of any kind, no price, no meeting or call or video ask, exactly one finding, under 120 words. Its only ask is permission to send the breakdown over, asked once, as the last line."
+        ? `This email is in the PERMISSION stage, so the constraints still hold no matter what: no URLs or links of any kind, no price, no meeting or call or video ask, exactly one finding, under 120 words.\n${closeRule}`
         : policy.mode === "redesign_only"
-          ? `This email is in the PERMISSION stage. The constraints still hold no matter what: no price, no meeting or call or video ask, exactly one finding, under 180 words, and its only ask is permission to send the breakdown, asked once as the last line. EXACTLY ONE link is allowed and it is this one: ${policy.url}. No other URL may appear.`
+          ? `This email is in the PERMISSION stage. The constraints still hold no matter what: no price, no meeting or call or video ask, exactly one finding, under 180 words. EXACTLY ONE link is allowed and it is this one: ${policy.url}. No other URL may appear.\n${closeRule}`
           : "This email is post-reveal, so links and the offer are allowed.",
       "Do NOT use em dashes or en dashes anywhere, and never ' - ' as a connector.",
       isPermissionStage ? PARAGRAPH_RULES : "",
@@ -406,7 +531,7 @@ export async function revisePreviousDraft(
       .join("\n"),
     user: [
       `Audit findings for reference:\n${reportContext(report, view)}`,
-      report.intake_answers ? `\nEarlier instructions for this outreach, still in force:\n"""\n${report.intake_answers}\n"""` : "",
+      priorAnswers ? `\nEarlier instructions for this outreach, still in force:\n"""\n${priorAnswers}\n"""` : "",
       `\nCurrent draft:\nSubject: ${previous.subject}\n\n${previous.body}`,
       `\nWhat to change:\n"""\n${instruction}\n"""`,
       `\nReturn the revised email as JSON.`,
@@ -434,8 +559,8 @@ export async function revisePreviousDraft(
 
   // A revision rewrites the greeting too, so the name check has to run again here. The stored
   // answers are the reference; when there are none there is nothing to check against.
-  const nameCheck = report.intake_answers
-    ? verifyNameAgainstAnswers(null, greetingName(signedBody), report.intake_answers)
+  const nameCheck = priorAnswers
+    ? verifyNameAgainstAnswers(null, greetingName(signedBody), priorAnswers)
     : { warning: null };
 
   return {

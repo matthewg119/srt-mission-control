@@ -39,7 +39,55 @@ export const VIDEO_LENGTH_LABEL = "4 min";
  * to "mention the price" rewrites it every take, and a video that says a different number than the
  * invoice is the one mistake that cannot be walked back. Override per recording with `loom $499`.
  */
-export const LOOM_PRICE_LABEL = "$299 / month";
+/**
+ * The offer is TWO TIERS, both always available, both month to month (confirmed 2026-08-11).
+ *
+ * It is not one price with a discount hiding behind it. "Can you do better" is answered by moving
+ * Complete down to Core, which is a smaller scope for a smaller number, not by cutting a price.
+ * That distinction is the whole reason there is no lever any more: a tier you can name on the
+ * first ask does not need to be withheld, and a scope change is honest where a discount is a
+ * confession that the first number was soft.
+ *
+ * ‼️ These two figures are the ONLY price figures that exist anywhere. Neither may be turned into
+ * a third one by arithmetic, and no percentage, "half", or per-day breakdown may be derived.
+ */
+export const PRICE_CORE = "$349 / month";
+export const PRICE_COMPLETE = "$499 / month";
+
+export const OFFER_TIERS = [
+  {
+    name: "Core",
+    price: PRICE_CORE,
+    includes: [
+      "8 pages on your site each month, 4 new and 4 updated, each answering a question buyers actually ask",
+      "Your 20 question audit re-run every month across ChatGPT, Perplexity, Gemini and Google AI, measured against your baseline",
+      "Automated review requests to your customers",
+      "A one-page scorecard and a short video every month",
+    ],
+  },
+  {
+    name: "Complete",
+    price: PRICE_COMPLETE,
+    includes: [
+      "Everything in Core, doubled: 8 new, 8 updated, 40 questions tracked",
+      "Placements in the directories, listicles and local forums AI actually cites",
+      "Your review replies written for you, including the bad ones",
+      "Tracking which competitors the AI names instead of you",
+    ],
+  },
+] as const;
+
+/**
+ * The risk framing, and it is TRUE as written.
+ *
+ * Not a guarantee, not a refund, not a performance promise. It says what happens to the work if
+ * they stop paying, which is a fact about the arrangement. Anything that rewrites it into "no
+ * risk" or "money back" is banned by HARD_LINES and must stay banned.
+ */
+export const OFFER_EXIT_LINE = "Leave anytime, keep everything: pages, profiles, data.";
+
+/** Both tiers, as one line, for a script or a brief that needs the price in a sentence. */
+export const LOOM_PRICE_LABEL = `${PRICE_CORE} (Core) or ${PRICE_COMPLETE} (Complete)`;
 export const LOOM_START_WINDOW = "60 to 90 days";
 
 /** The number Matthew reads on camera. Same one as operator-rules.ts, NOT the NAP number. */

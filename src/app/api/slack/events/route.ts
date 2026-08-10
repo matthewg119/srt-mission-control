@@ -402,7 +402,20 @@ export async function POST(request: NextRequest) {
         parentThreadTs !== event.ts &&
         userText.trim().length > 0
       ) {
-        const handled = await handleAuditThreadReply({ channel, threadTs: parentThreadTs, text: userText });
+        // Files go through too. This branch RETURNS on handled, so it short-circuits the
+        // image-capable path further down: passing only the text meant a pasted contact card was
+        // discarded without a word, which is how an intake reply lost the recipient's email.
+        const handled = await handleAuditThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          text: userText,
+          files: attachedFiles,
+          // An @mention is Matthew talking TO the bot rather than feeding the state machine, so it
+          // always goes to the agent even at a stage whose free text normally means something
+          // specific. "@BrainHeart give me bullet points" is not an intake answer.
+          isMention: event.type === "app_mention" || /<@[A-Z0-9]+>/.test(userText),
+          messageTs: (event.ts as string | undefined) ?? null,
+        });
         if (handled) return NextResponse.json({ ok: true });
       }
 

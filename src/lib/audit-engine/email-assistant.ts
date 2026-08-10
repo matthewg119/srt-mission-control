@@ -308,7 +308,7 @@ export async function draftPreSellOptions(
  * homework we are asking them to do, which is why it stays behind the yes. So: zero links by
  * default, exactly one when a redesign exists, and never both.
  */
-function prePitchRules(redesignUrl: string | null): string {
+export function prePitchRules(redesignUrl: string | null): string {
   return [
     "HARD CONSTRAINTS, these override every other instruction about calls to action:",
     redesignUrl
@@ -430,6 +430,39 @@ export const PERMISSION_CLOSE = [
 const CLOSE_ATTEMPT_RE =
   /^(?:i (?:recorded|made|put together|shot)\b.*|(?:the )?(?:full )?breakdown\b.*|want me to\b.*|mind if i\b.*|should i\b.*|can i\b.*|happy to\b.*|.*\byours to keep\b.*)$/i;
 
+/** Every name this system has ever signed with, current and retired. */
+const SIGNOFF_NAMES = [OUTREACH_SIGNATURE.name.split(" ")[0], ...STALE_SIGNOFF_NAMES].map((s) =>
+  s.toLowerCase()
+);
+
+/** Matched whole, not per word: "agency" and "search" are ordinary words in a sales email. */
+const SIGNOFF_AGENCIES = [OUTREACH_SIGNATURE.agency, ...STALE_SIGNOFF_AGENCIES].map((s) =>
+  s.toLowerCase()
+);
+
+/**
+ * Is this paragraph the sign-off block?
+ *
+ * The old test was `p.includes(firstName.toLowerCase())`, which is a plain substring check against
+ * the CURRENT name. So "Thanks,\nMatt" was not a sign-off: `signoff` came back empty, the strip
+ * loop below hit the signature on its first iteration and stopped, the model's own ask was left
+ * in place, and the close was then appended UNDERNEATH the name. Shortening your own name broke
+ * the email.
+ *
+ * Names match on a shared prefix in EITHER direction, so "Matt" finds "Matthew" and "Matthew"
+ * finds "Matt". Retired names are included because a body drafted before a rename still carries
+ * the old one, the same reason ensureSignoff() keeps STALE_SIGNOFF_NAMES around.
+ */
+function isSignoffBlock(p: string): boolean {
+  if (/[.!?]/.test(p) || p.length >= 60) return false;
+  const lower = p.toLowerCase();
+  if (SIGNOFF_AGENCIES.some((agency) => lower.includes(agency))) return true;
+  return lower
+    .split(/[^a-z]+/)
+    .filter((w) => w.length >= 3)
+    .some((w) => SIGNOFF_NAMES.some((n) => n.startsWith(w) || w.startsWith(n)));
+}
+
 /**
  * Guarantee the close, replacing whatever the model reached for instead.
  *
@@ -437,20 +470,28 @@ const CLOSE_ATTEMPT_RE =
  * were attempting the close are dropped rather than left in place, otherwise the email ends with
  * two competing asks — and two question marks aimed at the reader is the exact failure
  * prePitchRules rule 3 exists to prevent.
+ *
+ * The strip is STRUCTURAL, not a phrase list (2026-08-10). CLOSE_ATTEMPT_RE only knew five
+ * openings ("want me to", "mind if i", "should i", "can i", "happy to"), so every ask phrased
+ * outside them survived and stacked under the appended close: "Would it help if I sent it over?",
+ * "Is that something you'd want to see?", "Worth a look?". Email 1 for a live prospect failed the
+ * linter three times running on exactly that, and the retry could not fix it because the drafter
+ * was being told to write the ask. A trailing paragraph that ENDS in a question mark is an ask by
+ * definition, and the ask in this email is a constant, so the tail is the right thing to key on.
+ * A question inside the body is part of the finding and is left alone.
  */
 export function ensurePermissionClose(body: string): string {
   const paras = body.trimEnd().split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
 
   // The sign-off block is whatever trails the last real sentence. Hold it aside so the close
   // slots in above it rather than after the name.
-  const signoffAt = paras.findIndex(
-    (p, i) => i > 0 && !/[.!?]/.test(p) && p.length < 60 && p.toLowerCase().includes(OUTREACH_SIGNATURE.name.split(" ")[0].toLowerCase())
-  );
+  const signoffAt = paras.findIndex((p, i) => i > 0 && isSignoffBlock(p));
   const signoff = signoffAt >= 0 ? paras.splice(signoffAt) : [];
 
   // Drop the model's own attempt at a close, but only from the tail: an early sentence about
   // what was recorded is part of the finding, not the ask.
-  while (paras.length > 1 && CLOSE_ATTEMPT_RE.test(paras[paras.length - 1])) paras.pop();
+  const isCloseAttempt = (p: string) => p.endsWith("?") || CLOSE_ATTEMPT_RE.test(p);
+  while (paras.length > 1 && isCloseAttempt(paras[paras.length - 1])) paras.pop();
 
   return [...paras, ...PERMISSION_CLOSE, ...signoff].join("\n\n");
 }
@@ -496,6 +537,13 @@ export const VOICE_RULES = [
  * Stored with the em dashes of the original normalized to house style, since noDashes() would
  * rewrite them anyway and a few-shot that violates a hard rule teaches the wrong thing.
  *
+ * Same reasoning cut its last two lines (2026-08-10). The original ended "I also put together the
+ * full breakdown of which shops the engines name in Miami instead of you. Want me to send it?",
+ * which is the model writing its own close — the one thing rule 3 forbids. It also does not match
+ * CLOSE_ATTEMPT_RE, so it survived the strip and the appended close landed under it: two asks and
+ * two question marks, which the linter then rejected. It now stops where the no-redesign example
+ * stops, and for the same stated reason.
+ *
  * Note what this example DOES do: it explains mechanism. That is allowed, because the mechanism
  * here is concrete and about work already done for them (an FAQ built around the questions
  * engineers ask, certifications marked up, service area named). What stays banned in email 1 is
@@ -512,10 +560,7 @@ Nothing owed, nothing to sign. It's a concept, built from your own work.
 
 The reason it's built the way it is: AI engines pull from pages that answer the questions buyers actually type, in a format a machine can read. Yours has an FAQ section written around the questions engineers ask before they call, your certifications marked up so ChatGPT can cite them, and your service area named where it needs to be.
 
-I also put together the full breakdown of which shops the engines name in Miami instead of you. Want me to send it?
-
-${OUTREACH_SIGNATURE.name}
-${OUTREACH_SIGNATURE.agency}`;
+[STOP HERE. The close and the sign-off are appended automatically.]`;
 
 /**
  * The reference email, no link. This is a real one that was sent, reproduced exactly.
@@ -542,19 +587,21 @@ There is also one thing on your own site working against you there, and it is th
 
 [STOP HERE. The close and the sign-off are appended automatically.]`;
 
-/** The few-shot block, matched to whether a redesign exists for this prospect. */
-function permissionExample(redesignUrl: string | null): string {
+/**
+ * The few-shot block, matched to whether a redesign exists for this prospect.
+ *
+ * The "note where it stops" line ships on BOTH branches. It used to be no-redesign only, back when
+ * the redesign example wrote its own close and there was nothing to point at — which made the two
+ * branches teach opposite things about the one rule the linter enforces hardest.
+ */
+export function permissionExample(redesignUrl: string | null): string {
   return [
     "REFERENCE EMAIL. Match its rhythm, its one-sentence paragraphs and its restraint. Do NOT reuse its wording, its business, or its details:",
     "---",
     redesignUrl ? PERMISSION_EXAMPLE_WITH_REDESIGN : PERMISSION_EXAMPLE_NO_REDESIGN,
     "---",
-    redesignUrl
-      ? ""
-      : "Note where it stops. You write the findings and nothing after them; the close is appended for you.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "Note where it stops. You write the findings and nothing after them; the close is appended for you.",
+  ].join("\n");
 }
 
 /** Permission-stage subject lines are the quiet kind: no score, no claim, no bait. */

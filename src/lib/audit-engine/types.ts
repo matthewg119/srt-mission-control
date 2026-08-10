@@ -126,6 +126,14 @@ export interface AuditReportRow {
      */
     greetName?: string;
   } | null;
+  /**
+   * Cached read of the real Outlook conversation (docs/2026-08-11-call-coach-sessions.sql).
+   *
+   * Shape is ThreadTruth in thread-truth.ts, deliberately typed loosely here so types.ts does not
+   * import from a module that imports Graph. `thread_truth_at` older than 10 minutes is ignored.
+   */
+  thread_truth: unknown | null;
+  thread_truth_at: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;

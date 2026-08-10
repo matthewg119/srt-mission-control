@@ -25,6 +25,7 @@ import { PERMISSION_CLOSE, type BeliefId } from "./email-assistant";
 export type LintRule =
   | "seed-log"
   | "missing-close"
+  | "double-ask"
   | "draft-1-length"
   | "robots-tease"
   | "banned-jargon"
@@ -136,10 +137,14 @@ export function lintDraft(input: LintInput): LintResult {
         findings.push({ rule: "missing-close", detail: `The close is missing or altered. It must contain, on its own line: "${line}"` });
       }
     }
+    // Its own rule code, not missing-close (2026-08-10). Both findings used to post as
+    // `missing-close`, so a draft that HAD the close and merely asked twice was reported to the
+    // operator as having lost it. The message and the code said different things, which is how a
+    // real six-day outage read as noise in Slack.
     const questions = (input.body.match(/\?/g) ?? []).length;
     if (questions > 1) {
       findings.push({
-        rule: "missing-close",
+        rule: "double-ask",
         detail: `${questions} question marks aimed at the reader. A permission email asks exactly once, and the ask is the close.`,
       });
     }
@@ -224,14 +229,27 @@ export interface GatedDraft<T> {
   draft: T | null;
   findings: LintFinding[];
   attempts: number;
+  /**
+   * The last attempt that failed, kept so a refusal can SHOW its work.
+   *
+   * Null only when `draft` is set. It is never approved and must always be posted under the
+   * findings, labelled as rejected — see the caller in thread-assistant.ts.
+   */
+  lastRejected: T | null;
 }
 
 /**
  * Generate, lint, and retry.
  *
  * `produce` gets the previous attempt's findings so the retry prompt can name what to fix rather
- * than rolling the dice again. After LINTER_MAX_RETRIES the draft is returned as null and the
- * caller posts the findings — a visible refusal, never a silent pass.
+ * than rolling the dice again. After LINTER_MAX_RETRIES the draft is refused: `draft` comes back
+ * null and the caller posts the findings, never a silent pass.
+ *
+ * The rejected draft is RETAINED (2026-08-10). It used to go out of scope each iteration, so a
+ * refusal left the operator with three reasons, no text, and nothing logged — and when the cause
+ * was a contradiction between the prompt and the code, rephrasing the request could not fix it
+ * and there was no way to see that from Slack. Same precedent as buildFollowupScript(), which
+ * keeps its last shape-valid payload rather than handing back nothing.
  */
 export async function draftWithLint<T>(
   produce: (attempt: number, previous: LintFinding[]) => Promise<T>,
@@ -239,13 +257,15 @@ export async function draftWithLint<T>(
   maxRetries: number = LINTER_MAX_RETRIES
 ): Promise<GatedDraft<T>> {
   let findings: LintFinding[] = [];
+  let lastRejected: T | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const draft = await produce(attempt, findings);
     const result = lintDraft(toLintInput(draft));
-    if (result.ok) return { draft, findings: [], attempts: attempt + 1 };
+    if (result.ok) return { draft, findings: [], attempts: attempt + 1, lastRejected: null };
     findings = result.findings;
+    lastRejected = draft;
   }
-  return { draft: null, findings, attempts: maxRetries + 1 };
+  return { draft: null, findings, attempts: maxRetries + 1, lastRejected };
 }
 
 /** The instruction appended to a retry prompt, so attempt 2 knows what attempt 1 got wrong. */

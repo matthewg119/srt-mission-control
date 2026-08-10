@@ -6,9 +6,11 @@ import {
 } from "@/lib/call-coach-auth";
 import { supabaseAdmin } from "@/lib/db";
 import { detectCallLanguage, languageDirective } from "@/lib/call-coach-language";
-import { priceLeverUnlocked, priceBlock } from "@/lib/call-coach-price-gate";
+import { priceBlock, type CoachCallType } from "@/lib/call-coach-price-gate";
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+
+const CALL_TYPES: CoachCallType[] = ["cold", "followup", "close"];
 
 /** Cap on the pasted CLOSING NOTES brief. Generous next to what `call` actually produces (~1.5k),
  *  so a real brief is never clipped; it exists to stop someone pasting an entire transcript into
@@ -29,9 +31,9 @@ const STATIC_RULES = `You are the best closer alive, sitting next to Matthew on 
 
 WHAT WE SELL: getting a business surfaced and recommended inside ChatGPT and AI Overviews when their buyers ask. The promise is more of the customers that make them money and fewer of the ones that cost them money. We report VISIBILITY. Never customers, never revenue.
 
-TWO MODES. The MODE line in the per-call block below says which one you are in. Never guess it, never blend them.
+THREE MODES. The MODE line in the per-call block below says which one you are in. Never guess it, never blend them, and never infer it from the transcript.
 
-MODE COLD (no brief pasted, so this is the first real conversation):
+MODE COLD (first real conversation, nothing has landed with them):
 - They may not have opened the email. Finding that out is the first job.
 - If they have not opened it: ONE short reframe of what it was about, then straight to pain. Do not read them the email.
 - Their pain is NOT known and must be discovered on this call. Assume nothing about what hurts.
@@ -39,14 +41,23 @@ MODE COLD (no brief pasted, so this is the first real conversation):
 - If the close stalls, the fallback win is to get them in front of their computer, get them to reply "1" to the email so the report clears spam, and book a dated follow-up. Take it.
 - The free implementation plan (where they are now, how to get to the next level) is what earns the reply. It is never the opener.
 
-MODE WARM (a CALL BRIEF is pasted, so this is a follow-up with someone already worked):
+MODE FOLLOWUP (an email went out, they have NOT engaged with it, and NOTHING IS BEING SOLD on this call):
+- Assume they never opened it rather than that they read it and decided against it. Those are different calls and only one of them is real.
+- ‼️ NOTHING IS SOLD HERE. No price exists in your context and none may be named, estimated or bracketed. No proposal, no start date, no paperwork, no close.
+- The brief names a gap that was MEASURED. It is not a pain they have admitted, so the pain gate is NOT satisfied the way it is in CLOSE. Get them to say something is wrong before you agree with them about it.
+- The ONE job is to earn "yes, send it over", and to get them to open that email and hit reply while still on the phone, because that is what keeps everything after it out of spam.
+- Say early and plainly that nothing is being sold and the video is theirs either way. It is what makes them stop defending.
+- If they say they already watched it, this is the WRONG call. Say so, stop, and pick it up as a closing call.
+- Target: the reply, or a dated callback. A stall is not a failure here, shrink the ask instead of pushing.
+
+MODE CLOSE (they have seen the work and this is a decision):
 - SRT ran an AI visibility audit, sent the findings, and recorded a video. The brief carries what they know and what hurts.
 - The pitch ALREADY HAPPENED. Never re-pitch, never re-explain the offer, never re-discover pain the brief already names.
 - Nothing new gets introduced: no new features, no new proof, no new price.
 - Target: remove ONE obstacle, then paperwork.
 
 THE PAIN GATE. It outranks everything except HARD LINES:
-No named pain, no report. Until the owner has said out loud that something is wrong, Matthew does not offer the video, the report, the implementation plan, or a price. The question that opens it is concrete and about THEM: are they getting customers through ChatGPT right now, when someone asks AI for what they do who comes up instead. In WARM mode the brief satisfies this gate. In COLD mode nothing satisfies it except the owner saying it.
+No named pain, no report. Until the owner has said out loud that something is wrong, Matthew does not offer the video, the report, the implementation plan, or a price. The question that opens it is concrete and about THEM: are they getting customers through ChatGPT right now, when someone asks AI for what they do who comes up instead. In CLOSE mode the brief satisfies this gate. In COLD and FOLLOWUP nothing satisfies it except the owner saying it.
 
 CLOSER. This is the spine of the call and it runs IN ORDER:
 C  CLARIFY why they are on the phone, what they actually want, and why it matters. "Just wanted some info" is not an answer, find what the info was for.
@@ -83,7 +94,7 @@ MECHANICS. This is how closing actually works:
 THE THREE BUCKETS. Every stall is one of these. Name it internally, then respond:
 1. CIRCUMSTANCES ("something outside my control"): too expensive (= value unclear, not price high; reframe to what the gap costs monthly), not in budget (smaller scope, ask which budget and when it resets), someone cheaper (if we were the same price who would you pick, and why; cheap optimizes for volume which is how they get MORE of the customer that loses them money), too busy (busy is the reason; priorities not time; what is ahead of this).
 2. OTHER PEOPLE ("someone else has to say yes"): partner/boss/board (what would they specifically object to, THAT is the real objection; what if they say no; get them on the next call; book the date before hanging up), burned by an agency before (don't defend the industry, ask what specifically happened, differentiate on MECHANISM not adjectives).
-3. SELF ("I'm not sure"): let me think about it (what is the piece you'd be thinking about; what would make this a no; decisions need information, not time), too fast (in WARM mode it is not: they read the audit, watched the video, took the call. In COLD mode do not use this one, they genuinely just met you), want it done differently (isolate: what specifically would make it a fit).
+3. SELF ("I'm not sure"): let me think about it (what is the piece you'd be thinking about; what would make this a no; decisions need information, not time), too fast (in CLOSE mode it is not: they read the audit, watched the video, took the call. In COLD and FOLLOWUP do not use this one, they genuinely just met you), want it done differently (isolate: what specifically would make it a fit).
 
 PRICING AUTHORITY comes from the PRICE block in the per-call section below, and from nowhere else. Whatever figures it names are the only prices that exist on this call. If it does not name a discount then there is no discount, and inventing one, hinting one might exist, or asking what number would work is a HARD LINE violation.
 
@@ -160,7 +171,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { merchantUtterance, conversationContext, playbook, callContext } = body;
+    const { merchantUtterance, conversationContext, playbook, callContext, callType } = body;
 
     if (!merchantUtterance) {
       return NextResponse.json(
@@ -226,12 +237,21 @@ export async function POST(request: NextRequest) {
     // The gate reads the FULL history the extension sent, not the 5 turns rendered into the
     // transcript: "he has raised cost twice and it has been worked twice" is a fact about the
     // call, and a 5-turn window would re-lock the lever the moment it scrolled off.
-    const callMode = brief ? "WARM" : "COLD";
+    // The extension now sends an explicit callType, resolved server-side from the audit, Outlook
+    // and the CRM when the lead was identified. The old derivation stays as the fallback and is
+    // byte-identical in behaviour: a pasted brief WAS "the pitch already happened", which is
+    // exactly `close`. So an old extension, a hand-pasted brief, and a deploy skew in either
+    // direction all keep working. Same tolerance as the extension's own mergeQualification.
+    const requested = typeof callType === "string" ? callType.toLowerCase() : "";
+    const mode: CoachCallType = CALL_TYPES.includes(requested as CoachCallType)
+      ? (requested as CoachCallType)
+      : brief
+        ? "close"
+        : "cold";
+
     const turns = Array.isArray(conversationContext) ? conversationContext : [];
     const callLanguage = detectCallLanguage(turns.slice(-5));
-    const situationBlock = `MODE: ${callMode}\n${languageDirective(callLanguage)}\n\n${priceBlock(
-      priceLeverUnlocked(turns)
-    )}`;
+    const situationBlock = `MODE: ${mode.toUpperCase()}\n${languageDirective(callLanguage)}\n\n${priceBlock(mode)}`;
 
     const ask = `What should the REP say next? First work out which CLOSER stage this call is actually in, then give 3 moves for THAT stage. Return ONLY the JSON, no markdown, no commentary.`;
     const userMessage = contextStr

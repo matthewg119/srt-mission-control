@@ -3,8 +3,24 @@
 // the "no fabrication" rule is easy to verify in one place: a prompt only ever
 // reads as appeared=true when a real engine run recorded mentioned:true.
 
+import { supabaseAdmin } from "@/lib/db";
 import type { AuditReportRow, AuditRunRow } from "./types";
-import { isClientName, isMentioned, findMatchExcerpt } from "./mention-match";
+import { isClientName, isMentioned, findMatchExcerpt, buildAliases } from "./mention-match";
+
+/**
+ * Load the runs and build the view, in one call.
+ *
+ * These exact three lines (select audit_runs -> buildAliases -> buildReportView) were copied into
+ * four places: `finish-report.ts`, `thread-assistant.ts` twice, and the public report page. Four
+ * copies of "what does this report say" is four chances for one of them to compute the score from
+ * a different alias set than the card sitting next to it.
+ */
+export async function loadReportView(report: AuditReportRow): Promise<ReportView> {
+  const { data } = await supabaseAdmin.from("audit_runs").select("*").eq("report_id", report.id);
+  const runs = (data ?? []) as AuditRunRow[];
+  const aliases = buildAliases(report.client_name ?? report.business_type ?? report.website, report.website);
+  return buildReportView(report, runs, aliases);
+}
 
 export interface EngineCellView {
   status: "ok" | "no_data";

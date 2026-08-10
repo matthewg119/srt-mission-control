@@ -28,10 +28,24 @@
 import { callClaudeJSON, camelizeKeys } from "@/lib/claude-calls";
 import { LOOM_PRICE_LABEL, LOOM_START_WINDOW } from "@/config/pitch";
 import { noDashes } from "./email-assistant";
+import { usefulIntakeAnswers } from "./outreach-intake";
 import { getNicheAvatars, type BestAvatar, type NicheAvatars, type WorstCustomer } from "./niche-avatars";
 import { computeWeightedScore, type ReportView } from "./report-view";
 import { readLedger } from "./seed-ledger";
 import type { AuditReportRow } from "./types";
+import { SRT_COMPANY } from "@/config/rep-profile";
+
+/**
+ * The two identity strings the script is allowed to say out loud.
+ *
+ * `OUTREACH_SIGNATURE_AGENCY` is the same env the email tail already reads (email-assistant.ts),
+ * so the phone and the email cannot introduce the business under two different names.
+ * `FROM_DOMAIN` is derived from the mailbox the outreach actually leaves from, because section 4
+ * of every follow-up card tells the prospect where to go looking for that email.
+ */
+const AGENCY_NAME = process.env.OUTREACH_SIGNATURE_AGENCY || SRT_COMPANY.tagline;
+const FROM_DOMAIN =
+  (process.env.OUTREACH_MAILBOX || "matthew@srtagency.com").split("@")[1]?.trim() || "srtagency.com";
 
 /**
  * Which call this is, and it is NOT a cosmetic switch.
@@ -267,11 +281,36 @@ interface CallFacts {
   intakeAnswers: string | null;
   reportUrl: string | null;
   language: "en" | "es";
+  /**
+   * Who the rep says he is, and the domain the email he is asking them to find came FROM.
+   *
+   * These exist because the model had no grounding for either and filled both blanks. A live Grey
+   * Seal script opened "I'm with Search Ranking Technologies" and told the prospect to check spam
+   * for mail "from searchrankingtech.com". Neither string exists anywhere in this repo, SRT does
+   * not own that domain, and the whole point of section 4 is getting them to find a real email.
+   *
+   * Same doctrine as the numbers: absent grounding is not a neutral gap, it is an invitation.
+   */
+  agencyName: string;
+  fromDomain: string;
 }
 
 function pctText(appeared: number, total: number): string {
   if (total <= 0) return "no organic prompts measured";
   return `${appeared} of ${total}`;
+}
+
+/**
+ * The GAP, not the wins. `pctText(organicAppeared, organicTotal)` reads "8 of 18" and means they
+ * APPEARED in 8. Both card headers used to print that same string under the word "Absent", so a
+ * card told him to say the exact inverse of its own script body ("you only show up in 8"), on a
+ * call where the prospect is holding the PDF and can count.
+ *
+ * Absent is the complement. Anything that labels itself "absent from" must call this.
+ */
+function absentText(f: CallFacts): string {
+  if (f.organicTotal <= 0) return "no organic prompts measured";
+  return `${f.organicTotal - f.organicAppeared} of ${f.organicTotal}`;
 }
 
 /**
@@ -324,52 +363,6 @@ function whatTheySaw(report: AuditReportRow): string[] {
   return seen;
 }
 
-/**
- * Router commands that end up stored as the intake answer.
- *
- * At `awaiting_intake` EVERY free-text reply in the thread is the intake answer, so a word typed
- * in the belief that it is a command is kept verbatim and outranks everything generic from then on.
- * A live run stored the literal string "draft" and the coach brief printed `MY NOTES: draft`, which
- * a model reading that brief mid-call has no way to recognise as noise.
- */
-const INTAKE_JUNK = new Set([
-  "draft", "drafts", "1", "2", "3", "send", "send it", "sendit", "call", "close", "closing",
-  "followup", "follow up", "loom", "script", "full script", "reveal", "delivery", "deliver",
-  "image", "avatars", "avatars fresh", "questions", "intake", "ask me", "restart intake",
-  "yes", "no", "ok", "okay", "go", "cancel", "stop", "nevermind", "never mind", "test", "testing",
-  "na", "n/a", "none", "-", ".",
-]);
-
-/**
- * The intake answers, or nothing.
- *
- * Gates the WHOLE blob rather than filtering line by line, and that is deliberate. The real answer
- * is four free-text replies to the four intake slots, so it legitimately contains lines like
- * "Fran", "fran@americanstone.com" and "yes"; a per-line word count would gut a perfectly good
- * answer. What actually goes wrong is the opposite shape, one stray token standing alone, so that
- * is the only thing rejected.
- *
- * Applied in buildCallFacts so `factsPrompt` and `buildCoachNotes` are cleaned by one call and
- * cannot disagree about what Matthew said, the same reason CallFacts is assembled once for both.
- */
-export function usefulIntakeAnswers(raw: string | null): string | null {
-  const text = (raw ?? "").trim();
-  if (!text) return null;
-
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length > 1) return text;
-
-  const bare = lines[0].toLowerCase().replace(/[.!?,]+$/, "").trim();
-  if (INTAKE_JUNK.has(bare)) return null;
-  // `nudge 2`, `email 3` — a numbered command is junk for the same reason the bare word is.
-  if (/^(nudge|email|seed)\s+\d+$/.test(bare)) return null;
-  // Too small to be an instruction. A one-word answer costs the ICP framing nothing and the
-  // greeting name comes from prospect_name / loom_state.greetName, never from here.
-  if (wordsIn(bare) < 3 && bare.length < 15) return null;
-
-  return text;
-}
-
 export async function buildCallFacts(report: AuditReportRow, view: ReportView): Promise<CallFacts> {
   const weighted = computeWeightedScore(view);
   const { icp, antiIcp, isReposition } = await resolveAvatars(report, view);
@@ -399,12 +392,18 @@ export async function buildCallFacts(report: AuditReportRow, view: ReportView): 
     intakeAnswers: usefulIntakeAnswers(report.intake_answers),
     reportUrl: report.slug ? `https://mission.srtagency.com/r/${report.slug}` : null,
     language: report.call_language === "es" ? "es" : "en",
+    agencyName: AGENCY_NAME,
+    fromDomain: FROM_DOMAIN,
   };
 }
 
 /** The FACTS block. The ONLY numbers the model is allowed to speak. */
 function factsPrompt(f: CallFacts): string {
   const lines: string[] = [
+    // First, because it is the first thing said out loud and the model will invent it otherwise.
+    `WHO THE REP IS: ${f.agencyName}. That is the ONLY name you may introduce him with. Never invent a company name, an abbreviation, or a variation of it.`,
+    `The email came FROM the domain ${f.fromDomain}. That is the ONLY domain you may tell them to look for. Never invent a sender domain, a website, or a URL.`,
+    "",
     `Business: ${f.company}${f.businessType ? ` (${f.businessType})` : ""}${f.city ? ` in ${f.city}` : ""}`,
     f.prospect ? `Person on the call: ${f.prospect}` : "Person on the call: name unknown, do NOT invent one and do NOT use a placeholder",
     f.buyerPersona ? `Who buys from them: ${f.buyerPersona}` : "",
@@ -565,8 +564,51 @@ function restatesReplyAsk(line: string): boolean {
  * content guards apply to both: a price or a reach claim is no more acceptable written down, and a
  * sent email outlives an improvised sentence.
  */
-function lintSpoken(spoken: string[], written: string[], opts: { noPrice?: boolean } = {}): string[] {
+function lintSpoken(
+  spoken: string[],
+  written: string[],
+  opts: { noPrice?: boolean; facts?: CallFacts } = {}
+): string[] {
   const warnings: string[] = [];
+
+  // An invented sender domain is worse than a wrong number: it sends the prospect hunting through
+  // spam for mail from a company that does not exist, and the whole ask of section 4 is that they
+  // find the real one. Any bare domain that is not ours, and is not the prospect's own site, is a
+  // fabrication. `.filter(Boolean)` on the allow list matters: reportUrl is nullable.
+  if (opts.facts) {
+    const f = opts.facts;
+    const allowedHosts = [f.fromDomain, f.reportUrl, f.redesignUrl, f.loomUrl, f.company]
+      .filter(Boolean)
+      .map((s) => String(s).toLowerCase());
+    const domains = written
+      .join(" ")
+      .match(/\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|ai|co|us|biz)\b/gi);
+    const bogus = [...new Set((domains ?? []).map((d) => d.toLowerCase()))].filter(
+      (d) => !allowedHosts.some((a) => a.includes(d) || d.includes(a))
+    );
+    if (bogus.length) {
+      warnings.push(
+        `:rotating_light: INVENTED DOMAIN in the script (${bogus.join(", ")}). ` +
+          `The email came from ${f.fromDomain}. Do NOT send them looking for anything else.`
+      );
+    }
+
+    // The same failure one layer up: the rep introducing himself as a company we are not. Only
+    // checked on the lines that name an agency at all, so a script that never says it is fine.
+    const agency = f.agencyName.toLowerCase();
+    const misnamed = written.filter((l) => {
+      const low = l.toLowerCase();
+      return /\b(i'm with|i am with|this is|calling from|we're|we are)\b/.test(low)
+        && /\b(search|srt|retrieval|ranking|tactics|technologies)\b/.test(low)
+        && !low.includes(agency);
+    });
+    if (misnamed.length) {
+      warnings.push(
+        `:rotating_light: The script introduces the rep as a company that is not ${f.agencyName} ` +
+          `(${misnamed.length} line(s), e.g. "${misnamed[0].slice(0, 90)}"). Say ${f.agencyName}, nothing else.`
+      );
+    }
+  }
 
   const longLines = overLong(spoken);
   if (longLines.length) {
@@ -883,7 +925,7 @@ export async function buildFollowupScript(
   return {
     facts,
     script: data,
-    warnings: lintSpoken(followupSpoken(data), followupWritten(data), { noPrice: true }),
+    warnings: lintSpoken(followupSpoken(data), followupWritten(data), { noPrice: true, facts }),
   };
 }
 
@@ -966,7 +1008,7 @@ export async function buildCallScript(
   // mid-call by someone who has already had the whole conversation once, so a clumsy line costs
   // less there than it does on a cold opener, and its seven closes are a much more expensive
   // generation to re-ask for. Nothing written goes out with it, so spoken and written are the same.
-  return { facts, script: data, warnings: lintSpoken(spoken, spoken) };
+  return { facts, script: data, warnings: lintSpoken(spoken, spoken, { facts }) };
 }
 
 /**
@@ -1004,6 +1046,9 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
     followup
       ? `GOAL: earn "yes, send the video", and get them to REPLY to that email while on the phone.`
       : `GOAL: remove one obstacle, then paperwork. The pitch already happened.`,
+    // Who we are, before who they are. The live coach invents this exactly the way the script
+    // generator did if nothing tells it, and it is said in the first sentence of the call.
+    `WE ARE: ${f.agencyName}. Our email came from ${f.fromDomain}. Never say any other company name or domain.`,
     `BUSINESS: ${f.company}${f.businessType ? ` (${f.businessType})` : ""}${f.city ? `, ${f.city}` : ""}`,
     f.prospect ? `PERSON: ${f.prospect}` : `PERSON: unknown, do not use a name`,
     f.buyerPersona ? `THEIR BUYER: ${f.buyerPersona}` : "",
@@ -1016,6 +1061,10 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
     `NUMBERS I MAY CITE (nothing else exists):`,
     `- AI visibility score ${f.score}/100`,
     `- appears in ${pctText(f.organicAppeared, f.organicTotal)} buyer questions that never name them`,
+    // Both halves, stated. The coach used to get only the appeared count and had to subtract to
+    // answer "how many am I missing", which is the number actually spoken on the call, and a model
+    // doing arithmetic on a live call is a model that will eventually get it backwards.
+    `- absent from ${absentText(f)} of those same questions`,
     ...(f.competitors.length
       ? [`- recommended instead: ${f.competitors.map((c) => `${c.name} (${c.count}x)`).join(", ")}`]
       : ["- no competitor may be named"]),
@@ -1040,7 +1089,9 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
     `NEVER estimate reach: no "in front of X more people". Nothing measures that.`,
     followup
       ? `IF THEY STALL: the ask is only the video. Shrink it, never push. One reply is the win.`
-      : `IF THEY ASK FOR A DISCOUNT: smaller scope, never a smaller price.`,
+      : // Two tiers, so a request for less has a real answer that is not a discount. Core IS the
+        // smaller scope. Below Core there is nothing, and inventing a third number is banned.
+        `IF THEY ASK FOR LESS: move Complete down to Core. That is a smaller scope for a smaller number, not a discount. There is nothing below Core and no third figure exists.`,
   ];
   return lines.filter((l) => l !== "").join("\n").replace(/\n{3,}/g, "\n\n");
 }
@@ -1077,7 +1128,7 @@ export function formatFollowupScript(
 
   const header = [
     `:telephone_receiver: *Follow-up call · ${f.company}*${f.prospect ? ` · ${f.prospect}` : ""}`,
-    `_Absent from ${pctText(f.organicAppeared, f.organicTotal)} buyer questions · one job: get the reply, send the video · not selling_`,
+    `_Absent from ${absentText(f)} buyer questions · one job: get the reply, send the video · not selling_`,
     // One line, not a section. `call` is the "they have not seen it" call by definition, but the
     // row cannot prove they never pressed play, so the handoff is stated and then dropped.
     videoHasGoneOut(f)
@@ -1163,7 +1214,7 @@ export function formatCallScript(
 
   const header = [
     `:telephone_receiver: *Call script · ${f.company}*${f.prospect ? ` · ${f.prospect}` : ""}`,
-    `_Score ${f.score}/100 · absent from ${pctText(f.organicAppeared, f.organicTotal)} buyer questions · ${f.price}_`,
+    `_Score ${f.score}/100 · absent from ${absentText(f)} buyer questions · ${f.price}_`,
   ].join("\n");
 
   // A header with nothing under it reads as a broken card rather than a skipped section, so an

@@ -1,73 +1,70 @@
 /**
- * SRT Call Coach — when the $349 lever is allowed to exist.
+ * SRT Call Coach — what the model is allowed to know about price on THIS call.
  *
- * $499/mo is the price. $349/mo is a real fast-action price Matthew honors, but only as a last
- * resort: after the obstacle has been isolated and two answers on it have already failed.
+ * ## The offer is two tiers, not one price with a lever (rebuilt 2026-08-11)
  *
- * ‼️ This is a CODE gate, not a prompt rule, and it had to become one. Telling the model "do not
- * mention 349 until two responses have failed" leaked the number on the FIRST price objection in
- * 2 of 3 live runs, in one case as an entire "here's what I can do" card. The model reads its own
- * three suggestions as an escalating sequence and helpfully supplies step three, and no amount of
- * emphasis in the prompt fixed it.
+ * It used to model $499 as the price and $349 as a fast-action discount that had to be EARNED,
+ * withheld from the request until the owner had raised cost twice and been answered twice. That
+ * was wrong about the offer: Core at $349 and Complete at $499 are two real packages, both always
+ * on the table, differing in scope. A tier you can name on the first ask does not need hiding.
  *
- * Same doctrine the follow-up COACH NOTES already run on: the brief WITHHOLDS the price rather
- * than forbidding it, because a number sitting in a helpful model's context is one it will
- * eventually reach for. Absent beats forbidden. When this returns false the string "349" is not
- * in the request at all, so there is nothing to leak.
+ * The unlock machinery is gone with it. What survives is the part that was actually load-bearing:
+ *
+ *   1. **Withholding still beats forbidding.** On a follow-up call nothing is being sold, so the
+ *      figures are not in the request AT ALL rather than accompanied by "don't quote these". A
+ *      number sitting in a helpful model's context is one it will eventually reach for. That is
+ *      not a theory: the old prompt-level rule leaked 349 on the FIRST price objection in 2 of 3
+ *      live runs, once as an entire "here's what I can do" card with an invented saving attached.
+ *
+ *   2. **No arithmetic, ever.** Two figures in context is exactly the setup where a model produces
+ *      a third: "half", "about 400", "twelve a day". $349 and $499 are the only price figures that
+ *      exist and neither may be derived from the other.
+ *
+ *   3. **A request for less is answered with less SCOPE.** Complete down to Core is the move. It
+ *      is a real answer that keeps the number honest; discounting says the first number was soft.
  *
  * Pure, so it is testable without a call.
  */
 
-/** Money talk, in both languages, since these calls run in Spanglish. */
-const MONEY_RE =
-  /\b(price|pricing|cost|costs|expensive|afford|budget|money|pay|paying|payment|cheaper|discount|\$\s?\d|\d{3,}\s?(?:a|per)\s?month|precio|caro|cara|costo|presupuesto|dinero|pagar|barato|descuento|mensual(?:es|idad)?)\b/i;
+import { OFFER_TIERS, OFFER_EXIT_LINE } from "@/config/pitch";
 
-export interface GateTurn {
-  speaker?: string | null;
-  text?: string | null;
-}
-
-/** The owner. Anything that is not the rep is treated as the owner, matching the two-socket split. */
-function isOwner(t: GateTurn): boolean {
-  return (t.speaker ?? "").toLowerCase() !== "rep";
-}
+export type CoachCallType = "cold" | "followup" | "close";
 
 /**
- * True once the owner has raised money at least TWICE and Matthew has already answered it at
- * least twice. That is "isolated, and two responses failed" made mechanical: he pushed back, it
- * got worked, and he is still on it.
+ * The pricing paragraph for this request.
  *
- * Both halves are required. Counting only the owner's mentions would unlock on someone who says
- * "how much" and then "that's a lot" back to back, before Matthew has actually tried anything.
+ * ‼️ On `followup` the string "349" and the string "499" do not appear in the returned text, and
+ * that is the entire point of the branch. A follow-up call exists to earn "yes, send the video";
+ * a price quoted to someone who has not seen the work turns a free video into a sales call, and
+ * that is the one thing the stage cannot undo.
  */
-export function priceLeverUnlocked(turns: GateTurn[] | undefined | null): boolean {
-  if (!Array.isArray(turns) || turns.length === 0) return false;
-
-  const firstMoneyIdx = turns.findIndex((t) => isOwner(t) && MONEY_RE.test(t.text ?? ""));
-  if (firstMoneyIdx === -1) return false;
-
-  const ownerMoneyTurns = turns.filter((t) => isOwner(t) && MONEY_RE.test(t.text ?? "")).length;
-  const repRepliesAfter = turns.slice(firstMoneyIdx + 1).filter((t) => !isOwner(t)).length;
-
-  return ownerMoneyTurns >= 2 && repRepliesAfter >= 2;
-}
-
-/**
- * The pricing paragraph for this specific request. Locked is the default and says nothing about a
- * discount existing, because the model cannot quote what it was never told.
- */
-export function priceBlock(unlocked: boolean): string {
-  if (!unlocked) {
+export function priceBlock(callType: CoachCallType): string {
+  if (callType === "followup") {
     return `PRICE:
-- The price is $499/month. It is the ONLY price figure that exists on this call.
-- If they ask for a lower number the answer is a SMALLER SCOPE, never a smaller number. There is no discount to offer. Do not invent one, do not hint that one might exist, do not ask what number would work.
-- ‼️ Do not name any other figure, not even hypothetically, not even to make a point. "If it were $99 a month, would you be a yes" is INVENTING A PRICE: he cannot walk it back, and the owner now has a number in their head that Matthew will never honor. Isolate on the OBSTACLE, never on an imaginary price: "if cost weren't the issue, would you be a yes, is there anything else".
-- Never do arithmetic on $499 and never derive a second figure from it. No percentages, no "half", no per-day or per-week breakdown.`;
+- NOT DISCUSSED ON THIS CALL. Nothing is being sold. No price has been quoted to them and none exists in your context.
+- If they ask how much: the video is free and theirs to keep, and price is a conversation for after they have seen the work. Then get back to the ask.
+- Do not name, hint at, estimate or bracket a figure. Not "a few hundred", not "less than you'd think", not "depends on the package". Any of those is a price.`;
   }
 
-  return `PRICE — the discount is UNLOCKED on this call. He has raised cost more than once and it has already been worked twice without moving:
-- The price is $499/month. $349/month is a real fast-action price Matthew honors, for deciding today.
-- Offer it as a real price for a real reason. NO countdown, NO invented deadline, NO "only a few spots left". A real discount does not need a fake reason.
-- Never do arithmetic on the two figures. No "half off", no percentages, no "saves you X a year". 499 and 349 are the only price figures that exist and neither may be turned into a third one.
-- If 349 does not move it either, the next move is a SMALLER SCOPE or a clean exit, not a third number.`;
+  const tiers = OFFER_TIERS.map((t) => `  ${t.name}, ${t.price}: ${t.includes.join("; ")}`).join("\n");
+
+  const shared = `- ${OFFER_EXIT_LINE} This is a FACT about the arrangement, not a guarantee. Never turn it into "no risk", "money back", or a promise about results.
+- Never do arithmetic on the two figures. No "half", no percentages, no per-day or per-week breakdown, no annual total. These two numbers are the only price figures that exist and neither may be turned into a third one.
+- ‼️ Never invent a figure, not even hypothetically, not even to make a point. "If it were $99 a month, would you be a yes" is inventing a price: it cannot be walked back, and the owner now has a number in their head that will never be honored. Isolate on the OBSTACLE instead: "if cost weren't the issue, would you be a yes, and is there anything else".
+- If they ask for a lower number the answer is a SMALLER SCOPE, never a smaller number. Complete down to Core is a real answer. There is no discount below Core. Do not invent one, do not hint one might exist, do not ask what number would work.`;
+
+  if (callType === "cold") {
+    return `PRICE — both tiers, month to month:
+${tiers}
+
+- ‼️ The PAIN GATE outranks this. On a cold call you do not quote a price, offer the report, or describe the packages until the owner has said out loud that something is wrong. Until then these figures are for answering a direct "how much", nothing else.
+- If they ask how much before any pain has been named, give the range in one sentence and go straight back to what they are missing. Price without a problem attached is just a number to say no to.
+${shared}`;
+  }
+
+  return `PRICE — both tiers, month to month. The pitch already happened, so these are on the table:
+${tiers}
+
+- Lead with the one that fits what they told you they want, then name the other. Do not present them as cheap and expensive; they are narrower and wider.
+${shared}`;
 }

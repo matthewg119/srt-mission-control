@@ -287,6 +287,27 @@ export const slack = {
                   return data.messages[0];
         },
 
+        /**
+         * Every message in a thread, oldest first, capped at `limit`.
+         *
+         * Slack returns the PARENT message as element 0 of conversations.replies, which is what
+         * makes this usable as conversation history: the parent is the audit result card that
+         * everything after it is reacting to. Returns [] on any failure, because a thread whose
+         * history cannot be read should degrade to answering the current message alone.
+         */
+        async conversationsReplies(channel: string, threadTs: string, limit = 30): Promise<Array<Record<string, unknown>>> {
+                  const token = getToken();
+                  if (!token) return [];
+                  const url = `${SLACK_API}/conversations.replies?channel=${encodeURIComponent(channel)}&ts=${encodeURIComponent(threadTs)}&limit=${limit}`;
+                  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+                  const data = await res.json() as { ok: boolean; messages?: Array<Record<string, unknown>>; error?: string };
+                  if (!data.ok) {
+                            console.error("[slack] conversations.replies failed:", data.error);
+                            return [];
+                  }
+                  return data.messages ?? [];
+        },
+
         /** Fetch channel info (name, etc.). Returns null if not found or error. */
         async getChannelInfo(channel: string): Promise<{ name?: string } | null> {
                   const token = getToken();

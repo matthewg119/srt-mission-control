@@ -124,14 +124,40 @@ export interface ImageBlock {
   source: { type: "base64"; media_type: string; data: string };
 }
 
+/**
+ * Swap the tool set without forking the loop.
+ *
+ * The loop itself (tool_use -> execute -> feed results back) is domain-agnostic; only the tools and
+ * the executor are not. The audit thread needs a completely different set from the Office Manager's
+ * pipeline tools, and copying 100 lines of message-shuttling to get it is how the two copies drift.
+ *
+ * Every field is optional and defaults to today's behaviour, so the Office Manager, the dashboard
+ * chat and the Telegram bot are untouched by this.
+ */
+export interface ToolLoopOptions {
+  tools?: unknown[];
+  /** Must return a JSON-serialisable string for Claude plus anything the caller wants for its UI. */
+  executor?: (name: string, input: Record<string, unknown>) => Promise<ToolExecutionResult>;
+  model?: string;
+  maxTokens?: number;
+  /** More iterations = more reasoning, more tokens. 5 is the Office Manager's number. */
+  maxIterations?: number;
+}
+
 export async function runConversationWithTools(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
   systemPrompt: string,
-  lastMessageImages?: ImageBlock[]
+  lastMessageImages?: ImageBlock[],
+  opts: ToolLoopOptions = {}
 ): Promise<{ response: string; actions: string[]; toolResults: ToolResult[] }> {
   if (!isAIConfigured()) {
     throw new Error("AI_NOT_CONFIGURED");
   }
+
+  const tools = opts.tools ?? AI_TOOLS;
+  const runTool = opts.executor ?? executeTool;
+  const model = opts.model ?? "claude-sonnet-4-6";
+  const maxTokens = opts.maxTokens ?? 4096;
 
   const conversationMessages: AnthropicMessage[] = messages.map((m, i) => {
     // Last user message: prepend images if provided
@@ -149,7 +175,7 @@ export async function runConversationWithTools(
 
   const actions: string[] = [];
   const uiToolResults: ToolResult[] = []; // structured results for UI card rendering
-  let maxIterations = 5;
+  let maxIterations = opts.maxIterations ?? 5;
 
   while (maxIterations > 0) {
     maxIterations--;
@@ -162,10 +188,10 @@ export async function runConversationWithTools(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
+        model,
+        max_tokens: maxTokens,
         system: systemPrompt,
-        tools: AI_TOOLS,
+        tools,
         messages: conversationMessages,
       }),
     });
@@ -201,7 +227,7 @@ export async function runConversationWithTools(
           const inputPayload = block.input || {};
           actions.push(`${block.name}(${JSON.stringify(inputPayload).slice(0, 100)})`);
 
-          const execution: ToolExecutionResult = await executeTool(block.name, inputPayload);
+          const execution: ToolExecutionResult = await runTool(block.name, inputPayload);
 
           claudeToolResults.push({
             type: "tool_result",

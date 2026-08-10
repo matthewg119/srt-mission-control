@@ -44,7 +44,15 @@ import {
   type EmailOption,
   type PreSellOption,
 } from "./email-assistant";
-import { buildIntakeQuestions, postIntakeCard, draftFromIntake, revisePreviousDraft } from "./outreach-intake";
+import {
+  buildIntakeQuestions,
+  postIntakeCard,
+  draftFromIntake,
+  revisePreviousDraft,
+  usefulIntakeAnswers,
+  readIntakeImages,
+  type IntakeImage,
+} from "./outreach-intake";
 import { computeBeatSheetFacts, renderPreflight } from "./loom-beatsheet";
 import { buildLoomScript } from "./loom-script";
 import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
@@ -62,9 +70,11 @@ import {
   formatLintFindings,
   lintDraft,
   retryInstruction,
+  type LintFinding,
   type LintInput,
 } from "./draft-linter";
 import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, selectBelief } from "./seed-ledger";
+import { runThreadAgent } from "./thread-agent";
 import type { AuditReportRow, AuditRunRow } from "./types";
 
 function escapeHtml(s: string): string {
@@ -117,6 +127,143 @@ function lintContext(report: AuditReportRow): Pick<LintInput, "robots" | "siteSi
     siteSignals: report.site_signals ?? null,
     alreadyInstalled: installedBeliefs(readLedger(report)),
   };
+}
+
+/**
+ * A refusal that shows its work.
+ *
+ * The findings alone are what used to post, and a live thread proved that is not enough: email 1
+ * failed three times on `2 question marks aimed at the reader` because the drafter was being TOLD
+ * to write the ask while the code appended a second one. No rephrasing could have satisfied both,
+ * the rejected text was discarded each attempt, and nothing was logged, so from Slack it was
+ * indistinguishable from a bad prompt. The draft posts under the reasons, labelled, and the
+ * system_logs row is what makes a repeat diagnosable without reading scrollback.
+ *
+ * Precedent: buildFollowupScript() posts its last shape-valid script under a warning banner
+ * rather than leaving him with nothing. Nothing ships from here either way — an Outlook draft is
+ * still a separate `1`.
+ */
+async function postLintRefusal(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  what: string,
+  gated: { findings: LintFinding[]; attempts: number }
+): Promise<void> {
+  await slack
+    .postThreadReply(
+      channel,
+      threadTs,
+      [
+        `:no_entry: I couldn't get ${what} past the draft rules in ${gated.attempts} attempts.`,
+        "",
+        formatLintFindings(gated.findings),
+        "",
+        "Posting it below anyway so you can see what it kept producing. *Not approved* — read it before you do anything with it, or tell me how you'd rather put it and I'll redraft.",
+      ].join("\n")
+    )
+    .catch(() => {});
+
+  await supabaseAdmin
+    .from("system_logs")
+    .insert({
+      event_type: "audit_draft_rejected",
+      metadata: {
+        report_id: report.id,
+        what,
+        attempts: gated.attempts,
+        rules: gated.findings.map((f) => f.rule),
+        details: gated.findings.map((f) => f.detail),
+      },
+    })
+    .then(undefined, () => {});
+}
+
+/**
+ * Email 1, from whatever Matthew typed.
+ *
+ * Shared by the `draft` command and by free text at awaiting_intake, so the two cannot drift into
+ * writing the email differently.
+ */
+async function draftEmailOne(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  view: ReportView,
+  rawAnswers: string,
+  files: IntakeImage[] = []
+): Promise<void> {
+  // A pasted contact card is an answer to "their email address", so it is read INTO the answers
+  // rather than handled separately. Labelled, so the drafter knows which half was typed.
+  const fromImages = await readIntakeImages(files);
+  const withImages = [rawAnswers.trim(), fromImages ? `From the attached screenshot:\n${fromImages}` : ""]
+    .filter(Boolean)
+    .join("\n\n");
+
+  // Cleaned BEFORE it is stored, not just before it is used. This column is quoted to every later
+  // drafter and to the live call brief as instructions that outrank everything generic, so a
+  // stray command word kept here outlives the reply that produced it.
+  const answers = usefulIntakeAnswers(withImages) ?? "";
+
+  // Generate, lint, retry. The intake answers already outrank the generic guidance in this
+  // drafter, so appending the rejection reasons to them is how attempt 2 learns what
+  // attempt 1 got wrong.
+  const gated = await draftWithLint(
+    (attempt, previous) =>
+      draftFromIntake(report, view, attempt === 0 ? answers : `${answers}\n\n${retryInstruction(previous)}`),
+    (r) => ({ body: r.draft.body, subject: r.draft.subject, stage: "draft-1", ...lintContext(report) })
+  );
+
+  const result = gated.draft ?? gated.lastRejected;
+  if (!result) return; // unreachable: draftWithLint always returns one of the two
+  if (!gated.draft) await postLintRefusal(report, channel, threadTs, "email 1", gated);
+
+  const { draft, extracted, removedLinks, formatNote, nameWarning } = result;
+
+  // A rejected draft does not advance the thread. Leaving the stage at awaiting_intake is what
+  // lets him answer properly and get a clean email 1, instead of landing in the revise branch
+  // with a draft the linter already refused.
+  if (gated.draft) {
+    await supabaseAdmin
+      .from("audit_reports")
+      .update({
+        intake_answers: answers || null,
+        outreach_stage: "drafted",
+        // Only overwrite with something real, so a second pass that omits the email
+        // doesn't wipe the address captured on the first.
+        ...(extracted.prospect_name ? { prospect_name: extracted.prospect_name } : {}),
+        ...(extracted.prospect_email ? { prospect_email: extracted.prospect_email } : {}),
+        ...(extracted.redesign_url ? { redesign_url: extracted.redesign_url } : {}),
+      })
+      .eq("id", report.id);
+  }
+
+  const captured = [
+    extracted.prospect_name ? `to ${extracted.prospect_name}` : null,
+    extracted.prospect_email,
+    extracted.redesign_url ? "redesign link in play" : null,
+  ].filter(Boolean);
+
+  // Said out loud rather than discovered in Outlook with an empty To field.
+  const missing = !extracted.prospect_email && !report.prospect_email && !report.requester_email
+    ? "\n_No email address on file yet, so the Outlook draft will have an empty To. Reply with it and I'll redraft._"
+    : "";
+
+  await postSingleDraft(
+    { ...report, pending_drafts: [draft] },
+    channel,
+    threadTs,
+    `:envelope: *Email 1* · pre-pitch, one finding, one ask, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}${missing}`,
+    draft,
+    THREAD_COMMANDS,
+    { removedLinks, formatNote, nameWarning },
+    await draftPreSellOptions(report, view, {
+      exclude: installedBeliefs(readLedger(report)),
+      // Puts B4 first when their Google profile is strong or they bragged about it at intake.
+      preferred: selectBelief(report, readLedger(report)).id,
+      language: report.call_language === "es" ? "es" : "en",
+    })
+  );
 }
 
 /**
@@ -622,7 +769,17 @@ async function postLoomScript(
   );
 }
 
-export async function handleAuditThreadReply(args: { channel: string; threadTs: string; text: string }): Promise<boolean> {
+export async function handleAuditThreadReply(args: {
+  channel: string;
+  threadTs: string;
+  text: string;
+  /** Images pasted with the reply. Read only where they can mean something: the intake answers. */
+  files?: IntakeImage[];
+  /** True when Matthew @mentioned the bot. Always routes to the agent, whatever the stage. */
+  isMention?: boolean;
+  /** ts of this message, so the agent's history does not include the message it is answering. */
+  messageTs?: string | null;
+}): Promise<boolean> {
   const { data: reportData } = await supabaseAdmin
     .from("audit_reports")
     .select("*")
@@ -1050,7 +1207,7 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
       const footer = [
         THREAD_COMMANDS,
         missing.length > 0 ? `Not included: ${missing.join(", ")}.` : "",
-        terms ? "" : "Offer terms defaulted, reply `reveal $299/mo, setup waived` to change them.",
+        terms ? "" : "Offer terms defaulted to both tiers, reply `reveal Core only` or `reveal $499/mo, setup waived` to change them.",
       ]
         .filter(Boolean)
         .join(" ");
@@ -1079,91 +1236,137 @@ export async function handleAuditThreadReply(args: { channel: string; threadTs: 
       return true;
     }
 
-    // --- Free text: meaning depends on where the thread is ----------------------
-    if (report.outreach_stage === "awaiting_intake") {
-      // Generate, lint, retry. The intake answers already outrank the generic guidance in this
-      // drafter, so appending the rejection reasons to them is how attempt 2 learns what
-      // attempt 1 got wrong.
-      const gated = await draftWithLint(
-        (attempt, previous) =>
-          draftFromIntake(report, view, attempt === 0 ? text : `${text}\n\n${retryInstruction(previous)}`),
-        (r) => ({ body: r.draft.body, subject: r.draft.subject, stage: "draft-1", ...lintContext(report) })
-      );
-      if (!gated.draft) {
-        await slack.postThreadReply(
-          args.channel,
-          args.threadTs,
-          `:no_entry: I couldn't get email 1 past the draft rules in ${gated.attempts} attempts, so I'm not posting it.\n\n${formatLintFindings(gated.findings)}\n\nTell me how you'd rather put it and I'll redraft.`
-        );
-        return true;
-      }
-      const { draft, extracted, removedLinks, formatNote, nameWarning } = gated.draft;
-      await supabaseAdmin
-        .from("audit_reports")
-        .update({
-          intake_answers: text,
-          outreach_stage: "drafted",
-          // Only overwrite with something real, so a second pass that omits the email
-          // doesn't wipe the address captured on the first.
-          ...(extracted.prospect_name ? { prospect_name: extracted.prospect_name } : {}),
-          ...(extracted.prospect_email ? { prospect_email: extracted.prospect_email } : {}),
-          ...(extracted.redesign_url ? { redesign_url: extracted.redesign_url } : {}),
-        })
-        .eq("id", report.id);
-
-      const captured = [
-        extracted.prospect_name ? `to ${extracted.prospect_name}` : null,
-        extracted.prospect_email,
-        extracted.redesign_url ? "redesign link in play" : null,
-      ].filter(Boolean);
-
-      await postSingleDraft(
-        { ...report, pending_drafts: [draft] },
-        args.channel,
-        args.threadTs,
-        `:envelope: *Email 1* · pre-pitch, one finding, one ask, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}`,
-        draft,
-        THREAD_COMMANDS,
-        { removedLinks, formatNote, nameWarning },
-        await draftPreSellOptions(report, view, {
-          exclude: installedBeliefs(readLedger(report)),
-          // Puts B4 first when their Google profile is strong or they bragged about it at intake.
-          preferred: selectBelief(report, readLedger(report)).id,
-          language: report.call_language === "es" ? "es" : "en",
-        })
-      );
+    // --- `draft` — write email 1 now --------------------------------------------
+    // A COMMAND, not intake answers (2026-08-10). The picker above catches `draft it`, but bare
+    // `draft` matched nothing and fell through to the free-text branch, where at awaiting_intake
+    // the word itself was stored as the answers and quoted to the drafter as instructions that
+    // OUTRANK the generic guidance. `draft pelase jossana guerrero` did the same with a typo, and
+    // "jossana" became the prospect's name on the row. The verb now does what it says at any
+    // stage, and anything after it is the answers.
+    const draftMatch = text.match(/^draft\b[:,]?\s*([\s\S]*)$/i);
+    if (draftMatch) {
+      await draftEmailOne(report, args.channel, args.threadTs, view, draftMatch[1].trim(), args.files);
       return true;
     }
 
-    if (report.outreach_stage === "drafted") {
-      const previous = (report.pending_drafts ?? [])[0];
-      if (previous) {
-        const { draft: revised, removedLinks, formatNote, nameWarning } = await revisePreviousDraft(report, view, previous, text);
-        await postSingleDraft(
-          report,
-          args.channel,
-          args.threadTs,
-          `:pencil2: *${revised.label}* · revised:`,
-          revised,
-          THREAD_COMMANDS,
-          { removedLinks, formatNote, nameWarning },
-          await draftPreSellOptions(report, view, {
-          exclude: installedBeliefs(readLedger(report)),
-          // Puts B4 first when their Google profile is strong or they bragged about it at intake.
-          preferred: selectBelief(report, readLedger(report)).id,
-          language: report.call_language === "es" ? "es" : "en",
-        })
-        );
-        return true;
-      }
+    // --- Free text: meaning depends on where the thread is ----------------------
+    // At awaiting_intake the four questions are on screen and free text is genuinely the answers,
+    // so that fast path stays. An @mention overrides it: he is talking to the bot, not answering.
+    if (report.outreach_stage === "awaiting_intake" && !args.isMention) {
+      await draftEmailOne(report, args.channel, args.threadTs, view, text, args.files);
+      return true;
     }
 
-    // Default (and everything after the reveal): treat it as the prospect talking.
-    const options = await draftEmailOptions(report, view, { kind: "objection", prospectSaid: text });
-    await postOptions(report, args.channel, args.threadTs, `✉️ Reply drafts · 3 options:`, options);
+    // --- Everything else reasons ------------------------------------------------
+    //
+    // What used to be here was two fall-throughs: at `drafted`, revise email 1 in place; anywhere
+    // else, treat the message as the prospect talking and write an objection reply. Between them
+    // they ate every question, every out-of-band instruction and every request for a different
+    // artifact, because neither could do anything except produce the email it was built for.
+    //
+    // The revision path is not gone. It is `edit_draft` behaviour the agent chooses when he is
+    // actually editing a draft, which is a decision that needs to read the last few messages.
+    return await runAgentTurn(report, args, view);
   } catch (e) {
     await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Couldn't draft that: ${(e as Error).message}`).catch(() => {});
   }
 
+  return true;
+}
+
+/**
+ * Hand the message to the reasoning agent, with a visible placeholder while it thinks.
+ *
+ * Runs take 20 to 60 seconds because the agent reads Outlook, the report and sometimes the CRM
+ * before answering. Slack's own 3 second retry is already neutralised at the top of the events
+ * route; the placeholder is for the human, who otherwise watches a thread do nothing for a minute
+ * and types the message again.
+ */
+async function runAgentTurn(
+  report: AuditReportRow,
+  args: { channel: string; threadTs: string; text: string; messageTs?: string | null },
+  view: ReportView
+): Promise<boolean> {
+  const placeholder = (await slack
+    .postThreadReply(args.channel, args.threadTs, ":brain: _thinking..._")
+    .catch(() => null)) as { ts?: string } | null;
+
+  const say = async (text: string) => {
+    if (placeholder?.ts) await slack.updateMessage(args.channel, placeholder.ts, text).catch(() => {});
+    else await slack.postThreadReply(args.channel, args.threadTs, text).catch(() => {});
+  };
+
+  try {
+    const { reply } = await runThreadAgent({
+      report,
+      channel: args.channel,
+      threadTs: args.threadTs,
+      messageTs: args.messageTs ?? null,
+      text: args.text.replace(/<@[A-Z0-9]+>/g, "").trim(),
+    });
+    await say(reply || "_(nothing to say to that)_");
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    console.error("[audit-thread] agent failed:", msg);
+    // The old objection-reply fall-through is the honest fallback ONLY after the reveal, where a
+    // free-text message really is likely to be the prospect talking. Before that it would answer
+    // an objection nobody made, which is the behaviour this whole change exists to remove.
+    if (report.outreach_stage === "revealed") {
+      try {
+        const options = await draftEmailOptions(report, view, { kind: "objection", prospectSaid: args.text });
+        await say(`⚠️ I couldn't reason that through (${msg}), so here are reply drafts treating it as the prospect talking:`);
+        await postOptions(report, args.channel, args.threadTs, `✉️ Reply drafts · 3 options:`, options);
+        return true;
+      } catch {
+        /* fall through to the plain error below */
+      }
+    }
+    await say(`⚠️ I couldn't work that out: ${msg}`);
+  }
+  return true;
+}
+
+/**
+ * The old in-place revision of the queued draft.
+ *
+ * Kept as its own function because it is still the right move when he IS editing a draft; it was
+ * only wrong as the default for anything he typed. Reachable from the agent, not from a fall-through.
+ */
+export async function reviseQueuedDraft(
+  report: AuditReportRow,
+  channel: string,
+  threadTs: string,
+  view: ReportView,
+  text: string
+): Promise<boolean> {
+  const previous = (report.pending_drafts ?? [])[0];
+  if (!previous) return false; // nothing queued to edit; the caller says so.
+
+  // Lint-gated like the creation path (2026-08-10). It called ensurePermissionClose() but
+  // was not gated, so the SAME body was rejected when written and accepted when revised.
+  const gated = await draftWithLint(
+    (attempt, findings) =>
+      revisePreviousDraft(report, view, previous, attempt === 0 ? text : `${text}\n\n${retryInstruction(findings)}`),
+    (r) => ({ body: r.draft.body, subject: r.draft.subject, stage: "draft-1", ...lintContext(report) })
+  );
+  const result = gated.draft ?? gated.lastRejected;
+  if (!result) return true; // unreachable: one of the two is always set
+  const { draft: revised, removedLinks, formatNote, nameWarning } = result;
+  if (!gated.draft) await postLintRefusal(report, channel, threadTs, "the revision", gated);
+  await postSingleDraft(
+    report,
+    channel,
+    threadTs,
+    `:pencil2: *${revised.label}* · revised:`,
+    revised,
+    THREAD_COMMANDS,
+    { removedLinks, formatNote, nameWarning },
+    await draftPreSellOptions(report, view, {
+      exclude: installedBeliefs(readLedger(report)),
+      // Puts B4 first when their Google profile is strong or they bragged about it at intake.
+      preferred: selectBelief(report, readLedger(report)).id,
+      language: report.call_language === "es" ? "es" : "en",
+    })
+  );
   return true;
 }
