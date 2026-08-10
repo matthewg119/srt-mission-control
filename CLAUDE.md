@@ -848,6 +848,114 @@ suggestion to fund this personally. Findings post ABOVE the script, same as `lin
 clumsy line still beats no script; on `call` they are rejected first and only warned about if the
 correction retry could not fix them (see the box above).
 
+### The audit thread REASONS now (2026-08-11)
+
+Free text in `#ai-visibility-audits` used to fall through to "revise email 1 in place", and that
+one branch produced six wrong answers in a row on a live thread, ending with a follow-up that told
+a prospect who already had the video "I recorded a 4 min video, want me to send it over?".
+
+Exact commands (`call`, `close`, `1`, `nudge 3`, `loom`) keep their fast path. **Everything else,
+including every `app_mention`, goes to `thread-agent.ts`**, a real tool loop over the whole Slack
+thread (`slack.conversationsReplies`). `ai.ts:runConversationWithTools` gained an optional 4th
+argument so the loop is shared rather than forked; the Office Manager, dashboard chat and Telegram
+are untouched.
+
+`audit-tools.ts` wraps generators that already exist and are already governed, so `draft-linter`,
+`format-guard` and `lintSpoken` all still apply. Big artifacts POST THEMSELVES and return a short
+receipt, because making the agent re-emit a 3,000 token call script would triple every run and let
+it paraphrase a card whose exact wording is the point.
+
+> !! **The agent cannot send.** `microsoft.sendMail` and `sendDraft` are not imported by
+> `audit-tools.ts` and must not be. The worst outcome of a bad reasoning run is a wrong draft
+> sitting in Slack. Same doctrine as the price gate: absent beats forbidden.
+
+> !! `edit_draft` uses a **dynamic import** of `thread-assistant.ts`. That file imports
+> `thread-agent.ts`, which imports `audit-tools.ts`, so a static import there closes a cycle that
+> builds in dev and fails on a cold module graph.
+
+### `outreach_stage` drifts. The mailbox does not. (`thread-truth.ts`, 2026-08-11)
+
+`outreach_stage` only moves when someone types a command, so it is routinely stale: Grey Seal sat
+at `drafted` long after the email went out and the prospect said yes, and `ensurePermissionClose()`
+therefore appended the permission ask to a follow-up. Every generator downstream inherited that.
+
+`readThreadTruth(report)` / `readMailboxThread(email)` read the real conversation off Graph: what
+was sent, whether they replied, what they said verbatim, days of silence. `derivedStage` **outranks**
+the stored column and the disagreement is PRINTED, never silently corrected. Cached 10 minutes on
+`audit_reports.thread_truth`.
+
+- **Read for every lead, not just audited ones.** Whether we have contacted someone is a fact about
+  the mailbox. The first cut gated it on a report existing and reported "nothing was checked" for a
+  Zoho lead with three emails already sent.
+- **`prospect_email` is null on plenty of live reports**, so the address resolves report ->
+  `outreach_prospects` -> linked contact. A miss says "we cannot tell", never "they were not contacted".
+- !! `loom_url` / `redesign_url` are NOT inputs to the stage and must not become inputs. A stored
+  asset proves the video was MADE, not watched. Same trap `call-script.ts` already documents.
+
+`followup-email.ts` is the drafter that was missing: they got it and went quiet, or they replied.
+It never calls `ensurePermissionClose`. Its few-shot is a real sent email, **withheld unless the
+link policy is `any`** because it quotes prices.
+
+### Pricing is TWO TIERS (2026-08-11)
+
+Core `$349/mo` and Complete `$499/mo`, both always available, differing in scope. `OFFER_TIERS` and
+`OFFER_EXIT_LINE` in `src/config/pitch.ts` are the single source. The old "$499 with a $349 lever
+you have to earn" model is gone, and with it `priceLeverUnlocked`.
+
+What survived from the gate: **withholding on a follow-up call** (no figure is in the request at
+all, because a number in a helpful model's context is one it will reach for), and the ban on
+deriving a third number from the two. "Can you do better" is answered by Complete -> Core, which is
+a smaller scope for a smaller number, not a discount.
+
+`priceBlock(callType)` now takes the call type, not an unlock boolean.
+
+### Call Coach knows who is on the phone (`src/lib/call-coach/`, 2026-08-11)
+
+`POST /api/call-coach/identify` (screenshot + Chrome tab URL) and
+`POST /api/call-coach/brief-for-record` (dual auth: coach key **or** `CRON_SECRET`, so the dialer
+can call it). Both return one brief and write one `call_coach_sessions` row.
+
+> !! **The Chrome tab URL is tried FIRST and skips the vision call entirely.** A URL cannot be
+> misread; a screenshot can. That ordering is what makes wrong-lead risk manageable, and it means
+> the common case costs nothing. Vision confirms rather than decides.
+
+> !! **The screenshot is never persisted.** Not Supabase, not Slack, not a log line. It is a picture
+> of whatever was on his screen. The first debugging instinct will be to save it; do not.
+
+Nothing below `strong` auto-commits: weak/ambiguous returns candidates and the coach asks. Three
+redundant layers guard a misidentification, listed at the top of `resolve-target.ts`.
+
+`brief.ts` joins the two context builders that never spoke. `buildCoachNotes` is reused **verbatim**
+rather than reimplemented, so there is one place that turns audit rows into speakable numbers. With
+no audit the numbers block is a **negative assertion** ("NONE. Do not cite a score..."), because every
+brief the model has seen had a score and an absent section invites it to supply one.
+
+> !! **Zoho returns `""` for unset text fields, never null**, so every `??` chain over Zoho data is
+> dead unless it goes through a `blank()`/`str()` guard. This shipped broken twice in one day: first
+> `rec.Company ?? rec.Deal_Name` keeping the blank, then both routes returning their own
+> pre-correction `target` instead of `brief.who`. The WHO line is what makes a wrong lead obvious in
+> five seconds, so it is the one string here that must never be a shrug.
+
+### Post-call wrap (`wrap.ts`, `wrap-card.ts`, 2026-08-11)
+
+Call ends -> transcript is read back **from the database** (never from the request, or a client could
+forge a call into a CRM note) -> Sonnet writes it up -> one card in that lead's audit thread.
+
+On thumbs-up: claim the row, write ONE Zoho note, create an Outlook **draft**, print the draft into
+the thread. `wrap_state` is a claim flag (`auto_send_state` precedent) and `zoho_note_at` is checked
+separately, so a Graph failure plus a retry cannot double-write the note. Slack gets 200 in under a
+second and the work runs in `waitUntil`.
+
+- !! **NOTE ONLY.** No `updateLead`, no `Lead_Status`, no structured field, ever. Matthew's explicit
+  call, and it is the edit someone adds later "for convenience".
+- !! **Nothing sends.** `microsoft.sendDraft` is not imported by `wrap-card.ts`.
+- The prompt states that speaker labels are reliable and the WORDS are not, which is true: labels
+  come from which socket the audio arrived on, but live phone audio garbles numbers and mangles
+  Spanish. So a heard figure is never written as confirmed, `nextStep` is null unless something was
+  actually agreed, and `outcome: "unclear"` is an available answer.
+
+Migration: `docs/2026-08-11-call-coach-lead-context.sql` (applied 2026-08-11).
+
 ### SRT Call Coach backend (`/api/call-coach/*`)
 The Chrome extension lives in a SEPARATE repo (`Desktop/Code/live call coach srt`) and deploys
 separately; this repo owns its prompt, its playbook and its auth. Routes: `suggest` (the prompt +
@@ -859,13 +967,16 @@ legacy), `playbook` (GET bearer / POST `x-playbook-secret`), `session`, `transcr
 isolate-before-you-answer, at most two closes per obstacle, stop selling on the yes. Every funding
 reference is gone.
 
-**Two modes, and the brief is the ONLY signal that picks them** (2026-08-10). `callContext`
-non-empty means WARM (already worked, pitch happened, remove one obstacle); empty means COLD
-(first conversation, may not have opened the email, discover the pain from scratch, full close if
-it is real, fall back to "reply 1 to the email" plus a dated follow-up). It used to be
-closing-only, which meant a cold dial opened with "what stood out to you most in that audit" to
-someone who had never read it. **Do not try to infer the mode from the transcript** — that is the
-bug this replaced.
+**THREE modes as of 2026-08-11**: `COLD`, `FOLLOWUP`, `CLOSE`. The extension sends an explicit
+`callType`, resolved server-side by `call-type.ts` from the audit, the real mailbox and the CRM.
+When it is absent the route falls back to `brief ? "close" : "cold"`, which is byte-identical to the
+old `brief ? WARM : COLD` (a pasted brief WAS "the pitch already happened"), so a hand-pasted brief
+and a deploy skew in either direction both keep working.
+
+`FOLLOWUP` is the one that did not exist: an email went out, they have not engaged, and **nothing is
+sold**. No price is in the request at all. Without it a follow-up dial inherited CLOSE and quoted
+both tiers to someone who had not opened the email. **Do not try to infer the mode from the
+transcript**, that is the bug this replaced.
 
 **The pain gate outranks everything except HARD LINES.** No named pain, no report: no video, no
 report, no implementation plan, no price until the owner has said something is wrong. The brief
