@@ -138,6 +138,16 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return bridgeCommandAction({ actionId: action.action_id, channel, slackTs, userId });
     case "bridge_status":
       return bridgeStatusAction({ channel, slackTs });
+    case "cc_wrap_approve":
+    case "cc_wrap_discard":
+    case "cc_wrap_attach":
+      return callWrapAction({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userId,
+        sessionId: action.value ?? "",
+      });
     case "audit_send_now":
     case "audit_hold":
       return auditPitchAction({
@@ -779,6 +789,63 @@ async function sequenceCancel(args: {
  * with it. Hold parks the row, which also cancels the auto-send timer if that
  * switch is ever turned on.
  */
+/**
+ * The post-call wrap card: 👍 writes the Zoho note and creates the Outlook draft.
+ *
+ * ‼️ Slack gives an interaction 3 seconds. Zoho plus Graph plus a Slack post is 2 to 5, so the
+ * row is CLAIMED synchronously (which is what makes a retry safe) and the actual work runs in
+ * waitUntil. Same shape as leadDispositionAction.
+ */
+async function callWrapAction(args: {
+  actionId: string; channel: string; slackTs: string; userId: string; sessionId: string;
+}): Promise<NextResponse> {
+  if (!args.sessionId) return NextResponse.json({ ok: true });
+
+  if (args.actionId === "cc_wrap_discard") {
+    await supabaseAdmin
+      .from("call_coach_sessions")
+      .update({ wrap_state: "discarded" })
+      .eq("id", args.sessionId)
+      .neq("wrap_state", "done");
+    await slack.postThreadReply(args.channel, args.slackTs, `🚫 Discarded by <@${args.userId}>. Nothing was written to Zoho.`);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (args.actionId === "cc_wrap_attach") {
+    // Deliberately a plain instruction rather than a modal: attaching is rare, and the record id
+    // is already in his clipboard-adjacent Zoho tab. A modal here would be more code than value.
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      "🔍 Paste the Zoho record URL for this call in this thread and I'll attach it, then the buttons come back."
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  const { claimWrap, applyWrap } = await import("@/lib/call-coach/wrap-card");
+  const claimed = await claimWrap(args.sessionId);
+
+  if (!claimed) {
+    await slack.postThreadReply(args.channel, args.slackTs, "Already handled, nothing was written twice.");
+    return NextResponse.json({ ok: true });
+  }
+
+  waitUntil(
+    applyWrap(claimed, `slack:${args.userId}`).catch(async (e) => {
+      console.error("[slack/actions] wrap apply failed:", (e as Error).message);
+      await supabaseAdmin
+        .from("call_coach_sessions")
+        .update({ wrap_state: "failed", wrap_error: (e as Error).message })
+        .eq("id", args.sessionId);
+      await slack
+        .postThreadReply(args.channel, args.slackTs, `⚠️ Wrap failed: ${(e as Error).message}. The buttons are still live.`)
+        .catch(() => {});
+    })
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
 async function auditPitchAction(args: {
   actionId: string; channel: string; slackTs: string; userId: string; reportId: string;
 }): Promise<NextResponse> {
