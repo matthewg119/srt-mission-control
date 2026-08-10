@@ -24,6 +24,14 @@ export interface SessionIdentity {
   slackThreadTs: string | null;
 }
 
+/**
+ * ‼️ Callers must pass `brief.who`, not the target they handed to buildCallBrief.
+ *
+ * buildCallBrief resolves a missing business name from the audit report and then the website host,
+ * and this row is what the post-call wrap card reads back hours later. Storing the pre-correction
+ * copy means the Zoho note and the Slack card both say "unknown business" for a lead whose name
+ * was sitting on the report the whole time.
+ */
 function identityColumns(target: CallTarget, brief: CallBrief, confidence: TargetConfidence) {
   return {
     zoho_module: target.module,

@@ -82,15 +82,18 @@ export async function POST(req: NextRequest) {
 
     const sessionId =
       typeof body.sessionId === "string" && body.sessionId
-        ? (await attachIdentityToSession(body.sessionId, target, brief, "exact"), body.sessionId)
-        : await createPendingSession(auth.userId, target, brief, "exact");
+        ? (await attachIdentityToSession(body.sessionId, brief.who, brief, "exact"), body.sessionId)
+        : await createPendingSession(auth.userId, brief.who, brief, "exact");
 
     return NextResponse.json({
       ok: true,
       sessionId,
       callType: brief.callType,
       hasAudit: brief.hasAudit,
-      who: { label: whoLine(target), zohoUrl: target.zohoUrl, businessName: target.businessName },
+      // `brief.who`, NOT the local `target`. buildCallBrief fills in a missing business name from
+      // the audit report and then the website host, and reading the pre-correction copy here meant
+      // the API kept answering "unknown business" while the brief itself had the real one.
+      who: { label: whoLine(brief.who), zohoUrl: brief.who.zohoUrl, businessName: brief.who.businessName },
       reasons: brief.reasons,
       briefText: brief.text,
     });

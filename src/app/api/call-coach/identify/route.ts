@@ -88,8 +88,8 @@ export async function POST(req: NextRequest) {
 
     const sessionId =
       typeof body.sessionId === "string" && body.sessionId
-        ? (await attachIdentityToSession(body.sessionId, target, brief, resolved.confidence), body.sessionId)
-        : await createPendingSession(user.id, target, brief, resolved.confidence);
+        ? (await attachIdentityToSession(body.sessionId, brief.who, brief, resolved.confidence), body.sessionId)
+        : await createPendingSession(user.id, brief.who, brief, resolved.confidence);
 
     return NextResponse.json({
       ok: true,
@@ -99,13 +99,16 @@ export async function POST(req: NextRequest) {
       sessionId,
       callType: brief.callType,
       hasAudit: brief.hasAudit,
+      // `brief.who`, NOT the local `target`: buildCallBrief resolves a missing business name from
+      // the report and the website host, and the pre-correction copy is what rendered
+      // "unknown business" in the WHO line for real leads.
       who: {
-        module: target.module,
-        recordId: target.recordId,
-        label: whoLine(target),
-        zohoUrl: target.zohoUrl,
-        businessName: target.businessName,
-        personName: target.personName,
+        module: brief.who.module,
+        recordId: brief.who.recordId,
+        label: whoLine(brief.who),
+        zohoUrl: brief.who.zohoUrl,
+        businessName: brief.who.businessName,
+        personName: brief.who.personName,
       },
       briefText: brief.text,
     });
