@@ -996,6 +996,66 @@ is `callContext`, capped at `MAX_BRIEF_CHARS`, and it is the pasted COACH NOTES 
 It is framed as "the ONLY numbers that exist" because without that the model rounds 37/100 into
 "under 40%" and invents a competitor.
 
+### Requested scripts: the Intro and Close buttons (2026-08-11)
+`requestKind: "intro" | "close"` on the request body. When set, `merchantUtterance` stops being
+required (an intro fires before anyone has spoken) and the user message changes. **The output
+contract is byte-identical** — still 3 suggestions x 3 continuations + `qualification` + `notes` —
+which is the entire reason this rides on `/suggest` instead of a new route: the extension's
+incremental SSE parser is shape-driven, so it needed no changes, and auth, streaming and the
+cached prefix all came for free.
+
+> ‼️ **`requestKind` is a SEPARATE AXIS from `callType`, not a fourth value of it.** `callType` is
+> where the RELATIONSHIP is; `requestKind` is what he is asking for right now. A close on a cold
+> lead is `cold` + `close`, which one enum could not express, and folding them would have forced a
+> fourth `CoachCallType` and a fourth `priceBlock()` branch.
+
+**The mode-specific script wording lives in `src/lib/call-coach-script-gate.ts`, not in the
+prompt**, and that is the third time this codebase has had to learn the same lesson:
+
+> ‼️ It started as conditionals inside `STATIC_RULES` ("on COLD open with this exact stem, on CLOSE
+> never use it"). Measured over three runs each, the cold stem leaked into a close-stage intro
+> **1 time in 3**. Adding a ‼️ and the words "ONLY to COLD" took it to **3 in 3**. The cause is
+> structural: the same paragraph also said SUGGESTION 1 IS EXACTLY THIS LINE, VERBATIM, and a
+> verbatim order beats a conditional — emphasis on the conditional is emphasis on the whole
+> paragraph, including the part already winning. Moving it to a per-call block took it to **0 in
+> 3**. **Absent beats forbidden**, same as `call-coach-price-gate.ts` and the follow-up COACH
+> NOTES. A model cannot quote a line it was never given.
+
+- **INTRO** — 3 openers. On `cold` all three carry Matthew's stem *"Hey, I'm looking for some help
+  here,"* and suggestion 1 is his line verbatim. On `followup`/`close` it is a re-open and the stem
+  is not in the request at all. Never pitches, never prices, never mentions a report. Returns
+  `qualification` all-null and `notes` empty, because nobody has said anything yet.
+- **CLOSE** — 3 reframes, stage discipline **suspended** for this request only (he pressed the
+  button, so he gets closes for where the call is, not for the current CLOSER stage). On `cold` the
+  target is the email reply so the free implementation plan can go out, and Matthew's own
+  free-implementation / website / 20-minutes sequence is the spine. On `followup` no figure exists.
+  On `close` it is the one-to-ten, the isolate, and paperwork.
+- `filterRelevantPlaybook(playbook, merchantUtterance ?? "")` — the `?? ""` is load-bearing now
+  that intro requests carry no utterance, or `.toLowerCase()` throws and the catch silently serves
+  the generic fallback cards.
+
+**Every suggestion AND every continuation must end in a question mark.** The continuation half had
+to be stated separately and emphatically; the general rule alone left statements in the
+continuations on 2 of 3 runs.
+
+> ‼️ **Never claim work that was not done.** A cold brief that says "no audit has been run" once
+> produced *"we just ran an audit on your site"* — a lie the prospect catches on the same call. The
+> HARD LINE now says it outright: on a cold call the implementation plan is something he is
+> OFFERING TO BUILD. Offer to look, never claim to have looked.
+
+**Offer knowledge** in `THE MECHANISM` comes from `Desktop/AEO aduit/SRT_Sales_Letter.md` and
+`SRT_Loom_Script.md`, filtered to what transfers across verticals: the Gap, 6%-to-45% AI discovery,
+~85% of citations off-site, "it is not an auction", "nobody built your business to be readable by
+a machine", generic AI content does nothing.
+
+> ‼️ **`SRT_AEO_Offer_Pack.md` is STALE and its numbers must not be used** (confirmed with Matthew
+> 2026-08-11). It is a Jul 21 TRT-clinic doc quoting $499 setup / $299-for-life / $999 / $10k tiers,
+> a "cited in 90 days or your management fee back" guarantee, and a Friday deadline. `config/pitch.ts`
+> is authoritative: **Core $349, Complete $499, month to month, no setup fee, no guarantee.** The
+> guarantee ban stays. Also excluded: the 230-million-health-questions stat, TRT/testosterone
+> framing, "$99 telehealth", and "patients" as the default noun — the coach is vertical-agnostic and
+> is being pointed at property companies, not clinics.
+
 **Language is decided in CODE** (`src/lib/call-coach-language.ts`, pure, same precedent as
 `delivery-guards.ts`). It scores the last 5 turns on Spanish/English function words plus Spanish
 orthography and emits `CALL LANGUAGE: en | es | mixed`. A prompt line alone does not survive a

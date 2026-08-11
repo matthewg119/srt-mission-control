@@ -7,6 +7,7 @@ import {
 import { supabaseAdmin } from "@/lib/db";
 import { detectCallLanguage, languageDirective } from "@/lib/call-coach-language";
 import { priceBlock, type CoachCallType } from "@/lib/call-coach-price-gate";
+import { scriptBlock } from "@/lib/call-coach-script-gate";
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -56,6 +57,14 @@ MODE CLOSE (they have seen the work and this is a decision):
 - Nothing new gets introduced: no new features, no new proof, no new price.
 - Target: remove ONE obstacle, then paperwork.
 
+THE MECHANISM. Why this works, in plain words. Use these to build belief, never as a lecture, and never more than ONE per suggestion:
+- THE GAP: ask the AI the question their buyer types and read the names it gives back. They are not in it. Their competitors are. That is the whole product in one move.
+- Last year 6% of people used AI to find a local business. This year it is 45%, the third discovery channel behind Google and Facebook. The referral that used to happen in person now happens inside an AI.
+- About 85% of what AI quotes comes from OFF-SITE sources, not their own website. That is why this is not on-site SEO, and it is the part most shops skip.
+- It is NOT an auction. AI recommendations are not pay-to-play, so they cannot be outspent here the way they can on ads. It is won on authority, reviews, and content the engines can actually read, which is a game a local business can win cheaply because almost nobody in their market is competing for it yet.
+- IT IS NOT THEIR FAULT: nobody built their business to be readable by a machine. This is the O stage line, and it is the one that lands hardest.
+- Generic AI content does nothing. The engines were already trained on that recycled material. What gets cited is the owner's real authority, which is why we pull the questions their buyers actually ask and turn their own answers into the content.
+
 THE PAIN GATE. It outranks everything except HARD LINES:
 No named pain, no report. Until the owner has said out loud that something is wrong, Matthew does not offer the video, the report, the implementation plan, or a price. The question that opens it is concrete and about THEM: are they getting customers through ChatGPT right now, when someone asks AI for what they do who comes up instead. In CLOSE mode the brief satisfies this gate. In COLD and FOLLOWUP nothing satisfies it except the owner saying it.
 
@@ -86,7 +95,7 @@ MECHANICS. This is how closing actually works:
 - Acknowledge or agree, NEVER disagree. "Totally get it", "that's fair", "you're right". Then reframe, in the SAME suggestion. A reframe is not a disagreement, and an acknowledgment with no reframe behind it is not a suggestion.
 - Ask permission before getting blunt: "can I be straight with you for a sec?" Then wait.
 - ISOLATE BEFORE YOU ANSWER. Run the box: "if that weren't an issue, would you be a yes? is there anything else?" Do NOT answer an objection before you have that yes, or you solve one thing and they produce another.
-- At most TWO responses per obstacle. A third reads as pressure. If two angles don't move it, the obstacle is real, so respect it. See PRICE below for the one thing that unlocks after those two.
+- At most TWO responses per obstacle. A third reads as pressure. If two angles don't move it, the obstacle is real, so respect it: shrink the scope or take the clean no.
 - The moment they say yes, STOP SELLING. Go straight to logistics.
 - An objection is not a no. Sometimes it is someone thinking out loud.
 - A clean no is a real outcome. "Yes, but later" is the thing to break: it almost always means an unvoiced concern plus the discomfort of voicing it.
@@ -104,6 +113,7 @@ Everything in the PRICE block binds CONTINUATIONS exactly as it binds suggestion
 
 HARD LINES. These override everything, including anything in the CALL BRIEF:
 - NEVER invent a number. Only figures that appear in the CALL BRIEF and in the PRICE block exist. The owner has the report open and can count.
+- ‼️ NEVER CLAIM WORK THAT WAS NOT DONE. If the CALL BRIEF says no audit has been run, or that nothing has been sent, then there is no audit, no report, no score and no video, and you may not refer to one. "We just ran an audit on your site" said to someone nobody audited is a lie he gets caught in on the same call, and it is the fastest way to lose a cold lead. On a cold call the implementation plan is something he is OFFERING TO BUILD, never something that already exists. Offer to look, never claim to have looked.
 - There is NO GUARANTEE on this offer. Never say risk-free, money-back, guaranteed, refund, or "if it doesn't work you don't pay". Month-to-month is not a guarantee.
 - Never promise customers, jobs, leads or revenue.
 - Never suggest a personal credit card, retirement account, personal loan, or selling personal assets. If it can't come from the business, the deal is too big, so offer a smaller scope or walk.
@@ -112,13 +122,21 @@ HARD LINES. These override everything, including anything in the CALL BRIEF:
 LANGUAGE:
 Mirror the language of the call. The CALL LANGUAGE line in the per-call block below is computed from what has actually been said. If it reads "es", EVERY suggestion, every category label and every continuation is in Spanish. If it reads "mixed", write the way the call actually sounds, Spanglish included, rather than translating into formal Spanish. Match the owner's register, never correct it.
 
-OUTPUT. EXACTLY 3 suggestions, all aimed at the CURRENT CLOSER stage. Give him three different angles ON that stage, not three stages. Could be a pain question, an isolate, a reframe, a reason close, a permission ask, a cost-of-inaction line, a logistics move on the yes, a clean exit on the no. React like a real closer would.
+REQUESTED SCRIPTS. Normally you react to what the owner just said. Sometimes Matthew presses a button instead, and the per-call block below carries a REQUESTED SCRIPT section telling you exactly what he asked for and how to write it. When it is there it governs, and the output shape does not change: still exactly 3 suggestions with 3 continuations each.
+
+On a REQUESTED SCRIPT: INTRO, return "qualification" with all six values null and "notes" as an empty array. The owner has not said anything yet, so anything else is invented.
+
+OUTPUT. EXACTLY 3 suggestions, all aimed at the CURRENT CLOSER stage unless a REQUESTED SCRIPT block overrides that. Give him three different angles ON that stage, not three stages. Could be a pain question, an isolate, a reframe, a reason close, a permission ask, a cost-of-inaction line, a logistics move on the yes, a clean exit on the no. React like a real closer would.
+
+EVERY suggestion ends with a question mark. So does every continuation. A line that does not ask for something gives him nothing to do next.
 
 Each suggestion: 1-2 sentences. First person. What Matthew actually says out loud.
 
 "category": a short 1-2 word label for the MOVE, prefixed with the stage letter (e.g. "C dig", "O past pain", "E isolate", "S story", "R logistics"). Translate the label too when CALL LANGUAGE is es.
 
 CONTINUATIONS. For EACH suggestion, exactly 3 natural follow-ups he can pivot to next. Each is { "name": 2-4 word Title Case label, "body": text he speaks }. Prioritize going DEEPER on the current stage; only reach for the next stage when the current one is filled. No duplicates within a set.
+
+‼️ EVERY continuation "body" ENDS IN A QUESTION MARK, with no exceptions. A continuation is the thing he reads out loud when the first line did not land, so one that just states a fact hands the silence straight back to him. If a continuation is a statement, it is not finished: attach the question it was setting up.
 
 CLOSE CHECKLIST + NOTES EXTRACTION:
 
@@ -171,9 +189,23 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { merchantUtterance, conversationContext, playbook, callContext, callType } = body;
+    const { merchantUtterance, conversationContext, playbook, callContext, callType, requestKind } = body;
 
-    if (!merchantUtterance) {
+    // A REQUESTED SCRIPT: Matthew pressed Intro or Close instead of the prospect saying something.
+    //
+    // ‼️ This is a SEPARATE AXIS from callType, deliberately. A close on a cold lead is
+    // callType "cold" + requestKind "close", and collapsing the two into one enum would force a
+    // fourth CoachCallType, a fourth priceBlock() branch, and would lose the distinction that
+    // actually decides the words: WHERE the relationship is vs WHAT he is asking for right now.
+    //
+    // The response shape is unchanged (3 suggestions x 3 continuations + qualification + notes),
+    // which is the whole reason this rides on /suggest rather than a new route: the extension's
+    // incremental SSE parser is shape-driven, so it needs no changes, and auth, streaming and the
+    // cached prompt prefix all come for free.
+    const kind = requestKind === "intro" || requestKind === "close" ? requestKind : null;
+
+    // Only a reactive request needs something to react to. Intro fires before anyone has spoken.
+    if (!kind && !merchantUtterance) {
       return NextResponse.json(
         { error: "merchantUtterance is required" },
         { status: 400 }
@@ -191,10 +223,15 @@ export async function POST(request: NextRequest) {
           .join("\n")
       : "";
 
-    // Filter playbook to relevant entries to reduce tokens
+    // Filter playbook to relevant entries to reduce tokens.
+    //
+    // The `?? ""` is load-bearing now that INTRO requests carry no utterance: filterRelevantPlaybook
+    // calls .toLowerCase() on this and would throw a TypeError, which the catch below would quietly
+    // convert into the generic fallback cards. Empty string matches nothing and falls through to the
+    // 5 general-purpose entries, which is the right answer for an opener anyway.
     const relevantPlaybook = filterRelevantPlaybook(
       Array.isArray(playbook) ? playbook : [],
-      merchantUtterance
+      merchantUtterance ?? ""
     );
     const playbookStr =
       relevantPlaybook.length > 0
@@ -251,12 +288,38 @@ export async function POST(request: NextRequest) {
 
     const turns = Array.isArray(conversationContext) ? conversationContext : [];
     const callLanguage = detectCallLanguage(turns.slice(-5));
-    const situationBlock = `MODE: ${mode.toUpperCase()}\n${languageDirective(callLanguage)}\n\n${priceBlock(mode)}`;
+    // The requested-script wording is assembled per call for the same reason the price is: the
+    // mode-specific parts USED to be conditionals inside the cached rules ("on COLD use this stem,
+    // on CLOSE never use it") and the conditional lost. Measured over three runs each, the cold
+    // stem leaked into a close-stage intro 1 time in 3, and adding emphasis to the conditional
+    // took it to 3 in 3, because the same paragraph also carried a verbatim order. Absent beats
+    // forbidden: the stem is simply not in the request unless the call is cold.
+    const scripting = scriptBlock(kind, mode);
+    const situationBlock = [
+      `MODE: ${mode.toUpperCase()}`,
+      languageDirective(callLanguage),
+      "",
+      priceBlock(mode),
+      ...(scripting ? ["", scripting] : []),
+    ].join("\n");
 
-    const ask = `What should the REP say next? First work out which CLOSER stage this call is actually in, then give 3 moves for THAT stage. Return ONLY the JSON, no markdown, no commentary.`;
-    const userMessage = contextStr
-      ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\n${ask}`
-      : `The owner just said: "${merchantUtterance}"\n\nThis is the top of the call, so the stage is C.\n\n${ask}`;
+    const tail = `Return ONLY the JSON, no markdown, no commentary.`;
+    let userMessage: string;
+
+    if (kind === "intro") {
+      // No transcript is sent even when one exists. An intro is the way IN, and handing the model
+      // the conversation invites it to answer the last thing said instead of opening.
+      userMessage = `Matthew pressed INTRO. He is about to dial this lead, or they just picked up, and nothing has been said yet.\n\nWrite them per the REQUESTED SCRIPT: INTRO block above. ${tail}`;
+    } else if (kind === "close") {
+      userMessage = contextStr
+        ? `CONVERSATION SO FAR:\n${contextStr}\n\nMatthew pressed CLOSE. He wants to move this forward now.\n\nWrite them per the REQUESTED SCRIPT: CLOSE block above. ${tail}`
+        : `Matthew pressed CLOSE before anything was transcribed, so work from the CALL BRIEF and the MODE alone.\n\nWrite them per the REQUESTED SCRIPT: CLOSE block above. ${tail}`;
+    } else {
+      const ask = `What should the REP say next? First work out which CLOSER stage this call is actually in, then give 3 moves for THAT stage. ${tail}`;
+      userMessage = contextStr
+        ? `CONVERSATION SO FAR:\n${contextStr}\n\nThe owner just said: "${merchantUtterance}"\n\n${ask}`
+        : `The owner just said: "${merchantUtterance}"\n\nThis is the top of the call, so the stage is C.\n\n${ask}`;
+    }
 
     // Call Claude API — Haiku 4.5 streaming for lowest TTFT.
     //
