@@ -1,0 +1,523 @@
+/*
+ * /webflow-Aivisibility — layout only.
+ *
+ * Every colour, radius and easing here comes from .scan-root in ../scan/scan.css,
+ * which the layout applies alongside .medspa-root. Do NOT redeclare a token in this
+ * file: one design system, one place it is defined.
+ */
+
+.medspa-root {
+  --medspa-maxw: 46rem;
+}
+
+.medspa-main {
+  max-width: var(--medspa-maxw);
+  margin: 0 auto;
+  padding: 2rem 1.25rem 5rem;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+/* The funnel has no exit. This is a div, never a link, and there is no nav. */
+.medspa-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 2rem;
+}
+
+.medspa-brand-mark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 1.05rem;
+}
+
+.medspa-brand-mark i {
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: #1b65a7;
+}
+.medspa-brand-mark i:nth-child(1) { height: 60%; }
+.medspa-brand-mark i:nth-child(2) { height: 80%; }
+.medspa-brand-mark i:nth-child(3) { height: 100%; background: var(--accent-brand); }
+
+.medspa-eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-brand);
+  background: var(--accent-brand-dim);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.medspa-h1 {
+  font-size: clamp(1.75rem, 5.5vw, 2.75rem);
+  line-height: 1.12;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+  color: var(--card-foreground);
+}
+
+.medspa-h1 em {
+  font-style: normal;
+  color: var(--accent-brand);
+}
+
+.medspa-sub {
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+  margin: 0 0 2rem;
+  max-width: 38rem;
+}
+
+/* ── Video ──────────────────────────────────────────────────────────────── */
+
+.vsl {
+  margin: 0 0 2rem;
+}
+
+.vsl-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.vsl-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.vsl-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  border: 0;
+  cursor: pointer;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  font: inherit;
+}
+
+.vsl-overlay-icon {
+  display: grid;
+  place-items: center;
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+  background: var(--accent-brand);
+  color: #04252b;
+  font-size: 1.5rem;
+  padding-left: 4px;
+}
+
+.vsl-overlay-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.vsl-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.25rem 0;
+}
+
+.vsl-btn {
+  flex: none;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+/*
+ * Presentation only. There is no input and no pointer target here, because a
+ * draggable track is a seek bar and a seek bar defeats the gate.
+ */
+.vsl-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--secondary);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.vsl-track-fill {
+  height: 100%;
+  background: var(--accent-brand);
+  transition: width 0.25s linear;
+}
+
+.vsl-placeholder {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-align: center;
+  padding: 1.5rem;
+  margin: 0 0 2rem;
+  border: 1px dashed var(--input);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.vsl-placeholder-title {
+  font-weight: 600;
+  color: var(--card-foreground);
+}
+
+.vsl-placeholder-body {
+  margin: 0;
+  max-width: 28rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+/* ── Stats ──────────────────────────────────────────────────────────────── */
+
+.medspa-stats {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+  margin: 0 0 2.5rem;
+}
+
+@media (min-width: 640px) {
+  .medspa-stats { grid-template-columns: repeat(3, 1fr); }
+}
+
+.medspa-stat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 1rem;
+}
+
+.medspa-stat-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--accent-brand);
+  margin-bottom: 0.35rem;
+}
+
+.medspa-stat-label {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+/* ── Cards, forms ───────────────────────────────────────────────────────── */
+
+.medspa-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 1.5rem;
+}
+
+.medspa-card h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.5rem;
+  color: var(--card-foreground);
+}
+
+.medspa-card p {
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.medspa-field {
+  margin-bottom: 1rem;
+}
+
+.medspa-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 0.35rem;
+  color: var(--foreground);
+}
+
+.medspa-input {
+  width: 100%;
+  padding: 0.8rem 0.9rem;
+  font: inherit;
+  font-size: 1rem; /* 16px minimum, or iOS zooms the page on focus */
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  outline: none;
+  transition: border-color 0.15s var(--ease);
+}
+
+.medspa-input:focus {
+  border-color: var(--accent-brand);
+}
+
+.medspa-input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* Visually hidden, but not display:none, because some bots skip hidden inputs. */
+.medspa-hp {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.medspa-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.medspa-consent input {
+  flex: none;
+  margin-top: 0.15rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent-brand);
+}
+
+.medspa-btn {
+  width: 100%;
+  padding: 0.95rem 1.25rem;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #04252b;
+  background: var(--accent-brand);
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  transition: filter 0.15s var(--ease);
+}
+
+.medspa-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.medspa-btn:disabled { opacity: 0.6; cursor: default; }
+
+.medspa-error {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--destructive);
+}
+
+.medspa-reassure {
+  margin: 0.9rem 0 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.medspa-linkbtn {
+  display: inline-block;
+  margin-top: 1rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--muted-foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.medspa-linkbtn:hover { color: var(--foreground); }
+
+/*
+ * ── The $39 panel ───────────────────────────────────────────────────────────
+ *
+ * An ordinary section in DOCUMENT FLOW, never a fixed sheet or a centered dialog.
+ * The srt-agwb funnels made this call explicitly ("a modal would fight the mobile
+ * keyboard") and this panel contains a required text input, so it is exactly the
+ * case that rule is about. A fixed sheet would need dvh units, a visualViewport
+ * listener to re-anchor above the keyboard, and a scroll lock iOS Safari argues
+ * with. Every one of those is a way to hide the submit button. In flow, the
+ * keyboard just scrolls the page like any other form, and it cannot fail.
+ */
+.medspa-offer {
+  margin-top: 1.5rem;
+  border: 1px solid var(--accent-brand);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 1.5rem;
+  scroll-margin-top: 2rem;
+}
+
+.medspa-offer h2 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  color: var(--card-foreground);
+}
+
+.medspa-offer-body {
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--foreground);
+}
+
+/* The website field sits directly UNDER the button, as its label. Order matters. */
+.medspa-offer-field {
+  margin-top: 1rem;
+}
+
+.medspa-notice {
+  margin: 1rem 0 0;
+  padding: 0.9rem 1rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--accent-brand-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--foreground);
+}
+
+/* ── OTO: progress steps, bullets, seat counter ─────────────────────────── */
+
+.medspa-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.medspa-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.9rem;
+  color: var(--muted-foreground);
+  transition: color 0.2s var(--ease);
+}
+
+.medspa-steps li.is-active { color: var(--foreground); font-weight: 500; }
+.medspa-steps li.is-done   { color: var(--muted-foreground); }
+
+.medspa-step-dot {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--muted-foreground);
+}
+
+.medspa-steps li.is-active .medspa-step-dot {
+  border-color: var(--accent-brand);
+  color: var(--accent-brand);
+}
+
+.medspa-steps li.is-done .medspa-step-dot {
+  background: var(--accent-brand);
+  border-color: var(--accent-brand);
+  color: #04252b;
+}
+
+.medspa-step-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+}
+
+.medspa-bullets {
+  list-style: none;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.medspa-bullets li {
+  position: relative;
+  padding-left: 1.4rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--foreground);
+}
+
+.medspa-bullets li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--accent-brand);
+  font-weight: 700;
+}
+
+.medspa-seats {
+  margin: 0 0 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-brand);
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+
+.medspa-footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .medspa-root *,
+  .medspa-root *::before,
+  .medspa-root *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
