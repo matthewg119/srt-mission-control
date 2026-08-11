@@ -984,17 +984,73 @@ satisfies it in WARM; nothing satisfies it in COLD except the owner saying it.
 
 **CLOSER is the spine and it runs in order** (Clarify, Label, Overview, Sell, Explain, Reinforce).
 All 3 suggestions target the CURRENT stage, three angles on it rather than three stages. Something
-volunteered from a later stage is recorded as a letter-tagged note, not chased. The one exception
-is R: the moment they say yes, jump there and stop selling.
+volunteered from a later stage is recorded as a letter-tagged note, not chased. **Two** exceptions
+now: R (the moment they say yes, jump there and stop selling) and the status-quo brush-off.
 
-**FOUR system blocks now, and the order is load-bearing.** `STATIC_RULES` carries
-`cache_control: ephemeral` and must stay first and byte-identical or the cache never hits; the
-`MODE` + `CALL LANGUAGE` + `PRICE` block is second (it selects which half of the cached rules
-applies, so it has to be read before the rest); the playbook is third; the CALL BRIEF is fourth.
-Anything that varies per call belongs in block two, never in `STATIC_RULES`. The brief
-is `callContext`, capped at `MAX_BRIEF_CHARS`, and it is the pasted COACH NOTES from `call` above.
-It is framed as "the ONLY numbers that exist" because without that the model rounds 37/100 into
-"under 40%" and invents a competitor.
+### THE STATUS-QUO BRUSH-OFF — the second stage-discipline exception (2026-08-11)
+
+*"I've got plenty of customers"*, *"we're doing fine"*, *"I'm all set"*, *"we get everything from
+referrals"*. This is the owner rejecting the **premise**, not a stage sitting unfilled — and stage
+discipline used to outrank it, so an unfilled stage C produced three flavours of the same pain
+question. A live call got exactly that: three cards reading `C PAIN DISCOVERY`, `C CLARIFY INTENT`,
+`C DIRECT PAIN` to a man who had just said he had plenty of customers.
+
+The move is agree out loud, then shift the axis from **quantity to composition** (more of the ones
+that make him money, fewer that cost him — which is already what `WHAT WE SELL` promises), then one
+question that makes his claim checkable. Never argue with "I'm full"; never imply he needs volume.
+On referrals, never call them weak: the referral that used to happen in person now happens inside
+an AI. Two attempts maximum, then take the clean no.
+
+A `status_quo` family was added to the playbook for the same reason — the closest prior entries
+were `"not interested"` and `"send me some information"`, so the single most common objection to
+this offer had no coverage at all.
+
+**Three cards must differ by ANGLE, not wording.** Stated explicitly in `OUTPUT` now: three
+rephrasings of one move is one card printed three times, and it leaves him nothing when the first
+does not land. Give him moves that fail *differently*.
+
+**THREE system blocks, and the order is load-bearing.** `CACHED_PREFIX` (= `STATIC_RULES` + the
+full playbook) carries `cache_control` and must stay first and byte-identical; the `MODE` +
+`CALL LANGUAGE` + `PRICE` block is second (it selects which half of the cached rules applies, so
+it has to be read before the rest); the CALL BRIEF is third. Anything that varies per call belongs
+in block two, never in `CACHED_PREFIX`. The brief is `callContext`, capped at `MAX_BRIEF_CHARS`,
+and it is the pasted COACH NOTES from `call` above. It is framed as "the ONLY numbers that exist"
+because without that the model rounds 37/100 into "under 40%" and invents a competitor.
+
+> ‼️ **THE PROMPT CACHE WAS DEAD FOR MONTHS AND NOTHING COULD HAVE TOLD YOU** (fixed 2026-08-11).
+> `STATIC_RULES` measured **3,952 tokens** against Haiku 4.5's **4,096-token minimum cacheable
+> prefix**. A prefix under the minimum does not error — it silently reports
+> `cache_creation_input_tokens: 0` and re-prefills at full price and full latency on every single
+> suggestion of every call. The code comment asserted the threshold was 1024, which is *Sonnet's*
+> number. **The minimum is not monotonic across generations**, which is the whole trap: Opus 5 /
+> Fable 5 = 512, Opus 4.8 / Sonnet 5 / Sonnet 4.6 = 1024, Opus 4.7 = 2048, **Opus 4.6 / Opus 4.5 /
+> Haiku 4.5 = 4096**.
+>
+> It was invisible because this route proxies `claudeResponse.body` through untouched and never
+> parses `usage`, and the extension's SSE parser discarded everything that was not a text delta.
+> The extension now logs `message_start` usage — that is the only cache-health readout that exists.
+>
+> The fix was folding the playbook in: `CACHED_PREFIX` is **8,550 tokens**, ~2x headroom.
+> **If `STATIC_RULES` is ever trimmed, re-measure with `count_tokens`.**
+
+**`ttl: "1h"`, not the 5-minute default.** Within a call the requests are seconds apart and either
+would hold, but there are minutes between prospects and a 5-minute entry expires in every one of
+them, paying a fresh write on the first suggestion of every call — the one he is waiting on with
+the phone ringing. The 1h write costs 2x once and then reads all day.
+
+**`MODEL` is one constant used by both the warm-up and the real request.** Caches are scoped per
+model, so a warm-up naming a different model writes an entry nothing ever reads: no error, a
+permanent 0% hit rate. Two string literals is exactly how that drift happens.
+
+**`POST {warm: true}`** runs `max_tokens: 0` (prefill only, no output tokens billed) and returns
+immediately. The extension fires it from `startCapture()` while the share picker is open. It must
+**not** stream — the API rejects `max_tokens: 0` together with `stream: true` — and its system
+block must stay byte-identical to the real one or it warms an entry nothing reads.
+
+**`validateCallCoachKey` is cached in-process for 5 minutes** (`call-coach-auth.ts`). It used to
+block every suggestion on a Supabase round trip before the Anthropic request was even opened.
+Negative results are cached too, but a *transient* Supabase failure is deliberately not, or one
+blip would lock the coach out for five minutes mid-call. Trade: revocation takes up to 5 minutes.
 
 ### Requested scripts: the Intro and Close buttons (2026-08-11)
 `requestKind: "intro" | "close"` on the request body. When set, `merchantUtterance` stops being
@@ -1030,9 +1086,19 @@ prompt**, and that is the third time this codebase has had to learn the same les
   target is the email reply so the free implementation plan can go out, and Matthew's own
   free-implementation / website / 20-minutes sequence is the spine. On `followup` no figure exists.
   On `close` it is the one-to-ten, the isolate, and paperwork.
-- `filterRelevantPlaybook(playbook, merchantUtterance ?? "")` — the `?? ""` is load-bearing now
-  that intro requests carry no utterance, or `.toLowerCase()` throws and the catch silently serves
-  the generic fallback cards.
+- ~~`filterRelevantPlaybook`~~ **is deleted** (2026-08-11). The playbook now lives in
+  `src/lib/call-coach-playbook.ts` as a pre-rendered block inside `CACHED_PREFIX`. The `playbook`
+  field is still accepted off the request body and deliberately IGNORED — reading it would put
+  client-controlled bytes in the cached prefix, so one stale extension would re-write the cache on
+  every request.
+
+> ‼️ **The scorer was matching on STOPWORDS, and it cost a live call.** For *"I got plenty of
+> customers I don't need that right now"* it returned, in order: "i need to talk to my partner"
+> (0.57), "too busy right now" (0.50), **"that's a lot of money"** (0.40), "i need to run it by my
+> boss" (0.375), "how do i know this works", "i want to think it over", and **"let's do it"**
+> (0.33). The model was handed price-objection and closing-on-the-yes material for a prospect who
+> had just said he was satisfied, and answered with three discovery questions. Sending all 29
+> entries costs nothing now that they are inside the cached prefix.
 
 **Every suggestion AND every continuation must end in a question mark.** The continuation half had
 to be stated separately and emphatically; the general rule alone left statements in the
@@ -1094,9 +1160,18 @@ excluded from both sets rather than assigned to one.
 `sell`, `explain`, `reinforce`. They replaced `watchedVideo` / `mainGoal` / `mainConcern` /
 `decisionMaker` / `budgetFit` / `nextStep`; the last two live on as letter-tagged `notes` entries
 (`E: partner has to sign off`). Still exactly six, because the extension's grid, its additive
-merge and its streaming parser are all shape-driven. The JSON output contract
-(`suggestions[].text/category/continuations[]`, `qualification`, `notes`) is otherwise unchanged,
-which is what let the whole streaming parser stay untouched.
+merge and its streaming parser are all shape-driven.
+
+**The output contract changed 2026-08-11: `continuations` is now a SEPARATE top-level array**,
+`[[{name,body} x3] x3]`, index-matched to `suggestions`. They used to be nested inside each
+suggestion, and the extension only renders a card once its whole object closes — so card 3's text
+waited on ~450 output tokens instead of ~120. Measured against the real parser, all three cards now
+render by 33% of the stream. The prompt states the ordering requirement explicitly because the
+model will otherwise nest them back out of habit.
+
+> Ship both repos the same day. The extension prefers inline continuations when present, so an
+> extension running ahead of this backend still works; a backend running ahead of the extension
+> degrades to cards with no continuations.
 
 > The extension deploys separately. On a skew its `mergeQualification` iterates its own key list
 > and ignores unknown keys, so a mismatch shows a blank checklist rather than crashing. Ship both

@@ -8,10 +8,20 @@ import { supabaseAdmin } from "@/lib/db";
 import { detectCallLanguage, languageDirective } from "@/lib/call-coach-language";
 import { priceBlock, type CoachCallType } from "@/lib/call-coach-price-gate";
 import { scriptBlock } from "@/lib/call-coach-script-gate";
+import { PLAYBOOK_BLOCK } from "@/lib/call-coach-playbook";
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
 const CALL_TYPES: CoachCallType[] = ["cold", "followup", "close"];
+
+/**
+ * ‼️ One constant, used by BOTH the warm-up and the real request.
+ *
+ * Prompt caches are scoped per model, so a warm-up that names a different model than the
+ * suggestion writes an entry nothing ever reads: no error, no warning, just a permanent 0%
+ * hit rate. Two string literals is exactly how that drift happens.
+ */
+const MODEL = "claude-haiku-4-5-20251001";
 
 /** Cap on the pasted CLOSING NOTES brief. Generous next to what `call` actually produces (~1.5k),
  *  so a real brief is never clipped; it exists to stop someone pasting an entire transcript into
@@ -24,9 +34,22 @@ const MAX_BRIEF_CHARS = 4000;
  * on every call, which is what lets Anthropic prompt caching land a hit
  * (the cached prefix has to be byte-identical across requests).
  *
- * The dynamic playbook block is sent as a SEPARATE, uncached system block
- * AFTER this one (see the fetch body below). Order matters: cached prefix
- * first, variable suffix second.
+ * ‼️ THIS ALONE IS NOT LONG ENOUGH TO CACHE, which is why `CACHED_PREFIX`
+ * below concatenates the playbook onto it. Measured with `count_tokens`:
+ * STATIC_RULES is 3,952 tokens and **Haiku 4.5's minimum cacheable prefix
+ * is 4,096**, so for months the `cache_control` marker did nothing at all.
+ * A prefix under the minimum does not error, it silently reports
+ * `cache_creation_input_tokens: 0` and re-prefills at full price and full
+ * latency on every single suggestion of every call.
+ *
+ * The minimum is NOT monotonic across model generations, which is the trap:
+ * Opus 5 / Fable 5 = 512, Opus 4.8 / Sonnet 5 / Sonnet 4.6 = 1024,
+ * Opus 4.7 = 2048, **Opus 4.6 / Opus 4.5 / Haiku 4.5 = 4096**. An earlier
+ * comment here asserted 1024, which is Sonnet's number, not this model's.
+ *
+ * If STATIC_RULES is ever trimmed, re-measure. `CACHED_PREFIX` currently
+ * lands at 7,857 tokens, so there is ~2x headroom, but the failure is
+ * invisible without checking `usage`.
  */
 const STATIC_RULES = `You are the best closer alive, sitting next to Matthew on a live sales call with a BUSINESS OWNER. Tell him EXACTLY what to say next: first person, conversational, ready to speak verbatim.
 
@@ -79,7 +102,20 @@ R  REINFORCE after the yes. Stop selling, move to logistics, make them feel righ
 STAGE DISCIPLINE:
 - Aim every suggestion at the CURRENT stage. Do not advance until that stage is filled.
 - If the owner volunteers something from a LATER stage, do NOT chase it. Record it as a note tagged with its letter and keep working the stage you are in. "I tried SEO before" said during C becomes the note "O: tried SEO before", and the suggestion still works C.
-- The one exception is R. The moment they say yes, jump there and stop selling.
+- Two exceptions, and only two: R and the status-quo brush-off below.
+- R. The moment they say yes, jump there and stop selling.
+
+THE STATUS-QUO BRUSH-OFF. The second exception, and the most common thing you will hear on a cold dial:
+"I've got plenty of customers", "we're doing fine", "I'm all set", "I don't need that", "we get everything from referrals", "we're too busy as it is".
+This is the owner rejecting the PREMISE, not a stage sitting unfilled, and another discovery question is the single worst move available. He just told you he is fine; asking him again whether he is fine is what makes him hang up.
+- NEVER answer it with three versions of the same pain question. That is the failure this rule exists to stop.
+- Agree with it out loud first, and mean it. "That's a good problem." "Then you can afford to be picky." Never argue, never imply he is wrong about his own business.
+- Then move the axis from QUANTITY to COMPOSITION. We do not sell more customers, we sell more of the ones that make him money and fewer of the ones that cost him. Full is not the same as full of the right work. That reframe is the answer to this objection and it is the only one that survives an owner who genuinely is busy.
+- Then ONE question that makes his claim checkable, about him and not about us: what AI names when someone asks for what he does, what the person a referral sent finds when they go look, whether the last ten jobs were the ones he wanted.
+- On referrals specifically: never call referrals weak. Use the mechanism, the referral that used to happen in person now happens inside an AI.
+- Three cards here means three DIFFERENT angles: the agree-and-reframe, the checkable question, the permission-to-ask-one-thing exit. Not three phrasings of one move.
+- At most two attempts, then respect it and take the clean no.
+- Once he engages, go back to the stage you were in.
 
 RULES:
 - NEVER simulate the owner's voice. ONLY what Matthew speaks.
@@ -109,6 +145,8 @@ PRICING AUTHORITY comes from the PRICE block in the per-call section below, and 
 
 Your 3 suggestions are three alternatives for the SAME moment, at the same level of escalation. They are not step 1, step 2, step 3, so never write a card that assumes the other two were already tried and failed.
 
+They must differ by ANGLE, not by wording. Three rephrasings of one move is one card printed three times, and it leaves him nothing to fall back on when the first one does not land. If all three would fail for the same reason, at least one of them is wrong. Give him moves that fail DIFFERENTLY: a question and a reframe and an exit, not three questions.
+
 Everything in the PRICE block binds CONTINUATIONS exactly as it binds suggestions. A continuation is read out loud one click later, so a price leaked there is a price leaked.
 
 HARD LINES. These override everything, including anything in the CALL BRIEF:
@@ -134,7 +172,11 @@ Each suggestion: 1-2 sentences. First person. What Matthew actually says out lou
 
 "category": a short 1-2 word label for the MOVE, prefixed with the stage letter (e.g. "C dig", "O past pain", "E isolate", "S story", "R logistics"). Translate the label too when CALL LANGUAGE is es.
 
-CONTINUATIONS. For EACH suggestion, exactly 3 natural follow-ups he can pivot to next. Each is { "name": 2-4 word Title Case label, "body": text he speaks }. Prioritize going DEEPER on the current stage; only reach for the next stage when the current one is filled. No duplicates within a set.
+CONTINUATIONS. A SEPARATE top-level array, NOT nested inside the suggestions.
+
+"continuations" is an array of exactly 3 arrays. continuations[0] belongs to suggestions[0], continuations[1] to suggestions[1], continuations[2] to suggestions[2]. Each inner array holds exactly 3 follow-ups he can pivot to next, each { "name": 2-4 word Title Case label, "body": text he speaks }. Prioritize going DEEPER on the current stage; only reach for the next stage when the current one is filled. No duplicates within a set.
+
+‼️ ORDER MATTERS AND IT IS NOT COSMETIC. Write all 3 "suggestions" FIRST, complete, then the "continuations" array. He is reading these off a screen mid-call while a prospect waits, and the cards appear in the order you emit them. Emitting a suggestion's continuations before the next suggestion's text means card 3 does not exist yet when he needs it. Never nest a "continuations" key inside a suggestion object.
 
 ‼️ EVERY continuation "body" ENDS IN A QUESTION MARK, with no exceptions. A continuation is the thing he reads out loud when the first line did not land, so one that just states a fact hands the silence straight back to him. If a continuation is a statement, it is not finished: attach the question it was setting up.
 
@@ -153,7 +195,21 @@ Alongside suggestions, return two more top-level fields based on what the OWNER 
 "notes": array of 0-8 short bullet facts (max 12 words each). Golden nuggets, especially anything the owner volunteered OUT OF ORDER. Each note MUST start with its CLOSER letter and a colon, e.g. "O: tried SEO before, agency ghosted them", "E: partner has to sign off", "C: no idea if AI sends them anyone". ADDITIVE: repeat all earlier facts every response, the extension dedupes.
 
 Return ONLY valid JSON:
-{"suggestions":[{"text":"...","category":"...","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"...","category":"...","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]},{"text":"...","category":"...","continuations":[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]}],"qualification":{"clarify":null,"label":null,"overview":null,"sell":null,"explain":null,"reinforce":null},"notes":[]}`;
+{"suggestions":[{"text":"...","category":"..."},{"text":"...","category":"..."},{"text":"...","category":"..."}],"continuations":[[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}],[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}],[{"name":"...","body":"..."},{"name":"...","body":"..."},{"name":"...","body":"..."}]],"qualification":{"clarify":null,"label":null,"overview":null,"sell":null,"explain":null,"reinforce":null},"notes":[]}`;
+
+/**
+ * What actually carries `cache_control`. Rules first, then the full playbook.
+ *
+ * The playbook USED to be a separate uncached block holding the top 10 entries scored
+ * against the merchant's utterance. That did two bad things at once: it put ~1,400
+ * changing tokens in front of the model on every request (so they were re-prefilled
+ * every time), and the scorer matched on STOPWORDS. See the header of
+ * `call-coach-playbook.ts` for the measured retrieval failure that cost a live call.
+ *
+ * Folding it in fixes both. It is the same bytes every request, so it rides the cache,
+ * and every objection is always present instead of being retrieved by a broken scorer.
+ */
+const CACHED_PREFIX = `${STATIC_RULES}\n\n${PLAYBOOK_BLOCK}`;
 
 /**
  * POST /api/call-coach/suggest
@@ -191,6 +247,55 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { merchantUtterance, conversationContext, playbook, callContext, callType, requestKind } = body;
 
+    // ── Warm-up ───────────────────────────────────────────────────────────────
+    //
+    // `{ warm: true }` from the extension when Matthew presses Start Listening or a brief loads.
+    // Two cold starts get paid on the first suggestion of a call otherwise, and that first
+    // suggestion is the one he is waiting on with the phone already ringing:
+    //
+    //   1. The Vercel lambda itself, which has been idle since the last call.
+    //   2. The prompt cache write for CACHED_PREFIX.
+    //
+    // `max_tokens: 0` runs prefill and returns immediately with an empty `content` and
+    // `stop_reason: "max_tokens"`. No output tokens are generated or billed; the only charge is
+    // the cache write that the first real request would have paid anyway.
+    //
+    // ‼️ It must NOT stream — the API rejects `max_tokens: 0` together with `stream: true`.
+    // The system blocks below have to stay byte-identical to the real request's cached block or
+    // this warms an entry nothing will ever read.
+    if (body?.warm === true) {
+      try {
+        const warmRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicApiKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            max_tokens: 0,
+            system: [
+              {
+                type: "text",
+                text: CACHED_PREFIX,
+                cache_control: { type: "ephemeral", ttl: "1h" },
+              },
+            ],
+            messages: [{ role: "user", content: "warmup" }],
+          }),
+        });
+        const warmJson = await warmRes.json().catch(() => null);
+        const usage = warmJson?.usage ?? null;
+        console.log("[call-coach] warm", warmRes.status, JSON.stringify(usage));
+        return NextResponse.json({ warmed: warmRes.ok, usage });
+      } catch (err) {
+        // Never fatal. A failed warm just means the first real suggestion pays what it used to.
+        console.error("[call-coach] warm failed:", err);
+        return NextResponse.json({ warmed: false });
+      }
+    }
+
     // A REQUESTED SCRIPT: Matthew pressed Intro or Close instead of the prospect saying something.
     //
     // ‼️ This is a SEPARATE AXIS from callType, deliberately. A close on a cold lead is
@@ -223,24 +328,13 @@ export async function POST(request: NextRequest) {
           .join("\n")
       : "";
 
-    // Filter playbook to relevant entries to reduce tokens.
-    //
-    // The `?? ""` is load-bearing now that INTRO requests carry no utterance: filterRelevantPlaybook
-    // calls .toLowerCase() on this and would throw a TypeError, which the catch below would quietly
-    // convert into the generic fallback cards. Empty string matches nothing and falls through to the
-    // 5 general-purpose entries, which is the right answer for an opener anyway.
-    const relevantPlaybook = filterRelevantPlaybook(
-      Array.isArray(playbook) ? playbook : [],
-      merchantUtterance ?? ""
-    );
-    const playbookStr =
-      relevantPlaybook.length > 0
-        ? JSON.stringify(relevantPlaybook, null, 0)
-        : "No matching playbook entries.";
-
-    // Dynamic system block — appended AFTER the cached STATIC_RULES.
-    // Keeping this separate is what lets the static prefix get a cache hit.
-    const playbookBlock = `PLAYBOOK (adapt when merchant words match a trigger):\n${playbookStr}`;
+    // `playbook` is still accepted off the request body and deliberately IGNORED. The extension
+    // fetches it, caches it for an hour and ships it on every call; older builds in the wild still
+    // do. Reading it would put client-controlled bytes inside the cached prefix, so one stale
+    // extension would silently re-write the cache on every request. The server's own copy is
+    // authoritative — see `call-coach-playbook.ts`. Once every client is updated this field can
+    // come out of the contract entirely.
+    void playbook;
 
     // The pre-call brief, pasted into the extension's CLOSING NOTES box before dialing. It comes
     // from `call` in the audit thread (see audit-engine/call-script.ts), where every figure in it
@@ -323,12 +417,10 @@ export async function POST(request: NextRequest) {
 
     // Call Claude API — Haiku 4.5 streaming for lowest TTFT.
     //
-    // The system field is split into TWO blocks so the first one (the
-    // static rules — easily >1024 tokens) gets cached by Anthropic. On
-    // every subsequent call within the 5-minute ephemeral window we pay
-    // ~10% of the input cost on that block and TTFT drops noticeably.
-    // The dynamic playbook block sits AFTER the cached block so it can
-    // change per-utterance without invalidating the cache.
+    // `CACHED_PREFIX` (rules + full playbook, 8,550 tokens) is block one and carries the
+    // breakpoint. Everything that varies per call comes after it. See the threshold warning on
+    // STATIC_RULES: this used to be STATIC_RULES alone at 3,952 tokens, under Haiku's 4,096
+    // minimum, so the marker did nothing and every request re-prefilled at full cost.
     const claudeResponse = await fetch(
       "https://api.anthropic.com/v1/messages",
       {
@@ -339,7 +431,7 @@ export async function POST(request: NextRequest) {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: MODEL,
           // 800 was too tight and failed SILENTLY. `qualification` and `notes` are emitted AFTER
           // `suggestions` in the JSON, so a response that runs long does not lose its third card,
           // it loses the CHECKLIST and the NOTES entirely, and the extension's tolerant parser
@@ -350,26 +442,24 @@ export async function POST(request: NextRequest) {
           max_tokens: 1400,
           temperature: 0.5,
           stream: true,
-          // Cached prefix FIRST, then the two per-call blocks. The brief is stable for the whole
-          // call but goes after the playbook anyway: putting it between the cached rules and the
-          // playbook would not extend the cache (only the first block is marked) and would move
-          // the prospect facts further from the user turn, which is where they get used.
+          // Cached prefix FIRST (rules + playbook), then the per-call blocks.
+          //
+          // `ttl: "1h"` rather than the 5-minute default. Within one call the requests are seconds
+          // apart and either TTL would hold, but there are minutes of gap between prospects and a
+          // 5-minute entry expires in every one of them, paying a fresh 1.25x write on the first
+          // suggestion of every call. The 1h write costs 2x once and then reads all day.
           system: [
             {
               type: "text",
-              text: STATIC_RULES,
-              cache_control: { type: "ephemeral" },
+              text: CACHED_PREFIX,
+              cache_control: { type: "ephemeral", ttl: "1h" },
             },
             // MODE and CALL LANGUAGE go FIRST among the per-call blocks and stay tiny. They select
-            // which half of STATIC_RULES applies, so the model has to have read them before it
-            // reaches the playbook or the brief.
+            // which half of the cached rules applies, so the model has to have read them before it
+            // reaches the brief.
             {
               type: "text",
               text: situationBlock,
-            },
-            {
-              type: "text",
-              text: playbookBlock,
             },
             ...(briefBlock ? [{ type: "text", text: briefBlock }] : []),
           ],
@@ -416,63 +506,6 @@ export async function POST(request: NextRequest) {
       fallback: true,
     });
   }
-}
-
-/**
- * Filter playbook to entries most relevant to the merchant's utterance.
- * Reduces token count by only sending matching entries instead of all 30+.
- */
-function filterRelevantPlaybook(
-  playbook: Array<{
-    trigger: string;
-    category: string;
-    suggestions: string[];
-    context: string;
-    source: string;
-  }>,
-  utterance: string
-) {
-  if (playbook.length === 0) return [];
-
-  const lower = utterance.toLowerCase();
-  const words = new Set(lower.split(/\s+/).filter((w) => w.length > 2));
-
-  const scored = playbook.map((entry) => {
-    const trigger = entry.trigger.toLowerCase();
-    const triggerWords = trigger.split(/\s+/);
-
-    // Direct trigger match — highest priority
-    if (lower.includes(trigger)) return { entry, score: 10 };
-
-    // Word overlap scoring
-    const matchCount = triggerWords.filter(
-      (tw) => words.has(tw) || lower.includes(tw)
-    ).length;
-    const score = triggerWords.length > 0 ? matchCount / triggerWords.length : 0;
-
-    return { entry, score };
-  });
-
-  // Return top 10 matches with minimum relevance threshold
-  const relevant = scored
-    .filter((s) => s.score >= 0.3)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10)
-    .map((s) => s.entry);
-
-  // If no good matches, send a few general-purpose entries
-  if (relevant.length === 0) {
-    const generalCategories = [
-      "pattern_interrupt",
-      "objection_discovery",
-      "sales_psychology",
-    ];
-    return playbook
-      .filter((e) => generalCategories.includes(e.category))
-      .slice(0, 5);
-  }
-
-  return relevant;
 }
 
 /**
