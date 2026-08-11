@@ -1,8 +1,9 @@
-// Create the $39 (or $56) PaymentIntent and the order row behind it.
+// Create the $39 PaymentIntent and the order row behind it.
 //
 // setup_future_usage: 'off_session' is the whole point of this route beyond taking
-// the money: it saves the card to the Customer so the one-click $299 OTO can charge
-// it later with no re-entry.
+// the money: it saves the card to the Customer so /get-named can start a Core or
+// Complete subscription later with one click and no re-entry. That saved card is
+// also what makes the $39 credit a one-tap experience rather than a support ticket.
 
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest) {
   const amount = PRICES.audit;
 
   const cityRaw = clean(payload.city, 80);
+  const zip = clean(payload.zip, 12);
   const market = marketKey(cityRaw);
 
   // The opt-in row, if there is one. A buyer can in principle reach checkout without
@@ -83,6 +85,7 @@ export async function POST(req: NextRequest) {
       clinic_website: check.target.website,
       clinic_domain: check.target.domain,
       city: cityRaw || null,
+      zip: zip || null,
       market_key: market,
       amount_cents: amount,
       status: "created",
@@ -115,8 +118,8 @@ export async function POST(req: NextRequest) {
         amount,
         currency: "usd",
         customer: customer.id,
-        // Saves the card for the off-session founding subscription. Without this the
-        // one-click OTO is impossible and the whole back end of the funnel dies.
+        // Saves the card for the off-session Core/Complete subscription. Without this the
+        // one-click subscribe on /get-named is impossible and the back end of the funnel dies.
         setup_future_usage: "off_session",
         automatic_payment_methods: { enabled: true },
         description: "SRT AI Visibility Audit",

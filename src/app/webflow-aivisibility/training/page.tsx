@@ -46,7 +46,7 @@ export default function TrainingPage({
           <span className="medspa-eyebrow">{TRAINING.eyebrow}</span>
           <h1 className="medspa-h1">{TRAINING.headline}</h1>
           <p className="medspa-sub">{TRAINING.subhead}</p>
-          <TrainingClient />
+          <TrainingClient accessKey={searchParams.k ?? null} />
         </>
       ) : (
         <div className="medspa-card">

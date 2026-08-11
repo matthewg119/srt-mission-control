@@ -42,6 +42,9 @@ export function FunnelClient({ checkoutEnabled }: { checkoutEnabled: boolean }) 
 
   // Live checkout state (only used when checkoutEnabled).
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  // The opt-in route signs and returns this. Both the buy path and the decline path
+  // lead to the training, so it is the next destination either way.
+  const [trainingUrl, setTrainingUrl] = useState<string | null>(null);
   const [orderId, setOrderId] = useState<string | null>(null);
   const [confirmSecret, setConfirmSecret] = useState<string | null>(null);
 
@@ -115,6 +118,7 @@ export function FunnelClient({ checkoutEnabled }: { checkoutEnabled: boolean }) 
 
       // Fires only for ad-attributed visitors, which is what the ad set optimizes on.
       track("Lead");
+      if (typeof data.trainingUrl === "string") setTrainingUrl(data.trainingUrl);
       setBusy(false);
       setStage("offer");
       track("InitiateCheckout");
@@ -183,8 +187,8 @@ export function FunnelClient({ checkoutEnabled }: { checkoutEnabled: boolean }) 
    * Called once Stripe confirms in the browser.
    *
    * This is the PRIMARY provisioning trigger. The webhook is an idempotent backstop,
-   * but the buyer needs a working OTO token about a second from now and webhook
-   * latency cannot promise that.
+   * but the buyer is redirected to the training about a second from now and webhook
+   * latency cannot promise the row is ready by then.
    */
   async function onPaid() {
     track("Purchase");
@@ -195,8 +199,11 @@ export function FunnelClient({ checkoutEnabled }: { checkoutEnabled: boolean }) 
         body: JSON.stringify({ orderId, confirmSecret }),
       });
       const data = await res.json();
-      if (data.ok && data.otoUrl) {
-        window.location.assign(data.otoUrl);
+      // Buyers watch the training next. The subscription is sold from /get-named
+      // afterwards, not as an immediate upsell.
+      const next = (typeof data.trainingUrl === "string" && data.trainingUrl) || trainingUrl;
+      if (data.ok && next) {
+        window.location.assign(next);
         return;
       }
     } catch {
@@ -385,7 +392,15 @@ export function FunnelClient({ checkoutEnabled }: { checkoutEnabled: boolean }) 
               <button
                 type="button"
                 className="medspa-linkbtn"
-                onClick={() => setStage("declined")}
+                onClick={() => {
+                  // Decliners get the training too. It is not gated behind the
+                  // purchase, and it is what carries them to /get-named.
+                  if (trainingUrl) {
+                    window.location.assign(trainingUrl);
+                    return;
+                  }
+                  setStage("declined");
+                }}
               >
                 {OFFER.decline}
               </button>

@@ -49,13 +49,30 @@ export const PRICES = {
    * constant and nothing else.
    */
   audit: 3900,
-  /** Founding, locked for life, first 5 clinics only. */
-  founding: 29900,
-  /** Standard, everyone after the founding seats are gone. */
-  standard: 49900,
+  /** Core: "fixes what you say". */
+  core: 34900,
+  /** Complete: "changes what everyone else says". */
+  complete: 49900,
 } as const;
 
-export const FOUNDING_SEATS = 5;
+export type Tier = "core" | "complete";
+
+/**
+ * What the $39 audit takes off the first month.
+ *
+ * Equal to the audit price by definition, and the credit line on the page computes
+ * from this rather than hardcoding "$310" so the two can never disagree.
+ */
+export const AUDIT_CREDIT_CENTS = PRICES.audit;
+
+export function tierPrice(tier: Tier): number {
+  return tier === "core" ? PRICES.core : PRICES.complete;
+}
+
+/** First month after the $39 audit credit. Never let this be a literal. */
+export function firstMonthCents(tier: Tier, hasAuditCredit: boolean): number {
+  return tierPrice(tier) - (hasAuditCredit ? AUDIT_CREDIT_CENTS : 0);
+}
 
 export function dollars(cents: number): string {
   return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
@@ -214,101 +231,15 @@ export const TRAINING = {
   ),
 } as const;
 
-// The $299 / $499 block. Deliberately carries NO price until checkout exists: a
-// price on a page that cannot take the money is a promise with no mechanism behind
-// it, which is the same reason LOOM_CLIENT_COUNT_CLAIM ships null.
-export const TRAINING_OFFER_PLACEHOLDER = {
+// The training page's CTA into the order page. It carries no price: pricing lives on
+// /get-named, where the comparison table gives the numbers their context.
+export const TRAINING_OFFER = {
   headline: guard("trainingOffer.headline", "Want us to do it for you?"),
   body: guard(
     "trainingOffer.body",
-    "We build the answer coverage, the markup and the third party citations that AI search reads, and we work with one clinic per market."
+    "We build the answer coverage, the markup and the third party citations that AI search reads, and we keep it maintained every month."
   ),
-  cta: guard("trainingOffer.cta", "Tell me more"),
-} as const;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// The one-time offer, shown once immediately after the $39 purchase
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const OTO = {
-  runningHeadline: guard("oto.runningHeadline", "Your audit is running"),
-  runningBody: guard(
-    "oto.runningBody",
-    "It is asking ChatGPT all 20 questions right now. Read this while it works, the scorecard lands in your inbox either way."
-  ),
-
-  steps: [
-    guard("oto.step1", "Research your clinic"),
-    guard("oto.step2", "Identify your competitors"),
-    guard("oto.step3", "Write the buyer questions"),
-    guard("oto.step4", "Ask ChatGPT all 20"),
-    guard("oto.step5", "Score the answers"),
-    guard("oto.step6", "Build your report"),
-  ],
-
-  founding: {
-    eyebrow: guard("oto.founding.eyebrow", "Founding rate, this page only"),
-    headline: guard("oto.founding.headline", "Want us to go and fix it?"),
-    body: guard(
-      "oto.founding.body",
-      "The audit tells you where you stand. This is the work that changes it: the answer coverage, the schema markup and the third party citations AI search actually reads, rebuilt around your clinic and maintained every month."
-    ),
-    bullets: [
-      guard("oto.founding.b1", "We work with one clinic per market"),
-      guard("oto.founding.b2", "Your rate is locked for as long as you stay"),
-      guard("oto.founding.b3", "Cancel any time, no term"),
-    ],
-    cta: guard("oto.founding.cta", "Yes, start at $299 a month"),
-    ctaBusy: guard("oto.founding.ctaBusy", "Starting"),
-    noCard: guard("oto.founding.noCard", "No card to re-enter. We use the one you just paid with."),
-    decline: guard("oto.founding.decline", "No thanks, just the audit"),
-    seatsLabel: guard("oto.founding.seatsLabel", "founding seats left"),
-  },
-
-  standard: {
-    eyebrow: guard("oto.standard.eyebrow", "Monthly, cancel any time"),
-    headline: guard("oto.standard.headline", "Want us to go and fix it?"),
-    body: guard(
-      "oto.standard.body",
-      "The audit tells you where you stand. This is the work that changes it: the answer coverage, the schema markup and the third party citations AI search actually reads, rebuilt around your clinic and maintained every month."
-    ),
-    cta: guard("oto.standard.cta", "Start at $499 a month"),
-    ctaBusy: guard("oto.standard.ctaBusy", "Starting"),
-    soldOut: guard(
-      "oto.standard.soldOut",
-      "The five founding seats are taken. This is the standard rate."
-    ),
-    expired: guard(
-      "oto.standard.expired",
-      "The founding rate on your link has expired. This is the standard rate."
-    ),
-    cityLabel: guard("oto.standard.cityLabel", "Which city and state does your clinic serve?"),
-    cityPlaceholder: guard("oto.standard.cityPlaceholder", "Greensboro, NC"),
-  },
-
-  done: {
-    headline: guard("oto.done.headline", "You are in."),
-    body: guard(
-      "oto.done.body",
-      "We will be in touch today to kick off. Your audit scorecard still lands in your inbox separately."
-    ),
-  },
-
-  declined: {
-    headline: guard("oto.declined.headline", "No problem."),
-    body: guard(
-      "oto.declined.body",
-      "Your audit is still running and the scorecard lands in your inbox shortly."
-    ),
-  },
-
-  invalid: {
-    headline: guard("oto.invalid.headline", "This link is not live"),
-    body: guard(
-      "oto.invalid.body",
-      "It may have been used already, or it expired. If you have paid for an audit, check your inbox for the scorecard."
-    ),
-  },
+  cta: guard("trainingOffer.cta", "See what that looks like"),
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,3 +248,139 @@ export const OTO = {
 
 /** The one shared srtagency pixel. Standard events only, never custom parameters. */
 export const PIXEL_ID = "2571789533326438";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /get-named, the order page
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The tier comparison, as DATA with a fixed section order.
+ *
+ * ‼️ THE SECTION ORDER IS LOAD-BEARING. Do not reorder it, and in particular do not
+ * hoist the volume rows (4 vs 8 pages, 20 vs 40 prompts) to the top "so the
+ * difference is obvious". The tiers differ in CATEGORY, not quantity: Core fixes
+ * what you say, Complete changes what everyone else says. A table that opens on
+ * 4-vs-8 argues the opposite and turns a positioning difference into a haggle over
+ * volume. The volume rows live INSIDE their sections on purpose.
+ *
+ * `core: false` renders NOT_INCLUDED below. It is a middle dot, not an em dash:
+ * copy-guard throws on em dashes at module load, and that rule stays absolute.
+ */
+export const NOT_INCLUDED = "\u00b7";
+
+export interface TierRow {
+  label: string;
+  /** true = included, false = not in Core, string = the Core-specific value. */
+  core: boolean | string;
+  complete: boolean | string;
+}
+
+export interface TierSection {
+  heading: string;
+  rows: TierRow[];
+}
+
+export const TIER_TABLE: TierSection[] = [
+  {
+    heading: guard("tier.s1", "What everyone else says about you"),
+    rows: [
+      { label: guard("tier.s1r1", "Review response drafting"), core: false, complete: true },
+      { label: guard("tier.s1r2", "Negative review workflow"), core: false, complete: true },
+      {
+        label: guard("tier.s1r3", "Off-site placement across directories and lists"),
+        core: false,
+        complete: true,
+      },
+      {
+        label: guard("tier.s1r4", "Competitor displacement tracking"),
+        core: false,
+        complete: true,
+      },
+    ],
+  },
+  {
+    heading: guard("tier.s2", "What you say"),
+    rows: [
+      { label: guard("tier.s2r1", "New answer pages"), core: "4 a month", complete: "8 a month" },
+      { label: guard("tier.s2r2", "Refreshed existing pages"), core: true, complete: true },
+      { label: guard("tier.s2r3", "Automated review requests"), core: true, complete: true },
+    ],
+  },
+  {
+    heading: guard("tier.s3", "What you can see"),
+    rows: [
+      { label: guard("tier.s3r1", "Tracked prompts"), core: "20", complete: "40" },
+      { label: guard("tier.s3r2", "Monthly re-test"), core: true, complete: true },
+      { label: guard("tier.s3r3", "Scorecard"), core: true, complete: true },
+      { label: guard("tier.s3r4", "Walkthrough video"), core: true, complete: true },
+      { label: guard("tier.s3r5", "Slack channel"), core: true, complete: true },
+    ],
+  },
+];
+
+export const GET_NAMED = {
+  eyebrow: guard("gn.eyebrow", "The work itself"),
+  headline: guard("gn.headline", "Get named by the engines your patients ask"),
+
+  /** Sits directly above the table and is the whole argument for the two tiers. */
+  positioning: guard(
+    "gn.positioning",
+    "Core fixes what you say. Complete changes what everyone else says."
+  ),
+
+  coreName: guard("gn.coreName", "Core"),
+  completeName: guard("gn.completeName", "Complete"),
+  perMonth: guard("gn.perMonth", "a month"),
+
+  coreCta: guard("gn.coreCta", "Start Core"),
+  completeCta: guard("gn.completeCta", "Start Complete"),
+  ctaBusy: guard("gn.ctaBusy", "One moment"),
+
+  noTerm: guard("gn.noTerm", "No minimum term. Cancel anytime."),
+
+  guaranteeHeading: guard("gn.guaranteeHeading", "The Keep Everything Guarantee"),
+  guaranteeBody: guard(
+    "gn.guaranteeBody",
+    "Cancel whenever you want and you keep every asset we built. Your pages stay live, your listings stay corrected, your review system stays connected, and every scorecard and walkthrough video is yours. Nothing is switched off or taken back."
+  ),
+  /** Stated because "guarantee" reads as "refund" to most people, and it is not one. */
+  guaranteeNotRefund: guard(
+    "gn.guaranteeNotRefund",
+    "This is not a refund policy. It means the work stays yours, not that months are returned."
+  ),
+
+  /** Must appear before payment even though it is not in the video. */
+  implementationNote: guard(
+    "gn.implementationNote",
+    "Optional one-time implementation available at onboarding for clinics that want broader online-presence cleanup. Not required."
+  ),
+
+  zipLabel: guard("gn.zipLabel", "Which ZIP does your clinic serve?"),
+  zipPlaceholder: guard("gn.zipPlaceholder", "27401"),
+  cityLabel: guard("gn.cityLabel", "City and state"),
+  cityPlaceholder: guard("gn.cityPlaceholder", "Greensboro, NC"),
+
+  /** Rendered only for audit buyers. The figure is COMPUTED, never a literal. */
+  creditPrefix: guard("gn.creditPrefix", "$39 audit credit applied, your first month is"),
+
+  savedCardNote: guard(
+    "gn.savedCardNote",
+    "We use the card you paid the audit with. Nothing is charged until you tap the button."
+  ),
+} as const;
+
+export const CONFIRMED = {
+  headline: guard("confirmed.headline", "You are in."),
+  body: guard(
+    "confirmed.body",
+    "Book your onboarding call below. It is a kickoff, not a sales call, so bring your questions and anything you want looked at first."
+  ),
+  noCalendar: guard(
+    "confirmed.noCalendar",
+    "We will email you to schedule your onboarding call shortly."
+  ),
+} as const;
+
+/** Calendly inline embed. Unset renders CONFIRMED.noCalendar, never a broken iframe. */
+export const CALENDLY_URL = process.env.NEXT_PUBLIC_CALENDLY_URL || null;
+

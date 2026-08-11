@@ -494,12 +494,164 @@
   font-weight: 700;
 }
 
-.medspa-seats {
-  margin: 0 0 1.25rem;
-  font-size: 0.85rem;
+/* ── /get-named: the tier comparison ────────────────────────────────────── */
+
+.gn-positioning {
+  font-size: 1.05rem;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--card-foreground);
+  margin: 0 0 1.5rem;
+}
+
+/* The table scrolls inside its own box; the page body never scrolls sideways. */
+.gn-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.gn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  min-width: 30rem;
+}
+
+.gn-table th,
+.gn-table td {
+  padding: 0.7rem 0.9rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.gn-table thead th {
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.gn-table thead th:first-child { width: 55%; }
+
+.gn-tier-name {
+  display: block;
+  font-size: 1rem;
   font-weight: 600;
+  color: var(--card-foreground);
+}
+
+.gn-tier-price {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.85rem;
+  font-weight: 500;
   color: var(--accent-brand);
 }
+
+.gn-table tbody td { text-align: center; }
+
+.gn-table tbody th {
+  font-weight: 400;
+  color: var(--foreground);
+}
+
+/* The three section headers. They are the argument, so they read louder than rows. */
+.gn-section th {
+  padding-top: 1.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent-brand);
+}
+
+.gn-yes { color: var(--accent-brand); font-weight: 700; }
+.gn-no { color: var(--muted-foreground); }
+.gn-val { color: var(--foreground); font-variant-numeric: tabular-nums; }
+
+.gn-credit {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--accent-brand-dim);
+  color: var(--foreground);
+  font-size: 0.95rem;
+}
+
+.gn-fields {
+  display: grid;
+  gap: 0 1rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 560px) {
+  .gn-fields { grid-template-columns: 1fr 1fr; }
+}
+
+.gn-buttons {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 560px) {
+  .gn-buttons { grid-template-columns: 1fr 1fr; }
+}
+
+/* Core is the lighter of the two so Complete reads as the upgrade. */
+.gn-btn-core {
+  background: transparent;
+  color: var(--accent-brand);
+  border: 1px solid var(--accent-brand);
+}
+
+.gn-guarantee {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.gn-guarantee h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--card-foreground);
+}
+
+.gn-guarantee p {
+  margin: 0 0 0.75rem;
+  font-size: 0.93rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+
+/* "Guarantee" reads as "refund" to most people. This line is why it is not. */
+.gn-not-refund {
+  margin-bottom: 0 !important;
+  font-weight: 500;
+  color: var(--foreground) !important;
+}
+
+.gn-terms {
+  margin: 1.25rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.gn-calendly {
+  margin: 0 0 2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #fff;
+}
+
+.gn-calendly iframe { display: block; border: 0; }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */
 

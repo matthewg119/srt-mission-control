@@ -163,7 +163,7 @@ async function syncSubscription(sub: Stripe.Subscription, deleted: boolean): Pro
 
   const { data: existing } = await supabaseAdmin
     .from("medspa_subscriptions")
-    .select("id, founding_slot_no, status")
+    .select("id, tier, email, status")
     .eq("stripe_subscription_id", sub.id)
     .maybeSingle();
 
@@ -183,28 +183,22 @@ async function syncSubscription(sub: Stripe.Subscription, deleted: boolean): Pro
     })
     .eq("id", existing.id);
 
-  // A founding subscription that just went live after a 3DS challenge is worth
-  // saying out loud, because the claim route could not confirm it at the time.
+  // A subscription that just went live after a 3DS challenge is worth saying out
+  // loud, because the subscribe route could not confirm it at the time.
   if (!isLiveStatus(existing.status as string) && isLiveStatus(status)) {
     await note(
-      `:tada: Med spa subscription is now *${status}* (${sub.id})` +
-        (existing.founding_slot_no ? `, founding seat ${existing.founding_slot_no}` : "")
+      `:tada: Med spa subscription is now *${status}* (${existing.tier ?? "?"}, ${existing.email ?? "?"})`
     );
   }
 
-  if (deleted && existing.founding_slot_no) {
-    // Stamp the release for the record, but LEAVE claimed_by set. A seat that
-    // silently reopens makes "only 5, ever" false, and someone who cancels in month
-    // two has already consumed the scarcity. Reopening one is a deliberate manual
-    // UPDATE, never something a webhook does.
-    await supabaseAdmin
-      .from("medspa_founding_slots")
-      .update({ released_at: new Date().toISOString() })
-      .eq("slot_no", existing.founding_slot_no);
-
+  if (deleted) {
+    // ‼️ RECORD ONLY. Nothing is revoked, disabled, or clawed back on cancellation.
+    // "Keep Everything" is a product promise: their pages stay live, their listings
+    // stay corrected, their scorecards and videos stay theirs. If anyone later adds a
+    // teardown step here, that promise silently becomes false.
     await note(
-      `:warning: Founding seat ${existing.founding_slot_no} subscription was cancelled (${sub.id}). ` +
-        `The seat stays consumed. Free it by hand if you mean to resell it.`
+      `:wave: Med spa subscription cancelled (${existing.tier ?? "?"}, ${existing.email ?? "?"}). ` +
+        `Nothing is revoked, per Keep Everything. Their market is free for someone else.`
     );
   }
 }

@@ -3,10 +3,10 @@
 // TWO callers race for this, deliberately:
 //   1. /api/medspa/checkout/confirm, called by the browser the instant
 //      stripe.confirmPayment resolves. This is the PRIMARY path, because the buyer
-//      must land on the OTO page with a working token about a second later and
-//      webhook delivery is asynchronous: p50 is quick, p99 is seconds to minutes,
-//      and a cold lambda adds to it. Gating the token on the webhook would 404 the
-//      OTO page for the fastest buyers, who are exactly the ones who convert.
+//      is redirected onward about a second later and webhook delivery is
+//      asynchronous: p50 is quick, p99 is seconds to minutes, and a cold lambda adds
+//      to it. Waiting on the webhook would strand the fastest buyers, who are exactly
+//      the ones who convert.
 //   2. The Stripe webhook, which is the BACKSTOP for the buyer who closes the tab
 //      mid-redirect, loses their connection, or pays by a redirect-based method.
 //
@@ -18,10 +18,10 @@
 import { supabaseAdmin } from "@/lib/db";
 import { ingestLead, enrichLead } from "@/lib/lead-intake";
 import { getStripe } from "@/lib/medspa/stripe";
-import { signOtoToken, persistOtoToken } from "@/lib/medspa/oto";
+import { signAccess, isLinkSecretConfigured } from "@/lib/medspa/links";
 import { sendMedspaReceipt } from "@/lib/medspa/receipt-email";
 import { fulfillMedspaOrder } from "@/lib/medspa/fulfillment";
-import { dollars } from "@/config/medspa-funnel";
+import { dollars, funnelUrl } from "@/config/medspa-funnel";
 import type Stripe from "stripe";
 
 const ZOHO_LEAD_SOURCE = "Med Spa AI Audit ($39)";
@@ -29,8 +29,20 @@ const ZOHO_LEAD_SOURCE = "Med Spa AI Audit ($39)";
 export interface ProvisionResult {
   ok: true;
   orderId: string;
-  otoToken: string;
   email: string;
+  /** Signed /training URL, or null when the link secret is unset. */
+  trainingUrl: string | null;
+}
+
+/**
+ * The training link for an order, derived from the opt-in it belongs to.
+ *
+ * Null when the order has no opt-in (someone who reached checkout without opting in)
+ * or the secret is unset. Callers must render no button rather than a dead link.
+ */
+function trainingUrlForOrder(optinId: string | null): string | null {
+  if (!optinId || !isLinkSecretConfigured()) return null;
+  return funnelUrl(`/training?k=${encodeURIComponent(signAccess(optinId))}`);
 }
 
 /** Returns null when there is nothing to provision. Never throws on a stray event. */
@@ -62,7 +74,7 @@ export async function provisionPaidOrder(
 
   // ── THE PROVISIONING CLAIM ──
   // status 'created' -> 'paid'. Exactly one caller wins; the loser still needs the
-  // token, so it reads the row back below.
+  // order row (for the training link it returns), so it reads it back below.
   const { data: claimed } = await supabaseAdmin
     .from("medspa_orders")
     .update({
@@ -83,20 +95,15 @@ export async function provisionPaidOrder(
 
   if (!order) return null;
 
-  // Deterministic, so the winner and the loser derive the SAME string. Persisted by
-  // both, with on-conflict-do-nothing, which makes a double issue a no-op.
-  const token = signOtoToken(order.id as string, order.created_at as string);
-  await persistOtoToken({
-    token,
-    orderId: order.id as string,
-    email: order.email as string,
-  });
-
+  // Derived, not stored, and identical for the claim winner and loser: the signature
+  // is a pure function of the opt-in id. Nothing here needs a database round trip or
+  // a single-use ledger any more, which is the main simplification of dropping the
+  // OTO.
   const result: ProvisionResult = {
     ok: true,
     orderId: order.id as string,
-    otoToken: token,
     email: order.email as string,
+    trainingUrl: trainingUrlForOrder((order.optin_id as string | null) ?? null),
   };
 
   // Everything below is one-time work and belongs to the claim winner only.
@@ -122,7 +129,7 @@ async function onFirstPayment(order: OrderRow): Promise<void> {
   const website = order.clinic_website as string;
   const amount = order.amount_cents as number;
 
-  // Make the saved card the customer's default, so the one-click OTO has something
+  // Make the saved card the customer's default, so the one-click subscribe has something
   // unambiguous to charge off-session.
   const customerId = order.stripe_customer_id as string | null;
   const pmId = order.stripe_payment_method_id as string | null;
@@ -168,12 +175,11 @@ async function onFirstPayment(order: OrderRow): Promise<void> {
     }).catch((e) => console.error("[medspa/provision] ingestLead failed:", (e as Error).message));
   }
 
-  const token = signOtoToken(order.id as string, order.created_at as string);
   await sendMedspaReceipt({
     to: email,
     firstName: name.split(/\s+/)[0] || null,
     clinicWebsite: website,
     amountCents: amount,
-    otoToken: token,
+    trainingUrl: trainingUrlForOrder((order.optin_id as string | null) ?? null),
   }).catch((e) => console.error("[medspa/provision] receipt failed:", (e as Error).message));
 }

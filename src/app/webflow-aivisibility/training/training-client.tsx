@@ -4,11 +4,17 @@
 
 import { useState } from "react";
 import { GatedVSL } from "@/components/gated-vsl";
-import { TRAINING_OFFER_PLACEHOLDER, VIDEO, VSL_B } from "@/config/medspa-funnel";
+import { TRAINING_OFFER, VIDEO, VSL_B, funnelUrl } from "@/config/medspa-funnel";
 import { track } from "@/lib/medspa/pixel";
 
-export function TrainingClient() {
+export function TrainingClient({ accessKey }: { accessKey: string | null }) {
   const [revealed, setRevealed] = useState(false);
+
+  // Carry the signed key through to the order page so it knows who this is and can
+  // apply their $39 audit credit without asking them to prove they bought it.
+  const orderUrl = funnelUrl(
+    accessKey ? `/get-named?k=${encodeURIComponent(accessKey)}` : "/get-named"
+  );
 
   return (
     <>
@@ -31,23 +37,26 @@ export function TrainingClient() {
 
       {revealed && (
         <section className="medspa-offer">
-          <h2>{TRAINING_OFFER_PLACEHOLDER.headline}</h2>
-          <p className="medspa-offer-body">{TRAINING_OFFER_PLACEHOLDER.body}</p>
+          <h2>{TRAINING_OFFER.headline}</h2>
+          <p className="medspa-offer-body">{TRAINING_OFFER.body}</p>
 
           {/*
-            PLACEHOLDER: the $299 Founding / $499 Standard checkout mounts here in
-            Phase 2.
-
-            It deliberately prints NO price today. A price on a page that cannot take
-            the money is a promise with no mechanism behind it, which is the same
-            reason LOOM_CLIENT_COUNT_CLAIM ships null rather than a plausible number.
-            PRICES.founding and PRICES.standard already exist in the config and are
-            the single source for both the copy and the Stripe amount when this is
-            wired up.
+            No price here on purpose. Pricing lives on /get-named, where the
+            comparison table gives the two numbers their context. A bare "$349" on
+            this page would be a number without the argument that justifies it.
           */}
-          <button className="medspa-btn" type="button" disabled>
-            {TRAINING_OFFER_PLACEHOLDER.cta}
-          </button>
+          {/*
+            A plain anchor, not a Next <Link>. This app is served under srtagency.com
+            through a rewrite, so client-side routing would navigate against whatever
+            casing Next emitted and a 30x mid RSC-prefetch blanks the page.
+          */}
+          <a
+            className="medspa-btn"
+            href={orderUrl}
+            style={{ display: "block", textAlign: "center", textDecoration: "none" }}
+          >
+            {TRAINING_OFFER.cta}
+          </a>
         </section>
       )}
     </>

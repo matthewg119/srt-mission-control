@@ -1,13 +1,16 @@
-// The $39 receipt, which is also how the OTO link survives a closed tab.
+// The $39 receipt.
 //
-// The OTO URL is a bearer credential, so this email is the ONLY place the plaintext
-// token is persisted anywhere outside the browser's address bar (the database stores
-// only its SHA-256). That is deliberate, and it is why the link expires.
+// It used to carry the single-use OTO token, which was the only place that plaintext
+// ever existed outside the address bar. The OTO is gone: the subscription is now sold
+// from /get-named after the free training, so this email's job is simply to confirm
+// the charge and hand them the training link.
+//
+// The training link IS a bearer credential (HMAC over the opt-in id), but unlike the
+// OTO it never expires and is not single use, so it is safe to sit in an inbox.
 
 import { microsoft } from "@/lib/microsoft";
 import { SIGNATURE_S_HTML } from "@/config/email-signature";
-import { dollars, funnelUrl, PRICES } from "@/config/medspa-funnel";
-import { otoTtlMinutes } from "@/lib/medspa/oto";
+import { dollars } from "@/config/medspa-funnel";
 
 function escapeHtml(text: string): string {
   return text
@@ -17,16 +20,13 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export function otoUrlFor(token: string): string {
-  return funnelUrl(`/oto/${encodeURIComponent(token)}`);
-}
-
 export interface ReceiptParams {
   to: string;
   firstName?: string | null;
   clinicWebsite: string;
   amountCents: number;
-  otoToken: string;
+  /** Signed /training URL. Null renders no button rather than a dead link. */
+  trainingUrl: string | null;
 }
 
 export async function sendMedspaReceipt({
@@ -34,8 +34,19 @@ export async function sendMedspaReceipt({
   firstName,
   clinicWebsite,
   amountCents,
-  otoToken,
+  trainingUrl,
 }: ReceiptParams): Promise<void> {
+  // Same missing-URL rule as the guide email: an unset or unsignable link degrades to
+  // no CTA block, never to a 404 in a paid receipt.
+  const trainingBlock = trainingUrl
+    ? `
+    <hr style="border:0;border-top:1px solid #e5e5e5;margin:24px 0">
+    <p style="margin:0 0 12px">While it runs, watch the training. It explains what the scorecard is about to show you.</p>
+    <p style="margin:0 0 24px">
+      <a href="${trainingUrl}" style="display:inline-block;background:#00C9A7;color:#04252b;font-weight:700;text-decoration:none;padding:14px 28px;border-radius:8px">Watch the training</a>
+    </p>`
+    : "";
+
   const body = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
   <div style="background:#0B1426;padding:28px 24px;text-align:center">
@@ -46,12 +57,7 @@ export async function sendMedspaReceipt({
     <p style="margin:0 0 16px">Hi ${escapeHtml(firstName || "there")},</p>
     <p style="margin:0 0 16px">Thanks. We are putting all 20 questions to ChatGPT for ${escapeHtml(clinicWebsite)} right now, and the scorecard follows by email.</p>
     <p style="margin:0 0 20px"><strong>Paid today: ${dollars(amountCents)}</strong></p>
-    <hr style="border:0;border-top:1px solid #e5e5e5;margin:24px 0">
-    <p style="margin:0 0 12px">While it runs, there is one thing on the table for you and it is time limited:</p>
-    <p style="margin:0 0 20px">
-      <a href="${otoUrlFor(otoToken)}" style="display:inline-block;background:#00C9A7;color:#04252b;font-weight:700;text-decoration:none;padding:14px 28px;border-radius:8px">See the founding offer</a>
-    </p>
-    <p style="margin:0 0 24px;font-size:13px;color:#666666">This link is personal to you, works once, and expires in ${otoTtlMinutes()} minutes. After that the founding rate of ${dollars(PRICES.founding)} a month is gone.</p>
+    ${trainingBlock}
     <p style="margin:0 0 16px">Best,</p>
     ${SIGNATURE_S_HTML}
   </div>

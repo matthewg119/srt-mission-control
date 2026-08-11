@@ -9,7 +9,6 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/db";
 import { provisionPaidOrder } from "@/lib/medspa/provision";
-import { otoUrlFor } from "@/lib/medspa/receipt-email";
 import { clean } from "@/lib/medspa/validate";
 
 export const runtime = "nodejs";
@@ -61,9 +60,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, pending: true });
   }
 
+  // Buyers go to the free training next, not to an upsell. The subscription is sold
+  // from /get-named after they have watched it.
   return NextResponse.json({
     ok: true,
     pending: false,
-    otoUrl: otoUrlFor(result.otoToken),
+    trainingUrl: result.trainingUrl,
   });
 }

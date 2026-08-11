@@ -25,22 +25,43 @@ import Stripe from "stripe";
 const PLANS = [
   {
     // Caller-supplied product id. This is what makes the script idempotent.
-    productId: "srt_medspa_founding",
-    srtKey: "medspa_founding",
-    name: "SRT AI Visibility, Founding",
-    description: "Founding rate, locked for life. First five clinics only. One clinic per market.",
-    amount: 29900,
-    envVar: "STRIPE_PRICE_FOUNDING",
+    productId: "srt_medspa_core",
+    srtKey: "medspa_core",
+    name: "SRT AI Visibility, Core",
+    description: "Fixes what you say. Answer pages, refreshed pages, review requests, tracked prompts and a monthly re-test.",
+    amount: 34900,
+    envVar: "PRICE_ID_CORE_349",
   },
   {
-    productId: "srt_medspa_standard",
-    srtKey: "medspa_standard",
-    name: "SRT AI Visibility, Standard",
-    description: "Monthly AI visibility implementation and maintenance. One clinic per market.",
+    productId: "srt_medspa_complete",
+    srtKey: "medspa_complete",
+    name: "SRT AI Visibility, Complete",
+    description: "Changes what everyone else says. Everything in Core plus review response drafting, off-site placement and competitor displacement tracking.",
     amount: 49900,
-    envVar: "STRIPE_PRICE_STANDARD",
+    envVar: "PRICE_ID_COMPLETE_499",
   },
 ];
+
+// Retired by the v4 offer. Archived rather than deleted: Stripe will not delete a
+// product that has ever had a price, and archiving is what keeps them out of the
+// dashboard without breaking any historical object that referenced them.
+const RETIRED_PRODUCT_IDS = ["srt_medspa_founding", "srt_medspa_standard"];
+
+// The $39 audit credit, applied to the first month for anyone who bought the audit.
+//
+// A COUPON rather than a customer balance credit. A balance credit has to be written
+// before the subscription exists, so a failed creation strands $39 on the customer
+// that silently discounts some unrelated future invoice. The coupon travels in the
+// same subscriptions.create call: no subscription, no discount, nothing to clean up.
+// It also renders as an explicit discount line the customer can see, which matters
+// because the $39-comes-off promise is made on camera.
+const CREDIT_COUPON = {
+  id: "srt_medspa_audit_credit_3900",
+  amount_off: 3900,
+  currency: "usd",
+  duration: "once",
+  name: "$39 audit credit",
+};
 
 const key = process.env.STRIPE_SECRET_KEY;
 if (!key) {
@@ -102,6 +123,38 @@ for (const plan of PLANS) {
   }
 
   results.push({ envVar: plan.envVar, id: price.id });
+}
+
+// The $39 audit credit coupon. Coupons accept a caller-supplied id, so this is
+// retrieve-or-create like the products above and safe to re-run.
+let coupon;
+try {
+  coupon = await stripe.coupons.retrieve(CREDIT_COUPON.id);
+  console.log("coupon exists: " + coupon.id + "  $" + ((coupon.amount_off ?? 0) / 100) + " " + coupon.duration);
+} catch (e) {
+  if (e?.code !== "resource_missing" && e?.statusCode !== 404) throw e;
+  coupon = await stripe.coupons.create(CREDIT_COUPON);
+  console.log("coupon created: " + coupon.id + "  $" + (coupon.amount_off / 100) + " " + coupon.duration);
+}
+results.push({ envVar: "AUDIT_CREDIT_COUPON_ID", id: coupon.id });
+
+// Archive the retired Founding / Standard products. Stripe refuses to archive a
+// product that still has an active price, so the prices go first.
+for (const retiredId of RETIRED_PRODUCT_IDS) {
+  try {
+    const prod = await stripe.products.retrieve(retiredId);
+    if (!prod.active) {
+      console.log("retired already: " + retiredId);
+      continue;
+    }
+    const prices = await stripe.prices.list({ product: retiredId, active: true, limit: 100 });
+    for (const pr of prices.data) await stripe.prices.update(pr.id, { active: false });
+    await stripe.products.update(retiredId, { active: false });
+    console.log("retired: " + retiredId + " (" + prices.data.length + " price(s) deactivated)");
+  } catch (e) {
+    if (e?.code === "resource_missing" || e?.statusCode === 404) continue;
+    console.log("could not retire " + retiredId + ": " + e.message);
+  }
 }
 
 console.log(`\nSet these on the ${mode} environment:\n`);

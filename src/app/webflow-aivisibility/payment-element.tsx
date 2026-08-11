@@ -104,7 +104,7 @@ export function PaymentForm({ clientSecret, ...rest }: PaymentFormProps) {
 /**
  * Raise a 3DS challenge for an already-created subscription.
  *
- * The off-session founding charge can come back `requires_action`. Without this the
+ * The off-session subscription charge can come back `requires_action`. Without this the
  * subscription would sit `incomplete` forever and the buyer would believe they had
  * subscribed.
  */
