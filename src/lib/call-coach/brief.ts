@@ -19,6 +19,7 @@ import { companiesConflict, normalizeHost } from "@/lib/company-identity";
 import { buildZohoOnlyContext, type ZohoOnlySnapshot } from "@/lib/ai-intel/merchant-context";
 import { buildCallFacts, buildCoachNotes } from "@/lib/audit-engine/call-script";
 import { loadReportView } from "@/lib/audit-engine/report-view";
+import { readAuditThreadNotes, formatAuditThreadNotes } from "./slack-thread";
 import {
   readThreadTruth,
   readMailboxThread,
@@ -84,9 +85,22 @@ async function findReport(target: CallTarget): Promise<AuditReportRow | null> {
   // 4. Website host. Weakest, so it is the only one that gets a conflict check against the name
   //    as well: two businesses on one host is rare, but a parked domain or a shared builder
   //    subdomain does happen.
+  //
+  // ‼️ This used to pull the 50 most recent done reports and match client-side. That is a silent
+  // time bomb: the 51st finished audit pushes the oldest out of the page, the host stops matching,
+  // and the brief prints "NONE. No AI visibility audit has been run on this business" for a lead
+  // we HAVE audited — with `callType` dropping to cold alongside it. There were 44 done reports
+  // when this was found, and `/scan` lets strangers add to that table, so it was days away.
+  //
+  // Filtering server-side on the host keeps it exact at any table size. `ilike` needs the wildcards
+  // and the host itself is still compared exactly afterwards, so a substring collision
+  // ("amusements.com" inside "orlandoamusements.com") cannot sneak a wrong row through.
   const host = normalizeHost(target.website);
   if (host) {
-    const { data } = await done().order("created_at", { ascending: false }).limit(50);
+    const { data } = await done()
+      .ilike("website", `%${host}%`)
+      .order("created_at", { ascending: false })
+      .limit(20);
     const match = (data ?? []).find((r) => normalizeHost((r as AuditReportRow).website) === host);
     if (match) {
       const row = match as AuditReportRow;
@@ -170,7 +184,22 @@ export async function buildCallBrief(input: CallTarget): Promise<CallBrief> {
 
   const email = truth ? formatThreadTruth(truth) : "EMAIL HISTORY: no audit thread, so nothing was checked.";
 
-  const text = clip([...header, numbers, "", crm, "", email].filter(Boolean).join("\n"));
+  // ── What we said about them in Slack ─────────────────────────────────────
+  // The third live source, alongside Zoho and the mailbox. Until this existed, everything decided
+  // in the audit thread was invisible on the call unless a recognised command persisted it to a
+  // column. Fails open: no thread, no bot token, or a Slack outage all resolve to "".
+  const threadNotes = report
+    ? formatAuditThreadNotes(
+        await readAuditThreadNotes(report.slack_channel_id, report.slack_thread_ts).catch(() => null)
+      )
+    : "";
+
+  // ‼️ ORDER IS LOAD-BEARING. `clip()` truncates to MAX_BRIEF_CHARS and `/suggest` caps again at
+  // 4000, so whatever sits last is what gets eaten first. The measured numbers must never be the
+  // thing that falls off — a brief that loses its score silently reproduces the bug where the coach
+  // asks blind questions about a lead we already audited. Thread chatter is the most expendable
+  // thing here, so it goes at the very bottom.
+  const text = clip([...header, numbers, "", crm, "", email, "", threadNotes].filter(Boolean).join("\n"));
 
   return {
     callType: decision.type,

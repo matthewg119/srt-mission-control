@@ -46,6 +46,22 @@ export type ScriptKind = "intro" | "close";
  * ‼️ Do not reintroduce a verbatim line here. The failure is not that the model writes bad
  * openers, it is that a verbatim order outranks every personalization instruction in the same
  * block — which is the same structural lesson the header above already records.
+ *
+ * ## ‼️ COLD DOES NOT MEAN "NO AUDIT". Never assert facts the brief owns.
+ *
+ * Removing the canned opener left a hole, and the first patch filled it with the words
+ * "NO AUDIT HAS BEEN RUN" hardcoded into both cold blocks. That is false for a whole branch of
+ * `call-type.ts`, which its own comment calls "the specific trap": a report finished, a draft was
+ * written, and nobody pressed send. `cold` means nothing was DELIVERED, not that nothing was
+ * MEASURED. Orlando Amusements sat in exactly that state — status done, score 44/100, three named
+ * competitors, `outreach_stage: drafted`, `first_sent_at: null` — so `brief.ts` handed the model
+ * the full numbers block while this file told it none of it existed. The coach asked blind
+ * questions on a lead we had already audited.
+ *
+ * The rule that came out of it: **this file may state what has been SENT, because the mode encodes
+ * that. It may never state what has been MEASURED, because only the brief knows.** Defer to the
+ * brief's "NUMBERS I MAY CITE" section, which is explicit in both directions — real figures when
+ * `buildCoachNotes` ran, and a literal "NONE" from `zohoOnlyNumbers()` when it did not.
  */
 
 function introBlock(mode: CoachCallType): string {
@@ -57,11 +73,15 @@ function introBlock(mode: CoachCallType): string {
 - ‼️ HARD CAP: 30 WORDS PER CARD, question included. Count them. He is reading this with the phone already ringing, and a card he has to scan twice is a card he will not use. One long comma-spliced sentence breaks this cap exactly like three short ones would.
 - Plain spoken English, the way someone actually talks on a phone. No slogans, no marketing voice, no throat-clearing before the question.
 - If the brief is thin or missing, stay short and plain rather than inventing detail. Never invent a business fact to sound specific.
-- ‼️ Nothing has been sent to this person and NO AUDIT HAS BEEN RUN for them. Do not mention an audit, a report, a score or a video, not even as something you are about to send. Offer to LOOK, never claim to have looked.
-- ‼️ SPECIFIC MEANS THE QUESTION IS ABOUT THEIR BUSINESS. IT DOES NOT MEAN CLAIMING TO KNOW ANYTHING ABOUT THEM. You have not checked this business, so you cannot report on it, hint at a result, or imply you have already had a look. These are the two sides of the line:
-    ALLOWED, because it asks: "When a parent in Orlando asks ChatGPT for a bounce house, do you know who it names?"
-    BANNED, because it claims: "I was looking at how you show up", "I noticed you're not appearing", "your competitors are coming up instead", "here's what I'm seeing".
-  If a card would collapse without its claim, it was never an opener, it was a fabricated finding. Ask the question instead. He is on this call to earn the right to look, not to report what he found.
+- ‼️ NOTHING HAS BEEN SENT to this person. No report link, no video, no email has reached them, so never refer to one as something they have or are about to receive.
+- ‼️ WHETHER ANYTHING WAS MEASURED IS A SEPARATE QUESTION, AND THE CALL BRIEF ANSWERS IT. Read its "NUMBERS I MAY CITE" section and obey it literally:
+    If it lists a score, a competitor or a set of questions they are absent from, those were MEASURED and they are the strongest thing you have. Open on one. A real number about their own business is worth more than any question you could invent.
+    If it says NONE, then nothing has been measured for this business and you have no findings at all. Ask instead of claiming.
+- ‼️ NEVER PRODUCE A FIGURE THE BRIEF DID NOT GIVE YOU, and never imply a look that the brief does not evidence. The line runs between citing and inventing, not between specific and vague:
+    ALLOWED when the brief carries numbers: "You're absent from 12 of the 20 questions your buyers actually ask, and Astro Jump comes up instead. Want to see it?"
+    ALLOWED when the brief says NONE: "When a parent in Orlando asks ChatGPT for a bounce house, do you know who it names?"
+    BANNED either way: any score, percentage, count or competitor that is not in the brief, and any "I noticed" or "here's what I'm seeing" that the brief does not back.
+  A card that would collapse without an unsupported claim was never an opener, it was a fabricated finding.
 - No pitch, no price, no packages. This is CLOSER stage C and its only job is to earn the next thirty seconds.`;
   }
 
@@ -106,8 +126,11 @@ ${shared}
 - The target is getting them to hand over the website so the free implementation plan can go out. Everything here serves that one ask.
 - ‼️ Three DIFFERENT routes to it, built from the CALL BRIEF and from what this owner has actually said on the call so far. Offering it, shrinking it, and removing the risk from it are three routes. The same offer worded three ways is not.
 - His own language for this is plain and low pressure: it is free, it is not a sales call, worst case they keep the plan themselves, the only thing needed is a website. Use that register. Do not recite it as a script and do not stack all of it into one card.
-- ‼️ The implementation plan is something he is OFFERING TO BUILD. It does not exist yet. NO AUDIT HAS BEEN RUN. Never say an audit was run, a report exists, or anything was already sent.
-- ‼️ AND THEREFORE YOU HAVE NO FINDINGS. Not one. "Here's what I'm seeing", "your name isn't coming up", "your competitors are showing up instead", "I checked and" are all fabrications on this call, and the owner catches them the moment he asks how you know. Sell the LOOK, never the result of a look nobody took: what he is offering is to go and find out, for free, and send it over. That offer is stronger than an invented finding anyway, because it is true and it costs the owner nothing to accept.
+- ‼️ NOTHING HAS BEEN SENT to them. The implementation plan and the video are things he is OFFERING TO HAND OVER, never things they already have.
+- ‼️ WHAT HE MAY POINT AT IS DECIDED BY THE CALL BRIEF, in its "NUMBERS I MAY CITE" section, and by nothing else:
+    If it carries a score, competitors or absent questions, they were MEASURED. Lead with one. "You're absent from 12 of 20 questions and these three come up instead, want me to send you the breakdown" is a far stronger close than any offer to go and look, because the gap is already proven and the ask is only to receive it.
+    If it says NONE, nothing has been measured. Then sell the LOOK, not a result: he is offering to go and find out, free, and send it over. That is true and it costs the owner nothing to accept.
+- ‼️ Either way, NEVER invent a figure, a percentage or a competitor name that is not in the brief. "Here's what I'm seeing" with nothing behind it is caught the moment the owner asks how you know.
 - No price. Not a range, not "a few hundred", not "depends". They have not seen anything yet.`;
 }
 

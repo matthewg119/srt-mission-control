@@ -930,6 +930,29 @@ rather than reimplemented, so there is one place that turns audit rows into spea
 no audit the numbers block is a **negative assertion** ("NONE. Do not cite a score..."), because every
 brief the model has seen had a score and an absent section invites it to supply one.
 
+**Three live sources, read at scan time** (2026-08-11): Zoho (`buildZohoOnlyContext`), the Outlook
+mailbox (`readThreadTruth` / `readMailboxThread`), and now the audit's **Slack thread**
+(`slack-thread.ts`). Slack was the hole — `brief.ts` carried `slack_channel_id`/`slack_thread_ts`
+only so the post-call wrap knew where to post, and never read a byte. Everything decided in
+`#ai-visibility-audits` was invisible on the call unless a recognised command happened to persist
+it to a column, and `intake_answers` was the only path in.
+
+`readAuditThreadNotes` keeps **human** messages only — bot posts are the audit card, every draft and
+every receipt, which are output rather than input — and drops bare command tokens (`1`, `call`,
+`nudge 3`) because those are instructions, not context. Live read rather than write-through: no new
+table, no backfill of the existing audits, and it cannot drift.
+
+> !! **`THREAD NOTES` is appended LAST and capped at 800 chars, and both are load-bearing.**
+> `clip()` and `/suggest`'s `MAX_BRIEF_CHARS` both truncate from the end, so whatever sits last is
+> eaten first. Thread chatter is the most expendable thing in the brief and the measured numbers are
+> the least — a brief that loses its score silently reproduces the bug directly above.
+
+> !! **`findReport`'s website route used to scan the 50 most recent done reports and match
+> client-side.** There were 44 done reports when that was found, and `/scan` lets strangers add to
+> the table. At 51 the oldest silently stops matching, the brief prints "no audit has been run" for
+> a lead we HAVE audited, and `callType` drops to cold. It now filters server-side on the
+> normalized host, then still compares the host exactly so a substring collision cannot pass.
+
 > !! **Zoho returns `""` for unset text fields, never null**, so every `??` chain over Zoho data is
 > dead unless it goes through a `blank()`/`str()` guard. This shipped broken twice in one day: first
 > `rec.Company ?? rec.Deal_Name` keeping the blank, then both routes returning their own
@@ -1104,6 +1127,22 @@ in preamble and ended in the same sentence three times.
 
 The fixed script now lives in the extension as a **read-only panel** he opens when he wants it.
 It is never sent to a model, because a model only ever hands it back paraphrased worse.
+
+> ‼️ **COLD DOES NOT MEAN "NO AUDIT", and the first patch for the fabrication problem below got
+> this wrong.** It hardcoded `NO AUDIT HAS BEEN RUN` into both cold blocks. That is false for a
+> whole branch of `call-type.ts` — the one its own comment calls *"the specific trap: a report
+> finished, a draft was written, and nobody pressed send."* `cold` means nothing was **delivered**,
+> not that nothing was **measured**.
+>
+> Orlando Amusements sat in exactly that state: `status: done`, score 44/100, `outreach_stage:
+> drafted`, `first_sent_at: null`. So `brief.ts` handed the model the full numbers block while the
+> script gate told it none of it existed, and the coach asked blind discovery questions about a
+> lead we had already audited. That is what "why won't it use my audit" turned out to be.
+>
+> **The rule: `call-coach-script-gate.ts` may state what has been SENT, because the mode encodes
+> that. It may never state what has been MEASURED, because only the brief knows.** Both cold blocks
+> now defer to the brief's `NUMBERS I MAY CITE` section, which is explicit in both directions —
+> real figures from `buildCoachNotes`, or a literal `NONE` from `zohoOnlyNumbers()`.
 
 **Two failure modes showed up when the verbatim text was removed, both caught by testing against
 the live API before shipping. Both guards are load-bearing:**
