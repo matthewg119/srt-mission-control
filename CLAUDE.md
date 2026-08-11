@@ -1077,15 +1077,47 @@ prompt**, and that is the third time this codebase has had to learn the same les
 > 3**. **Absent beats forbidden**, same as `call-coach-price-gate.ts` and the follow-up COACH
 > NOTES. A model cannot quote a line it was never given.
 
-- **INTRO** — 3 openers. On `cold` all three carry Matthew's stem *"Hey, I'm looking for some help
-  here,"* and suggestion 1 is his line verbatim. On `followup`/`close` it is a re-open and the stem
-  is not in the request at all. Never pitches, never prices, never mentions a report. Returns
-  `qualification` all-null and `notes` empty, because nobody has said anything yet.
+- **INTRO** — 3 openers, built from the CALL BRIEF: this business, what they sell, who buys, the
+  city, the owner's name. On `followup`/`close` it is a re-open instead. Never pitches, never
+  prices, never mentions a report. Returns `qualification` all-null and `notes` empty, because
+  nobody has said anything yet.
 - **CLOSE** — 3 reframes, stage discipline **suspended** for this request only (he pressed the
   button, so he gets closes for where the call is, not for the current CLOSER stage). On `cold` the
-  target is the email reply so the free implementation plan can go out, and Matthew's own
-  free-implementation / website / 20-minutes sequence is the spine. On `followup` no figure exists.
-  On `close` it is the one-to-ten, the isolate, and paperwork.
+  target is getting the website handed over so the free implementation plan can go out, by three
+  different routes (offer it, shrink it, de-risk it). On `followup` no figure exists. On `close` it
+  is the one-to-ten, the isolate, and paperwork.
+
+### The canned openers are gone (2026-08-11, same day they were added)
+
+The first cut hardcoded a `COLD_STEM` every intro card had to begin with (*"Hey, I'm looking for
+some help here,"*), a `COLD_OPENER` suggestion 1 had to reproduce verbatim, and a three-line close
+"spine" to follow close to verbatim. Live result: scanning Orlando Amusement resolved the business,
+the owner, the city and what they sell — and then the intro **discarded all of it** and printed the
+same three cards it prints for everyone. The close came back as three paragraphs that differed only
+in preamble and ended in the same sentence three times.
+
+> ‼️ **Do not put a verbatim line back in this file.** The failure was never that the model writes
+> bad openers. It is that a verbatim order outranks every personalization instruction sharing a
+> block with it — the identical structural lesson the "absent beats forbidden" box above already
+> records, applied one level down. A card Matthew could have written on a sticky note is worth
+> nothing on screen; the only thing worth generating is the part that changes.
+
+The fixed script now lives in the extension as a **read-only panel** he opens when he wants it.
+It is never sent to a model, because a model only ever hands it back paraphrased worse.
+
+**Two failure modes showed up when the verbatim text was removed, both caught by testing against
+the live API before shipping. Both guards are load-bearing:**
+
+1. **It invented findings to sound specific.** With the script gone the model filled the space with
+   *"I was looking at how Orlando Amusement shows up"* and *"here's what I'm seeing: your name isn't
+   showing up, but your competitors are"* — on a lead where **no audit has been run**. The block now
+   states the line explicitly with an allowed/banned pair: specific means **the question is about
+   their business**, never a claim about what you found. Sell the LOOK, never the result of a look
+   nobody took.
+2. **It dodged the length rule with run-on sentences.** Told "one or two sentences", it returned
+   single 71-word lines held together by commas. The cap is now stated in **words (30, question
+   included)** with the dodge named, in `shared` so it binds all three close modes. Measured before
+   and after on the same brief: 71/51/60 words → 29/31/33.
 - ~~`filterRelevantPlaybook`~~ **is deleted** (2026-08-11). The playbook now lives in
   `src/lib/call-coach-playbook.ts` as a pre-rendered block inside `CACHED_PREFIX`. The `playbook`
   field is still accepted off the request body and deliberately IGNORED — reading it would put

@@ -25,22 +25,43 @@ import type { CoachCallType } from "./call-coach-price-gate";
 export type ScriptKind = "intro" | "close";
 
 /**
- * Matthew's own cold opener. It is his line, it works, and it is reproduced verbatim rather than
- * paraphrased because a rewritten version of a line that already works is just a worse line.
+ * ## Why there is no canned opener here any more (2026-08-11, same day it was added)
+ *
+ * This file briefly hardcoded Matthew's cold opener: a `COLD_STEM` every card had to begin with,
+ * plus a `COLD_OPENER` that suggestion 1 had to reproduce verbatim. The close block did the same
+ * thing with a three-line "spine" it was told to follow close to verbatim.
+ *
+ * It made the coach useless on the thing it exists for. Scanning a lead resolves the business, the
+ * owner, the city and what they sell, and then the intro threw all of it away and printed the same
+ * three cards for everyone — the scan's entire output discarded at the last step. The close came
+ * back as three long paragraphs that differed only in their preamble and ended in the same
+ * sentence three times, which is one card printed three times.
+ *
+ * A card he could have written on a sticky note is worth nothing on screen. If a line is fixed he
+ * already knows it, so the only thing worth generating is the part that changes: THIS business,
+ * THIS owner, what they actually sell. The fixed script now lives where a fixed script belongs —
+ * a read-only panel in the extension he opens when he wants it, never round-tripped through a
+ * model that would only paraphrase it worse.
+ *
+ * ‼️ Do not reintroduce a verbatim line here. The failure is not that the model writes bad
+ * openers, it is that a verbatim order outranks every personalization instruction in the same
+ * block — which is the same structural lesson the header above already records.
  */
-const COLD_STEM = "Hey, I'm looking for some help here,";
-const COLD_OPENER = `Hey, I'm looking for some help here. Are you using ChatGPT to attract more business?`;
 
 function introBlock(mode: CoachCallType): string {
   if (mode === "cold") {
     return `REQUESTED SCRIPT: INTRO, on a COLD lead. He is about to dial, or they just picked up. Nothing has been said yet.
 
-- Give 3 openers. Attention first, then interest, then desire.
-- EVERY one of the three begins with this exact stem: "${COLD_STEM}"
-- SUGGESTION 1 IS EXACTLY THIS LINE, verbatim, no edits and no additions:
-    "${COLD_OPENER}"
-- Suggestions 2 and 3 keep the stem and change what follows it, using the business in the CALL BRIEF and what they actually sell.
-- ‼️ Nothing has been sent to this person and no audit has been run for them. Do not mention an audit, a report, a score or a video, not even as something you are about to send. Offer to LOOK, never claim to have looked.
+- Give 3 openers, and give him 3 genuinely DIFFERENT ways in. Not one line phrased three times.
+- ‼️ Build every one of them out of the CALL BRIEF: this business by name, what they actually sell, who buys from them, their city, this owner. An opener that would work on any business on earth is a wasted card, and the whole reason he scanned the lead was so it would not be one.
+- ‼️ HARD CAP: 30 WORDS PER CARD, question included. Count them. He is reading this with the phone already ringing, and a card he has to scan twice is a card he will not use. One long comma-spliced sentence breaks this cap exactly like three short ones would.
+- Plain spoken English, the way someone actually talks on a phone. No slogans, no marketing voice, no throat-clearing before the question.
+- If the brief is thin or missing, stay short and plain rather than inventing detail. Never invent a business fact to sound specific.
+- ‼️ Nothing has been sent to this person and NO AUDIT HAS BEEN RUN for them. Do not mention an audit, a report, a score or a video, not even as something you are about to send. Offer to LOOK, never claim to have looked.
+- ‼️ SPECIFIC MEANS THE QUESTION IS ABOUT THEIR BUSINESS. IT DOES NOT MEAN CLAIMING TO KNOW ANYTHING ABOUT THEM. You have not checked this business, so you cannot report on it, hint at a result, or imply you have already had a look. These are the two sides of the line:
+    ALLOWED, because it asks: "When a parent in Orlando asks ChatGPT for a bounce house, do you know who it names?"
+    BANNED, because it claims: "I was looking at how you show up", "I noticed you're not appearing", "your competitors are coming up instead", "here's what I'm seeing".
+  If a card would collapse without its claim, it was never an opener, it was a fabricated finding. Ask the question instead. He is on this call to earn the right to look, not to report what he found.
 - No pitch, no price, no packages. This is CLOSER stage C and its only job is to earn the next thirty seconds.`;
   }
 
@@ -55,6 +76,10 @@ function introBlock(mode: CoachCallType): string {
 
 function closeBlock(mode: CoachCallType): string {
   const shared = `- Give 3 reframes that raise desire. Each ends in a question.
+- ‼️ HARD CAP: 30 WORDS PER CARD, question included. Count them before you return it. He reads these out loud mid-call, and a close that takes a paragraph to arrive has lost the room before it lands.
+- ‼️ One sentence does NOT mean one enormous sentence. A 60-word line held together by commas and dashes is three sentences in a trench coat and it breaks the cap just the same. Say one thing, then ask.
+- Pick ONE angle per card and let the other cards carry the rest. Stacking the whole offer into a single card (free, and twenty minutes, and a one-page plan, and no sales call, and worst case you keep it) is what makes them unreadable, and it leaves the other two cards nothing to be.
+- No throat-clearing. "Here's what I'm thinking, and tell me if it lands" is six words spent before the sentence starts.
 - ‼️ Stage discipline is SUSPENDED for this request only. He pressed the button, so give him closes for where the call actually is, not for the current CLOSER stage.
 - Every HARD LINE still binds. A requested close is not permission to guarantee anything, invent a figure, or manufacture a deadline.`;
 
@@ -78,11 +103,11 @@ ${shared}
   return `REQUESTED SCRIPT: CLOSE, on a COLD lead. Nothing has been sent to them and no audit has been run.
 
 ${shared}
-- The target is getting them to accept the email, so the free implementation plan and a personalized video on getting more business through ChatGPT can go out. His own sequence is the spine and should appear close to verbatim across the three:
-    "Would you be against us doing a free implementation for you, so new customers can find you using ChatGPT? The only requirement is having a website. Does your business have one?"
-    "It'd take me about 20 minutes to go over everything on the phone, so I'll just send you an email with all of it. That okay?"
-    "Worst case you keep the implementation plan for yourself. What's your website?"
-- ‼️ The implementation plan is something he is OFFERING TO BUILD. It does not exist yet. Never say an audit was run, a report exists, or anything was already sent.
+- The target is getting them to hand over the website so the free implementation plan can go out. Everything here serves that one ask.
+- ‼️ Three DIFFERENT routes to it, built from the CALL BRIEF and from what this owner has actually said on the call so far. Offering it, shrinking it, and removing the risk from it are three routes. The same offer worded three ways is not.
+- His own language for this is plain and low pressure: it is free, it is not a sales call, worst case they keep the plan themselves, the only thing needed is a website. Use that register. Do not recite it as a script and do not stack all of it into one card.
+- ‼️ The implementation plan is something he is OFFERING TO BUILD. It does not exist yet. NO AUDIT HAS BEEN RUN. Never say an audit was run, a report exists, or anything was already sent.
+- ‼️ AND THEREFORE YOU HAVE NO FINDINGS. Not one. "Here's what I'm seeing", "your name isn't coming up", "your competitors are showing up instead", "I checked and" are all fabrications on this call, and the owner catches them the moment he asks how you know. Sell the LOOK, never the result of a look nobody took: what he is offering is to go and find out, for free, and send it over. That offer is stronger than an invented finding anyway, because it is true and it costs the owner nothing to accept.
 - No price. Not a range, not "a few hundred", not "depends". They have not seen anything yet.`;
 }
 
