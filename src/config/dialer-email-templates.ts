@@ -38,6 +38,24 @@ const ulStyle = `style="margin:0 0 20px 0;padding-left:22px;list-style-type:disc
 const liStyle = `style="margin:0 0 6px 0;"`;
 
 export const FULL_HTML_EMAIL_TEMPLATES: Record<string, FullHtmlEmailTemplate> = {
+  // ── Nice Speaking With You (AI Visibility permission ask) ───────────────────
+  // Captured VERBATIM from the sent message "ChatGPT Visibility report Inquire"
+  // via GET /api/debug/capture-signature. Only the <html>/<head>/<body> wrapper
+  // was stripped; not one character of the body was retyped or restyled.
+  //
+  // NO SIG_S here, deliberately. Matthew typed his sign-off into the message
+  // itself ("Thanks, / Matthew Garcia / ..."), so it is already inside this HTML.
+  // Appending the "S" block would put a SECOND, different signature on an email
+  // whose whole point is that it goes out exactly as he sent it. It carries no
+  // cid: images either, so nothing here breaks when Graph sends it.
+  //
+  // No {{firstName}} token on purpose: the email opens "Nice speaking with you,"
+  // with no name, and that is how it was written.
+  "nice-speaking": {
+    subject: "ChatGPT Visibility report Inquire",
+    html: `<div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)">Nice speaking with you,</div><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)"><br></div><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)">We will get started working on your report shortly.</div><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)"><br></div><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)">Please reply to this email with a &quot;1&quot; or anything overall,</div><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)"><br></div><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)">This is for the email to give us permission to send the full AI Visibility report.</div><div id="Signature" class="elementToProof"><div class="elementToProof" style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)"><br></div><div class="elementToProof" style="font-size:12pt; color:rgb(0,0,0)"><span style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; color:rgb(0,36,81)">Thanks,<br>Matthew Garcia<br><b>Search Retrieval Tactics</b><br>AI Visibility Specialist<br>336-833-2303</span><span style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif"><br></span><span style="font-family:Aptos,sans-serif"><a href="https://www.srtagency.com" title="https://www.srtagency.com">https://www.srtagency.com</a></span><span style="font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif"><br></span></div></div>`,
+  },
+
   // ── Original post-call "Next Steps" email (verbatim, no greeting/signature) ──
   "next-steps": {
     subject: "(Next Steps) Business loan Inquire",
