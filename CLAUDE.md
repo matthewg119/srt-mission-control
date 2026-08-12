@@ -1075,6 +1075,37 @@ block every suggestion on a Supabase round trip before the Anthropic request was
 Negative results are cached too, but a *transient* Supabase failure is deliberately not, or one
 blip would lock the coach out for five minutes mid-call. Trade: revocation takes up to 5 minutes.
 
+### NEPQ mechanics (`call-coach-nepq.ts`, 2026-08-11)
+
+From Matthew's NEPQ / 7th Level follow-up guide. It is the **HOW a line is worded**, layered under
+the CLOSER spine, which stays the **WHAT and the order**. They do not compete: CLOSER picks the
+move, NEPQ decides whether it sounds like a salesperson. `NEPQ_BLOCK` sits in `CACHED_PREFIX`
+between `STATIC_RULES` and the playbook — it modifies every line the rules produce, so it has to be
+read before the playbook's example responses rather than after them.
+
+Carried: the extra banned phrases (following up / checking in / circling back / is this a good time
+/ do you have two minutes / let me ask you a question), neutral qualifiers, **"feel" never
+"think"**, confused-clarifier objection handling (repeat their own words back as a two-word
+question and stop), the slight push-away that produces self-persuasion, consequence questions being
+late rather than early, and the follow-up open.
+
+> **Deliberately dropped.** The guide is written for a human with a voice; a suggestion card is text
+> read off a screen. Shuffling papers as a pattern interrupt, hand gestures driving tone, pitch and
+> volume cannot be carried by a card. What survives is the part that is WORD CHOICE — the hedged
+> recall that lands as confused rather than accusing, the neutral qualifiers, the openers. The
+> retail / walk-in framework is out too: SRT sells over the phone.
+
+**The follow-up open is the whole call.** `scriptBlock("intro", "followup" | "close")` now builds on
+it: his name said like someone they already know, a **vague** recall of the last contact with a
+question mark on it, their problem in their words, then *"did you give up on [the result], or what
+actually happened?"* — as a shape, never verbatim. Being slightly unsure about the timing is the
+point: it invites a correction, and a prospect correcting you is a prospect in a conversation.
+
+**The Slack `call` script gets it too**, via `openerAngle()` in `audit-engine/call-script.ts`, and
+`lintSpoken` now **rejects the tells in code**. A prose ban is not a ban — same lesson as the
+em-dash rule and the price gate. On that card the opener *is* the call, so one "just following up"
+costs the whole conversation.
+
 ### Requested scripts: the Intro and Close buttons (2026-08-11)
 `requestKind: "intro" | "close"` on the request body. When set, `merchantUtterance` stops being
 required (an intro fires before anyone has spoken) and the user message changes. **The output

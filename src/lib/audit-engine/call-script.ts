@@ -150,10 +150,30 @@ const REPLY_ASK_LINE =
  * of it. The redesign angle wins whenever a redesign exists, because leading with something already
  * built and free is the only opener that costs the listener nothing to say yes to.
  */
+/**
+ * How the follow-up call opens.
+ *
+ * ‼️ NEPQ, and it is the whole call. This is a dial to someone who got an email and did nothing,
+ * so the opener decides whether there is a conversation at all. Anything that reads as "just
+ * following up" fires the defense reflex before the second line lands: the prospect is not
+ * declining the offer at that point, they are declining a salesperson.
+ *
+ * The shape that survives it: his name said like someone they already know, a VAGUE recall of the
+ * last contact with a question mark on it, their problem in their words, then the question that
+ * does the work. Being slightly unsure about the timing is deliberate — it invites a correction,
+ * and a prospect correcting you is a prospect in a two-way conversation.
+ */
 function openerAngle(f: CallFacts): string {
+  const nepq = [
+    "NEPQ SHAPE, and it is not optional. Line 1 names himself the way someone they already know would, and recalls the last contact VAGUELY with a question mark on it, never precisely: \"looks like we sent you something, I want to say a couple of weeks ago?\".",
+    "Line 2 ends on the question that does the work: did they give up on the result they wanted, or what actually happened. Written for THIS business out of FACTS, not that sentence verbatim.",
+    "BANNED outright: 'just following up', 'circling back', 'checking in', 'touching base', 'is this a good time', 'do you have two minutes'. Any of them and the call is over before the finding.",
+    "Almost nobody answers 'yes, we gave up'. They explain instead, which is the entire point: it hands the call back to them and gets him out of pitch mode.",
+  ].join(" ");
+
   return f.redesignUrl
-    ? "Lead with the free redesign that already exists. Ask if they saw it, and make clear it is theirs either way, no strings. This opens on a gift, not a pitch, so there is nothing to say no to. He SAYS it, he does not read out a URL."
-    : "Say who he is and that he sent something over, then go straight to the finding. No hook, no cleverness. This has to survive a prospect who has already screened two calls today.";
+    ? `Lead with the free redesign that already exists. Ask if they saw it, and make clear it is theirs either way, no strings. This opens on a gift, not a pitch, so there is nothing to say no to. He SAYS it, he does not read out a URL. ${nepq}`
+    : `Say who he is and that he sent something over, then go to the question. No hook, no cleverness. This has to survive a prospect who has already screened two calls today. ${nepq}`;
 }
 
 /** Non-negotiable. Stated to the model, and the last three are re-checked in code by lintScript. */
@@ -570,6 +590,26 @@ function lintSpoken(
   opts: { noPrice?: boolean; facts?: CallFacts } = {}
 ): string[] {
   const warnings: string[] = [];
+
+  // ── NEPQ tells ───────────────────────────────────────────────────────────
+  // A prose ban is not a ban, same lesson as the em-dash rule and the price gate. These are the
+  // phrases that identify a salesperson in the first two seconds of a follow-up dial, and on this
+  // card the opener IS the call, so one of them showing up costs the whole conversation.
+  const NEPQ_TELLS: Array<[RegExp, string]> = [
+    [/\bjust (?:following up|checking in)\b|\bfollowing up\b|\bcircl(?:ing|e) back\b|\btouch(?:ing)? base\b|\bchecking in\b/i, "following up / checking in"],
+    [/\bis (?:this|now) a good time\b|\bdid i catch you at a bad time\b/i, "is this a good time"],
+    [/\bdo you have (?:two|2|a couple(?: of)?) minutes\b|\bgot a minute\b/i, "do you have two minutes"],
+    [/\blet me ask you a question\b/i, "let me ask you a question"],
+  ];
+  const spokenBlob = spoken.join(" ");
+  const tells = NEPQ_TELLS.filter(([re]) => re.test(spokenBlob)).map(([, name]) => name);
+  if (tells.length) {
+    warnings.push(
+      `:warning: SALESPERSON TELL in a spoken line (${tells.join(", ")}). ` +
+        `NEPQ: these fire the defense reflex before the finding lands. Open on a vague recall and ` +
+        `"did you give up on that, or what actually happened?" instead.`
+    );
+  }
 
   // An invented sender domain is worse than a wrong number: it sends the prospect hunting through
   // spam for mail from a company that does not exist, and the whole ask of section 4 is that they

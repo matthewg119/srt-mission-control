@@ -9,6 +9,7 @@ import { detectCallLanguage, languageDirective } from "@/lib/call-coach-language
 import { priceBlock, type CoachCallType } from "@/lib/call-coach-price-gate";
 import { scriptBlock } from "@/lib/call-coach-script-gate";
 import { PLAYBOOK_BLOCK } from "@/lib/call-coach-playbook";
+import { NEPQ_BLOCK } from "@/lib/call-coach-nepq";
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -209,7 +210,10 @@ Return ONLY valid JSON:
  * Folding it in fixes both. It is the same bytes every request, so it rides the cache,
  * and every objection is always present instead of being retrieved by a broken scorer.
  */
-const CACHED_PREFIX = `${STATIC_RULES}\n\n${PLAYBOOK_BLOCK}`;
+// Rules, then HOW to word them, then the objection map. NEPQ sits between the two on purpose: it
+// modifies every line the CLOSER rules produce, so it has to be read before the playbook's example
+// responses rather than after them.
+const CACHED_PREFIX = `${STATIC_RULES}\n\n${NEPQ_BLOCK}\n\n${PLAYBOOK_BLOCK}`;
 
 /**
  * POST /api/call-coach/suggest

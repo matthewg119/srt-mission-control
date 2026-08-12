@@ -88,10 +88,14 @@ function introBlock(mode: CoachCallType): string {
   const seen = mode === "close" ? "they have already seen the work" : "an email has already gone out to them";
   return `REQUESTED SCRIPT: INTRO, on a lead where ${seen}. This is a RE-OPEN, not a cold open.
 
-- Give 3 ways back in. Name himself, name the thing already sent, ask one question.
+- Give 3 ways back in. Three different angles, not three phrasings of one. HARD CAP 30 WORDS each.
+- ‼️ THE OPENER IS THE WHOLE CALL HERE, and "following up" kills it before it starts. Build these on the NEPQ follow-up shape in the mechanics above: his name said like someone they already know, a VAGUE recall of when they last spoke with a question mark on it, their problem in THEIR words, and then the question that does the work:
+    "Did you give up on [the result they wanted], or what actually happened?"
+  Written for this prospect, out of the CALL BRIEF. Not that sentence verbatim — its shape.
+- Being slightly unsure about when you spoke is the point, not sloppiness. It invites them to correct you, and a prospect correcting you is a prospect back in a conversation.
 - Use the CALL BRIEF for what they have actually seen. Never invent a touch that is not in it.
 - No pitch and no re-explaining the offer. He is picking up a conversation, not starting one.
-- Warm, brief, and straight to a question. Three different angles, not three phrasings of one.`;
+- At least one of the three should end on a question about THEM rather than about the email. The email is the excuse for the call, not its subject.`;
 }
 
 function closeBlock(mode: CoachCallType): string {
