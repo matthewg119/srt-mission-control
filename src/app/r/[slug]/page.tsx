@@ -13,7 +13,7 @@ import { BlockBreakdown } from "@/components/audit-report/BlockBreakdown";
 import { PromptTable } from "@/components/audit-report/PromptTable";
 import { CompetitorSection } from "@/components/audit-report/CompetitorSection";
 import { MethodologyFooter } from "@/components/audit-report/MethodologyFooter";
-import { WhatsAppCta } from "@/components/audit-report/WhatsAppCta";
+import { PricingCta } from "@/components/audit-report/PricingCta";
 import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
 
 export const metadata: Metadata = {
@@ -76,7 +76,7 @@ export default async function ReportPage({ params }: { params: { slug: string } 
         </>
       )}
 
-      <WhatsAppCta />
+      <PricingCta />
       <MethodologyFooter createdAt={row.created_at} />
     </main>
   );
