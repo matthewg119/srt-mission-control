@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { HuntLink } from "./hunt-nav";
 import { Phone, Clock, MessageCircle, CalendarX, Sparkles } from "lucide-react";
 import type { WorklistBucket, WorklistItem } from "@/lib/worklist";
 import { LogCallForm } from "./log-call-form";
@@ -58,7 +58,7 @@ function money(n: number | null): string | null {
   return n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
 }
 
-function LeadCard({ lead }: { lead: WorklistItem }) {
+function LeadCard({ lead, queueIds }: { lead: WorklistItem; queueIds: string[] }) {
   const [logging, setLogging] = useState(false);
   const tone = BUCKET_META[lead.bucket].tone;
 
@@ -66,12 +66,18 @@ function LeadCard({ lead }: { lead: WorklistItem }) {
     <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link
-            href={`/dashboard/leads/${lead.contactId}`}
+          {/* Freezes the board's order for the next/prev arrows. It matters more here
+              than on the leads list: logging a call usually makes a lead INELIGIBLE, so
+              it drops off this board entirely and a live re-query would lose your place
+              every single time. */}
+          <HuntLink
+            id={lead.contactId}
+            ids={queueIds}
+            label="Call list"
             className="text-sm font-medium text-white hover:underline"
           >
             {lead.name}
-          </Link>
+          </HuntLink>
           {lead.businessName && lead.businessName !== lead.name && (
             <p className="truncate text-xs text-[rgba(255,255,255,0.45)]">{lead.businessName}</p>
           )}
@@ -154,6 +160,12 @@ export function WorklistBoard({ leads }: { leads: WorklistItem[] }) {
     grouped.set(l.bucket, list);
   }
 
+  // Queue order follows the RENDERED order, bucket by bucket, so arrowing forward walks
+  // the board top to bottom exactly as it reads. Built from BUCKET_ORDER rather than the
+  // flat `leads` array, which is sorted by score and would arrow you across buckets in a
+  // sequence that does not match anything on screen.
+  const queueIds = BUCKET_ORDER.flatMap((b) => (grouped.get(b) ?? []).map((l) => l.contactId));
+
   if (leads.length === 0) {
     return (
       <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-8 text-center">
@@ -188,7 +200,7 @@ export function WorklistBoard({ leads }: { leads: WorklistItem[] }) {
             <p className="mb-3 text-xs text-[rgba(255,255,255,0.35)]">{meta.blurb}</p>
             <div className="space-y-2">
               {items.map((l) => (
-                <LeadCard key={l.contactId} lead={l} />
+                <LeadCard key={l.contactId} lead={l} queueIds={queueIds} />
               ))}
             </div>
           </section>
