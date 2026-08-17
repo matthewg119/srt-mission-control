@@ -56,9 +56,11 @@ interface ContactRow {
   mobile_phone: string | null;
   email: string | null;
   application_stage: string | null;
-  biz_city: string | null;
-  biz_state: string | null;
-  industry: string | null;
+  // Optional, not because they are nullable but because `contacts` has drifted
+  // and these may not exist as columns at all. Read with `?.` everywhere.
+  biz_city?: string | null;
+  biz_state?: string | null;
+  industry?: string | null;
 }
 
 /** RFC 4180: quote everything, double any embedded quote. Note bodies are
@@ -70,8 +72,17 @@ function csvCell(v: unknown): string {
 
 const ACTIVITY_COLS =
   "id, contact_id, activity_type, direction, channel, subject, body, outcome, occurred_at, actor, external_module";
-const CONTACT_COLS =
-  "id, first_name, last_name, business_name, phone, mobile_phone, email, application_stage, biz_city, biz_state, industry";
+
+// `contacts` was built in the Supabase console and has documented drift, and
+// PostgREST fails the WHOLE query on one unknown column. A named column list
+// here is a guess that takes the export down; `*` cannot be wrong. Every field
+// is read optionally below, so a missing one is an empty CSV cell, not a crash.
+const CONTACT_COLS = "*";
+
+// PostgREST puts `.in()` in the query STRING, so a batch of 1,000 uuids is a
+// ~37KB URL and the server answers 400 Bad Request. 100 keeps it well inside
+// any proxy's limit; the extra round trips cost nothing on a one-off script.
+const ID_BATCH = 100;
 
 async function main() {
   console.log(`📦 Archiving imported Zoho activity${DRY_RUN ? " (DRY RUN)" : ""}…`);
@@ -101,14 +112,14 @@ async function main() {
   // query stays proportional to the archive rather than to the whole book.
   const wanted = [...new Set(activities.map((a) => a.contact_id).filter(Boolean) as string[])];
   const byId = new Map<string, ContactRow>();
-  for (let i = 0; i < wanted.length; i += PAGE) {
+  for (let i = 0; i < wanted.length; i += ID_BATCH) {
     const { data, error } = await supabaseAdmin
       .from("contacts")
       .select(CONTACT_COLS)
-      .in("id", wanted.slice(i, i + PAGE));
+      .in("id", wanted.slice(i, i + ID_BATCH));
     if (error) throw new Error(`contacts: ${error.message}`);
     for (const c of (data ?? []) as unknown as ContactRow[]) byId.set(c.id, c);
-    process.stdout.write(`\r  contacts: ${byId.size} rows…`);
+    process.stdout.write(`\r  contacts: ${byId.size} / ${wanted.length} rows…`);
   }
   process.stdout.write("\n");
 
