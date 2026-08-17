@@ -87,18 +87,31 @@ where lower(trim(coalesce(application_stage, ''))) in (
   'working - contacted', 'working - application out', 'working', 'contacted'
 );
 
--- No contact: everything else. That includes the whole funding pipeline
--- (Underwriting, Shopping, Pre-Approved, Approved, VC / DL, Contracts Out,
--- Contracts In, Pending Stips, Funding Call, In Funding) and every pre-contact
--- or funnel-capture value.
+-- No contact: everything else that HAS a value. That includes the whole funding
+-- pipeline (Underwriting, Shopping, Pre-Approved, Approved, VC / DL, Contracts
+-- Out, Contracts In, Pending Stips, Funding Call, In Funding) and every
+-- pre-contact or funnel-capture value.
 update contacts
 set application_stage = 'No contact',
     application_stage_updated_at = now(),
     application_stage_origin = 'import'
-where application_stage is null
-   or application_stage not in ('Closed', 'Working');
+where application_stage is not null
+  and trim(application_stage) <> ''
+  and application_stage not in ('Closed', 'Working');
 
--- Confirm. Should return exactly three rows: No contact, Working, Closed.
+-- Untouched: never had a stage on it at all. Not the same as No contact, which
+-- is somebody's decision that we have not reached them yet. These are rows the
+-- scrapers, funnels and bulk loads created without ever writing the column, and
+-- keeping them separate stops imported noise burying real uncontacted leads on
+-- the same call board. They stay workable, just on a slower cadence.
+update contacts
+set application_stage = 'Untouched',
+    application_stage_updated_at = now(),
+    application_stage_origin = 'import'
+where application_stage is null
+   or trim(application_stage) = '';
+
+-- Confirm. Up to four rows: Untouched, No contact, Working, Closed.
 -- "Email Pitch" and "Negotiating / Follow-up" start empty on purpose. Nothing
 -- in the funding book maps to them; they are the new AEO motion.
 select application_stage, count(*) from contacts group by 1 order by 2 desc;

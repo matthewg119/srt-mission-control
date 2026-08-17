@@ -21,6 +21,16 @@ export interface StagePipeline {
   stages: readonly StageMeta[];
 }
 
+/**
+ * Never had a stage on it. Not the same thing as "No contact".
+ *
+ * "No contact" is a decision: somebody looked at this lead and said we have not
+ * reached them yet. "Untouched" is the absence of one, and after the Zoho import
+ * there are a lot of them: rows the scrapers, funnels and bulk loads created
+ * without ever writing application_stage. Lumping them into No contact would
+ * bury real uncontacted leads under imported noise on the same call board.
+ */
+export const STAGE_UNTOUCHED = "Untouched";
 export const STAGE_NO_CONTACT = "No contact";
 export const STAGE_WORKING = "Working";
 export const STAGE_EMAIL_PITCH = "Email Pitch";
@@ -30,6 +40,7 @@ export const STAGE_CLOSED = "Closed";
 export const AEO_PIPELINE: StagePipeline = {
   name: "Pipeline",
   stages: [
+    { name: STAGE_UNTOUCHED, color: "#64748B" },
     { name: STAGE_NO_CONTACT, color: "#1B65A7" },
     { name: STAGE_WORKING, color: "#9C27B0" },
     { name: STAGE_EMAIL_PITCH, color: "#00BCD4" },
@@ -97,14 +108,17 @@ const CLOSED_KEYWORDS = [
 ];
 
 /**
- * Any stage string -> one of the five. Unknown values become "No contact",
- * which is the safe default: the lead stays on the call board rather than
- * disappearing into a stage nothing queries.
+ * Any stage string -> one of the six.
+ *
+ * Null or blank means nobody ever set one, which is "Untouched". An unrecognized
+ * NON-blank value is different: somebody wrote something, we just do not know
+ * what it meant, so it falls to "No contact" rather than being called untouched.
+ * Neither default hides the lead: both stay on the call board.
  */
 export function normalizeStage(stage: string | null | undefined): string {
-  if (!stage) return STAGE_NO_CONTACT;
+  if (!stage) return STAGE_UNTOUCHED;
   const lower = String(stage).trim().toLowerCase();
-  if (!lower) return STAGE_NO_CONTACT;
+  if (!lower) return STAGE_UNTOUCHED;
   if (STAGE_BY_LOWER.has(lower)) return STAGE_BY_LOWER.get(lower)!.name;
   if (STAGE_ALIASES[lower]) return STAGE_ALIASES[lower];
   if (CLOSED_KEYWORDS.some((k) => lower.includes(k))) return STAGE_CLOSED;
@@ -124,12 +138,13 @@ export function isTerminalStage(stage: string | null | undefined): boolean {
 /**
  * Pre-contact rather than closed.
  *
- * "No contact" MUST be here. isDeadStage() gates the worklist's hard drop in
- * src/lib/worklist.ts, and after the migration the overwhelming majority of the
- * book sits at "No contact". If this list loses that entry, the call board goes
- * empty and it looks like a data loss rather than a config bug.
+ * "No contact" and "Untouched" MUST both be here. isDeadStage() gates the
+ * worklist's hard drop in src/lib/worklist.ts, and after the migration the
+ * overwhelming majority of the book sits at one of these two. If this list
+ * loses either entry, the call board goes empty and it looks like data loss
+ * rather than a config bug.
  */
-export const PRE_CONTACT_STAGES: readonly string[] = [STAGE_NO_CONTACT];
+export const PRE_CONTACT_STAGES: readonly string[] = [STAGE_UNTOUCHED, STAGE_NO_CONTACT];
 
 const PRE_CONTACT_LOWER = new Set(PRE_CONTACT_STAGES.map((s) => s.toLowerCase()));
 
@@ -152,6 +167,10 @@ export interface StageCadence {
 }
 
 export const STAGE_CADENCE: Record<string, StageCadence> = {
+  // Bulk-imported and never looked at. Workable, but it should not outrank a
+  // lead someone deliberately marked as not yet contacted, so the repeat is
+  // slower. The worklist's age tie-breakers do the rest of the sorting.
+  [STAGE_UNTOUCHED]: { firstTouchHours: 24, repeatDays: 7 },
   // Speed to lead: a brand-new lead is worth 15 minutes, not a day.
   [STAGE_NO_CONTACT]: { firstTouchHours: 0.25, repeatDays: 1 },
   [STAGE_WORKING]: { firstTouchHours: 24, repeatDays: 3 },

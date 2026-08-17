@@ -24,12 +24,16 @@ for (const [k, v] of Object.entries(buckets)) console.log(`${k}: ${v.length}\n  
 console.log("\n-- the load-bearing checks --");
 const checks: [string, boolean, boolean][] = [
   ["No contact is NOT dead (call board survives)", isDeadStage("No contact"), false],
+  ["Untouched is NOT dead (call board survives)", isDeadStage("Untouched"), false],
   ["Closed IS dead", isDeadStage("Closed"), true],
   ["Working is NOT dead", isDeadStage("Working"), false],
   ["Email Pitch is NOT dead", isDeadStage("Email Pitch"), false],
   ["Negotiating is NOT dead", isDeadStage("Negotiating / Follow-up"), false],
   ["No contact is not terminal", isTerminalStage("No contact"), false],
+  ["Untouched is not terminal", isTerminalStage("Untouched"), false],
+  ["null maps to Untouched, not No contact", normalizeStage(null) === "Untouched", true],
   ["Negotiating is hot", HOT_STAGES.includes("Negotiating / Follow-up"), true],
+  ["an unknown non-blank value is No contact, not Untouched", normalizeStage("Xyzzy") === "No contact", true],
 ];
 for (const [name, got, want] of checks) {
   const ok = got === want;
