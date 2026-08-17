@@ -27,7 +27,8 @@ import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel, postInboundMessage } from "@/lib/sms-channel";
 import { draftSmsReply } from "@/lib/sms-ai-engine";
 import { postImessageSuggestion } from "@/lib/imessage-suggestion";
-import { markZohoHotLead } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
+import { markHotLead } from "@/lib/hot-lead";
 import { verifyInboundSecret } from "@/lib/loopmessage";
 
 export const runtime = "nodejs";
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, discarded: true });
   }
 
-  const contact = await findContactByPhone(phone);
+  const contact = await resolveLead({ phone });
   if (!contact) {
     console.log("[loopmessage/inbound] unknown number — discarding");
     return NextResponse.json({ ok: true, discarded: true });
@@ -146,8 +147,8 @@ export async function POST(req: NextRequest) {
 
   // Ensure the per-lead Slack channel exists (also stores slack_channel_id).
   const displayName =
-    [contact.first_name, contact.last_name].filter(Boolean).join(" ") ||
-    contact.business_name ||
+    [contact.firstName, contact.lastName].filter(Boolean).join(" ") ||
+    contact.businessName ||
     phone;
 
   const { channelId } = await ensureSmsChannel({
@@ -155,8 +156,8 @@ export async function POST(req: NextRequest) {
     phone,
     displayName,
     contactId: contact.id,
-    zohoLeadId: contact.zoho_lead_id,
-    businessName: contact.business_name,
+    zohoLeadId: contact.zohoLeadId,
+    businessName: contact.businessName,
   });
 
   if (!channelId) {
@@ -166,11 +167,9 @@ export async function POST(req: NextRequest) {
   // Inbound merchant message → mirror, flag hot lead, draft a suggestion.
   await postInboundMessage(channelId, displayName, body, conv.id as string);
 
-  if (contact.zoho_lead_id) {
-    markZohoHotLead(contact.zoho_lead_id, body, channelId).catch((e) =>
-      console.error("[loopmessage/inbound] hot lead failed:", e)
-    );
-  }
+  markHotLead({ contactId: contact.id, replyText: body, slackChannelId: channelId }).catch((e) =>
+    console.error("[loopmessage/inbound] hot lead failed:", e)
+  );
 
   // Suggestion drafting can be slow — fire it but await so the function (and the
   // serverless runtime) does not get torn down mid-draft. Always 200 after.
@@ -212,30 +211,3 @@ async function assertSchemaReady(): Promise<{ ok: boolean; detail: string }> {
     : { ok: false, detail: `Apply in the Supabase SQL editor: ${missing.join("; ")}` };
 }
 
-// Match by the last 10 digits, format-agnostic — identical to the imessage route.
-// `phone_last10` / `mobile_last10` are STORED generated columns (see
-// docs/2026-06-04-contacts-phone-last10.sql) holding the last 10 digits.
-async function findContactByPhone(phone: string): Promise<{
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-  business_name: string | null;
-  zoho_lead_id: string | null;
-} | null> {
-  const last10 = phone.replace(/\D/g, "").slice(-10);
-  if (last10.length < 10) return null;
-  const { data, error } = await supabaseAdmin
-    .from("contacts")
-    .select("id, first_name, last_name, business_name, zoho_lead_id")
-    .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
-    .limit(1)
-    .maybeSingle();
-  if (error) console.error("[loopmessage/inbound] contact lookup failed:", error.message);
-  return (data as {
-    id: string;
-    first_name: string | null;
-    last_name: string | null;
-    business_name: string | null;
-    zoho_lead_id: string | null;
-  } | null) ?? null;
-}

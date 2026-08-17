@@ -1,8 +1,8 @@
 // Smart Follow-up — the brains behind the dialer's "⚡ Smart Follow-up" button.
 //
-// Given a Zoho Lead OR Deal (the dialer scrapes the module + id + contact
-// email/phone off the page), this:
-//   1. resolves the record → contact email/first name/business name,
+// Given what the dialer scraped off the page (module + record id + contact
+// email/phone/name), this:
+//   1. resolves it to a CRM contact via resolveLead(),
 //   2. gathers the deal's status "across the board" (stage, last-contact gap,
 //      whether bank statements / a completed package are in OneDrive),
 //   3. AI-drafts the right follow-up email for that situation,
@@ -14,7 +14,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft } from "@/lib/microsoft";
-import { getLead, getDeal, searchLeads, type ZohoApiRecord } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
@@ -48,7 +48,17 @@ export interface FollowupDraft {
   body: string; // copy only — greeting + "S" signature added at send
 }
 
-// ── 1. Resolve the Zoho record → contact ───────────────────────────────────
+// ── 1. Resolve the scraped record → contact ────────────────────────────────
+//
+// This used to fetch the Lead or Deal from Zoho and treat that as the truth,
+// with the Supabase contact as a secondary lookup. It is now the other way
+// round: `contacts` IS the record, and what the dialer scraped is only a hint
+// used to find it.
+//
+// `amount` is always null for Deals now. It came off Zoho's Deal.Amount and has
+// no equivalent column here, and the pipeline it belonged to went out with the
+// funding decommission. It stays on the interface because the Slack payload and
+// the dialer both still read the field.
 export async function resolveRecord(input: {
   module: "Leads" | "Deals";
   recordId: string;
@@ -56,46 +66,26 @@ export async function resolveRecord(input: {
   phone?: string | null;
   name?: string | null;
 }): Promise<ResolvedRecord> {
-  let email = (input.email ?? "").trim() || null;
-  let firstName = "there";
-  let businessName: string | null = (input.name ?? "").trim() || null;
-  let stage: string | null = null;
-  let amount: string | null = null;
-  let phone = (input.phone ?? "").trim() || null;
+  const scrapedEmail = (input.email ?? "").trim() || null;
+  const scrapedPhone = (input.phone ?? "").trim() || null;
+  const scrapedName = (input.name ?? "").trim() || null;
 
-  if (input.module === "Leads") {
-    const lead = await getLead(input.recordId);
-    email = email || ((lead.Email as string) ?? null);
-    firstName = ((lead.First_Name as string) ?? "").trim() || "there";
-    businessName = businessName || ((lead.Company as string) ?? null);
-    stage = (lead.Lead_Status as string) ?? null;
-    phone = phone || ((lead.Phone as string) ?? (lead.Mobile as string) ?? null);
-  } else {
-    const deal = await getDeal(input.recordId);
-    businessName = businessName || ((deal.Deal_Name as string) ?? (asName(deal.Account_Name) ?? null));
-    stage = (deal.Stage as string) ?? null;
-    amount = deal.Amount != null ? String(deal.Amount) : null;
-    // Deal layouts carry a Contact_Name lookup; the dialer also scrapes the
-    // contact's email/phone off the page (more reliable than re-fetching).
-    firstName = firstWord(asName(deal.Contact_Name)) || firstWord(input.name) || "there";
-    // If the dialer didn't scrape an email, try to find the lead by business name.
-    if (!email && businessName) {
-      try {
-        const hits = await searchLeads({ criteria: `(Company:equals:${businessName})` });
-        if (hits[0]?.Email) email = hits[0].Email as string;
-        if (!phone) phone = (hits[0]?.Phone as string) ?? (hits[0]?.Mobile as string) ?? phone;
-      } catch {
-        /* best-effort */
-      }
-    }
-  }
-
-  // Supabase contact: by zoho id, then email, then phone last10.
-  const contact = await findContact({
+  // The scraped record id is a Zoho id, so it only helps on the Leads module,
+  // where contacts.zoho_lead_id can still match it. Everything else falls
+  // through to email, then phone, then business name.
+  const contact = await resolveLead({
     zohoLeadId: input.module === "Leads" ? input.recordId : null,
-    email,
-    phone,
+    email: scrapedEmail,
+    phone: scrapedPhone,
+    businessName: scrapedName,
   });
+
+  const email = scrapedEmail || contact?.email || null;
+  const phone = scrapedPhone || contact?.mobilePhone || contact?.phone || null;
+  const businessName = scrapedName || contact?.businessName || null;
+  const firstName = contact?.firstName || firstWord(scrapedName) || "there";
+  const stage = contact?.applicationStage ?? null;
+  const amount: string | null = null;
 
   // Find-or-create the conversation so the desktop bubble has somewhere to land.
   let conversationId: string | null = null;
@@ -120,57 +110,10 @@ export async function resolveRecord(input: {
     stage,
     amount,
     phone,
-    zohoLeadId: contact?.zoho_lead_id ?? (input.module === "Leads" ? input.recordId : null),
+    zohoLeadId: contact?.zohoLeadId ?? (input.module === "Leads" ? input.recordId : null),
     contactId: contact?.id ?? null,
     conversationId,
   };
-}
-
-interface ContactRow {
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-  business_name: string | null;
-  zoho_lead_id: string | null;
-  email: string | null;
-}
-
-const CONTACT_COLS = "id, first_name, last_name, business_name, zoho_lead_id, email";
-
-async function findContact(opts: {
-  zohoLeadId: string | null;
-  email: string | null;
-  phone: string | null;
-}): Promise<ContactRow | null> {
-  if (opts.zohoLeadId) {
-    const { data } = await supabaseAdmin
-      .from("contacts")
-      .select(CONTACT_COLS)
-      .eq("zoho_lead_id", opts.zohoLeadId)
-      .maybeSingle();
-    if (data) return data as ContactRow;
-  }
-  if (opts.email) {
-    const { data } = await supabaseAdmin
-      .from("contacts")
-      .select(CONTACT_COLS)
-      .ilike("email", opts.email)
-      .maybeSingle();
-    if (data) return data as ContactRow;
-  }
-  if (opts.phone) {
-    const last10 = opts.phone.replace(/\D/g, "").slice(-10);
-    if (last10.length === 10) {
-      const { data } = await supabaseAdmin
-        .from("contacts")
-        .select(CONTACT_COLS)
-        .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
-        .limit(1)
-        .maybeSingle();
-      if (data) return data as ContactRow;
-    }
-  }
-  return null;
 }
 
 // ── 2. Gather status across the board ───────────────────────────────────────
