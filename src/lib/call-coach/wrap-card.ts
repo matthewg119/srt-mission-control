@@ -7,7 +7,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { microsoft } from "@/lib/microsoft";
-import { addNoteResilient, addNoteToRecord } from "@/lib/zoho";
+import { addNote } from "@/lib/crm";
 import { auditSignatureHtml } from "@/lib/audit-engine/lead-pitch";
 import { resolveReplyAnchor } from "@/lib/audit-engine/reply-anchor";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
@@ -181,27 +181,29 @@ export async function applyWrap(session: WrapSessionRow, approvedBy: string): Pr
         .filter(Boolean)
         .join("\n");
 
-      if ((session.zoho_module ?? "Leads") === "Leads") {
-        // addNoteResilient survives a lead that has since been converted to a deal.
-        await addNoteResilient({
-          zohoLeadId: session.zoho_record_id,
-          businessName: session.business_name ?? undefined,
-          title,
-          content: body,
-        });
-      } else {
-        await addNoteToRecord(session.zoho_module ?? "Deals", session.zoho_record_id, title, body);
-      }
+      // The session stores a Zoho id because CallTarget is still Zoho-shaped.
+      // addNote's ladder resolves it: zoho_lead_id first, then the business name,
+      // which is what covered a converted lead before.
+      const res = await addNote({
+        zohoLeadId: session.zoho_record_id ?? undefined,
+        businessName: session.business_name ?? undefined,
+        title,
+        content: body,
+        origin: "ai",
+        actor: `call_coach:${approvedBy}`,
+      });
+      if (!res.ok) throw new Error("note was not written");
+
       await supabaseAdmin
         .from("call_coach_sessions")
         .update({ zoho_note_at: new Date().toISOString() })
         .eq("id", session.id);
-      done.push(`Note on Zoho ${session.zoho_module}/${session.zoho_record_id}`);
+      done.push(`Note on ${session.business_name ?? session.zoho_record_id}`);
     } catch (e) {
-      failed = `Zoho note failed: ${(e as Error).message}`;
+      failed = `Note failed: ${(e as Error).message}`;
     }
   } else {
-    done.push("Zoho note was already written on an earlier attempt, so it was not written twice");
+    done.push("The note was already written on an earlier attempt, so it was not written twice");
   }
 
   // ── 2. The Outlook DRAFT. Never a send. ─────────────────────────────────

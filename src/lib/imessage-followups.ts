@@ -2,24 +2,24 @@
 //
 // scheduleFollowup(...) records a reminder for a future date in sms_followups,
 // ensures the lead's SMS conversation + Slack channel exist (so the reminder can
-// post in their own chat), and logs a Zoho task. runDueFollowups() — driven by
+// post in their own chat), and opens a CRM task. runDueFollowups() — driven by
 // the sms-followups cron — fires every reminder whose due_at has passed: it posts
 // a reminder header into the lead's Slack channel, drafts a check-in via the
 // adaptive SMS engine, posts the suggestion card (which arms the 2-min auto-send),
-// then closes the Zoho task and drops a CRM note.
+// then completes the task and drops a CRM note.
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 import { draftSmsReply } from "@/lib/sms-ai-engine";
 import { postImessageSuggestion } from "@/lib/imessage-suggestion";
-import { createZohoTask, closeZohoTask, addNoteResilient } from "@/lib/zoho";
+import { createTask as createCrmTask, completeTask, addNote } from "@/lib/crm";
 
 export interface ScheduleFollowupArgs {
   contactId: string;
   reason: string;
   dueDate: string;            // ISO, YYYY-MM-DD, or relative ('tomorrow', 'in 3 days')
-  createZohoTask?: boolean;   // default true
+  createCrmTask?: boolean;    // default true
 }
 
 export interface ScheduleFollowupResult {
@@ -71,7 +71,7 @@ export function parseDueDate(input: string): Date | null {
 }
 
 export async function scheduleFollowup(args: ScheduleFollowupArgs): Promise<ScheduleFollowupResult> {
-  const createTask = args.createZohoTask !== false;
+  const wantsTask = args.createCrmTask !== false;
 
   const due = parseDueDate(args.dueDate);
   if (!due) {
@@ -121,16 +121,20 @@ export async function scheduleFollowup(args: ScheduleFollowupArgs): Promise<Sche
   });
   const channelId = ensured.channelId ?? (convo.slack_channel_id as string | null);
 
-  // Log the Zoho task (best-effort).
-  let zohoTaskId: string | null = null;
-  if (createTask && contact.zoho_lead_id) {
-    zohoTaskId = await createZohoTask({
-      leadId: contact.zoho_lead_id,
-      subject: `Follow up: ${displayName}`,
-      dueDate: due.toISOString().slice(0, 10),
+  // Open the CRM task (best-effort). No longer gated on zoho_lead_id: a lead we
+  // never pushed to Zoho still deserves a task on the board.
+  let crmTaskId: string | null = null;
+  if (wantsTask) {
+    const task = await createCrmTask({
+      contactId: contact.id,
+      title: `Follow up: ${displayName}`,
+      dueAt: due,
       description: args.reason,
-      priority: "High",
+      priority: "high",
+      origin: "ai",
+      actor: "imessage_followups",
     });
+    crmTaskId = task.taskId;
   }
 
   const { data: inserted, error } = await supabaseAdmin
@@ -141,7 +145,7 @@ export async function scheduleFollowup(args: ScheduleFollowupArgs): Promise<Sche
       slack_channel_id: channelId,
       due_at: due.toISOString(),
       reason: args.reason,
-      zoho_task_id: zohoTaskId,
+      crm_task_id: crmTaskId,
       status: "scheduled",
     })
     .select("id")
@@ -188,7 +192,7 @@ export async function autoScheduleFollowupOnSend(conversationId: string): Promis
       contactId: conv.contact_id as string,
       reason,
       dueDate: `in ${days} days`,
-      createZohoTask: true,
+      createCrmTask: true,
     });
     return res.ok;
   } catch (e) {
@@ -203,7 +207,7 @@ interface DueFollowupRow {
   contact_id: string;
   slack_channel_id: string | null;
   reason: string;
-  zoho_task_id: string | null;
+  crm_task_id: string | null;
 }
 
 export async function runDueFollowups(): Promise<{ posted: number }> {
@@ -211,7 +215,7 @@ export async function runDueFollowups(): Promise<{ posted: number }> {
 
   const { data: due, error } = await supabaseAdmin
     .from("sms_followups")
-    .select("id, conversation_id, contact_id, slack_channel_id, reason, zoho_task_id")
+    .select("id, conversation_id, contact_id, slack_channel_id, reason, crm_task_id")
     .eq("status", "scheduled")
     .lte("due_at", nowIso)
     .limit(50);
@@ -243,23 +247,17 @@ export async function runDueFollowups(): Promise<{ posted: number }> {
         .eq("id", row.id);
       posted++;
 
-      // Close the Zoho task + drop a CRM note (best-effort).
-      if (row.zoho_task_id) {
-        await closeZohoTask(row.zoho_task_id);
+      // Complete the task + drop a CRM note (best-effort).
+      if (row.crm_task_id) {
+        await completeTask(row.crm_task_id, { actor: "imessage_followups" });
       }
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("zoho_lead_id, business_name")
-        .eq("id", row.contact_id)
-        .maybeSingle();
-      if (contact?.zoho_lead_id || contact?.business_name) {
-        await addNoteResilient({
-          zohoLeadId: (contact?.zoho_lead_id as string | null) ?? null,
-          businessName: (contact?.business_name as string | null) ?? null,
-          title: "Follow-up executed",
-          content: `Follow-up executed: ${row.reason}`,
-        });
-      }
+      await addNote({
+        contactId: row.contact_id,
+        title: "Follow-up executed",
+        content: `Follow-up executed: ${row.reason}`,
+        origin: "ai",
+        actor: "imessage_followups",
+      });
     } catch (e) {
       console.error("[imessage-followups] row failed:", (e as Error).message);
     }

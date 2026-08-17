@@ -592,7 +592,7 @@ async function scheduleSuggestedFollowup(args: { slackTs: string; channel: strin
     contactId: conv.contact_id as string,
     reason,
     dueDate: `in ${days} days`,
-    createZohoTask: true,
+    createCrmTask: true,
   });
 
   if (!res.ok) {
