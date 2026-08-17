@@ -117,10 +117,11 @@ export async function ensureClientChannel(args: {
     return { channelId: null, channelName: null, created: false };
   }
 
-  // The creator is already a member, but joining is free and makes this correct if the
-  // channel is ever adopted rather than created. Without membership,
-  // files.completeUploadExternal silently no-ops while still returning ok:true.
-  await hubFetch("conversations.join", { channel: channel.id });
+  // NO conversations.join HERE. It only works on PUBLIC channels: called on a private
+  // one it fails with method_not_supported_for_channel_type. The bot does not need it
+  // anyway, because the app that CREATES a private channel is already a member of it.
+  // Membership is what matters, since files.completeUploadExternal silently no-ops
+  // without it while still returning ok:true.
 
   const matthewId = process.env.MATTHEW_SLACK_USER_ID;
   if (matthewId && !usingClientHub()) {
