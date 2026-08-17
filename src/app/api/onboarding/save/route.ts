@@ -18,6 +18,14 @@ import { verifyOnboardingToken } from "@/lib/clients/token";
 import { slack } from "@/lib/slack-bot";
 import { postToClientChannel } from "@/lib/clients/client-channel";
 import {
+  seedDeliverySteps,
+  postDeliveryChecklist,
+  autoCompleteStep,
+  notifyThread,
+} from "@/lib/clients/delivery-checklist";
+import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
+import { waitUntil } from "@vercel/functions";
+import {
   INTAKE_STEPS,
   TOTAL_STEPS,
   CONSENT_VALUE_BY_LABEL,
@@ -28,6 +36,9 @@ import { normalizeAddress, normalizeState } from "@/lib/clients/normalize";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
+// The final step kicks off a scan in waitUntil. The response returns in milliseconds, but
+// the function has to stay alive long enough for that background work to get going.
+export const maxDuration = 300;
 
 /** Step 1 writes real columns; every other step writes its jsonb bag. */
 const STEP_1_COLUMNS = new Set([
@@ -185,6 +196,14 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
+/**
+ * Everything that happens when the form is finished.
+ *
+ * This is the hinge of the whole flow: the intake card it posts becomes the anchor thread
+ * for every internal message about this client, the checklist hangs under it, and the
+ * baseline scan starts. Each piece is caught separately so a Slack outage cannot stop the
+ * scan and a scan failure cannot stop the checklist.
+ */
 async function onIntakeComplete(args: {
   clientId: string;
   name: string;
@@ -197,10 +216,6 @@ async function onIntakeComplete(args: {
     .eq("client_id", args.clientId)
     .eq("stage", "intake");
 
-  // Photograph I fires here once the baseline runner exists. It does not today: the
-  // engine layer is OpenAI only and the spec's four-engine baseline cannot be run, so
-  // nothing is kicked off rather than something misleading being labelled a baseline.
-
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
   const lines = [
     `:white_check_mark: *${args.name}* finished onboarding intake.`,
@@ -211,14 +226,102 @@ async function onIntakeComplete(args: {
       `:warning: They offer something for reviews, or have a lobby tablet or QR. That is a conversation on the call before anything gets built.`
     );
   }
-  const text = lines.join("\n");
 
+  // ── The anchor message ──
+  // Its ts is claimed with a conditional UPDATE guarded on `is null`, so two concurrent
+  // completions cannot produce two threads. Same pattern as lead-thread.ts.
   const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (onboardingChannel) await slack.postMessage(onboardingChannel, text);
+  if (onboardingChannel) {
+    const res = (await slack.postMessage(onboardingChannel, lines.join("\n"))) as {
+      ok?: boolean;
+      ts?: string;
+    };
+    if (res?.ok && res.ts) {
+      await supabaseAdmin
+        .from("clients")
+        .update({ ops_thread_ts: res.ts, updated_at: new Date().toISOString() })
+        .eq("id", args.clientId)
+        .is("ops_thread_ts", null);
+    }
+  }
 
-  // The client channel may be in a different workspace, so it needs the hub-aware
-  // poster rather than slack.postMessage.
+  // The client channel may be in a different workspace, so it needs the hub-aware poster
+  // rather than slack.postMessage. Client-facing wording only: the checklist below is
+  // internal and must never land here.
   if (args.channelId) {
-    await postToClientChannel(args.channelId, ":white_check_mark: Intake received. Thank you.");
+    await postToClientChannel(args.channelId, ":white_check_mark: Intake received. Thank you.")
+      .catch(() => {});
+  }
+
+  // ── The internal delivery checklist ──
+  await seedDeliverySteps(args.clientId);
+  await autoCompleteStep(args.clientId, "intake_received").catch(() => {});
+  await postDeliveryChecklist(args.clientId).catch((e) =>
+    console.error("[onboarding/save] checklist post failed:", (e as Error).message)
+  );
+
+  // ── The baseline scan ──
+  // NOT awaited. runAuditPipeline does not return until the ENTIRE audit is finished,
+  // which is minutes: awaiting it here would hang the client on the Finish button and
+  // then blow the function's time limit. waitUntil lets the response go back immediately
+  // while the scan keeps running.
+  waitUntil(
+    startBaselineScan(args.clientId).catch((e) =>
+      console.error("[onboarding/save] baseline scan failed:", (e as Error).message)
+    )
+  );
+}
+
+/**
+ * Fire the AI visibility scan against the website the client just confirmed.
+ *
+ * Honest about what it is. The pilot spec's Photograph I is 20 questions across four
+ * engines; this repo has ONE engine, because Perplexity was removed after its key had
+ * been rejected since launch and there is no Gemini or SERP integration at all. So the
+ * thread reply says "one engine" rather than letting a single-engine run be filed as
+ * "the baseline". Overstating coverage is the same failure mode the audit engine's own
+ * no-fabrication rule exists to prevent.
+ *
+ * contactId is passed so the audit's lead writeback fires too: the scan lands on the CRM
+ * record as well as here.
+ */
+async function startBaselineScan(clientId: string): Promise<void> {
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("id, website, city, state, email, legal_name, dba_name, contact_id")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (!client?.website) {
+    await notifyThread(clientId, "No website on file, so no baseline scan was started.").catch(() => {});
+    return;
+  }
+
+  const city = [client.city, client.state].filter(Boolean).join(", ") || undefined;
+
+  await notifyThread(
+    clientId,
+    `:mag: Baseline scan started for ${client.website as string}. One engine, ChatGPT with web search.`
+  ).catch(() => {});
+
+  const result = await runAuditPipeline({
+    website: client.website as string,
+    city,
+    requesterEmail: (client.email as string) ?? undefined,
+    requesterName: ((client.dba_name || client.legal_name) as string) ?? undefined,
+    contactId: (client.contact_id as string) ?? undefined,
+    leadSource: "aeo_client_onboarding",
+    allowLowConfidenceCity: true,
+    onError: async (message: string) => {
+      await notifyThread(clientId, `:warning: Baseline scan failed: ${message}`).catch(() => {});
+    },
+  });
+
+  // Ticked here rather than in onReportCreated. That callback fires the moment the row
+  // exists, seconds in, which would mark "baseline scan run" complete while the engine
+  // was still working. runAuditPipeline only returns once every batch and finishReport
+  // are done, so this line is the honest moment.
+  if (result.ok) {
+    await autoCompleteStep(clientId, "baseline_scan").catch(() => {});
   }
 }

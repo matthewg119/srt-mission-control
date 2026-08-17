@@ -21,8 +21,27 @@
 // and nothing here imports a price constant. PILOT §1.
 
 import { microsoft } from "@/lib/microsoft";
-import { SIGNATURE_S_HTML } from "@/config/email-signature";
 import { guard } from "@/lib/copy-guard";
+
+// The plain sign-off, not SIGNATURE_S_HTML.
+//
+// The full marketing signature carries a "Get your free AI audit" button and a
+// confidentiality notice. Both are wrong here: this person has already signed up, so
+// pitching them the top of the funnel in their welcome email is noise, and the legal
+// boilerplate makes a warm first email read like a contract.
+//
+// Spelled "Search Retrieval Tactics", matching srtagency.com. Kept local to this file so
+// changing it cannot disturb the audit-pitch signature, which is a different voice for a
+// different moment.
+const WELCOME_SIGNATURE_HTML = `
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#333333;line-height:1.5">
+  <p style="margin:0 0 4px">Thanks,</p>
+  <p style="margin:0"><strong>Matthew Garcia</strong></p>
+  <p style="margin:0"><strong>Search Retrieval Tactics</strong></p>
+  <p style="margin:0">AI Visibility Specialist</p>
+  <p style="margin:0">336-833-2303</p>
+  <p style="margin:0"><a href="https://www.srtagency.com" style="color:#1B65A7">https://www.srtagency.com</a></p>
+</div>`;
 
 export const WELCOME_SUBJECT = guard(
   "welcome subject",
@@ -84,7 +103,7 @@ export async function sendPilotWelcome({
     ${ctaBlock}
     <p style="margin:0 0 16px">${INTAKE_LINE}</p>
     <p style="margin:0 0 24px">${CALL_LINE}</p>
-    ${SIGNATURE_S_HTML}
+    ${WELCOME_SIGNATURE_HTML}
   </div>
   <div style="background:#f5f5f5;padding:16px 24px;text-align:center;font-size:12px;color:#888888">
     <p style="margin:0">SRT Agency LLC, Search Retrieval Tactics</p>

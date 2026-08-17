@@ -41,6 +41,12 @@ export interface FieldDef {
   help?: string;
   placeholder?: string;
   options?: string[];
+  /**
+   * Render this field only when another field on the same step holds a given value.
+   * Hidden fields are never required and are not validated, so a conditional that never
+   * appears cannot block the form.
+   */
+  showWhen?: { field: string; equals: string };
 }
 
 export interface StepDef {
@@ -259,11 +265,39 @@ export const INTAKE_STEPS: StepDef[] = [
     ),
     bag: "access_inventory",
     fields: [
-      { key: "gbp", label: "Google Business Profile, and who manages it", kind: "text", required: true },
-      { key: "yelp", label: "Yelp, or your main industry directory account", kind: "text" },
-      { key: "registrar", label: "Domain registrar", kind: "text", required: true },
-      { key: "platform", label: "Website platform, and who built it", kind: "text", required: true },
-      { key: "analytics", label: "Google Analytics or Search Console", kind: "text" },
+      {
+        key: "gbp",
+        label: "Do you have a Google Business Profile, and who has the login?",
+        kind: "text",
+        required: true,
+        help: "This is the listing that shows up with your hours and reviews. We will ask to be added as a manager so we can fix it. We never need your password.",
+      },
+      {
+        key: "yelp",
+        label: "Your Yelp or main industry listing",
+        kind: "text",
+        help: "Paste the link to it, if you have one. Just the web address, not a login.",
+      },
+      {
+        key: "registrar",
+        label: "Where is your domain registered?",
+        kind: "text",
+        required: true,
+        help: "Whoever you pay for the web address each year. GoDaddy, Namecheap, Squarespace, Google Domains.",
+      },
+      {
+        key: "platform",
+        label: "What is your website built on, and who built it?",
+        kind: "text",
+        required: true,
+        help: "WordPress, Wix, Squarespace, Webflow, or the name of the person or agency who made it. This is a different thing from where the domain is registered.",
+      },
+      {
+        key: "analytics",
+        label: "Do you have Google Analytics or Search Console set up?",
+        kind: "text",
+        help: "Two free Google tools that show who finds your website. Not sure is a perfectly good answer.",
+      },
       {
         key: "prior_agencies",
         label: "Any previous SEO or marketing agencies who may still hold access",
@@ -299,7 +333,15 @@ export const INTAKE_STEPS: StepDef[] = [
         label: "Language for your customers' review tool",
         kind: "select",
         required: true,
-        options: ["English", "Spanish", "Both"],
+        options: ["English", "Spanish", "Both", "Other"],
+      },
+      {
+        // Shown only when Language is Other. The stored `language` column stays one of
+        // en/es/both, so this is the free text that tells us what to actually build.
+        key: "language_other",
+        label: "Which language?",
+        kind: "text",
+        showWhen: { field: "language", equals: "Other" },
       },
     ],
   },
@@ -321,20 +363,21 @@ export const LANGUAGE_VALUE_BY_LABEL: Record<string, "en" | "es" | "both"> = {
 export const TOTAL_STEPS = INTAKE_STEPS.length;
 
 /**
- * §16.2, the "what happens next" screen.
+ * The "what happens next" screen.
  *
- * ONE deviation from the source, and it is load bearing: the original says the last
- * screen books the call. Booking is not built yet (it needs Graph calendar write, which
- * does not exist), so this says we will send times. Restore the original wording the day
- * booking ships, not before.
+ * Deliberately shorter than §16.2, and deliberately promises nothing. The spec version
+ * commits to first pages inside two weeks and a monthly re-run before the client has
+ * even had the call, which is a timeline we would then be measured against on day one.
+ * This asks for the one thing we actually need next, which is two times to talk.
+ *
+ * It also cannot say "the last screen books the call", because booking is not built:
+ * that needs Graph calendar write, which does not exist.
  */
 export const COMPLETION_COPY = {
   heading: guard("completion heading", "Thanks. That is everything we need."),
   body: guard(
     "completion body",
-    "Before we talk, we run the questions people in your city ask an AI, and write down who gets named. " +
-      "On the call you will see it. Then we build. First pages are live within two weeks, and every month " +
-      "you get the same questions re-run and a short video of what moved."
+    "Please reply to our email with two times you are free today or tomorrow, and we will " +
+      "schedule your onboarding call."
   ),
-  next: guard("completion next", "We will email you times for the call shortly."),
 };

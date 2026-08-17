@@ -8,7 +8,9 @@ import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
 import { INTAKE_STEPS } from "@/config/client-intake";
 import { ONBOARDING_STAGES } from "@/lib/clients/provision";
+import { DELIVERY_STEPS } from "@/lib/clients/delivery-checklist";
 import { TimeLogForm } from "./time-log-form";
+import { DeliveryChecklistForm } from "./delivery-checklist-form";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -47,25 +49,35 @@ export default async function ClientDetailPage({
 }) {
   const { id } = await params;
 
-  const [{ data: client }, { data: steps }, { data: entries }] = await Promise.all([
-    supabaseAdmin.from("clients").select("*").eq("id", id).maybeSingle(),
-    supabaseAdmin
-      .from("client_onboarding_steps")
-      .select("stage, status, completed_at")
-      .eq("client_id", id),
-    supabaseAdmin
-      .from("time_log")
-      .select("id, task_category, minutes, logged_at, note")
-      .eq("client_id", id)
-      .order("logged_at", { ascending: false })
-      .limit(50),
-  ]);
+  const [{ data: client }, { data: steps }, { data: entries }, { data: delivery }] =
+    await Promise.all([
+      supabaseAdmin.from("clients").select("*").eq("id", id).maybeSingle(),
+      supabaseAdmin
+        .from("client_onboarding_steps")
+        .select("stage, status, completed_at")
+        .eq("client_id", id),
+      supabaseAdmin
+        .from("time_log")
+        .select("id, task_category, minutes, logged_at, note")
+        .eq("client_id", id)
+        .order("logged_at", { ascending: false })
+        .limit(50),
+      supabaseAdmin
+        .from("client_delivery_steps")
+        .select("step_key, status")
+        .eq("client_id", id),
+    ]);
 
   if (!client) notFound();
 
   const stageStatus = new Map(
     (steps ?? []).map((s) => [s.stage as string, s.status as string])
   );
+
+  const completedSteps = (delivery ?? [])
+    .filter((d) => d.status === "complete")
+    .map((d) => d.step_key as string);
+  const deliveryTotal = DELIVERY_STEPS.length;
 
   // 'implementation' is excluded from the subscription total in EVERY rollup. It is
   // one-time cleanup, logged as a confound in the case study, and folding it in would
@@ -134,6 +146,18 @@ export default async function ClientDetailPage({
             </div>
           );
         })}
+      </div>
+
+      {/* ── The internal delivery checklist ── */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Delivery</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {completedSteps.length} of {deliveryTotal} done
+            {client.ops_checklist_ts ? " · mirrored in Slack" : ""}
+          </span>
+        </div>
+        <DeliveryChecklistForm clientId={id} completed={completedSteps} />
       </div>
 
       {/* ── Timing log ── */}
