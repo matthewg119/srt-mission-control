@@ -78,6 +78,25 @@ export const OFFER_TIERS = [
 ] as const;
 
 /**
+ * The free first build, which is what Matthew now leads with (2026-08-17).
+ *
+ * One section of the prospect's OWN site, built by us, at no charge and with no card. It is a
+ * real deliverable they keep whether or not anything paid follows, and that is the reason it
+ * works: it is checkable. The paid tiers below are a SEPARATE, later conversation, and saying so
+ * out loud is what stops it sounding like a bait.
+ *
+ * ‼️ It has no expiry and no scarcity attached. Inventing one ("only this month", "I have two
+ * slots left") turns a true offer into a false one and is banned for the same reason a made-up
+ * price is.
+ */
+export const FREE_FIRST_BUILD =
+  "We build one section of your own site that AI can actually read and cite. It is free, there is no card, and you keep it either way. All you have to do is say yes.";
+
+/** The same thing in Spanish, for the Spanish-language coach path. */
+export const FREE_FIRST_BUILD_ES =
+  "Crearemos una seccion de tu sitio web que la IA realmente pueda leer. Es completamente gratis y es tuya. Solo tienes que decir que si.";
+
+/**
  * The risk framing, and it is TRUE as written.
  *
  * Not a guarantee, not a refund, not a performance promise. It says what happens to the work if

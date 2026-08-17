@@ -26,7 +26,7 @@
  * Pure, so it is testable without a call.
  */
 
-import { OFFER_TIERS, OFFER_EXIT_LINE } from "@/config/pitch";
+import { OFFER_TIERS, OFFER_EXIT_LINE, FREE_FIRST_BUILD } from "@/config/pitch";
 
 export type CoachCallType = "cold" | "followup" | "close";
 
@@ -42,13 +42,14 @@ export function priceBlock(callType: CoachCallType): string {
   if (callType === "followup") {
     return `PRICE:
 - NOT DISCUSSED ON THIS CALL. Nothing is being sold. No price has been quoted to them and none exists in your context.
-- If they ask how much: the video is free and theirs to keep, and price is a conversation for after they have seen the work. Then get back to the ask.
+- If they ask how much: the video is free and theirs to keep, the first build on their site is free too, and price is a conversation for after they have seen the work. Then get back to the ask.
 - Do not name, hint at, estimate or bracket a figure. Not "a few hundred", not "less than you'd think", not "depends on the package". Any of those is a price.`;
   }
 
   const tiers = OFFER_TIERS.map((t) => `  ${t.name}, ${t.price}: ${t.includes.join("; ")}`).join("\n");
 
-  const shared = `- ${OFFER_EXIT_LINE} This is a FACT about the arrangement, not a guarantee. Never turn it into "no risk", "money back", or a promise about results.
+  const shared = `- THE FREE FIRST BUILD IS THE ASK ON THIS CALL, not a tier. ${FREE_FIRST_BUILD} The tiers above are the conversation AFTER they have seen it, and saying that out loud is what keeps the free part credible. Never attach an expiry or a slot count to it.
+- ${OFFER_EXIT_LINE} This is a FACT about the arrangement, not a guarantee. Never turn it into "no risk", "money back", or a promise about results.
 - Never do arithmetic on the two figures. No "half", no percentages, no per-day or per-week breakdown, no annual total. These two numbers are the only price figures that exist and neither may be turned into a third one.
 - ‼️ Never invent a figure, not even hypothetically, not even to make a point. "If it were $99 a month, would you be a yes" is inventing a price: it cannot be walked back, and the owner now has a number in their head that will never be honored. Isolate on the OBSTACLE instead: "if cost weren't the issue, would you be a yes, and is there anything else".
 - If they ask for a lower number the answer is a SMALLER SCOPE, never a smaller number. Complete down to Core is a real answer. There is no discount below Core. Do not invent one, do not hint one might exist, do not ask what number would work.`;

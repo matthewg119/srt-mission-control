@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { getCorsHeaders } from "@/lib/lead-validation";
 import { addNoteToLead as zohoAddNote, updateLead as zohoUpdateLead } from "@/lib/zoho";
 import { setLeadStatus } from "@/lib/crm";
+import { STAGE_CLOSED } from "@/config/stage-display";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
@@ -104,46 +105,20 @@ export async function POST(request: NextRequest) {
       console.error("[disqualify] contact update failed:", err instanceof Error ? err.message : err);
     }
 
-    // 2. Move the lead's deal (if any) directly into "Dead Declined".
-    //    Writing to Supabase directly (not via PATCH /api/deals/[id]) so the
-    //    existing deal-stage-change Meta CAPI firing does NOT trigger — we
-    //    want the Zoho webhook path to be the single source of Meta DNQ.
+    // 2. Close the lead out.
+    //    The `deals` table went with the funding business, so the DNQ lands on
+    //    contacts.application_stage instead. Written through setLeadStatus so
+    //    it leaves a lead_status_history row and a status_change activity.
     try {
-      const { data: deal } = await supabaseAdmin
-        .from("deals")
-        .select("id, stage, pipeline")
-        .eq("contact_id", contact.id)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (deal && deal.stage !== "Dead Declined") {
-        await supabaseAdmin
-          .from("deals")
-          .update({
-            stage: "Dead Declined",
-            pipeline: "Active Deals",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", deal.id);
-
-        await supabaseAdmin.from("deal_events").insert({
-          deal_id: deal.id,
-          event_type: "stage_change",
-          description: `Auto-DNQ — ${reason || "below revenue threshold"}`,
-          metadata: {
-            old_stage: deal.stage,
-            new_stage: "Dead Declined",
-            pipeline: "Active Deals",
-            reason,
-            monthlyRevenue: parsedRevenue,
-            source,
-            auto: true,
-          },
-        });
-      }
-    } catch (err) {
-      console.error("[disqualify] deal update failed:", err instanceof Error ? err.message : err);
+      await setLeadStatus({
+        contactId: contact.id,
+        status: STAGE_CLOSED,
+        reason: `Auto-DNQ - ${reason || "below revenue threshold"}`,
+        origin: "webhook",
+        actor: "leads/disqualify",
+      });
+    } catch (e) {
+      console.error("[leads/disqualify] status write failed:", (e as Error).message);
     }
 
     // 3. Push Lead_Status="DNQ" to Zoho. This is what triggers the Zoho

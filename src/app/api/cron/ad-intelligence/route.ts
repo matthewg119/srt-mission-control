@@ -12,15 +12,17 @@ export async function GET() {
   try {
     // 1. Fetch recent pipeline data for context
     const { data: rawPipelineData } = await supabaseAdmin
-      .from("deals")
-      .select("stage, amount, contacts(business_name)")
-      .order("updated_at", { ascending: false })
+      .from("contacts")
+      .select("business_name, application_stage, industry")
+      .neq("working_state", "closed")
+      .order("last_activity_at", { ascending: false, nullsFirst: false })
       .limit(20);
 
-    const pipelineData = (rawPipelineData || []).map((d) => {
-      const c = d.contacts as unknown as { business_name: string } | null;
-      return { business_name: c?.business_name || "Unknown", stage: d.stage, amount: d.amount };
-    });
+    const pipelineData = (rawPipelineData || []).map((c) => ({
+      business_name: c.business_name || "Unknown",
+      stage: c.application_stage,
+      industry: c.industry,
+    }));
 
     const { data: recentLogs } = await supabaseAdmin
       .from("system_logs")
@@ -31,7 +33,7 @@ export async function GET() {
 
     // 2. Build context from pipeline + logs
     const pipelineContext = pipelineData
-      ?.map((d) => `${d.business_name}: ${d.stage} ($${d.amount})`)
+      ?.map((d) => `${d.business_name}: ${d.stage}${d.industry ? ` (${d.industry})` : ""}`)
       .join(", ") || "No recent pipeline data";
 
     const logContext = recentLogs

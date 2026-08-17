@@ -271,7 +271,9 @@ export async function processStageChange(
 }
 
 /**
- * Check for stale deals and fire stale automations
+ * Find leads that have sat in a stage past its staleDays and fire the matching
+ * automations. Reads `contacts`, not the retired `deals` table: a lead's stage
+ * is contacts.application_stage and its last touch is last_activity_at.
  */
 export async function processStaleDeals(): Promise<{ checked: number; actioned: number }> {
   const staleRules = DEFAULT_AUTOMATIONS.filter(
@@ -284,41 +286,45 @@ export async function processStaleDeals(): Promise<{ checked: number; actioned: 
   for (const rule of staleRules) {
     const cutoff = new Date(Date.now() - (rule.staleDays! * 24 * 60 * 60 * 1000)).toISOString();
 
-    const { data: staleDeals } = await supabaseAdmin
-      .from("deals")
-      .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
-      .eq("stage", rule.stage)
-      .eq("pipeline", rule.pipeline)
-      .lt("updated_at", cutoff);
+    const { data: staleLeads } = await supabaseAdmin
+      .from("contacts")
+      .select("id, first_name, last_name, business_name, application_stage, last_activity_at, created_at")
+      .eq("application_stage", rule.stage)
+      .neq("working_state", "closed")
+      .or(`last_activity_at.lt.${cutoff},last_activity_at.is.null`)
+      .limit(200);
 
-    checked += staleDeals?.length || 0;
+    checked += staleLeads?.length || 0;
 
-    for (const deal of staleDeals || []) {
-      const c = deal.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
-      const contactName = c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown";
+    for (const lead of staleLeads || []) {
+      // A lead with no activity at all is only stale once it is old enough;
+      // otherwise every brand-new lead fires the alert the moment it lands.
+      if (!lead.last_activity_at && new Date(lead.created_at as string).toISOString() > cutoff) continue;
 
-      // Check if we already fired this stale rule for this deal recently (last 24h)
+      const contactName = `${lead.first_name || ""} ${lead.last_name || ""}`.trim() || "Unknown";
+
+      // Skip if we already fired this stale rule for this lead in the last 24h.
       const { count } = await supabaseAdmin
         .from("automation_logs")
         .select("*", { count: "exact", head: true })
-        .eq("opportunity_id", deal.id)
+        .eq("opportunity_id", lead.id)
         .eq("action_type", "stale_check")
         .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
 
       if (count && count > 0) continue;
 
       const context = buildTemplateContext({
-        opportunityId: deal.id,
-        contactId: deal.contact_id,
+        opportunityId: lead.id,
+        contactId: lead.id,
         contactName,
         firstName: contactName.split(" ")[0],
-        businessName: c?.business_name || "",
-        stageName: deal.stage,
-        pipelineName: deal.pipeline,
+        businessName: lead.business_name || "",
+        stageName: lead.application_stage as string,
+        pipelineName: rule.pipeline,
       });
 
       await supabaseAdmin.from("automation_logs").insert({
-        opportunity_id: deal.id,
+        opportunity_id: lead.id,
         action_type: "stale_check",
         to_stage: rule.stage,
         status: "success",
@@ -326,7 +332,7 @@ export async function processStaleDeals(): Promise<{ checked: number; actioned: 
       });
 
       for (const action of rule.actions) {
-        await executeAction(action, context, deal.id, deal.contact_id || "");
+        await executeAction(action, context, lead.id, lead.id);
       }
 
       actioned++;

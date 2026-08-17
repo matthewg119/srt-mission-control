@@ -1,38 +1,51 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
+import {
+  STAGE_NO_CONTACT,
+  STAGE_WORKING,
+  STAGE_EMAIL_PITCH,
+  STAGE_NEGOTIATING,
+  STAGE_CLOSED,
+} from "@/config/stage-display";
+
+// Stage templates for the five-stage AEO pipeline.
+//
+// The eighteen that used to live here were MCA stage templates (Pending Stips,
+// Funding Call, In Funding, Funded) written against stages no lead can be in
+// any more. Categories come from stage-display so they cannot drift again.
+//
+// The slugs referenced by src/config/automations.ts are preserved:
+// new-lead-welcome-sms/email and contacted-followup-sms/email.
+//
+// House rule, and it applies to everything below: no em dashes.
 
 const SEED_TEMPLATES = [
-  // === NEW DEALS PIPELINE ===
   {
     name: "New Lead Welcome SMS",
     slug: "new-lead-welcome-sms",
     type: "SMS",
-    category: "Open - Not Contacted",
+    category: STAGE_NO_CONTACT,
     subject: null,
-    body: `Hi {{first_name}}, thanks for reaching out to SRT Agency! We specialize in helping businesses like {{business_name}} get the funding they need. One of our specialists will be reaching out shortly. Reply STOP to opt out.`,
-    variables: ["first_name", "business_name"],
+    body: `Hi {{first_name}}, Matthew from SRT Agency. We build the part of your website that AI assistants can actually read, so they send you customers instead of naming someone else. First one is free. Worth a quick chat? Reply STOP to opt out.`,
+    variables: ["first_name"],
   },
   {
     name: "New Lead Welcome Email",
     slug: "new-lead-welcome-email",
     type: "Email",
-    category: "Open - Not Contacted",
-    subject: "Welcome to SRT Agency — Your Funding Journey Starts Here",
+    category: STAGE_NO_CONTACT,
+    subject: "Can AI find {{business_name}}?",
     body: `Hi {{first_name}},
 
-Thank you for your interest in business funding through SRT Agency.
+More people are asking an AI assistant for a business like yours than are typing it into a search box. Most sites have nothing on them an assistant can read, so it names somebody else.
 
-We received your information for {{business_name}} and one of our funding specialists will be reviewing your profile shortly.
+We fix that. We build one section of your own site, in your words, structured so an assistant can quote it: what you do, who you do it for, where, and what it costs.
 
-Here's what happens next:
-1. We'll review your application details
-2. A specialist will contact you to discuss your funding needs
-3. We'll match you with the best lending options available
+The first one is free. No card, nothing to install, and you keep it either way.
 
-If you have any questions in the meantime, feel free to reply to this email or call us directly.
+Just reply "yes" and I'll get it started.
 
-Best regards,
 {{agent_name}}
 SRT Agency
 {{agent_phone}}`,
@@ -42,221 +55,100 @@ SRT Agency
     name: "Contacted Follow-Up SMS",
     slug: "contacted-followup-sms",
     type: "SMS",
-    category: "Working - Contacted",
+    category: STAGE_WORKING,
     subject: null,
-    body: `Hi {{first_name}}, this is {{agent_name}} from SRT Agency. Great speaking with you about funding for {{business_name}}. As discussed, here are the next steps. Call or text me at {{agent_phone}} if you have questions.`,
-    variables: ["first_name", "agent_name", "business_name", "agent_phone"],
+    body: `Hi {{first_name}}, Matthew from SRT following up. Still happy to build that first section for {{business_name}} at no cost. Just say the word.`,
+    variables: ["first_name", "business_name"],
   },
   {
     name: "Contacted Follow-Up Email",
     slug: "contacted-followup-email",
     type: "Email",
-    category: "Working - Contacted",
-    subject: "Next Steps for {{business_name}} — SRT Agency",
+    category: STAGE_WORKING,
+    subject: "Following up, {{first_name}}",
     body: `Hi {{first_name}},
 
-Great connecting with you about business funding for {{business_name}}.
+Good speaking with you. To put it plainly: we build one section of {{business_name}}'s site that AI assistants can read and cite, so that when someone asks for a business like yours, you get named.
 
-As discussed, here are the next steps to move forward:
-1. Complete the application if you haven't already
-2. Gather your most recent 3 months of bank statements
-3. We'll review everything and match you with the best options
+The first build is free and takes about a week. You do not have to write anything.
 
-If you have any questions, don't hesitate to reach out.
+Just reply "yes" and I'll get it started.
 
-Best,
 {{agent_name}}
 SRT Agency
 {{agent_phone}}`,
     variables: ["first_name", "business_name", "agent_name", "agent_phone"],
   },
   {
-    name: "Application Sent SMS",
-    slug: "application-sent-sms",
+    name: "Pitch Sent SMS",
+    slug: "pitch-sent-sms",
     type: "SMS",
-    category: "Working - Application Out",
+    category: STAGE_EMAIL_PITCH,
     subject: null,
-    body: `Hi {{first_name}}, we've sent the application for {{business_name}} to your email. Please complete it at your earliest convenience so we can get the ball rolling! — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
+    body: `Hi {{first_name}}, just sent over the details on the free build for {{business_name}}. Reply here if anything is unclear.`,
+    variables: ["first_name", "business_name"],
   },
   {
-    name: "Converted to Active Deal SMS",
-    slug: "converted-active-sms",
-    type: "SMS",
-    category: "Converted",
-    subject: null,
-    body: `{{first_name}}, your application for {{business_name}} has been moved to our active pipeline! Our team is reviewing your file. We'll keep you updated on every step. — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
-  },
-  {
-    name: "Not Converted Email",
-    slug: "not-converted-email",
+    name: "Pitch Nudge Email",
+    slug: "pitch-nudge-email",
     type: "Email",
-    category: "Closed - Not Converted",
-    subject: "Update on Your Funding Application — SRT Agency",
+    category: STAGE_EMAIL_PITCH,
+    subject: "Did this reach you?",
     body: `Hi {{first_name}},
 
-Thank you for your interest in business funding for {{business_name}}.
+Checking that my last note landed. The offer is unchanged: one section of your site that AI can read and cite, built by us, at no cost.
 
-After reviewing your application, we're unable to move forward with traditional funding options at this time. This could be due to several factors including time in business, revenue requirements, or credit profile.
+If the timing is wrong, that is a fine answer. Just tell me and I will leave it.
 
-However, we don't give up easily. Here are some alternatives we can explore:
-- Revenue-based financing options
-- Merchant cash advance products
-- Equipment financing (if applicable)
-- Building your business credit profile for future funding
+Just reply "yes" and I'll get it started.
 
-Would you like to discuss any of these options? Just reply to this email or call us.
+{{agent_name}}
+SRT Agency`,
+    variables: ["first_name", "agent_name"],
+  },
+  {
+    name: "Negotiating Recap Email",
+    slug: "negotiating-recap-email",
+    type: "Email",
+    category: STAGE_NEGOTIATING,
+    subject: "Where we landed",
+    body: `Hi {{first_name}},
 
-Best regards,
+Recapping so we are on the same page.
+
+We build the first section for {{business_name}} at no cost. You review it before anything goes live. If it does what we say it does, we talk about covering the rest of the site.
+
+Anything you want changed before I start?
+
+{{agent_name}}
+SRT Agency
+{{agent_phone}}`,
+    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
+  },
+  {
+    name: "Kickoff SMS",
+    slug: "kickoff-sms",
+    type: "SMS",
+    category: STAGE_NEGOTIATING,
+    subject: null,
+    body: `{{first_name}}, starting on the first section for {{business_name}} today. I will send it over for your review before anything goes live.`,
+    variables: ["first_name", "business_name"],
+  },
+  {
+    name: "Closed Out Email",
+    slug: "closed-out-email",
+    type: "Email",
+    category: STAGE_CLOSED,
+    subject: "Leaving this here",
+    body: `Hi {{first_name}},
+
+Closing this out on my end so I stop filling your inbox.
+
+If AI visibility becomes relevant for {{business_name}} later, reply to this and I will pick it straight back up. The free first build stands whenever you want it.
+
 {{agent_name}}
 SRT Agency`,
     variables: ["first_name", "business_name", "agent_name"],
-  },
-
-  // === ACTIVE DEALS PIPELINE ===
-  {
-    name: "Contract In SMS",
-    slug: "contract-in-sms",
-    type: "SMS",
-    category: "Contract In",
-    subject: null,
-    body: `{{first_name}}, we've received your contracts for {{business_name}}! Our team is reviewing everything now. We'll reach out if we need any additional documentation. — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
-  },
-  {
-    name: "Contract In Email",
-    slug: "contract-in-email",
-    type: "Email",
-    category: "Contract In",
-    subject: "Contracts Received — {{business_name}}",
-    body: `Hi {{first_name}},
-
-We've received the contracts for {{business_name}}. Our team is now reviewing everything to make sure it's all in order.
-
-Here's what happens next:
-1. We'll verify all documentation is complete
-2. If any stipulations are needed, we'll reach out right away
-3. Once everything is satisfied, we'll schedule your funding call
-
-Thank you for your patience. We're working to get you funded as quickly as possible.
-
-Best,
-{{agent_name}}
-SRT Agency
-{{agent_phone}}`,
-    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
-  },
-  {
-    name: "Pending Stips SMS",
-    slug: "pending-stips-sms",
-    type: "SMS",
-    category: "Pending Stips",
-    subject: null,
-    body: `{{first_name}}, we need a few more documents for {{business_name}} before we can move forward. Check your email for the details. The sooner we get these, the faster we can fund! — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
-  },
-  {
-    name: "Pending Stips Email",
-    slug: "pending-stips-email",
-    type: "Email",
-    category: "Pending Stips",
-    subject: "Documents Needed — {{business_name}}",
-    body: `Hi {{first_name}},
-
-We're almost there! To continue processing the funding for {{business_name}}, we need the following stipulations satisfied:
-
-Please gather and send these documents as soon as possible. The faster we receive them, the sooner we can get you funded.
-
-You can reply to this email with the documents attached, or call us if you have any questions.
-
-Best,
-{{agent_name}}
-SRT Agency
-{{agent_phone}}`,
-    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
-  },
-  {
-    name: "Stips Reminder SMS",
-    slug: "stips-reminder-sms",
-    type: "SMS",
-    category: "Pending Stips",
-    subject: null,
-    body: `Friendly reminder {{first_name}} — we're still waiting on documents for {{business_name}}. Let's get these wrapped up so we can move to funding! Need help? Call {{agent_phone}}.`,
-    variables: ["first_name", "business_name", "agent_phone"],
-  },
-  {
-    name: "Funding Call SMS",
-    slug: "funding-call-sms",
-    type: "SMS",
-    category: "Funding Call",
-    subject: null,
-    body: `{{first_name}}, your funding call for {{business_name}} is being scheduled! You'll receive a call from the lender to verify your information. Please answer all unfamiliar numbers. — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
-  },
-  {
-    name: "In Funding SMS",
-    slug: "in-funding-sms",
-    type: "SMS",
-    category: "In Funding",
-    subject: null,
-    body: `Great news {{first_name}}! {{business_name}} is now in the funding process. Funds typically arrive within 24-48 hours. We'll notify you the moment it lands. — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
-  },
-  {
-    name: "In Funding Email",
-    slug: "in-funding-email",
-    type: "Email",
-    category: "In Funding",
-    subject: "Funding in Progress — {{business_name}}",
-    body: `Hi {{first_name}},
-
-Exciting news — the funding for {{business_name}} is now being processed!
-
-Funds are typically disbursed within 24-48 business hours. You'll receive a notification when the funds hit your account.
-
-If you have any questions during this time, don't hesitate to reach out.
-
-Best,
-{{agent_name}}
-SRT Agency
-{{agent_phone}}`,
-    variables: ["first_name", "business_name", "agent_name", "agent_phone"],
-  },
-  {
-    name: "Funded Congratulations SMS",
-    slug: "funded-congrats-sms",
-    type: "SMS",
-    category: "Funded",
-    subject: null,
-    body: `🎉 Congratulations {{first_name}}! {{business_name}} has been funded! The funds should be in your account. It's been a pleasure working with you. If you ever need anything, don't hesitate to reach out. — {{agent_name}}, SRT Agency`,
-    variables: ["first_name", "business_name", "agent_name"],
-  },
-  {
-    name: "Funded Congratulations Email",
-    slug: "funded-congrats-email",
-    type: "Email",
-    category: "Funded",
-    subject: "Congratulations — {{business_name}} Has Been Funded!",
-    body: `Hi {{first_name}},
-
-Congratulations! The funding for {{business_name}} has been completed and the funds have been disbursed to your account.
-
-**What's Next:**
-- Payments will begin according to your contract terms
-- Keep our contact info handy — we're always here to help
-- When you're ready for additional funding in the future, reach out to us first
-
-It's been a pleasure working with you. We wish {{business_name}} continued success!
-
-If you know any other business owners who could benefit from funding, we'd love a referral.
-
-Best regards,
-{{agent_name}}
-SRT Agency
-{{agent_phone}}
-{{agent_email}}`,
-    variables: ["first_name", "business_name", "agent_name", "agent_phone", "agent_email"],
   },
 ];
 

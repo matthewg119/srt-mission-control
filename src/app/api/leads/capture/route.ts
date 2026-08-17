@@ -123,39 +123,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to create contact", details: errMsg }, { status: 500, headers: corsHeaders });
     }
 
-    // 2. Create deal in New Deals pipeline
-    let dealId: string | null = null;
-    try {
-      const { data: deal, error: dealErr } = await supabaseAdmin
-        .from("deals")
-        .insert({
-          contact_id: contactId,
-          pipeline: "New Deals",
-          stage: "Open - Not Contacted",
-          amount: 0,
-          source: source || "Website - Contact Form",
-        })
-        .select("id")
-        .single();
-      if (dealErr) throw new Error(dealErr.message);
-      dealId = deal!.id;
-
-      // Log deal creation
-      await supabaseAdmin.from("deal_events").insert({
-        deal_id: dealId,
-        event_type: "created",
-        description: `New lead from website contact form`,
-      });
-    } catch (error) {
-      console.error("Deal creation error:", error instanceof Error ? error.message : error);
-    }
+    // The `deals` table went with the funding business. A lead's stage now
+    // lives on contacts.application_stage, so there is nothing to create here.
+    // `opportunityId` stays in the response, always null, because the website
+    // form posts to this route and we are not redeploying it in this change.
 
     // 3. Log to system_logs
     try {
       await supabaseAdmin.from("system_logs").insert({
         event_type: "lead_capture",
         description: `New lead from website: ${firstName} ${lastName} (${email || phone})`,
-        metadata: { contactId, dealId, name, email, phone, message, source: source || "Website - Contact Form", clientIp, clientUserAgent },
+        metadata: { contactId, name, email, phone, message, source: source || "Website - Contact Form", clientIp, clientUserAgent },
       });
     } catch (logErr) {
       console.error("system_logs write failed:", logErr);
@@ -285,7 +263,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { success: true, message: "Lead captured successfully", contactId, opportunityId: dealId },
+      { success: true, message: "Lead captured successfully", contactId, opportunityId: null },
       { headers: corsHeaders }
     );
   } catch (error) {

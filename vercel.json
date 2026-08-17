@@ -5,10 +5,6 @@
       "schedule": "0 9 * * *"
     },
     {
-      "path": "/api/cron/stale-deals",
-      "schedule": "0 13 * * *"
-    },
-    {
       "path": "/api/cron/daily-recap",
       "schedule": "0 0 * * *"
     },
@@ -17,24 +13,8 @@
       "schedule": "0 23 * * *"
     },
     {
-      "path": "/api/cron/ai-guardian",
-      "schedule": "0 14 * * *"
-    },
-    {
       "path": "/api/cron/graph-subscription-renew",
       "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/cron/submission-followups",
-      "schedule": "0 14 * * *"
-    },
-    {
-      "path": "/api/cron/daily-digest",
-      "schedule": "0 12 * * 1-5"
-    },
-    {
-      "path": "/api/cron/archive-deal-channels",
-      "schedule": "0 15 * * *"
     },
     {
       "path": "/api/cron/bot-scan",
@@ -50,14 +30,6 @@
     },
     {
       "path": "/api/cron/sms-followups",
-      "schedule": "0 13 * * *"
-    },
-    {
-      "path": "/api/cron/income-verification-followup",
-      "schedule": "0 13 * * *"
-    },
-    {
-      "path": "/api/cron/statements-finish-app-followup",
       "schedule": "0 13 * * *"
     },
     {
@@ -83,10 +55,6 @@
     {
       "path": "/api/cron/medspa-credit-reminder",
       "schedule": "20 16 * * *"
-    },
-    {
-      "path": "/api/cron/hanging-leads",
-      "schedule": "5 12 * * 1-5"
     }
   ]
 }

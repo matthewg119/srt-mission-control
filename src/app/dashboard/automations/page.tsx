@@ -50,7 +50,7 @@ export default function AutomationsPage() {
   const handleRunStaleCheck = async () => {
     setRunningStaleCheck(true);
     try {
-      await fetch("/api/cron/stale-deals");
+      await fetch("/api/automations/stale-check", { method: "POST" });
       fetchLogs();
     } catch {
       // Error
