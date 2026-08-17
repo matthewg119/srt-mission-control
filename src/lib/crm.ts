@@ -85,45 +85,176 @@ async function logSystem(
 // ─────────────────────────────────────────────────────────────────────
 // Contact resolution
 // ─────────────────────────────────────────────────────────────────────
+//
+// ONE lookup, five keys. Before this, "find the person behind this phone
+// number" was written six times across the tree — in api/imessage/inbound,
+// api/loopmessage/inbound, api/ext/lead/resolve, api/sms/compose,
+// ai-intel/smart-followup and here — each with its own column list, its own
+// null handling, and three of them with their own live Zoho fallback. They
+// disagreed about what a match even was, so the extension could name a lead the
+// inbound webhook had already discarded.
+//
+// Everything that needs to turn a phone, an email or an id into a person calls
+// resolveLead(). It is the seam the Zoho cutover, the email panel, the text
+// thread and the dialer all sit on.
 
-interface ContactRef {
+/** A person, as the rest of the app should see them. Never a Zoho record. */
+export interface LeadRef {
   id: string;
-  zoho_lead_id: string | null;
-  application_stage: string | null;
-  business_name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  businessName: string | null;
+  email: string | null;
+  phone: string | null;
+  mobilePhone: string | null;
+  website: string | null;
+  applicationStage: string | null;
+  doNotContact: boolean;
+  zohoLeadId: string | null;
+  workingState: string | null;
+  /** Business name, else person name, else email, else phone. Never empty. */
+  displayName: string;
 }
 
-const CONTACT_COLS = "id, zoho_lead_id, application_stage, business_name";
+/**
+ * Verified against the live table with scripts/_probe-contacts-columns.ts.
+ *
+ * `contacts` was built in the Supabase console and has drifted from the code's
+ * assumptions more than once, and PostgREST fails the WHOLE query on a single
+ * unknown column — it does not degrade, it 400s the entire lane. So this list
+ * is checked, not assumed, and the probe script is how you check it again.
+ */
+const LEAD_COLS =
+  "id, first_name, last_name, business_name, email, phone, mobile_phone, " +
+  "website, application_stage, do_not_contact, zoho_lead_id, working_state";
 
-async function findContact(a: {
-  contactId?: string;
-  zohoLeadId?: string;
-  businessName?: string;
-}): Promise<ContactRef | null> {
+/** Zoho handed back "" for unset text, never null, so `a ?? b` never reached b.
+ *  Callers were written around that. Normalizing here means they no longer have
+ *  to be, and a blank name can never pass a "did we get a name" check again. */
+function blank(v: unknown): string | null {
+  const t = typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
+  return t.length > 0 ? t : null;
+}
+
+type ContactRow = Record<string, unknown>;
+
+/** Takes `unknown` on purpose. PostgREST types a runtime column-list string as
+ *  a union with GenericStringError, so every caller would otherwise need the
+ *  same cast. blank() already treats anything non-string as absent, so a
+ *  surprise shape degrades to nulls rather than throwing. */
+function toLeadRef(raw: unknown): LeadRef {
+  const row = raw as ContactRow;
+  const firstName = blank(row.first_name);
+  const lastName = blank(row.last_name);
+  const businessName = blank(row.business_name);
+  const email = blank(row.email);
+  const phone = blank(row.phone);
+  const mobilePhone = blank(row.mobile_phone);
+  const personName = [firstName, lastName].filter(Boolean).join(" ") || null;
+
+  return {
+    id: String(row.id),
+    firstName,
+    lastName,
+    businessName,
+    email,
+    phone,
+    mobilePhone,
+    website: blank(row.website),
+    applicationStage: blank(row.application_stage),
+    doNotContact: row.do_not_contact === true,
+    zohoLeadId: blank(row.zoho_lead_id),
+    workingState: blank(row.working_state),
+    displayName:
+      businessName ?? personName ?? email ?? phone ?? mobilePhone ?? "Unknown lead",
+  };
+}
+
+export interface ResolveLeadInput {
+  contactId?: string | null;
+  zohoLeadId?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  businessName?: string | null;
+}
+
+/**
+ * Find a person in `contacts`, cheapest and most certain first.
+ *
+ * The ladder is ordered by how a step can be WRONG, not by convenience:
+ *   id            cannot be wrong.
+ *   zoho_lead_id  unique index; cannot be wrong while the column survives.
+ *   phone         a shared front-desk line legitimately matches two businesses,
+ *                 so this takes the first hit and does not pretend to be sure.
+ *   email         near-certain for one hit.
+ *   businessName  weakest. Only accepted when EXACTLY one row comes back.
+ *
+ * Returns null when nothing matches. A null is not permission to discard the
+ * work: inbound messaging keeps the thread under the bare phone number, because
+ * dropping a real reply from an unrecognized number is worse than an unnamed one.
+ */
+export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> {
   if (a.contactId) {
     const { data } = await supabaseAdmin
       .from("contacts")
-      .select(CONTACT_COLS)
+      .select(LEAD_COLS)
       .eq("id", a.contactId)
       .maybeSingle();
-    if (data) return data as ContactRef;
+    if (data) return toLeadRef(data);
   }
+
   if (a.zohoLeadId) {
     const { data } = await supabaseAdmin
       .from("contacts")
-      .select(CONTACT_COLS)
+      .select(LEAD_COLS)
       .eq("zoho_lead_id", a.zohoLeadId)
       .maybeSingle();
-    if (data) return data as ContactRef;
+    if (data) return toLeadRef(data);
   }
+
+  if (a.phone) {
+    // phone_last10 and mobile_last10 are STORED generated columns
+    // (docs/2026-06-04-contacts-phone-last10.sql). They are phone-only and
+    // mobile-only respectively and are NOT coalesced, so both must be checked
+    // or 10% of the book silently stops matching. Contacts store phones in
+    // mixed formats with none in E.164, which is why exact matching on `phone`
+    // found nobody and every inbound iMessage used to be discarded.
+    const last10 = a.phone.replace(/\D/g, "").slice(-10);
+    if (last10.length === 10) {
+      const { data } = await supabaseAdmin
+        .from("contacts")
+        .select(LEAD_COLS)
+        .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
+        .limit(1);
+      if (data?.length) return toLeadRef(data[0]);
+    }
+  }
+
+  if (a.email) {
+    const email = a.email.trim();
+    // ilike, not eq: the index is on lower(email) (contacts_email_lower_idx),
+    // and an eq would neither use it nor match a differently-cased address.
+    if (email) {
+      const { data } = await supabaseAdmin
+        .from("contacts")
+        .select(LEAD_COLS)
+        .ilike("email", email)
+        .limit(1);
+      if (data?.length) return toLeadRef(data[0]);
+    }
+  }
+
   if (a.businessName) {
     const { data } = await supabaseAdmin
       .from("contacts")
-      .select(CONTACT_COLS)
+      .select(LEAD_COLS)
       .ilike("business_name", a.businessName)
       .limit(2);
-    if (data && data.length === 1) return data[0] as ContactRef;
+    // Two hits means we do not know which, and guessing writes a call note onto
+    // the wrong company's record, where it stays.
+    if (data && data.length === 1) return toLeadRef(data[0]);
   }
+
   return null;
 }
 
@@ -258,12 +389,12 @@ export async function setLeadStatus(
   input: SetLeadStatusInput
 ): Promise<SetLeadStatusResult> {
   const mode = crmMode();
-  const contact = await findContact({
+  const contact = await resolveLead({
     contactId: input.contactId,
     zohoLeadId: input.zohoLeadId,
   });
 
-  const zohoLeadId = input.zohoLeadId ?? contact?.zoho_lead_id ?? null;
+  const zohoLeadId = input.zohoLeadId ?? contact?.zohoLeadId ?? null;
   const candidates =
     input.statusCandidates && input.statusCandidates.length > 0
       ? input.statusCandidates
@@ -324,7 +455,7 @@ export async function setLeadStatus(
     };
   }
 
-  const oldStatus = contact.application_stage;
+  const oldStatus = contact.applicationStage;
   const now = new Date().toISOString();
 
   if (oldStatus !== landedStatus) {
@@ -495,7 +626,7 @@ export async function addNote(input: AddNoteInput): Promise<{
   contactId: string | null;
   zohoTarget: string | null;
 }> {
-  const contact = await findContact({
+  const contact = await resolveLead({
     contactId: input.contactId,
     zohoLeadId: input.zohoLeadId,
     businessName: input.businessName,
@@ -505,8 +636,8 @@ export async function addNote(input: AddNoteInput): Promise<{
   if (pushesToZoho() && input.origin !== "zoho") {
     try {
       const res = await addNoteResilient({
-        zohoLeadId: input.zohoLeadId ?? contact?.zoho_lead_id ?? null,
-        businessName: input.businessName ?? contact?.business_name ?? null,
+        zohoLeadId: input.zohoLeadId ?? contact?.zohoLeadId ?? null,
+        businessName: input.businessName ?? contact?.businessName ?? null,
         title: input.title,
         content: input.content,
         // addNoteToLead mirrors into lead_activities by default so that the
@@ -531,7 +662,7 @@ export async function addNote(input: AddNoteInput): Promise<{
             kind: "note",
             title: input.title,
             contactId: contact?.id ?? null,
-            zohoLeadId: input.zohoLeadId ?? contact?.zoho_lead_id ?? null,
+            zohoLeadId: input.zohoLeadId ?? contact?.zohoLeadId ?? null,
           }
         );
       }
