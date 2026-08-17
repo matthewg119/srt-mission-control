@@ -112,6 +112,8 @@ export interface LeadRef {
   doNotContact: boolean;
   zohoLeadId: string | null;
   workingState: string | null;
+  /** Where the lead came from. The successor of Zoho's Lead_Source. */
+  source: string | null;
   /** Business name, else person name, else email, else phone. Never empty. */
   displayName: string;
 }
@@ -126,7 +128,7 @@ export interface LeadRef {
  */
 const LEAD_COLS =
   "id, first_name, last_name, business_name, email, phone, mobile_phone, " +
-  "website, application_stage, do_not_contact, zoho_lead_id, working_state";
+  "website, application_stage, do_not_contact, zoho_lead_id, working_state, source";
 
 /** Zoho handed back "" for unset text, never null, so `a ?? b` never reached b.
  *  Callers were written around that. Normalizing here means they no longer have
@@ -165,6 +167,7 @@ function toLeadRef(raw: unknown): LeadRef {
     doNotContact: row.do_not_contact === true,
     zohoLeadId: blank(row.zoho_lead_id),
     workingState: blank(row.working_state),
+    source: blank(row.source),
     displayName:
       businessName ?? personName ?? email ?? phone ?? mobilePhone ?? "Unknown lead",
   };
@@ -354,6 +357,104 @@ export async function logActivity(input: LogActivityInput): Promise<string | nul
   } catch (e) {
     console.error("[crm.logActivity] failed:", (e as Error).message);
     return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Activity log — reads
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Every column anything in the app reads off `lead_activities`, verified against
+ * the table definition in docs/2026-08-17-crm-core.sql.
+ *
+ * Deliberately not select("*"): `metadata` is a jsonb bag no reader uses, and
+ * most callers JSON.stringify these rows straight into an LLM prompt, where it
+ * would be paid for by the token.
+ */
+const ACTIVITY_COLS =
+  "id, contact_id, activity_type, direction, channel, subject, body, " +
+  "outcome, duration_secs, occurred_at, actor, source";
+
+const ACTIVITY_LIMIT_DEFAULT = 50;
+const ACTIVITY_LIMIT_MAX = 500;
+
+/**
+ * A timeline row, raw.
+ *
+ * snake_case on purpose. `LeadRef` is camelCase because `contacts` is a drifted
+ * 169-column table that needs a translation layer; `lead_activities` was defined
+ * once and every existing reader in the app already consumes the raw column
+ * names. Renaming them here would mean no existing caller could adopt this
+ * without a rewrite, which is the opposite of the point.
+ */
+export interface LeadActivityRow {
+  id: string;
+  contact_id: string;
+  activity_type: string;
+  direction: string | null;
+  channel: string | null;
+  subject: string | null;
+  body: string | null;
+  outcome: string | null;
+  duration_secs: number | null;
+  occurred_at: string;
+  actor: string | null;
+  source: string;
+}
+
+export interface GetLeadActivitiesInput {
+  /** One contact, or many. Many is how a board scan reads N contacts in one
+   *  round trip instead of N round trips. */
+  contactId: string | string[];
+  /** Restrict to these `activity_type` values. Omit for the whole timeline. */
+  types?: string[];
+  /** Clamped to 1..500. Defaults to 50. */
+  limit?: number;
+}
+
+/**
+ * The lead timeline. One reader, so the column list and the ordering are decided
+ * in one place rather than in each of the seven near-identical copies that grew
+ * across the app.
+ */
+export async function getLeadActivities(
+  a: GetLeadActivitiesInput
+): Promise<LeadActivityRow[]> {
+  const ids = (Array.isArray(a.contactId) ? a.contactId : [a.contactId]).filter(Boolean);
+  // .in("contact_id", []) goes on the wire as `in.()` and 400s the query. An
+  // empty caller list is a no-op, not an error, so it never reaches PostgREST.
+  if (ids.length === 0) return [];
+
+  const raw = Number(a.limit);
+  const limit = Number.isFinite(raw)
+    ? Math.min(Math.max(Math.trunc(raw), 1), ACTIVITY_LIMIT_MAX)
+    : ACTIVITY_LIMIT_DEFAULT;
+
+  try {
+    let q = supabaseAdmin.from("lead_activities").select(ACTIVITY_COLS);
+    q = ids.length === 1 ? q.eq("contact_id", ids[0]) : q.in("contact_id", ids);
+    if (a.types?.length) q = q.in("activity_type", a.types);
+
+    // Newest first, always, and not an option. Both composite indexes are
+    // occurred_at DESC, so it is the only ordering that is free. created_at
+    // breaks the tie, because setLeadStatus writes a status_change and logCall
+    // writes a call in the same millisecond, and "whichever row came back" is
+    // not an ordering.
+    const { data, error } = await q
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) throw new Error(error.message);
+    // Same cast as toLeadRef: PostgREST types a runtime column-list string as a
+    // union with GenericStringError.
+    return (data ?? []) as unknown as LeadActivityRow[];
+  } catch (e) {
+    // Same posture as logActivity. A timeline read is context, never the point
+    // of the request, so losing it beats failing the caller's actual job.
+    console.error("[crm.getLeadActivities] failed:", (e as Error).message);
+    return [];
   }
 }
 

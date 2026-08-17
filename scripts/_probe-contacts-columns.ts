@@ -29,6 +29,7 @@ const WANTED = [
   "do_not_contact",
   "zoho_lead_id",
   "working_state",
+  "source",
 ];
 
 async function main() {
