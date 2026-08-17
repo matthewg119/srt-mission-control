@@ -17,7 +17,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import type { ToolExecutionResult } from "@/lib/ai-tools";
-import { searchLeads, getLead, getLeadNotes } from "@/lib/zoho";
+import { resolveLead, getLeadActivities } from "@/lib/crm";
 import { loadReportView, computeWeightedScore, type ReportView } from "./report-view";
 import { readThreadTruth, formatThreadTruth, type ThreadTruth } from "./thread-truth";
 import {
@@ -68,9 +68,9 @@ export const AUDIT_THREAD_TOOLS = [
     },
   },
   {
-    name: "get_zoho_record",
+    name: "get_crm_record",
     description:
-      "The CRM record for this business: lead status, owner, source, and the notes Matthew has typed after previous calls. Use when asked about call history, what was said before, or the state of the relationship outside email.",
+      "The CRM record for this business: lead status, whether it is live on the call board, source, do-not-contact, and the timeline of what has actually happened. Calls Matthew logged, notes he typed, status changes, tasks. Use when asked about call history, what was said before, or the state of the relationship outside email.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -237,36 +237,71 @@ export function makeAuditExecutor(ctx: AuditToolContext) {
           return ok(formatThreadTruth(t));
         }
 
-        case "get_zoho_record": {
-          const email =
-            (input.email as string | undefined) ?? ctx.report.prospect_email ?? ctx.report.requester_email ?? undefined;
-          const phone = input.phone as string | undefined;
-          if (!email && !phone) return ok("No email or phone on this report, so there is nothing to look up in Zoho.");
+        case "get_crm_record": {
+          // An explicit email or phone means he is asking about a DIFFERENT
+          // business, so it wins outright. Only when he is asking about THIS one
+          // do we fall back to the report's own contact link, which is the rung
+          // of resolveLead's ladder that cannot be wrong.
+          const askedEmail = (input.email as string | undefined)?.trim() || null;
+          const askedPhone = (input.phone as string | undefined)?.trim() || null;
+          const reportEmail = ctx.report.prospect_email ?? ctx.report.requester_email;
 
-          const found = await searchLeads(phone ? { phone } : { email: email! });
-          if (!found.length) return ok(`No Zoho record found for ${phone ?? email}. This business may not be in the CRM yet.`);
+          // requester_phone is deliberately NOT used as a fallback. resolveLead
+          // tries phone before email, and phone is the weaker rung (a shared
+          // front-desk line legitimately matches two businesses), so feeding it
+          // one would let it outrank the near-certain email the report has.
+          let lead = null;
+          if (askedEmail || askedPhone) {
+            lead = await resolveLead({ email: askedEmail, phone: askedPhone });
+          } else if (ctx.report.contact_id || reportEmail || ctx.report.client_name) {
+            lead = await resolveLead({
+              contactId: ctx.report.contact_id,
+              email: reportEmail,
+              // Weakest rung, and resolveLead only accepts it on an exact single
+              // hit. client_name is inferred from a title tag and is often a
+              // tagline, so it will usually match nothing, which is correct.
+              businessName: ctx.report.client_name,
+            });
+          }
 
-          const lead = found[0];
-          const id = String(lead.id ?? "");
-          const [full, notes] = await Promise.all([
-            id ? getLead(id).catch(() => lead) : Promise.resolve(lead),
-            id ? getLeadNotes(id, 8).catch(() => []) : Promise.resolve([]),
-          ]);
+          if (!lead) {
+            const who = askedEmail ?? askedPhone ?? reportEmail;
+            return ok(
+              who
+                ? `No CRM record found for ${who}. Either this business is not in the CRM yet, or the name matched more than one company and I will not guess which.`
+                : "No contact link, email or phone on this report, so there is nothing to look up in the CRM."
+            );
+          }
+
+          const timeline = await getLeadActivities({ contactId: lead.id, limit: 8 });
+
           return ok({
-            zoho_record: `Leads/${id}`,
-            company: full.Company,
-            name: [full.First_Name, full.Last_Name].filter(Boolean).join(" ") || null,
-            email: full.Email,
-            phone: full.Phone,
-            lead_status: full.Lead_Status,
-            lead_source: full.Lead_Source,
-            website: (full as Record<string, unknown>).Website ?? null,
-            notes: notes.map((n) => ({
-              at: n.Created_Time,
-              title: n.Note_Title,
-              text: (n.Note_Content ?? "").slice(0, 600),
+            crm_record: lead.id,
+            company: lead.businessName,
+            name: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || null,
+            email: lead.email,
+            phone: lead.phone,
+            mobile_phone: lead.mobilePhone,
+            website: lead.website,
+            lead_status: lead.applicationStage,
+            working_state: lead.workingState,
+            lead_source: lead.source,
+            do_not_contact: lead.doNotContact,
+            timeline: timeline.map((a) => ({
+              at: a.occurred_at,
+              type: a.activity_type,
+              actor: a.actor,
+              title: a.subject,
+              text: (a.body ?? "").slice(0, 600),
             })),
-            note: "Notes are what Matthew typed after previous calls. They are the record of what was said on the phone.",
+            note:
+              "This is the lead's whole CRM timeline, not a note file. Read each entry's `type`: " +
+              "`call` and `note` are what a human wrote or said and ARE the record of what happened " +
+              "on the phone. `status_change`, `task_created`, `system` and `audit` are written by " +
+              "Mission Control itself, so never quote one back as something Matthew or the prospect " +
+              "said. `lead_status` is the pipeline stage; `working_state` is whether the lead is live " +
+              "on the call board right now. An empty timeline means no CRM activity, NOT that nobody " +
+              "has been contacted, because email lives in get_email_history.",
           });
         }
 
