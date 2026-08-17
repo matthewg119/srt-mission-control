@@ -123,11 +123,24 @@ export async function ensureClientChannel(args: {
   // Membership is what matters, since files.completeUploadExternal silently no-ops
   // without it while still returning ok:true.
 
-  const matthewId = process.env.MATTHEW_SLACK_USER_ID;
-  if (matthewId && !usingClientHub()) {
-    // Only meaningful in our own workspace: a main-workspace user id is not a member
-    // of the hub workspace and the invite would fail with user_not_found.
-    await hubFetch("conversations.invite", { channel: channel.id, users: matthewId });
+  // Whoever runs delivery has to be IN the channel, and a private channel created by a
+  // bot has exactly one member until someone is invited: the bot. Skipping this would
+  // leave a trail of client channels you cannot see.
+  //
+  // The id differs per workspace. A main-workspace user id is not a member of the hub
+  // workspace, so inviting it there fails with user_not_found, which is why hub mode
+  // needs its own env var rather than reusing MATTHEW_SLACK_USER_ID.
+  const ownerId = usingClientHub()
+    ? process.env.SLACK_HUB_OWNER_USER_ID
+    : process.env.MATTHEW_SLACK_USER_ID;
+
+  if (ownerId) {
+    await hubFetch("conversations.invite", { channel: channel.id, users: ownerId });
+  } else if (usingClientHub()) {
+    console.error(
+      "[client-channel] SLACK_HUB_OWNER_USER_ID is not set, so nobody was invited to " +
+        `#${channel.name ?? name}. The bot is its only member.`
+    );
   }
 
   await hubFetch("chat.postMessage", {
