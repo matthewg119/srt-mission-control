@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
-import { updateLead as updateZohoLead } from "@/lib/zoho";
+import { setLeadStatus } from "@/lib/crm";
 import { onPreApproved } from "@/lib/ai-intel/pre-approved-handler";
 
 // GET /api/deals/[id] — single deal with contact, events, and notes
@@ -99,7 +99,16 @@ export async function PATCH(
       const zohoLeadId = contactRef?.zoho_lead_id ?? null;
       if (zohoLeadId) {
         try {
-          await updateZohoLead(zohoLeadId, { Lead_Status: stage });
+          // Routed through crm.setLeadStatus rather than updateZohoLead directly:
+          // it records the transition in lead_status_history with origin, which
+          // is what lets the inbound Zoho webhook recognise the echo of this
+          // very write and not re-fire everything downstream.
+          await setLeadStatus({
+            zohoLeadId,
+            status: stage,
+            reason: "Deal stage changed",
+            origin: "mission_control",
+          });
         } catch (e) {
           console.error("[deals PATCH] Zoho stage forward failed:", (e as Error).message);
           // Non-fatal — Supabase update below still runs so the user isn't stuck.
@@ -115,7 +124,12 @@ export async function PATCH(
       const zohoLeadId2 = contactRef2?.zoho_lead_id ?? null;
       if (zohoLeadId2) {
         try {
-          await updateZohoLead(zohoLeadId2, { Lead_Status: lead_status });
+          await setLeadStatus({
+            zohoLeadId: zohoLeadId2,
+            status: lead_status,
+            reason: "Lead disposition set from the deal record",
+            origin: "mission_control",
+          });
         } catch (e) {
           console.error("[deals PATCH] Zoho lead_status update failed:", (e as Error).message);
         }

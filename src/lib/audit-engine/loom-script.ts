@@ -6,13 +6,23 @@
 // template here is HIS script, the one he wrote for the surface-sealing contractor, with the
 // per-audit facts substituted in. Screenshots get pasted over the top while it is read.
 //
+// ── Template v2 (2026-08-16) ────────────────────────────────────────────────
+// The order changed and a middle section was added. The score is now the FIRST thing said rather
+// than the payoff of a build-up, all three best customers get named where one used to, an either-or
+// beat bookends the video, and the explanatory middle is three pillars (Findable, Familiar,
+// Freshness) carried by fixed anecdotes. The offer is three commitments, both tiers are contrasted
+// rather than just priced, and the close sends them to the payment link instead of asking for a
+// reply phrase. That last change is not local to this file: delivery-email.ts carries the same link
+// and no longer flags a missing reply phrase.
+//
 // ── What is filled from real data and what is not ───────────────────────────
 // The score, the X of Y, the prompts, the prompt they rank best on and the ones they are absent
 // from all come from this audit's own run. The customers named in the open are the niche's own
 // avatars (niche-avatars.ts), not something written here. ONE Claude call supplies the wordings
 // that are a fact about the TRADE rather than about this business: the verb for what they do
-// when a lead lands, the jobs in the owner's own words, and the two customers to attract and two
-// to avoid REWORDED for saying out loud. Nothing else is generated, and nothing is estimated.
+// when a lead lands, the jobs in the owner's own words, and the customers to avoid REWORDED for
+// saying out loud. The three pillars are hand-written constants and must stay that way, for the
+// reason spelled out over LOOM_PILLARS. Nothing else is generated, and nothing is estimated.
 //
 // ── The name ────────────────────────────────────────────────────────────────
 // The video opens on the owner's first name, because that is the whole difference between a
@@ -35,6 +45,11 @@ import {
   LOOM_PRICE_LABEL,
   LOOM_START_WINDOW,
   LOOM_TEXT_NUMBER,
+  ONBOARDING_WINDOW,
+  PAYMENT_LINK,
+  PRICE_COMPLETE,
+  PRICE_CORE,
+  TIER_CONTRAST,
 } from "@/config/pitch";
 import { noDashes } from "./email-assistant";
 import type { BeatSheetFacts } from "./loom-beatsheet";
@@ -71,9 +86,14 @@ interface TradeVoice {
   action: string;
   /** Three jobs in the owner's own words, short. */
   jobs: string[];
-  /** The customers to get in front of, plural and spoken: "new home builders". */
-  attract: string[];
-  /** The customers to avoid, plural and spoken: "sample hoarders". Empty when there is no niche set. */
+  /**
+   * The customers to avoid, plural and spoken: "sample hoarders". Empty when there is no niche set.
+   *
+   * There is no matching `attract`, and there used to be. v2 reads the best customers out as their
+   * own card LABELS ("The Corporate Film Program Buyer"), so the spoken plural rewording that fed
+   * "get in front of more X or Y" has nothing left to fill. Generating it anyway would be a field
+   * nothing reads, drifting quietly against the labels actually on screen.
+   */
   avoid: string[];
 }
 
@@ -87,10 +107,7 @@ function isTradeVoice(v: unknown): v is TradeVoice {
     o.action.length > 0 &&
     Array.isArray(o.jobs) &&
     o.jobs.length >= 1 &&
-    // avoid is allowed to be empty (no niche set), attract never is: it is the sentence the whole
-    // video is pointed at, and "get in front of more" with nothing after it is not a fallback.
-    Array.isArray(o.attract) &&
-    o.attract.length >= 1 &&
+    // avoid is allowed to be empty: a run with no niche set simply does not say the line.
     Array.isArray(o.avoid)
   );
 }
@@ -174,6 +191,115 @@ function pluralish(label: string): string {
   return `${t}s`;
 }
 
+/**
+ * ‼️ THE THREE PILLARS ARE COPY, NOT PROMPT MATERIAL, AND THEY MUST STAY THAT WAY.
+ *
+ * Same precedent as PERMISSION_CLOSE, NOT_SELLING_LINE and REPLY_ASK_LINE, but the reason here is
+ * sharper than "the model rewrites it". Two of these three pillars are carried by a STORY ABOUT A
+ * REAL PERSON: an operator in Florida whose own reviews were quoted to recommend his competitors,
+ * and Matthew's wife booking a laser appointment off a review ChatGPT surfaced at a barbecue. A
+ * model asked to "tell a client story for this niche" does not decline for lack of one. It invents
+ * a client, on camera, in a pitch whose entire basis is "you can verify all of this yourself".
+ *
+ * That is the same no-fabrication rule run-prompts.ts states for engine results, applied to speech.
+ * If a new anecdote is ever worth telling, it gets written here by a person who was there.
+ *
+ * Vertical-agnostic on purpose: the laser story is told to contractors and film festivals alike,
+ * because the point of it is HOW the machine chose, not what was being bought.
+ */
+const LOOM_PILLARS: ReadonlyArray<{ title: string; lines: string[] }> = [
+  {
+    title: "Number 1. Findable",
+    lines: [
+      "I had a guy in Florida. Twenty years in business, hundreds of reviews.",
+      "And the engine was quoting his own reviews to recommend his competitors.",
+      "That is because most sites are written for people. The machine cannot read them.",
+      "And AI is not like Google. There is no twenty options and a hundred pages of results.",
+      "It hands back three or five business names. That is the whole list.",
+      "So you can be easy to find on Google and still be hard to find in the AI answers, and that is a whole different fix.",
+      "So what we do is rewrite your pages into answers the machine can actually quote.",
+    ],
+  },
+  {
+    title: "Number 2. Familiar",
+    lines: [
+      "The machine is scared of being wrong. It picks whoever it has the most evidence for.",
+      "I was at a barbecue with my wife, and we had a trip coming up the next weekend.",
+      "We had just moved to a new city, and she had never had laser treatment here.",
+      "And she goes, let me just ask ChatGPT where I can go.",
+      "She pulls out her phone and starts talking to it. She tells it she had a bad experience with laser treatment before, and asks what places it recommends.",
+      "And it pulled a review one of those websites had, from someone with her exact problem.",
+      "She did not even hesitate. She booked that week, and they sold her on a yearly plan.",
+      "It barely reads your website. It reads what other people said about you. Reviews, forums, blogs.",
+      "And it checks whether your information matches everywhere. One mismatch and it drops you.",
+      "So what we do is turn your happy customers into the proof the machine can quote.",
+    ],
+  },
+  {
+    title: "Number 3. Freshness",
+    lines: [
+      "The machine builds a new answer every single time. Recent beats old.",
+      "And the longer the same names keep coming back, the harder they set.",
+      "So the game is not getting picked once. It is being the name it keeps coming back to.",
+      "It is like asking the machine who owns Tesla. It already has a memory, and it says Elon Musk instantly.",
+      "So what we do is keep you in the answer, until you are part of the memory of the AI.",
+      "And we prove it monthly.",
+    ],
+  },
+];
+
+/** The offer as three things we commit to, which is what replaced the old "what we do" paragraph. */
+const LOOM_COMMITMENTS: ReadonlyArray<{ title: string; lines: string[] }> = [
+  {
+    title: "Number 1",
+    lines: [
+      "We rebuild your pages into answers the engine wants to quote.",
+      "Answers only your ideal customer in your city actually asks.",
+      "And we answer them in words the machine can actually quote.",
+    ],
+  },
+  {
+    title: "Number 2",
+    lines: [
+      "We turn your happy customers into the evidence.",
+      "We set up automatic workflows so the reviews come out pain driven, with real customer details, and end on what changed for them.",
+      "We get your facts matching everywhere the machine checks.",
+      "And we do outreach to the forums and the blogs that make the lists the engine quotes.",
+    ],
+  },
+  {
+    title: "Number 3",
+    lines: [
+      "Every month we run these same real questions and send you the findings.",
+      "Whether your name showed up, and whether it moved.",
+      "So ninety days from now you are not wondering whether this worked.",
+      "You are measuring me, not trusting me.",
+    ],
+  },
+];
+
+/**
+ * The either-or beat, said twice: once before the pillars and once in the close.
+ *
+ * ONE source for both readings. Said twice from two hand-written copies they drift by a word or
+ * two, and a repeated line that is not quite the same line is worse than saying it once: the second
+ * pass sounds like a different thought instead of the point landing again.
+ */
+function urgencyBeat(city: string | null, withPromise: boolean): string[] {
+  const where = city ?? "your city";
+  const lines = [
+    "And either you start doing something about it or you don't.",
+    "",
+    `Somebody in ${where} is going to become the name that keeps getting quoted.`,
+    "",
+    "Right now it is leaning their way.",
+  ];
+  if (withPromise) {
+    lines.push("", "But do not worry. In this video I am going to show you how to become the one it quotes.");
+  }
+  return lines;
+}
+
 /** File-safe slug for the attachment name. */
 function slugify(s: string): string {
   return s
@@ -187,7 +313,6 @@ async function tradeVoice(
   report: AuditReportRow,
   view: ReportView,
   avatar: BestAvatar,
-  attractAvatars: BestAvatar[],
   avoidAvatars: WorstCustomer[]
 ): Promise<TradeVoice> {
   const trade = report.business_type ?? "local service";
@@ -200,10 +325,8 @@ async function tradeVoice(
     greeting: trade,
     action: "get back to them and quote the job",
     jobs: absent.slice(0, 3),
-    attract: attractAvatars.map((a) => pluralish(a.label)).filter(Boolean),
     avoid: avoidAvatars.map((w) => pluralish(w.label)).filter(Boolean),
   };
-  if (!fallback.attract.length) fallback.attract = [pluralish(avatar.label) || avatar.label];
 
   try {
     const { data } = await callClaudeJSON<TradeVoice>({
@@ -215,15 +338,15 @@ async function tradeVoice(
         'action: what this owner physically does once a lead comes in, as a short verb phrase that finishes the sentence "all you have to do is ___". e.g. "drive out and quote the job", "book the consultation", "send the estimate over". Match how this trade actually closes work.',
         "jobs: three jobs this business could be getting, in the owner's own plain words, five to nine words each. Take them from the buyer questions provided. Describe the WORK, not the search.",
         "",
-        "attract and avoid: you are given customer types that have ALREADY been decided. Your only job is to reword each one for saying out loud.",
-        'They are written to be read on a card, so they arrive singular and articled, e.g. "the $45 one-time mow shopper". They are going to be read in these two sentences:',
-        '  "...get in front of more X or Y"   and   "...and avoid the P or the Q".',
+        "avoid: you are given customer types that have ALREADY been decided. Your only job is to reword each one for saying out loud.",
+        'They are written to be read on a card, so they arrive singular and articled, e.g. "the $45 one-time mow shopper". They are going to be read in this sentence:',
+        '  "...and keep you away from the P or the Q".',
         "So make each one a bare plural noun phrase: no leading 'the' or 'a', no dollar amounts, TWO TO FOUR WORDS.",
-        'e.g. "the recurring commercial property manager" becomes "property management companies"; "the $45 one-time mow shopper" becomes "sample shoppers"; "the individual room flipper" becomes "one room flippers".',
+        'e.g. "the $45 one-time mow shopper" becomes "sample shoppers"; "the individual room flipper" becomes "one room flippers".',
         "A NAME, not a description. No verbs, no \"who\" or \"that\" clause, no reason attached. \"sample hoarders\" is right; \"free sample collectors who never buy\" is wrong, that is the reason and it does not get said.",
         "The detail in brackets next to each one is context so you pick the right words. It is never part of your answer.",
         "",
-        "HARD RULE on attract and avoid: reword only. Return one entry per customer given, in the same order. Never introduce a customer type that is not in the list, never merge two into one, never drop one. These names have already been checked against how this trade actually makes and loses money, and a substitution here would put a customer on camera that nobody chose.",
+        "HARD RULE on avoid: reword only. Return one entry per customer given, in the same order. Never introduce a customer type that is not in the list, never merge two into one, never drop one. These names have already been checked against how this trade actually loses money, and a substitution here would put a customer on camera that nobody chose.",
         "",
         "Plain language only. No marketing adjectives, no jargon, no dollar amounts, no dashes as punctuation.",
         "Return JSON only.",
@@ -232,10 +355,7 @@ async function tradeVoice(
         `Trade: ${trade}`,
         report.city ? `Market: ${report.city}` : "",
         `Their buyer, as classified: ${report.buyer_persona ?? "unknown"}`,
-        `The customer this video is aimed at: ${avatar.label}`,
-        "",
-        `Customers to ATTRACT, reword these ${attractAvatars.length} in this order:`,
-        ...attractAvatars.map((a, i) => `${i + 1}. ${a.label} (${a.ticket})`),
+        `The customer this video is aimed at: ${avatar.label} (${avatar.ticket})`,
         "",
         avoidAvatars.length
           ? [
@@ -248,7 +368,7 @@ async function tradeVoice(
           ? `Buyer questions they do NOT appear in. The jobs come from these:\n${absent.map((q) => `- ${q}`).join("\n")}`
           : "They appear in most tested questions, so use the highest-value work this trade does.",
         "",
-        'Return {"greeting":"...","action":"...","jobs":["...","...","..."],"attract":["...","..."],"avoid":["...","..."]}',
+        'Return {"greeting":"...","action":"...","jobs":["...","...","..."],"avoid":["...","..."]}',
       ]
         .filter(Boolean)
         .join("\n"),
@@ -256,7 +376,7 @@ async function tradeVoice(
       temperature: 0.4,
       schemaHint:
         '{ "greeting": string, "action": string, "jobs": string[] (3), ' +
-        '"attract": string[] (one per customer given, same order), "avoid": string[] (one per customer given, same order) }',
+        '"avoid": string[] (one per customer given, same order) }',
       validate: isTradeVoice,
     });
     // Two ways the rewording goes wrong, both handled by falling back to the plain plural of the
@@ -273,11 +393,7 @@ async function tradeVoice(
       if (got.length !== source.length) return plain;
       return got.map((s, i) => (s.trim().split(/\s+/).length > 5 ? plain[i] ?? s.trim() : s.trim()));
     };
-    return {
-      ...data,
-      attract: tidy(data.attract, attractAvatars, fallback.attract),
-      avoid: tidy(data.avoid, avoidAvatars, fallback.avoid),
-    };
+    return { ...data, avoid: tidy(data.avoid, avoidAvatars, fallback.avoid) };
   } catch (e) {
     console.error("[loom-script] trade voice failed, using fallbacks:", (e as Error).message);
     return fallback;
@@ -298,13 +414,14 @@ export async function buildLoomScript(
   avatar: BestAvatar,
   opts: LoomScriptOptions = {}
 ): Promise<LoomScriptResult> {
-  // Two to attract: the one picked in the wizard, then the strongest of the set that is not it.
-  // Two to avoid: the first two on the card, which is the order they were judged in.
+  // All three to attract, the picked one first: v2 reads the whole best-customer set out as the
+  // jobs this points at, where the old script named one. Two to avoid: the first two on the card,
+  // which is the order they were judged in.
   const others = (opts.avatars?.best ?? []).filter((b) => b.label !== avatar.label);
-  const attractAvatars = [avatar, ...others].slice(0, 2);
+  const attractAvatars = [avatar, ...others].slice(0, 3);
   const avoidAvatars = (opts.avatars?.worst ?? []).slice(0, 2);
 
-  const voice = await tradeVoice(report, view, avatar, attractAvatars, avoidAvatars);
+  const voice = await tradeVoice(report, view, avatar, avoidAvatars);
   const name = readName(report, opts.greetName);
   const company = report.client_name ?? facts.company;
   const price = opts.price || LOOM_PRICE_LABEL;
@@ -331,46 +448,59 @@ export async function buildLoomScript(
   if (!name) {
     say(`NAME: not known. Say their name in the first line, or reply "loom <name>" and rebuild.`);
   }
+  if (!PAYMENT_LINK) {
+    say(
+      `NO PAYMENT LINK SET. The close below asks them to click the link in the email. Set SRT_PAYMENT_URL before recording, or that sentence promises something that does not exist.`
+    );
+  }
 
-  // 1 + 2. Greeting and what the video is.
+  // 1 + 2. Greeting and THE SCORE, which is now the first thing said.
   //
-  // The whole pitch is in this sentence: not "more visibility" but a named customer they want more
-  // of and a named customer they are sick of. Both come from the niche's avatar set, the same one
-  // shown on the Slack card, so what he says here is what he already agreed to when he picked.
-  const attract = orList(voice.attract);
-  const avoid = voice.avoid.length ? orList(voice.avoid.map((a) => `the ${a}`)) : null;
-  const pitch = LOOM_CLIENT_COUNT_CLAIM
-    ? `In this video I am going to show you how you can get ${LOOM_CLIENT_COUNT_CLAIM}${where}.`
-    : [
-        `In this video I am going to show you how to increase your AI visibility,`,
-        `so you can get in front of more ${attract}${where}${avoid ? `,` : `.`}`,
-        avoid ? `and avoid ${avoid}.` : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-  say(screen("the dream lead image, full screen"), "", `Hey ${name ?? voice.greeting},`, "", pitch);
-
-  // 3. The dream lead, framed as the target.
-  say("");
+  // v2 opens on the number rather than working up to it. The reason is the thumbnail: the video is
+  // sent as the answer to "want me to send it over", so the viewer already knows roughly what this
+  // is, and holding the score back for ninety seconds spends the only attention that was granted.
   say(
+    screen("the PDF scorecard"),
+    "",
+    `Hey ${name ?? voice.greeting},`,
+    "",
+    `In this video I am going to show you your current visibility status.`,
+    "",
+    `As you can see here, you scored ${facts.score} out of 100. You showed up in ${facts.appeared} of the ${facts.total} questions we tested.`
+  );
+
+  // 3. Who this points at. v2 names the WHOLE best-customer set, where the old script named one.
+  //
+  // The pitch is in this list: not "more visibility" but three named customers they want more of.
+  // They are the niche set's own labels, the same ones on the Slack card, so what he reads here is
+  // what he already agreed to when he picked. Labels rather than the spoken rewording, because read
+  // as a list they are titles, and a title is what makes a customer type sound like a real segment.
+  const avoid = voice.avoid.length ? orList(voice.avoid.map((a) => `the ${a}`)) : null;
+  say(...rule("THE JOBS"));
+  say(
+    screen("the dream lead image, full screen"),
+    "",
+    LOOM_CLIENT_COUNT_CLAIM
+      ? `When you decide to increase your AI visibility, we will be able to get you ${LOOM_CLIENT_COUNT_CLAIM}${where}.`
+      : `When you decide to increase your AI visibility, we will be able to get you in front of this type of job${where}.`,
+    ""
+  );
+  for (const a of attractAvatars) say(`  ${a.label}`);
+  if (avoid) say("", `And keep you away from ${avoid}.`);
+  say(
+    "",
     `This right here is the exact kind of inquiry we point at your phone.`,
     "",
     `Someone like ${avatar.label}. ${sentence(avatar.ticket)}`,
     "",
-    `And look at the line in the message. They asked ChatGPT for ${avatar.aiQuestion}, and that is how they found you.`,
-    "",
-    `That is the job we are pointing this at.`
+    `And look at the line in the message. They asked ChatGPT for ${avatar.aiQuestion}, and that is how they found you.`
   );
-
-  // 4. The jobs.
   if (voice.jobs.length) {
-    say(...rule("THE JOBS"));
-    say(`These are the jobs we can bring you.`, "");
+    say("", `Which in your world is work like this.`, "");
     for (const job of voice.jobs) say(`  ${job}`);
   }
 
-  // 5. Speed to lead. Said early because it is the one thing HE needs from THEM.
+  // 4. Speed to lead. Said early because it is the one thing HE needs from THEM.
   say(...rule("SPEED"));
   say(
     `One thing before I show you the rest, because it decides whether this works for you or not.`,
@@ -380,31 +510,23 @@ export async function buildLoomScript(
     `Speed is the name of the game. If you can be fast, this can work for you.`
   );
 
-  // 6. The 20 prompts.
+  // 5. The 20 prompts, framed by what makes them fair: none of them say the business name.
   say(...rule("WHAT WE FOUND"));
   say(
     screen("the list of 20 prompts"),
     "",
-    `Here is what we figured out.`,
+    `These are the phrases we used to try and find you, without mentioning your name completely.`,
     "",
-    `These are the twenty questions we tested. Real things people type into ChatGPT when they are looking for ${aTrade(report.business_type ?? "what you do")}${where}.`,
+    `Real things people type into ChatGPT when they are looking for ${aTrade(report.business_type ?? "what you do")}${where}.`,
     ""
   );
   for (const p of view.prompts) say(`  ${p.prompt}`);
 
-  // 7. The score. The competitor count and the "yours either way" line used to sit here and were
-  // cut to keep the recording to the beats in the written script. Both are still true and both are
-  // still in the pre-flight and the PDF, so they are available to say, just not scripted.
-  say(...rule("THE SCORE"));
-  say(
-    screen("the PDF scorecard"),
-    "",
-    `We ran all twenty, and scored what came back.`,
-    "",
-    `You came out at ${facts.score} out of 100. You showed up in ${facts.appeared} of the ${facts.total}.`
-  );
+  // 6. The either-or. First of two readings; this one carries the promise that sets up the pillars.
+  say("");
+  say(...urgencyBeat(report.city, true));
 
-  // 9. Live. The concession first, because he will check it himself afterwards.
+  // 7. Live. The concession first, because he will check it himself afterwards.
   say(...rule("LIVE"));
   say(screen("a temporary ChatGPT window"), "");
   if (facts.trampa) {
@@ -438,22 +560,67 @@ export async function buildLoomScript(
   // evidence and deleting it outright would have thrown away the strongest thing some audits find.
   // See renderPreflight() in loom-beatsheet.ts.
 
-  // 10 + 11 + 12. The offer, in plain terms.
-  say(...rule("WHAT WE DO"));
+  // 8. THE THREE PILLARS. The explanatory middle of the video, and the only part that is the same
+  // every time. See LOOM_PILLARS for why the anecdotes are written here and not generated.
+  say(...rule("THE 3 PILLARS"));
   say(
-    `What we do is optimize not just your website, but your online presence overall.`,
+    `Being recommended by AI comes down to three main pillars.`,
     "",
-    `So you get in front of those exact questions, and the people looking for that kind of work find you.`,
+    `If you miss one, you stay invisible.`
+  );
+  for (const pillar of LOOM_PILLARS) {
+    say("", `${pillar.title}`, "");
+    for (const line of pillar.lines) say(line, "");
+  }
+
+  // 9. The offer as three commitments, replacing the old single "what we do" paragraph.
+  say(...rule("WHAT WE COMMIT TO"));
+  say(
+    `So you can do all of this yourself.`,
     "",
-    `And then all you have to do is ${voice.action}.`,
+    `But if you want us to do it for you, our promise is simple. We commit to three things.`
+  );
+  for (const c of LOOM_COMMITMENTS) {
+    say("", `${c.title}`, "");
+    for (const line of c.lines) say(line, "");
+  }
+  say(`And then all you have to do is ${voice.action}.`);
+
+  // 10. The math.
+  //
+  // ‼️ The second line is a DELIVERY_BANNED_PROMISES hit: it claims the investment is made back,
+  // which nothing in this pipeline measures. It is here ON PURPOSE and SPOKEN ONLY (Matthew's call,
+  // 2026-08-16). Downstream behaviour is already correct and must not be "fixed" to match: the
+  // transcript path runs spokenPromises() over what was said, FLAGS this line in Slack, and
+  // declines to repeat it in the delivery email. The video cannot unsay it; the email can decline
+  // to put it in writing. Do not copy this sentence into any drafter.
+  say("");
+  say(
+    `You will not win all of the jobs. But if you are fast, you will win more than you don't.`,
     "",
-    `You will not win all of them. But if you are fast, you will win more than you don't.`
+    `And just one extra client a month will very likely make back the investment.`
   );
 
-  // 13. Price and timeline.
+  // 11. Price and timeline. Both tiers, with what actually separates them.
   say(...rule("THE INVESTMENT"));
+  if (opts.price) {
+    // A `loom $499` override means the recording quotes one number, so the contrast would describe
+    // a choice that is not being offered.
+    say(`If you want to get started, the investment is ${price}.`);
+  } else {
+    say(
+      `We have our core Visibility program, which is ${PRICE_CORE}.`,
+      "",
+      `Or the complete Visibility program, where the investment is ${PRICE_COMPLETE}.`,
+      "",
+      `${TIER_CONTRAST.Core.line} ${TIER_CONTRAST.Core.detail}`,
+      "",
+      `${TIER_CONTRAST.Complete.line} ${TIER_CONTRAST.Complete.detail}`,
+      "",
+      TIER_CONTRAST.both
+    );
+  }
   say(
-    `If you want to get started, the investment is ${price}.`,
     "",
     `Typically you start getting pushed by ${orList(facts.engines)}${otherEngines.length ? `, and the other search agents like ${orList(otherEngines)}` : ""}, in anywhere from ${startWindow}.`,
     "",
@@ -462,24 +629,37 @@ export async function buildLoomScript(
     `And again, it works really well if you can call the leads within five minutes.`
   );
 
-  // 14 + 15. The CTA and what happens next.
+  // 12. The CTA and what happens next. v2 sends them to the payment link rather than asking for a
+  // reply phrase, so the delivery email carries that link. Both are read off PAYMENT_LINK.
   say(...rule("THE CLOSE"));
+  if (PAYMENT_LINK) {
+    say(
+      `If this sounds like you and you would like to get started, click the link I sent over to your email.`,
+      "",
+      screen(`the payment page, ${PAYMENT_LINK}`),
+      "",
+      `It takes you to this page, where you can pay by credit card, PayPal or direct ACH.`,
+      "",
+      `After the payment is completed you will receive an invitation link to get you started right away.`,
+      "",
+      `Getting started usually takes ${ONBOARDING_WINDOW}, depending on how busy we are.`
+    );
+  } else {
+    say(
+      `!! NO PAYMENT LINK IS SET, so do not say "click the link I sent over". Set SRT_PAYMENT_URL and rebuild this script, or say you will send the invoice over after this video and stop there.`,
+      "",
+      `If this sounds like you and you would like to get started, reply to the email I sent over and I will send the invoice.`
+    );
+  }
+  say("");
+  say(...urgencyBeat(report.city, false));
   say(
-    `If that sounds like you and you want to get started, reply to the email I sent over with "let's do it", and I will send an invoice that looks like this.`,
-    "",
-    screen("the invoice"),
-    "",
-    `It takes you to a page where you can pay by credit card, PayPal or direct ACH.`,
-    "",
-    `After that we reach out to get some basic information from you about your Google Business profile, and we get started. Usually a few hours depending on how busy we are.`,
-    "",
-    `There are no fireworks and no gold stars.`,
-    "",
-    `But if that sounds like you, send that email and we will get you going.`,
     "",
     `If you have any questions you can reach me on this guy right here. My number is ${LOOM_TEXT_NUMBER}. Feel free to text me.`,
     "",
-    `And if it is not for you, thanks for watching.`
+    `I hope I explained myself. And if you feel like I did not understand your business correctly, or I missed something, we clarify all of it on the onboarding call as soon as the payment is completed. Or you can just call me.`,
+    "",
+    `And if it is not for you, thanks for your time. I hope you learned something that gets you ready for the age of AI ahead of us.`
   );
 
   say(

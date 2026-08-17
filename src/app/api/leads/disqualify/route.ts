@@ -2,7 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { getCorsHeaders } from "@/lib/lead-validation";
-import { updateLead as zohoUpdateLead, addNoteToLead as zohoAddNote } from "@/lib/zoho";
+import { addNoteToLead as zohoAddNote, updateLead as zohoUpdateLead } from "@/lib/zoho";
+import { setLeadStatus } from "@/lib/crm";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
@@ -169,17 +170,22 @@ export async function POST(request: NextRequest) {
       //     TERMINAL_ZOHO_STATUSES in zoho-guardian and is the most likely
       //     valid value. "DNQ" is what the webhook reader checks for — keep
       //     it as a fallback in case that is configured too.
+      //     The candidate loop now lives inside crm.setLeadStatus, which also
+      //     records the landed value in lead_status_history so the inbound
+      //     webhook can tell this write apart from a real Zoho-side edit.
       const statusCandidates = ["Dead Declined", "DNQ", "Declined", "Dead"];
-      let landedStatus: string | null = null;
       const attemptErrors: Array<{ status: string; error: string }> = [];
-      for (const candidate of statusCandidates) {
-        try {
-          await zohoUpdateLead(contact.zoho_lead_id, { Lead_Status: candidate });
-          landedStatus = candidate;
-          break;
-        } catch (err) {
-          attemptErrors.push({ status: candidate, error: err instanceof Error ? err.message : String(err) });
-        }
+      const statusRes = await setLeadStatus({
+        contactId: contact.id as string,
+        zohoLeadId: contact.zoho_lead_id,
+        status: statusCandidates[0],
+        statusCandidates,
+        reason,
+        origin: "mission_control",
+      });
+      const landedStatus = statusRes.pushedToZoho ? statusRes.landedStatus : null;
+      if (!landedStatus && statusRes.error) {
+        attemptErrors.push({ status: statusCandidates.join("|"), error: statusRes.error });
       }
       if (!landedStatus) {
         console.error("[disqualify] All Zoho Lead_Status candidates rejected:", JSON.stringify(attemptErrors));

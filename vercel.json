@@ -83,6 +83,14 @@
     {
       "path": "/api/cron/medspa-credit-reminder",
       "schedule": "20 16 * * *"
+    },
+    {
+      "path": "/api/cron/crm-sync",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/hanging-leads",
+      "schedule": "5 12 * * 1-5"
     }
   ]
 }

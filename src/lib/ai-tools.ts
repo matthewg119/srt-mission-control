@@ -9,6 +9,7 @@ import { slack } from "./slack-bot";
 import { cancelPendingSuggestion } from "./imessage-suggestion";
 import { dispatchOutbound } from "./imessage-transport";
 import { scheduleFollowup } from "./imessage-followups";
+import { CRM_TOOLS, CRM_TOOL_NAMES, executeCrmTool } from "./crm-tools";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
 export interface ToolExecutionResult {
@@ -17,7 +18,7 @@ export interface ToolExecutionResult {
 }
 
 // Tool definitions for the Anthropic API
-export const AI_TOOLS = [
+const BASE_TOOLS = [
   {
     name: "get_pipeline_overview",
     description:
@@ -384,11 +385,22 @@ export const AI_TOOLS = [
   },
 ];
 
+// The CRM tools (worklist, lead lookup, call logging, follow-ups, open query)
+// live in crm-tools.ts — this file is already long enough, and keeping them
+// separate makes the Zoho-replacement surface reviewable on its own.
+//
+// Merging here rather than at each call site means every existing consumer
+// picks them up automatically: the web chat, the Telegram webhook, and — the
+// one that matters — the free-form Slack handler in
+// src/app/api/slack/events/route.ts, which passes no tool overrides at all.
+export const AI_TOOLS = [...BASE_TOOLS, ...CRM_TOOLS];
+
 // Tool execution functions
 export async function executeTool(
   toolName: string,
   input: Record<string, unknown>
 ): Promise<ToolExecutionResult> {
+  if (CRM_TOOL_NAMES.has(toolName)) return executeCrmTool(toolName, input);
   try {
     let content: string;
     // Support both old opportunity_id and new deal_id parameter names

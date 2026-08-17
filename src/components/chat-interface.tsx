@@ -17,6 +17,9 @@ import {
   User,
   Building2,
   ListChecks,
+  PhoneCall,
+  CalendarClock,
+  Database,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -58,6 +61,22 @@ const TOOL_LABELS: Record<string, { label: string; icon: typeof Zap }> = {
   get_deal_notes: { label: "Fetching notes", icon: FileText },
   get_lenders: { label: "Checking lenders", icon: Building2 },
   enroll_in_sequence: { label: "Enrolling in sequence", icon: ListChecks },
+
+  // CRM tools (src/lib/crm-tools.ts). Without an entry here the UI falls back
+  // to the raw snake_case tool name, which reads like a leak.
+  get_worklist: { label: "Building your call list", icon: PhoneCall },
+  get_lead: { label: "Looking up lead", icon: User },
+  get_lead_timeline: { label: "Reading the history", icon: Activity },
+  search_leads_db: { label: "Searching leads", icon: Search },
+  get_lead_stats: { label: "Counting leads", icon: Kanban },
+  log_call: { label: "Logging the call", icon: PhoneCall },
+  add_lead_note: { label: "Adding note", icon: FileText },
+  set_lead_status: { label: "Updating status", icon: ArrowRightLeft },
+  create_lead_task: { label: "Scheduling follow-up", icon: CalendarClock },
+  complete_lead_task: { label: "Closing follow-up", icon: ListChecks },
+  snooze_lead: { label: "Snoozing lead", icon: CalendarClock },
+  describe_schema: { label: "Reading the schema", icon: Database },
+  query_database: { label: "Querying the database", icon: Database },
 };
 
 function getToolLabel(action: string): { label: string; icon: typeof Zap } {
@@ -66,6 +85,15 @@ function getToolLabel(action: string): { label: string; icon: typeof Zap } {
 }
 
 const SUGGESTION_CHIPS = [
+  // Worklist first — "who do we need to call today?" is the question this
+  // whole surface exists to answer. It is an ordinary suggested prompt, not a
+  // special mode: clicking it just sends the text through the same tool loop.
+  { label: "Who do we need to call today?", prompt: "Who do we need to call today?", category: "Worklist" },
+  { label: "No follow-up scheduled", prompt: "Which working leads have no follow-up scheduled?", category: "Worklist" },
+  { label: "Overdue follow-ups", prompt: "Show me my overdue follow-ups", category: "Worklist" },
+  { label: "They replied, we didn't", prompt: "Which leads replied and haven't heard back from us?", category: "Worklist" },
+  { label: "Log a call", prompt: "Log a call with ", category: "Worklist" },
+
   { label: "Pipeline overview", prompt: "Give me a full pipeline overview", category: "Pipeline" },
   { label: "Who has Pending Stips?", prompt: "Who currently has Pending Stips?", category: "Pipeline" },
   { label: "Stale deals", prompt: "Which deals have been stale for more than 3 days?", category: "Pipeline" },
@@ -398,7 +426,11 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
                   </div>
 
                   <div className="space-y-3">
-                    {["Pipeline", "Contacts", "Lenders", "Actions"].map((cat) => {
+                    {/* Categories are listed explicitly, so a chip with a
+                        category missing from this array silently never
+                        renders. "Worklist" leads because it answers the
+                        question this page is opened to ask. */}
+                    {["Worklist", "Pipeline", "Contacts", "Lenders", "Actions"].map((cat) => {
                       const chips = SUGGESTION_CHIPS.filter((c) => c.category === cat);
                       return (
                         <div key={cat}>

@@ -5,6 +5,32 @@
 
 import { DEFAULTS } from "@/config/defaults";
 import { supabaseAdmin } from "@/lib/db";
+import { mirrorZohoNote, mirrorZohoStatusWrite } from "@/lib/crm-mirror";
+
+/**
+ * Controls the lead_activities mirror on the note helpers below.
+ * Defaults to mirroring; crm.addNote() passes mirror:false because it writes
+ * its own timeline row with richer origin metadata.
+ */
+export interface NoteMirrorOptions {
+  mirror?: boolean;
+  actor?: string;
+}
+
+/**
+ * Shape of a Zoho v5 write response. `details.id` is the id of the record just
+ * created, and carrying it back matters: the note mirror stamps it as the
+ * activity's external_id so the importer recognises its own note later instead
+ * of writing a second copy of it. See mirrorZohoNote().
+ */
+interface ZohoWriteResponse {
+  data?: Array<{
+    code: string;
+    message: string;
+    status: string;
+    details?: { id?: string } & Record<string, unknown>;
+  }>;
+}
 
 const ZOHO_TOKEN_ENDPOINT = "https://accounts.zoho.com/oauth/v2/token";
 const ZOHO_API_BASE = "https://www.zohoapis.com/crm/v5";
@@ -148,7 +174,8 @@ async function getAccessToken(): Promise<string> {
 export async function zohoRequest(
             method: string,
             path: string,
-            body?: unknown
+            body?: unknown,
+            extraHeaders?: Record<string, string>
           ): Promise<unknown> {
             const accessToken = await getAccessToken();
 
@@ -157,6 +184,7 @@ export async function zohoRequest(
                 headers: {
                                 Authorization: `Zoho-oauthtoken ${accessToken}`,
                                 "Content-Type": "application/json",
+                                ...(extraHeaders ?? {}),
                 },
   };
 
@@ -165,6 +193,11 @@ export async function zohoRequest(
   }
 
   const response = await fetch(`${ZOHO_API_BASE}${path}`, options);
+
+  // 304 is the expected answer to If-Modified-Since when nothing changed.
+  // It is not `ok`, but it is also not an error — the incremental sync in
+  // zoho-pull.ts relies on getting an empty result here rather than a throw.
+  if (response.status === 304) return {};
 
   if (!response.ok) {
                 const errorText = await response.text();
@@ -193,35 +226,86 @@ export async function zohoRequest(
  * available, so callers can warn instead of silently reporting a partial pull as complete.
  * Throttled to stay under Zoho's 10 req/s.
  */
+export interface ListAllRecordsOptions {
+  perPage?: number;
+  maxPages?: number;
+  sleepMs?: number;
+  /**
+   * Extra query-string params. The important one is `converted: "both"` —
+   * Zoho v5 `GET /Leads` defaults to converted=false, so without it a full
+   * pull SILENTLY drops every converted lead (the whole won-business
+   * history). Also used for sort_by / sort_order fallbacks.
+   */
+  extraParams?: Record<string, string>;
+  /** Resume from a checkpointed cursor (crm_sync_state.page_token). */
+  startPageToken?: string;
+  /** Extra request headers — carries If-Modified-Since for incremental sync. */
+  headers?: Record<string, string>;
+  /**
+   * Stream pages instead of buffering the whole module. When supplied,
+   * `records` comes back EMPTY — the callback owns the data. This is what
+   * keeps a full-module pull off the Node heap and lets the caller
+   * checkpoint `nextToken` after every written page.
+   * Return `false` to stop paging early (used by the Modified_Time fallback).
+   */
+  onPage?: (
+    records: ZohoApiRecord[],
+    nextToken: string | undefined,
+    pageIndex: number
+  ) => Promise<void | boolean>;
+}
+
 export async function listAllRecords(
   module: string,
   fields: string,
-  opts: { perPage?: number; maxPages?: number; sleepMs?: number } = {}
-): Promise<{ records: ZohoApiRecord[]; truncated: boolean }> {
+  opts: ListAllRecordsOptions = {}
+): Promise<{ records: ZohoApiRecord[]; truncated: boolean; nextPageToken?: string }> {
   const perPage = opts.perPage ?? 200; // Zoho hard cap
   const maxPages = opts.maxPages ?? 1000; // 1000 * 200 = 200k record ceiling
   const sleepMs = opts.sleepMs ?? 150;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const records: ZohoApiRecord[] = [];
-  let pageToken: string | undefined;
+  let pageToken: string | undefined = opts.startPageToken;
   let pages = 0;
   let truncated = false;
+
+  const extra = Object.entries(opts.extraParams ?? {})
+    .map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("");
 
   while (pages < maxPages) {
     const path =
       `/${module}?fields=${encodeURIComponent(fields)}&per_page=${perPage}` +
+      extra +
       (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : "");
-    const result = (await zohoRequest("GET", path)) as {
+    const result = (await zohoRequest("GET", path, undefined, opts.headers)) as {
       data?: ZohoApiRecord[];
       info?: { more_records?: boolean; next_page_token?: string };
     };
     const batch = result.data ?? [];
     if (batch.length === 0) break;
-    records.push(...batch);
+
+    const nextToken = result.info?.more_records
+      ? result.info?.next_page_token
+      : undefined;
+
+    if (opts.onPage) {
+      const cont = await opts.onPage(batch, nextToken, pages);
+      if (cont === false) {
+        pageToken = nextToken;
+        pages++;
+        break;
+      }
+    } else {
+      records.push(...batch);
+    }
     pages++;
 
-    if (!result.info?.more_records) break;
+    if (!result.info?.more_records) {
+      pageToken = undefined;
+      break;
+    }
     pageToken = result.info?.next_page_token;
     if (!pageToken || pages === maxPages) {
       truncated = true; // more records available but no cursor / ceiling hit
@@ -230,7 +314,9 @@ export async function listAllRecords(
     await sleep(sleepMs);
   }
 
-  return { records, truncated };
+  // nextPageToken is set only when there is genuinely more to fetch, so a
+  // caller can treat `!nextPageToken` as "this entity is complete".
+  return { records, truncated, nextPageToken: pageToken };
 }
 
 /**
@@ -314,7 +400,8 @@ export async function createLead(leadData: ZohoLeadData): Promise<string | null>
 
 export async function updateLead(
             zohoLeadId: string,
-            updates: Partial<ZohoApiRecord>
+            updates: Partial<ZohoApiRecord>,
+            opts?: NoteMirrorOptions
           ): Promise<void> {
             const result = await zohoRequest("PUT", `/Leads/${zohoLeadId}`, { data: [{ id: zohoLeadId, ...updates }] }) as {
                           data?: Array<{ code: string; message: string; status: string; details?: unknown }>;
@@ -324,6 +411,18 @@ export async function updateLead(
                           throw new Error(
                             `Zoho updateLead non-success: code=${updated.code} message=${updated.message} details=${JSON.stringify(updated.details ?? {})} payload=${JSON.stringify(updates)}`
                           );
+            }
+            // Some callers set Lead_Status inside a bulk field update rather than
+            // via crm.setLeadStatus (the application route writes every field and
+            // the status in one PUT). Mirroring here catches those without having
+            // to split their payloads. crm.setLeadStatus passes mirror:false since
+            // it writes its own history row with a real reason and origin.
+            if (opts?.mirror !== false && typeof updates.Lead_Status === "string" && updates.Lead_Status) {
+                          await mirrorZohoStatusWrite({
+                            zohoLeadId,
+                            status: updates.Lead_Status,
+                            actor: opts?.actor,
+                          });
             }
 }
 
@@ -367,7 +466,8 @@ export async function getLeadNotes(
 export async function addNoteToLead(
             zohoLeadId: string,
             title: string,
-            content: string
+            content: string,
+            opts?: NoteMirrorOptions
           ): Promise<void> {
             const result = await zohoRequest("POST", "/Notes", {
                           data: [{
@@ -376,10 +476,22 @@ export async function addNoteToLead(
                                           Parent_Id: zohoLeadId,
                                           se_module: "Leads",
                           }],
-            }) as { data?: Array<{ code: string; message: string; status: string }> };
+            }) as ZohoWriteResponse;
             const created = result.data?.[0];
             if (created && created.status !== "success") {
                           throw new Error(`Zoho note non-success: code=${created.code} message=${created.message}`);
+            }
+            // Zoho notes ARE the activity history we're migrating. Mirroring here
+            // rather than at each of the ~12 callers means a note physically
+            // cannot reach Zoho without landing in the timeline too.
+            if (opts?.mirror !== false) {
+                          await mirrorZohoNote({
+                                          zohoLeadId,
+                                          title,
+                                          content,
+                                          actor: opts?.actor,
+                                          externalId: created?.details?.id ?? null,
+                          });
             }
 }
 
@@ -388,14 +500,27 @@ export async function addNoteToRecord(
   module: string,
   recordId: string,
   title: string,
-  content: string
+  content: string,
+  opts?: NoteMirrorOptions
 ): Promise<void> {
   const result = await zohoRequest("POST", "/Notes", {
     data: [{ Note_Title: title, Note_Content: content, Parent_Id: recordId, se_module: module }],
-  }) as { data?: Array<{ code: string; message: string; status: string }> };
+  }) as ZohoWriteResponse;
   const created = result.data?.[0];
   if (created && created.status !== "success") {
     throw new Error(`Zoho note non-success: code=${created.code} message=${created.message}`);
+  }
+  if (opts?.mirror !== false) {
+    // A Deals-module note resolves through contacts.zoho_deal_id; anything else
+    // (Accounts, Contacts) has no contact mapping and mirrors to nothing.
+    await mirrorZohoNote({
+      zohoLeadId: module === "Leads" ? recordId : null,
+      zohoDealId: module === "Deals" ? recordId : null,
+      title,
+      content,
+      actor: opts?.actor,
+      externalId: created?.details?.id ?? null,
+    });
   }
 }
 
@@ -430,10 +555,14 @@ export async function addNoteResilient(opts: {
   businessName?: string | null;
   title: string;
   content: string;
+  /** Pass mirror:false from crm.addNote, which writes its own timeline row. */
+  mirror?: boolean;
+  actor?: string;
 }): Promise<{ ok: boolean; target: string | null }> {
+  const mirrorOpts: NoteMirrorOptions = { mirror: opts.mirror, actor: opts.actor };
   if (opts.zohoLeadId) {
     try {
-      await addNoteToLead(opts.zohoLeadId, opts.title, opts.content);
+      await addNoteToLead(opts.zohoLeadId, opts.title, opts.content, mirrorOpts);
       return { ok: true, target: `Leads/${opts.zohoLeadId}` };
     } catch (e) {
       const msg = (e as Error).message;
@@ -445,7 +574,7 @@ export async function addNoteResilient(opts: {
     const dealId = await findDealByName(opts.businessName);
     if (dealId) {
       try {
-        await addNoteToRecord("Deals", dealId, opts.title, opts.content);
+        await addNoteToRecord("Deals", dealId, opts.title, opts.content, mirrorOpts);
         return { ok: true, target: `Deals/${dealId}` };
       } catch (e) {
         console.warn("[zoho] addNoteToRecord(Deals) failed:", (e as Error).message.slice(0, 120));

@@ -118,6 +118,35 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Zoho Webhook] Lead: ${leadName}, Phone: ${phone}, Source: ${leadSource}, Status: ${leadStatus}`);
 
+    // ── CRM mirror ──
+    // Additive: keeps contacts.application_stage, lead_status_history and the
+    // lead_activities timeline current so Mission Control stops depending on
+    // Zoho for "what stage is this and when did it change".
+    //
+    // Sits BEFORE the DNQ branch below because that branch returns early, and a
+    // DNQ is exactly the status transition we most want recorded.
+    //
+    // applyZohoStatus() owns the echo guard: when this webhook is Zoho echoing
+    // back a status Mission Control itself just wrote, it is dropped rather
+    // than re-applied. Fully wrapped — a mirror failure must never cost us the
+    // Speed-to-Lead call or the Meta CAPI event underneath.
+    if (leadId && leadStatus) {
+      try {
+        const { applyZohoStatus } = await import("@/lib/crm");
+        const result = await applyZohoStatus({
+          zohoLeadId: String(leadId),
+          status: String(leadStatus).trim(),
+          zohoModifiedTime: lead.Modified_Time || undefined,
+        });
+        console.log(`[Zoho Webhook] CRM mirror: ${result.reason}`);
+      } catch (mirrorErr) {
+        console.error(
+          "[Zoho Webhook] CRM mirror failed (non-fatal):",
+          mirrorErr instanceof Error ? mirrorErr.message : mirrorErr
+        );
+      }
+    }
+
     const normalizedStatus = leadStatus.trim().toLowerCase();
 
     // ── DNQ: direct Zoho → Meta CAPI, no database lookup ──

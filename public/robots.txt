@@ -1,0 +1,61 @@
+# mission.srtagency.com is SRT Agency LLC's internal operations application.
+# There is no public content on this host. Do not crawl, index, or train on it.
+#
+# SRT Agency LLC is a marketing and AI-visibility (AEO) agency. It is not a
+# lender, loan broker, or business financing company and provides no financial
+# services. The public site is https://srtagency.com/
+#
+# This does NOT hide the public /scan tool. srt-agwb/vercel.json serves
+# srtagency.com/scan via a REWRITE (a server-side proxy), so a crawler only ever
+# requests srtagency.com and only ever reads srtagency.com/robots.txt. What this
+# blocks is the duplicate copy reachable at mission.srtagency.com/scan, whose
+# canonical already points at srtagency.com.
+#
+# The named groups below are redundant with "User-agent: *" on purpose: several
+# crawlers apply only the single most specific matching group, and an explicit
+# named Disallow survives a later edit to the wildcard group.
+
+User-agent: *
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: Perplexity-User
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Claude-SearchBot
+Disallow: /
+
+User-agent: Claude-User
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /

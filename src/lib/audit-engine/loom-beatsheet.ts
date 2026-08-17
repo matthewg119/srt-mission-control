@@ -21,6 +21,7 @@
 // the trampa in the script.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
+import { PAYMENT_LINK } from "@/config/pitch";
 import { buildAliases } from "./mention-match";
 import { robotsVerdict, searchBotFindings, type RobotsVerdict } from "./robots-check";
 import type { AuditReportRow, AuditRunRow } from "./types";
@@ -342,6 +343,13 @@ export function renderPreflight(view: ReportView, f: BeatSheetFacts): string {
     brandedCount ? `[ ] ${brandedCount} branded prompts, they do not count as wins` : null,
     `[ ] Dream-lead image pasted and on screen for the open`,
     `[ ] PDF open in a tab`,
+    // The v2 close tells them to click the link in the email, so the link has to exist and has to
+    // be on screen. With none configured this is not a checklist item, it is a correction: the
+    // script prints the same warning, because a promised link that does not exist is discovered by
+    // the prospect, after the recording, when nothing can be done about it.
+    PAYMENT_LINK
+      ? `[ ] Payment page open in a tab: ${PAYMENT_LINK}`
+      : `[ ] NO PAYMENT LINK SET (SRT_PAYMENT_URL). Do not say "click the link I sent over"`,
     f.robotsVerdict === "soft"
       ? `[ ] robots.txt blocks ${f.robotsBot}, TRAINING only. Do NOT say "your site blocks ${f.robotsEngine}"`
       : null,

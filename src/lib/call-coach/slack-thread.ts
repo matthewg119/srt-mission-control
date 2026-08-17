@@ -62,7 +62,14 @@ export interface AuditThreadNotes {
  */
 export async function readAuditThreadNotes(
   channel: string | null,
-  threadTs: string | null
+  threadTs: string | null,
+  /**
+   * Char budget for the kept lines. Defaults to the LIVE COACH's budget, which is small on purpose
+   * (see the note on MAX_BLOCK_CHARS above) and must stay the default so nothing silently widens
+   * the brief. The post-call email drafter passes a bigger number: it is not competing with a score
+   * for room in a 4000-char brief, and for it the thread history IS the material.
+   */
+  maxChars: number = MAX_BLOCK_CHARS
 ): Promise<AuditThreadNotes | null> {
   if (!channel || !threadTs) return null;
 
@@ -93,8 +100,8 @@ export async function readAuditThreadNotes(
   let used = 0;
   for (let i = human.length - 1; i >= 0; i--) {
     const line = human[i];
-    if (used + line.length > MAX_BLOCK_CHARS && kept.length) break;
-    kept.unshift(line.slice(0, MAX_BLOCK_CHARS));
+    if (used + line.length > maxChars && kept.length) break;
+    kept.unshift(line.slice(0, maxChars));
     used += line.length;
   }
 
