@@ -73,9 +73,16 @@ export function OnboardingFunnel({
     setErrors((prev) => (prev[key] ? { ...prev, [key]: "" } : prev));
   };
 
+  // A field gated by showWhen only exists when its condition holds. Hidden fields are
+  // neither validated nor submitted, so a conditional that never appears can never block
+  // the form.
+  const visible = def.fields.filter(
+    (f) => !f.showWhen || values[f.showWhen.field] === f.showWhen.equals
+  );
+
   async function advance() {
     const found: Record<string, string> = {};
-    for (const field of def.fields) {
+    for (const field of visible) {
       const err = fieldError(field, values[field.key]);
       if (err) found[field.key] = err;
     }
@@ -88,7 +95,7 @@ export function OnboardingFunnel({
     setSaveError(null);
 
     const payload: Values = {};
-    for (const field of def.fields) {
+    for (const field of visible) {
       const raw = values[field.key];
       payload[field.key] =
         field.kind === "multiselect"
@@ -139,7 +146,7 @@ export function OnboardingFunnel({
       {def.blurb && <p className="mb-6 text-sm text-white/60">{def.blurb}</p>}
 
       <div className="space-y-5">
-        {def.fields.map((field) => (
+        {visible.map((field) => (
           <Field
             key={field.key}
             def={field}
@@ -294,13 +301,11 @@ function Field({
   );
 }
 
-/** §16.2, adapted for the fact that booking is not built yet. */
 function Done() {
   return (
     <div className="rounded-xl bg-white/5 p-8 text-center">
       <h1 className="mb-4 text-2xl font-bold">{COMPLETION_COPY.heading}</h1>
-      <p className="mb-6 text-white/70">{COMPLETION_COPY.body}</p>
-      <p className="text-sm text-[#00C9A7]">{COMPLETION_COPY.next}</p>
+      <p className="text-white/70">{COMPLETION_COPY.body}</p>
     </div>
   );
 }

@@ -25,7 +25,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { ingestLead, enrichLead } from "@/lib/lead-intake";
 import { normalizeTarget } from "@/lib/scan/normalize";
-import { ensureClientChannel } from "@/lib/clients/client-channel";
+import { ensureClientChannel, usingClientHub } from "@/lib/clients/client-channel";
+import { microsoft } from "@/lib/microsoft";
 import { sendPilotWelcome } from "@/lib/clients/welcome-email";
 import {
   signOnboardingToken,
@@ -59,9 +60,14 @@ export const ONBOARDING_STAGES = [
 ] as const;
 
 export interface StartPilotInput {
-  legalName: string;
+  /**
+   * Optional, because /start provisions from an email alone and intake step 1 collects
+   * the real name minutes later. Anything relying on it must handle null.
+   */
+  legalName?: string | null;
   dbaName?: string | null;
-  website: string;
+  /** Optional for the same reason. Intake step 1 is the authority on it. */
+  website?: string | null;
   email: string;
   phone?: string | null;
   contactFirstName?: string | null;
@@ -72,7 +78,7 @@ export interface StartPilotInput {
   addressLine2?: string | null;
   postalCode?: string | null;
   /** Internal only. Never rendered client-side, never spoken to a pilot. */
-  tierScope: "core" | "complete";
+  tierScope?: "core" | "complete";
   marketCenterLat?: number | null;
   marketCenterLng?: number | null;
   marketRadiusMi?: number | null;
@@ -102,16 +108,25 @@ export function onboardingUrlFor(token: string): string {
 }
 
 export async function startPilot(input: StartPilotInput): Promise<StartPilotResult> {
-  const legalName = input.legalName.trim();
+  const legalName = input.legalName?.trim() || "";
   const email = input.email.trim().toLowerCase();
-  if (!legalName) return { ok: false, error: "Legal business name is required." };
   if (!email) return { ok: false, error: "Email is required." };
 
-  const normalized = normalizeTarget(input.website);
-  if (!normalized.ok) {
-    return { ok: false, error: `That website could not be read (${normalized.error}).` };
+  // Email alone is a valid start: /start provisions from the Stripe thank-you page before
+  // anyone has typed a business name, and intake step 1 backfills every one of these
+  // fields minutes later. A website that was TYPED and is unreadable is still an error,
+  // because that is a mistake worth surfacing rather than silently dropping.
+  let website: string | null = null;
+  let domain: string | null = null;
+
+  if (input.website?.trim()) {
+    const normalized = normalizeTarget(input.website);
+    if (!normalized.ok) {
+      return { ok: false, error: `That website could not be read (${normalized.error}).` };
+    }
+    website = normalized.target.website;
+    domain = normalized.target.domain;
   }
-  const { website, domain } = normalized.target;
 
   // ── Seat cap ──
   // Counted server-side, refused with a plain sentence. There is no counter anywhere in
@@ -127,7 +142,9 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   const now = new Date();
 
   const baseRow = {
-    legal_name: legalName,
+    // Placeholder rather than null: the column is NOT NULL, and a self-serve start has no
+    // name yet. Intake step 1 overwrites it with the real one within minutes.
+    legal_name: legalName || email,
     dba_name: input.dbaName?.trim() || null,
     website,
     domain,
@@ -139,7 +156,7 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     state: input.state ? normalizeState(input.state) : null,
     postal_code: input.postalCode?.trim() || null,
     billing_status: billingStatus,
-    tier_scope: input.tierScope,
+    tier_scope: input.tierScope ?? "complete",
     language: input.language ?? "en",
     market_center_lat: input.marketCenterLat ?? null,
     market_center_lng: input.marketCenterLng ?? null,
@@ -161,7 +178,14 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   // error on the second insert, and the existing row is read back. Two genuinely
   // different clinics whose names slugify the same get a numeric suffix instead, which
   // is why this loops rather than simply returning.
-  const desired = slugify(input.dbaName?.trim() || legalName) || slugify(domain);
+  // Falls back to the email local-part, because a self-serve start has neither a name nor
+  // a domain and slugify("") returns "" — which would make every email-only client
+  // collide on the same empty slug.
+  const desired =
+    slugify(input.dbaName?.trim() || legalName) ||
+    slugify(domain ?? "") ||
+    slugify(email.split("@")[0]) ||
+    "client";
   let clientId: string | null = null;
   let slug = desired;
   let inserted = false;
@@ -188,15 +212,25 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
       return { ok: false, error: `Could not create the client row: ${error.message}` };
     }
 
-    // Same clinic clicking twice, or a genuine name collision. Only the former should
-    // reuse the row, and the domain is what tells them apart.
+    // Same business starting twice, or two different businesses whose names slugify the
+    // same. Only the first should reuse the row.
     const { data: existing } = await supabaseAdmin
       .from("clients")
-      .select("id, slug, domain")
+      .select("id, slug, domain, email")
       .eq("slug", candidate)
       .maybeSingle();
 
-    if (existing && existing.domain === domain) {
+    // Domain identifies them when there IS one. When there is not, it must NOT: two
+    // email-only starts both have domain null, and `null === null` would hand the second
+    // business the first one's client row, its Slack channel and its onboarding link.
+    // Email is the only identifier a self-serve start actually has.
+    const sameBusiness = existing
+      ? domain
+        ? existing.domain === domain
+        : existing.domain === null && existing.email === email
+      : false;
+
+    if (existing && sameBusiness) {
       clientId = existing.id as string;
       slug = existing.slug as string;
       break;
@@ -271,12 +305,20 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   );
 
   // ── Subdomain: learn.{domain} unless it already resolves, then guide. ──
-  await chooseSubdomain(clientId, domain).catch((e) =>
-    warn(`subdomain check failed: ${(e as Error).message}`)
-  );
+  // Skipped when there is no domain yet: it gets decided after intake step 1, and a DNS
+  // lookup of "learn.null" is not a check worth running.
+  if (domain) {
+    await chooseSubdomain(clientId, domain).catch((e) =>
+      warn(`subdomain check failed: ${(e as Error).message}`)
+    );
+  }
 
   // ── Slack channel ──
-  const channel = await ensureClientChannel({ clientId, slug, legalName }).catch((e) => {
+  const channel = await ensureClientChannel({
+    clientId,
+    slug,
+    legalName: legalName || email,
+  }).catch((e) => {
     warn(`Slack channel failed: ${(e as Error).message}`);
     return { channelId: null, channelName: null, created: false };
   });
@@ -315,7 +357,7 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   await linkToCrm(clientId, {
     email,
     website,
-    legalName,
+    legalName: legalName || email,
     firstName: input.contactFirstName ?? null,
     lastName: input.contactLastName ?? null,
     phone: input.phone ?? null,
@@ -324,7 +366,7 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
 
   // ── Post to #onboarding-srt-aeo ──
   await postOnboardingCard({
-    legalName,
+    legalName: legalName || email,
     slug,
     email,
     website,
@@ -414,7 +456,7 @@ async function linkToCrm(
   clientId: string,
   who: {
     email: string;
-    website: string;
+    website: string | null;
     legalName: string;
     firstName: string | null;
     lastName: string | null;
@@ -423,7 +465,10 @@ async function linkToCrm(
   }
 ): Promise<void> {
   const headline = `:seedling: Pilot started: ${who.legalName}`;
-  const detailLines = [`Website: ${who.website}`, `Client: ${clientId}`];
+  const detailLines = [
+    who.website ? `Website: ${who.website}` : null,
+    `Client: ${clientId}`,
+  ].filter(Boolean) as string[];
 
   const enriched = await enrichLead({
     email: who.email,
@@ -438,7 +483,9 @@ async function linkToCrm(
       lastName: who.lastName || undefined,
       email: who.email,
       phone: who.phone || undefined,
-      website: who.website,
+      // Omitted entirely when unknown. A guessed or placeholder website forks the contact
+      // record, which is the trap documented in api/medspa/optin.
+      website: who.website || undefined,
       businessName: who.legalName,
       city: who.city || undefined,
       source: "aeo_pilot",
@@ -481,38 +528,60 @@ async function postOnboardingCard(args: {
   legalName: string;
   slug: string;
   email: string;
-  website: string;
+  website: string | null;
   channelId: string | null;
   channelName: string | null;
   onboardingUrl: string | null;
   clientId: string;
 }): Promise<void> {
+  // The guest invite cannot be automated below Enterprise Grid, so this exists to make
+  // the manual step one click: the channel, the workspace it is in, and the address to
+  // invite, all in one place.
+  const workspace = usingClientHub() ? "the Client Hub workspace" : "this workspace";
+  const inviteLine = args.channelName
+    ? `*Invite them:* in ${workspace}, open #${args.channelName} and add ${args.email} as a single-channel guest.`
+    : `*Invite them:* no channel was created, so this needs doing by hand.`;
+
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!channel) {
+  if (channel) {
+    const text = [
+      `:seedling: *Pilot started: ${args.legalName}*`,
+      ``,
+      args.website ? `*Website:* ${args.website}` : `*Website:* not given yet`,
+      `*Channel:* ${args.channelName ? `#${args.channelName}` : "not created"}`,
+      `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
+      args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,
+      ``,
+      inviteLine,
+    ].join("\n");
+
+    await slack.postMessage(channel, text);
+  } else {
     console.error(
       "[clients/provision] SLACK_CLIENT_ONBOARDING_CHANNEL is not set. Create #onboarding-srt-aeo and paste its id."
     );
-    return;
   }
 
-  // The guest invite cannot be automated below Enterprise Grid, so this card exists to
-  // make the manual step one click: the channel and the address to invite, together.
-  const inviteLine = args.channelName
-    ? `*Invite them:* open #${args.channelName} and add ${args.email} as a guest.`
-    : `*Invite them:* no channel was created, so this needs doing by hand.`;
-
-  const text = [
-    `:seedling: *Pilot started: ${args.legalName}*`,
-    ``,
-    `*Website:* ${args.website}`,
-    `*Channel:* ${args.channelName ? `#${args.channelName}` : "not created"}`,
-    `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
-    args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,
-    ``,
-    inviteLine,
-  ].join("\n");
-
-  await slack.postMessage(channel, text);
+  // And by email, because the invite is the one step that stalls onboarding while looking
+  // finished: the client has their link and their channel exists, but they cannot reach
+  // it. A Slack card in a busy channel is easy to scroll past.
+  if (args.channelName) {
+    await microsoft
+      .sendMail({
+        to: process.env.MATTHEW_EMAIL || "matthew@srtagency.com",
+        subject: `Invite ${args.email} to #${args.channelName}`,
+        body:
+          `${args.legalName} has been provisioned and their channel exists, but Slack has no API ` +
+          `to invite a guest, so this part is manual.\n\n` +
+          `In ${workspace}, open #${args.channelName} and add ${args.email} as a single-channel guest.\n\n` +
+          `Board: ${appUrl()}/dashboard/clients/${args.clientId}`,
+        isHtml: false,
+        fromMailbox: process.env.OUTREACH_MAILBOX || "matthew@srtagency.com",
+      })
+      .catch((e) =>
+        console.error("[clients/provision] invite reminder email failed:", (e as Error).message)
+      );
+  }
 }
 
 /** Loud failures go here. Silence about a half-provisioned client is the failure mode. */
