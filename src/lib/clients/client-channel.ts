@@ -148,7 +148,7 @@ export async function ensureClientChannel(args: {
     text: [
       `*${legalName}*`,
       ``,
-      `This is the working channel for this clinic. Findings, scorecards and the monthly video land here.`,
+      `This is the working channel for this account. Findings, scorecards and the monthly video land here.`,
     ].join("\n"),
   });
 

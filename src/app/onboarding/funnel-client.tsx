@@ -20,7 +20,7 @@ type Values = Record<string, unknown>;
 
 interface Props {
   token: string;
-  clinicName: string;
+  businessName: string;
   initialValues: Values;
   /** 1-based step to open on. 0 means already finished. */
   startStep: number;
@@ -50,7 +50,7 @@ function fieldError(field: FieldDef, raw: unknown): string | null {
 
 export function OnboardingFunnel({
   token,
-  clinicName,
+  businessName,
   initialValues,
   startStep,
   alreadyComplete,
@@ -122,7 +122,7 @@ export function OnboardingFunnel({
     <div className="rounded-xl bg-white/5 p-6 sm:p-8">
       <div className="mb-6">
         <div className="mb-2 flex items-center justify-between text-xs text-white/50">
-          <span>{clinicName}</span>
+          <span>{businessName}</span>
           <span>
             Step {step} of {TOTAL_STEPS}
           </span>
