@@ -1,0 +1,46 @@
+import { normalizeStage, isDeadStage, isTerminalStage, cadenceFor, STAGE_NAMES, HOT_STAGES } from "@/config/stage-display";
+
+const LEGACY = [
+  "Open - Not Contacted", "Not Contacted", "Working - No Contact", "New", "New Lead",
+  "Attempted to Contact", "Intro Text Guide", "Pre-Qualified", "Contact in Future",
+  "Statements Received", "Funnel Lead Captured", "Email Captured", "Name Captured",
+  "No Business Checking", "Application Complete", "Hot Lead",
+  "Underwriting", "Shopping", "Pre-Approved", "Approved", "VC / DL",
+  "Contracts Out", "Contracts In", "Pending Stips", "Funding Call", "In Funding",
+  "Working - Contacted", "Working - Application Out", "Working", "Contacted",
+  "Closed", "Closed - Not Converted", "Converted", "Dead Declined", "Deal Lost",
+  "Not interested", "Take Off List", "Junk Lead", "junk lead", null, "", "Xyzzy",
+];
+
+let bad = 0;
+const buckets: Record<string, string[]> = {};
+for (const s of LEGACY) {
+  const n = normalizeStage(s);
+  if (!STAGE_NAMES.includes(n)) { console.log("NOT A STAGE:", s, "->", n); bad++; }
+  (buckets[n] ??= []).push(String(s));
+}
+for (const [k, v] of Object.entries(buckets)) console.log(`${k}: ${v.length}\n    ${v.join(", ")}`);
+
+console.log("\n-- the load-bearing checks --");
+const checks: [string, boolean, boolean][] = [
+  ["No contact is NOT dead (call board survives)", isDeadStage("No contact"), false],
+  ["Closed IS dead", isDeadStage("Closed"), true],
+  ["Working is NOT dead", isDeadStage("Working"), false],
+  ["Email Pitch is NOT dead", isDeadStage("Email Pitch"), false],
+  ["Negotiating is NOT dead", isDeadStage("Negotiating / Follow-up"), false],
+  ["No contact is not terminal", isTerminalStage("No contact"), false],
+  ["Negotiating is hot", HOT_STAGES.includes("Negotiating / Follow-up"), true],
+];
+for (const [name, got, want] of checks) {
+  const ok = got === want;
+  if (!ok) bad++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name} (got ${got}, want ${want})`);
+}
+
+console.log("\n-- cadence resolves for all five --");
+for (const s of STAGE_NAMES) {
+  const c = cadenceFor(s);
+  console.log(`  ${s.padEnd(24)} firstTouch ${c.firstTouchHours}h  repeat ${c.repeatDays}d`);
+}
+console.log(bad === 0 ? "\nALL GOOD" : `\n${bad} FAILURES`);
+process.exit(bad ? 1 : 0);

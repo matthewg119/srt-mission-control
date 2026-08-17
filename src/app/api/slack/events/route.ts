@@ -805,7 +805,7 @@ export async function POST(request: NextRequest) {
         // #content-full media. Auto-render (decoder image gen) fires ONLY when the
         // operator explicitly asks for a full reel render; everything else either
         // routes to pov-studio (animate/caption/recreate) or builds a package that
-        // waits for 👍. This stops a stray reply (e.g. "2") triggering an MCA render.
+        // waits for 👍. This stops a stray reply (e.g. "2") triggering a render.
         const frontDoorIntent = classifyByKeywords(userText);
         const decoderKeyword = /\b(decoder|viral|package)\b/i.test(userText);
         const hasImageFiles = attachedFiles.some((f) => (f.mimetype ?? "").startsWith("image/"));
@@ -1229,13 +1229,13 @@ async function generateAndPostHooks(
     messages: [
       {
         role: "user",
-        content: `You are a viral short-form video strategist for SRT Agency, a business funding broker.
+        content: `You are a viral short-form video strategist for SRT Agency, an AEO agency that makes local businesses findable and citable by AI assistants.
 
 Generate 3 distinct hook options for this video. Each hook is a combination of:
 1. Slide 1 (wide compelling visual — NO faces, extreme close-up of the avatar's world, stops the scroll)
 2. Slide 2 (the specific avatar in their environment — full shot, authentic setting)
 
-Concept: ${packageJson.concept_summary ?? "business funding story"}
+Concept: ${packageJson.concept_summary ?? "AI visibility story"}
 Avatar: ${packageJson.target_persona ?? "small business owner"}
 
 Return ONLY valid JSON, no preamble:
@@ -1641,235 +1641,11 @@ async function handleFileShared(fileId: string): Promise<void> {
     }
   }
 
-  if (mimeType !== "application/pdf") {
-    console.log("[slack/events] skipping non-PDF file:", mimeType, file.name);
-    return;
-  }
-
-  // If a PDF landed in a content channel, the message-event branch already fired the decoder.
-  if (isInContentChannel) {
-    return;
-  }
-
-  const pipelineChannel = process.env.SLACK_PIPELINE_CHANNEL || "";
-  const allShares: Record<string, Array<{ thread_ts?: string; ts?: string }>> = {
-    ...(file.shares?.public ?? {}),
-    ...(file.shares?.private ?? {}),
-  };
-
-  let channelId: string | null = null;
-  let threadTs: string | null = null;
-  for (const [ch, arr] of Object.entries(allShares)) {
-    for (const share of arr ?? []) {
-      if (share.thread_ts) {
-        channelId = ch;
-        threadTs = share.thread_ts;
-        if (pipelineChannel && ch === pipelineChannel) break;
-      }
-    }
-    if (pipelineChannel && channelId === pipelineChannel) break;
-  }
-
-  if (!channelId || !threadTs) {
-    console.log("[slack/events] file not shared inside a thread — skipping", { file_id: file.id });
-    return;
-  }
-  if (pipelineChannel && channelId !== pipelineChannel) {
-    console.log("[slack/events] file not in pipeline channel — skipping", { channelId });
-    return;
-  }
-
-  const { data: deal } = await supabaseAdmin
-    .from("deals")
-    .select("id, contact_id, zoho_lead_id, contacts:contact_id(business_name)")
-    .eq("slack_thread_ts", threadTs)
-    .maybeSingle();
-
-  // Allow PDFs dropped outside a known deal thread — the bank-statements route
-  // will try to match by merchant name extracted from the analysis, and will
-  // post back into this same thread if no deal is found.
-  const dealId = deal ? (deal.id as string) : null;
-  const merchantName = deal
-    ? (
-        (deal as { contacts?: { business_name?: string } | null }).contacts?.business_name ?? "Merchant"
-      ).trim()
-    : null;
-
-  if (!file.url_private_download) {
-    console.error("[slack/events] no url_private_download on file", file.id);
-    return;
-  }
-  const buffer = await slack.downloadFile(file.url_private_download);
-  const fileName = file.name ?? `document-${Date.now()}.pdf`;
-
-  // Application PDFs are routed to a separate extractor — they contain merchant form data,
-  // not bank transaction history. Detect by filename keywords.
-  const isApplicationPDF = /\b(application|merchant[\s_-]?app|mca[\s_-]?app)\b/i.test(fileName);
-  if (isApplicationPDF) {
-    await extractApplicationPDF(buffer, fileName, channelId, threadTs, dealId, merchantName);
-    return;
-  }
-
-  // Use known merchant folder if we have a deal, otherwise temp staging folder
-  const folderBase = merchantName ? `Deals/${merchantName}/Bank Statements` : "Deals/_Inbox/Bank Statements";
-  let driveItemId: string | null = null;
-  let driveWebUrl: string | null = null;
-  try {
-    const parentFolder = merchantName ? `Deals/${merchantName}` : "Deals/_Inbox";
-    await microsoft.createDriveFolder("Bank Statements", parentFolder).catch(() => {});
-    const uploaded = await microsoft.uploadDriveFile(folderBase, fileName, buffer, "application/pdf");
-    driveItemId = uploaded.id;
-    driveWebUrl = uploaded.webUrl;
-    await slack.postThreadReply(channelId, threadTs, `📥 Saved \`${fileName}\` to OneDrive — analyzing…`);
-  } catch (e) {
-    console.error("[slack/events] OneDrive upload failed:", (e as Error).message);
-    await slack.postThreadReply(channelId, threadTs, `⚠️ OneDrive upload failed: ${(e as Error).message}. Analyzing from Slack only.`);
-  }
-
-  const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  const analyzeBody: Record<string, unknown> = {
-    source: "slack_drop",
-    onedrive_folder_url: driveWebUrl,
-    slack_channel: channelId,
-    slack_thread_ts: threadTs,
-  };
-  if (dealId) analyzeBody.deal_id = dealId;
-  else if (merchantName) analyzeBody.merchant_name = merchantName;
-  if (driveItemId) {
-    analyzeBody.drive_item_ids = [driveItemId];
-  } else {
-    analyzeBody.pdf_urls = [file.url_private_download];
-  }
-
-  const res = await fetch(`${siteUrl}/api/agent/bank-statements`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(analyzeBody),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    await slack.postThreadReply(channelId, threadTs, `⚠️ Analysis failed: ${errText.slice(0, 200)}`);
-  }
-}
-
-// Application PDF dropped into a deal thread → extract merchant form fields → post structured card.
-async function extractApplicationPDF(
-  buffer: Buffer,
-  fileName: string,
-  channelId: string,
-  threadTs: string,
-  dealId: string | null,
-  merchantName: string | null
-): Promise<void> {
-  await slack.postThreadReply(channelId, threadTs, `📋 Application PDF detected — extracting fields from \`${fileName}\`…`);
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    await slack.postThreadReply(channelId, threadTs, "⚠️ ANTHROPIC_API_KEY not set — cannot extract application data.");
-    return;
-  }
-
-  interface AppData {
-    business_name: string | null;
-    owner_name: string | null;
-    ein: string | null;
-    ssn_last4: string | null;
-    monthly_revenue: string | null;
-    credit_score: string | null;
-    time_in_business: string | null;
-    funding_requested: string | null;
-    existing_advances: string | null;
-    industry: string | null;
-    address: string | null;
-    phone: string | null;
-    email: string | null;
-  }
-
-  try {
-    const base64 = buffer.toString("base64");
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1024,
-        system: `You are extracting data from an MCA (merchant cash advance) application PDF. Return ONLY valid JSON matching this exact schema — null for any field you cannot find:
-{
-  "business_name": string | null,
-  "owner_name": string | null,
-  "ein": string | null,
-  "ssn_last4": string | null,
-  "monthly_revenue": string | null,
-  "credit_score": string | null,
-  "time_in_business": string | null,
-  "funding_requested": string | null,
-  "existing_advances": string | null,
-  "industry": string | null,
-  "address": string | null,
-  "phone": string | null,
-  "email": string | null
-}
-For SSN: extract ONLY the last 4 digits for privacy. No preamble, no markdown.`,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: { type: "base64", media_type: "application/pdf", data: base64 },
-              },
-              { type: "text", text: "Extract all merchant application fields from this PDF." },
-            ],
-          },
-        ],
-      }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      await slack.postThreadReply(channelId, threadTs, `⚠️ Claude extraction failed (${res.status}): ${errText.slice(0, 200)}`);
-      return;
-    }
-
-    const json = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-    const raw = json.content?.find((b) => b.type === "text")?.text ?? "{}";
-    let data: AppData;
-    try {
-      data = JSON.parse(raw) as AppData;
-    } catch {
-      await slack.postThreadReply(channelId, threadTs, `⚠️ Could not parse extraction result:\n\`\`\`\n${raw.slice(0, 400)}\n\`\`\``);
-      return;
-    }
-
-    const lines = [
-      `📋 *Application Data — \`${fileName}\`*`,
-      data.business_name ? `*Business:* ${data.business_name}` : null,
-      data.owner_name ? `*Owner:* ${data.owner_name}` : null,
-      data.ein ? `*EIN:* ${data.ein}` : null,
-      data.ssn_last4 ? `*SSN (last 4):* ****${data.ssn_last4}` : null,
-      data.phone ? `*Phone:* ${data.phone}` : null,
-      data.email ? `*Email:* ${data.email}` : null,
-      data.industry ? `*Industry:* ${data.industry}` : null,
-      data.address ? `*Address:* ${data.address}` : null,
-      data.time_in_business ? `*Time in Business:* ${data.time_in_business}` : null,
-      data.monthly_revenue ? `*Monthly Revenue:* ${data.monthly_revenue}` : null,
-      data.credit_score ? `*Credit Score:* ${data.credit_score}` : null,
-      data.funding_requested ? `*Funding Requested:* ${data.funding_requested}` : null,
-      data.existing_advances ? `*Existing Advances:* ${data.existing_advances}` : null,
-      dealId ? `\n_Deal ID: ${dealId}_` : (merchantName ? `\n_Merchant: ${merchantName}_` : null),
-      `\n_Review and confirm before updating the CRM._`,
-    ].filter(Boolean);
-
-    await slack.postThreadReply(channelId, threadTs, lines.join("\n"));
-  } catch (err) {
-    await slack.postThreadReply(channelId, threadTs, `⚠️ Application extraction error: ${(err as Error).message}`);
-  }
+  // Everything past this point used to be the funding path: match the thread to
+  // a `deals` row, file the PDF into OneDrive under Deals/{merchant}/Bank
+  // Statements, and run Claude over it as an MCA application. All three went
+  // with the funding business, so a PDF that reaches here has no handler left.
+  console.log("[slack/events] no handler for this file:", mimeType, file.name);
 }
 
 // Voice note dropped in a content thread → strip silence → convert to Sofia's voice → post back.

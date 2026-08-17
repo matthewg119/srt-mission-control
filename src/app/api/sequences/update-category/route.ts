@@ -11,15 +11,11 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 
-const VALID_CATEGORIES = ["mca", "sba", "loc", "cre"] as const;
-type Category = (typeof VALID_CATEGORIES)[number];
-
-const CATEGORY_LABELS: Record<Category, string> = {
-  mca: "💳 MCA",
-  sba: "🏛 SBA",
-  loc: "💰 Line of Credit",
-  cre: "🏢 Commercial RE",
-};
+import {
+  SEQUENCE_CATEGORIES as VALID_CATEGORIES,
+  CATEGORY_LABELS,
+  type SequenceCategory as Category,
+} from "@/config/sequence-categories";
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;

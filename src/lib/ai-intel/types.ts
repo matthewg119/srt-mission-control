@@ -10,22 +10,20 @@ export type MerchantState =
   | "needs_data_cleanup"
   | "normal_nurture";
 
-export type AIAction = "suppress" | "submit_deal" | "draft_email" | "slack_alert" | "clean_zoho_data" | "none";
+export type AIAction = "suppress" | "draft_email" | "slack_alert" | "clean_zoho_data" | "none";
 
 export type AIUrgency = "high" | "medium" | "low";
 
 export type TriggerType = "cron" | "webhook_zoho" | "inbound_email" | "slack_command";
 
+// The funding action types (submit_deal, reply_funder, send_submission,
+// clear_lead_amounts, add_lender, seed_lenders) went with the funding business.
+// executePendingAction() returns unknown_action_type for anything still holding
+// them, which is the right answer for a stale Slack card.
 export type ActionType =
   | "send_email"
-  | "submit_deal"
   | "update_zoho"
-  | "reply_funder"
   | "send_marketing_email"
-  | "send_submission"
-  | "clear_lead_amounts"
-  | "add_lender"
-  | "seed_lenders"
   | "apply_followup"
   | "file_to_onedrive";
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
+import { CATEGORY_LABELS, isSequenceCategory } from "@/config/sequence-categories";
 import { applyLeadDisposition } from "@/lib/lead-disposition";
 import { DISPOSITION_BY_ACTION_ID } from "@/lib/lead-thread";
 import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
@@ -127,10 +128,10 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
       return scheduleSuggestedFollowup({ slackTs, channel, userId });
     case "sequence_cancel":
       return sequenceCancel({ channel, userId, slackTs, actionValue: action.value });
-    case "sequence_cat_mca":
-    case "sequence_cat_sba":
-    case "sequence_cat_loc":
-    case "sequence_cat_cre":
+    case "sequence_cat_aeo":
+    case "sequence_cat_audit":
+    case "sequence_cat_reengage":
+    case "sequence_cat_client":
       return sequenceUpdateCategory({ channel, userId, slackTs, actionValue: action.value });
     case "bridge_restart":
     case "bridge_doctor":
@@ -346,7 +347,7 @@ async function openEditModal(args: { slackTs: string; channel: string; userId: s
           action_id: "subject_input",
           initial_value: currentSubject,
         },
-        optional: payload.action_type !== "send_email" && payload.action_type !== "reply_funder" && payload.action_type !== "submit_deal",
+        optional: payload.action_type !== "send_email",
       },
       {
         type: "input",
@@ -921,10 +922,6 @@ async function followupTrackAction(args: {
   return NextResponse.json({ ok: true });
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  mca: "💳 MCA", sba: "🏛 SBA", loc: "💰 Line of Credit", cre: "🏢 Commercial RE",
-};
-
 async function sequenceUpdateCategory(args: {
   channel: string; userId: string; slackTs: string; actionValue: string;
 }): Promise<NextResponse> {
@@ -954,7 +951,7 @@ async function sequenceUpdateCategory(args: {
     return NextResponse.json({ ok: true });
   }
 
-  const label = CATEGORY_LABELS[category] ?? category.toUpperCase();
+  const label = isSequenceCategory(category) ? CATEGORY_LABELS[category] : category.toUpperCase();
   await slack.postThreadReply(
     args.channel,
     args.slackTs,
@@ -988,17 +985,15 @@ function isMatthew(slackUserId: string): boolean {
 }
 
 function inferTriggerType(actionType: string): string {
-  if (actionType === "reply_funder" || actionType === "submit_deal") return "deal_submission";
-  return "merchant_state";
+  // "reply_funder" / "submit_deal" went with the funding business; anything
+  // still arriving with those types is a stale card and lands in the default.
+  return "lead_state";
 }
 
 function summarizeResult(actionType: string, details?: Record<string, unknown>): string {
   if (!details) return "";
-  if (actionType === "send_email" || actionType === "reply_funder") {
+  if (actionType === "send_email") {
     return `Sent to ${details.to ?? "unknown"}.`;
-  }
-  if (actionType === "submit_deal") {
-    return `Sent submission to ${details.to ?? "unknown"} (${details.attachments ?? 0} attachments).`;
   }
   if (actionType === "update_zoho") {
     return `Zoho updated (stage → ${details.stage ?? "n/a"}).`;

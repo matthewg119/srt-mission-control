@@ -102,7 +102,7 @@ export default function CarouselPage() {
             {
               role: "system",
               content:
-                "Generate a 5-slide Instagram carousel script for SRT Agency (business funding company). Each slide needs a 'hook' (short attention-grabbing line, max 8 words) and a 'body' (supporting text, 1-2 sentences). Return ONLY a JSON array of 5 objects with 'hook' and 'body' fields. No markdown, no explanation.",
+                "Generate a 5-slide Instagram carousel script for SRT Agency (AEO: we make local businesses findable and citable by AI assistants). Each slide needs a 'hook' (short attention-grabbing line, max 8 words) and a 'body' (supporting text, 1-2 sentences). Return ONLY a JSON array of 5 objects with 'hook' and 'body' fields. No markdown, no explanation.",
             },
             {
               role: "user",

@@ -3,26 +3,15 @@ import { supabaseAdmin } from "@/lib/db";
 import { enrollContact } from "@/lib/sequence-engine";
 import { slack } from "@/lib/slack-bot";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
+import { CATEGORY_LABELS, DEFAULT_SEQUENCE_CATEGORY, isSequenceCategory } from "@/config/sequence-categories";
 
 export const dynamic = "force-dynamic";
 
-// Category display labels and emoji for Slack cards
-const CATEGORY_LABELS: Record<string, string> = {
-  mca: "💳 MCA",
-  sba: "🏛 SBA",
-  loc: "💰 Line of Credit",
-  cre: "🏢 Commercial RE",
-};
-
 const SEQUENCE_LABELS: Record<string, string> = {
-  "fu-new-inbound":     "FU — New Inbound Lead",
-  "awaiting-statements":"Awaiting Bank Statements",
-  "pre-approved-nurture":"Pre-Approved Nurture",
+  "new-lead-nurture":   "New Lead Nurture",
+  "pitch-followup":     "Pitch Follow-Up",
   "post-call-followup": "Post-Call Follow-Up",
-  "approved-nurture":   "Renewal Nurture",
-  "post-call-daily":    "Post-Call Daily (4-day)",
-  "website-lead-nurture":"Website Lead Nurture",
-  "application-abandoned":"Application Abandoned",
+  "post-call-daily":    "Post-Call Daily",
 };
 
 /**
@@ -36,7 +25,7 @@ const SEQUENCE_LABELS: Record<string, string> = {
  *   zoho_lead_id?: string,     // Zoho Lead ID — v21 extension field name (same thing)
  *   sequence_slug: string,     // e.g. "fu-new-inbound"
  *   enrolled_by?: string,      // e.g. "extension" | "zoho_button" | "ui"
- *   category?: string,         // "mca" | "sba" | "loc" | "cre" (default: "mca")
+ *   category?: string,         // see src/config/sequence-categories.ts
  * }
  */
 export async function POST(req: NextRequest) {
@@ -55,7 +44,7 @@ export async function POST(req: NextRequest) {
 
   // Accept both field names — v21 extension sends zoho_lead_id
   const zohoId = body.zoho_contact_id || body.zoho_lead_id;
-  const { sequence_slug, enrolled_by = "unknown", category = "mca" } = body;
+  const { sequence_slug, enrolled_by = "unknown", category = DEFAULT_SEQUENCE_CATEGORY } = body;
 
   if (!zohoId || !sequence_slug) {
     return NextResponse.json(
@@ -64,7 +53,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const normalizedCategory = ["mca", "sba", "loc", "cre"].includes(category) ? category : "mca";
+  const normalizedCategory = isSequenceCategory(category) ? category : DEFAULT_SEQUENCE_CATEGORY;
 
   // Look up the Supabase contact by Zoho Lead ID
   const { data: contact, error: contactErr } = await supabaseAdmin

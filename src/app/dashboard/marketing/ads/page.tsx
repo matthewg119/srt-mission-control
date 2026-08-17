@@ -91,7 +91,7 @@ export default function AdsPage() {
     const result = await aiCall([
       {
         role: "system",
-        content: `You are an ICP researcher for SRT Agency (business funding). Create a detailed vertical profile for: ${selectedVertical.name}. Include: 1) Top 5 pain points, 2) Buying beliefs they need, 3) Industry slang/language, 4) Fears & objections, 5) Desires & goals, 6) Reddit research queries to find them. Format with headers and bullet points.`,
+        content: `You are an ICP researcher for SRT Agency (AEO: we make local businesses findable and citable by AI assistants). Create a detailed vertical profile for: ${selectedVertical.name}. Include: 1) Top 5 pain points, 2) Buying beliefs they need, 3) Industry slang/language, 4) Fears & objections, 5) Desires & goals, 6) Reddit research queries to find them. Format with headers and bullet points.`,
       },
       {
         role: "user",
