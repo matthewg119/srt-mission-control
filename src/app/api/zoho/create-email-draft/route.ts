@@ -3,14 +3,17 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 // Chrome extension → create Outlook email draft endpoint (v21).
-// Fetches the lead from Zoho, renders the selected template, injects the user's
-// Outlook signature, then creates a real draft via Microsoft Graph. Returns
-// the webLink that opens it in Outlook Web compose view.
+// Resolves the lead in `contacts`, renders the selected template, injects the
+// user's Outlook signature, then creates a real draft via Microsoft Graph.
+// Returns the webLink that opens it in Outlook Web compose view.
 //
-// POST body: { zoho_lead_id, template_key }
+// POST body: { zoho_lead_id | contact_id, template_key }
+//
+// `zoho_lead_id` is still accepted because the shipped extension sends it; it
+// now resolves against contacts.zoho_lead_id rather than against Zoho.
 
 import { NextRequest, NextResponse } from "next/server";
-import { getLead } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
 import { microsoft } from "@/lib/microsoft";
 
 const CORS_HEADERS = {
@@ -72,14 +75,15 @@ export async function POST(req: NextRequest) {
 
   const body = (await req.json().catch(() => ({}))) as {
     zoho_lead_id?: string;
+    contact_id?: string;
     template_key?: string;
   };
 
-  const { zoho_lead_id, template_key } = body;
+  const { zoho_lead_id, contact_id, template_key } = body;
 
-  if (!zoho_lead_id || !template_key) {
+  if ((!zoho_lead_id && !contact_id) || !template_key) {
     return NextResponse.json(
-      { error: "zoho_lead_id and template_key are required" },
+      { error: "zoho_lead_id or contact_id, and template_key, are required" },
       { status: 400, headers: CORS_HEADERS }
     );
   }
@@ -92,18 +96,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Fetch lead from Zoho
-  let zohoLead;
-  try {
-    zohoLead = await getLead(zoho_lead_id);
-  } catch (err) {
-    return NextResponse.json(
-      { error: `zoho_fetch_failed: ${(err as Error).message}` },
-      { status: 500, headers: CORS_HEADERS }
-    );
+  const lead = await resolveLead({ contactId: contact_id, zohoLeadId: zoho_lead_id });
+  if (!lead) {
+    return NextResponse.json({ error: "lead_not_found" }, { status: 404, headers: CORS_HEADERS });
   }
 
-  const toEmail = (zohoLead.Email ?? "") as string;
+  const toEmail = lead.email;
   if (!toEmail) {
     return NextResponse.json(
       { error: "no_email_on_lead" },
@@ -111,7 +109,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const firstName = (zohoLead.First_Name ?? "") as string;
+  const firstName = lead.firstName ?? "";
 
   // Render template body
   const renderedBody = tmpl.body.replace(/\{\{firstName\}\}/g, firstName || "there");
