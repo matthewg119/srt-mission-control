@@ -22,38 +22,42 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-// Mirror of the EMAIL_TEMPLATES array in the v21 Chrome extension content.js
+// Mirror of the EMAIL_TEMPLATES array in the v21 Chrome extension content.js.
+//
+// The KEYS are frozen, including "funding-options". The shipped extension sends
+// them by name and lives in a separate repo, so renaming one here silently 400s
+// the button that uses it. Only the copy changed when SRT moved off funding.
 const EMAIL_TEMPLATES: Record<string, { subject: string; body: string }> = {
   "nice-speaking": {
     subject: "Great speaking with you!",
     body: `<p>Hi {{firstName}},</p>
-<p>It was great speaking with you today. Here's my contact info so you have it handy — I'll follow up on the funding options we discussed.</p>
+<p>It was great speaking with you today. Here's my contact info so you have it handy, and I'll follow up on the AI visibility side of things we discussed.</p>
 <p>In the meantime, feel free to reach out anytime.</p>`,
   },
   "app-link": {
-    subject: "Your Business Funding Application",
+    subject: "Your free AI visibility check",
     body: `<p>Hi {{firstName}},</p>
-<p>Here is your application link — it only takes about 5 minutes to complete, and there's no hard credit pull:</p>
-<p><a href="https://srtagency.com/apply">srtagency.com/apply</a></p>
-<p>Once I receive it, I'll start pulling options for your business right away.</p>`,
+<p>Here is the link. It takes about 2 minutes, there is no card and nothing to install:</p>
+<p><a href="https://srtagency.com/audit">srtagency.com/audit</a></p>
+<p>We ask ChatGPT and the other assistants the questions your buyers actually ask, and send you back what they say and who they name. You can run any of those questions yourself in an incognito window and see the same answer.</p>`,
   },
   "funding-options": {
-    subject: "Funding Options for Your Business",
+    subject: "What ChatGPT says about your business",
     body: `<p>Hi {{firstName}},</p>
-<p>I've been working on some funding options for your business and I'd love to walk you through what I've found.</p>
+<p>I've been through what the AI assistants currently say when someone asks for a business like yours, and I'd like to walk you through it.</p>
 <p>Can we set up a quick 15-minute call this week? Just reply with a time that works for you.</p>`,
   },
   "fu-1": {
-    subject: "Following Up — Business Funding",
+    subject: "Following up",
     body: `<p>Hi {{firstName}},</p>
-<p>Just wanted to follow up on our conversation about business funding. I know things get busy — wanted to check in and see if you're still interested in exploring your options.</p>
+<p>Just wanted to follow up on our conversation. I know things get busy, so I wanted to check in and see if you still want to look at what the AI assistants are saying about you.</p>
 <p>No pressure at all. Would love to connect whenever you have a moment.</p>`,
   },
   "fu-2": {
-    subject: "Last Follow-Up — SRT Agency",
+    subject: "Last follow-up, SRT Agency",
     body: `<p>Hi {{firstName}},</p>
 <p>I don't want to keep filling your inbox, so this will be my last follow-up.</p>
-<p>If you're ever ready to explore business funding options down the road, I'm here — just reach out and we'll pick up from here.</p>`,
+<p>If you ever want to see what an AI assistant says when someone asks it for a business like yours, I'm here. Just reach out and we'll pick up from here.</p>`,
   },
 };
 

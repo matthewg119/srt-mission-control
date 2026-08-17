@@ -20,18 +20,24 @@ import { slack } from "@/lib/slack-bot";
 import { generateDraft } from "@/lib/sms-ai-engine";
 import { resolveTenantId } from "@/lib/persona";
 
-// Map each template to the funnel stage that best frames its rewrite. Openers +
-// app link are Stage 1 (soft pitch); the follow-ups keep a warm Stage 2 tone.
+// Map each template to the funnel stage in sms-ai-engine.ts that best frames its
+// rewrite. Almost everything the dialer sends is still first touch: we are
+// trying to get one yes to the free visibility check, and the follow-ups are
+// nudges toward that same yes. Stage 2 is deliberately unused here, because it
+// means "their check is running" and instructs the engine not to invent a
+// result, which is the wrong frame for a lead who has not said yes yet.
+// fu2-authorized is the exception: it claims we have already looked at their
+// site, which is Stage 3.
 const TEMPLATE_STAGE: Record<string, number> = {
   "nice-speaking": 1,
   "app-link": 1,
   "tuesday-opener": 1,
-  "fu1-guide": 2,
-  "fu2-authorized": 2,
-  "fu3-worth-reply": 2,
-  "fu4-black-hole": 2,
-  "fu5-last-ping": 2,
-  "fu6-say-anything": 2,
+  "fu1-guide": 1,
+  "fu2-authorized": 3,
+  "fu3-worth-reply": 1,
+  "fu4-black-hole": 1,
+  "fu5-last-ping": 1,
+  "fu6-say-anything": 1,
 };
 
 export const runtime = "nodejs";
@@ -43,33 +49,36 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
+// The template KEYS are frozen. The shipped Chrome extension sends them by name
+// and lives in a separate repo, so renaming one here silently 400s the dialer
+// button that uses it. Only the copy changed when SRT moved off funding.
 const SMS_TEMPLATES: Record<string, string> = {
   "nice-speaking":
     "Hey {{firstName}}! Was great speaking with you. Going to save your number and shoot you an email from matthew@srtagency.com so you have my info. Talk soon! 💪",
   "app-link":
-    "Hey {{firstName}}! Here is the link to start your application — only takes 2 min 👉 srtagency.com/fullapp Let me know if you have any questions!",
+    "Hey {{firstName}}! Here's the free AI visibility check 👉 srtagency.com/audit We ask ChatGPT the questions your buyers ask and send you back who it actually names. Takes you 2 min.",
   "fu1-guide":
-    "Hey {{firstName}}, quick question — would it be cool if I sent over our funding guide PDF? No strings, just want to make sure you have all the info 💪",
+    "Hey {{firstName}}, quick one, want me to run your business through ChatGPT and send you what it says about you? Free, no card, takes me about a day 💪",
   "fu2-authorized":
-    "Hey {{firstName}}! Based on everything we talked about, you're looking solid for funding. Just need a few docs from you. What's the best time to connect?",
+    "Hey {{firstName}}! Had a look at your site and I can see exactly why the AI isn't naming you yet. Easier to show you than type it. What's a good time to connect?",
   "fu3-worth-reply":
     "Worth a Reply? KHRT 👊",
   "fu4-black-hole":
     "Did your inbox turn into a black hole? 😅 Still here when you're ready {{firstName}}",
   "fu5-last-ping":
-    "Last ping {{firstName}} — unless you're still curious about funding options? No pressure either way 🤙",
+    "Last ping {{firstName}}, unless you still want to see what ChatGPT says about you? No pressure either way 🤙",
   "fu6-say-anything":
     "Say anything and I'll take it as a win {{firstName}} 😂",
   "tuesday-opener":
-    "Happy Tuesday! Are you still looking for money for your business? 💰",
+    "Happy Tuesday! Quick question, have you ever checked what ChatGPT says when someone asks it for a business like yours? 🤖",
 };
 
 // Human-readable labels for each template key (used in Slack copy-paste block header)
 const SMS_TEMPLATES_LABELS: Record<string, string> = {
   "nice-speaking":    "Nice Speaking With You",
-  "app-link":         "Application Link",
-  "fu1-guide":        "FU1: PDF Guide Ask",
-  "fu2-authorized":   "FU2: Authorized + Contact Info",
+  "app-link":         "Free AI Visibility Check Link",
+  "fu1-guide":        "FU1: Offer to Run Their Check",
+  "fu2-authorized":   "FU2: Looked At Your Site + Book a Call",
   "fu3-worth-reply":  "FU3: Worth a Reply? KHRT",
   "fu4-black-hole":   "FU4: Black Hole Inbox",
   "fu5-last-ping":    "FU5: Last Ping",

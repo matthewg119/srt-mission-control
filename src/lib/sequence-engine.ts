@@ -69,12 +69,6 @@ function shouldStopForZohoStatus(status: string | null | undefined): boolean {
   ].some((k) => s.includes(k));
 }
 
-function isDeclinedStatus(status: string | null | undefined): boolean {
-  if (!status) return false;
-  const s = status.toLowerCase();
-  return s.includes("declined") || s.includes("dead declined");
-}
-
 // ── Campaign key resolution ────────────────────────────────────────────────
 
 function resolveSequenceCampaignKey(slug: string, stepNumber: number): MarketingCampaignKey {
@@ -355,26 +349,12 @@ export async function processScheduledEmails(): Promise<{
           .eq("id", enrollment.id);
         stats.stopped++;
 
-        // Send one-time decline email when status is Declined
-        if (!ctx.contact.do_not_contact && isDeclinedStatus(zohoStatus) && ctx.contact.email) {
-          const firstName = ctx.contact.first_name ?? enrollment.contact_name?.split(" ")[0] ?? "there";
-          const declineBody = `<p>Hi ${firstName},</p>
-<p>Wanted to give you a direct update: the lenders we submitted to weren't able to move forward at this time.</p>
-<p>This doesn't mean permanently — business conditions change and some programs have different criteria. If you'd like, I can check back in 60–90 days to see if anything has shifted.</p>
-<p>Just reply "yes" and I'll put a note to follow up.</p>
-<p>— Matthew</p>`;
-          try {
-            await microsoft.sendMail({
-              to: ctx.contact.email,
-              subject: "Re: Your funding application",
-              body: declineBody,
-              isHtml: true,
-            });
-            console.log(`[Sequence] Decline email sent to ${ctx.contact.email}`);
-          } catch (e) {
-            console.error("[Sequence] Decline email failed:", (e as Error).message);
-          }
-        }
+        // A "Declined" branch used to sit here and send, unattended, an email
+        // saying the lenders we submitted to could not move forward. It went
+        // with the funding business: the five stages in config/stage-display.ts
+        // are Untouched, No contact, Working, Email Pitch, Negotiating and
+        // Closed, so nothing could reach it any more. The enrollment still
+        // stops; only the email is gone.
 
         continue;
       }

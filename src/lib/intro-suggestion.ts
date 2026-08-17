@@ -1,13 +1,14 @@
 // New-lead intro text suggestion. When a fresh lead with a phone arrives, draft a
-// first-touch text (Stage 1 Soft Pitch — "hi, what are you looking for", qualify,
-// build rapport) and post it to the lead's SMS Slack channel with a ✅ Send button.
+// first-touch text (Stage 1 in sms-ai-engine.ts: say hi, find out what the
+// business does, offer the free AI visibility check) and post it to the lead's
+// SMS Slack channel with a ✅ Send button.
 //
 // This is suggestion-ONLY: armAutoSend:false so nothing fires without Matthew's
 // explicit click. Deduped via sms_conversations.intro_suggested_at so re-running
 // capture never double-suggests.
 //
-// IMPORTANT: do NOT call this for bfunding leads — those get a scheduled real first
-// SMS (first_sms_template = 'bfunding-lead') and an AI intro would double-text.
+// IMPORTANT: do NOT call this for a lead that already has a scheduled real first
+// SMS (sms_conversations.first_sms_template is set). An AI intro would double-text.
 
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/db";
@@ -29,7 +30,7 @@ interface SuggestIntroArgs {
 // First-touch marker fed to generateDraft as the "inbound message" so the Stage 1
 // prompt produces an opener (not a reply to a real message).
 const FIRST_TOUCH_MARKER =
-  "[new lead — no message yet. Write a warm first-touch opener: say hi by first name, ask what they're looking for / how much funding, and nudge toward the application. This is cold outreach, keep it short and human.]";
+  "[new lead, no message yet. Write a warm first-touch opener: say hi by first name, ask what the business does if it is not already obvious, and offer to run the free AI visibility check. This is cold outreach, keep it short and human. Do not invent anything about what the AI currently says about them, nothing has been checked yet.]";
 
 export async function suggestIntroText(args: SuggestIntroArgs): Promise<{ ok: boolean; reason?: string }> {
   const { contactId, displayName, businessName, monthlyRevenue, zohoLeadId } = args;
@@ -58,7 +59,7 @@ export async function suggestIntroText(args: SuggestIntroArgs): Promise<{ ok: bo
     // 2. Dedup — already suggested an intro for this convo.
     if (conv.intro_suggested_at) return { ok: false, reason: "already_suggested" };
 
-    // 3. Safety: never intro a bfunding lead (it gets a scheduled real first SMS).
+    // 3. Safety: never intro a lead that already has a scheduled real first SMS.
     if (conv.first_sms_template) return { ok: false, reason: "scheduled_first_sms" };
 
     // 4. Ensure the Slack channel.
