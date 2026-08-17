@@ -31,7 +31,7 @@ export const SRT_COMPANY = {
   name: "SRT Agency",
   tagline: "Search Retrieval Tactics",
   fax: "(252) 556-1444",
-  applyUrl: "https://srtagency.com/apply",
+  applyUrl: "https://srtagency.com/audit",
   portalUrl: "https://portal.srtagency.com",
 };
 

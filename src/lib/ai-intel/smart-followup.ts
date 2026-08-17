@@ -3,8 +3,7 @@
 // Given what the dialer scraped off the page (module + record id + contact
 // email/phone/name), this:
 //   1. resolves it to a CRM contact via resolveLead(),
-//   2. gathers the deal's status "across the board" (stage, last-contact gap,
-//      whether bank statements / a completed package are in OneDrive),
+//   2. gathers the lead's status (stage, last-contact gap),
 //   3. AI-drafts the right follow-up email for that situation,
 //   4. routes it for approval to BOTH surfaces (Slack card + textwin.ai bubble)
 //      with a shared draft_key so approving one cancels the other.
@@ -13,7 +12,6 @@
 // textwin.ai (email/suggestions). This module never auto-sends.
 
 import { supabaseAdmin } from "@/lib/db";
-import { microsoft } from "@/lib/microsoft";
 import { resolveLead } from "@/lib/crm";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
@@ -38,8 +36,6 @@ export interface FollowupStatus {
   stage: string | null;
   amount: string | null;
   daysSinceContact: number | null;
-  statementCount: number;
-  hasCompletedPackage: boolean;
   summary: string; // one-line for the dialer + ai_reason
 }
 
@@ -119,14 +115,9 @@ export async function resolveRecord(input: {
 // ── 2. Gather status across the board ───────────────────────────────────────
 export async function gatherStatus(rec: ResolvedRecord): Promise<FollowupStatus> {
   const daysSinceContact = await lastContactGapDays(rec.contactId, rec.conversationId);
-  const { statementCount, hasCompletedPackage } = await onedrivePackageStatus(rec.businessName);
 
   const parts: string[] = [];
   if (rec.stage) parts.push(rec.stage);
-  parts.push(
-    statementCount > 0 ? `${statementCount} bank statement${statementCount === 1 ? "" : "s"} on file` : "no statements on file"
-  );
-  if (hasCompletedPackage) parts.push("package complete");
   if (daysSinceContact != null) {
     parts.push(daysSinceContact === 0 ? "spoke today" : `last contact ${daysSinceContact}d ago`);
   } else {
@@ -137,8 +128,6 @@ export async function gatherStatus(rec: ResolvedRecord): Promise<FollowupStatus>
     stage: rec.stage,
     amount: rec.amount,
     daysSinceContact,
-    statementCount,
-    hasCompletedPackage,
     summary: parts.join(" · "),
   };
 }
@@ -180,41 +169,28 @@ async function lastContactGapDays(
   return Math.max(0, Math.floor((Date.now() - newest) / 86_400_000));
 }
 
-async function onedrivePackageStatus(
-  businessName: string | null
-): Promise<{ statementCount: number; hasCompletedPackage: boolean }> {
-  if (!businessName) return { statementCount: 0, hasCompletedPackage: false };
-  const biz = businessName.replace(/[<>:"/\\|?*]/g, "_");
-  let statementCount = 0;
-  let hasCompletedPackage = false;
-  try {
-    const stmts = await microsoft.listFolderChildren(`Deals/${biz}/Bank Statements`);
-    statementCount = stmts.filter(
-      (c) => c.isFile && (c.name || "").toLowerCase().endsWith(".pdf")
-    ).length;
-  } catch {
-    /* folder may not exist yet */
-  }
-  try {
-    const pkg = await microsoft.listFolderChildren(`Deals/${biz}/Completed Package`);
-    hasCompletedPackage = pkg.some((c) => c.isFile && (c.name || "").toLowerCase().endsWith(".pdf"));
-  } catch {
-    /* no package yet */
-  }
-  return { statementCount, hasCompletedPackage };
-}
-
 // ── 3. AI-draft the follow-up ───────────────────────────────────────────────
-const DRAFT_SYSTEM = `You are Matthew Garcia, Senior Capital Strategist at SRT Agency, a business-financing brokerage. You write short, warm-but-direct follow-up emails to small-business owners about their funding application.
+//
+// This used to read an OneDrive bank-statement and completed-package count and
+// branch the email on it: chase the statements, confirm they still want funding,
+// congratulate an approval. All three went with the funding business, and the
+// folders they counted are not written any more. Stage and the last-contact gap
+// are the two signals that still mean something, so those are what it drafts on.
+const DRAFT_SYSTEM = `You are Matthew Garcia at SRT Agency (Search Retrieval Tactics). You write short, warm-but-direct follow-up emails to small-business owners.
+
+SRT does one thing: make sure that when someone asks ChatGPT or another AI assistant for a business like theirs, it names them. That is not advertising and it is not SEO. Never mention financing, loans, lenders, funders, bank statements, advances, approvals or capital. Some of these people were funding leads years ago; that is not why we are writing.
 
 Rules:
-- Write ONLY the body copy. Do NOT include a greeting ("Hello X,") or any signature/sign-off — both are added automatically.
+- Write ONLY the body copy. Do NOT include a greeting ("Hello X,") or any signature/sign-off, both are added automatically.
 - Keep it under 110 words. One clear ask.
 - Never use the em dash character. Use commas, periods, or hyphens.
+- Never promise more customers, calls, jobs, leads or revenue, and never use the word guarantee. We report visibility, we do not predict sales.
+- Never say "AEO", "GEO", "LLM", "schema" or "citations". Say "the answers AI gives about you" or "AI search".
+- Never invent a score, a finding or a competitor name. Only reference something if you were given it.
 - Match the email to the situation you are given:
-  • No bank statements on file → ask them to send the last 3 to 4 months of business bank statements (PDF), or finish at srtagency.com/fullapp. This is the most common blocker.
-  • Statements on file but it has been 10+ days since contact → friendly check-in, confirm they still want funding, state the next step.
-  • Package complete / approved / pre-approved stage → congratulate, lay out the next step to finalize.
+  • No prior contact logged, or an early stage → offer the free AI visibility check: we ask the assistants the questions their buyers ask and send back who gets named. The link is srtagency.com/audit.
+  • 10+ days since contact → friendly check-in, no new claims, restate the one next step and make it easy to say yes.
+  • Email Pitch or Negotiating stage → the ask is the free first build: one section of their own site that AI can actually read and cite, free, no card, theirs either way. No expiry and no scarcity, never invent one.
   • Otherwise → a brief, helpful nudge to keep momentum.
 - Sound like a person, not a template. No emojis.`;
 
@@ -226,10 +202,7 @@ export async function draftFollowup(
     first_name: rec.firstName,
     business_name: rec.businessName,
     stage: status.stage,
-    amount_requested: status.amount,
     days_since_last_contact: status.daysSinceContact,
-    bank_statements_on_file: status.statementCount,
-    completed_package_on_file: status.hasCompletedPackage,
   });
 
   const { data } = await callClaudeJSON<FollowupDraft>({
