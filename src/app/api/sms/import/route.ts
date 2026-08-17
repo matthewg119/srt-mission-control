@@ -1,15 +1,19 @@
 export const dynamic = "force-dynamic";
-// SMS Import API — parse contacts from CSV or pull from Zoho CRM.
+// SMS Import API — parse contacts from CSV or pull from the CRM.
 // Returns a preview of contacts before they're committed to a campaign.
 //
 // POST /api/sms/import
 //   body: { source: "csv", csv: "phone,first_name,business_name\n..." }
-//   body: { source: "zoho", stage?: string, days_since_contact?: number, limit?: number }
+//   body: { source: "crm" | "zoho", stage?: string, days_since_contact?: number, limit?: number }
 //   response: { ok, contacts: [{phone, first_name, business_name, contact_id}], total, skipped }
+//
+// "zoho" is still accepted as a source name so the shipped dialer keeps working.
+// It reads `contacts` like everything else now.
 
 import { NextRequest, NextResponse } from "next/server";
 import { normalizePhone } from "@/lib/phone";
 import { supabaseAdmin } from "@/lib/db";
+import { normalizeStage } from "@/config/stage-display";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -34,11 +38,11 @@ export async function POST(req: NextRequest) {
 
   if (source === "csv") {
     return handleCsvImport(body);
-  } else if (source === "zoho") {
-    return handleZohoImport(body);
+  } else if (source === "crm" || source === "zoho") {
+    return handleCrmImport(body);
   }
 
-  return NextResponse.json({ error: "source must be 'csv' or 'zoho'" }, { status: 400 });
+  return NextResponse.json({ error: "source must be 'csv' or 'crm'" }, { status: 400 });
 }
 
 async function handleCsvImport(body: Record<string, unknown>): Promise<NextResponse> {
@@ -93,60 +97,71 @@ async function handleCsvImport(body: Record<string, unknown>): Promise<NextRespo
   return NextResponse.json({ ok: true, contacts, total: contacts.length, skipped });
 }
 
-async function handleZohoImport(body: Record<string, unknown>): Promise<NextResponse> {
-  const stage = (body.stage as string | undefined) ?? "New";
+// ‼️ This used to reach Zoho through a DYNAMIC `await import("@/lib/zoho")`,
+// which a static grep for the module does not see. It is the one call that
+// would have survived the whole cutover silently and then 500'd the first time
+// somebody pulled a texting list after the account was closed.
+//
+// The COQL search is now a `contacts` query. Two mapping notes:
+//   • Lead_Status became application_stage, and its vocabulary changed with the
+//     stage collapse. The caller's value goes through normalizeStage(), so a
+//     dialer still sending a pre-collapse label lands on a real stage instead
+//     of quietly matching nothing.
+//   • Last_Activity_Time became last_activity_at. Rows that have never had any
+//     activity are INCLUDED, which is the intent of "not contacted in N days".
+//     Zoho's `before:` comparison dropped them, so the list used to silently
+//     exclude exactly the leads most worth texting.
+async function handleCrmImport(body: Record<string, unknown>): Promise<NextResponse> {
+  const stage = normalizeStage((body.stage as string | undefined) ?? null);
   const daysSince = (body.days_since_contact as number | undefined) ?? 30;
   const limit = Math.min((body.limit as number | undefined) ?? 500, 2000);
 
   try {
-    // Lazy-import zoho to avoid edge runtime issues
-    const { zohoRequest } = await import("@/lib/zoho");
-
-    // Zoho COQL query — leads in the target stage not contacted recently
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - daysSince);
-    const cutoffStr = cutoff.toISOString().split("T")[0]; // YYYY-MM-DD
 
-    const params = new URLSearchParams({
-      criteria: `(Lead_Status:equals:${stage})AND(Last_Activity_Time:before:${cutoffStr})`,
-      fields: "First_Name,Last_Name,Phone,Mobile,Company,id",
-      per_page: String(Math.min(limit, 200)),
-    });
+    const { data, error } = await supabaseAdmin
+      .from("contacts")
+      .select("id, first_name, business_name, phone, mobile_phone, last_activity_at")
+      .eq("application_stage", stage)
+      .or(`last_activity_at.is.null,last_activity_at.lt.${cutoff.toISOString()}`)
+      .eq("do_not_contact", false)
+      .limit(limit);
 
-    const result = await zohoRequest("GET", `/Leads/search?${params.toString()}`) as {
-      data?: Array<Record<string, string | null>>;
-    };
+    if (error) {
+      return NextResponse.json({ error: `CRM pull failed: ${error.message}` }, { status: 500 });
+    }
 
-    const zohoLeads = result.data ?? [];
+    const rows = data ?? [];
     const contacts: ImportedContact[] = [];
     let skipped = 0;
 
-    for (const lead of zohoLeads) {
-      const rawPhone = (lead.Phone ?? lead.Mobile ?? "") as string;
-      const phone = normalizePhone(rawPhone);
+    for (const row of rows) {
+      const phone = normalizePhone(
+        (row.mobile_phone as string | null) ?? (row.phone as string | null) ?? ""
+      );
       if (!phone) {
         skipped++;
         continue;
       }
-
-      // Try to match existing contact in our DB
-      const { data: dbContact } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .eq("phone", phone)
-        .maybeSingle();
-
       contacts.push({
         phone,
-        first_name: (lead.First_Name as string | null) ?? null,
-        business_name: (lead.Company as string | null) ?? null,
-        contact_id: dbContact?.id ?? null,
+        first_name: (row.first_name as string | null) ?? null,
+        business_name: (row.business_name as string | null) ?? null,
+        contact_id: row.id as string,
       });
     }
 
-    return NextResponse.json({ ok: true, contacts, total: contacts.length, skipped, source_count: zohoLeads.length });
+    return NextResponse.json({
+      ok: true,
+      contacts,
+      total: contacts.length,
+      skipped,
+      source_count: rows.length,
+      stage,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
-    return NextResponse.json({ error: `Zoho pull failed: ${msg}` }, { status: 500 });
+    return NextResponse.json({ error: `CRM pull failed: ${msg}` }, { status: 500 });
   }
 }
