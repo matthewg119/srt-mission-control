@@ -146,6 +146,10 @@ AUDIT_SIGNATURE_NAME=      # Outlook signature BLOCK name for audit pitches. Def
 OUTREACH_SIGNATURE_NAME=   # Who cold outreach is SIGNED by, two plain lines. Default "Matthew
                            # Garcia". Different thing from AUDIT_SIGNATURE_NAME above.
 OUTREACH_SIGNATURE_AGENCY= # Default "SRT Agency".
+SRT_PAYMENT_URL=           # Where they pay. The Loom v2 close ("click the link I sent over") and the
+                           # delivery email both carry it. UNSET IS HANDLED, not ignored: the script
+                           # prints a correction instead of the close, PRE-FLIGHT says NO PAYMENT
+                           # LINK SET, and the delivery email flags it. Set it before recording.
 AUDIT_AUTOSEND_ENABLED=    # Unset = lead pitches NEVER send themselves. "1" arms the timer.
 AUDIT_AUTOSEND_MINUTES=    # Optional, default 5. Only meaningful when the above is on.
 SCAN_IP_SALT=              # Salt for hashing /scan client IPs. Optional but SET IT: the default
@@ -275,7 +279,7 @@ parsed into fields, because a parser that guessed would drop half the instructio
 | Reply | Does |
 |---|---|
 | free text at `awaiting_intake` | the intake answers → one email 1 draft |
-| free text at `drafted` | revises that draft in place ("tighter", "drop the score line") |
+| **paste your call notes** | the post-call email: written from what the OWNER said, one ask, "can I send the video". Auto-detected, see below |
 | `1` / `send it` | Outlook draft, To = `prospect_email ?? requester_email` |
 | `loom` (bare, no url) | starts the 3-step recording wizard: 20 prompts + PRE-FLIGHT + pick the customer, then the picture, then the script `.txt`. `loom <url>` still stores the video |
 | `script` | rebuild the script `.txt` for the customer already picked |
@@ -283,7 +287,13 @@ parsed into fields, because a parser that guessed would drop half the instructio
 | `redesign <url>` / `loom <url>` | stores the asset for the reveal |
 | `reveal` (optionally `reveal $299/mo, setup waived`) | the hand-everything-over message |
 | `email 2` .. `email 5` | the old 3-option belief ladder (post-reveal) |
-| free text at `revealed` | treated as the prospect talking → objection replies |
+| anything else, any stage | `runAgentTurn()` → the reasoning agent reads the thread and answers |
+
+> ‼️ The last row used to be two rows: "free text at `drafted` revises that draft in place" and
+> "free text at `revealed` → objection replies". Both have been false since `b92c6a2` (see "The audit
+> thread REASONS now"). Revision is now `edit_draft`, chosen by the agent; the objection drafter is
+> only a fallback when the agent throws at `revealed`. The `reveal $299/mo` example above is also
+> illustrative, not a real offer.
 
 - `src/lib/audit-engine/site-signals.ts` — the "one thing on your site working against you"
   hook (stale copyright year, no viewport, http, no schema, no phone), computed from the
@@ -452,8 +462,70 @@ exactly when a Loom gets recorded. No anchor found is not fatal — it sends as 
 so in the flags.
 
 **FLAGS are Spanish and Slack-only**, never part of the email: promises the video made, figures the
-video got wrong, a missing reply phrase, an invented timestamp, a thread that could not be found.
+video got wrong, an invented timestamp, no payment link configured, a thread that could not be found.
 `Sin flags.` when clean.
+
+> The missing-reply-phrase flag is **gone as of v2** (2026-08-16). The recording now sends them to
+> the payment link, so a video with no reply phrase in it is the normal case rather than a gap.
+> `replyPhrase()` is still called and still honoured verbatim when the video did name one, because a
+> video that said "reply let's do it" and an email that says something else is the same broken
+> promise it always was. It just no longer flags its own absence.
+
+### Call notes → the post-call email (`notes-email.ts`, 2026-08-16)
+
+Paste the notes from a phone call into a finished audit thread and it drafts the email that asks for
+the yes on the video. No command word: the paste IS the command, the same way a Loom transcript is.
+
+Email 1 is written from the AUDIT, and has to be, because at that point nobody has spoken to the
+prospect. The moment there has been a call that stops being the best material available. Before this,
+the notes went nowhere: a real block of them was pasted into a live thread, fell through every branch
+into the reasoning agent, and produced nothing usable.
+
+> ‼️ **THE NOTES OUTRANK THE AVATAR SET.** Same doctrine as `intake_answers`, and the live case is
+> the argument: the niche set picked "The Corporate Film Program Buyer" while the owner had spent
+> the call explaining he needs to hire TECHNICIANS, not find customers. A draft off the generic pick
+> would have been well-researched and about the wrong problem, which is worse than a generic one
+> because it proves nobody listened.
+
+Four context sources, each labelled separately in the prompt so the model knows what may supply what:
+the pasted notes verbatim (authority), the rest of the Slack thread (`readAuditThreadNotes`, at a
+3500-char budget rather than the coach's 800 — that cap exists to protect a call brief's score and
+does not apply here), the real mailbox (`readThreadTruth`, so it does not reintroduce itself
+mid-conversation), and `reportContext` as the only source of numbers.
+
+The ask is `PERMISSION_CLOSE`, appended by `ensurePermissionClose()`, so this inherits the single-ask
+rule and linter rule `missing-close` for free. Still permission stage: no price, redesign link only.
+
+> ‼️ **Router placement is load-bearing in BOTH directions** (`thread-assistant.ts`). BELOW the
+> `awaiting_intake` branch, because there a long multi-line paste is the intake answers and nothing
+> else — you cannot have notes from a call with someone you have not emailed yet, and moving it up
+> would eat email 1 for every prospect whose answers ran long. ABOVE `runAgentTurn`, which is the
+> branch it takes messages FROM, so the gate has to be something a model cannot argue past.
+
+`looksLikeCallNotes()` (`notes-guards.ts`) is mechanical for that reason: 180+ chars AND 3+ non-empty
+lines AND no `<@Uxxx>` mention. A one-line revision, a bare `draft` and a pasted objection all fail
+it. The mention exemption is the escape hatch and the recovery: a message addressed to the assistant
+is never notes, so a misroute costs one retyped message rather than a lost capability.
+
+Three guards, all pure functions, all Slack-only, because notes mix three things the drafter cannot
+reliably separate on its own:
+
+| Guard | Catches | Why it is not email content |
+|---|---|---|
+| `spokenPromises` (reused) | "one extra client makes back the investment" | not a claim this business makes |
+| `callbackCommitments` | "regresa sabado 22 quiere que lo llame", "call him back thursday" | HIS calendar. An email saying "as I mentioned I'll call Saturday" is a commitment a drafter made, not a person |
+| `outOfScopeAsks` | ads / anuncios / hiring / staffing / social / website builds | we sell two tiers. The email may REPOSITION that work toward what they asked for, never offer the thing itself |
+
+`outOfScopeAsks` dedupes by matched PHRASE, not by line: notes circle the same subject for five lines
+while he thinks it through, and five bullets saying "he asked about ads" is a flag block nobody reads
+to the end. `callbackCommitments` dedupes by line, because two callbacks are two things he owes.
+Bare `personal` is deliberately NOT a staffing match (it is "his personal cell" in English); it needs
+a quantifier in front of it.
+
+The reposition is the point and it is honest: the questions we make a business findable for do not
+have to be buying questions. Someone who wants to be found by future employees is the same work
+pointed at a different question. Promising to run their job ads is not, and `offerBlock()` hands the
+model `OFFER_TIERS` as a closed list so "can you also do X" has a definite answer.
 
 ## /scan — the self-serve public funnel (2026-08-05)
 `srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
@@ -651,6 +723,46 @@ improvises better than he reads; in practice it meant re-deciding the same pitch
 recording. `loom-script.ts` renders his own script instead, filled from this run's data, read out
 loud with screenshots pasted over the top. What survives in Slack is PRE-FLIGHT, because it carries
 the things a script cannot: DO NOT OPEN WITH, which engines returned data, the branded-prompt count.
+
+#### Template v2 (2026-08-16)
+
+The script the wizard writes is now v2. Structural, not cosmetic:
+
+| | v1 | v2 |
+|---|---|---|
+| the score | mid-script, after a build-up | **first thing said** |
+| best customers | one, named | **all three, read out as their card labels** |
+| the middle | one "what we do" paragraph | **3 pillars: Findable / Familiar / Freshness** |
+| the offer | one paragraph | **3 numbered commitments** |
+| price | one line, both tiers | both tiers **plus `TIER_CONTRAST`**, what actually separates them |
+| urgency | none | an either-or beat, **said twice**, bookending the pillars |
+| the close | "reply with let's do it, I'll send an invoice" | **the payment link**, then invitation link, then `ONBOARDING_WINDOW` |
+
+> ‼️ **THE THREE PILLARS ARE CONSTANTS AND MUST NOT BECOME PROMPT MATERIAL.** Two of them are
+> carried by a story about a real person: the Florida operator whose own reviews were quoted to
+> recommend his competitors, and Matthew's wife booking a laser appointment off a review ChatGPT
+> surfaced at a barbecue. A model asked to "tell a client story for this niche" does not decline for
+> lack of one, it invents a client, on camera, in a pitch whose whole basis is "you can verify this
+> yourself". Same no-fabrication rule as `run-prompts.ts`, applied to speech. `LOOM_PILLARS`,
+> `LOOM_COMMITMENTS` and `urgencyBeat()` live in `loom-script.ts`; the urgency beat is one function
+> called twice so the two readings cannot drift into being different thoughts.
+
+> ‼️ **The ROI line is spoken-only, on purpose** (Matthew's call). "Just one extra client a month
+> will very likely make back the investment" is a `DELIVERY_BANNED_PROMISES` hit and downstream
+> behaviour is already correct: `spokenPromises()` catches it in the transcript, FLAGS it in Slack,
+> and the delivery email declines to repeat it. The video cannot unsay it, the email can decline to
+> put it in writing. Do not "fix" the drafters to match the script, and do not copy the sentence
+> into one.
+
+**`PAYMENT_LINK` is tri-state and both callers handle it.** `SRT_PAYMENT_URL` unset is a real state,
+not a config error to paper over: the script prints a `!!` correction instead of the close, PRE-FLIGHT
+prints `NO PAYMENT LINK SET` instead of a checklist item, and the delivery email flags it and writes
+`[LINK DE PAGO]`. Same discipline as `site_signals` and `robots_check`. A promised link that does not
+exist is discovered by the prospect, after the recording, when nothing can be done about it.
+
+**`TradeVoice.attract` was deleted with v2.** The best customers are now read out as their own card
+labels, so the spoken plural rewording that fed "get in front of more X or Y" had nothing left to
+fill. `avoid` stays, because "and keep you away from the sample hoarders" still needs it.
 
 **`computeBeatSheetFacts()` is exported separately from `renderPreflight()`** so the script and the
 card consume the same facts. Recomputing would mean a second price-tier Claude call and, worse, a
@@ -908,6 +1020,13 @@ deriving a third number from the two. "Can you do better" is answered by Complet
 a smaller scope for a smaller number, not a discount.
 
 `priceBlock(callType)` now takes the call type, not an unlock boolean.
+
+> ‼️ **A price literal outside `config/pitch.ts` is the bug, not the number it holds.**
+> `DEFAULT_REVEAL_TERMS` in `email-assistant.ts` hardcoded `$399 per month` and went on quoting it
+> after this change, so every bare `reveal` handed a prospect a price that does not exist under the
+> current offer and never did. Fixed 2026-08-16 by deriving it from `PRICE_CORE` / `PRICE_COMPLETE`
+> / `OFFER_EXIT_LINE`. `TIER_CONTRAST` (added with Loom v2) lives there too and is the FRAMING, not
+> the deliverables: `OFFER_TIERS[].includes` remains the contract.
 
 ### Call Coach knows who is on the phone (`src/lib/call-coach/`, 2026-08-11)
 

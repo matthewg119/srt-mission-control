@@ -35,11 +35,6 @@ export default function LoginPage() {
           {/* Login Form (client component) */}
           <LoginForm />
         </div>
-
-        {/* Footer */}
-        <p className="mt-6 text-center text-sm text-[rgba(255,255,255,0.5)]">
-          SRT Agency Internal Operations
-        </p>
       </div>
     </div>
   );

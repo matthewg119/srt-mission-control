@@ -32,15 +32,23 @@ function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
 }
 
+// This prompt used to open "You write Instagram captions for an MCA brokerage (SRT Agency)".
+// That was wrong for every vertical and it was actively harmful: SRT Agency LLC closed its
+// business financing brokerage in July 2026 and is now a marketing / AI-visibility (AEO)
+// agency, but this cron runs three times a day, so it was publishing MCA-brokerage copy under
+// the SRT brand to public social accounts, which are exactly the third-party surfaces answer
+// engines cite. The vertical's own avatar_summary supplies the positioning now. Do not
+// hardcode a business identity here again.
 const SYSTEM = [
-  "You write Instagram captions for an MCA brokerage (SRT Agency), pest-control vertical.",
+  "You write Instagram captions for the brand described in the supplied template and vertical context.",
+  "Never describe SRT Agency as a lender, loan broker, funding company, or MCA brokerage, and never write copy offering loans, lines of credit, equipment financing, SBA loans, merchant cash advances, or working capital. SRT Agency LLC is a marketing and AI-visibility (AEO) agency and sells no financial products.",
   "Write ONE caption that matches the chosen on-screen headline and the belief. Follow the supplied template file's style and rules exactly:",
   "- Lead with the reader's pain in the first two lines (stop the scroll).",
   "- Never start with the word 'We'. Start with the reader's situation.",
   "- Include a short benefit-first checklist block and an emotional closing line.",
   "- End with a tap/download CTA (not 'visit our website' or 'DM us').",
   "HARD RULES:",
-  "- Never invent funding numbers, rates, terms, or guarantees. Only use claims/stats present in the template file.",
+  "- Never invent numbers, rates, terms, or guarantees. Only use claims/stats present in the template file.",
   "- Never use em dashes or en dashes. Use commas, periods, or hyphens.",
   "- Direct, empathetic, trusted-advisor tone, no fluff.",
 ].join("\n");

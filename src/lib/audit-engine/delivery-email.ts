@@ -31,6 +31,8 @@ import {
   DELIVERY_REQUIRED_LINES,
   LOOM_PRICE_LABEL,
   LOOM_TEXT_NUMBER,
+  ONBOARDING_WINDOW,
+  PAYMENT_LINK,
 } from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import { ensureSignoff, noDashes } from "./email-assistant";
@@ -139,6 +141,10 @@ function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name:
       : "No competitor was named often enough in the missing questions to quote",
     `Report link: ${reportUrl(report.slug)}`,
     `Price: ${LOOM_PRICE_LABEL}`,
+    PAYMENT_LINK
+      ? `Payment link, this is the next step: ${PAYMENT_LINK}`
+      : `Payment link: NONE CONFIGURED. Write [LINK DE PAGO] where the link belongs.`,
+    `After payment they get an invitation link, and getting started takes ${ONBOARDING_WINDOW}.`,
     `Phone for questions: ${LOOM_TEXT_NUMBER}`,
     site ? `Thing on their own site: ${site}` : "",
   ]
@@ -194,10 +200,17 @@ export async function draftDeliveryEmail(
     flags.push(`El video dice "${c.said}"${c.at ? ` en ${c.at}` : ""} pero el reporte dice ${c.actual}. Usé el reporte.`);
   }
 
-  // Rule 9.
+  // Rule 9, ADVISORY since template v2 (2026-08-16).
+  //
+  // The v2 close sends them to the payment link, so a video with no reply phrase in it is now the
+  // normal case rather than a gap: there is nothing to confirm, the next step is the link. When the
+  // recording DID name a phrase it is still honoured verbatim, because a video that said "reply
+  // let's do it" and an email that says something else is the same broken promise it always was.
   const phrase = replyPhrase(transcript);
-  if (!phrase) {
-    flags.push('El video no dice una frase de respuesta exacta. Dejé [CONFIRMAR LA FRASE DE RESPUESTA] en el cierre.');
+
+  // What DOES need flagging is a close with nowhere to send them.
+  if (!PAYMENT_LINK) {
+    flags.push("No hay link de pago configurado (SRT_PAYMENT_URL). Dejé [LINK DE PAGO] en el cierre.");
   }
 
   const { data } = await callClaudeJSON<ModelOut>({
@@ -212,7 +225,7 @@ export async function draftDeliveryEmail(
       "2. The competitor, named, with the count from the FIGURES below.",
       "3. The two timestamps: where the score and findings are shown, and where the price and the next step are covered.",
       "4. The report is attached and theirs to keep either way, and they can re-run any question themselves in an incognito window.",
-      "5. Close: the price, the exact phrase to reply with, what happens after they reply, and the phone number for questions.",
+      "5. Close: the price, the PAYMENT LINK as the next step, what happens after they pay (an invitation link, then a short onboarding), and the phone number for questions. Use the payment link exactly as given in the FIGURES, on its own line.",
       "",
       "HARD RULES:",
       `1. Under ${DELIVERY_MAX_WORDS} words. Plain text. ONE call to action.`,
@@ -231,8 +244,8 @@ export async function draftDeliveryEmail(
       facts,
       "",
       phrase
-        ? `The exact phrase he asked them to reply with, use it verbatim: "${phrase}"`
-        : "He did not state a reply phrase in the video. Write [CONFIRMAR LA FRASE DE RESPUESTA] where it belongs.",
+        ? `He asked them on camera to reply with an exact phrase. Use it verbatim ALONGSIDE the payment link, do not replace one with the other: "${phrase}"`
+        : "He did not ask them to reply with a phrase, which is expected. The payment link is the next step and the only call to action.",
       promises.length
         ? `\nDo NOT repeat these, he said them on camera but they are not claims we make: ${promises.map((p) => `"${p.phrase}"`).join(", ")}`
         : "",

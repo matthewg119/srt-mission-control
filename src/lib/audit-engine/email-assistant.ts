@@ -35,7 +35,7 @@
 // them, sending it is the fulfillment, so there is no permission to earn.
 
 import { callClaudeText, callClaudeJSON } from "@/lib/claude-calls";
-import { VIDEO_LENGTH_LABEL } from "@/config/pitch";
+import { OFFER_EXIT_LINE, PRICE_COMPLETE, PRICE_CORE, VIDEO_LENGTH_LABEL } from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
@@ -646,7 +646,10 @@ export function reportContext(report: AuditReportRow, view: ReportView): string 
     .join("\n");
 }
 
-const COMPLIANCE_RULES = [
+// Exported so notes-email.ts uses THIS copy rather than a hand-made second one. The cost of a
+// duplicated prompt block is recorded in outreach-intake.ts: its private copy of the close rule
+// drifted into saying the opposite of prePitchRules(), and email 1 was unreachable for six days.
+export const COMPLIANCE_RULES = [
   // Deliberately says "clients", not "patients". This block is unconditional across every
   // vertical, and a control panel shop reading about patients is an instantly dead deal.
   "NEVER guarantee customers, clients, sales, or revenue. Only visibility and citations, which are verifiable and measured.",
@@ -658,7 +661,7 @@ const COMPLIANCE_RULES = [
 
 // Style rules that make the drafts read human and on-brand. The em-dash ban is
 // the single highest-impact one: em dashes are the #1 AI-generated tell.
-const STYLE_RULES = [
+export const STYLE_RULES = [
   "Do NOT use em dashes (—) or en dashes (–) anywhere, and never use ' - ' as a sentence connector. Use periods and commas, or restructure. Write numeric ranges with 'to' (for example '3 to 5', not '3-5'). This rule is non-negotiable: em dashes make it read AI-generated and that kills the brand.",
   "Write like the specific person who personally ran this audit on THIS business, not a template. Vary sentence length. No 'I hope this finds you well', no corporate filler, no bullet lists unless they genuinely earn their place.",
   "Surface urgency that is already true in the data. Never manufacture it: no countdowns, no fake 'spots left', no expiring discounts. The prospect has been burned by exactly those tricks and will catch them.",
@@ -698,7 +701,7 @@ function marketFactsFor(report: AuditReportRow): string {
   ].join("\n");
 }
 
-const SUBJECT_LINE_INSTRUCTION =
+export const SUBJECT_LINE_INSTRUCTION =
   "Output format: first line is exactly `Subject: <the subject line>`, then one blank line, then the email body. Nothing before the Subject line, no markdown. The subject line itself must also contain no em dashes.";
 
 // The one fixed close for every email. Matthew's call: a low-friction 5-minute video, never
@@ -1099,9 +1102,15 @@ export async function draftPermissionEmail(
 
 // ── Stage 2: REVEAL ──────────────────────────────────────────────────────────
 
-/** Default terms when Matthew doesn't pass any with the `reveal` command. */
-const DEFAULT_REVEAL_TERMS =
-  "$399 per month, month to month, and anything built for them is theirs to keep whether they stay or leave";
+/**
+ * Default terms when Matthew doesn't pass any with the `reveal` command.
+ *
+ * ‼️ DERIVED FROM config/pitch.ts, never written out here. This constant hardcoded "$399 per month"
+ * and went on quoting it for five days after the offer became two tiers on 2026-08-11, so every
+ * bare `reveal` handed a prospect a price that does not exist and never did under the current
+ * offer. A price literal anywhere outside config/pitch.ts is the bug, not the value it holds.
+ */
+const DEFAULT_REVEAL_TERMS = `${PRICE_CORE} for Core or ${PRICE_COMPLETE} for Complete, month to month, and ${OFFER_EXIT_LINE.charAt(0).toLowerCase()}${OFFER_EXIT_LINE.slice(1, -1)}`;
 
 /**
  * The message that fires when they say yes. This is the ONLY place in the cold lane where

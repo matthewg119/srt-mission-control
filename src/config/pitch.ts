@@ -86,9 +86,45 @@ export const OFFER_TIERS = [
  */
 export const OFFER_EXIT_LINE = "Leave anytime, keep everything: pages, profiles, data.";
 
+/**
+ * What separates the two tiers, in one sentence each, for saying out loud.
+ *
+ * `OFFER_TIERS[].includes` is the deliverable list and stays the contract; this is the FRAMING,
+ * and the two are not interchangeable. Read aloud, a four-item bullet list is unlistenable and the
+ * distinction that actually decides the tier gets lost inside it: Core changes what the business
+ * says about itself, Complete changes what the rest of the internet says about it. That is the
+ * whole choice, and it is the sentence a prospect repeats back when deciding.
+ */
+export const TIER_CONTRAST = {
+  Core: {
+    line: "Core fixes what you say.",
+    detail: "We fix your website and manage your reviews.",
+  },
+  Complete: {
+    line: "Complete changes what everyone else says about you.",
+    detail:
+      "Your website, plus outreach to the forums, plus we write the reviews for your customers for the engine to quote.",
+  },
+  both: "Both include the monthly report with your progress.",
+} as const;
+
 /** Both tiers, as one line, for a script or a brief that needs the price in a sentence. */
 export const LOOM_PRICE_LABEL = `${PRICE_CORE} (Core) or ${PRICE_COMPLETE} (Complete)`;
 export const LOOM_START_WINDOW = "60 to 90 days";
+
+/**
+ * Where they pay, or null.
+ *
+ * ‼️ NULL IS A REAL STATE AND BOTH CALLERS MUST HANDLE IT. The v2 close is "click the link I sent
+ * over", so the script and the delivery email both depend on a link that exists. With none set,
+ * they say so — the pre-flight prints NO PAYMENT LINK SET and the delivery email flags it — rather
+ * than printing a placeholder that ships to a prospect. Same tri-state discipline as `site_signals`
+ * and `robots_check`: never scanned and clean are different answers, and so are no link and a link.
+ */
+export const PAYMENT_LINK: string | null = process.env.SRT_PAYMENT_URL || null;
+
+/** How long onboarding takes once they have paid. Said on camera and written in the hand-over. */
+export const ONBOARDING_WINDOW = "around 30 minutes";
 
 /** The number Matthew reads on camera. Same one as operator-rules.ts, NOT the NAP number. */
 export const LOOM_TEXT_NUMBER = "336-833-2303";

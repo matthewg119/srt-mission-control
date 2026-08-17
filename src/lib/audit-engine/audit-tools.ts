@@ -29,6 +29,7 @@ import {
   formatCallScript,
 } from "./call-script";
 import { draftFollowupEmail } from "./followup-email";
+import { draftNotesEmail } from "./notes-email";
 import {
   draftPermissionEmail,
   draftRevealMessage,
@@ -104,9 +105,9 @@ export const AUDIT_THREAD_TOOLS = [
       properties: {
         kind: {
           type: "string",
-          enum: ["permission", "nudge", "reveal", "followup", "objection", "belief"],
+          enum: ["permission", "nudge", "reveal", "followup", "objection", "belief", "post_call"],
           description:
-            "permission = first cold email, earns a yes, no price no links. nudge = another pre-pitch touch, still no price. reveal = they said yes, hand over the report + video + price. followup = they already got something and went quiet, OR they replied and need an answer. objection = they pushed back and you are answering it. belief = the post-reveal ladder.",
+            "permission = first cold email, earns a yes, no price no links. nudge = another pre-pitch touch, still no price. reveal = they said yes, hand over the report + video + price. followup = they already got something and went quiet, OR they replied and need an answer. objection = they pushed back and you are answering it. belief = the post-reveal ladder. post_call = there has been a phone call and notes exist on the row or in the thread, write from what the OWNER said and ask for the yes on the video.",
         },
         instruction: {
           type: "string",
@@ -319,6 +320,23 @@ export function makeAuditExecutor(ctx: AuditToolContext) {
             const d = await draftSequenceEmail(ctx.report, v, Number(input.step ?? 2));
             subject = d.subject;
             body = d.body;
+          } else if (kind === "post_call") {
+            // Notes come from the row when they were pasted, and from the agent's own instruction
+            // when they were only ever said in the thread. Refuse rather than fall back to email 1:
+            // a "post-call" email written with no call in it is the generic draft wearing a label
+            // that says it listened.
+            const notes = ctx.report.call_notes || instruction;
+            if (!notes.trim()) {
+              return ok(
+                "No call notes on this report and none given. Paste the notes into the thread, or pass them as the instruction."
+              );
+            }
+            const d = await draftNotesEmail(ctx.report, v, notes);
+            subject = d.draft.subject;
+            body = d.draft.body;
+            flags.push(...d.flags);
+            if (d.removedLinks.length) flags.push(`Links removed by policy: ${d.removedLinks.join(", ")}`);
+            if (d.formatNote) flags.push(d.formatNote);
           } else {
             // permission | nudge. Step 1 is email 1; 2 to 5 are the pre-pitch ladder.
             const step = kind === "nudge" ? Number(input.step ?? 2) : 1;
@@ -338,7 +356,7 @@ export function makeAuditExecutor(ctx: AuditToolContext) {
             })
             .eq("id", ctx.report.id);
 
-          const label = kind === "followup" ? "Follow-up" : kind === "reveal" ? "Reveal" : kind === "objection" ? "Objection reply" : kind === "belief" ? "Belief email" : kind === "nudge" ? `Nudge ${input.step ?? 2}` : "Email 1 · permission";
+          const label = kind === "followup" ? "Follow-up" : kind === "reveal" ? "Reveal" : kind === "objection" ? "Objection reply" : kind === "belief" ? "Belief email" : kind === "post_call" ? "Post-call" : kind === "nudge" ? `Nudge ${input.step ?? 2}` : "Email 1 · permission";
           await post(
             ctx,
             [

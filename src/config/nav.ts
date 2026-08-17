@@ -15,6 +15,7 @@ import {
   Users,
   Smartphone,
   Clapperboard,
+  PhoneCall,
 } from "lucide-react";
 
 export interface NavSection {
@@ -33,6 +34,12 @@ export const navSections: NavSection[] = [
     label: "Main",
     items: [
       { label: "BrainHeart", href: "/dashboard", icon: Brain },
+      { label: "Vektor", href: "/dashboard/assistant", icon: MessageSquare },
+      { label: "Call list", href: "/dashboard/worklist", icon: PhoneCall },
+      { label: "Leads", href: "/dashboard/leads", icon: Users },
+      // Clients we deliver for. Not /dashboard/onboarding, which is our own
+      // team-member setup checklist and a different thing entirely.
+      { label: "Clients", href: "/dashboard/clients", icon: Building2 },
       { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
       { label: "Tasks", href: "/dashboard/tasks", icon: CheckSquare },
       { label: "Submissions", href: "/dashboard/email-agents", icon: Send },

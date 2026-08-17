@@ -9,9 +9,15 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+// noindex is the default for this whole host: it is the internal ops app and
+// nothing here is meant to be public. src/app/scan/page.tsx deliberately
+// overrides it back to index:true, which still works because page metadata beats
+// layout metadata. The real crawl block is public/robots.txt.
 export const metadata: Metadata = {
   title: "SRT Mission Control",
-  description: "AI-first internal operations portal for SRT Agency",
+  description:
+    "Internal operations application for SRT Agency LLC, a marketing and AI-visibility (AEO) agency.",
+  robots: { index: false, follow: false, nocache: true },
   icons: { icon: "/favicon.svg" },
 };
 

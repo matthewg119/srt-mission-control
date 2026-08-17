@@ -21,6 +21,7 @@ import {
   searchLeads as zohoSearchLeads,
   addNoteToLead as zohoAddNote,
 } from "@/lib/zoho";
+import { crmMode, logActivity } from "@/lib/crm";
 
 export interface IngestLeadInput {
   firstName?: string;
@@ -159,7 +160,19 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
 
   // ── Zoho: update the existing lead or search-then-create. Awaited so the
   // serverless function isn't torn down mid-write. ──
+  //
+  // GATED ON CRM_WRITE_MODE. This is the one Zoho write that does NOT go
+  // through crm.ts — it calls the client directly — so without this check
+  // flipping the mode to supabase_only would still create a Zoho lead for
+  // every inbound funnel, Meta lead ad and public audit request.
+  //
+  // Note what is NOT inside this block: the Supabase contact upsert already
+  // happened above, and the #hot-leads Slack post and the Speed-to-Lead
+  // RingOut below both key off `contactId`, never off `zohoLeadId`. Turning
+  // Zoho off costs the lead nothing operationally.
   let zohoLeadId: string | null = existingZohoId;
+  const zohoEnabled = crmMode() !== "supabase_only";
+  if (zohoEnabled) {
   try {
     if (!zohoLeadId && email) {
       const found = await zohoSearchLeads({ email });
@@ -214,6 +227,22 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
         metadata: { contactId, email, phone, source: input.source },
       })
       .then(undefined, () => {});
+  }
+  } else if (contactId && input.noteTitle && detailLines.length) {
+    // With Zoho off, the intake detail has nowhere else to go — the Zoho note
+    // above was the only record of it. Write it straight to the timeline.
+    // (When Zoho IS on, addNoteToLead already mirrors it, so doing it here too
+    // would double every intake note.)
+    await logActivity({
+      contactId,
+      activityType: "note",
+      direction: "internal",
+      channel: "web",
+      subject: input.noteTitle,
+      body: detailLines.join("\n"),
+      actor: "lead-intake",
+      source: "mission_control",
+    });
   }
 
   // ── Activity log ──

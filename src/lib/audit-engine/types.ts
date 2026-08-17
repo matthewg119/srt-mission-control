@@ -95,6 +95,15 @@ export interface AuditReportRow {
    *  this exists, so its two timestamps are read off what was actually said. */
   loom_transcript: string | null;
   /**
+   * Call notes pasted into the audit thread, verbatim (docs/2026-08-16-audit-call-notes.sql).
+   *
+   * The post-call email is written from these, and they OUTRANK the niche avatar set when the two
+   * disagree, on the same reasoning as intake_answers: what the owner said on the phone beats what
+   * the buyer-question analysis inferred about him. Kept raw and never parsed into fields.
+   */
+  call_notes: string | null;
+  call_notes_at: string | null;
+  /**
    * The pending step of the `loom` wizard (docs/2026-08-04-audit-loom-state.sql).
    *
    * This is what decides whether a bare "2" in the thread means "avatar 2" or "email option 2".

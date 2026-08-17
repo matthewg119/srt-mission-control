@@ -516,12 +516,16 @@ async function handleMissingFields(args: {
 }): Promise<Record<string, unknown>> {
   const { data: contact } = await supabaseAdmin
     .from("contacts")
-    .select("ssn, ein, first_name, last_name, business_name, drivers_license_uploaded, voided_check_uploaded")
+    // There is no `ssn` column and never was — the real ones are ssn_full and
+    // ssn4. PostgREST fails the whole query on an unknown column, so this
+    // packet-readiness check has been erroring rather than reporting anything.
+    // Either form satisfies a lender's SSN requirement, so accept both.
+    .select("ssn_full, ssn4, ein, first_name, last_name, business_name, drivers_license_uploaded, voided_check_uploaded")
     .eq("id", args.contact.id)
     .maybeSingle();
 
   const available: Record<string, boolean> = {
-    ssn: Boolean(contact?.ssn),
+    ssn: Boolean(contact?.ssn_full || contact?.ssn4),
     ein: Boolean(contact?.ein),
     drivers_license: Boolean(contact?.drivers_license_uploaded),
     voided_check: Boolean(contact?.voided_check_uploaded),

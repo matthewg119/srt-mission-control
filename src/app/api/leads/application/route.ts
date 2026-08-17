@@ -792,6 +792,12 @@ export async function POST(request: NextRequest) {
                                                               home_address: homeAddress,
                                                               signature: signature || null,
                                                               signature_name: signatureName || null,
+                                                              // Stamped only when a signature is actually present, so the
+                                                              // column keeps meaning "when they signed" rather than "when
+                                                              // this row was last written". Everything before 2026-08-19
+                                                              // is NULL because no signing time was ever recorded — see
+                                                              // docs/2026-08-19-contacts-application-signed-at.sql.
+                                                              ...(signature ? { application_signed_at: new Date().toISOString() } : {}),
                                                               updated_at: new Date().toISOString(),
                                             }).eq("id", contactId);
                             } catch (err) {

@@ -1,0 +1,247 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { supabaseAdmin } from "@/lib/db";
+import { STAGE_PIPELINES, cadenceFor } from "@/config/stage-display";
+import { formatRelativeTime } from "@/lib/utils";
+import { LeadTimeline, type TimelineActivity } from "@/components/crm/lead-timeline";
+import { LogCallForm } from "@/components/crm/log-call-form";
+import { LeadStatusPicker } from "@/components/crm/status-picker";
+
+export const dynamic = "force-dynamic";
+
+// Everything about one lead, on one screen: identity + business + financials,
+// the full timeline, and the follow-up state. This is the page that has to be
+// good enough that nobody opens Zoho.
+
+const ALL_STAGES = STAGE_PIPELINES.flatMap((p) => p.stages);
+
+interface Task {
+  id: string;
+  title: string;
+  due_at: string | null;
+  status: string;
+  priority: string;
+}
+
+function stageColor(stage: string | null): string {
+  return ALL_STAGES.find((s) => s.name === stage)?.color ?? "#9CA3AF";
+}
+
+function fmt(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (typeof v === "number") return v.toLocaleString();
+  return String(v);
+}
+
+const FIELD_GROUPS: Array<{ title: string; fields: Array<[string, string]> }> = [
+  {
+    title: "Contact",
+    fields: [
+      ["first_name", "First name"],
+      ["last_name", "Last name"],
+      ["email", "Email"],
+      ["phone", "Phone"],
+      ["mobile_phone", "Mobile"],
+      ["home_address", "Home address"],
+    ],
+  },
+  {
+    title: "Business",
+    fields: [
+      ["business_name", "Business"],
+      ["legal_name", "Legal name"],
+      ["dba", "DBA"],
+      ["industry", "Industry"],
+      ["ein", "EIN"],
+      ["inc_date", "Incorporated"],
+      ["biz_address", "Address"],
+      ["biz_city", "City"],
+      ["biz_state", "State"],
+      ["biz_zip", "Zip"],
+    ],
+  },
+  {
+    title: "Financials",
+    fields: [
+      ["amount_needed", "Requested"],
+      ["monthly_revenue", "Monthly revenue"],
+      ["monthly_deposits", "Monthly deposits"],
+      ["credit_score", "Credit"],
+      ["use_of_funds", "Use of funds"],
+      ["existing_loans", "Existing loans"],
+    ],
+  },
+  {
+    title: "Source",
+    fields: [
+      ["source", "Lead source"],
+      ["utm_campaign", "Campaign"],
+      ["utm_medium", "Medium"],
+      ["created_at", "Created"],
+    ],
+  },
+];
+
+export default async function LeadDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+
+  const [leadRes, tasksRes, activityRes] = await Promise.all([
+    supabaseAdmin.from("contacts").select("*").eq("id", id).maybeSingle(),
+    supabaseAdmin
+      .from("lead_tasks")
+      .select("id, title, due_at, status, priority")
+      .eq("contact_id", id)
+      .eq("status", "open")
+      .order("due_at", { ascending: true, nullsFirst: false }),
+    supabaseAdmin
+      .from("lead_activities")
+      .select(
+        "id, activity_type, direction, channel, subject, body, outcome, duration_secs, occurred_at, actor, source"
+      )
+      .eq("contact_id", id)
+      .order("occurred_at", { ascending: false })
+      .limit(200),
+  ]);
+
+  if (!leadRes.data) notFound();
+
+  const lead = leadRes.data as Record<string, unknown>;
+  const tasks = (tasksRes.data ?? []) as unknown as Task[];
+  const activities = (activityRes.data ?? []) as unknown as TimelineActivity[];
+
+  const status = (lead.application_stage as string | null) ?? null;
+  const displayName =
+    [lead.first_name, lead.last_name].filter(Boolean).join(" ").trim() ||
+    (lead.business_name as string) ||
+    "Unknown lead";
+
+  return (
+    <div>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Link
+            href="/dashboard/leads"
+            className="text-[11px] text-[rgba(255,255,255,0.35)] hover:text-white"
+          >
+            ← Leads
+          </Link>
+          <h1 className="mt-1 text-xl font-medium text-white">{displayName}</h1>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span
+              className="rounded-md px-1.5 py-0.5"
+              style={{ background: `${stageColor(status)}22`, color: stageColor(status) }}
+            >
+              {status ?? "no status"}
+            </span>
+            <span className="text-[rgba(255,255,255,0.4)]">
+              last touch{" "}
+              {lead.last_activity_at
+                ? formatRelativeTime(lead.last_activity_at as string)
+                : "never"}
+            </span>
+            {tasks.length === 0 && (
+              <span className="text-[#9C27B0]">no follow-up scheduled</span>
+            )}
+          </div>
+        </div>
+
+        {/* Kept while the Zoho mirror is still running. Goes away in Phase 6. */}
+        {typeof lead.zoho_lead_id === "string" && lead.zoho_lead_id && (
+          <a
+            href={`https://crm.zoho.com/crm/org/tab/Leads/${lead.zoho_lead_id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg border border-[rgba(255,255,255,0.1)] px-3 py-1.5 text-[11px] text-[rgba(255,255,255,0.4)] hover:text-white"
+          >
+            Open in Zoho
+          </a>
+        )}
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[300px_1fr_280px]">
+        {/* Left — the record */}
+        <div className="space-y-4">
+          {FIELD_GROUPS.map((g) => (
+            <div
+              key={g.title}
+              className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-3"
+            >
+              <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+                {g.title}
+              </p>
+              <dl className="space-y-1.5">
+                {g.fields.map(([key, label]) => (
+                  <div key={key} className="flex justify-between gap-3 text-[11px]">
+                    <dt className="shrink-0 text-[rgba(255,255,255,0.35)]">{label}</dt>
+                    <dd className="truncate text-right text-[rgba(255,255,255,0.75)]">
+                      {fmt(lead[key])}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ))}
+        </div>
+
+        {/* Centre — log a call, then the history */}
+        <div className="space-y-4">
+          <LogCallForm
+            contactId={id}
+            leadName={displayName}
+            defaultFollowUpDays={cadenceFor(status).repeatDays}
+          />
+          <div>
+            <p className="mb-3 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+              History · {activities.length}
+            </p>
+            <LeadTimeline activities={activities} />
+          </div>
+        </div>
+
+        {/* Right — status and follow-ups */}
+        <div className="space-y-4">
+          <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-3">
+            <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+              Status
+            </p>
+            <LeadStatusPicker contactId={id} current={status} />
+          </div>
+
+          <div className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-3">
+            <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+              Open follow-ups
+            </p>
+            {tasks.length === 0 ? (
+              <p className="text-[11px] text-[#9C27B0]">
+                Nothing scheduled — this lead shows on the call board.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {tasks.map((t) => (
+                  <li key={t.id} className="text-[11px]">
+                    <span className="text-white">{t.title}</span>
+                    <span className="ml-1.5 text-[rgba(255,255,255,0.35)]">
+                      {t.due_at ? t.due_at.slice(0, 10) : "no date"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <Link
+            href={`/dashboard/assistant?q=${encodeURIComponent(`Tell me about ${displayName}`)}`}
+            className="block rounded-xl border border-[rgba(255,255,255,0.07)] px-3 py-2 text-center text-[11px] text-[rgba(255,255,255,0.5)] hover:text-white"
+          >
+            Ask Vektor about this lead
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

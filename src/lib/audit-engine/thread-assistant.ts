@@ -61,6 +61,8 @@ import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead"
 import { getNicheAvatars, formatAvatarsCard, type BestAvatar, type NicheAvatars } from "./niche-avatars";
 import { getIntelBrief, formatBriefMarkdown, sourceDomains } from "./intel-brief";
 import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
+import { draftNotesEmail } from "./notes-email";
+import { looksLikeCallNotes } from "./notes-guards";
 import { resolveReplyAnchor } from "./reply-anchor";
 import { generateScorecardPDF } from "./pdf-scorecard";
 import { scorecardFileName } from "./finish-report";
@@ -96,9 +98,9 @@ export const THREAD_COMMANDS = [
   "*1* Outlook draft  ·  *seed 1-3* install a pre-sell line  ·  *nudge 2-5* next touch  ·  *reveal* they said yes",
   "*loom* pick the customer, then the picture, then get the script  ·  *script* just the script again",
   "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt straight up",
-  "*paste the Loom transcript* = the hand-over email  ·  *redesign <url>* / *loom <url>* store an asset  ·  *questions* redo intake",
-  "*call* follow-up phone script + a send-instead email  ·  *close* the selling script once they've seen the video  ·  *call: <context>* aims it",
-  "Anything else you type edits the draft.",
+  "*paste the Loom transcript* = the hand-over email  ·  *paste your call notes* = the post-call email  ·  *questions* redo intake",
+  "*redesign <url>* / *loom <url>* store an asset  ·  *call* follow-up phone script + a send-instead email  ·  *close* the selling script once they've seen the video  ·  *call: <context>* aims it",
+  "Anything else you type, I read the thread and answer. @ me to be sure.",
 ].join("\n");
 
 /** Persist the 3 options on the report row and post them to the thread as a numbered card. */
@@ -1254,6 +1256,92 @@ export async function handleAuditThreadReply(args: {
     // so that fast path stays. An @mention overrides it: he is talking to the bot, not answering.
     if (report.outreach_stage === "awaiting_intake" && !args.isMention) {
       await draftEmailOne(report, args.channel, args.threadTs, view, text, args.files);
+      return true;
+    }
+
+    // --- Call notes pasted in: the post-call email -------------------------------
+    //
+    // A block of jotted notes after a phone call IS the command, the same way a pasted transcript
+    // is. Nothing else in the thread produces that shape, and typing a word above it every time is
+    // a rule the thread can enforce for itself.
+    //
+    // ‼️ PLACEMENT IS LOAD-BEARING, IN BOTH DIRECTIONS.
+    //
+    // BELOW the awaiting_intake branch, because there a long multi-line paste is the intake answers
+    // and nothing else: you cannot have notes from a call with someone you have not emailed yet.
+    // Moving this above it would eat email 1 for every prospect whose intake answers ran long.
+    //
+    // ABOVE runAgentTurn, obviously, but that is the branch it is taking messages FROM, so the gate
+    // has to be something a model could not argue its way past. looksLikeCallNotes is mechanical
+    // for exactly that reason, and it exempts anything carrying an @mention: a message addressed to
+    // the assistant is never notes, which is also the recovery when this reads something wrong.
+    const notesCheck = looksLikeCallNotes(text);
+    if (notesCheck.ok) {
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        [
+          ":memo: Reading that as call notes. Drafting the email that asks for the yes on the Loom.",
+          "_If you meant to talk to me instead, @ me._",
+        ].join("\n")
+      );
+
+      // Stored verbatim BEFORE the draft, so a generation that fails still leaves the notes on the
+      // row for the next attempt and for the live call brief. Same reasoning as loom_transcript.
+      await supabaseAdmin
+        .from("audit_reports")
+        .update({ call_notes: text, call_notes_at: new Date().toISOString() })
+        .eq("id", report.id);
+
+      const gated = await draftWithLint(
+        (attempt, previous) =>
+          draftNotesEmail(report, view, text, attempt === 0 ? "" : retryInstruction(previous)),
+        (r) => ({ body: r.draft.body, subject: r.draft.subject, stage: "draft-1", ...lintContext(report) })
+      );
+
+      const result = gated.draft ?? gated.lastRejected;
+      if (!result) return true; // unreachable: draftWithLint always returns one of the two
+      if (!gated.draft) await postLintRefusal(report, args.channel, args.threadTs, "the post-call email", gated);
+
+      const anchor = await resolveReplyAnchor(report);
+      const flags = [...result.flags];
+      if (!anchor) {
+        flags.push(
+          "No encontré el correo original en Outlook, así que esto sale como mensaje nuevo y no como respuesta en el hilo. Revisa el asunto antes de enviar."
+        );
+      }
+
+      await postSingleDraft(
+        report,
+        args.channel,
+        args.threadTs,
+        [
+          ":telephone_receiver: *Post-call* · written from your notes, one ask: can I send the video",
+          anchor
+            ? `_Replies on the existing thread (found via ${anchor.source}). Outlook writes the Re: line itself._`
+            : `_No thread found, this will go as a new message._`,
+        ].join("\n"),
+        {
+          ...result.draft,
+          subject: anchor?.subject ? `re: ${anchor.subject.replace(/^re:\s*/i, "")}` : result.draft.subject,
+          replyToMessageId: anchor?.messageId,
+        },
+        THREAD_COMMANDS,
+        { removedLinks: result.removedLinks, formatNote: result.formatNote },
+        await draftPreSellOptions(report, view, {
+          exclude: installedBeliefs(readLedger(report)),
+          preferred: selectBelief(report, readLedger(report)).id,
+          language: report.call_language === "es" ? "es" : "en",
+        })
+      );
+
+      await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        flags.length
+          ? [":warning: *FLAGS*", ...flags.map((f) => `• ${f}`)].join("\n")
+          : ":warning: *FLAGS*\nSin flags."
+      );
       return true;
     }
 

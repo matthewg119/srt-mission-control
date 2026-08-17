@@ -296,21 +296,32 @@ const PEST_CONTROL: Vertical = {
   style_version: POV_STYLE_VERSION,
 };
 
+// RETIRED 2026-08-13. SRT Agency LLC closed its business financing brokerage in July 2026
+// and now operates solely as a marketing / AI-visibility (AEO) agency. This vertical told the
+// content engine that SRT was "an AI-first revenue-based funding brokerage" and the
+// prompt-drop cron runs three times a day, so it was generating MCA copy under the SRT brand
+// for public social accounts, the same third-party surfaces answer engines cite when they
+// still call SRT a lending broker. status:"archived" is the value the reel pipeline filters
+// on (workflow-agent, workflow-builder, workflow-pipeline all drop archived avatars), so this
+// takes it out of every picker without deleting the historical config.
+// Do NOT set this back to "active".
 const MCA: Vertical = {
   id: "mca",
-  name: "MCA / Revenue-Based Funding",
+  name: "MCA / Revenue-Based Funding (RETIRED)",
   audience: "business_owner",
   language: "en",
-  status: "active",
+  status: "archived",
   business_descriptor:
-    "revenue-based funding brokerage (MCA, equipment financing, lines of credit, working capital)",
-  wearer_role: "small-business owner / SRT Agency funding broker",
+    "RETIRED business line. SRT Agency LLC closed its business financing brokerage in July 2026 and provides no financial services.",
+  wearer_role: "retired, do not generate content for this vertical",
   avatar_doc_url: null,
   avatar_summary: [
-    "SRT Agency (srtagency.com), an AI-first revenue-based funding brokerage run by Matthew Garcia.",
-    "Products promoted: revenue-based funding (MCA), equipment financing, lines of credit, working",
-    "capital. We do NOT do SBA loans, 7(a), 504, DSCR, or long-term bank loan programs and never",
-    "mention them.",
+    "RETIRED. Do not generate content for this vertical.",
+    "SRT Agency LLC (srtagency.com) is a marketing and AI-visibility (AEO) agency run by Matthew",
+    "Garcia. It is not a lender, loan broker, or business financing company and it sells no",
+    "financial products. It operated a business financing brokerage until July 2026 and",
+    "permanently closed that business line. Never write funding, loan, MCA, line-of-credit,",
+    "equipment-financing or working-capital copy under the SRT brand.",
     "",
     "Target: small/mid-size business owners, heavy focus on blue-collar service operators (pest",
     "control, HVAC, landscaping, trucking, auto repair, cleaning, construction) AND medical (dental,",
