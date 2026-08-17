@@ -147,15 +147,13 @@ export default function ConversationDetailPage({ params }: { params: Promise<{ i
                 Slack Channel
               </a>
             )}
-            {conv.zoho_lead_id && (
+            {conv.contact_id && (
               <a
-                href={`https://crm.zoho.com/crm/tab/Leads/${conv.zoho_lead_id}`}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={`/dashboard/leads/${conv.contact_id}`}
                 className="flex items-center gap-1 text-xs text-[rgba(255,255,255,0.4)] hover:text-white"
               >
                 <ExternalLink size={10} />
-                Zoho Lead
+                Lead
               </a>
             )}
           </div>

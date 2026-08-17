@@ -111,12 +111,10 @@ export default async function ContactPage({
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
   const vCardUrl = `${baseUrl}/api/vcard/${contactId}`;
-  const zohoUrl = contact.zohoLeadId
-    ? `https://crm.zoho.com/crm/org/leads/view/${contact.zohoLeadId}`
-    : null;
-  const missionUrl = contact.id
-    ? `${baseUrl}/dashboard/pipeline`
-    : null;
+  // Straight to the lead in Mission Control. This used to point at the pipeline board and,
+  // beside it, at Zoho. Zoho is being retired, and the lead itself is what you actually
+  // wanted from a contact card anyway.
+  const missionUrl = contact.id ? `${baseUrl}/dashboard/leads/${contact.id}` : null;
 
   const fullName = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || "Unknown";
   const e164Phone = contact.phone ? normalizePhone(contact.phone) : null;
@@ -209,16 +207,6 @@ export default async function ContactPage({
 
       {/* Secondary actions */}
       <div className="w-full max-w-sm flex gap-3">
-        {zohoUrl && (
-          <a
-            href={zohoUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-[rgba(255,255,255,0.12)] text-[rgba(255,255,255,0.6)] text-sm hover:text-white hover:border-[rgba(255,255,255,0.3)] transition-colors"
-          >
-            Open in Zoho
-          </a>
-        )}
         {missionUrl && (
           <a
             href={missionUrl}

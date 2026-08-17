@@ -2,6 +2,7 @@ import Link from "next/link";
 import { supabaseAdmin } from "@/lib/db";
 import { STAGE_PIPELINES } from "@/config/stage-display";
 import { formatRelativeTime } from "@/lib/utils";
+import { HuntLink } from "@/components/crm/hunt-nav";
 
 export const metadata = { title: "Leads | SRT Mission Control" };
 export const dynamic = "force-dynamic";
@@ -58,6 +59,11 @@ export default async function LeadsPage({
     )
     .neq("working_state", "closed")
     .order("last_activity_at", { ascending: false, nullsFirst: false })
+    // Secondary key so the order is TOTAL. Roughly 7,400 of 8,300 contacts have never
+    // been touched and so share a NULL last_activity_at; without a tiebreaker Postgres
+    // returns those in arbitrary order that can differ between two identical requests,
+    // which makes "the list I was just looking at" a meaningless phrase.
+    .order("id", { ascending: true })
     .limit(200);
 
   if (sp.status) query = query.eq("application_stage", sp.status);
@@ -71,6 +77,16 @@ export default async function LeadsPage({
 
   const { data } = await query;
   const rows = (data ?? []) as unknown as LeadRow[];
+
+  // The hunt queue: this list, in this order, as it stands right now.
+  const queueIds = rows.map((r) => r.id);
+  const queueLabel = sp.q
+    ? `Search: ${sp.q}`
+    : sp.status
+      ? `Leads: ${sp.status}`
+      : sp.unscheduled === "1"
+        ? "Leads with no follow-up"
+        : "All leads";
 
   return (
     <div>
@@ -149,12 +165,17 @@ export default async function LeadsPage({
                 className="border-t border-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.02)]"
               >
                 <td className="px-3 py-2.5">
-                  <Link
-                    href={`/dashboard/leads/${r.id}`}
+                  {/* Freezes this exact list so the next/prev arrows on the lead page
+                      walk it in this order, even after logging a call reshuffles the
+                      underlying query. */}
+                  <HuntLink
+                    id={r.id}
+                    ids={queueIds}
+                    label={queueLabel}
                     className="text-white hover:underline"
                   >
                     {name(r)}
-                  </Link>
+                  </HuntLink>
                   {r.business_name && r.business_name !== name(r) && (
                     <p className="text-[11px] text-[rgba(255,255,255,0.35)]">{r.business_name}</p>
                   )}

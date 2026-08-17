@@ -25,6 +25,7 @@ import { buildReportView, computeWeightedScore, type ReportView, type WeightedSc
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
+import { writeAuditToLead } from "@/lib/audit-engine/lead-writeback";
 import { companiesConflict } from "@/lib/company-identity";
 import { microsoft } from "@/lib/microsoft";
 import { waitUntil } from "@vercel/functions";
@@ -172,6 +173,14 @@ export async function finishReport(row: AuditReportRow): Promise<void> {
     .single();
 
   const finalRow = (updated as AuditReportRow | null) ?? { ...row, status: "done" as const, score: weighted.score };
+
+  // Tell the CRM what the audit learned. Best effort, and a no-op when the report has no
+  // contact_id (every cold /audit). Idempotent on report id, so the watchdog re-finishing
+  // this report cannot double-log.
+  await writeAuditToLead(finalRow, view, weighted.score).catch((e) =>
+    console.error("[finishReport] lead writeback failed:", (e as Error).message)
+  );
+
   if (finalRow.slack_channel_id && finalRow.slack_thread_ts) {
     await slack
       .postThreadReply(finalRow.slack_channel_id, finalRow.slack_thread_ts, formatFinalMessage(finalRow, view))

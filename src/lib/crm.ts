@@ -40,7 +40,12 @@ export type CrmOrigin =
   | "ai"
   | "portal"
   | "import"
-  | "webhook";
+  | "webhook"
+  // An AI visibility audit inferring fields from the live website. Kept distinct from
+  // "ai" because updateLeadFields treats it differently: an audit writes field history
+  // but does NOT log the summary activity, so a scan cannot reorder the worklist.
+  // lead_field_history's check constraint mirrors this union.
+  | "audit_engine";
 
 export function crmMode(): CrmMode {
   const raw = (process.env.CRM_WRITE_MODE || "").trim();
@@ -777,12 +782,29 @@ export async function updateLeadFields(a: {
 
   if (Object.keys(patch).length === 0) return { ok: true };
 
+  // Read BEFORE the write. This is the only moment the old values still exist, and
+  // "the audit overwrote something I typed" is unrecoverable without them.
+  const fields = Object.keys(patch);
+  const { data: before } = await supabaseAdmin
+    .from("contacts")
+    .select(fields.join(", "))
+    .eq("id", a.contactId)
+    .maybeSingle();
+
   const { error } = await supabaseAdmin
     .from("contacts")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("id", a.contactId);
 
   if (error) return { ok: false, error: error.message };
+
+  await recordFieldHistory({
+    contactId: a.contactId,
+    before: (before ?? {}) as Rec,
+    patch,
+    origin: a.origin,
+    actor: a.actor,
+  });
 
   if (pushesToZoho()) {
     const { data: c } = await supabaseAdmin
@@ -812,18 +834,65 @@ export async function updateLeadFields(a: {
     }
   }
 
-  await logActivity({
-    contactId: a.contactId,
-    activityType: "system",
-    direction: "internal",
-    subject: "Fields updated",
-    body: Object.keys(patch).join(", "),
-    actor: a.actor,
-    source: "mission_control",
-    metadata: { fields: Object.keys(patch), origin: a.origin },
-  });
+  // The per-field rows above are the record. This summary activity exists only because
+  // it TOUCHES the lead: inserting into lead_activities fires the trigger that bumps
+  // contacts.last_activity_at and reorders the worklist. A human editing a lead is a
+  // touch and should move it. An audit inferring six fields is not, and letting a scan
+  // shove the call list around every time it ran was the reason field history got its
+  // own table in the first place.
+  if (a.origin !== "audit_engine") {
+    await logActivity({
+      contactId: a.contactId,
+      activityType: "system",
+      direction: "internal",
+      subject: "Fields updated",
+      body: Object.keys(patch).join(", "),
+      actor: a.actor,
+      source: "mission_control",
+      metadata: { fields: Object.keys(patch), origin: a.origin },
+    });
+  }
 
   return { ok: true };
+}
+
+/** Display text for a stored value. Null and empty both read as "empty" upstream. */
+function historyValue(v: unknown): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (Array.isArray(v)) return v.map((x) => String(x)).join(", ");
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/**
+ * One row per field that actually changed.
+ *
+ * Best effort by design, like logActivity: a bookkeeping insert must never be the
+ * reason a field edit or a finished audit reports failure. Unchanged fields are
+ * skipped, so a patch that rewrites the same value produces no history noise.
+ */
+async function recordFieldHistory(a: {
+  contactId: string;
+  before: Rec;
+  patch: Rec;
+  origin: CrmOrigin;
+  actor?: string;
+}): Promise<void> {
+  const rows = Object.entries(a.patch)
+    .map(([field, next]) => ({
+      contact_id: a.contactId,
+      field,
+      old_value: historyValue(a.before?.[field]),
+      new_value: historyValue(next),
+      origin: a.origin,
+      actor: a.actor ?? null,
+    }))
+    .filter((r) => r.old_value !== r.new_value);
+
+  if (rows.length === 0) return;
+
+  const { error } = await supabaseAdmin.from("lead_field_history").insert(rows);
+  if (error) console.error("[crm] field history insert failed:", error.message);
 }
 
 /**

@@ -1015,21 +1015,9 @@ function RealConversationCard({ conv }: { conv: RealConversation }) {
       className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] flex flex-col overflow-hidden"
       style={{ height: "560px" }}
     >
-      {/* Header: lead name (Zoho link if available), read-only */}
+      {/* Header: lead name, read-only */}
       <div className="px-3 py-2.5 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-2">
-        {conv.zoho_lead_id ? (
-          <a
-            href={`https://crm.zoho.com/crm/tab/Leads/${conv.zoho_lead_id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-semibold text-white hover:text-[#00C9A7]"
-          >
-            {conv.display_name}
-            <ExternalLink size={11} className="opacity-60" />
-          </a>
-        ) : (
-          <span className="text-xs font-semibold text-white">{conv.display_name}</span>
-        )}
+        <span className="text-xs font-semibold text-white">{conv.display_name}</span>
         {isDead && (
           <span className="ml-auto text-[9px] uppercase tracking-wider text-[#E74C3C]">Dead</span>
         )}

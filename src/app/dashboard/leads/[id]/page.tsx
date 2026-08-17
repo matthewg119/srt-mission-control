@@ -3,9 +3,14 @@ import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
 import { STAGE_PIPELINES, cadenceFor } from "@/config/stage-display";
 import { formatRelativeTime } from "@/lib/utils";
-import { LeadTimeline, type TimelineActivity } from "@/components/crm/lead-timeline";
+import {
+  LeadTimeline,
+  type TimelineActivity,
+  type TimelineFieldChange,
+} from "@/components/crm/lead-timeline";
 import { LogCallForm } from "@/components/crm/log-call-form";
 import { LeadStatusPicker } from "@/components/crm/status-picker";
+import { HuntNav } from "@/components/crm/hunt-nav";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +95,7 @@ export default async function LeadDetailPage({
 }) {
   const { id } = await params;
 
-  const [leadRes, tasksRes, activityRes] = await Promise.all([
+  const [leadRes, tasksRes, activityRes, fieldRes, auditRes] = await Promise.all([
     supabaseAdmin.from("contacts").select("*").eq("id", id).maybeSingle(),
     supabaseAdmin
       .from("lead_tasks")
@@ -106,6 +111,22 @@ export default async function LeadDetailPage({
       .eq("contact_id", id)
       .order("occurred_at", { ascending: false })
       .limit(200),
+    supabaseAdmin
+      .from("lead_field_history")
+      .select("id, field, old_value, new_value, origin, actor, occurred_at")
+      .eq("contact_id", id)
+      .order("occurred_at", { ascending: false })
+      .limit(200),
+    // Newest finished audit for this lead. Only reports that were linked to a contact
+    // appear here: a cold /audit from Slack has no contact_id and no lead to attach to.
+    supabaseAdmin
+      .from("audit_reports")
+      .select("id, slug, score, city, business_type, vertical_slug, competitors, created_at")
+      .eq("contact_id", id)
+      .eq("status", "done")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   if (!leadRes.data) notFound();
@@ -113,6 +134,8 @@ export default async function LeadDetailPage({
   const lead = leadRes.data as Record<string, unknown>;
   const tasks = (tasksRes.data ?? []) as unknown as Task[];
   const activities = (activityRes.data ?? []) as unknown as TimelineActivity[];
+  const fieldChanges = (fieldRes.data ?? []) as unknown as TimelineFieldChange[];
+  const audit = auditRes.data as Record<string, unknown> | null;
 
   const status = (lead.application_stage as string | null) ?? null;
   const displayName =
@@ -150,22 +173,60 @@ export default async function LeadDetailPage({
           </div>
         </div>
 
-        {/* Kept while the Zoho mirror is still running. Goes away in Phase 6. */}
-        {typeof lead.zoho_lead_id === "string" && lead.zoho_lead_id && (
-          <a
-            href={`https://crm.zoho.com/crm/org/tab/Leads/${lead.zoho_lead_id}`}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-lg border border-[rgba(255,255,255,0.1)] px-3 py-1.5 text-[11px] text-[rgba(255,255,255,0.4)] hover:text-white"
-          >
-            Open in Zoho
-          </a>
-        )}
+        {/* Zoho is being retired, so its link is gone. This slot is now for working
+            through a list one lead at a time. Renders nothing unless you arrived from
+            one of the list pages. */}
+        <HuntNav currentId={id} />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[300px_1fr_280px]">
         {/* Left — the record */}
         <div className="space-y-4">
+          {/* What the AI visibility audit found. First card, because it is the reason
+              to call: it is the only thing here that says what is wrong today. */}
+          {audit && (
+            <div className="rounded-xl border border-[rgba(0,201,167,0.25)] bg-[rgba(0,201,167,0.05)] p-3">
+              <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+                AI visibility
+              </p>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-medium text-[#00C9A7]">
+                  {(audit.score as number | null) ?? "—"}
+                </span>
+                <span className="text-[11px] text-[rgba(255,255,255,0.4)]">out of 100</span>
+              </div>
+              <dl className="mt-2 space-y-1.5">
+                {[
+                  ["Read as", audit.business_type],
+                  ["City", audit.city],
+                  [
+                    "Competitors",
+                    Array.isArray(audit.competitors)
+                      ? (audit.competitors as string[]).slice(0, 3).join(", ")
+                      : null,
+                  ],
+                  ["Scanned", new Date(audit.created_at as string).toLocaleDateString()],
+                ].map(([label, value]) => (
+                  <div key={label as string} className="flex justify-between gap-3 text-[11px]">
+                    <dt className="shrink-0 text-[rgba(255,255,255,0.35)]">{label as string}</dt>
+                    <dd className="truncate text-right text-[rgba(255,255,255,0.75)]">
+                      {fmt(value)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              {typeof audit.slug === "string" && (
+                <Link
+                  href={`/r/${audit.slug}`}
+                  target="_blank"
+                  className="mt-2.5 block rounded-lg border border-[rgba(0,201,167,0.3)] py-1.5 text-center text-[11px] text-[#00C9A7] hover:bg-[rgba(0,201,167,0.1)]"
+                >
+                  Open the report
+                </Link>
+              )}
+            </div>
+          )}
+
           {FIELD_GROUPS.map((g) => (
             <div
               key={g.title}
@@ -199,7 +260,7 @@ export default async function LeadDetailPage({
             <p className="mb-3 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
               History · {activities.length}
             </p>
-            <LeadTimeline activities={activities} />
+            <LeadTimeline activities={activities} fieldChanges={fieldChanges} />
           </div>
         </div>
 
