@@ -40,13 +40,13 @@ function escapeHtml(text: string): string {
 const INTAKE_LINE = guard(
   "welcome intake line",
   "It's about ten minutes: your business details exactly as they should appear everywhere, " +
-    "your treatments, who you most want walking in, and how you currently ask for reviews. " +
+    "what you offer, who you most want walking in, and how you currently ask for reviews. " +
     "When you're done we'll send you times for our call."
 );
 
 const CALL_LINE = guard(
   "welcome call line",
-  "On the call I'll show you exactly where the AI is naming other clinics in your city " +
+  "On the call I'll show you exactly where the AI is naming other businesses in your city " +
     "instead of you, then we get set up. About an hour, you drive your own accounts, " +
     "I never touch a password."
 );
@@ -88,7 +88,6 @@ export async function sendPilotWelcome({
   </div>
   <div style="background:#f5f5f5;padding:16px 24px;text-align:center;font-size:12px;color:#888888">
     <p style="margin:0">SRT Agency LLC, Search Retrieval Tactics</p>
-    <p style="margin:8px 0 0">Nothing here is medical advice.</p>
   </div>
 </div>
   `;

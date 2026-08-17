@@ -53,13 +53,20 @@ export interface StepDef {
   fields: FieldDef[];
 }
 
+// Google first and always: it is the one universal destination, and the save route
+// special-cases it as the default primary. The rest are a menu, not a taxonomy. The
+// vertical-specific ones stay in the list rather than being branched on, because a
+// hardcoded `if (vertical === ...)` is the thing the audit engine explicitly forbids
+// itself and there is no reason for this file to be less disciplined.
 export const REVIEW_DESTINATIONS = [
   "Google",
-  "RealSelf",
-  "Yelp",
   "Facebook",
+  "Yelp",
+  "BBB",
+  "RealSelf",
   "Healthgrades",
   "Trustpilot",
+  "Industry directory (tell us which)",
   "Other",
 ];
 
@@ -101,22 +108,22 @@ export const INTAKE_STEPS: StepDef[] = [
         label: "Everything you offer, in your own words",
         kind: "textarea",
         required: true,
-        help: "Not marketing copy. The words you would use with a patient.",
+        help: "Not marketing copy. The words you would use with a customer.",
       },
       {
         key: "service_area",
         label: "Service area",
         kind: "textarea",
         required: true,
-        placeholder: "In clinic only, or the towns people drive from",
+        placeholder: "On site only, or the towns you travel to",
       },
-      { key: "payment_types", label: "Insurance and payment types accepted", kind: "textarea" },
+      { key: "payment_types", label: "Payment types accepted", kind: "textarea" },
       {
         key: "credentials",
-        label: "Provider credentials",
+        label: "Credentials and experience",
         kind: "textarea",
         required: true,
-        help: "Degrees, licenses, board certifications, years practicing.",
+        help: "Licenses, certifications, insurance, awards, years in business.",
       },
       {
         key: "competitors",
@@ -137,7 +144,7 @@ export const INTAKE_STEPS: StepDef[] = [
     fields: [
       {
         key: "target",
-        label: "What type of patient do you want to attract?",
+        label: "What type of customer do you want to attract?",
         kind: "textarea",
         required: true,
         help: "Describe them like a person, not a demographic.",
@@ -159,7 +166,7 @@ export const INTAKE_STEPS: StepDef[] = [
       },
       {
         key: "tried_before",
-        label: "What does a patient usually try before they come to you?",
+        label: "What does a customer usually try before they come to you?",
         kind: "textarea",
       },
     ],
@@ -188,16 +195,16 @@ export const INTAKE_STEPS: StepDef[] = [
         label: "Who asks?",
         kind: "select",
         required: true,
-        options: ["Owner", "Front desk", "Provider", "Automated", "Nobody"],
+        options: ["Owner", "Front desk", "Whoever did the work", "Automated", "Nobody"],
       },
       {
         key: "when",
-        label: "When in the visit?",
+        label: "When in the job or visit?",
         kind: "select",
         required: true,
         options: [
-          "During the visit",
-          "At checkout",
+          "During the job",
+          "At checkout or on completion",
           "Same day, after",
           "Days later",
           "No set time",
@@ -208,10 +215,10 @@ export const INTAKE_STEPS: StepDef[] = [
         // PILOT §6: separate from the review tool question, deliberately. This is where
         // the automated request will eventually live (D-P8), so it is not optional.
         key: "booking_software",
-        label: "What booking or patient messaging software do you use?",
+        label: "What booking, scheduling or customer messaging software do you use?",
         kind: "text",
         required: true,
-        help: "The system your front desk actually lives in.",
+        help: "The system your front desk or dispatcher actually lives in.",
       },
       { key: "volume", label: "Roughly how many requests per month?", kind: "text" },
       {
@@ -232,7 +239,7 @@ export const INTAKE_STEPS: StepDef[] = [
       },
       {
         key: "lobby_tablet",
-        label: "Is there a tablet or QR code in the lobby for reviews?",
+        label: "Is there a tablet or QR code in the lobby, or on the invoice, for reviews?",
         kind: "yesno",
         required: true,
       },
@@ -253,7 +260,7 @@ export const INTAKE_STEPS: StepDef[] = [
     bag: "access_inventory",
     fields: [
       { key: "gbp", label: "Google Business Profile, and who manages it", kind: "text", required: true },
-      { key: "yelp", label: "Yelp business account", kind: "text" },
+      { key: "yelp", label: "Yelp, or your main industry directory account", kind: "text" },
       { key: "registrar", label: "Domain registrar", kind: "text", required: true },
       { key: "platform", label: "Website platform, and who built it", kind: "text", required: true },
       { key: "analytics", label: "Google Analytics or Search Console", kind: "text" },
@@ -267,7 +274,7 @@ export const INTAKE_STEPS: StepDef[] = [
   },
   {
     step: 6,
-    title: guard("step6 title", "Permission, and the language your patients read"),
+    title: guard("step6 title", "Permission, and the language your customers read"),
     fields: [
       {
         key: "consent_results",
@@ -276,20 +283,20 @@ export const INTAKE_STEPS: StepDef[] = [
         required: true,
         help: guard(
           "consent help",
-          "We would like to use your results to show other clinic owners what this looks like."
+          "We would like to use your results to show other business owners what this looks like."
         ),
         options: [
           guard(
             "consent anonymized",
-            "Anonymized: city and treatment, no clinic name, no screenshots that identify you"
+            "Anonymized: city and industry, no business name, no screenshots that identify you"
           ),
-          guard("consent named", "Named: clinic name, city, screenshots"),
+          guard("consent named", "Named: business name, city, screenshots"),
           guard("consent none", "Neither, please do not use my results"),
         ],
       },
       {
         key: "language",
-        label: "Language for your patients' review tool",
+        label: "Language for your customers' review tool",
         kind: "select",
         required: true,
         options: ["English", "Spanish", "Both"],
@@ -325,7 +332,7 @@ export const COMPLETION_COPY = {
   heading: guard("completion heading", "Thanks. That is everything we need."),
   body: guard(
     "completion body",
-    "Before we talk, we run the questions patients in your city ask an AI, and write down who gets named. " +
+    "Before we talk, we run the questions people in your city ask an AI, and write down who gets named. " +
       "On the call you will see it. Then we build. First pages are live within two weeks, and every month " +
       "you get the same questions re-run and a short video of what moved."
   ),

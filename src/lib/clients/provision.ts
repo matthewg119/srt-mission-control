@@ -204,7 +204,7 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   }
 
   if (!clientId) {
-    return { ok: false, error: "Could not find a free channel name for this clinic." };
+    return { ok: false, error: "Could not find a free channel name for this business." };
   }
 
   // The cap is checked against clients that already existed, so a re-click on an
@@ -423,7 +423,7 @@ async function linkToCrm(
   }
 ): Promise<void> {
   const headline = `:seedling: Pilot started: ${who.legalName}`;
-  const detailLines = [`Clinic website: ${who.website}`, `Client: ${clientId}`];
+  const detailLines = [`Website: ${who.website}`, `Client: ${clientId}`];
 
   const enriched = await enrichLead({
     email: who.email,

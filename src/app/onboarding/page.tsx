@@ -134,7 +134,7 @@ export default async function OnboardingPage({
     <Shell>
       <OnboardingFunnel
         token={t as string}
-        clinicName={(client.dba_name as string) || (client.legal_name as string)}
+        businessName={(client.dba_name as string) || (client.legal_name as string)}
         initialValues={initial}
         startStep={done ? 0 : Math.min(savedStep + 1, INTAKE_STEPS.length)}
         alreadyComplete={done}

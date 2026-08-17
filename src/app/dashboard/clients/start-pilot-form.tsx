@@ -136,7 +136,7 @@ export function StartPilotForm() {
       <div className="grid gap-3 sm:grid-cols-2">
         {field("Legal business name", "legalName", { required: true })}
         {field("Public facing name", "dbaName")}
-        {field("Website", "website", { required: true, placeholder: "clinic.com" })}
+        {field("Website", "website", { required: true, placeholder: "business.com" })}
         {field("Owner email", "email", { required: true })}
         {field("Owner first name", "contactFirstName")}
         {field("Phone", "phone")}
@@ -149,7 +149,7 @@ export function StartPilotForm() {
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
         {field("Market center latitude", "marketCenterLat", {
           placeholder: "30.2672",
-          help: "Right-click the clinic in Google Maps.",
+          help: "Right-click the business in Google Maps.",
         })}
         {field("Market center longitude", "marketCenterLng", { placeholder: "-97.7431" })}
         {field("Radius, miles", "marketRadiusMi")}
@@ -172,7 +172,7 @@ export function StartPilotForm() {
           </option>
         </select>
         <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.3)]">
-          Sets delivery volume so hours can be measured. Never shown to the clinic.
+          Sets delivery volume so hours can be measured. Never shown to the client.
         </p>
       </div>
 
