@@ -85,8 +85,8 @@ function LeadCard({ lead }: { lead: WorklistItem }) {
                 {lead.status}
               </span>
             )}
-            {money(lead.amountNeeded) && (
-              <span className="text-[rgba(255,255,255,0.45)]">{money(lead.amountNeeded)}</span>
+            {lead.website && (
+              <span className="text-[rgba(255,255,255,0.45)]">{lead.website}</span>
             )}
             {lead.daysSinceActivity !== null && (
               <span className="text-[rgba(255,255,255,0.35)]">

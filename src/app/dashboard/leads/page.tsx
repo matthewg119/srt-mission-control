@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { supabaseAdmin } from "@/lib/db";
-import { STAGE_PIPELINES } from "@/config/stage-display";
+import { ALL_STAGES, stageColor } from "@/config/stage-display";
 import { formatRelativeTime } from "@/lib/utils";
 
 export const metadata = { title: "Leads | SRT Mission Control" };
@@ -21,22 +21,10 @@ interface LeadRow {
   application_stage: string | null;
   working_state: string | null;
   source: string | null;
-  amount_needed: number | null;
   last_activity_at: string | null;
   next_action_at: string | null;
   next_action_reason: string | null;
   open_task_count: number | null;
-}
-
-const ALL_STAGES = STAGE_PIPELINES.flatMap((p) => p.stages);
-
-function stageColor(stage: string | null): string {
-  return ALL_STAGES.find((s) => s.name === stage)?.color ?? "#9CA3AF";
-}
-
-function money(n: number | null): string {
-  if (n === null || n === undefined) return "—";
-  return n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
 }
 
 function name(r: LeadRow): string {
@@ -54,7 +42,7 @@ export default async function LeadsPage({
   let query = supabaseAdmin
     .from("contacts")
     .select(
-      "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, amount_needed, last_activity_at, next_action_at, next_action_reason, open_task_count"
+      "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, last_activity_at, next_action_at, next_action_reason, open_task_count"
     )
     .neq("working_state", "closed")
     .order("last_activity_at", { ascending: false, nullsFirst: false })
@@ -137,7 +125,7 @@ export default async function LeadsPage({
             <tr>
               <th className="px-3 py-2.5">Lead</th>
               <th className="px-3 py-2.5">Status</th>
-              <th className="px-3 py-2.5">Ask</th>
+              <th className="px-3 py-2.5">Source</th>
               <th className="px-3 py-2.5">Last touch</th>
               <th className="px-3 py-2.5">Next follow-up</th>
             </tr>
@@ -170,8 +158,8 @@ export default async function LeadsPage({
                     {r.application_stage ?? "—"}
                   </span>
                 </td>
-                <td className="px-3 py-2.5 text-[rgba(255,255,255,0.6)]">
-                  {money(r.amount_needed)}
+                <td className="px-3 py-2.5 text-[rgba(255,255,255,0.45)]">
+                  {r.source ?? "—"}
                 </td>
                 <td className="px-3 py-2.5 text-[rgba(255,255,255,0.45)]">
                   {r.last_activity_at ? formatRelativeTime(r.last_activity_at) : "never"}

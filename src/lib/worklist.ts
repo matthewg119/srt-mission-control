@@ -67,7 +67,7 @@ export interface WorklistItem {
   nextActionReason: string | null;
   openTasks: WorklistTask[];
   lastNote: { title: string | null; body: string | null; occurredAt: string } | null;
-  amountNeeded: number | null;
+  website: string | null;
 }
 
 export interface WorklistOptions {
@@ -104,16 +104,14 @@ const CANDIDATE_COLS = [
   "next_action_at",
   "next_action_reason",
   "open_task_count",
-  "amount_needed",
-  "monthly_revenue",
+  "website",
+  "industry",
   "created_at",
   // NOTE: only columns present in CONTACT_FIELD_MAP (or created by
   // docs/2026-08-17-crm-core.sql) are safe to select here. PostgREST fails the
   // WHOLE query on one unknown column, so an optimistic guess takes the call
   // board down. `application_signed_at` was such a guess and is NOT a real
-  // column — use the portal funnel flags instead.
-  "portal_app_completed",
-  "portal_statements_uploaded",
+  // column.
 ].join(", ");
 
 export interface WorklistCandidateRow {
@@ -135,11 +133,9 @@ export interface WorklistCandidateRow {
   next_action_at: string | null;
   next_action_reason: string | null;
   open_task_count: number | null;
-  amount_needed: number | null;
-  monthly_revenue: number | null;
+  website: string | null;
+  industry: string | null;
   created_at: string | null;
-  portal_app_completed: boolean | null;
-  portal_statements_uploaded: boolean | null;
 }
 
 const MS_HOUR = 3_600_000;
@@ -163,11 +159,6 @@ const isSameDay = isSameBusinessDay;
 function displayName(r: WorklistCandidateRow): string {
   const n = [r.first_name, r.last_name].filter(Boolean).join(" ").trim();
   return n || r.business_name || r.email || "Unknown lead";
-}
-
-function money(n: number | null): string {
-  if (n === null || n === undefined) return "";
-  return n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
 }
 
 function plural(n: number, word: string): string {
@@ -212,11 +203,7 @@ export function scoreLead(
     return { score: -1000, reasons: ["do not contact"], bucket: "unscheduled", eligible: false };
   }
   if (r.working_state === "closed" || isDeadStage(r.application_stage)) {
-    // Deal Lost is revived on a cadence rather than dropped, so it is handled
-    // below as a normal cadence lead. Everything else genuinely stops here.
-    if (r.application_stage !== "Deal Lost") {
-      return { score: -1000, reasons: ["closed"], bucket: "unscheduled", eligible: false };
-    }
+    return { score: -1000, reasons: ["closed"], bucket: "unscheduled", eligible: false };
   }
   if (r.snoozed_until && new Date(r.snoozed_until) > now && !opts.includeSnoozed) {
     return {
@@ -309,23 +296,17 @@ export function scoreLead(
   }
 
   // ── Modifiers ───────────────────────────────────────────────────────
+  // The funding-era modifiers are gone with the funding business: a $100k+
+  // `amount_needed` and "signed the app but sent no statements" both described
+  // an MCA deal, not an AEO prospect, and both would have quietly kept ranking
+  // the call board by how much money someone once asked us for.
   if (r.application_stage && HOT_STAGES.includes(r.application_stage)) {
     score += 25;
-    reasons.push(`${r.application_stage} — money on the table`);
+    reasons.push(`${r.application_stage} — live conversation`);
   }
-  if ((r.amount_needed ?? 0) >= 100_000) {
-    score += 10;
-    reasons.push(`${money(r.amount_needed)} ask`);
-  }
-  if (r.portal_app_completed && !r.portal_statements_uploaded) {
-    score += 10;
-    reasons.push("finished the app, no statements yet");
-  }
-  if (r.application_stage === "Deal Lost") {
-    const d = daysSince(r.last_activity_at ?? r.created_at, now) ?? 0;
-    if (d < 7) return { score: 0, reasons: [], bucket, eligible: false };
-    score += 12;
-    reasons.push(`lost ${plural(Math.floor(d), "day")} ago — revival window`);
+  if (!r.website) {
+    score += 6;
+    reasons.push("no website on file — worth asking what they have");
   }
 
   // ── Tie-breakers ────────────────────────────────────────────────────
@@ -367,10 +348,9 @@ function tieBreakers(r: WorklistCandidateRow, reasons: string[]): number {
   else if (ageDays <= 90) bonus += 2;
   else if (ageDays > 365) bonus -= 4;
 
-  // Any stated ask at all beats none — it means a real conversation happened
-  // somewhere. The >= $100k modifier above handles the large end separately.
-  if ((r.amount_needed ?? 0) > 0) bonus += 2;
-  if ((r.monthly_revenue ?? 0) > 0) bonus += 2;
+  // A known industry means we can say something specific about how their
+  // customers search, which is the whole pitch.
+  if (r.industry) bonus += 2;
 
   // An email gives a second channel when the call goes to voicemail.
   if (r.email) bonus += 1;
@@ -585,7 +565,7 @@ export async function buildWorklist(
     nextActionReason: row.next_action_reason,
     openTasks: tasks.get(row.id) ?? [],
     lastNote: notes.get(row.id) ?? null,
-    amountNeeded: row.amount_needed,
+    website: row.website,
   }));
 }
 

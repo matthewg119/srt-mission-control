@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { STAGE_NAMES } from "@/config/stage-display";
 import { MessageSquare, Play, Pause, Plus, Upload, Users, RefreshCw, AlertTriangle } from "lucide-react";
 
 interface Campaign {
@@ -389,7 +390,7 @@ function NewCampaignModal({
                       onChange={(e) => setZohoStage(e.target.value)}
                       className="bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg px-3 py-2 text-white text-sm focus:outline-none"
                     >
-                      {["New", "Contacted", "Not Contacted", "Lost Lead", "Pre-Approved"].map((s) => (
+                      {STAGE_NAMES.map((s) => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>

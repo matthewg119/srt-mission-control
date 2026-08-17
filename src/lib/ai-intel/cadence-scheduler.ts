@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/lib/db";
-import type { MerchantContext } from "./merchant-context";
+import type { LeadContext } from "./lead-context";
 import type { MarketingCampaignKey, CadenceTrack } from "./types";
 
 // ── New-lead cadence ─────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ function campaignKeyForTrack(track: CadenceTrack, day: number): MarketingCampaig
   return "confirmation_daily";
 }
 
-export function decideCadence(ctx: MerchantContext): CadenceDecision {
+export function decideCadence(ctx: LeadContext): CadenceDecision {
   // No cadence row yet → first touch, Day 1 sequence 1.
   const now = Date.now();
   if (!ctx.cadence) {

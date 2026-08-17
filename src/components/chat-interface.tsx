@@ -95,16 +95,14 @@ const SUGGESTION_CHIPS = [
   { label: "Log a call", prompt: "Log a call with ", category: "Worklist" },
 
   { label: "Pipeline overview", prompt: "Give me a full pipeline overview", category: "Pipeline" },
-  { label: "Who has Pending Stips?", prompt: "Who currently has Pending Stips?", category: "Pipeline" },
-  { label: "Stale deals", prompt: "Which deals have been stale for more than 3 days?", category: "Pipeline" },
+  { label: "Who's negotiating?", prompt: "Which leads are at Negotiating / Follow-up?", category: "Pipeline" },
+  { label: "Pitched, no reply", prompt: "Which leads are at Email Pitch and haven't replied?", category: "Pipeline" },
   { label: "New leads today", prompt: "Show me new leads from the last 24 hours", category: "Pipeline" },
   { label: "Recent activity", prompt: "Show me recent activity", category: "Activity" },
   { label: "Find a contact", prompt: "Look up contact: ", category: "Contacts" },
-  { label: "View lenders", prompt: "Show me all lenders", category: "Lenders" },
-  { label: "MCA lenders", prompt: "What lenders do we have for MCA / Working Capital?", category: "Lenders" },
   { label: "Send SMS", prompt: "Send an SMS to ", category: "Actions" },
-  { label: "Move a deal", prompt: "Move deal for ", category: "Actions" },
-  { label: "Add a note", prompt: "Add a note to the deal for ", category: "Actions" },
+  { label: "Change a stage", prompt: "Set the stage for ", category: "Actions" },
+  { label: "Add a note", prompt: "Add a note to ", category: "Actions" },
   { label: "Enroll in sequence", prompt: "Enroll contact in sequence: ", category: "Actions" },
 ];
 

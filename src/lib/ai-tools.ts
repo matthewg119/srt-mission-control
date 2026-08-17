@@ -1,9 +1,6 @@
 import { supabaseAdmin } from "./db";
 import { microsoft } from "./microsoft";
 import { renderTemplate, type TemplateContext } from "./template-renderer";
-import { STAGE_PIPELINES } from "@/config/stage-display";
-import { sendEvent } from "./meta-capi";
-import { analyzeBankStatements } from "./ai-intel/bank-statement-analyzer";
 import { normalizePhone } from "./phone";
 import { slack } from "./slack-bot";
 import { cancelPendingSuggestion } from "./imessage-suggestion";
@@ -19,70 +16,6 @@ export interface ToolExecutionResult {
 
 // Tool definitions for the Anthropic API
 const BASE_TOOLS = [
-  {
-    name: "get_pipeline_overview",
-    description:
-      "Get an overview of all deals across both pipelines (New Deals and Active Deals). Returns deal counts per stage, total values, and stale deals. Use this when asked about pipeline status, how many deals we have, or general business health.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [] as string[],
-    },
-  },
-  {
-    name: "get_deals_in_stage",
-    description:
-      "Get all deals in a specific pipeline stage. Returns deal details including contact name, business name, amount, and days in stage. Use when asked about specific stage status like 'who has Pending Stips?' or 'show me In Funding deals'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        stage: {
-          type: "string",
-          description:
-            "The stage name, e.g. 'Open - Not Contacted', 'Working - Contacted', 'Converted', 'Underwriting', 'Shopping', 'Pre-Approved', 'Approved', 'VC / DL', 'Contracts Out', 'Contracts In', 'Pending Stips', 'Funding Call', 'In Funding', 'Closed', 'Deal Lost'",
-        },
-        pipeline: {
-          type: "string",
-          description: "Pipeline name: 'New Deals' or 'Active Deals'. Optional — if not provided, searches both.",
-        },
-      },
-      required: ["stage"],
-    },
-  },
-  {
-    name: "search_deals",
-    description:
-      "Search for deals by contact name or business name. Use when asked about a specific client or business.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        query: {
-          type: "string",
-          description: "Search term — will match against contact name and business name",
-        },
-      },
-      required: ["query"],
-    },
-  },
-  {
-    name: "move_deal",
-    description:
-      "Move a deal to a different stage. Use when asked to update a deal's stage, like 'move John to Approved' or 'advance Smith Construction to Contracts Out'. ALWAYS confirm with the user before executing this.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        deal_id: {
-          type: "string",
-          description: "The deal ID to move",
-        },
-        new_stage: {
-          type: "string",
-          description: "The target stage name",
-        },
-      },
-      required: ["deal_id", "new_stage"],
-    },
-  },
   {
     name: "send_sms",
     description:
@@ -213,7 +146,7 @@ const BASE_TOOLS = [
   {
     name: "get_contact_profile",
     description:
-      "Get a complete contact dossier: contact details, open deals, active email sequences, and recent notes. Use when asked to 'show me [name]', 'pull up [business]', or 'what's the file on [contact]'.",
+      "Get a complete contact dossier: contact details, active email sequences, and recent timeline. Use when asked to 'show me [name]', 'pull up [business]', or 'what's the file on [contact]'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -223,123 +156,6 @@ const BASE_TOOLS = [
         },
       },
       required: ["query"],
-    },
-  },
-  {
-    name: "add_deal_note",
-    description:
-      "Add a note to a deal or contact. Use when asked to 'make a note', 'log that [client] said...', or 'add a note to [deal]'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        contact_id: { type: "string", description: "Contact ID" },
-        note: { type: "string", description: "The note content to add" },
-        deal_id: { type: "string", description: "Optional: deal ID to associate with" },
-      },
-      required: ["contact_id", "note"],
-    },
-  },
-  {
-    name: "get_deal_notes",
-    description:
-      "Get notes for a contact or deal. Use when asked 'what notes do we have on [contact]' or 'show me the history for [deal]'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        contact_id: { type: "string", description: "Contact ID" },
-        deal_id: { type: "string", description: "Optional: filter to a specific deal" },
-      },
-      required: ["contact_id"],
-    },
-  },
-  {
-    name: "get_lenders",
-    description:
-      "Look up funders/lenders in the database, including their UNDERWRITING criteria. Each funder carries an `underwriting_box` (min monthly deposits/revenue, time-in-business, max amount, positions funded, blocked industries, NSF/negative-day tolerance, factor/buy-sell rate range) plus the email(s) we submit to (To + CC) and a link to their full guideline PDF when on file. " +
-      "Use this for: 'who funds equipment deals', 'find a lender for [situation]', 'what lenders do we have', 'show me Tier 1 lenders', 'which lenders accept portal submissions', AND for underwriting questions like 'what's the box / underwriting for Legend?', 'what does VOX require?', 'which funders take a 3rd position under $30k/mo?', 'who accepts trucking?', or 'pull up Hunter's guidelines' (return the guideline_pdf_url link). " +
-      "Pass `name` for a specific funder, or `filter`/`tier`/`submission_method` to narrow a list.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        name: {
-          type: "string",
-          description: "Optional: a specific funder/lender name (or part of it) to look up, e.g. 'Legend', 'VOX', 'Hunter'.",
-        },
-        filter: {
-          type: "string",
-          description: "Optional: product type, industry, minimum credit score, or keyword to filter lenders (matches name, notes, underwriting box, blocked industries, and products)",
-        },
-        tier: {
-          type: "number",
-          description: "Optional: filter by tier (1 = A paper/best rates, 2 = B paper/moderate, 3 = high risk/last resort)",
-        },
-        submission_method: {
-          type: "string",
-          description: "Optional: filter by submission method — 'email', 'portal', or 'both'",
-        },
-      },
-      required: [] as string[],
-    },
-  },
-  {
-    name: "underwrite_deal",
-    description:
-      "Analyze a deal and generate an SOS (Statement of Scenario). Automatically fetches and reads bank statement PDFs from OneDrive (Deals/{merchant}/Bank Statements/). Use when asked to 'underwrite [deal]', 'analyze [business]', 'create SOS for [contact]', or 'run underwriting on [deal]'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        deal_id: {
-          type: "string",
-          description: "The deal ID to underwrite",
-        },
-        additional_context: {
-          type: "string",
-          description: "Optional: supplementary notes to include alongside the automatic bank statement analysis",
-        },
-      },
-      required: ["deal_id"],
-    },
-  },
-  {
-    name: "match_lenders",
-    description:
-      "Given a deal's profile, return a ranked list of matching lenders from the database. Filters by credit score, revenue, product type, industry, amount, and TIB. Ranks by tier (Tier 1 first). Use when asked 'which lenders fit this deal', 'match lenders for [business]', or 'who should we submit to'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        deal_id: {
-          type: "string",
-          description: "The deal ID to match lenders against",
-        },
-        product_type: {
-          type: "string",
-          description: "Optional: specific product type to match (e.g. 'Working Capital', 'Line of Credit')",
-        },
-      },
-      required: ["deal_id"],
-    },
-  },
-  {
-    name: "submit_to_lender",
-    description:
-      "Create an email submission draft to a lender for a deal. Uses the latest SOS document to compose the email. Creates a draft in email_drafts for user approval before sending. Use when asked to 'submit [deal] to [lender]' or 'send this deal to [lender]'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        deal_id: {
-          type: "string",
-          description: "The deal ID",
-        },
-        lender_id: {
-          type: "string",
-          description: "The lender UUID from the lenders table",
-        },
-        custom_notes: {
-          type: "string",
-          description: "Optional: additional notes for the submission email",
-        },
-      },
-      required: ["deal_id", "lender_id"],
     },
   },
   {
@@ -354,33 +170,10 @@ const BASE_TOOLS = [
         contact_name: { type: "string" },
         sequence_slug: {
           type: "string",
-          description: "Sequence slug: 'website-lead-nurture', 'application-completed-nurture', 'application-abandoned', or 'website-lead-to-application'",
+          description: "Sequence slug. Call get_sequences first if you are not sure which ones exist.",
         },
       },
       required: ["contact_id", "contact_email", "contact_name", "sequence_slug"],
-    },
-  },
-  {
-    name: "search_lender_emails",
-    description:
-      "Search the inbox for lender responses, approvals, or declines related to a specific deal or merchant. Use when asked 'check lender emails for [merchant]', 'did we hear back from [lender]?', or 'any approvals for [deal]?'. Searches the Microsoft 365 inbox and returns matching emails with subject, sender, date, and preview.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        merchant_name: {
-          type: "string",
-          description: "The business or merchant name to search for in emails",
-        },
-        lender_name: {
-          type: "string",
-          description: "Optional: specific lender name to narrow the search",
-        },
-        days_back: {
-          type: "number",
-          description: "How many days back to search. Default 14.",
-        },
-      },
-      required: ["merchant_name"],
     },
   },
 ];
@@ -403,17 +196,7 @@ export async function executeTool(
   if (CRM_TOOL_NAMES.has(toolName)) return executeCrmTool(toolName, input);
   try {
     let content: string;
-    // Support both old opportunity_id and new deal_id parameter names
-    const dealId = (input.deal_id || input.opportunity_id) as string | undefined;
     switch (toolName) {
-      case "get_pipeline_overview":
-        content = await getPipelineOverview(); break;
-      case "get_deals_in_stage":
-        content = await getDealsInStage(input.stage as string, input.pipeline as string | undefined); break;
-      case "search_deals":
-        content = await searchDeals(input.query as string); break;
-      case "move_deal":
-        content = await moveDeal(dealId as string, input.new_stage as string); break;
       case "send_sms":
         content = await sendSms(input.contact_id as string, input.message as string); break;
       case "schedule_followup":
@@ -428,22 +211,8 @@ export async function executeTool(
         content = await getRecentActivity((input.limit as number) || 20); break;
       case "get_contact_profile":
         content = await getContactProfile(input.query as string); break;
-      case "add_deal_note":
-        content = await addDealNote(input.contact_id as string, input.note as string, (input.deal_id || input.opportunity_id) as string | undefined); break;
-      case "get_deal_notes":
-        content = await getDealNotes(input.contact_id as string, (input.deal_id || input.opportunity_id) as string | undefined); break;
-      case "get_lenders":
-        content = await getLenders(input.filter as string | undefined, input.tier as number | undefined, input.submission_method as string | undefined, input.name as string | undefined); break;
-      case "underwrite_deal":
-        content = await underwriteDeal(dealId as string, input.additional_context as string | undefined); break;
-      case "match_lenders":
-        content = await matchLenders(dealId as string, input.product_type as string | undefined); break;
-      case "submit_to_lender":
-        content = await submitToLender(dealId as string, input.lender_id as string, input.custom_notes as string | undefined); break;
       case "enroll_in_sequence":
         content = await enrollInSequence(input.contact_id as string, input.contact_email as string, input.contact_name as string, input.sequence_slug as string); break;
-      case "search_lender_emails":
-        content = await searchLenderEmails(input.merchant_name as string, input.lender_name as string | undefined, (input.days_back as number) || 14); break;
       default:
         content = JSON.stringify({ error: `Unknown tool: ${toolName}` });
     }
@@ -455,208 +224,6 @@ export async function executeTool(
     return { content, structuredData: null };
   }
 }
-
-async function getPipelineOverview(): Promise<string> {
-  const { data: deals } = await supabaseAdmin
-    .from("deals")
-    .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
-    .order("updated_at", { ascending: false });
-
-  if (!deals || deals.length === 0) {
-    return JSON.stringify({
-      message: "No deals in the pipeline yet.",
-      total: 0,
-    });
-  }
-
-  const now = Date.now();
-  const stageGroups: Record<string, { count: number; totalAmount: number; staleCount: number }> = {};
-
-  for (const deal of deals) {
-    const key = `${deal.pipeline || "Unknown"} → ${deal.stage}`;
-    if (!stageGroups[key]) {
-      stageGroups[key] = { count: 0, totalAmount: 0, staleCount: 0 };
-    }
-    stageGroups[key].count++;
-    stageGroups[key].totalAmount += deal.amount || 0;
-
-    const daysSinceUpdate = Math.floor((now - new Date(deal.updated_at).getTime()) / (1000 * 60 * 60 * 24));
-    if (daysSinceUpdate > 3) stageGroups[key].staleCount++;
-  }
-
-  return JSON.stringify({
-    total_deals: deals.length,
-    stages: stageGroups,
-    pipelines: {
-      "New Deals": deals.filter((d) => d.pipeline === "New Deals").length,
-      "Active Deals": deals.filter((d) => d.pipeline === "Active Deals").length,
-    },
-  });
-}
-
-async function getDealsInStage(stage: string, pipeline?: string): Promise<string> {
-  let query = supabaseAdmin
-    .from("deals")
-    .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
-    .eq("stage", stage);
-
-  if (pipeline) query = query.eq("pipeline", pipeline);
-
-  const { data: deals } = await query;
-
-  if (!deals || deals.length === 0) {
-    return JSON.stringify({ message: `No deals in "${stage}" stage.`, deals: [] });
-  }
-
-  const now = Date.now();
-  return JSON.stringify({
-    stage,
-    count: deals.length,
-    deals: deals.map((d) => {
-      const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
-      return {
-        id: d.id,
-        contact: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
-        business: c?.business_name || "",
-        amount: d.amount,
-        pipeline: d.pipeline,
-        days_in_stage: Math.floor((now - new Date(d.updated_at).getTime()) / (1000 * 60 * 60 * 24)),
-      };
-    }),
-  });
-}
-
-async function searchDeals(query: string): Promise<string> {
-  // Search deals by joining contacts and matching on name or business
-  const { data: deals } = await supabaseAdmin
-    .from("deals")
-    .select("id, stage, pipeline, amount, updated_at, contact_id, contacts(first_name, last_name, business_name)")
-    .order("updated_at", { ascending: false })
-    .limit(50);
-
-  if (!deals || deals.length === 0) {
-    return JSON.stringify({ message: `No deals found matching "${query}".`, deals: [] });
-  }
-
-  // Filter client-side since Supabase doesn't support ilike on joined tables easily
-  const lowerQuery = query.toLowerCase();
-  const filtered = deals.filter((d) => {
-    const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
-    if (!c) return false;
-    const fullName = `${c.first_name || ""} ${c.last_name || ""}`.toLowerCase();
-    const biz = (c.business_name || "").toLowerCase();
-    return fullName.includes(lowerQuery) || biz.includes(lowerQuery);
-  });
-
-  if (filtered.length === 0) {
-    return JSON.stringify({ message: `No deals found matching "${query}".`, deals: [] });
-  }
-
-  return JSON.stringify({
-    query,
-    count: filtered.length,
-    deals: filtered.map((d) => {
-      const c = d.contacts as unknown as { first_name: string; last_name: string; business_name: string } | null;
-      return {
-        id: d.id,
-        contact: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
-        business: c?.business_name || "",
-        amount: d.amount,
-        stage: d.stage,
-        pipeline: d.pipeline,
-      };
-    }),
-  });
-}
-
-async function moveDeal(dealId: string, newStage: string): Promise<string> {
-  // Validate stage exists in our pipeline config
-  const allStages = STAGE_PIPELINES.flatMap((p) => p.stages.map((s) => ({ pipeline: p.name, stage: s.name })));
-  const target = allStages.find((s) => s.stage.toLowerCase() === newStage.toLowerCase());
-
-  if (!target) {
-    return JSON.stringify({ error: `Stage "${newStage}" not found in any pipeline. Valid stages: ${allStages.map(s => s.stage).join(", ")}` });
-  }
-
-  try {
-    // Get current deal to log the change
-    const { data: currentDeal } = await supabaseAdmin
-      .from("deals")
-      .select("stage, pipeline")
-      .eq("id", dealId)
-      .single();
-
-    if (!currentDeal) {
-      return JSON.stringify({ error: `Deal ${dealId} not found.` });
-    }
-
-    const oldStage = currentDeal.stage;
-
-    // Update the deal
-    await supabaseAdmin
-      .from("deals")
-      .update({
-        stage: target.stage,
-        pipeline: target.pipeline,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", dealId);
-
-    // Log the stage change as a deal event
-    await supabaseAdmin.from("deal_events").insert({
-      deal_id: dealId,
-      event_type: "stage_change",
-      description: `Moved from "${oldStage}" to "${target.stage}" (${target.pipeline})`,
-      metadata: { old_stage: oldStage, new_stage: target.stage, pipeline: target.pipeline, moved_by: "AI" },
-    });
-
-    // System log
-    await supabaseAdmin.from("system_logs").insert({
-      event_type: "ai_action",
-      description: `AI moved deal ${dealId} from "${oldStage}" to "${target.stage}" in ${target.pipeline}`,
-      metadata: { dealId, oldStage, newStage: target.stage, pipeline: target.pipeline },
-    });
-
-    // Fire Meta Purchase CAPI event when deal is funded (moved to "Closed" in Active Deals)
-    if (target.stage === "Closed" && target.pipeline === "Active Deals") {
-      const { data: deal } = await supabaseAdmin
-        .from("deals")
-        .select("contact_id, agreement_amount, amount")
-        .eq("id", dealId)
-        .maybeSingle();
-
-      if (deal?.contact_id) {
-        const { data: contact } = await supabaseAdmin
-          .from("contacts")
-          .select("id, email, phone, mobile_phone, first_name, last_name")
-          .eq("id", deal.contact_id)
-          .maybeSingle();
-
-        if (contact) {
-          const dealAmount = deal.agreement_amount || deal.amount;
-          await sendEvent({
-            eventName: "Purchase",
-            actionSource: "system_generated",
-            userData: {
-              email: contact.email || undefined,
-              phone: contact.phone || contact.mobile_phone || undefined,
-              firstName: contact.first_name || undefined,
-              lastName: contact.last_name || undefined,
-              externalId: contact.id,
-            },
-            customData: { value: dealAmount, currency: "USD", content_name: "Business Funding" },
-          });
-          console.log(`[Meta CAPI] Purchase event fired via AI for deal ${dealId}, amount: ${dealAmount}`);
-        }
-      }
-    }
-
-    return JSON.stringify({ success: true, message: `Deal moved from "${oldStage}" to "${target.stage}" in ${target.pipeline}.` });
-  } catch (error) {
-    return JSON.stringify({ error: error instanceof Error ? error.message : "Failed to move deal" });
-  }
-}
-
 async function sendSms(contactId: string, message: string): Promise<string> {
   try {
     const { data: contact } = await supabaseAdmin
@@ -895,14 +462,6 @@ async function getContactProfile(query: string): Promise<string> {
   const contactId = contact.id;
   const contactName = `${contact.first_name || ""} ${contact.last_name || ""}`.trim() || "Unknown";
 
-  // Get deals for this contact
-  const { data: deals } = await supabaseAdmin
-    .from("deals")
-    .select("id, stage, pipeline, amount, updated_at, source, created_at")
-    .eq("contact_id", contactId)
-    .order("created_at", { ascending: false })
-    .limit(10);
-
   // Get active sequences
   let enrollments: unknown[] = [];
   try {
@@ -914,14 +473,14 @@ async function getContactProfile(query: string): Promise<string> {
     enrollments = data || [];
   } catch { /* table may not exist yet */ }
 
-  // Get recent notes
+  // Recent timeline. Reads lead_activities, not the retired deal_notes table.
   let notes: unknown[] = [];
   try {
     const { data } = await supabaseAdmin
-      .from("deal_notes")
-      .select("body, author, created_at")
+      .from("lead_activities")
+      .select("activity_type, subject, body, actor, occurred_at")
       .eq("contact_id", contactId)
-      .order("created_at", { ascending: false })
+      .order("occurred_at", { ascending: false })
       .limit(5);
     notes = data || [];
   } catch { /* table may not exist yet */ }
@@ -932,493 +491,14 @@ async function getContactProfile(query: string): Promise<string> {
       name: contactName,
       email: contact.email,
       phone: contact.phone,
-      tags: contact.tags || [],
       businessName: contact.business_name || "",
       industry: contact.industry || "",
-      credit_score_range: contact.credit_score_range || "",
+      website: contact.website || "",
+      stage: contact.application_stage || "",
       source: contact.source || "",
-      lead_score: contact.lead_score || 0,
     },
-    deals: (deals || []).map((d) => ({
-      id: d.id,
-      stage: d.stage,
-      pipeline: d.pipeline,
-      amount: d.amount,
-      source: d.source,
-      days_in_pipeline: Math.floor((Date.now() - new Date(d.created_at).getTime()) / (1000 * 60 * 60 * 24)),
-    })),
     sequences: enrollments,
     notes,
-  });
-}
-
-async function addDealNote(contactId: string, note: string, dealId?: string): Promise<string> {
-  try {
-    const { data } = await supabaseAdmin
-      .from("deal_notes")
-      .insert({ contact_id: contactId, opportunity_id: dealId || null, body: note, author: "AI Office Manager" })
-      .select()
-      .single();
-    return JSON.stringify({ success: true, note_id: data?.id });
-  } catch (err) {
-    return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to add note" });
-  }
-}
-
-async function getDealNotes(contactId: string, dealId?: string): Promise<string> {
-  try {
-    let query = supabaseAdmin
-      .from("deal_notes")
-      .select("id, body, author, created_at")
-      .eq("contact_id", contactId)
-      .order("created_at", { ascending: false })
-      .limit(20);
-    if (dealId) query = query.eq("opportunity_id", dealId);
-    const { data: notes } = await query;
-    return JSON.stringify({ notes: notes || [], count: (notes || []).length });
-  } catch (err) {
-    return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to get notes" });
-  }
-}
-
-async function getLenders(filter?: string, tier?: number, submissionMethod?: string, name?: string): Promise<string> {
-  let query = supabaseAdmin.from("lenders").select("*").eq("is_active", true).order("tier").order("name");
-  if (tier) query = query.eq("tier", tier);
-  if (submissionMethod) query = query.eq("submission_method", submissionMethod);
-  if (name) query = query.ilike("name", `%${name}%`);
-
-  const { data, error } = await query;
-  if (error) return JSON.stringify({ error: "Failed to query lenders database" });
-
-  let lenders = data || [];
-  if (filter) {
-    const lf = filter.toLowerCase();
-    lenders = lenders.filter((l: Record<string, unknown>) => {
-      const text = [
-        l.name, l.notes, l.underwriting_box, l.positions_funded, l.factor_rate_range,
-        ...(Array.isArray(l.products) ? l.products : []),
-        ...(Array.isArray(l.blocked_industries) ? l.blocked_industries : []),
-      ].filter(Boolean).join(" ").toLowerCase();
-      return text.includes(lf);
-    });
-  }
-
-  const TIER_LABELS: Record<number, string> = { 1: "A Paper", 2: "B Paper", 3: "High Risk" };
-  // Focused projection — the fields Vektor needs to answer UW + routing questions
-  // (rather than dumping every column). underwriting_box is the headline.
-  return JSON.stringify({
-    lenders: lenders.map((l: Record<string, unknown>) => ({
-      id: l.id,
-      name: l.name,
-      tier: l.tier,
-      tier_label: TIER_LABELS[(l.tier as number) || 2] || "B Paper",
-      submission_method: l.submission_method,
-      submission_email: l.submission_email,
-      to_emails: l.to_emails,
-      cc_emails: l.cc_emails,
-      portal_url: l.portal_url,
-      underwriting_box: l.underwriting_box,
-      min_monthly_revenue: l.min_monthly_revenue,
-      max_amount: l.max_amount,
-      min_credit_score: l.min_credit_score,
-      min_time_in_business_months: l.min_time_in_business_months,
-      max_negative_days: l.max_negative_days,
-      positions_funded: l.positions_funded,
-      factor_rate_range: l.factor_rate_range,
-      blocked_industries: l.blocked_industries,
-      products: l.products,
-      guideline_pdf_url: l.guideline_pdf_url,
-      guideline_pdf_name: l.guideline_pdf_name,
-      notes: l.notes,
-    })),
-    count: lenders.length,
-    tier_breakdown: {
-      tier_1: lenders.filter((l: Record<string, unknown>) => l.tier === 1).length,
-      tier_2: lenders.filter((l: Record<string, unknown>) => l.tier === 2).length,
-      tier_3: lenders.filter((l: Record<string, unknown>) => l.tier === 3).length,
-    },
-  });
-}
-
-// ── Deal Processing & Submissions ────────────────────────────────────────────
-
-async function getDealProfile(dealId: string) {
-  // Get deal with contact info
-  const { data: deal } = await supabaseAdmin
-    .from("deals")
-    .select("*, contacts(*)")
-    .eq("id", dealId)
-    .single();
-
-  if (!deal) return null;
-
-  const contact = (deal.contacts || {}) as Record<string, unknown>;
-
-  // Get notes
-  let notes: string[] = [];
-  try {
-    const { data: noteData } = await supabaseAdmin
-      .from("deal_notes")
-      .select("body, author, created_at")
-      .eq("contact_id", deal.contact_id)
-      .order("created_at", { ascending: false })
-      .limit(5);
-    notes = (noteData || []).map((n: Record<string, unknown>) => `[${n.author}] ${n.body}`);
-  } catch { /* ok */ }
-
-  return { deal, contact, notes };
-}
-
-async function underwriteDeal(dealId: string, additionalContext?: string): Promise<string> {
-  const profile = await getDealProfile(dealId);
-  if (!profile) return JSON.stringify({ error: `Deal ${dealId} not found.` });
-
-  const { deal, contact, notes } = profile;
-
-  // Auto-fetch bank statement PDFs from OneDrive
-  let bankStatementReport: string | null = null;
-  const merchantName = String(contact.business_name || contact.legal_name || "").trim();
-  if (merchantName) {
-    try {
-      const folderPath = `Deals/${merchantName}/Bank Statements`;
-      const files = await microsoft.listFolderChildren(folderPath);
-      const pdfs = files.filter((f) => f.isFile && f.name.toLowerCase().endsWith(".pdf"));
-      if (pdfs.length > 0) {
-        const buffers = await Promise.all(
-          pdfs.map(async (f) => {
-            const dl = await microsoft.downloadDriveItem(f.id);
-            return { name: dl.name, buffer: dl.buffer };
-          })
-        );
-        const result = await analyzeBankStatements(buffers);
-        bankStatementReport = result.report;
-      }
-    } catch (e) {
-      console.error("[underwrite] OneDrive bank statement fetch failed:", (e as Error).message);
-    }
-  }
-
-  // Build SOS document using contacts table columns directly
-  const sos = {
-    business_profile: {
-      business_name: contact.business_name || contact.legal_name || "Unknown",
-      dba: contact.dba || "",
-      industry: contact.industry || "Not specified",
-      ein: contact.ein ? "On file" : "Not provided",
-      incorporation_date: contact.incorporation_date || "Not specified",
-    },
-    owner_profile: {
-      name: `${contact.first_name || ""} ${contact.last_name || ""}`.trim() || "Unknown",
-      email: contact.email || "Not provided",
-      phone: contact.phone || "Not provided",
-      credit_score_range: contact.credit_score_range || "Not specified",
-      ownership_percentage: contact.ownership_pct || "Not specified",
-      ssn_full: contact.ssn_full || (contact.ssn_last4 ? "***-**-" + contact.ssn_last4 : "Not provided"),
-      ssn_last4: contact.ssn_last4 ? "On file" : "Not provided",
-      dob: contact.dob ? "On file" : "Not provided",
-      home_address: contact.home_address || "Not provided",
-    },
-    funding_request: {
-      amount_requested: deal.amount || contact.funding_amount_requested || "Not specified",
-      use_of_funds: contact.use_of_funds || "Not specified",
-      financing_type: deal.product_type || "Working Capital",
-    },
-    financial_summary: {
-      monthly_deposits: contact.monthly_deposits || (bankStatementReport ? "See bank statement analysis" : "Not provided"),
-      existing_loans: contact.existing_loans || "Unknown",
-      bank_statement_analysis: bankStatementReport ?? (merchantName ? "No PDFs found in OneDrive — upload statements to Deals/" + merchantName + "/Bank Statements/" : "No bank statement analysis available"),
-    },
-    additional_context: additionalContext || null,
-    notes: notes.length > 0 ? notes : ["No notes on file"],
-    pipeline_info: {
-      stage: deal.stage,
-      pipeline: deal.pipeline,
-      days_in_pipeline: Math.floor((Date.now() - new Date(deal.created_at).getTime()) / (1000 * 60 * 60 * 24)),
-    },
-  };
-
-  // Generate text version for emails
-  const sosText = [
-    `=== STATEMENT OF SCENARIO (SOS) ===`,
-    ``,
-    `BUSINESS PROFILE`,
-    `Business: ${sos.business_profile.business_name}`,
-    sos.business_profile.dba ? `DBA: ${sos.business_profile.dba}` : "",
-    `Industry: ${sos.business_profile.industry}`,
-    `Incorporation: ${sos.business_profile.incorporation_date}`,
-    ``,
-    `OWNER PROFILE`,
-    `Name: ${sos.owner_profile.name}`,
-    `Credit Score: ${sos.owner_profile.credit_score_range}`,
-    `Ownership: ${sos.owner_profile.ownership_percentage}`,
-    ``,
-    `FUNDING REQUEST`,
-    `Amount: $${typeof sos.funding_request.amount_requested === 'number' ? sos.funding_request.amount_requested.toLocaleString() : sos.funding_request.amount_requested}`,
-    `Use of Funds: ${sos.funding_request.use_of_funds}`,
-    `Product: ${sos.funding_request.financing_type}`,
-    ``,
-    `FINANCIAL SUMMARY`,
-    `Monthly Deposits: ${sos.financial_summary.monthly_deposits}`,
-    `Existing Loans: ${sos.financial_summary.existing_loans}`,
-    bankStatementReport ? `\nBANK STATEMENT ANALYSIS\n${bankStatementReport}` : `\nBANK STATEMENT ANALYSIS\n${sos.financial_summary.bank_statement_analysis}`,
-    additionalContext ? `\nADDITIONAL CONTEXT\n${additionalContext}` : "",
-    ``,
-    `--- SRT Agency | srtagency.com ---`,
-  ].filter(Boolean).join("\n");
-
-  // Store in deal_sos table
-  try {
-    await supabaseAdmin.from("deal_sos").insert({
-      opportunity_id: dealId,
-      contact_id: deal.contact_id,
-      business_name: sos.business_profile.business_name,
-      sos_content: sos,
-      sos_text: sosText,
-      status: "draft",
-    });
-  } catch { /* table may not exist yet, still return the SOS */ }
-
-  // Log it
-  await supabaseAdmin.from("system_logs").insert({
-    event_type: "ai_action",
-    description: `AI generated SOS for ${sos.business_profile.business_name} (${dealId})`,
-    metadata: { dealId, businessName: sos.business_profile.business_name },
-  });
-
-  return JSON.stringify({
-    tool: "underwrite_deal",
-    sos,
-    sos_text: sosText,
-    message: `SOS generated for ${sos.business_profile.business_name}. Review the details and use match_lenders to find suitable funders.`,
-  });
-}
-
-async function matchLenders(dealId: string, productType?: string): Promise<string> {
-  const profile = await getDealProfile(dealId);
-  if (!profile) return JSON.stringify({ error: `Deal ${dealId} not found.` });
-
-  const { deal, contact } = profile;
-
-  // Parse deal criteria from contact columns
-  const creditRange = (contact.credit_score_range as string) || "";
-  const creditMin = creditRange ? parseInt(creditRange.split("-")[0]) || 0 : 0;
-  const monthlyDeposits = (contact.monthly_deposits as string) || "";
-  const monthlyRev = monthlyDeposits.includes("1M") ? 100000 : monthlyDeposits.includes("500K") ? 50000 : monthlyDeposits.includes("250K") ? 25000 : monthlyDeposits.includes("120K") ? 10000 : 5000;
-  const incDate = (contact.incorporation_date as string) || "";
-  // Estimate TIB from incorporation date
-  let tibMonths = 6;
-  if (incDate) {
-    const inc = new Date(incDate);
-    if (!isNaN(inc.getTime())) {
-      tibMonths = Math.floor((Date.now() - inc.getTime()) / (1000 * 60 * 60 * 24 * 30));
-    }
-  }
-  const industry = ((contact.industry as string) || "").toLowerCase();
-  const amount = deal.amount || 0;
-  const product = productType || deal.product_type || "Working Capital";
-
-  // Get all active lenders
-  const { data: allLenders } = await supabaseAdmin
-    .from("lenders")
-    .select("*")
-    .eq("is_active", true)
-    .order("tier")
-    .order("name");
-
-  if (!allLenders || allLenders.length === 0) {
-    return JSON.stringify({ error: "No active lenders in database. Seed lenders first." });
-  }
-
-  // Match and score
-  const matches: Array<{
-    lender: Record<string, unknown>;
-    score: number;
-    reasons: string[];
-    warnings: string[];
-  }> = [];
-
-  for (const lender of allLenders) {
-    const reasons: string[] = [];
-    const warnings: string[] = [];
-    let score = 50;
-
-    if (lender.tier === 1) score += 30;
-    else if (lender.tier === 2) score += 15;
-
-    if (lender.min_credit_score && creditMin > 0) {
-      if (creditMin >= lender.min_credit_score) {
-        reasons.push(`Credit ${creditMin}+ meets min ${lender.min_credit_score}`);
-        score += 10;
-      } else {
-        warnings.push(`Credit ${creditMin} below min ${lender.min_credit_score}`);
-        score -= 20;
-      }
-    }
-
-    if (lender.min_monthly_revenue) {
-      if (monthlyRev >= lender.min_monthly_revenue) {
-        reasons.push(`Revenue $${(monthlyRev/1000).toFixed(0)}K/mo meets min $${(lender.min_monthly_revenue/1000).toFixed(0)}K`);
-        score += 10;
-      } else {
-        warnings.push(`Revenue $${(monthlyRev/1000).toFixed(0)}K/mo below min $${(lender.min_monthly_revenue/1000).toFixed(0)}K`);
-        score -= 15;
-      }
-    }
-
-    if (lender.max_amount && amount > 0) {
-      if (amount <= lender.max_amount) {
-        reasons.push(`Amount $${(amount/1000).toFixed(0)}K within max $${(lender.max_amount/1000).toFixed(0)}K`);
-        score += 5;
-      } else {
-        warnings.push(`Amount $${(amount/1000).toFixed(0)}K exceeds max $${(lender.max_amount/1000).toFixed(0)}K`);
-        score -= 25;
-      }
-    }
-
-    if (lender.min_time_in_business_months) {
-      if (tibMonths >= lender.min_time_in_business_months) {
-        reasons.push(`TIB ${tibMonths}mo meets min ${lender.min_time_in_business_months}mo`);
-        score += 5;
-      } else {
-        warnings.push(`TIB ${tibMonths}mo below min ${lender.min_time_in_business_months}mo`);
-        score -= 15;
-      }
-    }
-
-    const products = (lender.products as string[]) || [];
-    if (products.length > 0 && product) {
-      if (products.some((p: string) => p.toLowerCase().includes(product.toLowerCase()) || product.toLowerCase().includes(p.toLowerCase()))) {
-        reasons.push(`Offers ${product}`);
-        score += 10;
-      }
-    }
-
-    const blocked = (lender.blocked_industries as string[]) || [];
-    if (industry && blocked.some((b: string) => industry.includes(b.toLowerCase()))) {
-      warnings.push(`Industry "${industry}" is blocked`);
-      score -= 50;
-    }
-
-    if (lender.response_time_days && lender.response_time_days <= 2) {
-      reasons.push(`Fast response: ${lender.response_time_days}d`);
-      score += 5;
-    }
-
-    if (score > 20) {
-      matches.push({ lender, score, reasons, warnings });
-    }
-  }
-
-  matches.sort((a, b) => b.score - a.score);
-
-  const TIER_LABELS: Record<number, string> = { 1: "A Paper", 2: "B Paper", 3: "High Risk" };
-
-  return JSON.stringify({
-    tool: "match_lenders",
-    deal_summary: {
-      business: contact.business_name || "Unknown",
-      amount: deal.amount,
-      credit: creditRange || "Unknown",
-      product,
-    },
-    matches: matches.slice(0, 15).map((m) => ({
-      id: m.lender.id,
-      name: m.lender.name,
-      tier: m.lender.tier,
-      tier_label: TIER_LABELS[(m.lender.tier as number) || 2],
-      submission_method: m.lender.submission_method || "email",
-      submission_email: m.lender.submission_email,
-      score: m.score,
-      reasons: m.reasons,
-      warnings: m.warnings,
-      products: m.lender.products,
-    })),
-    total_matches: matches.length,
-    message: `Found ${matches.length} matching lenders for ${contact.business_name || "this deal"}. Top matches shown ranked by fit score.`,
-  });
-}
-
-async function submitToLender(dealId: string, lenderId: string, customNotes?: string): Promise<string> {
-  const { data: lender } = await supabaseAdmin
-    .from("lenders")
-    .select("*")
-    .eq("id", lenderId)
-    .single();
-
-  if (!lender) return JSON.stringify({ error: `Lender ${lenderId} not found.` });
-  if (!lender.submission_email && lender.submission_method === "email") {
-    return JSON.stringify({ error: `Lender ${lender.name} has no submission email on file. Add one in the Lenders page.` });
-  }
-
-  // Get the latest SOS for this deal
-  const { data: sos } = await supabaseAdmin
-    .from("deal_sos")
-    .select("*")
-    .eq("opportunity_id", dealId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-
-  if (!sos) {
-    return JSON.stringify({ error: `No SOS found for deal ${dealId}. Run underwrite_deal first to generate the SOS document.` });
-  }
-
-  const businessName = sos.business_name || "Unknown Business";
-  const sosContent = sos.sos_content as Record<string, unknown>;
-  const fundingRequest = sosContent?.funding_request as Record<string, unknown> || {};
-  const amount = fundingRequest.amount_requested || "TBD";
-  const product = fundingRequest.financing_type || "Working Capital";
-
-  const subject = `SOS - ${businessName} - ${product} - $${typeof amount === 'number' ? amount.toLocaleString() : amount}`;
-  const body = sos.sos_text + (customNotes ? `\n\nADDITIONAL NOTES:\n${customNotes}` : "");
-
-  // Create email draft
-  const { data: draft, error: draftErr } = await supabaseAdmin
-    .from("email_drafts")
-    .insert({
-      agent: "submissions",
-      opportunity_id: dealId,
-      contact_id: sos.contact_id,
-      to_email: lender.submission_email || "",
-      subject,
-      body,
-      attachments: [],
-      deal_data: { sos_id: sos.id, lender_id: lenderId, lender_name: lender.name, business_name: businessName },
-      status: "draft",
-    })
-    .select()
-    .single();
-
-  if (draftErr) return JSON.stringify({ error: `Failed to create email draft: ${draftErr.message}` });
-
-  // Create submission task
-  try {
-    await supabaseAdmin.from("submission_tasks").insert({
-      opportunity_id: dealId,
-      contact_id: sos.contact_id,
-      lender_id: lenderId,
-      lender_name: lender.name,
-      submission_method: "email",
-      status: "draft_created",
-      email_draft_id: draft?.id,
-    });
-  } catch { /* table may not exist yet */ }
-
-  // Log it
-  await supabaseAdmin.from("system_logs").insert({
-    event_type: "ai_action",
-    description: `AI created submission draft: ${businessName} → ${lender.name}`,
-    metadata: { dealId, lenderId, lenderName: lender.name, draftId: draft?.id },
-  });
-
-  return JSON.stringify({
-    tool: "submit_to_lender",
-    success: true,
-    draft_id: draft?.id,
-    lender_name: lender.name,
-    to_email: lender.submission_email,
-    subject,
-    message: `Email draft created for submission to ${lender.name} (${lender.submission_email}). Review and approve in the Submissions page to send.`,
   });
 }
 
@@ -1429,38 +509,5 @@ async function enrollInSequence(contactId: string, contactEmail: string, contact
     return JSON.stringify(result);
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to enroll in sequence" });
-  }
-}
-
-async function searchLenderEmails(merchantName: string, lenderName?: string, daysBack = 14): Promise<string> {
-  try {
-    const query = lenderName ? `${merchantName} ${lenderName}` : merchantName;
-    const emails = await microsoft.searchMail(query, 20);
-
-    const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
-    const filtered = emails.filter((e) => new Date(e.receivedDateTime) >= since);
-
-    if (filtered.length === 0) {
-      return JSON.stringify({
-        message: `No emails found matching "${query}" in the last ${daysBack} days.`,
-        emails: [],
-      });
-    }
-
-    return JSON.stringify({
-      query,
-      days_searched: daysBack,
-      count: filtered.length,
-      emails: filtered.map((e) => ({
-        subject: e.subject,
-        from: e.from,
-        received: new Date(e.receivedDateTime).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
-        preview: e.bodyPreview?.slice(0, 300),
-        link: e.webLink,
-      })),
-      hint: "Check the 'from' field to identify approvals (lender addresses) vs declines. Ask me to read a specific email in full if needed.",
-    });
-  } catch (err) {
-    return JSON.stringify({ error: err instanceof Error ? err.message : "Email search failed. Microsoft 365 may need reconnecting at /dashboard/integrations." });
   }
 }

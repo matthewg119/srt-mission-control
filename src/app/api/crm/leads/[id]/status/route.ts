@@ -2,9 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { setLeadStatus } from "@/lib/crm";
-import { STAGE_PIPELINES } from "@/config/stage-display";
-
-const ALL_STAGES = STAGE_PIPELINES.flatMap((p) => p.stages.map((s) => s.name));
+import { STAGE_NAMES } from "@/config/stage-display";
 
 export async function POST(
   request: NextRequest,
@@ -28,9 +26,9 @@ export async function POST(
   if (!status) {
     return NextResponse.json({ error: "status is required" }, { status: 400 });
   }
-  if (!ALL_STAGES.includes(status)) {
+  if (!STAGE_NAMES.includes(status)) {
     return NextResponse.json(
-      { error: `Unknown status "${status}"`, validStatuses: ALL_STAGES },
+      { error: `Unknown status "${status}"`, validStatuses: STAGE_NAMES },
       { status: 400 }
     );
   }

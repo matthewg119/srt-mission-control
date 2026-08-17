@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // Returns: { ok: true, line }
 
 import { NextRequest, NextResponse } from "next/server";
-import { buildMerchantContext } from "@/lib/ai-intel/merchant-context";
+import { buildLeadContext } from "@/lib/ai-intel/lead-context";
 import { draftCustomIntroLine } from "@/lib/ai-intel/custom-intro-director";
 
 export const runtime = "nodejs";
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const ctx = await buildMerchantContext({ zohoLeadId });
+    const ctx = await buildLeadContext({ zohoLeadId });
     if (!ctx) {
       return NextResponse.json({ ok: true, line: FALLBACK_LINE, fallback: true });
     }

@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postApprovalRequest } from "./slack-approval";
-import { buildMerchantContext, whyThisLead, type MerchantContext } from "./merchant-context";
+import { buildLeadContext, whyThisLead, type LeadContext } from "./lead-context";
 import { decideTouch } from "./touch-policy";
 import { decideCadence } from "./cadence-scheduler";
 import { getMattVoiceExamples, renderVoiceExamplesForPrompt } from "./voice-examples";
@@ -11,10 +11,10 @@ import type { PendingActionPayload, MarketingCampaignKey } from "./types";
 
 // ── Email Marketing Director ─────────────────────────────────────────────
 // Single drafter called per contact by the cron. Given a contact:
-//   1. Build merchant context (Zoho notes, deal events, activity, cadence).
+//   1. Build lead context (CRM notes, activity, cadence).
 //   2. Apply touch policy (skip / handoff / proceed).
 //   3. Decide cadence position (D1/2/3 ladder or confirmation-daily).
-//   4. Draft personalized email with {magic_link} placeholder.
+//   4. Draft a personalized email whose only ask is a reply.
 //   5. Post approval card to #vektor-email-director for Matt's 👍.
 
 export interface DraftResult {
@@ -33,7 +33,7 @@ export interface DraftResult {
 
 export async function draftForContact(contactId: string): Promise<DraftResult> {
   try {
-    const ctx = await buildMerchantContext({ contactId });
+    const ctx = await buildLeadContext({ contactId });
     if (!ctx) return { contact_id: contactId, outcome: "error", detail: "no_context" };
     if (!ctx.contact.email) return { contact_id: contactId, outcome: "skip_no_email" };
 
@@ -65,11 +65,10 @@ export async function draftForContact(contactId: string): Promise<DraftResult> {
       campaign_key: cadence.campaign_key,
       cadence_day: cadence.cadence_day,
       sequence_position: cadence.sequence_position,
-      magic_link_redirect: draft.redirectPath,
     };
 
     const summary = [
-      `*${ctx.contact.business_name ?? ctx.contact.first_name ?? "Merchant"}* — ${whyThisLead(ctx)}`,
+      `*${ctx.contact.business_name ?? ctx.contact.first_name ?? "Lead"}* — ${whyThisLead(ctx)}`,
       ``,
       `*Campaign:* ${cadence.campaign_key} (D${cadence.cadence_day}/${cadence.sequence_position})`,
       `*To:* ${ctx.contact.email}`,
@@ -104,33 +103,32 @@ export async function draftForContact(contactId: string): Promise<DraftResult> {
 
 export interface DraftedEmail {
   subject: string;
-  body: string;          // HTML-ready, with `{magic_link}` placeholder unresolved
-  hook: string;          // 1-line "why this angle" for Matt
-  redirectPath: string;  // which portal page the magic link should land on
+  body: string;  // HTML-ready
+  hook: string;  // 1-line "why this angle" for Matt
 }
 
-const SYSTEM_PROMPT_BASE = `You are SRT Agency's Email Marketing Director. You write short, personal, one-to-one emails to business owners who are our merchant leads. You are NOT a mass-marketer — you write like a human rep sending from his laptop.
+const SYSTEM_PROMPT_BASE = `You are SRT Agency's Email Marketing Director. You write short, personal, one-to-one emails to local business owners. You are NOT a mass-marketer — you write like a human rep sending from his laptop.
+
+WHAT SRT SELLS: AEO. We build the part of a business's own website that AI assistants can actually read and cite, so that when someone asks an assistant for a business like theirs, they get named. We lead with a free first build: one section of their site, no charge, no card. All they have to do is say yes.
+
+SRT DOES NOT DO BUSINESS FUNDING. Never mention financing, loans, lenders, funders, bank statements, advances, approvals or capital. Many of these contacts were funding leads years ago. That is not why we are writing.
 
 Hard rules:
 - Under 6 sentences of body (a short paragraph is fine).
-- Include EXACTLY ONE CTA, rendered as the literal placeholder "{magic_link}" — no invented URLs. The placeholder will be replaced at send time with a real one-click portal login link.
+- EXACTLY ONE ask, and the ask is a reply. "Reply yes and I'll get it started" or a close variant. No links, no booking pages, no invented URLs.
 - Sign off exactly: "Matt" (no title, no phone, no signature block — we append the full signature automatically).
 - No subject-line clichés (no "Quick question?", no ALL CAPS, no "[Name]").
 - No emojis inside the body unless the prior voice examples use them.
-- Personalize: reference one specific detail from their context (business, amount, industry, signed-but-no-statements, etc.) — do not repeat a generic hook you've used on prior emails to this contact.
+- Never use an em dash. Commas, periods and hyphens only.
+- Personalize: reference one specific detail from their context (their business, city, industry, or website) — do not repeat a generic hook you've used on prior emails to this contact.
 
-Return JSON: { subject, body, hook, redirectPath }.
+Return JSON: { subject, body, hook }.
   subject: <60 chars, natural, not clickbait.
-  body: HTML string, use <p> paragraphs, ends with the "{magic_link}" CTA on its own line.
-  hook: one short sentence explaining the angle you chose (for Matt's review).
-  redirectPath: portal path the magic link should land on — pick based on campaign/state:
-    - "/portal/statements" if the lead is signed but hasn't uploaded statements
-    - "/portal/dashboard" for general check-ins
-    - "/portal/apply" for partial applications
-    - "/portal/dashboard" default`;
+  body: HTML string, use <p> paragraphs, ends with the reply ask on its own line.
+  hook: one short sentence explaining the angle you chose (for Matt's review).`;
 
 export async function draftEmail(
-  ctx: MerchantContext,
+  ctx: LeadContext,
   campaignKey: MarketingCampaignKey,
   cadenceDay: number
 ): Promise<DraftedEmail | null> {
@@ -139,24 +137,21 @@ export async function draftEmail(
 
   const priorSubjects = ctx.recent_sends.map((s) => `- ${s.subject}`).join("\n") || "(none)";
   const notesBlock =
-    ctx.zoho?.notes.slice(0, 6).map((n) => `• [${n.modified_at.slice(0, 10)}] ${n.title}: ${n.content.slice(0, 200)}`).join("\n") ||
-    "(no Zoho notes)";
+    ctx.crm.notes.slice(0, 6).map((n) => `• [${n.modified_at.slice(0, 10)}] ${n.title}: ${n.content.slice(0, 200)}`).join("\n") ||
+    "(no notes on file)";
 
   const user = [
-    `Merchant: ${ctx.contact.business_name ?? "unknown"} | Contact: ${ctx.contact.first_name ?? ""} ${ctx.contact.last_name ?? ""}`.trim(),
+    `Business: ${ctx.contact.business_name ?? "unknown"} | Contact: ${ctx.contact.first_name ?? ""} ${ctx.contact.last_name ?? ""}`.trim(),
     `Email: ${ctx.contact.email}`,
     `Industry: ${ctx.contact.industry ?? "—"}`,
-    `Amount needed: ${ctx.contact.amount_needed ? `$${ctx.contact.amount_needed.toLocaleString()}` : "—"}`,
-    `Monthly revenue: ${ctx.contact.monthly_revenue ? `$${ctx.contact.monthly_revenue.toLocaleString()}` : "—"}`,
-    `Credit score: ${ctx.contact.credit_score ?? "—"}`,
-    `Zoho Lead Status: ${ctx.zoho?.lead_status ?? "—"}`,
-    `Portal: signed=${ctx.contact.portal_app_completed}, statements_uploaded=${ctx.contact.portal_statements_uploaded}, logins=${ctx.contact.portal_login_count}`,
+    `Location: ${[ctx.contact.biz_city, ctx.contact.biz_state].filter(Boolean).join(", ") || "—"}`,
+    `Website: ${ctx.contact.website ?? "— (none on file, do not claim to have looked at it)"}`,
+    `Stage: ${ctx.crm.lead_status ?? "—"}`,
     `Days since lead created: ${ctx.days_since_created ?? "—"}`,
-    `Hours since application signature: ${ctx.hours_since_signature ?? "—"}`,
     ``,
     `Cadence: ${campaignKey} — Day ${cadenceDay}, sequence position ${ctx.cadence?.sends_today ?? 0 + 1}.`,
     ``,
-    `Recent Zoho notes:`,
+    `Recent notes (may be stale funding-era history — use only for who they are, never as a reason to write):`,
     notesBlock,
     ``,
     `Subjects of prior emails you've already sent this contact (DO NOT repeat them):`,
@@ -165,7 +160,7 @@ export async function draftEmail(
 
   const system = `${SYSTEM_PROMPT_BASE}\n\n${voiceBlock}`;
 
-  const schemaHint = `{ "subject": string, "body": string, "hook": string, "redirectPath": string }`;
+  const schemaHint = `{ "subject": string, "body": string, "hook": string }`;
 
   try {
     const result = await callClaudeJSON<DraftedEmail>({
@@ -183,13 +178,13 @@ export async function draftEmail(
   }
 }
 
-async function postHandoffCard(ctx: MerchantContext, reason: string): Promise<string | null> {
+async function postHandoffCard(ctx: LeadContext, reason: string): Promise<string | null> {
   const channel = VEKTOR_CHANNELS.emailDirector || VEKTOR_CHANNELS.main;
   if (!channel) return null;
 
   const nameFallback = `${ctx.contact.first_name ?? ""} ${ctx.contact.last_name ?? ""}`.trim();
   const who = ctx.contact.business_name || nameFallback || "lead";
-  const text = `⚠️ Stale lead — ${who}\n${reason}\nLast Zoho status: ${ctx.zoho?.lead_status ?? "(none)"}\nOpen tasks: ${ctx.open_tasks.length}\n\nAssign a rep to clean, or flip do-not-contact.`;
+  const text = `⚠️ Stale lead — ${who}\n${reason}\nStage: ${ctx.crm.lead_status ?? "(none)"}\nOpen tasks: ${ctx.open_tasks.length}\n\nAssign a rep to clean, or flip do-not-contact.`;
 
   const resp = (await slack.postMessage(channel, text, [
     { type: "section", text: { type: "mrkdwn", text } },

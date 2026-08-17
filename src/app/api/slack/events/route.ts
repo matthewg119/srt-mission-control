@@ -8,10 +8,6 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
-import { parseLenderChoicesFromReply } from "@/lib/ai-intel/request-lender-routing";
-import { getEmailSubmissionByThread, setPendingAdhocForward, clearPendingAdhocForward } from "@/lib/ai-intel/email-submissions";
-import { forwardDealToFunders, forwardDealToAddresses } from "@/lib/ai-intel/forward-deal-to-funders";
-import { isBuildCommand, handleBuildCommand, handleStatementDropThreadReply } from "@/lib/ai-intel/build-draft";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
@@ -122,22 +118,18 @@ export const maxDuration = 300;
 const processedEvents = new Set<string>();
 const MAX_PROCESSED = 1000;
 
-// Agent system prompts by channel
+// Agent system prompts by channel.
+//
+// The `underwriting` and `submissions` agents went with the funding business.
+// #srt-sub and #uw now fall through to brainheart like any other channel, which
+// is deliberate: an agent that still knows how to talk about lenders is exactly
+// the cross-wiring the AEO pivot is removing.
 const AGENT_PROMPTS: Record<string, string> = {
-  brainheart: `You are BrainHeart — the CEO's AI partner at SRT Agency. You have full context of all operations. You create tasks, monitor deals, send reports, and give strategic advice. Be direct, proactive, and action-oriented. When asked about status, always check real data with your tools.`,
-  underwriting: `You are the Deal Processing AI for SRT Agency. You are PICKY and THOROUGH. When analyzing deals, you must understand: what does the business actually DO, how do they make money, what are the funds for, are there red flags. You MUST have complete information before moving a deal forward. If information is missing, say exactly what you need.`,
-  submissions: `You are the Submissions AI for SRT Agency. You handle lender submissions, track submission status, follow up with lenders, and flag issues with files. You are organized and detail-oriented. When something is out of place in a deal file, you immediately flag it.
-
-You also answer funder UNDERWRITING questions in this channel. Every funder has an \`underwriting_box\` (min deposits/revenue, time-in-business, max amount, positions, blocked industries, NSF/negative-day tolerance, factor range) and may have a full guideline PDF on file. Use the get_lenders tool to look funders up: pass a specific name (e.g. "Legend", "VOX") or a filter (e.g. "trucking", "3rd position") to find fits. When asked "what's the box for X" or "what does X require", recite the box/criteria. When asked to "pull up the guidelines" for a funder, return its guideline_pdf_url link. If a funder has no box on file, say so plainly — do not invent criteria. Keep answers short, direct, and factual: lead with the answer, no filler.`,
+  brainheart: `You are BrainHeart — the CEO's AI partner at SRT Agency, an AEO agency. You have full context of all operations. You create tasks, work the call board, send reports, and give strategic advice. Be direct, proactive, and action-oriented. When asked about status, always check real data with your tools. SRT does not do business funding; never pitch or discuss financing.`,
 };
 
 function getAgentType(channel: string): string {
   const ceoChannel = process.env.SLACK_CEO_CHANNEL || "";
-  const uwChannel = process.env.SLACK_UW_CHANNEL || "";
-  const subChannel = process.env.SLACK_SUB_CHANNEL || "";
-
-  if (channel === uwChannel) return "underwriting";
-  if (channel === subChannel) return "submissions";
   if (channel === ceoChannel) return "brainheart";
   return "brainheart"; // default for DMs
 }
@@ -651,117 +643,6 @@ export async function POST(request: NextRequest) {
           console.error("[slack/events] guardian thread message error:", (e as Error).message);
         });
         return NextResponse.json({ ok: true });
-      }
-
-      // Thread reply in a #pipeline-new deal thread? Check for a pending
-      // send_submission action and interpret the reply as lender names to
-      // send the draft to.
-      const pipelineChannelEnv = process.env.SLACK_PIPELINE_CHANNEL || "";
-      if (
-        parentThreadTs &&
-        parentThreadTs !== event.ts &&
-        pipelineChannelEnv &&
-        channel === pipelineChannelEnv &&
-        userText.trim().length > 0
-      ) {
-        const handled = await handleDealThreadReply({
-          channel,
-          threadTs: parentThreadTs,
-          userId: event.user as string,
-          replyText: userText,
-        });
-        if (handled) return NextResponse.json({ ok: true });
-      }
-
-      // Thread reply under a "New Deal" message in #srt-sub → funder names to
-      // forward the verbatim package to. Must run BEFORE the submissions-AI
-      // agent fallthrough (getAgentType maps #srt-sub → "submissions").
-      const subChannelEnv = process.env.SLACK_SUB_CHANNEL || "";
-
-      // #srt-sub statement/app drop → analyze + build report + the two Outlook drafts.
-      // Fire a non-blocking POST to the dedicated endpoint (its own 300s timeout) so the
-      // slow work doesn't run in this short-lived events function.
-      if (
-        subChannelEnv &&
-        channel === subChannelEnv &&
-        attachedFiles.some((f) => f.mimetype === "application/pdf" || /\.pdf$/i.test(f.name ?? ""))
-      ) {
-        const dropThread = parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : (event.ts as string);
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-        await supabaseAdmin.from("system_logs").insert({
-          event_type: "build_drafts_dispatch",
-          description: "[slack/events] #srt-sub PDF drop → dispatch build-drafts",
-          metadata: { files: attachedFiles.length, channel },
-        }).then(() => {}, () => {});
-        // build-drafts responds immediately (work continues there via waitUntil), so awaiting
-        // this is fast and guarantees the request is actually sent before this function returns.
-        try {
-          await fetch(`${appUrl}/api/agent/build-drafts`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              channel,
-              threadTs: dropThread,
-              userId: event.user as string,
-              text: userText,
-              files: attachedFiles.map((f) => ({ name: f.name, mimetype: f.mimetype, url_private_download: f.url_private_download })),
-            }),
-          });
-        } catch (e) {
-          console.error("[slack/events] build-drafts dispatch error:", (e as Error).message);
-        }
-        return NextResponse.json({ ok: true });
-      }
-
-      // #srt-sub "build" command (no files) → resolve the lead only.
-      // Must run before the funder-name reply handler so "build …" isn't parsed as lenders.
-      if (
-        subChannelEnv &&
-        channel === subChannelEnv &&
-        isBuildCommand(userText)
-      ) {
-        const handled = await handleBuildCommand({
-          channel,
-          threadTs: parentThreadTs && parentThreadTs !== event.ts ? parentThreadTs : (event.ts as string),
-          userId: event.user as string,
-          text: userText,
-        });
-        if (handled) return NextResponse.json({ ok: true });
-      }
-
-      // Thread reply under a #srt-sub bank-statement drop → Vektor controls
-      // (N-months trim, name override, rebuild, or a conversational answer).
-      // Runs BEFORE the email-submissions funder-forward handler below.
-      if (
-        parentThreadTs &&
-        parentThreadTs !== event.ts &&
-        subChannelEnv &&
-        channel === subChannelEnv &&
-        userText.trim().length > 0
-      ) {
-        const handled = await handleStatementDropThreadReply({
-          channel,
-          threadTs: parentThreadTs,
-          userId: event.user as string,
-          replyText: userText,
-        });
-        if (handled) return NextResponse.json({ ok: true });
-      }
-
-      if (
-        parentThreadTs &&
-        parentThreadTs !== event.ts &&
-        subChannelEnv &&
-        channel === subChannelEnv &&
-        userText.trim().length > 0
-      ) {
-        const handled = await handleSubDealThreadReply({
-          channel,
-          threadTs: parentThreadTs,
-          userId: event.user as string,
-          replyText: userText,
-        });
-        if (handled) return NextResponse.json({ ok: true });
       }
 
       // Thread reply under a suggestion card → send the stored draft. A send-command
@@ -1614,191 +1495,6 @@ async function handleContentDrop(args: {
   }
 }
 
-// Thread-reply handler for deal threads with a pending send_submission card.
-// Parses lender names, edits the pending payload with lender_ids, resolves
-// the action as approved, and fires submit-to-lenders via executePendingAction.
-// Returns true if the reply was consumed as a lender list (even on parse
-// failure) so the outer AI-agent branch doesn't also respond.
-async function handleDealThreadReply(args: {
-  channel: string;
-  threadTs: string;
-  userId: string;
-  replyText: string;
-}): Promise<boolean> {
-  const { data: deal } = await supabaseAdmin
-    .from("deals")
-    .select("id")
-    .eq("slack_thread_ts", args.threadTs)
-    .maybeSingle();
-  if (!deal) return false;
-
-  const { data: pending } = await supabaseAdmin
-    .from("pending_slack_actions")
-    .select("id, slack_ts, slack_channel, payload")
-    .eq("action_type", "send_submission")
-    .eq("status", "pending")
-    .eq("payload->>deal_id", deal.id as string)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!pending) return false;
-
-  const choice = await parseLenderChoicesFromReply(args.replyText);
-  if (choice.lender_ids.length === 0) {
-    await slack.postEphemeral(
-      args.channel,
-      args.userId,
-      `Couldn't match any lender from "${args.replyText.slice(0, 120)}". Try: \`Forward Financing, Credibly\` or \`Tier 1 only\` — optionally add \`/ note: client note here\`.`,
-    );
-    return true;
-  }
-
-  const currentPayload = (pending.payload as PendingActionPayload) ?? {};
-  const editedPayload: PendingActionPayload = {
-    ...currentPayload,
-    lender_ids: choice.lender_ids,
-    ...(choice.note ? { client_note: choice.note } : {}),
-  } as PendingActionPayload & { client_note?: string };
-
-  const { action, error } = await resolvePendingAction({
-    slackTs: pending.slack_ts as string,
-    status: "approved",
-    approvedBy: args.userId,
-    editedPayload,
-  });
-  if (error || !action) {
-    await slack.postEphemeral(args.channel, args.userId, `Couldn't resolve send: ${error ?? "unknown"}`);
-    return true;
-  }
-
-  await slack.postThreadReply(
-    args.channel,
-    args.threadTs,
-    `📤 Sending to: ${choice.matched_names.join(", ")}${choice.unmatched.length ? ` _(unmatched: ${choice.unmatched.join(", ")})_` : ""}`,
-  );
-
-  const result = await executePendingAction({
-    actionId: action.id,
-    actionType: action.action_type,
-    payload: action.payload,
-    approvedBy: args.userId,
-  });
-
-  const channelId = result.details?.channel_id as string | undefined;
-  const summary = result.ok
-    ? `Sent to ${(result.details?.sent as string[] | undefined)?.length ?? 0} lender(s)${
-        channelId ? ` — channel: <#${channelId}>` : ""
-      }`
-    : `Send failed: ${result.error ?? "unknown"}`;
-
-  await postExecutionReceipt({
-    channel: args.channel,
-    threadTs: pending.slack_ts as string,
-    summary,
-    success: result.ok,
-  });
-  return true;
-}
-
-// Reply under a "New Deal" parent message in #srt-sub: parse funder names and
-// forward the verbatim package to each. Returns true if this thread is a tracked
-// email_submissions deal (so the caller stops before the AI agent answers).
-/**
- * Pull raw email addresses out of a thread reply, splitting To vs CC: everything after a
- * `cc` marker (e.g. "… and cc jane@lender.com") goes to CC. Used for the ad-hoc "email this
- * to X" flow so Matthew can forward a deal to addresses that aren't seeded lenders.
- */
-function parseAddressesFromText(text: string): { to: string[]; cc: string[] } {
-  // Slack auto-linkifies emails to <mailto:addr|display>. Unwrap those first so we capture the
-  // bare address, not the whole "mailto:addr|display" blob (which Graph rejects as invalid).
-  const unwrapped = text.replace(/<mailto:([^|>]+)(?:\|[^>]*)?>/gi, "$1");
-  // Exclude : and | too, so any stray "mailto:" prefix or "|display" suffix can't bleed in.
-  const emailRe = /[^\s,;<>()"|:]+@[^\s,;<>()"|:]+\.[^\s,;<>()"|:]+/g;
-  const norm = (arr: string[]) =>
-    Array.from(new Set(arr.map((e) => e.replace(/^mailto:/i, "").replace(/[.,;:]+$/, "").toLowerCase()).filter(Boolean)));
-  const ccIdx = unwrapped.search(/\bcc\b[:\s]/i);
-  const toPart = ccIdx >= 0 ? unwrapped.slice(0, ccIdx) : unwrapped;
-  const ccPart = ccIdx >= 0 ? unwrapped.slice(ccIdx) : "";
-  const to = norm(toPart.match(emailRe) ?? []);
-  const cc = norm(ccPart.match(emailRe) ?? []).filter((e) => !to.includes(e));
-  return { to, cc };
-}
-
-async function handleSubDealThreadReply(args: {
-  channel: string;
-  threadTs: string;
-  userId: string;
-  replyText: string;
-}): Promise<boolean> {
-  const submission = await getEmailSubmissionByThread(args.threadTs);
-  if (!submission) return false;
-
-  const affirmative = /^\s*(go|yes|all|send(\s+(it|them))?(\s+all)?|ship\s+it)\s*$/i.test(args.replyText.trim());
-
-  // Ad-hoc "email this to bob@lender.com and cc jane@lender.com" → stage + confirm, don't send yet.
-  const { to: adhocTo, cc: adhocCc } = parseAddressesFromText(args.replyText);
-  if (adhocTo.length > 0) {
-    await setPendingAdhocForward(submission.id, adhocTo, adhocCc);
-    const ccNote = adhocCc.length ? ` · CC ${adhocCc.join(", ")}` : "";
-    await slack.postThreadReply(
-      args.channel,
-      args.threadTs,
-      `📧 Send *${submission.business_name}* to: ${adhocTo.join(", ")}${ccNote}?\nReply \`go\` to send.`,
-    );
-    return true;
-  }
-
-  // `go` with a staged ad-hoc target → forward to those raw addresses (takes precedence over suggested funders).
-  if (affirmative && (submission.pending_adhoc_to?.length ?? 0) > 0) {
-    const to = submission.pending_adhoc_to!;
-    const cc = submission.pending_adhoc_cc ?? [];
-    const ccNote = cc.length ? ` · CC ${cc.join(", ")}` : "";
-    await slack.postThreadReply(args.channel, args.threadTs, `📤 Forwarding *${submission.business_name}* to: ${to.join(", ")}${ccNote}`);
-    const result = await forwardDealToAddresses({ emailSubmissionId: submission.id, to, cc });
-    await clearPendingAdhocForward(submission.id);
-    if (!result.ok) {
-      await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Forward failed: ${result.error ?? "unknown"}`);
-    }
-    return true;
-  }
-
-  const choice = await parseLenderChoicesFromReply(args.replyText);
-  let lenderIds = choice.lender_ids;
-  let forwardLabel = `${choice.matched_names.join(", ")}${
-    choice.unmatched.length ? ` _(unmatched: ${choice.unmatched.join(", ")})_` : ""
-  }`;
-
-  // `go` / `all` / `yes` with no explicit funders → forward to the funders the bot suggested.
-  if (lenderIds.length === 0 && affirmative && (submission.suggested_lender_ids?.length ?? 0) > 0) {
-    lenderIds = submission.suggested_lender_ids!;
-    forwardLabel = `${lenderIds.length} suggested funder(s)`;
-  }
-
-  if (lenderIds.length === 0) {
-    await slack.postEphemeral(
-      args.channel,
-      args.userId,
-      `Couldn't match any funder from "${args.replyText.slice(0, 120)}". Reply \`go\` to send all suggested, name funders like \`Legend, Fundbox\` / \`Tier 1 only\`, or email a raw address like \`email this to bob@lender.com and cc jane@lender.com\`.`,
-    );
-    return true;
-  }
-
-  await slack.postThreadReply(
-    args.channel,
-    args.threadTs,
-    `📤 Forwarding *${submission.business_name}* to: ${forwardLabel}`,
-  );
-
-  const result = await forwardDealToFunders({
-    emailSubmissionId: submission.id,
-    lenderIds,
-  });
-
-  if (!result.ok && result.sent.length === 0) {
-    await slack.postThreadReply(args.channel, args.threadTs, `⚠️ Forward failed: ${result.error ?? "unknown"}`);
-  }
-  return true;
-}
 
 interface SlackFileInfo {
   id: string;

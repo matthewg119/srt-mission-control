@@ -24,7 +24,6 @@ export default function AutomationsPage() {
   const [logs, setLogs] = useState<AutomationLog[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
   const [activeTab, setActiveTab] = useState<"rules" | "history">("rules");
-  const [filterPipeline, setFilterPipeline] = useState<"all" | "New Deals" | "Active Deals">("all");
   const [runningStaleCheck, setRunningStaleCheck] = useState(false);
 
   useEffect(() => {
@@ -59,12 +58,10 @@ export default function AutomationsPage() {
     setRunningStaleCheck(false);
   };
 
-  const filteredRules = rules.filter(
-    (r) => filterPipeline === "all" || r.pipeline === filterPipeline
-  );
-
-  const onEnterRules = filteredRules.filter((r) => r.trigger === "on_enter");
-  const staleRules = filteredRules.filter((r) => r.trigger === "stale");
+  // There is one pipeline now, so the pipeline filter that used to sit above
+  // these lists is gone with the New Deals / Active Deals split.
+  const onEnterRules = rules.filter((r) => r.trigger === "on_enter");
+  const staleRules = rules.filter((r) => r.trigger === "stale");
 
   return (
     <div>
@@ -73,7 +70,7 @@ export default function AutomationsPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Automations</h1>
           <p className="text-sm text-[rgba(255,255,255,0.5)] mt-1">
-            Auto-send SMS & Email when deals move stages
+            Auto-send SMS & Email when leads move stages
           </p>
         </div>
         <button
@@ -105,23 +102,6 @@ export default function AutomationsPage() {
 
       {activeTab === "rules" && (
         <>
-          {/* Pipeline filter */}
-          <div className="flex gap-1 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg p-1 mb-6 w-fit">
-            {(["all", "New Deals", "Active Deals"] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => setFilterPipeline(p)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                  filterPipeline === p
-                    ? "bg-[rgba(255,255,255,0.1)] text-white"
-                    : "text-[rgba(255,255,255,0.4)] hover:text-white"
-                }`}
-              >
-                {p === "all" ? "All Pipelines" : p}
-              </button>
-            ))}
-          </div>
-
           {/* On Enter Rules */}
           <h3 className="text-sm font-semibold text-[rgba(255,255,255,0.6)] mb-3 uppercase tracking-wider">
             Stage Entry Automations
@@ -134,7 +114,7 @@ export default function AutomationsPage() {
 
           {/* Stale Rules */}
           <h3 className="text-sm font-semibold text-[rgba(255,255,255,0.6)] mb-3 uppercase tracking-wider">
-            Stale Deal Alerts
+            Gone-Quiet Alerts
           </h3>
           <div className="space-y-2">
             {staleRules.map((rule) => (
@@ -157,7 +137,7 @@ export default function AutomationsPage() {
               <Zap size={40} className="mx-auto text-[rgba(255,255,255,0.2)] mb-4" />
               <p className="text-lg text-[rgba(255,255,255,0.4)] mb-2">No automation history yet</p>
               <p className="text-sm text-[rgba(255,255,255,0.3)]">
-                Automations will fire when deals move stages in your pipeline
+                Automations will fire when leads move stages in your pipeline
               </p>
             </div>
           ) : (

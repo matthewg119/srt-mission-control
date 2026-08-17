@@ -1,5 +1,21 @@
-// Pipeline automation rules — define what happens when a deal enters a stage
-// Each rule maps a stage to actions that fire on entry
+// Stage automation rules — what happens when a lead enters a stage, and what
+// happens when it sits there too long.
+//
+// This file used to carry 18 rules across two MCA pipelines (Underwriting,
+// Shopping, Pre-Approved, VC / DL, Contracts Out/In, Pending Stips, Funding
+// Call, In Funding). Those stages no longer exist; the AEO pipeline is five
+// stages and the rules below are keyed to them.
+//
+// The `pipeline` field is kept because automation-engine.ts and the dashboard
+// both read it, but there is only one pipeline now.
+
+import {
+  STAGE_NO_CONTACT,
+  STAGE_WORKING,
+  STAGE_EMAIL_PITCH,
+  STAGE_NEGOTIATING,
+  STAGE_CLOSED,
+} from "./stage-display";
 
 export interface AutomationAction {
   type: "send_sms" | "send_email" | "add_tag" | "remove_tag" | "notify_team";
@@ -11,7 +27,7 @@ export interface AutomationAction {
 
 export interface AutomationRule {
   id: string;
-  pipeline: "New Deals" | "Active Deals";
+  pipeline: "Pipeline";
   stage: string;
   trigger: "on_enter" | "stale";
   staleDays?: number; // Only for stale trigger
@@ -21,11 +37,10 @@ export interface AutomationRule {
 }
 
 export const DEFAULT_AUTOMATIONS: AutomationRule[] = [
-  // === NEW DEALS PIPELINE ===
   {
-    id: "open-not-contacted-welcome",
-    pipeline: "New Deals",
-    stage: "Open - Not Contacted",
+    id: "no-contact-welcome",
+    pipeline: "Pipeline",
+    stage: STAGE_NO_CONTACT,
     trigger: "on_enter",
     actions: [
       { type: "send_sms", templateSlug: "new-lead-welcome-sms" },
@@ -36,21 +51,21 @@ export const DEFAULT_AUTOMATIONS: AutomationRule[] = [
     description: "Welcome SMS + Email when a new lead comes in",
   },
   {
-    id: "open-not-contacted-stale",
-    pipeline: "New Deals",
-    stage: "Open - Not Contacted",
+    id: "no-contact-stale",
+    pipeline: "Pipeline",
+    stage: STAGE_NO_CONTACT,
     trigger: "stale",
     staleDays: 3,
     actions: [
       { type: "notify_team", message: "Lead has been sitting for 3+ days without contact" },
     ],
     enabled: true,
-    description: "Alert team when new leads go cold",
+    description: "Alert the team when new leads go cold",
   },
   {
-    id: "working-contacted-followup",
-    pipeline: "New Deals",
-    stage: "Working - Contacted",
+    id: "working-followup",
+    pipeline: "Pipeline",
+    stage: STAGE_WORKING,
     trigger: "on_enter",
     actions: [
       { type: "send_sms", templateSlug: "contacted-followup-sms" },
@@ -62,215 +77,60 @@ export const DEFAULT_AUTOMATIONS: AutomationRule[] = [
     description: "Follow-up SMS + delayed email after first contact",
   },
   {
-    id: "working-application-out",
-    pipeline: "New Deals",
-    stage: "Working - Application Out",
+    id: "email-pitch-sent",
+    pipeline: "Pipeline",
+    stage: STAGE_EMAIL_PITCH,
     trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "application-sent-sms" },
-      { type: "add_tag", tag: "application-out" },
-    ],
+    actions: [{ type: "add_tag", tag: "pitched" }],
     enabled: true,
-    description: "Confirm application was sent to lead",
+    description: "Tag the lead once the AEO pitch has gone out",
   },
   {
-    id: "converted-notification",
-    pipeline: "New Deals",
-    stage: "Converted",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "converted-active-sms" },
-      { type: "add_tag", tag: "converted" },
-      { type: "notify_team", message: "Lead converted to active deal" },
-    ],
-    enabled: true,
-    description: "Notify contact and team when lead converts",
-  },
-  {
-    id: "closed-not-converted",
-    pipeline: "New Deals",
-    stage: "Closed - Not Converted",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_email", templateSlug: "not-converted-email" },
-      { type: "add_tag", tag: "not-converted" },
-    ],
-    enabled: true,
-    description: "Send rejection email with alternative options",
-  },
-
-  // === ACTIVE DEALS PIPELINE ===
-  {
-    id: "underwriting",
-    pipeline: "Active Deals",
-    stage: "Underwriting",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_email", templateSlug: "underwriting-email" },
-      { type: "add_tag", tag: "underwriting" },
-    ],
-    enabled: true,
-    description: "Notify contact file is under review",
-  },
-  {
-    id: "shopping",
-    pipeline: "Active Deals",
-    stage: "Shopping",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "shopping-sms" },
-      { type: "add_tag", tag: "shopping" },
-    ],
-    enabled: true,
-    description: "Notify contact deal is being shopped to lenders",
-  },
-  {
-    id: "pre-approved",
-    pipeline: "Active Deals",
-    stage: "Pre-Approved",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "pre-approved-sms" },
-      { type: "send_email", templateSlug: "pre-approved-email" },
-      { type: "add_tag", tag: "pre-approved" },
-    ],
-    enabled: true,
-    description: "Pre-approval congratulations",
-  },
-  {
-    id: "approved-congrats",
-    pipeline: "Active Deals",
-    stage: "Approved",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "approved-sms" },
-      { type: "send_email", templateSlug: "approved-email" },
-      { type: "add_tag", tag: "approved" },
-      { type: "notify_team", message: "Deal APPROVED!" },
-    ],
-    enabled: true,
-    description: "Approval celebration — SMS, Email, team notification",
-  },
-  {
-    id: "vc-dl",
-    pipeline: "Active Deals",
-    stage: "VC / DL",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "vc-dl-sms" },
-    ],
-    enabled: true,
-    description: "Notify contact about verification call / DocuSign link",
-  },
-  {
-    id: "contracts-out",
-    pipeline: "Active Deals",
-    stage: "Contracts Out",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "contracts-out-sms" },
-    ],
-    enabled: true,
-    description: "Send contracts signing instructions",
-  },
-  {
-    id: "contracts-out-stale",
-    pipeline: "Active Deals",
-    stage: "Contracts Out",
-    trigger: "stale",
-    staleDays: 2,
-    actions: [
-      { type: "send_sms", templateSlug: "contracts-reminder-sms" },
-      { type: "notify_team", message: "Contracts unsigned for 2+ days" },
-    ],
-    enabled: true,
-    description: "Remind when contracts aren't signed after 2 days",
-  },
-  {
-    id: "contracts-in",
-    pipeline: "Active Deals",
-    stage: "Contracts In",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "contracts-in-sms" },
-    ],
-    enabled: true,
-    description: "Confirm contracts received",
-  },
-  {
-    id: "pending-stips",
-    pipeline: "Active Deals",
-    stage: "Pending Stips",
-    trigger: "on_enter",
-    actions: [
-      { type: "send_sms", templateSlug: "pending-stips-sms" },
-      { type: "send_email", templateSlug: "pending-stips-email" },
-      { type: "add_tag", tag: "pending-stips" },
-    ],
-    enabled: true,
-    description: "Notify contact about required stipulations",
-  },
-  {
-    id: "pending-stips-stale",
-    pipeline: "Active Deals",
-    stage: "Pending Stips",
+    id: "email-pitch-stale",
+    pipeline: "Pipeline",
+    stage: STAGE_EMAIL_PITCH,
     trigger: "stale",
     staleDays: 3,
     actions: [
-      { type: "send_sms", templateSlug: "stips-reminder-sms" },
-      { type: "notify_team", message: "Stips pending for 3+ days" },
+      { type: "notify_team", message: "Pitch sent 3+ days ago with no reply — worth a call" },
     ],
     enabled: true,
-    description: "Remind when stips haven't been satisfied after 3 days",
+    description: "Surface pitches that went quiet",
   },
   {
-    id: "funding-call",
-    pipeline: "Active Deals",
-    stage: "Funding Call",
+    id: "negotiating-entered",
+    pipeline: "Pipeline",
+    stage: STAGE_NEGOTIATING,
     trigger: "on_enter",
     actions: [
-      { type: "send_sms", templateSlug: "funding-call-sms" },
+      { type: "add_tag", tag: "negotiating" },
+      { type: "notify_team", message: "Lead moved to Negotiating / Follow-up" },
     ],
     enabled: true,
-    description: "Notify contact about funding call",
+    description: "Flag a live conversation to the team",
   },
   {
-    id: "in-funding",
-    pipeline: "Active Deals",
-    stage: "In Funding",
-    trigger: "on_enter",
+    id: "negotiating-stale",
+    pipeline: "Pipeline",
+    stage: STAGE_NEGOTIATING,
+    trigger: "stale",
+    staleDays: 2,
     actions: [
-      { type: "send_sms", templateSlug: "in-funding-sms" },
-      { type: "send_email", templateSlug: "in-funding-email" },
-      { type: "add_tag", tag: "in-funding" },
+      { type: "notify_team", message: "Live conversation with no touch in 2 days" },
     ],
     enabled: true,
-    description: "Funding in progress notification",
+    description: "A missed day here is what costs the yes",
   },
   {
-    id: "closed-won",
-    pipeline: "Active Deals",
-    stage: "Closed",
+    id: "closed",
+    pipeline: "Pipeline",
+    stage: STAGE_CLOSED,
     trigger: "on_enter",
     actions: [
-      { type: "send_sms", templateSlug: "funded-congrats-sms" },
-      { type: "send_email", templateSlug: "funded-congrats-email" },
-      { type: "add_tag", tag: "funded" },
-      { type: "notify_team", message: "DEAL CLOSED!" },
+      { type: "remove_tag", tag: "negotiating" },
+      { type: "add_tag", tag: "closed" },
     ],
     enabled: true,
-    description: "Closed/funded celebration — full notification suite",
-  },
-  {
-    id: "deal-lost",
-    pipeline: "Active Deals",
-    stage: "Deal Lost",
-    trigger: "on_enter",
-    actions: [
-      { type: "add_tag", tag: "deal-lost" },
-      { type: "notify_team", message: "Deal lost" },
-    ],
-    enabled: true,
-    description: "Tag and notify team when deal is lost",
+    description: "Clean up tags when a lead closes out",
   },
 ];

@@ -1,8 +1,15 @@
-// Presentation metadata only — stage is owned by Zoho (`deals.zoho_stage`).
-// This file exists so UI components can render ordered stage pickers + colors
-// without having to round-trip to Zoho's picklist API on every render. Keep it
-// in rough sync with Zoho's Lead_Status picklist; treat the list as advisory,
-// not authoritative.
+// The five stages, and the only place they are defined.
+//
+// This file used to be presentation metadata for Zoho's MCA picklist, which is
+// why the old version carried two pipelines and eighteen stages. SRT is off
+// business funding, so the funding vocabulary (Underwriting, Shopping,
+// Pre-Approved, VC / DL, Contracts Out, Pending Stips, Funding Call, In
+// Funding) is gone and the stage column is owned here now, not by Zoho.
+//
+// Anything that renders, filters, validates or cadences a stage imports from
+// this file. The old copies scattered across the codebase are what let
+// template-editor.tsx drift into offering "Contract In" and "Funded" as stages
+// that no lead could ever be in.
 
 export interface StageMeta {
   name: string;
@@ -14,126 +21,130 @@ export interface StagePipeline {
   stages: readonly StageMeta[];
 }
 
-export const NEW_DEALS_PIPELINE: StagePipeline = {
-  name: "New Deals",
+export const STAGE_NO_CONTACT = "No contact";
+export const STAGE_WORKING = "Working";
+export const STAGE_EMAIL_PITCH = "Email Pitch";
+export const STAGE_NEGOTIATING = "Negotiating / Follow-up";
+export const STAGE_CLOSED = "Closed";
+
+export const AEO_PIPELINE: StagePipeline = {
+  name: "Pipeline",
   stages: [
-    { name: "Open - Not Contacted", color: "#1B65A7" },
-    { name: "Working - Contacted", color: "#9C27B0" },
-    { name: "Working - Application Out", color: "#00BCD4" },
-    { name: "Closed - Not Converted", color: "#E74C3C" },
-    { name: "Converted", color: "#00C9A7" },
+    { name: STAGE_NO_CONTACT, color: "#1B65A7" },
+    { name: STAGE_WORKING, color: "#9C27B0" },
+    { name: STAGE_EMAIL_PITCH, color: "#00BCD4" },
+    { name: STAGE_NEGOTIATING, color: "#F5A623" },
+    { name: STAGE_CLOSED, color: "#6B7280" },
   ],
 } as const;
 
-export const ACTIVE_DEALS_PIPELINE: StagePipeline = {
-  name: "Active Deals",
-  stages: [
-    { name: "Underwriting", color: "#1B65A7" },
-    { name: "Shopping", color: "#9C27B0" },
-    { name: "Pre-Approved", color: "#00BCD4" },
-    { name: "Approved", color: "#4CAF50" },
-    { name: "VC / DL", color: "#f59e0b" },
-    { name: "Contracts Out", color: "#00C9A7" },
-    { name: "Contracts In", color: "#009688" },
-    { name: "Pending Stips", color: "#F5A623" },
-    { name: "Funding Call", color: "#9C27B0" },
-    { name: "In Funding", color: "#1B65A7" },
-    { name: "Closed", color: "#4CAF50" },
-    { name: "Dead Declined", color: "#E74C3C" },
-    { name: "Deal Lost", color: "#E74C3C" },
-  ],
-} as const;
+export const STAGE_PIPELINES: readonly StagePipeline[] = [AEO_PIPELINE];
 
-export const STAGE_PIPELINES: readonly StagePipeline[] = [
-  NEW_DEALS_PIPELINE,
-  ACTIVE_DEALS_PIPELINE,
+/** The five, flat. Filter chips, status pickers and the write allowlist. */
+export const ALL_STAGES: readonly StageMeta[] = AEO_PIPELINE.stages;
+
+export const STAGE_NAMES: readonly string[] = ALL_STAGES.map((s) => s.name);
+
+const STAGE_BY_LOWER = new Map(ALL_STAGES.map((s) => [s.name.toLowerCase(), s]));
+
+export function stageColor(stage: string | null | undefined): string {
+  if (!stage) return "#9CA3AF";
+  return STAGE_BY_LOWER.get(String(stage).trim().toLowerCase())?.color ?? "#9CA3AF";
+}
+
+// ── Normalization ────────────────────────────────────────────────────
+// The migration collapsed contacts.application_stage to these five, but the
+// column is free-form text with no CHECK constraint, and inbound webhooks,
+// the medspa/TRT syncs and any hand-edited row can still hand us something
+// else. Everything that accepts a stage from outside runs it through here, so
+// a stray value can never put a sixth chip on the leads page.
+
+/** Legacy value -> new stage. Mirrors the SQL migration exactly; if you change
+ *  one, change the other. Keys are lowercase. */
+const STAGE_ALIASES: Record<string, string> = {
+  // Reached them.
+  "working - contacted": STAGE_WORKING,
+  "working - application out": STAGE_WORKING,
+  contacted: STAGE_WORKING,
+  working: STAGE_WORKING,
+
+  // Done with, one way or the other. Won business closes too: there is no
+  // funding deal left to work, and the AEO pitch starts from scratch.
+  closed: STAGE_CLOSED,
+  "closed - not converted": STAGE_CLOSED,
+  "closed - converted": STAGE_CLOSED,
+  converted: STAGE_CLOSED,
+  funded: STAGE_CLOSED,
+  "dead declined": STAGE_CLOSED,
+  "deal lost": STAGE_CLOSED,
+  declined: STAGE_CLOSED,
+  "not interested": STAGE_CLOSED,
+  unresponsive: STAGE_CLOSED,
+  lost: STAGE_CLOSED,
+  "bad lead": STAGE_CLOSED,
+  "wrong number": STAGE_CLOSED,
+  duplicate: STAGE_CLOSED,
+  "junk lead": STAGE_CLOSED,
+  "lost lead": STAGE_CLOSED,
+  "take off list": STAGE_CLOSED,
+};
+
+/** Substring fallback for the values Zoho stored off-picklist. "Not interested"
+ *  was live on 29 of a 2,400-lead sample against a list that said "Not
+ *  Interested", so exact matching alone silently left dead leads workable. */
+const CLOSED_KEYWORDS = [
+  "declined", "dead", "dnq", "lost", "junk", "duplicate", "not interested",
 ];
 
-/** Terminal Zoho stages — not editable, not eligible for cadence/nurture. */
-export const ZOHO_TERMINAL_STAGES: readonly string[] = [
-  // Hard closed / dead
-  "Closed - Not Converted",
-  "Closed",
-  "Closed - Converted",
-  "Dead Declined",
-  "Deal Lost",
-  "Funded",
-  "Declined",
-  "Not Interested",
-  "Unresponsive",
-  "Lost",
-  "Bad Lead",
-  "Wrong Number",
-  "Duplicate",
-  "Junk Lead",
-  "Lost Lead",
-  // Values confirmed live on Zoho leads 2026-08-16 that nothing here caught.
-  // "Take Off List" is an explicit do-not-call and matched none of the
-  // substring keywords below; "Converted" is won business, not a lead to work.
-  "Take Off List",
-  "Converted",
-  // Pre-contact stages — no outreach has happened yet; guardian has nothing to act on.
-  // These were flooding Zoho webhook quota because the guardian processed them daily.
-  "Open - Not Contacted",
-  "Not Contacted",
-  "Working - No Contact",
-  "New",
-];
+/**
+ * Any stage string -> one of the five. Unknown values become "No contact",
+ * which is the safe default: the lead stays on the call board rather than
+ * disappearing into a stage nothing queries.
+ */
+export function normalizeStage(stage: string | null | undefined): string {
+  if (!stage) return STAGE_NO_CONTACT;
+  const lower = String(stage).trim().toLowerCase();
+  if (!lower) return STAGE_NO_CONTACT;
+  if (STAGE_BY_LOWER.has(lower)) return STAGE_BY_LOWER.get(lower)!.name;
+  if (STAGE_ALIASES[lower]) return STAGE_ALIASES[lower];
+  if (CLOSED_KEYWORDS.some((k) => lower.includes(k))) return STAGE_CLOSED;
+  return STAGE_NO_CONTACT;
+}
 
-// Matching is CASE-INSENSITIVE, and that is not cosmetic. Zoho's stored values
-// do not follow its own picklist casing: "Not interested" is live on 29 of a
-// 2,400-lead sample while this list says "Not Interested", so the exact-match
-// test returned false and none of the substring keywords below rescued it.
-// Those leads were fully workable as far as every caller was concerned.
-const TERMINAL_STAGES_LOWER = new Set(
-  ZOHO_TERMINAL_STAGES.map((s) => s.toLowerCase())
-);
+// ── Terminal vs pre-contact ──────────────────────────────────────────
+
+/** Genuinely done. Never call these. */
+export const TERMINAL_STAGES: readonly string[] = [STAGE_CLOSED];
 
 export function isTerminalStage(stage: string | null | undefined): boolean {
   if (!stage) return false;
-  const lower = String(stage).trim().toLowerCase();
-  if (TERMINAL_STAGES_LOWER.has(lower)) return true;
-  return ["declined", "dead", "dnq", "lost", "junk", "duplicate", "not interested"].some(
-    (k) => lower.includes(k)
-  );
+  return normalizeStage(stage) === STAGE_CLOSED;
 }
 
 /**
- * Stages that are pre-contact rather than closed.
+ * Pre-contact rather than closed.
  *
- * ZOHO_TERMINAL_STAGES lumps these in with the dead ones because the AI
- * guardian has nothing to act on for a lead nobody has called yet. The
- * worklist has the opposite need: an untouched lead is the single most
- * important thing on the call board. So the two ideas need separate tests —
- * use isDeadStage() for "stop working this", isTerminalStage() for "the
- * guardian should skip this".
+ * "No contact" MUST be here. isDeadStage() gates the worklist's hard drop in
+ * src/lib/worklist.ts, and after the migration the overwhelming majority of the
+ * book sits at "No contact". If this list loses that entry, the call board goes
+ * empty and it looks like a data loss rather than a config bug.
  */
-export const PRE_CONTACT_STAGES: readonly string[] = [
-  "Open - Not Contacted",
-  "Not Contacted",
-  "Working - No Contact",
-  "New",
-  "New Lead",
-];
+export const PRE_CONTACT_STAGES: readonly string[] = [STAGE_NO_CONTACT];
 
-/** Genuinely closed out — lost, declined, junk, or funded. Never call these. */
 const PRE_CONTACT_LOWER = new Set(PRE_CONTACT_STAGES.map((s) => s.toLowerCase()));
 
+/** Stop working this. The opposite of "there is nothing to work yet". */
 export function isDeadStage(stage: string | null | undefined): boolean {
   if (!stage) return false;
-  // Case-insensitive for the same reason isTerminalStage is: Zoho stores
-  // "New lead" where this list says "New Lead".
   if (PRE_CONTACT_LOWER.has(String(stage).trim().toLowerCase())) return false;
   return isTerminalStage(stage);
 }
 
 // ── Follow-up cadence ────────────────────────────────────────────────
-// How long a lead in each stage may sit untouched before the worklist
-// surfaces it. Lives next to the pipelines it describes, and next to
-// isDeadStage(), because src/lib/worklist.ts uses all three together.
-//
-// firstTouchHours applies when there has been no activity at all;
-// repeatDays applies after the first touch.
+// How long a lead in each stage may sit untouched before the worklist surfaces
+// it. firstTouchHours applies when there has been no activity at all;
+// repeatDays applies after the first touch. src/lib/worklist.ts uses this
+// alongside isDeadStage(), which is why they live together.
 
 export interface StageCadence {
   firstTouchHours: number;
@@ -142,72 +153,28 @@ export interface StageCadence {
 
 export const STAGE_CADENCE: Record<string, StageCadence> = {
   // Speed to lead: a brand-new lead is worth 15 minutes, not a day.
-  "Open - Not Contacted": { firstTouchHours: 0.25, repeatDays: 1 },
-  "Not Contacted": { firstTouchHours: 0.25, repeatDays: 1 },
-  New: { firstTouchHours: 0.25, repeatDays: 1 },
-  "New Lead": { firstTouchHours: 0.25, repeatDays: 1 },
-
-  "Working - Contacted": { firstTouchHours: 24, repeatDays: 3 },
-  "Working - Application Out": { firstTouchHours: 24, repeatDays: 2 },
-  "Application Complete": { firstTouchHours: 12, repeatDays: 2 },
-  "Hot Lead": { firstTouchHours: 1, repeatDays: 1 },
-
-  Underwriting: { firstTouchHours: 24, repeatDays: 2 },
-  Shopping: { firstTouchHours: 12, repeatDays: 1 },
-  "Pre-Approved": { firstTouchHours: 4, repeatDays: 1 },
-  Approved: { firstTouchHours: 2, repeatDays: 1 },
-  "VC / DL": { firstTouchHours: 4, repeatDays: 1 },
-  "Contracts Out": { firstTouchHours: 4, repeatDays: 1 },
-  "Contracts In": { firstTouchHours: 4, repeatDays: 1 },
-  "Pending Stips": { firstTouchHours: 4, repeatDays: 1 },
-  "Funding Call": { firstTouchHours: 2, repeatDays: 1 },
-  "In Funding": { firstTouchHours: 12, repeatDays: 1 },
-
-  // Revival cadence, not a working cadence.
-  "Deal Lost": { firstTouchHours: 168, repeatDays: 14 },
-
-  // ── Values actually in use on Zoho leads (sampled 2026-08-16) ────────
-  // Everything above was written against the DEAL pipelines. The Zoho LEAD
-  // picklist is a different vocabulary, and none of these appeared here, so
-  // every imported lead fell through to DEFAULT_CADENCE and the whole table
-  // was decorative for 8,307 of 8,541 records.
-  "Attempted to Contact": { firstTouchHours: 4, repeatDays: 2 },
-  "Intro Text Guide": { firstTouchHours: 4, repeatDays: 2 },
-  Contacted: { firstTouchHours: 24, repeatDays: 3 },
-  Working: { firstTouchHours: 24, repeatDays: 3 },
-  "Pre-Qualified": { firstTouchHours: 4, repeatDays: 1 },
-  "Contact in Future": { firstTouchHours: 168, repeatDays: 30 },
-  "Statements Received": { firstTouchHours: 4, repeatDays: 1 },
-
-  // Portal funnel states. These live in the same column (contacts sets them
-  // directly, and 32 of them have reached Zoho's Lead_Status too), so the
-  // cadence table has to speak this vocabulary as well.
-  "Funnel Lead Captured": { firstTouchHours: 0.25, repeatDays: 1 },
-  "Email Captured": { firstTouchHours: 0.25, repeatDays: 1 },
-  "Name Captured": { firstTouchHours: 0.25, repeatDays: 1 },
-  "No Business Checking": { firstTouchHours: 168, repeatDays: 30 },
+  [STAGE_NO_CONTACT]: { firstTouchHours: 0.25, repeatDays: 1 },
+  [STAGE_WORKING]: { firstTouchHours: 24, repeatDays: 3 },
+  // A pitch email needs time to be read before the nudge is anything but noise.
+  [STAGE_EMAIL_PITCH]: { firstTouchHours: 48, repeatDays: 3 },
+  // Live conversation. A missed day here is what costs the yes.
+  [STAGE_NEGOTIATING]: { firstTouchHours: 24, repeatDays: 2 },
 };
 
 export const DEFAULT_CADENCE: StageCadence = { firstTouchHours: 24, repeatDays: 5 };
 
-// Lookup is case-insensitive: Zoho stores "New lead" where the table above
-// says "New Lead", which silently cost that stage its 15-minute first touch.
 const CADENCE_LOWER = new Map(
   Object.entries(STAGE_CADENCE).map(([k, v]) => [k.toLowerCase(), v])
 );
 
 export function cadenceFor(stage: string | null | undefined): StageCadence {
-  if (!stage) return STAGE_CADENCE["Open - Not Contacted"];
-  return CADENCE_LOWER.get(String(stage).trim().toLowerCase()) ?? DEFAULT_CADENCE;
+  if (!stage) return STAGE_CADENCE[STAGE_NO_CONTACT];
+  return (
+    CADENCE_LOWER.get(String(stage).trim().toLowerCase()) ??
+    CADENCE_LOWER.get(normalizeStage(stage).toLowerCase()) ??
+    DEFAULT_CADENCE
+  );
 }
 
-/** Stages where money is on the table and a missed day actually costs a deal. */
-export const HOT_STAGES: readonly string[] = [
-  "Approved",
-  "Pre-Approved",
-  "Contracts Out",
-  "Contracts In",
-  "Pending Stips",
-  "Funding Call",
-  "VC / DL",
-];
+/** Where a missed day actually costs the deal. Scores +25 on the call board. */
+export const HOT_STAGES: readonly string[] = [STAGE_NEGOTIATING];

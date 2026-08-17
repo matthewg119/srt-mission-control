@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./db";
 import { slack } from "./slack-bot";
 import { isAIConfigured } from "./ai";
+import { normalizeStage, STAGE_CLOSED, STAGE_NO_CONTACT } from "@/config/stage-display";
 
 interface PulseResult {
   summary: string;
@@ -24,29 +25,31 @@ async function gatherSystemState(): Promise<SystemState> {
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Run all queries in parallel
+  // Run all queries in parallel. These read `contacts`, not the retired `deals`
+  // table: a lead's stage lives on contacts.application_stage now.
   const [pipelineResult, newLeadsResult, staleResult, tasksResult, logsResult, draftsResult] = await Promise.all([
-    // Active deals by stage
+    // Live leads by stage
     supabaseAdmin
-      .from("deals")
-      .select("stage, pipeline, contact_id, contacts(first_name, last_name, business_name)")
-      .eq("pipeline", "Active Deals"),
+      .from("contacts")
+      .select("application_stage")
+      .neq("working_state", "closed")
+      .neq("application_stage", STAGE_CLOSED),
 
     // New leads in last 24h
     supabaseAdmin
-      .from("deals")
+      .from("contacts")
       .select("id")
-      .eq("pipeline", "New Deals")
-      .eq("stage", "Open - Not Contacted")
       .gte("created_at", yesterday),
 
-    // Stale deals (no update in 3 days)
+    // Live leads that have gone quiet for 3+ days
     supabaseAdmin
-      .from("deals")
-      .select("stage, updated_at, contact_id, contacts(first_name, last_name, business_name)")
-      .eq("pipeline", "Active Deals")
-      .lt("updated_at", threeDaysAgo)
-      .not("stage", "in", '("Closed","Deal Lost")'),
+      .from("contacts")
+      .select("application_stage, last_activity_at, first_name, last_name, business_name")
+      .neq("working_state", "closed")
+      .neq("application_stage", STAGE_CLOSED)
+      .neq("application_stage", STAGE_NO_CONTACT)
+      .lt("last_activity_at", threeDaysAgo)
+      .limit(25),
 
     // Pending tasks
     supabaseAdmin
@@ -68,23 +71,19 @@ async function gatherSystemState(): Promise<SystemState> {
       .eq("status", "pending_review"),
   ]);
 
-  // Aggregate active deals by stage
+  // Aggregate live leads by stage
   const activeDealsByStage: Record<string, number> = {};
-  for (const deal of pipelineResult.data || []) {
-    const stage = deal.stage as string;
+  for (const row of pipelineResult.data || []) {
+    const stage = normalizeStage(row.application_stage as string | null);
     activeDealsByStage[stage] = (activeDealsByStage[stage] || 0) + 1;
   }
 
-  // Map stale deals to expected shape
-  const staleDeals = (staleResult.data || []).map((d: Record<string, unknown>) => {
-    const c = d.contacts as { first_name?: string; last_name?: string; business_name?: string } | null;
-    return {
-      contact_name: c ? `${c.first_name || ""} ${c.last_name || ""}`.trim() : "Unknown",
-      business_name: c?.business_name || "",
-      stage: d.stage as string,
-      updated_at: d.updated_at as string,
-    };
-  });
+  const staleDeals = (staleResult.data || []).map((d: Record<string, unknown>) => ({
+    contact_name: `${d.first_name || ""} ${d.last_name || ""}`.trim() || "Unknown",
+    business_name: (d.business_name as string) || "",
+    stage: normalizeStage(d.application_stage as string | null),
+    updated_at: d.last_activity_at as string,
+  }));
 
   return {
     activeDealsByStage,
@@ -110,22 +109,22 @@ async function analyzeWithClaude(
 
   const stateDescription = `
 CURRENT SYSTEM STATE:
-- Total Active Deals: ${state.totalActiveDeals}
-- Active Deals by Stage: ${JSON.stringify(state.activeDealsByStage)}
+- Live leads: ${state.totalActiveDeals}
+- Leads by stage: ${JSON.stringify(state.activeDealsByStage)}
 - New Leads (24h): ${state.newLeads24h}
-- Stale Deals (3+ days no activity): ${state.staleDeals.length}${state.staleDeals.length > 0 ? "\n  " + state.staleDeals.map((d) => `${d.business_name || d.contact_name} — ${d.stage}`).join("\n  ") : ""}
+- Leads gone quiet (3+ days no activity): ${state.staleDeals.length}${state.staleDeals.length > 0 ? "\n  " + state.staleDeals.map((d) => `${d.business_name || d.contact_name} — ${d.stage}`).join("\n  ") : ""}
 - Pending Tasks: ${state.pendingTasks}
 - Pending Email Drafts: ${state.pendingDrafts}
 - Recent Activity: ${state.recentLogs.slice(0, 5).map((l) => l.description).join("; ")}
 `;
 
   const promptByType: Record<string, string> = {
-    morning_briefing: `Generate a morning briefing for the CEO. Include: today's priorities, deals needing attention, suggested call order, any urgent items. Be motivational but practical.`,
-    routine: `Generate a mid-day pulse check. What's changed, what needs attention, any blocked deals, suggestions for the rest of the day.`,
+    morning_briefing: `Generate a morning briefing for the CEO. Include: today's priorities, leads needing attention, suggested call order, any urgent items. Be motivational but practical.`,
+    routine: `Generate a mid-day pulse check. What's changed, what needs attention, any stuck leads, suggestions for the rest of the day.`,
     checkin: `Generate an end-of-day summary. What was accomplished, what's still open, what to prep for tomorrow. Keep it brief and actionable.`,
   };
 
-  const systemPrompt = `You are BrainHeart, the AI brain of SRT Agency (business financing brokerage). You think autonomously and create actionable insights.
+  const systemPrompt = `You are BrainHeart, the AI brain of SRT Agency (an AEO agency: we build the part of a business's own website that AI assistants can read and cite). SRT does not do business funding. You think autonomously and create actionable insights.
 
 ${stateDescription}
 
@@ -136,11 +135,11 @@ Respond with ONLY valid JSON (no markdown) in this format:
   "summary": "Your analysis in 2-4 sentences, direct and actionable",
   "tasks": [
     {
-      "type": "follow_up|call_prep|bank_statement_needed|stale_deal|new_lead_contact|general|daily_action",
+      "type": "follow_up|call_prep|quiet_lead|new_lead_contact|general|daily_action",
       "title": "Short task title",
       "description": "Brief description of what to do",
       "priority": "urgent|high|medium|low",
-      "department": "general|underwriting|submissions"
+      "department": "general|sales|delivery"
     }
   ]
 }
@@ -246,9 +245,9 @@ export async function runBrainHeartPulse(
     const blocks = slack.formatPulseReport({
       summary: analysis.summary,
       metrics: {
-        "Active Deals": state.totalActiveDeals,
+        "Live leads": state.totalActiveDeals,
         "New Leads (24h)": state.newLeads24h,
-        "Stale Deals": state.staleDeals.length,
+        "Gone quiet": state.staleDeals.length,
         "Pending Tasks": state.pendingTasks + tasksCreated,
       },
       tasks: analysis.tasks.map((t) => ({ title: t.title, priority: t.priority })),
@@ -265,7 +264,7 @@ export async function runBrainHeartPulse(
   if (pulseType === "routine" && Math.random() < 0.2 && slack.isConfigured() && slack.channels.ceo) {
     const checkins = [
       "Hey Matthew — just checking in. Pipeline looks solid today. Keep pushing! 💪",
-      "Quick thought: those stale deals might be worth a second touch. Want me to prep call notes?",
+      "Quick thought: those quiet leads might be worth a second touch. Want me to prep call notes?",
       "Numbers are looking good this week. Let me know if you need anything.",
       "Just ran a pulse check — everything's running smooth. You're killing it. 🔥",
       "Reminder: I'm here whenever you need me. Just say the word.",

@@ -21,10 +21,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { command: "/task", label: "Create Task", description: "Create a new task", prompt: "Create a task: " },
   { command: "/status", label: "Status", description: "Pipeline overview", prompt: "Give me a quick pipeline status overview" },
   { command: "/prep", label: "Call Prep", description: "Prep for a call", prompt: "Generate call prep for " },
-  { command: "/move", label: "Move Deal", description: "Move deal to stage", prompt: "Move deal " },
-  { command: "/underwrite", label: "Underwrite", description: "Analyze a deal", prompt: "Underwrite deal " },
-  { command: "/submit", label: "Submit", description: "Submit to lender", prompt: "Submit deal " },
-  { command: "/lenders", label: "Lenders", description: "Search lender DB", prompt: "Search lenders for " },
+  { command: "/calls", label: "Call list", description: "Who to call today", prompt: "Who do we need to call today?" },
+  { command: "/stage", label: "Move Lead", description: "Change a lead's stage", prompt: "Set the stage for " },
+  { command: "/note", label: "Add Note", description: "Log a note on a lead", prompt: "Add a note to " },
 ];
 
 export function ChatPopup() {

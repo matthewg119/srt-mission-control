@@ -29,11 +29,8 @@ async function buildHtmlBody(body: string, isHtml: boolean, signatureName?: stri
     .join("");
   return `${htmlBody}<br><br>${sig}`;
 }
-import { substituteMagicLinkInBody } from "@/lib/portal-magic-link";
 import { recordSend } from "./cadence-scheduler";
 import type { CadenceTrack } from "./types";
-import { maybePostSubmissionReady } from "./submission-ready";
-import { submitToLenders } from "./submit-to-lenders";
 
 export interface ExecuteResult {
   ok: boolean;
@@ -54,20 +51,8 @@ export async function executePendingAction(opts: {
         return await sendEmail(opts.payload);
       case "send_marketing_email":
         return await sendMarketingEmail({ ...opts.payload, approvedBy: opts.approvedBy, slackTs: (opts.payload as { slackTs?: string }).slackTs });
-      case "submit_deal":
-        return await submitDeal(opts.payload);
       case "update_zoho":
         return await updateZoho(opts.payload);
-      case "send_submission":
-        return await sendSubmission(opts.payload);
-      case "clear_lead_amounts":
-        return await clearLeadAmounts(opts.payload);
-      case "add_lender":
-        return await addLender(opts.payload);
-      case "seed_lenders":
-        return await seedLenders(opts.payload);
-      case "apply_followup":
-        return await runApplyFollowup(opts.payload);
       case "file_to_onedrive":
         return await fileToOneDrive(opts.payload);
       default:
@@ -157,45 +142,6 @@ async function fileToOneDrive(payload: PendingActionPayload): Promise<ExecuteRes
   return { ok: true, details: { filed, folder: `Deals/${biz}/Bank Statements` } };
 }
 
-async function submitDeal(payload: PendingActionPayload): Promise<ExecuteResult> {
-  if (!payload.to || !payload.subject || !payload.body) {
-    return { ok: false, error: "missing_submission_fields" };
-  }
-  const attachments: Array<{ name: string; contentType: string; contentBytes: string }> = [];
-  for (const att of payload.attachments ?? []) {
-    try {
-      const res = await fetch(att.url);
-      if (!res.ok) continue;
-      const buf = Buffer.from(await res.arrayBuffer());
-      attachments.push({ name: att.name, contentType: att.contentType, contentBytes: buf.toString("base64") });
-    } catch (e) {
-      console.error("[execute] attachment fetch failed:", att.url, (e as Error).message);
-    }
-  }
-
-  const htmlBody = await buildHtmlBody(payload.body, !!payload.is_html);
-
-  await microsoft.sendMail({
-    to: payload.to,
-    bcc: DEFAULTS.submissionsFromAddress,
-    subject: payload.subject,
-    body: htmlBody,
-    isHtml: true,
-    attachments,
-  });
-
-  if (payload.deal_id) {
-    await supabaseAdmin
-      .from("deal_submissions")
-      .update({ submitted_at: new Date().toISOString(), status: "pending" })
-      .eq("deal_id", payload.deal_id)
-      .eq("lender_id", payload.lender_id ?? "")
-      .is("submitted_at", null);
-  }
-
-  return { ok: true, details: { to: payload.to, attachments: attachments.length } };
-}
-
 async function updateZoho(payload: PendingActionPayload): Promise<ExecuteResult> {
   if (!payload.zoho_id) return { ok: false, error: "missing_zoho_id" };
   // Lead_Status / field updates removed — each updateLead() call triggers a Zoho
@@ -205,60 +151,9 @@ async function updateZoho(payload: PendingActionPayload): Promise<ExecuteResult>
     await addNoteToLead(payload.zoho_id, payload.note.title, payload.note.content);
   }
 
-  // Follow-up chaining: bank-statement approvals set followup="draft_submission".
-  // The pick-lenders card is now gated on the application being complete too, so
-  // route through maybePostSubmissionReady (idempotent). It posts now if the app
-  // is already done, otherwise the app-completion signal posts it later. We still
-  // pass the OneDrive folder + statement attachment ids for the lender email.
-  if (payload.followup === "draft_submission" && payload.deal_id && payload.contact_id) {
-    try {
-      await maybePostSubmissionReady(payload.contact_id, {
-        dealId: payload.deal_id,
-        zohoId: payload.zoho_id,
-        revenueTable: payload.revenue_table,
-        onedriveFolderUrl: payload.onedrive_folder_url,
-        bankStmtDriveItemIds: payload.bank_stmt_drive_item_ids,
-      });
-    } catch (e) {
-      console.error("[execute-action] submission-ready failed:", (e as Error).message);
-    }
-  }
-
   return {
     ok: true,
     details: { zoho_id: payload.zoho_id, note: !!payload.note, followup: payload.followup ?? null },
-  };
-}
-
-async function sendSubmission(payload: PendingActionPayload): Promise<ExecuteResult> {
-  if (!payload.deal_id || !payload.contact_id) return { ok: false, error: "missing_deal_or_contact" };
-  if (!payload.draft_subject || !payload.draft_body) return { ok: false, error: "missing_draft" };
-  const lenderIds = (payload as { lender_ids?: string[] }).lender_ids ?? [];
-  if (lenderIds.length === 0) return { ok: false, error: "no_lender_ids" };
-
-  const result = await submitToLenders({
-    dealId: payload.deal_id,
-    contactId: payload.contact_id,
-    zohoId: payload.zoho_id ?? null,
-    lenderIds,
-    draftSubject: payload.draft_subject,
-    draftBody: payload.draft_body,
-    bankStmtDriveItemIds: payload.bank_stmt_drive_item_ids ?? [],
-    onedriveFolderUrl: payload.onedrive_folder_url ?? null,
-    amountRequested: payload.amount ?? null,
-    clientNote: (payload as { client_note?: string }).client_note ?? null,
-  });
-
-  return {
-    ok: result.ok && result.sent.length + result.skipped.length > 0,
-    error: result.error,
-    details: {
-      sent: result.sent.map((l) => l.name),
-      failed: result.failed.map((l) => `${l.name}: ${l.error}`),
-      skipped: result.skipped.map((l) => `${l.name} (${l.reason})`),
-      channel_id: result.channelId,
-      channel_name: result.channelName,
-    },
   };
 }
 
@@ -272,13 +167,9 @@ async function sendMarketingEmail(
     return { ok: false, error: "missing_contact_id" };
   }
 
-  // Substitute {magic_link} in the body with a freshly-minted Supabase magic
-  // link so the CTA works for ~1 hour (Supabase default).
-  const { body: bodyWithLink, token: magicToken } = await substituteMagicLinkInBody(
-    payload.body,
-    payload.to,
-    payload.magic_link_redirect ?? "/portal/dashboard"
-  );
+  // The portal magic link is gone with the funding portal. Drafts now close on
+  // a reply rather than a login link, so the body ships as written.
+  const bodyWithLink = payload.body;
 
   const htmlBody = await buildHtmlBody(bodyWithLink, true);
 
@@ -301,7 +192,7 @@ async function sendMarketingEmail(
     zoho_lead_id: payload.zoho_id ?? null,
     subject: payload.subject,
     body_preview: bodyWithLink.replace(/<[^>]+>/g, "").slice(0, 500),
-    magic_link_token: magicToken,
+    magic_link_token: null,
     sent_at: sentAt,
     slack_ts: payload.slackTs ?? null,
     approved_by: payload.approvedBy ?? null,
@@ -352,227 +243,3 @@ export async function postExecutionReceipt(opts: { channel: string; threadTs: st
   await slack.postThreadReply(opts.channel, opts.threadTs, `${icon} ${opts.summary}`);
 }
 
-async function addLender(payload: PendingActionPayload): Promise<ExecuteResult> {
-  const name = payload.lender_name as string | undefined;
-  if (!name) return { ok: false, error: "missing lender_name in payload" };
-
-  const submissionEmail = (payload.submission_email as string | undefined) ?? null;
-  const ccEmails = (payload.cc_emails as string[] | undefined) ?? [];
-  const portalUrl = (payload.portal_url as string | undefined) ?? null;
-
-  const { data, error } = await supabaseAdmin
-    .from("lenders")
-    .upsert(
-      {
-        name,
-        tier: (payload.tier as number | undefined) ?? 2,
-        is_active: true,
-        submission_method: submissionEmail ? "email" : (portalUrl ? "portal" : "email"),
-        submission_email: submissionEmail,
-        cc_emails: ccEmails,
-        portal_url: portalUrl,
-        rep_name: (payload.rep_name as string | undefined) ?? null,
-        rep_email: (payload.rep_email as string | undefined) ?? null,
-        notes: [
-          payload.docs_required ? `Docs: ${payload.docs_required}` : null,
-          payload.subject_line_format ? `Subject: "${payload.subject_line_format}"` : null,
-          payload.notes as string | undefined,
-        ].filter(Boolean).join(" | ") || null,
-      },
-      { onConflict: "id" }
-    )
-    .select("id, name")
-    .maybeSingle();
-
-  if (error) {
-    // No unique constraint on name — fall back to insert
-    const { data: inserted, error: insertErr } = await supabaseAdmin
-      .from("lenders")
-      .insert({
-        name,
-        tier: (payload.tier as number | undefined) ?? 2,
-        is_active: true,
-        submission_method: submissionEmail ? "email" : (portalUrl ? "portal" : "email"),
-        submission_email: submissionEmail,
-        cc_emails: ccEmails,
-        portal_url: portalUrl,
-        rep_name: (payload.rep_name as string | undefined) ?? null,
-        rep_email: (payload.rep_email as string | undefined) ?? null,
-        notes: [
-          payload.docs_required ? `Docs: ${payload.docs_required}` : null,
-          payload.subject_line_format ? `Subject: "${payload.subject_line_format}"` : null,
-          payload.notes as string | undefined,
-        ].filter(Boolean).join(" | ") || null,
-      })
-      .select("id, name")
-      .single();
-    if (insertErr) return { ok: false, error: insertErr.message };
-    return { ok: true, details: { lender: inserted.name, id: inserted.id, action: "inserted" } };
-  }
-
-  return { ok: true, details: { lender: data?.name ?? name, id: data?.id, action: "upserted" } };
-}
-
-async function seedLenders(payload: PendingActionPayload): Promise<ExecuteResult> {
-  const list = (payload.lenders_to_seed as Array<{ name: string; email: string; to_emails?: string[]; cc_emails?: string[] }> | undefined) ?? [];
-  if (list.length === 0) return { ok: false, error: "no_lenders_to_seed" };
-
-  // Skip any whose submission_email already exists, so the card is idempotent.
-  const emails = list.map((l) => l.email.toLowerCase());
-  const { data: existing } = await supabaseAdmin
-    .from("lenders")
-    .select("submission_email")
-    .in("submission_email", emails);
-  const have = new Set(((existing ?? []) as Array<{ submission_email: string | null }>).map((r) => (r.submission_email ?? "").toLowerCase()));
-
-  const toInsert = list
-    .filter((l) => !have.has(l.email.toLowerCase()))
-    .map((l) => ({
-      name: l.name,
-      tier: 2,
-      is_active: true,
-      submission_method: "email",
-      submission_email: l.email,
-      to_emails: l.to_emails && l.to_emails.length > 0 ? l.to_emails : [l.email],
-      cc_emails: l.cc_emails ?? [],
-      recipient_source: "seeded_from_sent",
-    }));
-
-  if (toInsert.length === 0) {
-    return { ok: true, details: { inserted: 0, skipped: list.length, reason: "all_exist" } };
-  }
-
-  const { data, error } = await supabaseAdmin.from("lenders").insert(toInsert).select("id");
-  if (error) return { ok: false, error: error.message };
-
-  return { ok: true, details: { inserted: data?.length ?? 0, skipped: list.length - toInsert.length } };
-}
-
-async function clearLeadAmounts(payload: PendingActionPayload): Promise<ExecuteResult> {
-  const targets = (payload.zoho_fields as { targets?: Array<{ zoho_lead_id: string; business_name: string; current_amount: number }> } | undefined)?.targets;
-  if (!Array.isArray(targets) || targets.length === 0) {
-    return { ok: false, error: "no_targets" };
-  }
-  const results: Array<{ zoho_lead_id: string; ok: boolean; error?: string }> = [];
-  for (const t of targets) {
-    try {
-      await updateLead(t.zoho_lead_id, { MCA_Approved_Amount: null } as Parameters<typeof updateLead>[1]);
-      results.push({ zoho_lead_id: t.zoho_lead_id, ok: true });
-    } catch (e) {
-      results.push({ zoho_lead_id: t.zoho_lead_id, ok: false, error: (e as Error).message });
-    }
-  }
-  const succeeded = results.filter((r) => r.ok).length;
-  return { ok: true, details: { cleared: succeeded, total: targets.length, results } };
-}
-
-// "Check" on a standalone /apply card — run the suggested actions and report
-// exactly what was done. Best-effort per action: one failing action does not
-// abort the rest. Reads the application row by application_id for the detail.
-type StandaloneApp = {
-  id: string;
-  first_name: string | null; last_name: string | null; email: string | null; phone: string | null;
-  business_name: string | null; industry: string | null; biz_type: string | null; ein: string | null;
-  inc_date: string | null; ownership: string | null; biz_address: string | null; biz_city: string | null;
-  biz_state: string | null; biz_zip: string | null; monthly_revenue: string | null; amount_needed: string | null;
-  use_of_funds: string | null; existing_loans: string | null; funding_urgency: string | null; zoho_lead_id: string | null;
-};
-
-function applicationNote(app: StandaloneApp): string {
-  const v = (val: unknown) => (val && val !== "" ? String(val) : "—");
-  const addr = [app.biz_address, app.biz_city, app.biz_state, app.biz_zip].filter(Boolean).join(", ");
-  return [
-    "=== /apply SUBMISSION ===",
-    `Business: ${v(app.business_name)} (${v(app.biz_type)}, ${v(app.industry)})`,
-    `Contact: ${v(app.first_name)} ${v(app.last_name)} | ${v(app.email)} | ${v(app.phone)}`,
-    `Started: ${v(app.inc_date)} | Ownership: ${v(app.ownership)} | EIN: ${v(app.ein)}`,
-    `Address: ${addr || "—"}`,
-    `Monthly revenue: ${v(app.monthly_revenue)} | Requesting: ${v(app.amount_needed)} | Use: ${v(app.use_of_funds)}`,
-    `Existing loans: ${v(app.existing_loans)} | Urgency: ${v(app.funding_urgency)}`,
-  ].join("\n");
-}
-
-async function runApplyFollowup(payload: PendingActionPayload): Promise<ExecuteResult> {
-  const applicationId = payload.application_id;
-  if (!applicationId) return { ok: false, error: "missing_application_id" };
-
-  const { data: app } = await supabaseAdmin
-    .from("standalone_applications")
-    .select("*")
-    .eq("id", applicationId)
-    .maybeSingle();
-  if (!app) return { ok: false, error: "application_not_found" };
-
-  const a = app as StandaloneApp;
-  const did: string[] = [];
-  let zohoId = a.zoho_lead_id || payload.dedup?.existing_zoho_id || payload.zoho_id || null;
-  const actions = payload.suggested_actions ?? [];
-
-  for (const action of actions) {
-    try {
-      switch (action.kind) {
-        case "create_zoho_lead": {
-          const newId = await createLead({
-            firstName: a.first_name || undefined,
-            lastName: a.last_name || undefined,
-            email: a.email || undefined,
-            phone: a.phone || undefined,
-            businessName: a.business_name || undefined,
-            source: "Apply Link",
-            Lead_Status: "Application Complete",
-            fundingAmount: a.amount_needed || undefined,
-            monthlyRevenue: a.monthly_revenue || undefined,
-            industry: a.industry || undefined,
-            ein: a.ein || undefined,
-            useOfFunds: a.use_of_funds || undefined,
-            existingLoans: a.existing_loans || undefined,
-            bizAddress: a.biz_address || undefined,
-            bizCity: a.biz_city || undefined,
-          });
-          if (newId) {
-            zohoId = newId;
-            await supabaseAdmin.from("standalone_applications").update({ zoho_lead_id: newId }).eq("id", a.id);
-            did.push(`Created Zoho lead for ${a.business_name || "applicant"} (${newId}).`);
-          } else {
-            did.push("Zoho lead creation returned no id.");
-          }
-          break;
-        }
-        case "add_note": {
-          if (zohoId) {
-            await addNoteToLead(zohoId, "Application from /apply", `${action.detail}\n\n${applicationNote(a)}`);
-            did.push(`Logged note on Zoho record ${zohoId}.`);
-          } else {
-            did.push("No Zoho record to note yet (skipped add_note).");
-          }
-          break;
-        }
-        case "flag_duplicate": {
-          const existing = payload.dedup?.existing_name || "an existing record";
-          if (zohoId) {
-            await addNoteToLead(zohoId, "Possible duplicate from /apply", `${action.detail}\n\nMatches ${existing}. Review before creating a new lead.\n\n${applicationNote(a)}`).catch(() => {});
-          }
-          did.push(`Flagged possible duplicate of ${existing} (no new lead created).`);
-          break;
-        }
-        case "ensure_deal": {
-          // Standalone /apply rows have no MC contact; record the intent on the
-          // Zoho record so a deal can be opened from the CRM.
-          if (zohoId) {
-            await addNoteToLead(zohoId, "Ensure deal", action.detail).catch(() => {});
-            did.push("Noted deal/thread to open on the Zoho record.");
-          } else {
-            did.push("No record yet to attach a deal (skipped ensure_deal).");
-          }
-          break;
-        }
-        default:
-          did.push(`Unknown action: ${(action as { kind?: string }).kind ?? "?"}`);
-      }
-    } catch (e) {
-      did.push(`Failed ${action.kind}: ${(e as Error).message}`);
-    }
-  }
-
-  return { ok: true, details: { did, zoho_id: zohoId } };
-}

@@ -1,8 +1,6 @@
 import {
   Brain,
-  Kanban,
   CheckSquare,
-  Send,
   Building2,
   Zap,
   Settings,
@@ -40,9 +38,7 @@ export const navSections: NavSection[] = [
       // Clients we deliver for. Not /dashboard/onboarding, which is our own
       // team-member setup checklist and a different thing entirely.
       { label: "Clients", href: "/dashboard/clients", icon: Building2 },
-      { label: "Pipeline", href: "/dashboard/pipeline", icon: Kanban },
       { label: "Tasks", href: "/dashboard/tasks", icon: CheckSquare },
-      { label: "Submissions", href: "/dashboard/email-agents", icon: Send },
     ],
   },
   {
@@ -82,7 +78,6 @@ export const navSections: NavSection[] = [
   {
     label: "System",
     items: [
-      { label: "Lenders", href: "/dashboard/lenders", icon: Building2 },
       { label: "Integrations", href: "/dashboard/integrations", icon: LayoutList },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],

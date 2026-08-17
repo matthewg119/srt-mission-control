@@ -16,7 +16,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { companiesConflict, normalizeHost } from "@/lib/company-identity";
-import { buildZohoOnlyContext, type ZohoOnlySnapshot } from "@/lib/ai-intel/merchant-context";
+import { buildLeadSnapshot, type LeadSnapshot } from "@/lib/ai-intel/lead-context";
 import { buildCallFacts, buildCoachNotes } from "@/lib/audit-engine/call-script";
 import { loadReportView } from "@/lib/audit-engine/report-view";
 import { readAuditThreadNotes, formatAuditThreadNotes } from "./slack-thread";
@@ -179,7 +179,7 @@ export async function buildCallBrief(input: CallTarget): Promise<CallBrief> {
   }
 
   // ── The CRM block ────────────────────────────────────────────────────────
-  const zoho = await buildZohoOnlyContext(target.module, target.recordId).catch(() => null);
+  const zoho = await buildLeadSnapshot(target.recordId).catch(() => null);
   const crm = zoho ? crmBlock(zoho) : "";
 
   const email = truth ? formatThreadTruth(truth) : "EMAIL HISTORY: no audit thread, so nothing was checked.";
@@ -243,12 +243,11 @@ function hostLabel(website: string | null | undefined): string | null {
   return host || null;
 }
 
-function crmBlock(z: ZohoOnlySnapshot): string {
+function crmBlock(z: LeadSnapshot): string {
   const lines = ["CRM (facts, not talking points):"];
   const bits = [
     z.lead_status ? `status ${z.lead_status}` : null,
     z.lead_source ? `source ${z.lead_source}` : null,
-    z.lead_owner ? `owner ${z.lead_owner}` : null,
     z.days_since_modified != null ? `last touched ${z.days_since_modified}d ago` : null,
   ].filter(Boolean);
   if (bits.length) lines.push(`- ${bits.join(" · ")}`);

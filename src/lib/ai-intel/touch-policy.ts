@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft } from "@/lib/microsoft";
 import { MATTHEW } from "@/config/rep-profile";
-import type { MerchantContext } from "./merchant-context";
+import type { LeadContext } from "./lead-context";
 
 // ── Touch policy ───────────────────────────────────────────────────────────
 // Decides whether VeKtor should email a given contact right now.
@@ -17,7 +17,7 @@ export type TouchDecision =
   | { kind: "skip_recent_touch"; reason: string; lastTouchAt: string }
   | { kind: "handoff_to_rep"; reason: string };
 
-export async function decideTouch(ctx: MerchantContext): Promise<TouchDecision> {
+export async function decideTouch(ctx: LeadContext): Promise<TouchDecision> {
   if (ctx.contact.do_not_contact) {
     return { kind: "skip_recent_touch", reason: "do_not_contact flag", lastTouchAt: "" };
   }
@@ -51,12 +51,10 @@ export async function decideTouch(ctx: MerchantContext): Promise<TouchDecision> 
   }
 
   // 4. Been worked (has any historical touch) but no touch in 7d AND no open task
-  //    → handoff to rep to clean. Use existing marketing sends + deal events as
-  //    "worked" proxy (we don't have a unified touch log yet).
+  //    → handoff to rep to clean. lead_activities is the unified touch log the
+  //    original version of this check said we didn't have yet.
   const hasAnyHistoricalTouch =
-    ctx.recent_sends.length > 0 ||
-    ctx.deal_events.length > 0 ||
-    ctx.contact.portal_login_count > 0;
+    ctx.recent_sends.length > 0 || ctx.recent_activity.length > 0;
   const daysSinceUpdated = ctx.days_since_updated ?? 999;
   if (hasAnyHistoricalTouch && daysSinceUpdated > ACTIVE_WINDOW_DAYS) {
     return {

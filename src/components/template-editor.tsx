@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { STAGE_NAMES } from "@/config/stage-display";
 import { X, Eye, Code, Send } from "lucide-react";
 import { TEMPLATE_VARIABLES, previewTemplate, extractVariables } from "@/lib/template-renderer";
 
@@ -22,13 +23,10 @@ interface TemplateEditorProps {
   onClose: () => void;
 }
 
-const CATEGORIES = [
-  "Open - Not Contacted", "Working - Contacted", "Working - Application Out",
-  "Closed - Not Converted", "Converted",
-  "Contract In", "Pending Stips", "Funding Call", "In Funding",
-  "Funded", "Deal Lost",
-  "Re-engagement", "General",
-];
+// The five pipeline stages plus the two stage-less buckets. Sourced from
+// stage-display so this can't drift back into offering categories ("Contract
+// In", "Funded") that no lead can ever be in.
+const CATEGORIES = [...STAGE_NAMES, "Re-engagement", "General"];
 
 export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProps) {
   const [name, setName] = useState(template?.name || "");

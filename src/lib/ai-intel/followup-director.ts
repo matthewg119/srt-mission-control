@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { postApprovalRequest } from "./slack-approval";
-import { buildMerchantContext, whyThisLead, type MerchantContext } from "./merchant-context";
+import { buildLeadContext, whyThisLead, type LeadContext } from "./lead-context";
 import { getMattVoiceExamples, renderVoiceExamplesForPrompt } from "./voice-examples";
 import type { PendingActionPayload } from "./types";
 
@@ -70,7 +70,7 @@ export async function runFollowupSuggestions(opts: { limit?: number } = {}): Pro
 
 async function suggestForContact(contactId: string, channelId: string): Promise<FollowupResult> {
   try {
-    const ctx = await buildMerchantContext({ contactId });
+    const ctx = await buildLeadContext({ contactId });
     if (!ctx) return { contact_id: contactId, outcome: "error", detail: "no_context" };
     if (ctx.contact.do_not_contact) return { contact_id: contactId, outcome: "skip_not_due", detail: "dnc" };
     if (!ctx.contact.email) return { contact_id: contactId, outcome: "skip_no_email" };
@@ -129,7 +129,7 @@ async function suggestForContact(contactId: string, channelId: string): Promise<
 }
 
 // Returns a human reason this lead is due for a follow-up, or null to skip.
-function followupReason(ctx: MerchantContext): string | null {
+function followupReason(ctx: LeadContext): string | null {
   const now = Date.now();
 
   // 1) An open task whose due date has passed.
@@ -158,41 +158,44 @@ export interface DraftedFollowup {
   hook: string;
 }
 
-const SYSTEM_PROMPT = `You are SRT Agency's follow-up writer. You write short, personal, one-to-one follow-up emails to business owners who are funding leads. Write like a human rep, not a marketer.
+const SYSTEM_PROMPT = `You are SRT Agency's follow-up writer. You write short, personal, one-to-one follow-up emails to local business owners. Write like a human rep, not a marketer.
+
+WHAT SRT SELLS: AEO. We build the part of a business's own website that AI assistants can actually read and cite, so that when someone asks an assistant for a business like theirs, they get named. We lead with a free first build: one section of their site, no charge, no card. All they have to do is say yes.
+
+SRT DOES NOT DO BUSINESS FUNDING. Never mention financing, loans, lenders, funders, bank statements, advances, approvals or capital. Many of these contacts were funding leads years ago. That is not why we are writing.
 
 Hard rules:
 - Return only the body COPY that comes AFTER the greeting. DO NOT write a greeting ("Hello/Hi ...") — it is added automatically.
 - DO NOT write a sign-off, name, title, phone, or signature block — the signature is appended automatically.
-- Under 6 sentences. One clear CTA (reply / book a quick call / finish the application).
-- Personalize: reference ONE concrete detail from the context (business, amount, revenue, credit, a Zoho note, signed-but-no-statements, the follow-up reason). Don't repeat a hook from a prior email to this contact.
+- Under 6 sentences. One clear ask, and the ask is a reply: say yes and we start the free build.
+- Personalize: reference ONE concrete detail from the context (their business, city, industry, website, or the follow-up reason). Don't repeat a hook from a prior email to this contact.
 - No clichéd subject lines, no ALL CAPS, no "[Name]" tokens, no emojis unless the voice examples use them.
+- Never use an em dash. Commas, periods and hyphens only.
 
 Return JSON: { "subject": string, "copy": string, "hook": string }.
   subject: <60 chars, natural.
   copy: plain text, the message after the greeting.
   hook: one short sentence explaining the angle (for Matthew's review).`;
 
-export async function draftFollowupEmail(ctx: MerchantContext, reason: string): Promise<DraftedFollowup | null> {
+export async function draftFollowupEmail(ctx: LeadContext, reason: string): Promise<DraftedFollowup | null> {
   const voice = await getMattVoiceExamples(6).catch(() => []);
   const voiceBlock = renderVoiceExamplesForPrompt(voice);
 
   const priorSubjects = ctx.recent_sends.map((s) => `- ${s.subject}`).join("\n") || "(none)";
   const notesBlock =
-    ctx.zoho?.notes.slice(0, 6).map((n) => `• [${n.modified_at.slice(0, 10)}] ${n.title}: ${n.content.slice(0, 200)}`).join("\n") ||
-    "(no Zoho notes)";
+    ctx.crm.notes.slice(0, 6).map((n) => `• [${n.modified_at.slice(0, 10)}] ${n.title}: ${n.content.slice(0, 200)}`).join("\n") ||
+    "(no notes on file)";
 
   const user = [
-    `Merchant: ${ctx.contact.business_name ?? "unknown"} | Contact: ${ctx.contact.first_name ?? ""} ${ctx.contact.last_name ?? ""}`.trim(),
+    `Business: ${ctx.contact.business_name ?? "unknown"} | Contact: ${ctx.contact.first_name ?? ""} ${ctx.contact.last_name ?? ""}`.trim(),
     `Industry: ${ctx.contact.industry ?? "—"}`,
-    `Amount needed: ${ctx.contact.amount_needed ? `$${ctx.contact.amount_needed.toLocaleString()}` : "—"}`,
-    `Monthly revenue: ${ctx.contact.monthly_revenue ? `$${ctx.contact.monthly_revenue.toLocaleString()}` : "—"}`,
-    `Credit score: ${ctx.contact.credit_score ?? "—"}`,
-    `Zoho Lead Status: ${ctx.zoho?.lead_status ?? "—"}`,
-    `Portal: signed=${ctx.contact.portal_app_completed}, statements_uploaded=${ctx.contact.portal_statements_uploaded}, logins=${ctx.contact.portal_login_count}`,
+    `Location: ${[ctx.contact.biz_city, ctx.contact.biz_state].filter(Boolean).join(", ") || "—"}`,
+    `Website: ${ctx.contact.website ?? "— (none on file, do not claim to have looked at it)"}`,
+    `Stage: ${ctx.crm.lead_status ?? "—"}`,
     `Days since lead created: ${ctx.days_since_created ?? "—"}`,
     `Follow-up reason (why we're reaching out now): ${reason}`,
     ``,
-    `Recent Zoho notes:`,
+    `Recent notes (may be stale funding-era history — use only for who they are, never as a reason to write):`,
     notesBlock,
     ``,
     `Subjects of prior emails already sent (DO NOT repeat):`,

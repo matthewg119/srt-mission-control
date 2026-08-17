@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { STAGE_PIPELINES } from "@/config/stage-display";
+import { ALL_STAGES, normalizeStage } from "@/config/stage-display";
 
 // Status changes go through /api/crm/leads/[id]/status → crm.setLeadStatus,
 // never a direct contacts UPDATE. That path is what writes lead_status_history
@@ -43,7 +43,9 @@ export function LeadStatusPicker({
   return (
     <div>
       <select
-        value={current ?? ""}
+        // Normalized so a lead still carrying a pre-migration value renders as
+        // its mapped stage instead of falling through to a blank select.
+        value={current ? normalizeStage(current) : ""}
         disabled={saving}
         onChange={(e) => change(e.target.value)}
         className="w-full rounded-lg border border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.3)] px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
@@ -51,14 +53,10 @@ export function LeadStatusPicker({
         <option value="" disabled>
           Select a status…
         </option>
-        {STAGE_PIPELINES.map((p) => (
-          <optgroup key={p.name} label={p.name}>
-            {p.stages.map((s) => (
-              <option key={s.name} value={s.name}>
-                {s.name}
-              </option>
-            ))}
-          </optgroup>
+        {ALL_STAGES.map((s) => (
+          <option key={s.name} value={s.name}>
+            {s.name}
+          </option>
         ))}
       </select>
       {error && <p className="mt-1.5 text-[11px] text-[#E74C3C]">{error}</p>}

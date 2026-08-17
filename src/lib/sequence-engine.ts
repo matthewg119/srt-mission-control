@@ -16,7 +16,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/db";
-import { buildMerchantContext } from "@/lib/ai-intel/merchant-context";
+import { buildLeadContext } from "@/lib/ai-intel/lead-context";
 import { draftEmail } from "@/lib/ai-intel/email-director";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
@@ -338,17 +338,17 @@ export async function processScheduledEmails(): Promise<{
 
       const seq = sequence as Sequence;
 
-      // ── 1. Build merchant context + re-check Zoho status ──────────────
-      const ctx = await buildMerchantContext({ contactId: enrollment.contact_id });
+      // ── 1. Build lead context + re-check the CRM stage ────────────────
+      const ctx = await buildLeadContext({ contactId: enrollment.contact_id });
       if (!ctx) {
         console.warn(`[Sequence] No context for contact ${enrollment.contact_id} — skipping`);
         stats.errors++;
         continue;
       }
 
-      const zohoStatus = ctx.zoho?.lead_status ?? null;
+      const zohoStatus = ctx.crm.lead_status;
       if (ctx.contact.do_not_contact || shouldStopForZohoStatus(zohoStatus)) {
-        const stopReason = ctx.contact.do_not_contact ? "do_not_contact" : `Zoho status: ${zohoStatus}`;
+        const stopReason = ctx.contact.do_not_contact ? "do_not_contact" : `stage: ${zohoStatus}`;
         await supabaseAdmin
           .from("sequence_enrollments")
           .update({ status: "stopped", stopped_at: now, stop_reason: stopReason, pending_action_id: null })
@@ -409,11 +409,10 @@ export async function processScheduledEmails(): Promise<{
         campaign_key: campaignKey,
         cadence_day: nextStepNumber,
         sequence_position: nextStepNumber,
-        magic_link_redirect: draft.redirectPath,
         enrollment_id: enrollment.id,
       };
 
-      const who = ctx.contact.business_name ?? ctx.contact.first_name ?? "Merchant";
+      const who = ctx.contact.business_name ?? ctx.contact.first_name ?? "Lead";
       const summary = [
         `*${who}* — Sequence: ${seq.name} (step ${nextStepNumber})`,
         ``,
