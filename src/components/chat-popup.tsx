@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Brain, Send, X, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CHAT_MARKDOWN_COMPONENTS } from "./chat-markdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -15,6 +16,67 @@ interface SlashCommand {
   label: string;
   description: string;
   prompt: string;
+}
+
+// ── Where the widget sits ─────────────────────────────────────────────
+//
+// The button and the panel are two mutually-exclusive elements that both used to
+// hardcode `bottom-6 right-6`. They now share one stored point, the widget's
+// TOP-LEFT, and clamp against their own measured size — 48x48 and 400x500 are
+// different enough that a shared constant would push one of them off screen.
+//
+// `null` means never moved, which is also the only safe first render: localStorage
+// cannot be read during SSR, so the default corner classes paint first and the
+// saved point is applied after mount. Reading it into initial state instead would
+// hydrate one position and re-render into another.
+
+const POS_KEY = "srt:brainheart:pos:v1";
+const EDGE = 8;
+/** Below this, a pointer gesture is a click, not a drag. */
+const DRAG_THRESHOLD = 4;
+
+interface Pos {
+  x: number;
+  y: number;
+}
+
+function loadPos(): Pos | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const { x, y } = parsed as Record<string, unknown>;
+    if (typeof x !== "number" || typeof y !== "number") return null;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y };
+  } catch {
+    // Safari private mode throws on any localStorage access. A remembered
+    // position is a nicety, not a feature.
+    return null;
+  }
+}
+
+function savePos(pos: Pos) {
+  try {
+    localStorage.setItem(POS_KEY, JSON.stringify(pos));
+  } catch {
+    /* private mode, quota, or a blocked origin */
+  }
+}
+
+/** Keep the whole element on screen, measured rather than assumed. */
+function clamp(pos: Pos, el: HTMLElement | null): Pos {
+  if (typeof window === "undefined") return pos;
+  const w = el?.offsetWidth ?? 48;
+  const h = el?.offsetHeight ?? 48;
+  const maxX = Math.max(EDGE, window.innerWidth - w - EDGE);
+  const maxY = Math.max(EDGE, window.innerHeight - h - EDGE);
+  return {
+    x: Math.min(Math.max(EDGE, pos.x), maxX),
+    y: Math.min(Math.max(EDGE, pos.y), maxY),
+  };
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
@@ -36,6 +98,83 @@ export function ChatPopup() {
   const [hasUnread, setHasUnread] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── Drag ────────────────────────────────────────────────────────────
+  const [pos, setPos] = useState<Pos | null>(null);
+  // Whichever of the two elements is currently rendered, for measuring.
+  const nodeRef = useRef<HTMLElement | null>(null);
+  // True between passing the threshold and the click that follows pointerup, so
+  // releasing a drag on the button does not also open the chat.
+  const draggedRef = useRef(false);
+
+  useEffect(() => {
+    setPos(loadPos());
+  }, []);
+
+  // Re-clamp when the element changes size (opening the panel swaps 48x48 for
+  // 400x500) and when the window does. Returns the same object when nothing
+  // moved so this cannot feed itself.
+  useEffect(() => {
+    function fit() {
+      setPos((p) => {
+        if (!p) return p;
+        const next = clamp(p, nodeRef.current);
+        return next.x === p.x && next.y === p.y ? p : next;
+      });
+    }
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [isOpen]);
+
+  const startDrag = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const el = nodeRef.current;
+    if (!el) return;
+
+    const handle = e.currentTarget as HTMLElement;
+    const rect = el.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    draggedRef.current = false;
+    let latest: Pos | null = null;
+
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!draggedRef.current && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      draggedRef.current = true;
+      latest = clamp({ x: rect.left + dx, y: rect.top + dy }, el);
+      setPos(latest);
+    };
+
+    const up = (ev: PointerEvent) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      try {
+        handle.releasePointerCapture(ev.pointerId);
+      } catch {
+        /* capture was never taken */
+      }
+      if (latest) savePos(latest);
+      // The click event fires before this macrotask, so the flag is still set
+      // when onClick checks it and cleared before the next gesture.
+      setTimeout(() => {
+        draggedRef.current = false;
+      }, 0);
+    };
+
+    handle.setPointerCapture(e.pointerId);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  }, []);
+
+  // `pos` set = absolute placement; null = the original bottom-right corner.
+  const placement = pos
+    ? { className: "fixed z-50", style: { left: pos.x, top: pos.y } }
+    : { className: "fixed bottom-6 right-6 z-50", style: undefined };
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -111,8 +250,18 @@ export function ChatPopup() {
       {/* Floating button */}
       {!isOpen && (
         <button
-          onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 w-12 h-12 rounded-full bg-[#00C9A7] text-black flex items-center justify-center shadow-lg hover:bg-[#00b396] transition-colors z-50"
+          ref={(el) => {
+            nodeRef.current = el;
+          }}
+          onPointerDown={startDrag}
+          onClick={() => {
+            // A drag that ends on the button is not a click on it.
+            if (draggedRef.current) return;
+            setIsOpen(true);
+          }}
+          title="Drag to move"
+          style={{ ...placement.style, touchAction: "none" }}
+          className={`${placement.className} w-12 h-12 rounded-full bg-[#00C9A7] text-black flex items-center justify-center shadow-lg hover:bg-[#00b396] transition-colors cursor-grab active:cursor-grabbing`}
         >
           <Brain size={20} />
           {hasUnread && (
@@ -123,9 +272,23 @@ export function ChatPopup() {
 
       {/* Chat window */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 w-[400px] h-[500px] bg-[#0a0a0a] border border-[rgba(255,255,255,0.1)] rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[rgba(255,255,255,0.06)]">
+        <div
+          ref={(el) => {
+            nodeRef.current = el;
+          }}
+          style={placement.style}
+          className={`${placement.className} w-[400px] h-[500px] bg-[#0a0a0a] border border-[rgba(255,255,255,0.1)] rounded-2xl shadow-2xl flex flex-col overflow-hidden`}
+        >
+          {/* Header — also the drag handle for the open panel. */}
+          <div
+            onPointerDown={(e) => {
+              // Let the close button be a button.
+              if ((e.target as HTMLElement).closest("button")) return;
+              startDrag(e);
+            }}
+            style={{ touchAction: "none" }}
+            className="flex items-center justify-between px-4 py-3 border-b border-[rgba(255,255,255,0.06)] cursor-grab active:cursor-grabbing"
+          >
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-md bg-[rgba(0,201,167,0.15)] flex items-center justify-center">
                 <Brain size={12} className="text-[#00C9A7]" />
@@ -162,7 +325,12 @@ export function ChatPopup() {
                 >
                   {msg.role === "assistant" ? (
                     <div className="prose prose-invert prose-sm max-w-none [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={CHAT_MARKDOWN_COMPONENTS}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
                     </div>
                   ) : (
                     msg.content

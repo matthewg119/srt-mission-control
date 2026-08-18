@@ -8,9 +8,12 @@ import {
   type TimelineActivity,
   type TimelineFieldChange,
 } from "@/components/crm/lead-timeline";
-import { LogCallForm } from "@/components/crm/log-call-form";
+import { LeadLogCard } from "@/components/crm/lead-log-card";
+import { LeadFieldPanels } from "@/components/crm/lead-field-panels";
+import { CommsSync } from "@/components/crm/comms-sync";
 import { LeadStatusPicker } from "@/components/crm/status-picker";
 import { HuntNav } from "@/components/crm/hunt-nav";
+import { pickLeadPanelValues } from "@/config/lead-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -39,54 +42,10 @@ function fmt(v: unknown): string {
   return String(v);
 }
 
-const FIELD_GROUPS: Array<{ title: string; fields: Array<[string, string]> }> = [
-  {
-    title: "Contact",
-    fields: [
-      ["first_name", "First name"],
-      ["last_name", "Last name"],
-      ["email", "Email"],
-      ["phone", "Phone"],
-      ["mobile_phone", "Mobile"],
-      ["home_address", "Home address"],
-    ],
-  },
-  {
-    title: "Business",
-    fields: [
-      ["business_name", "Business"],
-      ["legal_name", "Legal name"],
-      ["dba", "DBA"],
-      ["industry", "Industry"],
-      ["ein", "EIN"],
-      ["inc_date", "Incorporated"],
-      ["biz_address", "Address"],
-      ["biz_city", "City"],
-      ["biz_state", "State"],
-      ["biz_zip", "Zip"],
-    ],
-  },
-  {
-    title: "Financials",
-    fields: [
-      ["amount_needed", "Requested"],
-      ["monthly_revenue", "Monthly revenue"],
-      ["monthly_deposits", "Monthly deposits"],
-      ["credit_score", "Credit"],
-      ["use_of_funds", "Use of funds"],
-      ["existing_loans", "Existing loans"],
-    ],
-  },
-  {
-    title: "Source",
-    fields: [
-      ["source", "Lead source"],
-      ["utm_campaign", "Campaign"],
-      ["utm_medium", "Medium"],
-      ["created_at", "Created"],
-    ],
-  },
-];
+// The panels themselves now live in src/config/lead-fields.ts, because the
+// client island that edits them needs the same list and the same per-field
+// input kinds. See that file for why a plain [column, label] tuple was not
+// enough once the values became editable.
 
 export default async function LeadDetailPage({
   params,
@@ -227,31 +186,15 @@ export default async function LeadDetailPage({
             </div>
           )}
 
-          {FIELD_GROUPS.map((g) => (
-            <div
-              key={g.title}
-              className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-3"
-            >
-              <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
-                {g.title}
-              </p>
-              <dl className="space-y-1.5">
-                {g.fields.map(([key, label]) => (
-                  <div key={key} className="flex justify-between gap-3 text-[11px]">
-                    <dt className="shrink-0 text-[rgba(255,255,255,0.35)]">{label}</dt>
-                    <dd className="truncate text-right text-[rgba(255,255,255,0.75)]">
-                      {fmt(lead[key])}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          ))}
+          {/* Click any value to edit it. Only the panel columns are handed to the
+              client — the page selects *, which includes ssn_full, and passing the
+              whole row would serialize it into the HTML payload. */}
+          <LeadFieldPanels contactId={id} values={pickLeadPanelValues(lead)} />
         </div>
 
         {/* Centre — log a call, then the history */}
         <div className="space-y-4">
-          <LogCallForm
+          <LeadLogCard
             contactId={id}
             leadName={displayName}
             defaultFollowUpDays={cadenceFor(status).repeatDays}
@@ -260,6 +203,9 @@ export default async function LeadDetailPage({
             <p className="mb-3 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
               History · {activities.length}
             </p>
+            {/* Mirrors Outlook + sms_messages onto the timeline after first paint,
+                so the record and the call form never wait on a mailbox. */}
+            <CommsSync contactId={id} />
             <LeadTimeline activities={activities} fieldChanges={fieldChanges} />
           </div>
         </div>
