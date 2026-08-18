@@ -197,13 +197,45 @@ export interface ResolveLeadInput {
  * dropping a real reply from an unrecognized number is worse than an unnamed one.
  */
 export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> {
+  const { matches, rung } = await resolveLeadCandidates(a);
+  if (!matches.length) return null;
+  // businessName is the one rung that refuses an ambiguous answer outright.
+  if (rung === "businessName" && matches.length !== 1) return null;
+  return matches[0];
+}
+
+/** Which lookup key produced the match. Callers turn this into a confidence. */
+export type ResolveRung = "contactId" | "zohoLeadId" | "phone" | "email" | "businessName";
+
+export interface ResolveCandidates {
+  /** Everyone the first matching rung returned. Empty when nothing matched. */
+  matches: LeadRef[];
+  /** The rung that produced `matches`. Null when nothing matched. */
+  rung: ResolveRung | null;
+}
+
+/** How many rows an ambiguous rung reports. Enough for a 1/2/3 confirm strip. */
+const CANDIDATE_LIMIT = 3;
+
+/**
+ * The same ladder as resolveLead(), but it says WHICH rung answered and hands
+ * back every row that rung found instead of silently taking the first.
+ *
+ * Call Coach needs both: a phone that matches two businesses must not
+ * auto-commit, and "one hit on a unique business name" is a far weaker claim
+ * than "this is the contact id". resolveLead() is a thin wrapper over this so
+ * there is still exactly one ladder to keep correct.
+ */
+export async function resolveLeadCandidates(a: ResolveLeadInput): Promise<ResolveCandidates> {
+  const none: ResolveCandidates = { matches: [], rung: null };
+
   if (a.contactId) {
     const { data } = await supabaseAdmin
       .from("contacts")
       .select(LEAD_COLS)
       .eq("id", a.contactId)
       .maybeSingle();
-    if (data) return toLeadRef(data);
+    if (data) return { matches: [toLeadRef(data)], rung: "contactId" };
   }
 
   if (a.zohoLeadId) {
@@ -212,7 +244,7 @@ export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> 
       .select(LEAD_COLS)
       .eq("zoho_lead_id", a.zohoLeadId)
       .maybeSingle();
-    if (data) return toLeadRef(data);
+    if (data) return { matches: [toLeadRef(data)], rung: "zohoLeadId" };
   }
 
   if (a.phone) {
@@ -228,8 +260,8 @@ export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> 
         .from("contacts")
         .select(LEAD_COLS)
         .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
-        .limit(1);
-      if (data?.length) return toLeadRef(data[0]);
+        .limit(CANDIDATE_LIMIT);
+      if (data?.length) return { matches: data.map(toLeadRef), rung: "phone" };
     }
   }
 
@@ -242,8 +274,8 @@ export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> 
         .from("contacts")
         .select(LEAD_COLS)
         .ilike("email", email)
-        .limit(1);
-      if (data?.length) return toLeadRef(data[0]);
+        .limit(CANDIDATE_LIMIT);
+      if (data?.length) return { matches: data.map(toLeadRef), rung: "email" };
     }
   }
 
@@ -252,13 +284,14 @@ export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> 
       .from("contacts")
       .select(LEAD_COLS)
       .ilike("business_name", a.businessName)
-      .limit(2);
-    // Two hits means we do not know which, and guessing writes a call note onto
-    // the wrong company's record, where it stays.
-    if (data && data.length === 1) return toLeadRef(data[0]);
+      .limit(CANDIDATE_LIMIT);
+    // More than one hit means we do not know which, and guessing writes a call
+    // note onto the wrong company's record, where it stays. resolveLead()
+    // refuses outright; a caller with a confirm strip can offer the choice.
+    if (data?.length) return { matches: data.map(toLeadRef), rung: "businessName" };
   }
 
-  return null;
+  return none;
 }
 
 // ─────────────────────────────────────────────────────────────────────

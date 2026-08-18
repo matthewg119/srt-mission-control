@@ -1,39 +1,42 @@
-// Turning "something on a screen" into a real Zoho record, with an honest confidence.
+// Turning "something on a screen" into a real CRM contact, with an honest confidence.
 //
 // The whole design here is about ONE failure: identifying the wrong lead. It is not a cosmetic
 // error. A wrong identification grounds every live suggestion for the length of the call, and then
-// the post-call wrap writes a note about that call onto the wrong company's CRM record, where it
+// the post-call wrap writes a note about that call onto the wrong company's record, where it
 // stays. So there are three layers between a misread and damage, and they are deliberately
 // redundant:
 //
 //   1. Nothing below `strong` auto-commits. Weak and ambiguous return CANDIDATES and the coach
 //      shows a confirm strip. One click, and the failure disappears.
-//   2. The brief's first line is the WHO line, naming business, person, phone and the Zoho id. A
+//   2. The brief's first line is the WHO line, naming business, person, phone and the record. A
 //      misidentification then fails in the first five seconds instead of at minute forty.
 //   3. The wrap re-reads the session row rather than re-deriving identity, and reprints that same
-//      WHO line above the note. So a wrong Zoho note needs two missed confirmations, not one.
+//      WHO line above the note. So a wrong note needs two missed confirmations, not one.
+//
+// Every rung goes through resolveLeadCandidates() in lib/crm.ts. That is the same ladder
+// resolveLead() uses, so there is one place where "find the person behind this" is kept correct;
+// this file only decides how much to TRUST each answer.
 
-import { searchLeads, getLead, getDeal, type ZohoApiRecord } from "@/lib/zoho";
+import { resolveLeadCandidates, type LeadRef, type ResolveRung } from "@/lib/crm";
 import { companiesConflict } from "@/lib/company-identity";
-import { supabaseAdmin } from "@/lib/db";
-import { parseZohoRecordUrl, zohoRecordUrl, type ZohoModule, type ZohoRecordRef } from "./zoho-url";
+import { parseRecordUrl, crmRecordUrl, type RecordRef } from "./record-url";
 import { readFromUntrustedRegion, type VisionRead } from "./identify-lead";
 
 export type TargetConfidence = "exact" | "strong" | "weak" | "ambiguous" | "none";
 
 export interface CallTarget {
-  module: ZohoModule;
-  recordId: string;
+  /** contacts.id. The identity. */
+  contactId: string;
   businessName: string | null;
   personName: string | null;
   email: string | null;
   phone: string | null;
   website: string | null;
-  /** Supabase contacts.id, when this record has ever been through a funnel. Often null. */
-  contactId: string | null;
   confidence: TargetConfidence;
   source: "tab_url" | "vision_url" | "vision_email" | "vision_phone" | "vision_name" | "dialer" | "manual";
-  zohoUrl: string;
+  crmUrl: string;
+  /** Legacy. Kept for the extension wire format and for sessions written before the cutover. */
+  zohoLeadId: string | null;
 }
 
 export interface ResolveResult {
@@ -54,56 +57,35 @@ function digits(s: string | null | undefined): string {
   return (s ?? "").replace(/\D/g, "");
 }
 
-/**
- * Zoho returns an EMPTY STRING for an unset text field, never null.
- *
- * So `rec.Company ?? rec.Deal_Name` keeps the empty Company and never reaches Deal_Name, and every
- * downstream "did we get a name" check passes on a blank. Anything reading a Zoho field goes
- * through here.
- */
-function blank(v: unknown): string | null {
-  const t = typeof v === "string" ? v.trim() : "";
-  return t.length > 0 ? t : null;
-}
-
-function fromRecord(
-  ref: ZohoRecordRef,
-  rec: ZohoApiRecord,
+function fromLeadRef(
+  lead: LeadRef,
   confidence: TargetConfidence,
   source: CallTarget["source"]
 ): CallTarget {
-  // A Deal carries Deal_Name / Account_Name where a Lead carries Company, and reading only
-  // `Company` off a Deal gives a nameless target. Same shape mismatch resolveRecord handles in
-  // smart-followup.ts.
-  const business =
-    blank(rec.Company) ??
-    blank((rec.Account_Name as { name?: string } | undefined)?.name) ??
-    blank(rec.Deal_Name) ??
-    null;
-
   return {
-    module: ref.module,
-    recordId: ref.recordId,
-    businessName: business,
-    personName: [blank(rec.First_Name), blank(rec.Last_Name)].filter(Boolean).join(" ") || null,
-    email: blank(rec.Email),
-    phone: blank(rec.Phone) ?? blank(rec.Mobile),
-    website: blank(rec.Website),
-    contactId: null,
+    contactId: lead.id,
+    businessName: lead.businessName,
+    personName: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || null,
+    email: lead.email,
+    phone: lead.phone ?? lead.mobilePhone,
+    website: lead.website,
     confidence,
     source,
-    zohoUrl: zohoRecordUrl(ref),
+    crmUrl: crmRecordUrl(lead.id),
+    zohoLeadId: lead.zohoLeadId,
   };
 }
 
-async function fetchRecord(ref: ZohoRecordRef): Promise<ZohoApiRecord | null> {
-  try {
-    if (ref.module === "Deals") return await getDeal(ref.recordId);
-    return await getLead(ref.recordId);
-  } catch (e) {
-    console.error(`[resolve-target] could not fetch ${ref.module}/${ref.recordId}:`, (e as Error).message);
-    return null;
-  }
+/** A parsed URL, resolved to a contact. Pure DB work — no CRM API exists to call. */
+async function fetchByRef(ref: RecordRef): Promise<LeadRef | null> {
+  const { matches } = await resolveLeadCandidates(
+    ref.kind === "contact" ? { contactId: ref.contactId } : { zohoLeadId: ref.zohoLeadId }
+  );
+  return matches[0] ?? null;
+}
+
+function refLabel(ref: RecordRef): string {
+  return ref.kind === "contact" ? `contact ${ref.contactId}` : `Zoho lead ${ref.zohoLeadId}`;
 }
 
 /**
@@ -111,28 +93,28 @@ async function fetchRecord(ref: ZohoRecordRef): Promise<ZohoApiRecord | null> {
  *
  * The ladder is ordered by how a step can be WRONG, not by how convenient it is:
  *   tab URL      cannot be wrong about which record; Chrome told us.
- *   vision URL   can be wrong by one digit, so the fetched record is cross-checked by name.
+ *   vision URL   can be wrong by one digit, so the resolved record is cross-checked by name.
  *   email        one hit is near-certain, several means two people share an address.
  *   phone        a shared front-desk line is common, so several hits are genuinely ambiguous.
  *   name         weakest. Only ever `weak`, and never when more than one matches.
  */
 export async function resolveCallTarget(args: {
   read: VisionRead | null;
-  /** URL of the Zoho tab, straight from chrome.tabs.query. Free and authoritative. */
+  /** URL of the CRM tab, straight from chrome.tabs.query. Free and authoritative. */
   tabUrl?: string | null;
 }): Promise<ResolveResult> {
   const notes: string[] = [];
   const read = args.read;
 
   // ── 1. The Chrome tab URL. No model involved. ────────────────────────────
-  const tabRef = parseZohoRecordUrl(args.tabUrl);
+  const tabRef = parseRecordUrl(args.tabUrl);
   if (tabRef) {
-    const rec = await fetchRecord(tabRef);
-    if (rec) {
-      notes.push(`Record id came from the Zoho tab URL, so no guessing was involved.`);
-      return one(fromRecord(tabRef, rec, "exact", "tab_url"), notes);
+    const lead = await fetchByRef(tabRef);
+    if (lead) {
+      notes.push("Record id came from the CRM tab URL, so no guessing was involved.");
+      return one(fromLeadRef(lead, "exact", "tab_url"), notes);
     }
-    notes.push(`The Zoho tab URL pointed at ${tabRef.module}/${tabRef.recordId} but that record could not be fetched.`);
+    notes.push(`The CRM tab URL pointed at ${refLabel(tabRef)} but no contact matches it.`);
   }
 
   if (!read) {
@@ -140,15 +122,15 @@ export async function resolveCallTarget(args: {
   }
 
   // ── 2. The URL the model read off the address bar. ───────────────────────
-  const visionRef =
-    parseZohoRecordUrl(read.urlText) ??
-    (read.zohoRecordId && read.zohoModule ? { module: read.zohoModule, recordId: read.zohoRecordId } : null);
+  const visionRef: RecordRef | null =
+    parseRecordUrl(read.urlText) ??
+    (read.zohoRecordId ? { kind: "zohoLead", zohoLeadId: read.zohoRecordId } : null);
 
   if (visionRef) {
-    const rec = await fetchRecord(visionRef);
-    if (rec) {
-      const target = fromRecord(visionRef, rec, "exact", "vision_url");
-      // One transcribed digit wrong lands on a real but different record, and the fetch succeeds.
+    const lead = await fetchByRef(visionRef);
+    if (lead) {
+      const target = fromLeadRef(lead, "exact", "vision_url");
+      // One transcribed digit wrong lands on a real but different record, and the lookup succeeds.
       // The name check is what catches that. Only fires when both sides carry a name.
       const conflict = companiesConflict(
         { businessName: read.businessName, website: read.website },
@@ -156,51 +138,48 @@ export async function resolveCallTarget(args: {
       );
       if (conflict) {
         notes.push(
-          `The record id read off the address bar (${visionRef.recordId}) belongs to "${target.businessName}", but the screen says "${read.businessName}". One of the two was misread.`
+          `The record id read off the address bar belongs to "${target.businessName}", but the screen says "${read.businessName}". One of the two was misread.`
         );
         return { chosen: null, candidates: [target], confidence: "ambiguous", notes };
       }
       notes.push("Record id read off the address bar and the business name on screen agrees with it.");
       return one(target, notes);
     }
-    notes.push(`Read ${visionRef.module}/${visionRef.recordId} off the screen but Zoho has no such record. Probably a misread digit.`);
+    notes.push(`Read ${refLabel(visionRef)} off the screen but no contact matches it. Probably a misread digit.`);
   }
 
   // ── 3. Email, then phone, then name. ─────────────────────────────────────
   if (read.email) {
-    const hits = await safeSearch({ email: read.email });
+    const hits = await hitsFor({ email: read.email }, "email");
     if (hits.length === 1) {
       notes.push(`Matched on the email address on screen (${read.email}).`);
-      return one(toTarget(hits[0], "strong", "vision_email"), notes);
+      return one(fromLeadRef(hits[0], "strong", "vision_email"), notes);
     }
     if (hits.length > 1) {
-      notes.push(`${hits.length} Zoho records share the email ${read.email}.`);
-      return many(hits.map((h) => toTarget(h, "ambiguous", "vision_email")), notes);
+      notes.push(`${hits.length} contacts share the email ${read.email}.`);
+      return many(hits.map((h) => fromLeadRef(h, "ambiguous", "vision_email")), notes);
     }
   }
 
   if (read.phone && digits(read.phone).length >= 10) {
-    const hits = await safeSearch({ phone: read.phone });
+    const hits = await hitsFor({ phone: read.phone }, "phone");
     if (hits.length === 1) {
       notes.push(`Matched on the phone number on screen (${read.phone}).`);
-      return one(toTarget(hits[0], "strong", "vision_phone"), notes);
+      return one(fromLeadRef(hits[0], "strong", "vision_phone"), notes);
     }
     if (hits.length > 1) {
       // Genuinely common: a shared front-desk line across two businesses, or one owner running
       // two. companiesConflict exists precisely because this used to collapse them into one.
-      notes.push(`${hits.length} Zoho records share the phone ${read.phone}. That is usually a shared front desk line.`);
-      return many(hits.map((h) => toTarget(h, "ambiguous", "vision_phone")), notes);
+      notes.push(`${hits.length} contacts share the phone ${read.phone}. That is usually a shared front desk line.`);
+      return many(hits.map((h) => fromLeadRef(h, "ambiguous", "vision_phone")), notes);
     }
   }
 
   if (read.businessName) {
-    const hits = await safeSearch({ criteria: `(Company:equals:${escapeCriteria(read.businessName)})` });
-    const byName = hits.length
-      ? hits
-      : await safeSearch({ criteria: `(Company:starts_with:${escapeCriteria(read.businessName)})` });
+    const byName = await hitsFor({ businessName: read.businessName }, "businessName");
 
     if (byName.length === 1) {
-      const target = toTarget(byName[0], "weak", "vision_name");
+      const target = fromLeadRef(byName[0], "weak", "vision_name");
       // A name match is the weakest signal there is, and it is exactly where a sidebar read lands.
       if (readFromUntrustedRegion(read)) {
         notes.push(
@@ -212,37 +191,37 @@ export async function resolveCallTarget(args: {
       return { chosen: null, candidates: [target], confidence: "weak", notes };
     }
     if (byName.length > 1) {
-      notes.push(`${byName.length} Zoho records match the name "${read.businessName}".`);
-      return many(byName.slice(0, 3).map((h) => toTarget(h, "ambiguous", "vision_name")), notes);
+      notes.push(`${byName.length} contacts match the name "${read.businessName}".`);
+      return many(byName.map((h) => fromLeadRef(h, "ambiguous", "vision_name")), notes);
     }
   }
 
   notes.push(
     read.businessName
-      ? `Read "${read.businessName}" off the screen but found nothing matching it in Zoho. It may not be in the CRM yet.`
+      ? `Read "${read.businessName}" off the screen but found nothing matching it in the CRM. It may not be in there yet.`
       : `Could not read a business off the screen (${read.evidence}).`
   );
   return { chosen: null, candidates: [], confidence: "none", notes };
 }
 
-function escapeCriteria(s: string): string {
-  // Zoho criteria are parenthesis-delimited, so an unescaped one truncates the query into
-  // something that still parses and quietly matches the wrong thing.
-  return s.replace(/[()]/g, " ").trim();
-}
-
-async function safeSearch(q: { email?: string; phone?: string; criteria?: string }): Promise<ZohoApiRecord[]> {
+/**
+ * One rung of the shared ladder, and only that rung.
+ *
+ * resolveLeadCandidates walks the whole ladder, so asking it for an email and getting back a
+ * `businessName` answer is possible in principle. Pinning the rung keeps each step of the
+ * confidence table honest about what actually matched.
+ */
+async function hitsFor(
+  input: { email?: string; phone?: string; businessName?: string },
+  expected: ResolveRung
+): Promise<LeadRef[]> {
   try {
-    return await searchLeads(q);
+    const { matches, rung } = await resolveLeadCandidates(input);
+    return rung === expected ? matches : [];
   } catch (e) {
-    console.error("[resolve-target] Zoho search failed:", (e as Error).message);
+    console.error("[resolve-target] contact lookup failed:", (e as Error).message);
     return [];
   }
-}
-
-function toTarget(rec: ZohoApiRecord, confidence: TargetConfidence, source: CallTarget["source"]): CallTarget {
-  const ref: ZohoRecordRef = { module: "Leads", recordId: String(rec.id ?? "") };
-  return fromRecord(ref, rec, confidence, source);
 }
 
 function one(target: CallTarget, notes: string[]): ResolveResult {
@@ -253,36 +232,10 @@ function many(candidates: CallTarget[], notes: string[]): ResolveResult {
   return { chosen: null, candidates, confidence: "ambiguous", notes };
 }
 
-/**
- * Attach the Supabase contact, when there is one.
- *
- * `contacts.zoho_lead_id` is the only join key between Zoho and everything this app stores, and it
- * is how the brief later finds the audit report. A cold Zoho lead legitimately has no contact row,
- * so a miss is normal and not worth a note.
- */
-export async function attachContactId(target: CallTarget): Promise<CallTarget> {
-  try {
-    const { data } = await supabaseAdmin
-      .from("contacts")
-      .select("id")
-      .eq("zoho_lead_id", target.recordId)
-      .maybeSingle();
-    if (data?.id) return { ...target, contactId: data.id as string };
-  } catch (e) {
-    console.error("[resolve-target] contact lookup failed:", (e as Error).message);
-  }
-  return target;
-}
-
 /** The line that opens every brief and every wrap card. Its job is to make a wrong lead obvious
  *  in the first five seconds rather than at minute forty. */
 export function whoLine(t: CallTarget): string {
-  return [
-    t.businessName ?? "unknown business",
-    t.personName,
-    t.phone,
-    `Zoho ${t.module}/${t.recordId}`,
-  ]
+  return [t.businessName ?? "unknown business", t.personName, t.phone, t.crmUrl]
     .filter(Boolean)
     .join(" · ");
 }

@@ -15,8 +15,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { extractApiKey, validateCallCoachKey } from "@/lib/call-coach-auth";
 import { identifyFromScreenshot } from "@/lib/call-coach/identify-lead";
-import { resolveCallTarget, attachContactId, autoCommits, whoLine } from "@/lib/call-coach/resolve-target";
-import { parseZohoRecordUrl } from "@/lib/call-coach/zoho-url";
+import { resolveCallTarget, autoCommits, whoLine } from "@/lib/call-coach/resolve-target";
+import { parseRecordUrl } from "@/lib/call-coach/record-url";
 import { buildCallBrief } from "@/lib/call-coach/brief";
 import { attachIdentityToSession, createPendingSession } from "@/lib/call-coach/session";
 
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
   }
 
   const tabUrl = typeof body.tabUrl === "string" ? body.tabUrl : null;
-  const tabRef = parseZohoRecordUrl(tabUrl);
+  const tabRef = parseRecordUrl(tabUrl);
 
   // Deliberately not `body.image?.data?.length` in a log line either.
   const rawImage = body.image?.data;
@@ -74,17 +74,20 @@ export async function POST(req: NextRequest) {
         committed: false,
         confidence: resolved.confidence,
         notes: resolved.notes,
+        // `module`, `recordId` and `zohoUrl` are the pre-cutover wire shape, kept populated
+        // because the shipped extension reads them by those names.
         candidates: resolved.candidates.map((c) => ({
-          module: c.module,
-          recordId: c.recordId,
+          module: "Leads",
+          recordId: c.zohoLeadId ?? c.contactId,
+          contactId: c.contactId,
           label: whoLine(c),
-          zohoUrl: c.zohoUrl,
+          crmUrl: c.crmUrl,
+          zohoUrl: c.crmUrl,
         })),
       });
     }
 
-    const target = await attachContactId(resolved.chosen);
-    const brief = await buildCallBrief(target);
+    const brief = await buildCallBrief(resolved.chosen);
 
     const sessionId =
       typeof body.sessionId === "string" && body.sessionId
@@ -103,10 +106,12 @@ export async function POST(req: NextRequest) {
       // the report and the website host, and the pre-correction copy is what rendered
       // "unknown business" in the WHO line for real leads.
       who: {
-        module: brief.who.module,
-        recordId: brief.who.recordId,
+        module: "Leads",
+        recordId: brief.who.zohoLeadId ?? brief.who.contactId,
+        contactId: brief.who.contactId,
         label: whoLine(brief.who),
-        zohoUrl: brief.who.zohoUrl,
+        crmUrl: brief.who.crmUrl,
+        zohoUrl: brief.who.crmUrl,
         businessName: brief.who.businessName,
         personName: brief.who.personName,
       },
