@@ -2,7 +2,7 @@
 
 **Replaces:** `SRT-Review-Funnel-Spec.md` — **retired, delete it.** That spec put a generation model in the path and asked for a staff name. Both are prohibited here.
 **Governed by:** `SRT-AEO-Onboarding-v2-PILOT.md` §10.3 and §16.5–16.7, which are canon. This document is the build translation, not a new decision.
-**Route:** `learn.{clientdomain}/review` — a standalone mobile page, separate build from the funnel app.
+**Route:** `reviews.{clientdomain}` — a standalone mobile page, separate build from the funnel app. Its own host, not a path on the hub: `dns-records.ts` provisions a dedicated `reviews.` CNAME on the onboarding call, and that is the record the QR on the printed cards resolves through.
 
 ---
 

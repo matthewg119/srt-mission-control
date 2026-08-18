@@ -17,6 +17,7 @@ import {
   resolveDnsProvider,
   seedDnsRecords,
 } from "@/lib/clients/dns-records";
+import { subdomainLabel } from "@/lib/clients/normalize";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -59,7 +60,9 @@ export async function POST(
 
   // ── Seed, and work out whose registrar we are talking them through ──
   if (action === "seed") {
-    await seedDnsRecords(id, (client.subdomain as string) || "learn");
+    // The LABEL. host goes straight into the registrar's Host box, which the registrar
+    // then appends the domain to, so a full host here saves as learn.clinic.com.clinic.com.
+    await seedDnsRecords(id, subdomainLabel(client.subdomain as string | null, domain));
 
     // Resolved rather than asked. "Who is your domain with" is a question plenty of
     // owners cannot answer; their nameservers answer it for them, and the call checklist

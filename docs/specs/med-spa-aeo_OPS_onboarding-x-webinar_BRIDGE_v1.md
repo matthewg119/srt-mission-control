@@ -83,7 +83,7 @@ Every row is something said on camera or written into the offer. Third column is
 
 **Keeps from the SRT spec:** no gating · fully editable · no incentives · copy-then-link, she posts herself · mobile-first · store answers to `client_corpus` (`source_type = 'review_funnel_answer'`, no identifiers, no IP) · funnel-completion metrics. **The AEO quality metric stays "% of posted reviews containing an objection phrase."** The staff-name metric goes.
 
-**Build instruction for v2 §7:** *"Route `learn.{domain}/review`. Build the spec in `med-spa-aeo_06-CLOSE_FINAL_v7.md` Part V. Four open questions verbatim. Output = her answers as bullet points, editable, copy button, then the destination link. No generation model in the path — string assembly only. No staff field anywhere in this route. Question set stored with a version id on every submission."*
+**Build instruction for v2 §7:** *"Route `reviews.{domain}`. Build the spec in `med-spa-aeo_06-CLOSE_FINAL_v7.md` Part V. Four open questions verbatim. Output = her answers as bullet points, editable, copy button, then the destination link. No generation model in the path — string assembly only. No staff field anywhere in this route. Question set stored with a version id on every submission."*
 
 **Renaming:** the file is `SRT-Review-Funnel-Spec.md`; the deliverable on camera is "the patient review tool." Rename the file to match, so nobody builds from the wrong noun.
 
@@ -176,7 +176,7 @@ Change Q8 to *"about an hour"* — it's the first Q&A item cut if the runtime is
 | 1 | **Payment** | `checkout.session.completed` | Tenant created · market locked · $39 credit applied if due · Slack channel provisioned · welcome email sent |
 | 2 | **Intake** | Welcome email opened | Funnel complete · canonical NAP locked · booking made (≥ 4 h notice) |
 | 3 | **Photograph I** | Funnel complete | 20 universal × 4 engines run · findings doc assembled · 3–5 real screenshots captured · citation sources upserted |
-| 4 | **Call** | Booking time | Findings walked · NAP confirmed aloud · **custom questions approved** · access granted · CNAME + TXT live · review mechanism + destination decided · implementation offered (yes → recorded + emailed) |
+| 4 | **Call** | Booking time | Findings walked · NAP confirmed aloud · **custom questions approved** · access granted · all three DNS records live, two CNAMEs and one TXT · review mechanism + destination decided · implementation offered (yes → recorded + emailed) |
 | 5 | **Photograph II** | Call complete | Full 40/80 × 4 archived as Day 0 — **before any change lands** |
 | 6 | **Build** | Day 0 archived | Hub live ≤ day 7 · first answer pages ≤ day 14 · review tool handed to a named person · implementation track running if bought · weekly report firing |
 | 7 | **Report** | Day 30 | Re-run · scorecard · video · outreach log (Complete) · displacement view (Complete) |

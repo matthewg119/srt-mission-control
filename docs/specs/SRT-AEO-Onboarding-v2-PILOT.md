@@ -85,7 +85,7 @@ A pilot is chosen, not sold. Criteria, in order of importance:
 4. **Reviews are asked for cleanly, or the owner is willing to stop what isn't.** No gating, no incentives, no lobby tablet, no staff-name prompts. Non-negotiable; it's on the intake form and it's confirmed on the call.
 5. **A booking / patient-messaging system exists** so the automated request can live in it. If not, card-only mode — acceptable, but at least two of the three pilots should have a system.
 6. **A named person for the review tool.** Not "the front desk." A name.
-7. **A website we can point a CNAME at** and access that can be recovered (an ex-agency holding GBP is fine if the owner will start the recovery on the call).
+7. **A website we can point two CNAMEs at** and access that can be recovered (an ex-agency holding GBP is fine if the owner will start the recovery on the call).
 8. **Willing to have results used** at least anonymized. Named use is a bonus, never a requirement.
 
 Nice to have: thin or old reviews (Complete scope has more to show), a treatment specialty (procedure-specific answer pages move first), Spanish-speaking patient base for one pilot.
@@ -161,7 +161,7 @@ Under 20 minutes, automated:
 | 0–15 | Findings. Lead with the screenshots. Name the competitors. | Same as paid. |
 | 15–20 | Canonical NAP confirmed aloud, field by field. | Same. |
 | 20–28 | **Custom question list** — the 20 (Core scope) or 60 (Complete scope) built from Step 3, the harvest, and the baseline's cited sources. They approve once. Add anything they think is missing. | This is Q8's promise; it lives here. |
-| 28–43 | Access grants, live, client driving. Registrar: **CNAME + TXT** (domain-level Search Console). Never ask for credentials. | Same. |
+| 28–43 | Access grants, live, client driving. Registrar: **three records, two CNAMEs and one TXT** (hub, `reviews.`, domain-level Search Console). Never ask for credentials. | Same. |
 | 43–50 | **Review mechanism + destination:** where the automated request will live (their booking system → we configure it, or card-only), Google primary / RealSelf for procedure visits, the named person, and the rules restated once: every patient, own phone at home, nothing offered, nobody prompted for a name. | Same. |
 | 50–55 | **Implementation track:** what the findings say needs cleaning (citations, GBP, orphaned access) and what access that needs. Stated as work we're doing, full stop. | **No offer.** In the paid flow this is where implementation is offered; for pilots it's part of the plan and it's logged as a confound. |
 | 55–60 | What happens over the next 21 days. Consent confirmed aloud. Day-30 report date set. | Same, minus anything about what happens after day 90. |
@@ -186,7 +186,7 @@ Generated per scope, at exactly the counts that will be sold: **4 new + 4 refres
 
 ### 10.3 · The patient review tool — the framework, as built
 
-Standalone mobile page at `learn.{clientdomain}/review`, reached by QR code on a physical card handed to the patient at the end of her visit. That evening, on her own phone, at home, she scans it and gets four open, sentiment-neutral questions:
+Standalone mobile page at `reviews.{clientdomain}`, reached by QR code on a physical card handed to the patient at the end of her visit. That evening, on her own phone, at home, she scans it and gets four open, sentiment-neutral questions:
 
 1. What were you worried about before you came in?
 2. What were you hoping would happen?
@@ -267,7 +267,7 @@ Six things, in this order, in one email and a short call if they want one:
 - Tenant provisioned as `pilot`; market held; seat counted; Slack channel live
 - Funnel complete; canonical NAP locked; booking made at ≥ 4 h notice
 - Photograph I run; findings doc; screenshots; sources upserted
-- Call done: NAP confirmed, custom questions approved, access granted, CNAME + TXT live, review mechanism + destination decided, named person recorded
+- Call done: NAP confirmed, custom questions approved, access granted, all three DNS records live (two CNAMEs and one TXT), review mechanism + destination decided, named person recorded
 - Photograph II archived as Day 0 before any change
 - Hub live ≤ day 7; first answer pages ≤ day 14
 - Review tool live; cards printed and handed; automated request configured or `card_only` recorded

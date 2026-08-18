@@ -16,6 +16,7 @@ import {
   type FieldError,
 } from "@/lib/medspa/validate";
 import { normalizeTarget, normalizeErrorMessage } from "@/lib/scan/normalize";
+import { formatPhoneUS } from "@/lib/clients/normalize";
 import { readAttribution, track } from "@/lib/medspa/pixel";
 import { PaymentForm } from "./payment-element";
 
@@ -287,7 +288,12 @@ export function FunnelClient({ checkoutEnabled }: { checkoutEnabled: boolean }) 
                 autoComplete="tel"
                 placeholder={LANDING.fields.phonePlaceholder}
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                // Live-formatted, same as /onboarding. The route behind this already
+                // stores E.164 via validateOptin, so this is the typing half only: a
+                // number that reads back as (336) 833-2303 while it is being entered is
+                // one the visitor can check, and a typed +1 is absorbed rather than
+                // doubled.
+                onChange={(e) => setPhone(formatPhoneUS(e.target.value))}
                 disabled={busy}
                 aria-invalid={errors.includes("phone")}
               />

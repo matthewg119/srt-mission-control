@@ -208,10 +208,10 @@ Structure it in this order every time:
 | Yelp Business | Additional user | Client adds via Yelp account settings |
 | Facebook Page | Admin or Editor role | Via Meta Business Suite |
 | Bing Places | Manager | Client invite |
-| Domain registrar / DNS | **One CNAME record added** — that's all the hybrid model needs | Screen-share, 5 minutes, client stays logged in and in control |
+| Domain registrar / DNS | **Three records added: two CNAMEs and one TXT** (hub, `reviews.`, domain-level Search Console) | Screen-share, 5 minutes, client stays logged in and in control |
 | Vertical directories | Case by case, per discrepancy log | Varies |
 
-> **On DNS:** Do the CNAME on a screen-share, in the client's own registrar account, with them driving. It takes five minutes, it costs them nothing, and them watching us not touch anything else is a trust event. Do not ask them to hand over registrar credentials — that request is where deals go cold and where our liability starts.
+> **On DNS:** Do all three records on a screen-share, in the client's own registrar account, with them driving. Three records: two CNAMEs and one TXT. Never "CNAME and TXT", which reads as two. It takes five minutes, it costs them nothing, and them watching us not touch anything else is a trust event. Do not ask them to hand over registrar credentials — that request is where deals go cold and where our liability starts.
 
 **Common blockers and how to handle them:**
 - *Unclaimed GBP listing* → claim it together on the call. Instant credibility moment.
@@ -231,7 +231,7 @@ Structure it in this order every time:
 
 - [ ] Choose subdomain — **standardize on one convention across all clients** (recommend `resources.` or `learn.`; pick one and never deviate, it keeps the SOP clean)
 - [ ] Add `[subdomain].clientdomain.com` as a custom domain on the multi-tenant Vercel project
-- [ ] Client adds the CNAME record (Phase 3 screen-share)
+- [ ] Client adds all three DNS records, two CNAMEs and one TXT (Phase 3 screen-share)
 - [ ] Verify DNS propagation + SSL provisioned
 - [ ] Create client tenant record in Supabase: branding, colors, logo, canonical NAP, services taxonomy
 - [ ] Generate and inject JSON-LD schema — `LocalBusiness` / `MedicalClinic` / `HomeAndConstructionBusiness` as appropriate, using the **corrected** NAP

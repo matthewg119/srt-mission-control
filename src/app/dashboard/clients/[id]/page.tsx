@@ -13,6 +13,7 @@ import { DRAFTS } from "@/lib/clients/client-drafts";
 import { DRAFT_COPY, isUnwritten } from "@/config/client-messages";
 import { reportsOutstanding } from "@/lib/clients/report-reminders";
 import { DNS_RECORDS, fqdn } from "@/lib/clients/dns-records";
+import { subdomainLabel } from "@/lib/clients/normalize";
 import { TimeLogForm } from "./time-log-form";
 import { DeliveryChecklistForm } from "./delivery-checklist-form";
 import { DraftsForm, type DraftRow } from "./drafts-form";
@@ -233,7 +234,14 @@ export default async function ClientDetailPage({
             phone={(client.phone as string) ?? null}
             email={(client.email as string) ?? null}
           />
-          {client.subdomain && <span>{client.subdomain as string}</span>}
+          {/* The column stores the LABEL, so the full host is composed here. This is the
+              one place that wants the whole name: it is read, not typed into a registrar. */}
+          {client.subdomain && client.domain && (
+            <span>
+              {subdomainLabel(client.subdomain as string, client.domain as string)}.
+              {client.domain as string}
+            </span>
+          )}
           <span>Scope: {(client.tier_scope as string) ?? "not set"} (internal)</span>
           {client.pilot_ends_at && (
             <span>Pilot ends {new Date(client.pilot_ends_at as string).toLocaleDateString()}</span>

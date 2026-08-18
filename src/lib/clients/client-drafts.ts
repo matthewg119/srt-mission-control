@@ -16,6 +16,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { hasBannedDash } from "@/lib/copy-guard";
+import { subdomainLabel } from "@/lib/clients/normalize";
 import {
   DRAFT_COPY,
   CHANNEL_LINE,
@@ -178,7 +179,10 @@ export function clientDisplayName(client: ClientRow): string {
  */
 function baseVars(client: ClientRow): DraftVars {
   const domain = client.domain || null;
-  const sub = client.subdomain || "learn";
+  // Through subdomainLabel, never raw: rows written before that column became label-only
+  // still hold a full host, and `${"learn.clinic.com"}.${domain}` is a hostname we would
+  // then read out to a paying client over the phone.
+  const sub = subdomainLabel(client.subdomain, domain);
   return {
     businessName: clientDisplayName(client),
     // No fallback to the business name. "Hi Bright Smile Dental," reads like a mail merge

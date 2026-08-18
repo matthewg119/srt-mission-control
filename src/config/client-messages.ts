@@ -86,9 +86,14 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
   intro: {
     label: "Intro, first message after intake",
     tokens: ["businessName", "firstName", "city"],
+    // {city} is available and deliberately unused. An absent token leaves the sentence
+    // around it behind, so "in {city}" degrades to "in today" rather than to nothing.
+    // Optional tokens belong at the end of a clause or nowhere.
     body: guard(
       "draft intro",
-      "TODO: write the intro. It goes to {firstName} at {businessName} the moment they finish intake. Say who you are, that this is the number to reach you on, and what happens next. The channel line and the no customer information line are added automatically underneath, so do not write them here."
+      "Hi {firstName}, it is Matthew from SRT. Thanks for getting the form done.\n\n" +
+        "This is my number, save it. Anything you need, you come straight here rather than to an inbox.\n\n" +
+        "First thing on my end is the baseline. I take the questions your customers ask before they pick anybody, run them into the AI engines, and write down exactly what comes back about {businessName} today, before we change a thing. Then we get on a call and I walk you through it."
     ),
   },
 
@@ -96,9 +101,14 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
   ask_gbp_access: {
     label: "Ask: Google Business Profile manager access",
     tokens: ["businessName", "firstName"],
+    // No token carries the SRT address, so the ask points at the message it arrived in
+    // rather than at an invented {ourEmail}. One less thing to keep in step by hand.
     body: guard(
       "draft ask gbp access",
-      "TODO: write the Google Business Profile access ask. They add us as a manager, we never ask for a password, and they stay the owner. Say what you need and how long it takes."
+      "{firstName}, one small job for you when you have two minutes.\n\n" +
+        "Add me as a manager on your Google Business Profile. Use the email address my welcome message came from.\n\n" +
+        "On google.com/business it is Settings, then People and access, then Add.\n\n" +
+        "You stay the owner. You can take the access off me whenever you want, and I never need your password."
     ),
   },
 
@@ -117,7 +127,10 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
     tokens: ["businessName", "firstName", "hubHost", "reviewHost", "domain"],
     body: guard(
       "draft ask dns",
-      "TODO: write the DNS ask. Three DNS records: two CNAMEs and one TXT. The CNAMEs are {hubHost} and {reviewHost}, the TXT is on {domain} for Search Console. We do it together on the call with them driving in their own registrar, and we never ask for their login."
+      "{firstName}, the next step is about five minutes inside whatever account your domain is registered with. GoDaddy, Squarespace, whoever you bought it from.\n\n" +
+        "There are three DNS records to add: two CNAMEs and one TXT.\n\n" +
+        "The two CNAMEs are {hubHost} and {reviewHost}. The TXT sits on {domain} itself and is the Google Search Console verification.\n\n" +
+        "We do it together on the call. You stay logged in and you do the typing, I read the values out. I never need your login, and nothing on your existing website changes."
     ),
   },
 
@@ -130,7 +143,10 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
     tokens: ["businessName", "firstName", "headline"],
     body: guard(
       "draft notify baseline",
-      "TODO: write the baseline scan notification. The scan has run and there is something to show them. {headline} carries the finding you want to lead with. Do not promise what it will turn into, just tell them it is done and what you saw."
+      "{firstName}, the baseline is done for {businessName}.\n\n" +
+        "{headline}\n\n" +
+        "That is the starting point, written down before we touch anything, so every re-test after this gets measured against the same thing rather than against a memory of it.\n\n" +
+        "I will take you through the full set on the call."
     ),
   },
 
@@ -140,7 +156,10 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
     tokens: ["businessName", "firstName", "pageUrl"],
     body: guard(
       "draft notify first page",
-      "TODO: write the first page live notification. {pageUrl} is the page. Tell them it is up and what it is for. No traffic promises, no timeline for results."
+      "{firstName}, the first page is up:\n\n" +
+        "{pageUrl}\n\n" +
+        "It answers one of the questions people ask before they pick anyone, and it is written so an AI engine can quote it and say where the answer came from.\n\n" +
+        "Have a read when you get a second. If anything on it about the business is wrong, tell me and I will change it today."
     ),
   },
 
@@ -148,9 +167,15 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
   report_monthly: {
     label: "Report: the monthly one",
     tokens: ["businessName", "firstName", "dayLabel", "headline"],
+    // A flat month gets this message too, and says the month was flat. The measure is
+    // named, not named, named alongside, named instead. Never a rank: there is no
+    // position column anywhere in the pipeline, so a number here would be invented.
     body: guard(
       "draft report monthly",
-      "TODO: write the monthly report message. {dayLabel} says which one it is, day 30, 60 or 90. A flat month gets a message too and it says the month was flat. Named, not named, named alongside, named instead. Never ranked."
+      "{firstName}, the {dayLabel} re-test is done for {businessName}.\n\n" +
+        "Same questions, same engines, same wording as the baseline, so this is like for like and not a fresh look at it.\n\n" +
+        "{headline}\n\n" +
+        "Anything that has not moved, I have said so rather than dressed it up. Full sheet is on its way over and we can go through any of it."
     ),
   },
 };

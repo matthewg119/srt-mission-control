@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { formatPhoneUS } from "@/lib/clients/normalize";
 
 export function StartPilotForm() {
   const router = useRouter();
@@ -112,7 +113,7 @@ export function StartPilotForm() {
   const field = (
     label: string,
     key: keyof typeof f,
-    opts: { required?: boolean; help?: string; placeholder?: string } = {}
+    opts: { required?: boolean; help?: string; placeholder?: string; tel?: boolean } = {}
   ) => (
     <div>
       <label className="mb-1 block text-xs text-[rgba(255,255,255,0.5)]">
@@ -122,7 +123,11 @@ export function StartPilotForm() {
       <input
         value={f[key]}
         placeholder={opts.placeholder}
-        onChange={(e) => set(key, e.target.value)}
+        // Live-formatted exactly as the /onboarding funnel does it, and for the same
+        // reason: this number is what every WhatsApp draft is addressed to, and waLink()
+        // returns null for anything that is not E.164, so a raw string typed here is a
+        // card with no button on it.
+        onChange={(e) => set(key, opts.tel ? formatPhoneUS(e.target.value) : e.target.value)}
         className="w-full rounded-lg border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.03)] px-3 py-2 text-sm text-white outline-none focus:border-[#00C9A7]"
       />
       {opts.help && <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.3)]">{opts.help}</p>}
@@ -139,7 +144,7 @@ export function StartPilotForm() {
         {field("Website", "website", { required: true, placeholder: "business.com" })}
         {field("Owner email", "email", { required: true })}
         {field("Owner first name", "contactFirstName")}
-        {field("Phone", "phone")}
+        {field("Phone", "phone", { tel: true })}
         {field("Street address", "addressLine1")}
         {field("City", "city")}
         {field("State", "state", { placeholder: "TX" })}

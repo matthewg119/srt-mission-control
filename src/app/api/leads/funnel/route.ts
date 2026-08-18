@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { ingestLead } from "@/lib/lead-intake";
+import { normalizeLeadPhone } from "@/lib/phone";
 
 const ZOHO_LEAD_SOURCE = "AI Visibility Index";
 
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     const name = clean(body.name, 80);
     const clinic = clean(body.clinic, 120);
     const email = clean(body.email, 120).toLowerCase();
-    const phone = clean(body.phone, 20).replace(/[^\d+]/g, "");
+    const phone = normalizeLeadPhone(clean(body.phone, 20));
     const website = clean(body.website, 120);
     const city = clean(body.city, 60);
     const services = Array.isArray(body.services)

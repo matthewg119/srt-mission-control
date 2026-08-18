@@ -204,7 +204,7 @@ Log rejections to `#alerts-infra` with a daily count. If it spikes you want to k
 Carried forward unchanged — see v1.1 for detail:
 
 - **Onboarding funnel question set** — 6 steps, including Step 3 ideal-customer and Step 4 current-review-workflow
-- **DNS: CNAME + TXT** on the call, client driving, domain-level Search Console verification
+- **DNS: three records, two CNAMEs and one TXT** on the call, client driving, domain-level Search Console verification
 - **No call tracking.** Traffic only.
 - **Non-clinical forms only.** Name, email, phone, service interest. Post-submit "how did you hear about us" with an explicit "ChatGPT or another AI assistant" option. No PHI, no BAA exposure.
 - **Attribution layer** — hub referrers, AI crawler logs, hub-hosted conversions, branded impressions as the proxy for invisible discovery

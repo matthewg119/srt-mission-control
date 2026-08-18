@@ -38,6 +38,7 @@ import {
   marketsOverlap,
   isUsableCenter,
 } from "@/lib/clients/normalize";
+import { normalizePhone } from "@/lib/medspa/validate";
 
 /** Six at a time, pilots included. PILOT §1 and D-P2. Enforced here, never rendered. */
 export const MAX_CONCURRENT_CLIENTS = 6;
@@ -147,7 +148,11 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     website,
     domain,
     email,
-    phone: input.phone?.trim() || null,
+    // E.164 or nothing usable. The form live-formats, but this is the last gate before
+    // the column every WhatsApp draft is addressed off, and /start posts here too. A
+    // number that will not normalize is KEPT as typed rather than dropped: it is still
+    // the only way to reach this person, and the client board flags it in amber.
+    phone: normalizePhone(input.phone ?? "") ?? (input.phone?.trim() || null),
     address_line1: input.addressLine1 ? normalizeAddress(input.addressLine1) : null,
     address_line2: input.addressLine2 ? normalizeAddress(input.addressLine2) : null,
     city: input.city?.trim() || null,
@@ -434,10 +439,15 @@ async function chooseSubdomain(clientId: string, domain: string): Promise<void> 
     ).catch(() => {});
   }
 
+  // THE LABEL, not the full host. Both real consumers of this column want the part that
+  // goes in a registrar's Host box: seedDnsRecords writes it straight into
+  // client_dns_records.host, and baseVars builds hubHost as `${sub}.${domain}`. Storing
+  // "learn.clinic.com" here made both of those say "learn.clinic.com.clinic.com" — the
+  // doubling dns-records.ts documents as the reason host is stored label-only.
   await supabaseAdmin
     .from("clients")
     .update({
-      subdomain: `${convention}.${domain}`,
+      subdomain: convention,
       subdomain_convention: convention,
       updated_at: new Date().toISOString(),
     })

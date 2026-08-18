@@ -30,6 +30,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { ingestLead, enrichLead } from "@/lib/lead-intake";
+import { normalizeLeadPhone } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -166,7 +167,7 @@ export async function POST(req: NextRequest) {
         : `https://${partialRaw}`
       : "";
     const partialName = clean(body.name, 80).split(" ").filter(Boolean);
-    const partialPhone = clean(body.phone, 20).replace(/[^\d+]/g, "");
+    const partialPhone = normalizeLeadPhone(clean(body.phone, 20));
     const qStagePartial = clean(body.qStage, 40);
     const qInvestPartial = clean(body.qInvest, 40);
 
@@ -203,7 +204,7 @@ export async function POST(req: NextRequest) {
 
   // ── The lead itself. ──
   const name = clean(body.name, 80);
-  const phone = clean(body.phone, 20).replace(/[^\d+]/g, "");
+  const phone = normalizeLeadPhone(clean(body.phone, 20));
   const rawWebsite = clean(body.website, 200);
   const website = isUrl(rawWebsite)
     ? rawWebsite.startsWith("http")

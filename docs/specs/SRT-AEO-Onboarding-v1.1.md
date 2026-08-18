@@ -140,15 +140,24 @@ WHOIS matters more than it looks: knowing the registrar before the call means yo
 | 0–20 | Findings doc, in v1.0 §3.1 order. Lead with the AI baseline screenshots. |
 | 20–25 | Confirm canonical NAP out loud, field by field |
 | 25–45 | Access grants — live, on screen-share, client driving |
-| 45–50 | **DNS: CNAME + TXT** in their registrar, client driving |
+| 45–50 | **DNS: three records, two CNAMEs and one TXT** in their registrar, client driving |
 | 50–60 | Walk through what happens over the next 21 days. Book the 30-day report. |
 
-### DNS — two records, not one
+### DNS — three records: two CNAMEs and one TXT
+
+Say it that way, every time. "CNAME and TXT" reads as two records and that is exactly where
+the count drifted: there are **two** CNAMEs, not one.
 
 While they're logged into the registrar:
 
 1. **CNAME** — `[subdomain].clientdomain.com` → Vercel. This is the hub.
-2. **TXT** — Google Search Console domain-level verification.
+2. **CNAME** — `reviews.clientdomain.com` → Vercel. This is the review tool.
+3. **TXT** — Google Search Console domain-level verification.
+
+Record 2 goes in on the call even though the review host is not built yet. An unattached
+CNAME simply does not resolve, nobody visits it before the review cards are printed, and
+getting a client back into their registrar weeks later is worse than a record sitting idle
+for a fortnight.
 
 The TXT record is the upgrade over v1.0. Domain-level verification gives you Search Console data for **the entire domain including their main site**, not just the hub. Same five minutes, twice the data. It is the single highest-value thing you get on that call and it costs the client nothing.
 
@@ -274,7 +283,7 @@ Monthly report stays as v1.0 §6 defines it: re-run the exact Phase 2.3 query se
 
 Full spec in `SRT-Review-Funnel-Spec.md`. Summary:
 
-A quiz-style landing page at `[subdomain].clientdomain.com/review` that walks a customer from *"what were you worried about?"* through to a pre-populated, editable ~30-word review they copy and paste into Google.
+A quiz-style landing page at `reviews.clientdomain.com` that walks a customer from *"what were you worried about?"* through to a pre-populated, editable ~30-word review they copy and paste into Google.
 
 **Why it exists:** normal review prompts produce "Great service, highly recommend!" — which is worthless to an AI engine because it contains no retrievable information. The funnel structure produces reviews containing **the objection language real people type into ChatGPT**, plus staff names, plus a named outcome. Those are the reviews that get quoted.
 
@@ -333,6 +342,7 @@ Output: 30 days of GBP posts + hub content briefs, in the Mission Control review
 Everything in v1.0 Appendix C, plus:
 
 - Onboarding funnel completed and canonical NAP locked
+- All three DNS records resolving: hub CNAME, `reviews.` CNAME, domain-level TXT
 - Search Console verified at **domain level** (TXT record confirmed)
 - Hub traffic, referrer, and crawler logging confirmed writing to Supabase
 - At least one hub form live with the attribution popup

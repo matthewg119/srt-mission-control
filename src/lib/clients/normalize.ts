@@ -16,6 +16,39 @@ export function slugify(input: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The hub subdomain
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `clients.subdomain` has been written as a FULL HOST ("learn.clinic.com") and read as a
+// LABEL ("learn") by two of its three consumers, which produced exactly the doubling the
+// DNS code already warns about: the panel's Host box said `learn.clinic.com`, the
+// registrar appended the domain to it, and the record saved as
+// `learn.clinic.com.clinic.com`. The DNS ask draft told the client the same doubled name,
+// and the resolver check then looked for a host nobody had created.
+//
+// chooseSubdomain() now stores the label. This still strips a trailing domain, because
+// the rows written before that change are still in the database and a defensive read
+// fixes them without a migration. subdomain_convention already carries the same value, so
+// nothing is lost either way.
+
+/** The label only: `learn`, never `learn.clinic.com`. Falls back to the convention. */
+export function subdomainLabel(
+  subdomain: string | null | undefined,
+  domain: string | null | undefined
+): string {
+  const raw = (subdomain ?? "").trim().toLowerCase().replace(/\.$/, "");
+  if (!raw) return "learn";
+
+  const host = (domain ?? "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  const stripped = host && raw.endsWith(`.${host}`) ? raw.slice(0, -(host.length + 1)) : raw;
+
+  // A label still carrying a dot is a hostname we could not resolve against this domain
+  // (a client whose `domain` column disagrees with the stored host). Take the first
+  // segment rather than passing something through that a registrar will mangle.
+  return stripped.split(".")[0] || "learn";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Phone display
 // ─────────────────────────────────────────────────────────────────────────────
 //

@@ -22,6 +22,7 @@ import {
   addNoteToLead as zohoAddNote,
 } from "@/lib/zoho";
 import { crmMode, logActivity } from "@/lib/crm";
+import { normalizeLeadPhone } from "@/lib/phone";
 
 export interface IngestLeadInput {
   firstName?: string;
@@ -73,7 +74,18 @@ const CONTACT_CANDIDATES = 5;
 async function findContact(email: string, phone: string, identity: CompanyIdentity) {
   const filters: string[] = [];
   if (email) filters.push(`email.ilike.${email}`);
-  if (phone) filters.push(`phone.eq.${phone}`, `mobile_phone.eq.${phone}`);
+
+  // ‼️ THE LAST TEN DIGITS, NOT THE STRING. This used to be `phone.eq.${phone}`, an exact
+  // text match against whatever shape the funnel happened to store, so "3368332303",
+  // "13368332303" and "+13368332303" were three different people to the one function every
+  // inbound funnel dedupes through. phone_last10 / mobile_last10 are generated columns
+  // (docs/2026-06-04-contacts-phone-last10.sql) that five other lookups in this app already
+  // use, and matching on them collapses the rows ALREADY stored in mismatched shapes, which
+  // normalizing at the door alone would never have reached.
+  const last10 = phone.replace(/\D/g, "").slice(-10);
+  if (last10.length === 10) {
+    filters.push(`phone_last10.eq.${last10}`, `mobile_last10.eq.${last10}`);
+  }
   if (!filters.length) return null;
 
   const { data } = await supabaseAdmin
@@ -104,7 +116,10 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
   const firstName = input.firstName?.trim() || "";
   const lastName = input.lastName?.trim() || "";
   const email = input.email?.trim().toLowerCase() || "";
-  const phone = input.phone?.trim() || "";
+  // Normalized HERE as well as at each funnel, because this is the one door every
+  // inbound lead goes through and a caller added later must not be able to reintroduce
+  // a raw string. It is what gets written to contacts.phone and pushed to the CRM.
+  const phone = normalizeLeadPhone(input.phone);
   const website = input.website?.trim() || "";
   const businessName = input.businessName?.trim() || "";
   const city = input.city?.trim() || "";

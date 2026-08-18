@@ -13,6 +13,7 @@ import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 import { suggestIntroText } from "@/lib/intro-suggestion";
+import { normalizeLeadPhone } from "@/lib/phone";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
@@ -32,9 +33,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, email, phone, message, source, website, _fbc, _fbp, eventId, sourceUrl,
+    const { name, email, phone: phoneRaw, message, source, website, _fbc, _fbp, eventId, sourceUrl,
             utmCampaign, utmContent, utmMedium, utmSource, adId } = body;
     const serverEventId = eventId || randomUUID();
+
+    // E.164 before anything reads it. This route stored the raw body value and then
+    // deduped on it with .eq(), so the same person filling the form from their phone and
+    // then from a laptop became two contacts, two Zoho leads and two Slack threads.
+    const phone = normalizeLeadPhone(phoneRaw);
 
     const leadScore = calculateLeadScore({ email, phone, fbc: _fbc });
     const adSource = resolveAdSource(_fbc, source);
@@ -64,11 +70,19 @@ export async function POST(request: NextRequest) {
         existing = data;
       }
       if (!existing && phone) {
-        const { data } = await supabaseAdmin
-          .from("contacts")
-          .select("id")
-          .eq("phone", phone)
-          .maybeSingle();
+        // Matched on the last ten digits, not on the string. phone_last10 and
+        // mobile_last10 are generated columns (docs/2026-06-04-contacts-phone-last10.sql)
+        // and five other lookups in this app already use them. An .eq() on the raw text
+        // only ever finds a row stored in the identical shape, which is the whole bug.
+        const last10 = phone.replace(/\D/g, "").slice(-10);
+        const { data } = last10.length === 10
+          ? await supabaseAdmin
+              .from("contacts")
+              .select("id")
+              .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
+              .limit(1)
+              .maybeSingle()
+          : { data: null };
         existing = data;
       }
 

@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { ingestLead } from "@/lib/lead-intake";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
+import { normalizeLeadPhone } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -282,7 +283,7 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
   const firstName = fields.first_name || fullName.split(" ")[0] || "";
   const lastName = fields.last_name || fullName.split(" ").slice(1).join(" ") || "";
   const email = (fields.email || "").trim().toLowerCase();
-  const phone = (fields.phone_number || "").replace(/[^\d+]/g, "");
+  const phone = normalizeLeadPhone(fields.phone_number);
   const website = extractWebsite(fields, questions);
 
   const extraLines = Object.entries(fields)

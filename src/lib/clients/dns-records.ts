@@ -217,6 +217,34 @@ export async function seedDnsRecords(clientId: string, subdomain: string): Promi
     .upsert(rows, { onConflict: "client_id,record_key", ignoreDuplicates: true });
 
   if (error) console.error("[dns-records] seed failed:", error.message);
+
+  // ── Repair a host that no longer matches the convention ──
+  //
+  // ignoreDuplicates protects a value and a verification somebody already earned, which
+  // is right. It also means a row written with the WRONG host keeps it forever, and rows
+  // written before `clients.subdomain` became label-only hold a full host that resolves
+  // to nothing. A host is not a fact worth preserving: it is derived from the convention,
+  // and a stale one is what sends somebody back into a registrar.
+  //
+  // verified_at is cleared with it. A verification is a statement about a specific name,
+  // so carrying it across a rename would assert that a host nobody has checked resolves.
+  for (const row of rows) {
+    await supabaseAdmin
+      .from("client_dns_records")
+      .update({
+        host: row.host,
+        // row.status, not a literal: the TXT record seeds `pending` because its value has
+        // to come from the client's own Search Console, and resetting it to `ready` would
+        // claim we had a string to give them.
+        status: row.status,
+        verified_at: null,
+        observed: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("client_id", clientId)
+      .eq("record_key", row.record_key)
+      .neq("host", row.host);
+  }
 }
 
 export async function loadDnsRows(clientId: string): Promise<DnsRow[]> {
