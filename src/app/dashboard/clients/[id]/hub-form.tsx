@@ -49,6 +49,8 @@ export function HubForm({
   hosts,
   pages,
   prompts,
+  day0ArchivedAt,
+  day0Source,
 }: {
   clientId: string;
   domain: string | null;
@@ -56,6 +58,9 @@ export function HubForm({
   hosts: HubHostView[];
   pages: HubPageView[];
   prompts: AuditPromptView[];
+  /** NULL means the Day 0 wall is shut and Publish will be refused. */
+  day0ArchivedAt: string | null;
+  day0Source: string | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -63,6 +68,14 @@ export function HubForm({
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState({ ...BLANK });
   const [open, setOpen] = useState(false);
+
+  // The waive form only appears after a publish has actually been refused. Offering it
+  // up front would make it a button beside Publish, which is the same as not having a
+  // wall — the point is that you meet it, not that you can route around it.
+  const [waiving, setWaiving] = useState(false);
+  const [waiveReason, setWaiveReason] = useState("");
+
+  const day0Open = Boolean(day0ArchivedAt);
 
   async function post(body: Record<string, unknown>, key: string) {
     setBusy(key);
@@ -79,9 +92,12 @@ export function HubForm({
         error?: string;
         warnings?: string[];
         pageUrl?: string | null;
+        blockedBy?: string;
+        waivable?: boolean;
       };
       if (!json.ok) {
         setError(json.error ?? json.warnings?.join(" ") ?? "That did not work.");
+        if (json.blockedBy === "day_zero_archive" && json.waivable) setWaiving(true);
       } else if (json.pageUrl) {
         setNotice(`Published: ${json.pageUrl}`);
       }
@@ -90,6 +106,31 @@ export function HubForm({
     } catch (e) {
       setError((e as Error).message);
       return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function waive() {
+    setBusy("waive");
+    setError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/delivery-step`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "waive_day_zero", reason: waiveReason }),
+      });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) {
+        setError(json.error ?? "That did not work.");
+        return;
+      }
+      setWaiving(false);
+      setWaiveReason("");
+      setNotice("Day 0 waived. It has been posted to #alerts-infra.");
+      router.refresh();
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(null);
     }
@@ -158,10 +199,34 @@ export function HubForm({
           Pages · {pages.filter((p) => p.status === "published").length} published
         </div>
 
+        {/* ── The preview, Runner v3 5f/5g ──────────────────────────────────
+            Before the call, before DNS, drafts included. Not a second hub: it renders the
+            same components the live host renders. Opens in a tab so it can be screen-shared
+            without losing the board. */}
+        <div className="flex flex-wrap gap-2">
+          <a
+            href={`/dashboard/clients/${clientId}/preview`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40"
+          >
+            Preview the hub →
+          </a>
+          <a
+            href={`/dashboard/clients/${clientId}/preview?kind=reviews`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40"
+          >
+            Preview the review tool →
+          </a>
+        </div>
+
         {pages.length === 0 && (
           <p className="text-sm text-[rgba(255,255,255,0.5)]">
             Nothing written yet. The first page is what completes <code>first_page</code> and
-            sends the client the link.
+            sends the client the link. The preview above works now regardless — an empty hub is
+            what the client sees the day their CNAME resolves.
           </p>
         )}
 
@@ -187,7 +252,12 @@ export function HubForm({
                   page.id
                 )
               }
-              disabled={busy !== null}
+              disabled={busy !== null || (page.status !== "published" && !day0Open)}
+              title={
+                page.status !== "published" && !day0Open
+                  ? "Day 0 is not archived. Tick the Day-0 step on the delivery checklist first."
+                  : undefined
+              }
               className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40 disabled:opacity-40"
             >
               {busy === page.id
@@ -198,6 +268,58 @@ export function HubForm({
             </button>
           </div>
         ))}
+
+        {/* ── The Day 0 wall, said before it is hit ───────────────────────── */}
+        {pages.length > 0 && !day0Open && (
+          <p className="text-xs text-[#F5A623]">
+            Publishing is blocked until Day 0 is archived. Tick{" "}
+            <em>Day-0 scan archived, before any change lands</em> on the Delivery checklist
+            above. Drafts, hostnames and DNS are unaffected.
+          </p>
+        )}
+
+        {day0Open && day0Source === "waived" && (
+          <p className="text-xs text-[#F5A623]">
+            Day 0 was <strong>waived</strong> for this client, not archived. Nothing measured
+            after this has a baseline behind it, and every artifact has to say so.
+          </p>
+        )}
+
+        {waiving && (
+          <div className="space-y-2 rounded border border-[#F5A623]/40 p-3">
+            <div className="text-xs text-[#F5A623]">
+              Publish anyway. This is recorded against your name, posted to #alerts-infra, and
+              shown on this panel from now on. Say why in a sentence.
+            </div>
+            <textarea
+              value={waiveReason}
+              onChange={(e) => setWaiveReason(e.target.value)}
+              rows={2}
+              placeholder="Why this client is publishing without an archived Day 0."
+              className="w-full rounded border border-white/15 bg-transparent p-2 text-sm"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={waive}
+                disabled={busy !== null || waiveReason.trim().length < 10}
+                className="rounded border border-[#F5A623]/60 px-2 py-1 text-xs text-[#F5A623] hover:border-[#F5A623] disabled:opacity-40"
+              >
+                {busy === "waive" ? "…" : "Waive Day 0"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWaiving(false);
+                  setWaiveReason("");
+                }}
+                className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         <button
           type="button"

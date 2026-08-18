@@ -9,6 +9,46 @@
 
 ---
 
+## STATUS 2026-08-18 — this document has been answered, and four things were decided
+
+A1, A2 (the revised copy) and Runner v3 are now in `docs/specs/`. The six measurements below
+were re-checked against the repo and **three of them were wrong in the direction that matters**;
+the corrections are in the approved plan and are summarised here so nobody acts on the stale
+version:
+
+- **Item 1 overstates the gap.** Six of the "fifteen missing tables" exist under other names.
+  `ai_baseline` is largely `audit_runs` (`prompt` is already question-text-as-run, `citations`
+  the cited sources, `recommended` the businesses named); `lead_avatars` is `niche_briefs`;
+  `onboarding_docs` is `client_docs`. Genuinely new and needed: `nap_discrepancies`,
+  `competitor_candidates`, `question_bank`, `page_candidates`, `harvest_runs`,
+  `question_set_versions`.
+- **Item 5 is wrong about the market check.** It is not blocked on a Places key. Revised A2 §2
+  specifies the **US Census geocoder**, and `checkMarket()` + `haversineMiles()` already exist and
+  already use A2's seat-holding list. Three small fixes remain: point-in-circle instead of
+  circle-overlap, `market_radius_mi NOT NULL DEFAULT 10`, and blocking rather than flagging at
+  checkout.
+- **"The repo has NO Slack file capture" is wrong.** `slack.filesInfo()`, `slack.downloadFile()`
+  and a `file_shared` handler that already routes by mimetype all exist. What is new is routing
+  a file to an onboarding task and writing `client_docs`.
+- **Item 2 stands, and the wall was already half-built** — as a warning. `day_zero_archive` is
+  already a `gate: true` row in `DELIVERY_STEPS` and `renderChecklist()` already prints the
+  Day-0 warning. Nothing refused a write.
+
+**Decisions taken 2026-08-18:** (1) Day 0 **blocks** `page_publish`, with a logged override —
+the one deliberate exception to this repo's "flags, never blocks" doctrine. (2) The 33 rows
+extend `DELIVERY_STEPS` rather than becoming a third list. (3) The live SRT row survives and the
+hub plumbing moves onto it. (4) The presence sweep ships manual-only.
+
+### Still open, and none of them is a build question
+
+| Decision | Owner | What it blocks |
+|---|---|---|
+| The engine count accepted as a baseline, in writing. It is **one** today. | Lina + Matthew | Client one's Photograph I. A2 D-P16 and Runner v3 §4 both say a one-engine run is never a photograph for a pilot client, so nothing here unblocks it. |
+| Google AI Overviews: official API, or manual sampled capture with the footer saying so. | Lina | A recorded webinar line (canon v4 §3, Beat 11) and the Photograph I grid. |
+| Which engine fulfils the $39 OTO audit, and whether it runs `universal_v1` on the four. | Lina + Matthew | The canon §3 ladder. The audit bot runs *generated* prompts on *one* engine today. |
+
+---
+
 ```
 Continuing the client-hub build for SRT Mission Control.
 

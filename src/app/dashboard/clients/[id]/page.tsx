@@ -19,6 +19,10 @@ import { DeliveryChecklistForm } from "./delivery-checklist-form";
 import { DraftsForm, type DraftRow } from "./drafts-form";
 import { DnsForm, type DnsRowView } from "./dns-form";
 import { HubForm, type HubHostView, type HubPageView, type AuditPromptView } from "./hub-form";
+import { ThemeForm, type ThemeView } from "./theme-form";
+import { readTheme } from "@/lib/hub/theme";
+import { listOnboardingDocs } from "@/lib/clients/onboarding-docs";
+import { stepByKey } from "@/lib/clients/delivery-checklist";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 
 /**
@@ -134,6 +138,8 @@ export default async function ClientDetailPage({
         .eq("client_id", id)
         .order("updated_at", { ascending: false }),
     ]);
+
+  const docs = await listOnboardingDocs(id);
 
   if (!client) notFound();
 
@@ -397,6 +403,23 @@ export default async function ClientDetailPage({
         />
       </div>
 
+      {/* ── Identity: the name the schema carries, and the look ── */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Identity and theme</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {readTheme(client.theme).confirmedAt ? "theme confirmed" : "theme not confirmed"}
+          </span>
+        </div>
+        <ThemeForm
+          clientId={id}
+          legalName={(client.legal_name as string) ?? ""}
+          dbaName={(client.dba_name as string | null) ?? null}
+          hasWebsite={Boolean(client.website || client.domain)}
+          theme={readTheme(client.theme) as ThemeView}
+        />
+      </div>
+
       {/* ── Hub ── */}
       <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
@@ -412,7 +435,57 @@ export default async function ClientDetailPage({
           hosts={hubHosts}
           pages={hubPages}
           prompts={auditPrompts}
+          day0ArchivedAt={(client.day_0_archived_at as string | null) ?? null}
+          day0Source={(client.day_0_source as string | null) ?? null}
         />
+      </div>
+
+      {/* ── Evidence ── */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Evidence</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {docs.length} file{docs.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {docs.length === 0 ? (
+          <p className="text-sm text-[rgba(255,255,255,0.5)]">
+            Nothing filed yet. Reply to this client&apos;s thread in{" "}
+            <code>#onboarding-srt-aeo</code> with a screenshot and it lands here on its own —
+            no uploading, no naming, no folder. That is how the presence sweep&apos;s eighteen
+            platforms become the evidence behind the findings doc.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {docs.map((d) => (
+              <li
+                key={d.id}
+                className="flex flex-wrap items-baseline justify-between gap-2 border-b border-white/5 pb-2"
+              >
+                <div className="min-w-0">
+                  <a
+                    href={`/api/clients/${id}/docs/${d.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-white hover:underline"
+                  >
+                    {d.filename}
+                  </a>
+                  <div className="text-xs text-[rgba(255,255,255,0.4)]">
+                    {d.stepKey
+                      ? (stepByKey(d.stepKey)?.label ?? d.stepKey)
+                      : "not tied to a step"}
+                  </div>
+                </div>
+                <span className="text-xs text-[rgba(255,255,255,0.35)]">
+                  {new Date(d.uploadedAt).toLocaleDateString()}
+                  {d.sizeBytes ? ` · ${Math.round(d.sizeBytes / 1024)} KB` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {/* ── Client messages ── */}

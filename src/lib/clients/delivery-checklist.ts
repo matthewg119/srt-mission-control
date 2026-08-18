@@ -22,6 +22,7 @@ import {
   postDnsCallChecklist,
 } from "@/lib/clients/client-drafts";
 import { subdomainLabel } from "@/lib/clients/normalize";
+import { DAY_ZERO_STEP_KEY, stampDay0, clearDay0IfManual } from "@/lib/clients/day-zero";
 
 export interface DeliveryStep {
   key: string;
@@ -31,44 +32,73 @@ export interface DeliveryStep {
   auto?: boolean;
   /** Nothing after this may legitimately happen before it. */
   gate?: boolean;
+  /**
+   * Runner v3 §2. 'auto' runs itself when ready; 'manual' and 'auto_then_manual' post to
+   * Slack and wait for a button. Distinct from `auto`, which only says the SYSTEM ticks it:
+   * a step can be auto_then_manual (the system does the work, a person confirms it landed).
+   */
+  mode?: "auto" | "manual" | "auto_then_manual";
+  /**
+   * Keys that must be complete before this one is honestly startable.
+   *
+   * ADVISORY, not enforcement, and that is deliberate. This list FLAGS out-of-order work in
+   * the Slack render — the same doctrine as the Measure gate. The single exception is
+   * day_zero_archive, which really does refuse, in code, in day-zero.ts. Everything else is
+   * a judgement somebody made about their own week.
+   */
+  blockedBy?: string[];
 }
 
 export const DELIVERY_STEPS: DeliveryStep[] = [
-  { key: "intake_received", phase: "Measure", label: "Intake received, canonical NAP locked", auto: true },
-  { key: "baseline_scan", phase: "Measure", label: "Baseline scan run", auto: true },
-  { key: "nap_sweep", phase: "Measure", label: "NAP sweep across the directory list" },
-  { key: "review_audit", phase: "Measure", label: "Review audit: them plus three competitors" },
-  { key: "findings_doc", phase: "Measure", label: "Findings written up and attached" },
+  // ── MEASURE ───────────────────────────────────────────────────────────────
+  { key: "intake_received", phase: "Measure", label: "Intake received, canonical NAP locked, audit attached if one exists", auto: true, mode: "auto" },
+  { key: "baseline_scan", phase: "Measure", label: "Photograph I: universal_v1 across the keyed engines", auto: true, mode: "auto", blockedBy: ["intake_received"] },
+  { key: "site_dns_intel", phase: "Measure", label: "Site, hosting and DNS intelligence", auto: true, mode: "auto", blockedBy: ["intake_received"] },
+  // Key kept from the 14-step list, where it was "NAP sweep across the directory list".
+  // Renaming the KEY would orphan every row already carrying it.
+  { key: "nap_sweep", phase: "Measure", label: "Presence sweep: automated tier", auto: true, mode: "auto", blockedBy: ["intake_received"] },
+  { key: "presence_sweep_manual", phase: "Measure", label: "Presence sweep: manual tier, screenshots in the thread", mode: "manual", blockedBy: ["nap_sweep"] },
+  { key: "presence_pdf", phase: "Measure", label: "Presence and consistency PDF report", auto: true, mode: "auto", blockedBy: ["presence_sweep_manual"] },
+  { key: "competitor_shortlist", phase: "Measure", label: "Competitor shortlist of 10, I pick 3", mode: "manual", blockedBy: ["baseline_scan"] },
+  { key: "review_audit", phase: "Measure", label: "Review audit: them plus the three I picked", auto: true, mode: "auto", blockedBy: ["competitor_shortlist"] },
+  { key: "avatar_harvest", phase: "Measure", label: "Avatar phrase harvest: forums and cited sources", auto: true, mode: "auto", blockedBy: ["baseline_scan"] },
+  { key: "findings_doc", phase: "Measure", label: "Findings written up and attached", auto: true, mode: "auto", blockedBy: ["presence_pdf", "review_audit"] },
 
-  { key: "call_booked", phase: "The call", label: "Call booked" },
-  { key: "call_held", phase: "The call", label: "Call held: NAP confirmed aloud, question list approved, consent confirmed" },
-  { key: "access_granted", phase: "The call", label: "Access granted: GBP manager, Search Console, Analytics" },
+  // ── PREPARE — before the call, none of it touches their properties ────────
+  { key: "avatar_confirmed", phase: "Prepare", label: "Avatar proposed, I confirm one", mode: "manual", blockedBy: ["avatar_harvest"] },
+  { key: "custom_question_set", phase: "Prepare", label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
+  { key: "page_candidates", phase: "Prepare", label: "Page candidates scored, 100 for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
+  { key: "citation_cleanup_list", phase: "Prepare", label: "Citation cleanup list built and ranked", auto: true, mode: "auto", blockedBy: ["presence_pdf"] },
+  { key: "hub_preview", phase: "Prepare", label: "Hub built, themed, preview live, theme confirmed by me", mode: "auto_then_manual", blockedBy: ["intake_received"] },
+  { key: "review_tool_preview", phase: "Prepare", label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
+  { key: "review_card_pdf", phase: "Prepare", label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
+  { key: "call_sheet", phase: "Prepare", label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },
+
+  // ── THE CALL ──────────────────────────────────────────────────────────────
+  { key: "call_booked", phase: "The call", label: "Call booked", mode: "manual" },
+  { key: "call_held", phase: "The call", label: "Call held: NAP aloud, question set approved, consent confirmed, preview walked, pages picked", mode: "manual", blockedBy: ["call_sheet"] },
+  { key: "access_granted", phase: "The call", label: "Access granted: GBP manager, Search Console, Analytics", mode: "manual", blockedBy: ["call_held"] },
   // THREE records, and the phrasing is deliberate. "CNAME and TXT" read as two, which is
-  // where the two-versus-three drift came from: there are two CNAMEs, not one. Always
-  // "three DNS records: two CNAMEs and one TXT", so the record count and the CNAME count
-  // can never be mistaken for each other.
-  //
-  // All three go in live on the call even though the reviews. host is not built yet. An
-  // unattached CNAME simply does not resolve, and nobody visits reviews.{domain} before
-  // the cards are printed. Getting a client back into their registrar a second time weeks
-  // later is worse than a record sitting idle for a fortnight.
-  {
-    key: "dns_records",
-    phase: "The call",
-    label: "DNS: three records added by the client, two CNAMEs and one TXT",
-  },
+  // where the two-versus-three drift came from: there are two CNAMEs, not one.
+  { key: "dns_records", phase: "The call", label: "DNS: three records added by the client, two CNAMEs and one TXT", mode: "manual", blockedBy: ["call_held"] },
 
-  {
-    key: "day_zero_archive",
-    phase: "Day 0",
-    label: "Day-0 scan archived, before any change lands",
-    gate: true,
-  },
+  // ── DAY 0 ─────────────────────────────────────────────────────────────────
+  // ‼️ THE ONE STEP THAT BLOCKS RATHER THAN FLAGS. See src/lib/clients/day-zero.ts and
+  // docs/2026-08-18-day-zero-wall.sql. Completing it stamps clients.day_0_archived_at and
+  // opens the publish path; unticking it clears the stamp again.
+  { key: DAY_ZERO_STEP_KEY, phase: "Day 0", label: "Day-0 scan archived, before any change lands", gate: true, mode: "auto", blockedBy: ["call_held"] },
 
-  { key: "gbp_buildout", phase: "Build", label: "Google Business Profile buildout: categories, services, photos, Q&A seeded" },
-  { key: "citation_cleanup", phase: "Build", label: "Citation cleanup started" },
-  { key: "subdomain_live", phase: "Build", label: "Subdomain live and verified in Search Console" },
-  { key: "first_page", phase: "Build", label: "First page published" },
+  // ── BUILD — unblocked by Day 0, not before ────────────────────────────────
+  { key: "gbp_buildout", phase: "Build", label: "Google Business Profile buildout: categories, services, photos, Q&A seeded", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "access_granted"] },
+  { key: "citation_cleanup", phase: "Build", label: "Citation cleanup executed from the list", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "citation_cleanup_list"] },
+  { key: "subdomain_live", phase: "Build", label: "Subdomain live and verified in Search Console", mode: "auto_then_manual", blockedBy: ["dns_records"] },
+  { key: "first_page", phase: "Build", label: "First pages published, measured track first", mode: "auto_then_manual", blockedBy: [DAY_ZERO_STEP_KEY, "subdomain_live"] },
+  { key: "cards_printed", phase: "Build", label: "Cards printed and handed to the clinic", mode: "manual", blockedBy: ["review_card_pdf"] },
+  { key: "review_request_configured", phase: "Build", label: "Automated request configured in their booking system, or card_only recorded", mode: "manual", blockedBy: ["call_held"] },
+  { key: "review_tool_handed", phase: "Build", label: "Review tool handed to the named person", mode: "manual", blockedBy: ["subdomain_live"] },
+  { key: "time_log_entries", phase: "Build", label: "Time log has entries from day 0", auto: true, mode: "auto", blockedBy: [DAY_ZERO_STEP_KEY] },
+  { key: "weekly_report", phase: "Build", label: "Weekly report firing", auto: true, mode: "auto", blockedBy: ["first_page"] },
+  { key: "day_30_date", phase: "Build", label: "Day-30 report date set", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY] },
 ];
 
 const GATE_INDEX = DELIVERY_STEPS.findIndex((s) => s.gate);
@@ -163,6 +193,18 @@ export function renderChecklist(name: string, rows: StepRow[]): string {
     );
   }
 
+  // Out-of-order work, named. blockedBy is ADVISORY — it says so on the interface — so this
+  // is the whole of its enforcement: a line that makes the gap visible on the next glance.
+  // Capped at three, because a checklist that lists twelve complaints gets scrolled past.
+  const outOfOrder = DELIVERY_STEPS.filter(
+    (s) => done(s.key) && (s.blockedBy ?? []).some((k) => !done(k))
+  ).slice(0, 3);
+  for (const s of outOfOrder) {
+    const missing = (s.blockedBy ?? []).filter((k) => !done(k));
+    const names = missing.map((k) => stepByKey(k)?.label ?? k).join(", ");
+    lines.push(`:warning: "${s.label}" is ticked but ${names} is not.`);
+  }
+
   if (GATE_INDEX >= 0 && !done(DELIVERY_STEPS[GATE_INDEX].key)) {
     const jumped = DELIVERY_STEPS.slice(GATE_INDEX + 1).filter((s) => done(s.key));
     if (jumped.length > 0) {
@@ -176,12 +218,39 @@ export function renderChecklist(name: string, rows: StepRow[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Rows for one client, self-healing.
+ *
+ * ‼️ IN-FLIGHT CLIENTS. Runner v3 §18: a tenant provisioned under the old 14-step checklist
+ * migrates IN PLACE. Rather than a one-shot migration somebody has to remember to run, the
+ * read tops the row set up whenever it is short — seedDeliverySteps upserts with
+ * ignoreDuplicates, so this adds the missing nineteen and touches none of the fourteen that
+ * already carry status and completed_at.
+ *
+ * The alternative was a SQL block, and a SQL block only fixes the clients that existed the
+ * day it ran. This one also fixes the row somebody restores from a backup next year.
+ */
 async function loadRows(clientId: string): Promise<StepRow[]> {
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("step_key, status, completed_at, completed_by")
     .eq("client_id", clientId);
-  return (data ?? []) as StepRow[];
+
+  let rows = (data ?? []) as StepRow[];
+
+  // Short means this client predates the current list. Top it up and re-read once.
+  // Guarded on > 0 so a client with genuinely no rows yet is left to seedDeliverySteps at
+  // intake rather than being half-provisioned by a read.
+  if (rows.length > 0 && rows.length < DELIVERY_STEPS.length) {
+    await seedDeliverySteps(clientId);
+    const { data: after } = await supabaseAdmin
+      .from("client_delivery_steps")
+      .select("step_key, status, completed_at, completed_by")
+      .eq("client_id", clientId);
+    rows = (after ?? rows) as StepRow[];
+  }
+
+  return rows;
 }
 
 async function loadClient(clientId: string) {
@@ -271,6 +340,14 @@ export async function postDeliveryChecklist(clientId: string): Promise<void> {
     .update({ ops_checklist_ts: res.ts, updated_at: new Date().toISOString() })
     .eq("id", clientId)
     .is("ops_checklist_ts", null);
+
+  // And post whatever is startable right now, under the checklist. At intake that is a
+  // short list — most steps are blocked behind Photograph I — which is the intended shape:
+  // the thread fills as the work becomes real, rather than dumping 33 cards on day one.
+  const { postReadySteps } = await import("@/lib/clients/step-engine");
+  await postReadySteps(clientId).catch((e) =>
+    console.error("[delivery-checklist] initial step posts failed:", (e as Error).message)
+  );
 }
 
 /** Re-render the existing message from current rows. Never throws into a caller. */
@@ -323,6 +400,38 @@ export async function setDeliveryStep(args: {
 
   if (error) return { ok: false, error: error.message };
 
+  // The Day-0 stamp rides on the tick so the two cannot drift. It is the one side effect
+  // here that is allowed to fail loudly: everything below this deliberately swallows
+  // errors so a Slack hiccup cannot undo the row write, but a stamp that silently did not
+  // happen would leave the wall shut with the checklist saying it is open, and the person
+  // who ticked it would find out at the moment they try to publish.
+  //
+  // source 'manual_step', never 'photograph_2': a tick asserts the archive happened, it is
+  // not evidence that it did. See day-zero.ts.
+  if (args.stepKey === DAY_ZERO_STEP_KEY) {
+    try {
+      if (args.complete) {
+        await stampDay0({
+          clientId: args.clientId,
+          source: "manual_step",
+          by: args.actor ?? null,
+        });
+      } else {
+        await clearDay0IfManual(args.clientId);
+      }
+    } catch (e) {
+      // Say exactly what happened. "The step is ticked but the wall is still shut" is a
+      // confusing state to discover by trying to publish an hour later.
+      return {
+        ok: false,
+        error:
+          `The step was ${args.complete ? "ticked" : "unticked"}, but the Day-0 stamp on ` +
+          `the client record failed: ${(e as Error).message}. Publishing is still blocked. ` +
+          `Un-tick and tick again once that is fixed.`,
+      };
+    }
+  }
+
   await refreshDeliveryChecklist(args.clientId).catch(() => {});
 
   if (args.complete) {
@@ -335,6 +444,17 @@ export async function setDeliveryStep(args: {
   // Drafts follow the checklist rather than the other way round, and they never block it:
   // the row write above has already happened and a Slack or copy problem must not undo it.
   await offerDraftsFor(args.clientId, args.stepKey, args.complete).catch(() => {});
+
+  // Completing a step can unblock others. Posting them is what makes this a step engine
+  // rather than a list: the next piece of work appears in the thread without anyone going
+  // to look for it. Imported lazily to keep the module cycle one-directional — step-engine
+  // reads DELIVERY_STEPS from here.
+  if (args.complete) {
+    const { postReadySteps } = await import("@/lib/clients/step-engine");
+    await postReadySteps(args.clientId).catch((e) =>
+      console.error("[delivery-checklist] posting ready steps failed:", (e as Error).message)
+    );
+  }
 
   return { ok: true };
 }

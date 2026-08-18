@@ -100,3 +100,90 @@ export async function findMarketConflict(
 
   return { conflict: true, withSubscriptionId: data.id as string, withEmail: data.email as string };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A2 D-P13 — distance, not a string
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ‼️ THE STRING CHECK ABOVE IS WHAT D-P13 FORBIDS: "The check reads distance from centre,
+// NEVER ZIP EQUALITY." marketKey() compares a normalized "city|state", which gets both
+// halves of the promise wrong. Two clinics a mile apart across a city line are two markets
+// to it and one market in reality; two clinics forty miles apart in the same sprawling city
+// are one market to it and two in reality.
+//
+// marketKey is kept because it is the stored shape on every existing medspa_subscriptions
+// row and it is still a useful human label. It is no longer the test.
+
+import { geocodeZip, zipCentroidsLoaded } from "@/lib/clients/geocode";
+import { isInsideMarket, isUsableCenter, DEFAULT_MARKET_RADIUS_MI } from "@/lib/clients/normalize";
+
+export interface HeldMarket {
+  clientId: string;
+  name: string;
+}
+
+/**
+ * Is the ZIP somebody just typed inside a market a CLIENT already holds?
+ *
+ * The seat-holding list is billing_status in ('pilot','active') — D-P13 says pilots hold a
+ * market exactly as paying clients do, and that list is the one provision.ts and
+ * report-reminders.ts already use. Note it is a DIFFERENT list from
+ * LIVE_SUBSCRIPTION_STATUSES above, which describes Stripe states on the med-spa funnel;
+ * the two answer different questions and merging them would be wrong in both directions.
+ *
+ * Three outcomes, and the third is the one that matters:
+ *   { held: HeldMarket }  the market is taken
+ *   { held: null }        checked, and it is free
+ *   { held: null, unchecked: reason }  COULD NOT CHECK
+ *
+ * Failing open on the third is deliberate — a missing ZIP must not stop somebody paying us,
+ * which is the same trade the original string check documented. But it is never SILENT. A
+ * market check that always passes and says nothing is worse than no market check, because
+ * everyone believes it ran. The caller alerts on `unchecked`.
+ */
+export interface MarketLookup {
+  held: HeldMarket | null;
+  unchecked?: string;
+}
+
+export async function findHeldMarketForZip(zip: string): Promise<MarketLookup> {
+  const point = await geocodeZip(zip).catch(() => null);
+
+  if (!point) {
+    const loaded = await zipCentroidsLoaded().catch(() => false);
+    return {
+      held: null,
+      unchecked: loaded
+        ? `ZIP ${zip} is not in zip_centroids`
+        : "zip_centroids is empty — the ZIP-centroid dataset has never been loaded",
+    };
+  }
+
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("id, legal_name, dba_name, market_center_lat, market_center_lng, market_radius_mi")
+    .in("billing_status", ["pilot", "active"]);
+
+  for (const c of data ?? []) {
+    const lat = c.market_center_lat as number | null;
+    const lng = c.market_center_lng as number | null;
+    if (!isUsableCenter(lat, lng)) continue;
+
+    const held = {
+      lat: lat as number,
+      lng: lng as number,
+      radiusMi: (c.market_radius_mi as number | null) ?? DEFAULT_MARKET_RADIUS_MI,
+    };
+
+    if (isInsideMarket(point, held)) {
+      return {
+        held: {
+          clientId: c.id as string,
+          name: ((c.dba_name as string | null) || (c.legal_name as string)) ?? "another clinic",
+        },
+      };
+    }
+  }
+
+  return { held: null };
+}

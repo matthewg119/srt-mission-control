@@ -1792,6 +1792,41 @@ moment the domain is attached.
   a translated sentiment-neutral question can land as a leading one, so the tool says so in
   Spanish and renders English until reviewed copy exists.
 
+### ‼️ The Day 0 wall — the one place this repo BLOCKS instead of flagging
+`src/lib/clients/day-zero.ts`, migration `docs/2026-08-18-client-hub.sql`'s successor
+`docs/2026-08-18-day-zero-wall.sql`. Canon: Runner v3's single hard rail, `docs/specs/`.
+
+`page_publish` refuses while `clients.day_0_archived_at` is NULL. Everything else on the
+delivery checklist warns and gets out of the way — `delivery-checklist.ts` says so twice, at the
+Measure gate and at the market check: *"a checklist that refused would just get worked around."*
+That reasoning is right for a call booked early, which costs the person who booked it. It is
+wrong here, because what is protected is the **baseline the day 30/60/90 numbers are measured
+against**, and once a page is live that baseline cannot be recovered by being careful afterwards.
+
+- **The check goes BEFORE `setPublished`, and that ordering is the point.** Publishing is not one
+  write: it flips `client_pages.status`, then `autoCompleteStep('first_page')` ticks a delivery
+  step, refreshes the Slack checklist, posts a thread reply and **inserts a `client_messages` row
+  telling the client their page is live**. A gate after any of that has already told the client
+  something that should not have happened.
+- **Unpublishing is never gated.** Taking a page down is the remedy, not the harm.
+- **`day_0_source` is the honest column.** `photograph_2` means a real archived run wrote it and
+  **nothing writes that today** — one engine is keyed and A2 `D-P16` says a one-engine run is
+  never a photograph for a pilot client. `manual_step` means a human ticked the box, which is an
+  *assertion* that the archive happened, not evidence of it. No artifact may call a `manual_step`
+  stamp a photograph.
+- **The waiver is a door, not a bypass.** `waiveDay0()` needs a reason of real length (a CHECK
+  constraint enforces non-empty, the function enforces a sentence), records who, and posts to
+  `#alerts-infra`. The board only offers it *after* a publish has been refused — offering it
+  beside Publish would make it a second button, which is the same as having no wall.
+- **Un-ticking clears only a `manual_step` stamp.** A mis-click must not erase a waiver somebody
+  signed their name to, or deny a `photograph_2` a real run wrote.
+- **`day-zero.ts` must never import `delivery-checklist.ts`.** The dependency runs one way:
+  delivery-checklist calls `stampDay0()`, so `DAY_ZERO_STEP_KEY` lives in day-zero and is imported
+  *from* there. Reversing it makes a cycle and one module sees the other half-initialised.
+- **The hole check is a grep.** `GATED` and `NOT_GATED` in `day-zero.ts` list every write path and
+  why. `setPublished` has exactly one caller and it is gated; verify with
+  `grep -rn "setPublished" src/`.
+
 ### Env
 ```
 HUB_VERCEL_TOKEN=            # Vercel API token. NOT VERCEL_* — that prefix is reserved.

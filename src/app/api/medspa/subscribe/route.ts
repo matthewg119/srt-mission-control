@@ -20,7 +20,7 @@ import {
   invoiceClientSecret,
   subscriptionPeriodEnd,
 } from "@/lib/medspa/stripe";
-import { marketKey, findMarketConflict } from "@/lib/medspa/market";
+import { marketKey, findMarketConflict, findHeldMarketForZip, type MarketLookup } from "@/lib/medspa/market";
 import { clean, validEmail } from "@/lib/medspa/validate";
 import { PRICES, tierPrice, dollars, type Tier } from "@/config/medspa-funnel";
 import { slack } from "@/lib/slack-bot";
@@ -127,6 +127,55 @@ export async function POST(req: NextRequest) {
 
   const discounts = applyCredit ? [{ coupon: couponId as string }] : undefined;
   const market = marketKey(cityRaw) || (audit?.city ? marketKey(audit.city as string) : null);
+
+  // ── A2 D-P13: one clinic per market, and this one BLOCKS ────────────────────
+  //
+  // "The checkout ZIP check geocodes the entered ZIP to its centroid and blocks when that
+  // point lies inside any held market... no counter, no 'how many seats' anywhere."
+  //
+  // ‼️ BEFORE Stripe, not after. The existing string check runs after the subscription is
+  // created and only records a flag — which means taking the money and then discovering we
+  // sold something we had already sold. Refunding that is a worse conversation than never
+  // charging. The seat-holding list is ('pilot','active'), which is what a CLIENT row uses;
+  // it is deliberately not LIVE_SUBSCRIPTION_STATUSES.
+  //
+  // Fails OPEN on a geocoding miss: a Census outage must not stop somebody paying us.
+  const heldZip = zip || ((audit?.zip as string) ?? "");
+  if (heldZip) {
+    const lookup: MarketLookup = await findHeldMarketForZip(heldZip).catch(() => ({
+      held: null,
+      unchecked: "the market lookup itself threw",
+    }));
+
+    // Could not check. Let the sale through and SAY SO — a silent pass here is how the
+    // exclusivity promise quietly stops being enforced without anyone noticing.
+    if (lookup.unchecked) {
+      await note(
+        `:warning: Market check did NOT run for ${email} (${heldZip}): ${lookup.unchecked}. ` +
+          `The sale went through unchecked. Verify by hand.`
+      );
+    }
+
+    const held = lookup.held;
+    if (held) {
+      await note(
+        `:no_entry: Checkout blocked for ${email} (${heldZip}): that market is held by ` +
+          `*${held.name}*. Offered the waitlist.`
+      );
+      return NextResponse.json(
+        {
+          ok: false,
+          marketHeld: true,
+          // No counter and no seat count, per canon. What we tell them is that this one is
+          // taken and that there is a list, and nothing about how many of anything exist.
+          error:
+            "That area is already taken. We work with one clinic per market, so we cannot " +
+            "take this one on right now. We can add you to the waitlist for it.",
+        },
+        { status: 409 }
+      );
+    }
+  }
 
   try {
     let sub: Stripe.Subscription;

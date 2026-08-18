@@ -155,12 +155,18 @@ export function normalizeState(input: string): string {
 // Market overlap
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// One clinic per market, enforced as a radius around a hand-entered center.
+// One clinic per market. Amendment A2 D-P13, confirmed 18 Aug 2026: a market is the circle
+// of radius TEN MILES around the tenant's canonical address, and pilots hold a market
+// exactly as paying clients do.
 //
-// This FLAGS. It never blocks, matching findMarketConflict() in
-// src/lib/medspa/market.ts: "one clinic per market" is a promise a human adjudicates,
-// and a provisioning function that refused to run because two radii grazed each other
-// would be wrong more often than it was right.
+// ‼️ THE TEST IS POINT-IN-CIRCLE, NOT CIRCLE-OVERLAP, AND THE DIFFERENCE IS REAL.
+// D-P13: the check "blocks when that point lies inside any held market" and "reads distance
+// from centre, never ZIP equality". Circle-overlap (d < r1 + r2) flags two ten-mile markets
+// whose centres are nineteen miles apart — neither clinic is inside the other's market, and
+// refusing that sale is refusing a market we never sold. isInsideMarket is the honest test.
+//
+// marketsOverlap is kept below because it is still the right question for "do these two
+// territories touch at all", which is a planning question rather than an exclusivity one.
 
 const EARTH_RADIUS_MI = 3958.8;
 
@@ -189,6 +195,25 @@ export function haversineMiles(
 export function marketsOverlap(a: MarketCircle, b: MarketCircle): boolean {
   return haversineMiles(a.lat, a.lng, b.lat, b.lng) < a.radiusMi + b.radiusMi;
 }
+
+/**
+ * D-P13's actual test: is this POINT inside that HELD market?
+ *
+ * Used both ways round, and both are the same question. At pilot intake the point is the
+ * new clinic's address and the circle is an existing client's market. At checkout the point
+ * is the entered ZIP's centroid. Two ZIPs a mile apart are one market; one large ZIP with
+ * two clinics nine miles apart is also one market — neither fact is expressible with a
+ * string comparison, which is why D-P13 forbids ZIP equality.
+ */
+export function isInsideMarket(
+  point: { lat: number; lng: number },
+  market: MarketCircle
+): boolean {
+  return haversineMiles(point.lat, point.lng, market.lat, market.lng) < market.radiusMi;
+}
+
+/** A2 D-P13. Not a dial: changing it is an admin action that follows the agreement. */
+export const DEFAULT_MARKET_RADIUS_MI = 10;
 
 /** Valid Earth coordinates, and not the 0,0 that an empty form produces. */
 export function isUsableCenter(lat: unknown, lng: unknown): lat is number {

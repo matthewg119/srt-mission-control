@@ -173,6 +173,18 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
     // stops the next person wondering whether a handler went missing.
     case "client_msg_open":
       return NextResponse.json({ ok: true });
+    case "step_done":
+    case "step_skip":
+    case "step_problem":
+      return deliveryStepAction({
+        actionId: action.action_id,
+        channel,
+        messageTs: payload.container?.message_ts ?? "",
+        userId,
+        userName: payload.user?.username ?? null,
+        value: action.value ?? "",
+      });
+
     case "client_msg_sent":
       return clientMessageSentAction({
         channel,
@@ -1053,4 +1065,146 @@ function summarizeResult(actionType: string, details?: Record<string, unknown>):
     return did.length ? `Done:\n${did.map((d) => `• ${d}`).join("\n")}` : "Nothing to do.";
   }
   return "";
+}
+
+
+/**
+ * [Done] [Skip — not applicable] [I hit a problem] on one delivery step.
+ *
+ * Runner v3 §2 and §3. Three rules that this function exists to keep:
+ *
+ *  1. NEVER AUTO-ADVANCE PAST A HUMAN. Only the button completes a manual step. Files
+ *     landing in the thread file evidence; they do not tick anything.
+ *  2. [Done] ON AN UPLOAD STEP VALIDATES THE COUNT, NAMES WHAT IS MISSING, AND STAYS OPEN.
+ *     It does not quietly accept four screenshots where eighteen were asked for, because
+ *     the gap only surfaces later, when the findings doc is being assembled and the
+ *     evidence is not there.
+ *  3. A SKIP CARRIES A REASON. §17: a skipped platform "renders as 'not checked' in every
+ *     artifact, never as 'no issues found.'" A reason-less skip is how the second thing
+ *     happens.
+ */
+async function deliveryStepAction(args: {
+  actionId: string;
+  channel: string;
+  messageTs: string;
+  userId: string;
+  userName: string | null;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId, stepKey] = args.value.split(":");
+  if (!clientId || !stepKey) return NextResponse.json({ ok: true });
+
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { setDeliveryStep, stepByKey } = await import("@/lib/clients/delivery-checklist");
+      const { uploadsFor, expectedFor, postReadySteps } = await import("@/lib/clients/step-engine");
+      const step = stepByKey(stepKey);
+      if (!step) return;
+
+      // ── Done ────────────────────────────────────────────────────────────
+      if (args.actionId === "step_done") {
+        const expected = expectedFor(stepKey);
+        if (expected > 0) {
+          const have = await uploadsFor(clientId, stepKey);
+          if (have < expected) {
+            // Stays open, on purpose. This is the one place the engine argues back.
+            await slack
+              .postEphemeral(
+                args.channel,
+                args.userId,
+                `Not yet — ${have} of ${expected} screenshots are filed against this step. ` +
+                  `Reply in the thread with the rest, then hit Done. If some genuinely have ` +
+                  `no listing, the screenshot of the empty search result is the evidence.`,
+                args.messageTs
+              )
+              .catch(() => {});
+            return;
+          }
+        }
+
+        await setDeliveryStep({ clientId, stepKey, complete: true, actor });
+        await resolveStepCard(args.channel, clientId, stepKey, `:white_check_mark: *${step.label}* — done by ${actor}.`);
+        await postReadySteps(clientId).catch(() => {});
+        return;
+      }
+
+      // ── Skip ────────────────────────────────────────────────────────────
+      if (args.actionId === "step_skip") {
+        await supabaseAdmin
+          .from("client_delivery_steps")
+          .update({
+            status: "skipped",
+            completed_by: actor,
+            completed_at: new Date().toISOString(),
+            skipped_reason: `Marked not applicable by ${actor}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("client_id", clientId)
+          .eq("step_key", stepKey);
+
+        await resolveStepCard(
+          args.channel,
+          clientId,
+          stepKey,
+          `:heavy_minus_sign: *${step.label}* — skipped by ${actor}. ` +
+            `It renders as "not checked" everywhere, never as "no issues found". ` +
+            `Reply here with why, so the artifact can say it.`
+        );
+        await postReadySteps(clientId).catch(() => {});
+        return;
+      }
+
+      // ── I hit a problem ─────────────────────────────────────────────────
+      await supabaseAdmin
+        .from("client_delivery_steps")
+        .update({
+          status: "error",
+          error_detail: `Flagged by ${actor} from Slack`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("client_id", clientId)
+        .eq("step_key", stepKey);
+
+      await resolveStepCard(
+        args.channel,
+        clientId,
+        stepKey,
+        `:warning: *${step.label}* — ${actor} hit a problem. Say what happened in this thread. ` +
+          `It is now in the #alerts-infra digest and it will not advance on its own.`
+      );
+    })()
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Replace the step's card with its outcome, in place.
+ *
+ * The buttons have to go: a resolved step still offering [Done] is an invitation to
+ * double-click it, and the thread underneath stays as the log of what happened.
+ */
+async function resolveStepCard(
+  channel: string,
+  clientId: string,
+  stepKey: string,
+  text: string
+): Promise<void> {
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("slack_message_ts")
+    .eq("client_id", clientId)
+    .eq("step_key", stepKey)
+    .maybeSingle();
+
+  const ts = (data?.slack_message_ts as string | null) ?? null;
+  if (!ts) return;
+
+  await slack
+    .updateMessage(channel, ts, text, [
+      { type: "section", text: { type: "mrkdwn", text } },
+    ])
+    .catch(() => {});
 }

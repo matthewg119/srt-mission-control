@@ -35,9 +35,11 @@ import {
   slugify,
   normalizeAddress,
   normalizeState,
-  marketsOverlap,
+  isInsideMarket,
   isUsableCenter,
+  DEFAULT_MARKET_RADIUS_MI,
 } from "@/lib/clients/normalize";
+import { resolveMarketCenter } from "@/lib/clients/geocode";
 import { normalizePhone } from "@/lib/medspa/validate";
 
 /** Six at a time, pilots included. PILOT §1 and D-P2. Enforced here, never rendered. */
@@ -385,11 +387,39 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function checkMarket(clientId: string, input: StartPilotInput): Promise<void> {
-  const lat = input.marketCenterLat;
-  const lng = input.marketCenterLng;
-  const radius = input.marketRadiusMi;
+  let lat = input.marketCenterLat;
+  let lng = input.marketCenterLng;
+  const radius = input.marketRadiusMi ?? DEFAULT_MARKET_RADIUS_MI;
 
-  if (!isUsableCenter(lat, lng) || !radius || radius <= 0) return;
+  // A2 §2: geocode the canonical address ONCE, at intake, with the US Census geocoder.
+  // Only when nobody typed a centre by hand — a hand-entered pin is somebody looking at a
+  // map, and that beats an address-file match.
+  if (!isUsableCenter(lat, lng)) {
+    // Street address first, ZIP centroid second. A centre-less client holds no market at
+    // all, so "no match" must not be allowed to mean "no exclusivity".
+    const point = await resolveMarketCenter({
+      addressLine1: input.addressLine1,
+      city: input.city,
+      state: input.state,
+      postalCode: input.postalCode,
+    }).catch(() => null);
+
+    if (point) {
+      lat = point.lat;
+      lng = point.lng;
+      await supabaseAdmin
+        .from("clients")
+        .update({
+          market_center_lat: point.lat,
+          market_center_lng: point.lng,
+          market_radius_mi: radius,
+          market_locked_at: new Date().toISOString(),
+        })
+        .eq("id", clientId);
+    }
+  }
+
+  if (!isUsableCenter(lat, lng) || radius <= 0) return;
 
   const { data: others } = await supabaseAdmin
     .from("clients")
@@ -397,14 +427,20 @@ async function checkMarket(clientId: string, input: StartPilotInput): Promise<vo
     .in("billing_status", ["pilot", "active"])
     .neq("id", clientId);
 
+  // D-P13's test, both ways round: this clinic inside a held market, OR a held clinic
+  // inside this one. Either is one market with two clinics in it, and only checking one
+  // direction lets the second clinic in whenever its radius is the smaller of the two.
   const hit = (others ?? []).find((o) => {
     const oLat = o.market_center_lat as number | null;
     const oLng = o.market_center_lng as number | null;
-    const oRadius = o.market_radius_mi as number | null;
-    if (!isUsableCenter(oLat, oLng) || !oRadius) return false;
-    return marketsOverlap(
-      { lat: lat as number, lng: lng as number, radiusMi: radius },
-      { lat: oLat as number, lng: oLng as number, radiusMi: oRadius }
+    const oRadius = (o.market_radius_mi as number | null) ?? DEFAULT_MARKET_RADIUS_MI;
+    if (!isUsableCenter(oLat, oLng)) return false;
+
+    const held = { lat: oLat as number, lng: oLng as number, radiusMi: oRadius };
+    const mine = { lat: lat as number, lng: lng as number, radiusMi: radius };
+    return (
+      isInsideMarket({ lat: lat as number, lng: lng as number }, held) ||
+      isInsideMarket({ lat: held.lat, lng: held.lng }, mine)
     );
   });
 

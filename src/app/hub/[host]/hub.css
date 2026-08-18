@@ -42,6 +42,17 @@ body:has(.hub-root) {
 
 .hub-root a { color: var(--hub-accent); text-underline-offset: 2px; }
 
+/* The client's own mark, when a confirmed theme carries one. Capped hard: the logo
+   identifies the page, it is not the page. max-width keeps a wide wordmark inside the
+   measure on a phone. */
+.hub-logo {
+  display: block;
+  max-height: 56px;
+  max-width: min(100%, 15rem);
+  width: auto;
+  margin: 0 0 1.5rem;
+}
+
 .hub-eyebrow {
   font-size: 0.8125rem;
   letter-spacing: 0.08em;

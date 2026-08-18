@@ -12,8 +12,9 @@
 // classifies the host (pure string work) and rewrites; this resolves, on Node, behind a
 // cache.
 
-import { unstable_cache } from "next/cache";
+import { unstable_cache, revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/db";
+import { readTheme, activeTheme, type HubTheme } from "@/lib/hub/theme";
 
 export type HubKind = "hub" | "reviews";
 
@@ -50,6 +51,14 @@ export interface HubClient {
   language: string;
   reviewDestinationPrimary: string | null;
   reviewWorkflow: Record<string, unknown> | null;
+  /**
+   * The theme the page may actually use, or null.
+   *
+   * Already through activeTheme(), so it is null until a human confirmed it (5f) and every
+   * value in it has passed validation. A renderer never sees the raw column, which means a
+   * renderer can never be the place a bad colour reaches a style attribute.
+   */
+  theme: HubTheme | null;
 }
 
 export type HostResolution =
@@ -58,7 +67,7 @@ export type HostResolution =
 
 const SELECT =
   "id, legal_name, dba_name, domain, website, address_line1, address_line2, city, state, " +
-  "postal_code, phone, email, hours, language, review_destination_primary, review_workflow";
+  "postal_code, phone, email, hours, language, review_destination_primary, review_workflow, theme";
 
 async function lookup(host: string): Promise<HostResolution> {
   const { data, error } = await supabaseAdmin
@@ -84,34 +93,64 @@ async function lookup(host: string): Promise<HostResolution> {
   const c = row.clients;
   if (!c) return { status: "unknown" };
 
+  return { status: "ok", host: row.host, kind: row.kind, client: toHubClient(c) };
+}
+
+/**
+ * One row shape to one HubClient, in one place.
+ *
+ * Exported because the PREVIEW resolves the same client by id instead of by hostname, and
+ * a second copy of this mapping is how a preview starts quietly disagreeing with the live
+ * page about which name or which address it shows.
+ */
+export function toHubClient(c: Record<string, unknown>): HubClient {
   const legalName = (c.legal_name as string | null) ?? "";
   const dbaName = (c.dba_name as string | null) ?? null;
 
   return {
-    status: "ok",
-    host: row.host,
-    kind: row.kind,
-    client: {
-      id: c.id as string,
-      // The trading name is what a customer recognises, so it wins when it exists. Same
-      // precedence clientDisplayName() already uses on the internal side.
-      displayName: dbaName?.trim() || legalName,
-      legalName,
-      domain: (c.domain as string | null) ?? null,
-      website: (c.website as string | null) ?? null,
-      addressLine1: (c.address_line1 as string | null) ?? null,
-      addressLine2: (c.address_line2 as string | null) ?? null,
-      city: (c.city as string | null) ?? null,
-      state: (c.state as string | null) ?? null,
-      postalCode: (c.postal_code as string | null) ?? null,
-      phone: (c.phone as string | null) ?? null,
-      email: (c.email as string | null) ?? null,
-      hours: c.hours ?? null,
-      language: (c.language as string | null) ?? "en",
-      reviewDestinationPrimary: (c.review_destination_primary as string | null) ?? null,
-      reviewWorkflow: (c.review_workflow as Record<string, unknown> | null) ?? null,
-    },
+    id: c.id as string,
+    // The trading name is what a customer recognises, so it wins when it exists. Same
+    // precedence clientDisplayName() already uses on the internal side.
+    displayName: dbaName?.trim() || legalName,
+    legalName,
+    domain: (c.domain as string | null) ?? null,
+    website: (c.website as string | null) ?? null,
+    addressLine1: (c.address_line1 as string | null) ?? null,
+    addressLine2: (c.address_line2 as string | null) ?? null,
+    city: (c.city as string | null) ?? null,
+    state: (c.state as string | null) ?? null,
+    postalCode: (c.postal_code as string | null) ?? null,
+    phone: (c.phone as string | null) ?? null,
+    email: (c.email as string | null) ?? null,
+    hours: c.hours ?? null,
+    language: (c.language as string | null) ?? "en",
+    reviewDestinationPrimary: (c.review_destination_primary as string | null) ?? null,
+    reviewWorkflow: (c.review_workflow as Record<string, unknown> | null) ?? null,
+    theme: activeTheme(readTheme(c.theme)),
   };
+}
+
+/**
+ * The preview's resolver: by client id, NOT by hostname, and DELIBERATELY UNCACHED.
+ *
+ * Uncached because the entire purpose of a preview is to show the newest draft. Five
+ * minutes of ISR is right for a crawler and wrong for somebody who just hit save and is
+ * about to walk a client through the result on a call.
+ *
+ * This never touches client_hosts, so a preview works before a single domain is attached
+ * — which is the point: 5f wants the client to see the hub BEFORE the DNS conversation.
+ */
+export async function loadClientForPreview(clientId: string): Promise<HubClient | null> {
+  const { data, error } = await supabaseAdmin
+    .from("clients")
+    .select(SELECT)
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (error) throw new Error(`[hub/resolve] preview load failed: ${error.message}`);
+  if (!data) return null;
+
+  return toHubClient(data as unknown as Record<string, unknown>);
 }
 
 const cached = unstable_cache(lookup, ["hub-host"], {
@@ -135,4 +174,28 @@ export async function resolveHost(rawHost: string): Promise<HostResolution> {
   const host = rawHost.trim().toLowerCase();
   if (!host) return { status: "unknown" };
   return cached(host);
+}
+
+/**
+ * Bust the host cache because the CLIENT RECORD changed, not because a host was attached.
+ *
+ * The cached resolution carries the client's name, address, phone and website — so a NAP
+ * correction is a hub content change, and until this existed nothing told the cache that.
+ * `registerClientHosts` was the only caller of revalidateTag(HOSTS_TAG), which meant a
+ * client whose address was corrected on the call kept serving the old one, in the
+ * LocalBusiness schema, for up to five minutes.
+ *
+ * Five minutes is survivable. Being wrong about the canonical NAP is the one thing this
+ * product cannot be wrong about, so it is worth the one line at each write.
+ *
+ * Guarded for the same reason the attach path guards it: outside a request context
+ * revalidateTag throws, and failing to bust a cache that expires anyway must never undo a
+ * database write that already succeeded.
+ */
+export function revalidateClientHub(): void {
+  try {
+    revalidateTag(HOSTS_TAG);
+  } catch {
+    // Not in a request (a cron, a script). The TTL covers it.
+  }
 }

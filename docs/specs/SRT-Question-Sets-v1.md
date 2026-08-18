@@ -13,7 +13,31 @@ The list below is a fallback: use it only if no PDF set exists, or as a diff aga
 
 ---
 
-## The universal 20 (fallback draft — med spa vertical)
+> ## ‼️ RESOLVED 2026-08-18. The reconciliation above is settled and the fallback below LOST.
+>
+> The PDF exists (`med-spa-aeo_lead-magnet_20-questions_v1.md`). **Amendment A2 `D-P15` makes its
+> twenty the definition of `universal_v1@med_spa`, character for character, with a fixed
+> substitution table `materialization_v1`.** Read
+> `docs/specs/SRT-Pilot-Amendment-A2-Market-Audit-Bridge-Universal-Set.md` §4. That list is what
+> seeds the tracked set. This one does not.
+>
+> **The fallback below is RETIRED and is kept only as the diff A2 §4 anticipates.** Nothing may
+> seed `question_set_version = 'universal_v1'` from it. It is not a smaller version of the same
+> list: it is keyword-shaped (`best med spa in {city}`) where the PDF's are full natural-language
+> questions, and it uses variables (`{clinic}`, `{competitor}`, `{neighborhood}`,
+> `{alternative treatment}`) that `materialization_v1` does not define.
+>
+> Runner v3 §4 says to say so out loud before retiring it. Said, in the Slack report of
+> 2026-08-18 and here.
+>
+> **Still live in this document below the fallback:** the custom-set spec, the composition
+> targets, the scope counts, and the versioning rules. A2 does not touch those. The **Engines**
+> section is superseded by A2 `D-P16` on the fidelity footer and by the standing fact that one
+> engine is keyed today — the four named there are the target, not the current state.
+
+---
+
+## The universal 20 (fallback draft — med spa vertical) — RETIRED, see the notice above
 
 Variables: `{city}` · `{treatment}` · `{clinic}` · `{competitor}` · `{neighborhood}` · `{concern}`
 

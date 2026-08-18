@@ -14,6 +14,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
+import { themeStyle } from "@/lib/hub/theme";
 import "./hub.css";
 
 // Not force-dynamic. Every dashboard page and API route in this repo sets
@@ -64,7 +65,14 @@ export default async function HubLayout({ children, params }: Props) {
   if (resolved.status !== "ok") notFound();
 
   return (
-    <div className="hub-root" lang={resolved.client.language}>
+    // The theme is four CSS custom properties overriding what hub.css already declares
+    // on .hub-root, so a themed hub and an unthemed one are the same markup. themeStyle
+    // returns {} when there is no confirmed theme.
+    <div
+      className="hub-root"
+      lang={resolved.client.language}
+      style={themeStyle(resolved.client.theme)}
+    >
       <div className="hub-wrap">{children}</div>
     </div>
   );

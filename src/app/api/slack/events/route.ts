@@ -8,6 +8,7 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
+import { clientForThread, captureOnboardingFile } from "@/lib/clients/onboarding-docs";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
@@ -1529,6 +1530,43 @@ async function handleFileShared(fileId: string): Promise<void> {
       return;
     }
   }
+  // ── Onboarding evidence, Runner v3 §3 ──────────────────────────────────────
+  // A screenshot replying in a client's thread IS the filing. Checked before the content
+  // lanes because it is keyed on an exact (channel, thread_ts) pair rather than on a
+  // mimetype: nothing else can match it, and it must not fall through to the image
+  // analyser and get treated as a content reference.
+  for (const [channelId, shares] of Object.entries({
+    ...(file.shares?.public ?? {}),
+    ...(file.shares?.private ?? {}),
+  })) {
+    for (const share of shares ?? []) {
+      const threadTs = share.thread_ts ?? share.ts;
+      const client = await clientForThread(channelId, threadTs);
+      if (!client || !threadTs) continue;
+
+      const result = await captureOnboardingFile({
+        clientId: client.id,
+        file,
+        threadTs,
+      });
+
+      // Errors are said out loud in the thread. A screenshot somebody believes was filed
+      // and was not is worse than one that visibly failed, because the gap only surfaces
+      // when the findings doc is being assembled and the evidence is not there.
+      if (!result.ok && !result.skipped) {
+        console.error("[slack/events] onboarding capture failed:", result.error);
+        await slack
+          .postThreadReply(
+            channelId,
+            threadTs,
+            `:warning: Could not file *${file.name ?? "that file"}*: ${result.error}. It is not saved — please try again.`
+          )
+          .catch(() => {});
+      }
+      return;
+    }
+  }
+
   const isInContentChannel = allShareChannels.some(
     (ch) => ch === VEKTOR_CHANNELS.content || ch === VEKTOR_CHANNELS.contentFull
   );

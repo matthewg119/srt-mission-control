@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { verifyOnboardingToken } from "@/lib/clients/token";
 import { slack } from "@/lib/slack-bot";
+import { revalidateClientHub } from "@/lib/hub/resolve";
 import {
   seedDeliverySteps,
   postDeliveryChecklist,
@@ -195,6 +196,12 @@ export async function POST(req: NextRequest) {
     console.error("[onboarding/save] update failed:", error.message);
     return NextResponse.json({ ok: false, error: "That did not save." }, { status: 500 });
   }
+
+  // The hub renders the canonical NAP, and resolveHost caches it for five minutes. Step 1
+  // is the only intake step that writes those fields, so it is the only one that has to
+  // tell the cache. Without this a corrected address kept serving — in the LocalBusiness
+  // schema, on the client's own domain — until the TTL happened to roll.
+  if (step === 1) revalidateClientHub();
 
   if (step === TOTAL_STEPS) {
     await onIntakeComplete({

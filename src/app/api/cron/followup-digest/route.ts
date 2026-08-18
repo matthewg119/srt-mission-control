@@ -14,6 +14,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { runFollowupDigest } from "@/lib/followup-operator/digest";
 import { runClientReportReminders } from "@/lib/clients/report-reminders";
+import { stepDigest } from "@/lib/clients/step-engine";
+import { slack } from "@/lib/slack-bot";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -41,6 +43,18 @@ async function handle(req: NextRequest) {
     //
     // Caught separately: a reminder failing must never turn the follow-up digest, which
     // is the job this route exists for, into a 500.
+    // Runner v3 §3: errors and anything waiting on a person for more than 48h. Best-effort
+    // and never allowed to take the rest of the digest down with it.
+    if (!dry) {
+      await stepDigest()
+        .then(async (text) => {
+          const channel = process.env.SLACK_ALERTS_INFRA_CHANNEL;
+          if (text && channel) await slack.postMessage(channel, `:clipboard: *Delivery steps*
+${text}`);
+        })
+        .catch((e) => console.error("[cron/followup-digest] step digest failed:", (e as Error).message));
+    }
+
     const reports = await runClientReportReminders({ dry }).catch((e) => {
       console.error("[followup-digest] client report reminders failed:", (e as Error).message);
       return { checked: 0, reminded: [] };

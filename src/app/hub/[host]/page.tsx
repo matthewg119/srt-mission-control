@@ -8,7 +8,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { listPublished } from "@/lib/hub/pages";
-import { localBusinessJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
+import { HubIndexBody } from "@/components/hub/hub-bodies";
 import { ReviewTool } from "./reviews/review-tool";
 
 export const revalidate = 300;
@@ -56,71 +56,7 @@ export default async function HubIndex({ params }: Props) {
   }
 
   const pages = await listPublished(client.id);
-  const where = [client.city, client.state].filter(Boolean).join(", ");
 
-  return (
-    <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLdScript(localBusinessJsonLd(client, host)) }}
-      />
-
-      <p className="hub-eyebrow">{where || "Questions and answers"}</p>
-      <h1>{client.displayName}</h1>
-      <p className="hub-lede">
-        Straight answers to the questions people actually ask, written out in full so they
-        can be read and quoted.
-      </p>
-
-      {pages.length > 0 ? (
-        <>
-          <h2>Answers</h2>
-          <ul className="hub-list">
-            {pages.map((page) => (
-              <li key={page.id}>
-                <a href={`/${page.slug}`}>
-                  {page.title}
-                  <span className="hub-q">{page.question}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        // Deliberately not an error and not an empty page. A hub goes live the day the
-        // CNAME resolves, which is days before the first page is written, and a bare 404
-        // during that window is what makes a client think nothing was built.
-        <p>New answers are being added here. Check back shortly.</p>
-      )}
-
-      <dl className="hub-nap">
-        {(client.addressLine1 || client.city) && (
-          <>
-            <dt>Address</dt>
-            <dd>
-              {[client.addressLine1, client.addressLine2].filter(Boolean).join(", ")}
-              {(client.addressLine1 || client.addressLine2) && <br />}
-              {[where, client.postalCode].filter(Boolean).join(" ")}
-            </dd>
-          </>
-        )}
-        {client.phone && (
-          <>
-            <dt>Phone</dt>
-            <dd>
-              <a href={`tel:${client.phone}`}>{client.phone}</a>
-            </dd>
-          </>
-        )}
-        {client.website && (
-          <>
-            <dt>Website</dt>
-            <dd>
-              <a href={client.website}>{client.website.replace(/^https?:\/\//, "")}</a>
-            </dd>
-          </>
-        )}
-      </dl>
-    </>
-  );
+  return <HubIndexBody client={client} host={host} pages={pages} />;
 }
+

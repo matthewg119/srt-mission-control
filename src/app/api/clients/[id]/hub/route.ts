@@ -10,8 +10,9 @@ import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { registerClientHosts, loadClientHosts, hostsFor } from "@/lib/hub/vercel-domains";
 import { savePage, setPublished, listAllForBoard, type PromptBlock } from "@/lib/hub/pages";
-import { autoCompleteStep } from "@/lib/clients/delivery-checklist";
+import { autoCompleteStep, stepByKey } from "@/lib/clients/delivery-checklist";
 import { subdomainLabel } from "@/lib/clients/normalize";
+import { assertDay0Archived, isDay0Error, DAY_ZERO_STEP_KEY } from "@/lib/clients/day-zero";
 
 export const dynamic = "force-dynamic";
 // Attaching two domains means up to four Vercel calls plus the DNS writeback.
@@ -90,6 +91,42 @@ export async function POST(
       if (!pageId) return NextResponse.json({ ok: false, error: "Which page?" }, { status: 400 });
 
       const publish = action === "page_publish";
+
+      // ‼️ THE DAY 0 WALL. Runner v3's one hard rail.
+      //
+      // BEFORE setPublished, not after, and that ordering is the whole point: publishing
+      // is not one write. It flips client_pages.status, then autoCompleteStep('first_page')
+      // ticks a delivery step, refreshes the Slack checklist, posts a thread reply and
+      // INSERTS a client_messages row telling the client their page is live. A check
+      // placed after any of that has already told the client something that should not
+      // have happened yet.
+      //
+      // Unpublishing is never gated. Taking a page down is the remedy, not the harm.
+      if (publish) {
+        try {
+          await assertDay0Archived(
+            clientId,
+            (client.dba_name as string | null) ?? (client.legal_name as string),
+            // Quote the checklist row back at them in its own words, so the error names
+            // the thing they have to go and tick rather than a paraphrase of it.
+            stepByKey(DAY_ZERO_STEP_KEY)?.label
+          );
+        } catch (e) {
+          if (!isDay0Error(e)) throw e;
+          return NextResponse.json(
+            {
+              ok: false,
+              error: e.message,
+              blockedBy: e.stepKey,
+              // The board turns this into the waive control rather than hard-coding the
+              // step key in the component.
+              waivable: true,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
       const result = await setPublished(clientId, pageId, publish);
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
 
