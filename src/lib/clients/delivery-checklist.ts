@@ -21,6 +21,7 @@ import {
   postDraft,
   postDnsCallChecklist,
 } from "@/lib/clients/client-drafts";
+import { subdomainLabel } from "@/lib/clients/normalize";
 
 export interface DeliveryStep {
   key: string;
@@ -192,6 +193,44 @@ async function loadClient(clientId: string) {
   return data as Record<string, unknown> | null;
 }
 
+/**
+ * The tokens a notify draft needs beyond the ones baseVars() already derives.
+ *
+ * Only notify_first_page needs anything today. Kept as a lookup rather than folded into
+ * baseVars() because baseVars is synchronous and shared by every draft, and this needs a
+ * query that only one of them cares about.
+ */
+async function notifyVars(clientId: string, draftKey: string): Promise<Record<string, string>> {
+  if (draftKey !== "notify_first_page") return {};
+
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("domain, subdomain")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  const domain = (client?.domain as string | null) ?? null;
+  if (!domain) return {};
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("slug")
+    .eq("client_id", clientId)
+    .eq("status", "published")
+    .order("published_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const slug = (page?.slug as string | null) ?? null;
+  // No page yet means the step was ticked by hand before anything was published. Return
+  // nothing rather than a link to the hub index dressed up as the page: fill() tidies the
+  // gap, and a message with a missing line is better than one pointing somewhere wrong.
+  if (!slug) return {};
+
+  const label = subdomainLabel((client?.subdomain as string | null) ?? null, domain);
+  return { pageUrl: `https://${label}.${domain}/${slug}` };
+}
+
 function displayName(client: Record<string, unknown>): string {
   return (client.dba_name as string) || (client.legal_name as string) || "Client";
 }
@@ -320,7 +359,12 @@ async function offerDraftsFor(
   if (!completed) return;
 
   const notify = notifyForStep(stepKey);
-  if (notify) await postDraft(clientId, notify.key).catch(() => {});
+  // Vars, not bare. postDraft() defaults to {} and the notify_first_page copy puts
+  // {pageUrl} on a line of its own, so with no vars fill() blanked the token and the
+  // client got told a page was live with no link to it. The URL is DERIVED here rather
+  // than typed on the board: it is a fact about the record, and the hostname is the one
+  // part of it a person would get wrong.
+  if (notify) await postDraft(clientId, notify.key, await notifyVars(clientId, notify.key)).catch(() => {});
 
   const rows = await loadRows(clientId);
   const next = nextStep(rows);

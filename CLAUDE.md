@@ -1629,3 +1629,182 @@ so it does not nag; the client board keeps a persistent `due` flag as the backst
 > ‼️ **`prompt_library` does not exist.** The 100-prompt library from build prompt v4 §1 is
 > unbuilt; `classify.ts` generates 20 questions per audit and those are what run. Anything
 > describing "select from the 100" is describing a thing that is not there yet.
+
+## The client hub (2026-08-18) — `learn.{clientdomain}` and `reviews.{clientdomain}`
+`src/lib/hub/*`, `src/app/hub/[host]/*`, `src/middleware.ts`. Migration:
+`docs/2026-08-18-client-hub.sql` (`client_hosts`, `client_pages`, `review_tool_submissions`).
+
+This is what `subdomain_live` was waiting for. Before it, `chooseSubdomain` picked a label,
+`seedDnsRecords` wrote a `cname_hub` row and the `ask_dns` draft read the hostname down the
+phone — and then nothing served it, so the record could never resolve and delivery step 13
+could not be completed for anybody. ONE multi-tenant surface inside Mission Control, not a
+Vercel project per client.
+
+### The security boundary is `src/middleware.ts` and it is the most dangerous file here
+`learn.aclinic.com` is a hostname whose DNS **the client controls**, answering on the same
+deployment as the internal CRM. Middleware decides **host, then path, then session** and never
+the reverse.
+
+- **DENY BY DEFAULT, as an allowlist of hub paths.** Not a denylist of internal ones. The real
+  exposure was never `/dashboard`: `/api/scan/*`, `/api/leads/funnel`, `/api/onboarding/save`
+  and `/api/clients/start` are **public by design and take no session**, so on a
+  client-controlled hostname a denylist that missed one is a lead-injection endpoint and a
+  40-model-call spend faucet. A new `/api` route added next month is refused without anyone
+  remembering to think about it.
+- **404, never 401/403 and never a redirect.** A 403 confirms the route exists; a redirect to
+  `/login` from a host the client's DNS controls is both an open-redirect primitive and a
+  genuine SRT login form on a domain their staff recognise.
+- `classifyHost()` (`src/lib/hub/host-classify.ts`) is pure, edge-safe and imports nothing, so
+  the one thing standing between a client's DNS zone and the CRM fits on a screen and is
+  testable without a database. **No Host header fails closed to external.**
+- `*.vercel.app` is classified INTERNAL deliberately. TLS there is on `*.vercel.app`, so the
+  inner Host header is caller-controlled; making it internal means spoofing
+  `Host: learn.x.com` at a deployment URL buys a 404 rather than a choice of branch. It does
+  not make deployment URLs safe — they already serve the whole app to anyone holding one.
+  **Turn on Vercel Deployment Protection.**
+- **`x-hub-host` is stripped on internal hosts.** It is set by the external branch and is the
+  review submit route's only statement of which client it is writing for, so a request
+  hand-crafted against `mission.srtagency.com` must not be able to forge it.
+- Middleware does **no database work**. Host CLASSIFICATION is string work; host RESOLUTION is
+  `resolveHost()` on Node behind a cache.
+
+> ‼️ **Middleware is a layer, never the only one.** Every `/api/clients/*` route still calls
+> `auth()` itself. CVE-2025-29927 let a caller skip middleware entirely via
+> `x-middleware-subrequest` (fixed in 14.2.25; this repo is on 14.2.28) and is the standing
+> argument for why.
+
+### ‼️ `public/robots.txt` is DELETED, and that is the whole product
+It said `Disallow: /` to `User-agent: *` **and to GPTBot, OAI-SearchBot, PerplexityBot,
+ClaudeBot, Claude-SearchBot, Google-Extended, CCBot, Bytespider and meta-externalagent by
+name** — correct for an internal tool. A file in `public/` is served for **every hostname the
+deployment answers for**, so the moment `learn.aclinic.com` resolved it would have handed that
+file to exactly the crawlers the client is paying to be found by. The hub would have rendered
+perfectly to a human and been worthless to a machine, which is the only failure mode that
+matters here and the only one nobody would notice.
+
+Its content moved verbatim to `src/app/robots.txt/route.ts` (internal host only). Hub hosts get
+`src/app/hub/[host]/robots.txt/route.ts`. **Verify with a request, never by reading the code.**
+
+Two smaller versions of the same trap: the root layout sets `robots: { index: false }` for the
+whole app, so every hub page overrides it (the `src/app/scan/page.tsx` precedent, page metadata
+beats layout metadata); and `src/components/providers.tsx` wraps everything in NextAuth's
+`SessionProvider`. Two root layouts via top-level route groups is the clean fix and is deferred
+— it means moving all eighteen route folders.
+
+### The host is in the PATH, not a header
+Middleware rewrites `learn.x.com/pricing` to `/hub/learn.x.com/pricing`. **Next's full-route
+cache keys on the pathname**, so two clinics that both publish `/pricing` behind a header-based
+lookup would share one cache entry and serve each other's page. The host segment is what keeps
+them disjoint.
+
+`client_hosts` rather than deriving from `domain` + `subdomain_convention`: derivation makes a
+live, indexed client website depend on a string staying correct, and somebody fixing a typo on
+the board would 404 a page Google has crawled. A row exists because
+`POST /v10/projects/{id}/domains` returned 200 — what was ATTACHED, not what was intended, the
+same split as `verified` versus `added` one layer down. It is also the Vercel ledger, so the
+routing map and the attachment state cannot disagree.
+
+> ‼️ **`resolveHost()` returns `unknown` on a MISS and THROWS on a FAILURE, and collapsing them
+> is the expensive mistake.** A 404 served during a Supabase blip, on pages Google has already
+> indexed, is how a client's hub gets quietly deindexed. A miss is 404; a throw reaches the
+> error boundary and becomes a 5xx, which tells a crawler to come back.
+
+No in-process Map in front of `unstable_cache`: a warm-lambda Map has no cross-instance
+invalidation path, so a disabled host would keep serving from some regions for the life of the
+container.
+
+> ‼️ **Do not put `export const revalidate` on the robots / sitemap / llms route handlers.**
+> That is a FULL-ROUTE cache and `revalidateTag()` does not reach it. Observed: publishing a
+> page updated `llms.txt` and the hub index and left the sitemap serving a body generated
+> before the page existed, from one shared query. The DB read inside `listPublished` is still
+> cached and still tag-invalidated; `s-maxage` is what keeps load off the origin.
+
+### `HUB_CNAME_TARGET` is a fallback, and now there is something that knows better
+`src/lib/hub/vercel-domains.ts` — the first Vercel API call in this repo.
+`GET /v9/projects/{id}/domains/{host}` first (idempotency: "already ours" and "somebody else's"
+are different outcomes and a 409 does not separate them), then `POST /v10/...` to attach, then
+`GET /v6/domains/{host}/config?projectIdOrName={id}` for `recommendedCNAME`, ranked, rank 1 wins.
+
+Measured on this project: rank 1 is **`4fddd1b501fe6565.vercel-dns-017.com`**, not
+`cname.vercel-dns.com`. The default would have been wrong for every client, and the DNS panel
+would have sat at `added` forever with nothing visibly wrong.
+
+- **Vercel returns a fully qualified name with the root dot.** Stripped once, on the way in.
+  `checkRecord()` normalizes it away before comparing so a stored dot still verifies — the
+  problem is the registrar's Value box and the person reading it back.
+- **Env vars are `HUB_VERCEL_TOKEN` / `HUB_VERCEL_PROJECT_ID` / `HUB_VERCEL_TEAM_ID`.**
+  Vercel RESERVES the `VERCEL_` prefix for its own system variables and refuses custom ones.
+- **The status guard is the point.** The target is written only over `pending` / `ready`. Once
+  a row is `added`, `verified` or `mismatch`, a human or the resolver has spoken and a refresh
+  must not overwrite that; a changed recommendation goes in `note` and the green tick is left
+  alone rather than silently becoming a lie.
+- **No second status vocabulary.** Vercel's `misconfigured` before propagation is the same fact
+  the panel already models between `added` and `verified`. It is stored on `client_hosts` as
+  context and rendered as words, never as a sixth status. SSL issues itself once the CNAME
+  resolves, so there is nothing to model for it.
+- `seedDnsRecords`'s repair pass now clears `value` and `note` along with the host. Per-domain
+  targets mean a `learn` to `guide` flip changes which target is correct, and the old one
+  behind a freshly reset `ready` label is a value that resolves to nothing.
+
+### Pages, and the bug this surfaced
+`client_pages`, rendered on request with the DB read cached per client. `question` is stored
+**verbatim** rather than referenced: `audit_reports.prompts` is regenerated by every run, so a
+reference would let the next audit turn a published page into the answer to a question nobody
+asked.
+
+Indexability is v1, not polish: `index, follow`, a canonical on the client host, per-host
+`sitemap.xml` and `llms.txt`, `LocalBusiness` on the index and `QAPage` per page. (QAPage, not
+FAQPage — Google restricted FAQPage rich results in 2023 and a page answering one question is a
+QAPage by definition.) `react-markdown` runs **without `rehype-raw`**, deliberately: a body is
+typed into a form and served on the client's own domain under their name, so a paste carrying a
+`<script>` would be an XSS on their site.
+
+**Nothing generates page copy.** The board offers the twenty questions the audit actually ran
+and a person writes the answer.
+
+> ‼️ **`notify_first_page` was posting with no link in it.** `offerDraftsFor` called
+> `postDraft(clientId, notify.key)` with no vars, and that draft's copy is "the first page is
+> up:" followed by `{pageUrl}` on its own line, so `fill()` blanked the token and tidied the
+> gap. The client was told a page was live and given nothing to click. `notifyVars()` derives
+> it from the newest published page; it returns nothing rather than linking the hub index when
+> the step was ticked before anything was published.
+
+### `reviews.{domain}` — a mirror, not a ghostwriter
+`docs/specs/SRT-Review-Tool-BUILD-SPEC-v2.md`. The host resolves through the same
+`client_hosts` row with `kind = 'reviews'`, so the QR on the printed cards is live from the
+moment the domain is attached.
+
+- **No model in the path.** Not for drafting, not for cleanup, not for tone, not for spelling.
+  `src/lib/hub/review-assemble.ts` imports nothing. FTC 16 CFR Part 465: a tool that GENERATES
+  review content its user did not write is the regulated thing; one that REFORMATS what she
+  typed is not. This repo has a Claude call in nearly every other feature and the reflex will
+  be to add one here.
+- **On screen labelled, in the copy buffer not.** `assembleLabelled` and `assemblePlain` are
+  separate functions and not derived from each other, so a refactor cannot merge them. The
+  labels are ours; the sentences are hers, and what reaches Google contains no SRT-authored
+  text at all.
+- **No staff field anywhere**, and no sentiment scale, no rating, no gating, no incentive.
+- `review_tool_submissions` has **no column for a name, email, phone, IP, user agent or session
+  id**, and the absence of the column is the enforcement: a route cannot store what there is
+  nowhere to put. It also forecloses IP rate limiting, so the cap is a per-client daily count
+  read back from the table. **The submit route must never read `x-forwarded-for`.**
+- Spanish is NOT machine-translated here. The spec requires a native speaker precisely because
+  a translated sentiment-neutral question can land as a leading one, so the tool says so in
+  Spanish and renders English until reviewed copy exists.
+
+### Env
+```
+HUB_VERCEL_TOKEN=            # Vercel API token. NOT VERCEL_* — that prefix is reserved.
+HUB_VERCEL_PROJECT_ID=       # prj_... from .vercel/project.json
+HUB_VERCEL_TEAM_ID=          # team_... (stored as orgId in .vercel/project.json)
+INTERNAL_HOSTS=              # Optional. Extra hostnames that serve Mission Control itself.
+                             # NEXT_PUBLIC_APP_URL's host and *.vercel.app are already internal.
+                             # EVERYTHING NOT LISTED IS TREATED AS A CLIENT HOST, so a missing
+                             # entry breaks /dashboard loudly rather than exposing it quietly.
+```
+
+> ‼️ **ORDER OF OPERATIONS: do not add the client's CNAME before this branch is on `main`.**
+> Attaching a domain points it at the PRODUCTION deployment. Until the hub code is in
+> production, a resolving `learn.{clientdomain}` would serve Mission Control's own app on a
+> hostname the client controls. Attaching alone is harmless — nothing resolves without the DNS
+> record — so attach early, and add the record after the deploy.

@@ -18,6 +18,8 @@ import { TimeLogForm } from "./time-log-form";
 import { DeliveryChecklistForm } from "./delivery-checklist-form";
 import { DraftsForm, type DraftRow } from "./drafts-form";
 import { DnsForm, type DnsRowView } from "./dns-form";
+import { HubForm, type HubHostView, type HubPageView, type AuditPromptView } from "./hub-form";
+import { hostsFor } from "@/lib/hub/vercel-domains";
 
 /**
  * Tokens a human types on the board. Everything else on a draft is derived from the
@@ -96,6 +98,8 @@ export default async function ClientDetailPage({
     { data: delivery },
     { data: messages },
     { data: dnsRecords },
+    { data: hostRows },
+    { data: pageRows },
   ] = await Promise.all([
       supabaseAdmin.from("clients").select("*").eq("id", id).maybeSingle(),
       supabaseAdmin
@@ -120,9 +124,45 @@ export default async function ClientDetailPage({
         .from("client_dns_records")
         .select("record_key, record_type, host, value, status, observed, last_checked_at, verified_at")
         .eq("client_id", id),
+      supabaseAdmin
+        .from("client_hosts")
+        .select("host, kind, vercel_attached_at, vercel_verified, vercel_misconfigured, vercel_checked_at, vercel_error")
+        .eq("client_id", id),
+      supabaseAdmin
+        .from("client_pages")
+        .select("id, slug, title, question, status, published_at")
+        .eq("client_id", id)
+        .order("updated_at", { ascending: false }),
     ]);
 
   if (!client) notFound();
+
+  // The twenty questions this client's most recent audit actually ran, which are what a
+  // page gets written to answer. audit_reports has no client_id: it predates the clients
+  // table and joins through contact_id, with the domain as the fallback for a report that
+  // ran before the contact was linked.
+  const auditFilter = client.contact_id
+    ? { column: "contact_id", value: client.contact_id as string }
+    : client.domain
+      ? { column: "website", value: `%${client.domain as string}%` }
+      : null;
+
+  const { data: latestReport } = auditFilter
+    ? await (auditFilter.column === "contact_id"
+        ? supabaseAdmin
+            .from("audit_reports")
+            .select("id, prompts")
+            .eq("contact_id", auditFilter.value)
+        : supabaseAdmin
+            .from("audit_reports")
+            .select("id, prompts")
+            .ilike("website", auditFilter.value)
+      )
+        .eq("status", "complete")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : { data: null };
 
   const stageStatus = new Map(
     (steps ?? []).map((s) => [s.stage as string, s.status as string])
@@ -166,6 +206,48 @@ export default async function ClientDetailPage({
       })
     ).map((r) => r.day)
   );
+
+  // ── Hub ──
+  // wanted is what the hostnames SHOULD be, composed from the record; hostRows is what
+  // Vercel has actually been told about. Rendering both is the point: the gap between them
+  // is exactly the "nothing serves this yet" state the panel exists to make visible.
+  const hubWanted = hostsFor({
+    subdomain: (client.subdomain as string) ?? null,
+    domain: (client.domain as string) ?? null,
+  }).map((h) => ({ host: h.host, kind: h.kind }));
+
+  const hubHosts: HubHostView[] = (hostRows ?? []).map((r) => ({
+    host: r.host as string,
+    kind: r.kind as "hub" | "reviews",
+    attached: Boolean(r.vercel_attached_at),
+    verified: (r.vercel_verified as boolean | null) ?? null,
+    misconfigured: (r.vercel_misconfigured as boolean | null) ?? null,
+    checkedAt: (r.vercel_checked_at as string | null) ?? null,
+    error: (r.vercel_error as string | null) ?? null,
+  }));
+
+  const hubPages: HubPageView[] = (pageRows ?? []).map((r) => ({
+    id: r.id as string,
+    slug: r.slug as string,
+    title: r.title as string,
+    question: (r.question as string) ?? "",
+    status: r.status as string,
+    publishedAt: (r.published_at as string | null) ?? null,
+  }));
+
+  const auditPrompts: AuditPromptView[] = Array.isArray(latestReport?.prompts)
+    ? (latestReport!.prompts as Array<Record<string, unknown>>).flatMap((p) => {
+        const text = typeof p === "string" ? p : ((p?.text ?? p?.prompt) as string | undefined);
+        if (!text) return [];
+        return [
+          {
+            text,
+            block: typeof p === "object" ? ((p?.block as string) ?? null) : null,
+            reportId: (latestReport!.id as string) ?? null,
+          },
+        ];
+      })
+    : [];
 
   // The DNS rows, ordered by DNS_RECORDS rather than by the database so the panel always
   // reads hub, reviews, TXT. The label-only host and the fully qualified name are both
@@ -312,6 +394,24 @@ export default async function ClientDetailPage({
           domain={clientDomain}
           provider={(client.dns_provider as string) ?? null}
           nameservers={(client.dns_nameservers as string[]) ?? []}
+        />
+      </div>
+
+      {/* ── Hub ── */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Hub</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {hubHosts.filter((h) => h.attached).length} of {hubWanted.length || 2} hostnames attached
+          </span>
+        </div>
+        <HubForm
+          clientId={id}
+          domain={clientDomain}
+          wanted={hubWanted}
+          hosts={hubHosts}
+          pages={hubPages}
+          prompts={auditPrompts}
         />
       </div>
 

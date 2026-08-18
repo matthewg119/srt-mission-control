@@ -237,8 +237,17 @@ export async function seedDnsRecords(clientId: string, subdomain: string): Promi
         // to come from the client's own Search Console, and resetting it to `ready` would
         // claim we had a string to give them.
         status: row.status,
+        // row.value, for the same reason the host is repaired. Vercel issues a PER-DOMAIN
+        // CNAME target, so a learn -> guide flip changes which hostname is attached and
+        // therefore which target is correct. Leaving the old domain's target behind a
+        // freshly reset `ready` label would hand the client a value that resolves to
+        // nothing, on a row that looks ready to type. registerClientHosts() overwrites this
+        // with the real target immediately after; the default is the honest placeholder in
+        // the gap between them.
+        value: row.value,
         verified_at: null,
         observed: null,
+        note: null,
         updated_at: new Date().toISOString(),
       })
       .eq("client_id", clientId)
