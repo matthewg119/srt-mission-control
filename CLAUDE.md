@@ -1476,3 +1476,116 @@ so the lead's origin is recorded on the `contacts` row (columns: `utm_source`,
 - **Organic/referral website CTAs:** already carry internal `source=` — no change needed.
 
 These tagged links never fire Meta events, so they cannot inflate Ads Manager.
+
+## Client onboarding and delivery (2026-08-16, comms rebuilt 2026-08-20)
+`src/lib/clients/*`, `src/config/client-intake.ts`, `src/config/client-messages.ts`. A
+paying client is a `clients` row; `startPilot()` claims it, seeds the 8 pilot stages, picks
+the subdomain, mints the `/onboarding` token and emails it. Migrations:
+`2026-08-16-client-onboarding.sql`, `2026-08-17-client-delivery-steps.sql`,
+`2026-08-20-client-contact-preference.sql`, `2026-08-20-client-messages.sql`,
+`2026-08-20-client-dns-records.sql`.
+
+**Two step lists at different altitudes, and they are not the same thing.**
+`client_onboarding_steps` is the EIGHT client-facing pilot stages that render on the board.
+`client_delivery_steps` is the FOURTEEN operational steps SRT's own team works through,
+several of which live inside one pilot stage. `DELIVERY_STEPS` in `delivery-checklist.ts`
+owns the order; the DB stores only `step_key`, so a step can be reworded without a
+migration.
+
+### SLACK IS INTERNAL ONLY (2026-08-20) — this reversed three days after it shipped
+`client-channel.ts` is DELETED. There are no per-client Slack channels and no guest
+invites. Single-channel guests are free at 5 per **PAID ACTIVE MEMBER**, not per channel
+and not a flat pool, so fifty clients meant roughly ten paid seats (~$870/yr) bought purely
+to unlock guest capacity for a workspace with one human in it — and one misclick on the
+invite screen bills someone as a full member.
+
+> ‼️ **`clients.slack_channel_id` / `slack_channel_name` are KEPT and must not be dropped.**
+> One client was provisioned before the reversal and really did have a channel. Nothing
+> writes them; the dashboard renders them labelled "legacy Slack". `SLACK_HUB_BOT_TOKEN` and
+> `SLACK_HUB_OWNER_USER_ID` are dead — out of `.env.example`, delete from Vercel.
+
+`#onboarding-srt-aeo` (`SLACK_CLIENT_ONBOARDING_CHANNEL`), the ops thread
+(`clients.ops_thread_ts`), the checklist message (`ops_checklist_ts`) and `#alerts-infra`
+all STAY. Those were always internal and they are the point.
+
+### Client-facing messages are DRAFTS, and nothing can send them
+`client-drafts.ts` posts a draft into the ops thread with a `wa.me` link on it; a human
+taps it. **The free WhatsApp Business app has no API, so there is no send path and no code
+that pretends otherwise.** Do not reach for the WhatsApp Business Platform API to get
+around it: Meta begins billing service messages 2026-10-01 and the free app being
+unaffected is the entire reason for this design. `sent_at` is stamped by the *Mark sent*
+button, i.e. by a person reporting what they did.
+
+- **Copy lives in `src/config/client-messages.ts` and nothing else does.** Six entries,
+  `guard()`-wrapped, shipping as `TODO:` placeholders. `isUnwritten()` makes a placeholder
+  **refuse to post as a message** — it posts a note naming the key to write instead. An
+  unwritten draft must be impossible to send by accident and impossible to miss.
+- `CHANNEL_LINE` and `NO_CUSTOMER_INFO_LINE` are appended to the intro **structurally**,
+  same precedent as `PERMISSION_CLOSE` / `NOT_SELLING_LINE`. The second one is the
+  no-patient-information line; for a clinic that is a compliance line, not politeness, so
+  it cannot be edited out by a rewrite of the copy above it.
+- **ASK fires when its step becomes NEXT; NOTIFY fires when its step COMPLETES.** Getting
+  that backwards asks for DNS records the day after they were added.
+- `unique (client_id, draft_key)` is load-bearing, not tidy: a step ticked, unticked and
+  re-ticked would otherwise post the same message three times.
+- `hasBannedDash()` runs on the INTERPOLATED body. `guard()` catches a dash somebody typed
+  at build time; only this catches one arriving through a token at runtime.
+- The three monthly reports are three `draft_key`s sharing one `copyKey`, differing by
+  `{dayLabel}` — which is derived server-side from the key, never accepted from a request,
+  so a day-90 message cannot say "day 30".
+
+### Phones: E.164 everywhere, live-formatted as typed
+`formatPhoneUS()` in `clients/normalize.ts` (pure, isomorphic) formats to
+`(336) 833-2303` and **absorbs a typed `+1` rather than duplicating it**; the save route
+stores `normalizePhone()`'s `+1XXXXXXXXXX`. Before this, every funnel kept the raw string,
+so `+13368332303` / `13368332303` / `3368332303` were three strings for one human — and
+`findContact()` dedupes on an EXACT match, so one person became three contacts, three Zoho
+leads and three Slack threads. `wa.me` takes digits only, so a non-E.164 number builds a
+link to nobody; `waLink()` returns null rather than a broken link and the card says so.
+
+> ‼️ **`/PDF` and the other funnels still have this bug.** Only `/onboarding` was fixed.
+> There is no separate WhatsApp number and there must not be one: one number, asked once.
+
+> ‼️ **`showWhen` on `FieldDef` is CLIENT-SIDE ONLY.** `/api/onboarding/save` loops
+> `def.fields` unconditionally, so a `showWhen` field marked `required: true` is hidden on
+> the client and 400s on the server — a dead end the client cannot get past. Any conditional
+> field must be `required: false`. Also: a new step-1 column must be added to
+> `STEP_1_COLUMNS` or it is silently dropped.
+
+### DNS: three records, and `verified` is observed, never asserted
+`dns-records.ts` + the panel on the client board. **Three records: two CNAMEs and one TXT.**
+Say it that way — "CNAME and TXT" reads as two and that is where the count drifted before.
+All three go in live on the call even though the `reviews.` host is unbuilt: an unattached
+CNAME just does not resolve, and getting a client back into their registrar weeks later is
+worse than a record idle for a fortnight.
+
+- `added` (a human says they typed it) and `verified` (the resolver saw it) are **separate
+  statuses**, and only `checkRecord()` may write the second. The gap between them is where
+  a build silently stalls.
+- NXDOMAIN maps to an internal `not_found` that is **never stored**. It is the normal state
+  of a record added ninety seconds ago, and writing `mismatch` over `added` mid-propagation
+  is worse than saying nothing.
+- `host` is stored as the LABEL ONLY (`learn`, `reviews`, `@`). Registrars append the domain
+  themselves, so a full name saves as `learn.clinic.com.clinic.com`.
+- TXT answers are joined before comparing: >255-char verification strings arrive chunked.
+- `resolveDnsProvider()` reads the nameservers to name the registrar, because "who is your
+  domain with" is a question many owners genuinely cannot answer. Unknown NS returns
+  `provider: null` with the nameservers still populated — a real answer, not a guess.
+- `HUB_CNAME_TARGET` is a **default, not a truth**: Vercel issues per-domain targets for
+  newer projects, so correct it per record from the Vercel dashboard.
+
+### The audit gates the call
+`renderChecklist` warns when `call_booked`/`call_held` is ticked while `baseline_scan` or
+`findings_doc` is not. The call is where the screenshots and the avatar decision come from,
+so holding it first means opinions instead of evidence. **Flags, never blocks** — same
+doctrine as the market-overlap check and the Day-0 gate.
+
+Day 30/60/90 reminders ride on `/api/cron/followup-digest` (`report-reminders.ts`) rather
+than a new cron: `vercel.json` already carries 14 entries against a Hobby plan that
+documents 2. Day 0 is the `day_zero_archive` step's `completed_at`, never signup; it falls
+back to `intake_completed_at` **and says so in the reminder**. It nudges on an exact day hit
+so it does not nag; the client board keeps a persistent `due` flag as the backstop.
+
+> ‼️ **`prompt_library` does not exist.** The 100-prompt library from build prompt v4 §1 is
+> unbuilt; `classify.ts` generates 20 questions per audit and those are what run. Anything
+> describing "select from the 100" is describing a thing that is not there yet.

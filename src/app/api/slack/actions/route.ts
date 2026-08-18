@@ -14,6 +14,7 @@ import { buildSuggestionBlocks, autoSendEnabled, autoSendMinutes } from "@/lib/i
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { scheduleFollowup } from "@/lib/imessage-followups";
 import { enqueueBridgeCommand, getBridgeStatus, formatBridgeStatusLine, type BridgeCommandType } from "@/lib/imessage-control";
+import { markDraftSent } from "@/lib/clients/client-drafts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -166,9 +167,58 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         slackTs,
         prospectId: action.value ?? "",
       });
+    // The "Open in WhatsApp" button is a plain url button. Slack still posts an
+    // interaction for it, and acknowledging without doing anything is correct: the tap
+    // has already opened WhatsApp. Falling through to default would work, but naming it
+    // stops the next person wondering whether a handler went missing.
+    case "client_msg_open":
+      return NextResponse.json({ ok: true });
+    case "client_msg_sent":
+      return clientMessageSentAction({
+        channel,
+        userId,
+        value: action.value ?? "",
+      });
     default:
       return NextResponse.json({ ok: true });
   }
+}
+
+/**
+ * "Mark sent" on a client draft.
+ *
+ * The stamp is the only record that a message actually reached a client. Nothing here
+ * sends anything: the free WhatsApp Business app has no API, so a human tapped the wa.me
+ * link, sent it in WhatsApp, and is now telling Mission Control that they did.
+ *
+ * Replies ephemerally rather than editing the card. The draft body has to stay readable
+ * afterwards, because the most common next question is "what exactly did I send them".
+ */
+async function clientMessageSentAction(args: {
+  channel: string;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId, draftKey] = args.value.split(":");
+  if (!clientId || !draftKey) return NextResponse.json({ ok: true });
+
+  waitUntil(
+    markDraftSent(clientId, draftKey, args.userId)
+      .then((res) =>
+        slack.postEphemeral(
+          args.channel,
+          args.userId,
+          res.alreadySent
+            ? "That one was already marked sent."
+            : res.ok
+              ? "Marked sent."
+              : "⚠️ Could not mark that sent. The draft row may have been cleared."
+        )
+      )
+      .catch((e) => console.error("[slack/actions] client_msg_sent failed:", (e as Error).message))
+  );
+
+  return NextResponse.json({ ok: true });
 }
 
 /**

@@ -92,6 +92,11 @@ export const INTAKE_STEPS: StepDef[] = [
       { key: "city", label: "City", kind: "text", required: true },
       { key: "state", label: "State", kind: "text", required: true },
       { key: "postal_code", label: "ZIP", kind: "text", required: true },
+      // ONE number, asked once. It is the NAP number, the number we message on, and the
+      // WhatsApp number. There is deliberately no separate "is this on WhatsApp" question:
+      // asking twice is a question nobody enjoys answering and a second column to keep in
+      // step with the first. The input absorbs a typed +1 rather than duplicating it, and
+      // the value is stored E.164, so one person cannot become three records.
       { key: "phone", label: "Primary public phone number", kind: "tel", required: true },
       { key: "email", label: "Business email", kind: "email", required: true },
       { key: "website", label: "Website", kind: "url", required: true },

@@ -9,8 +9,21 @@ import { supabaseAdmin } from "@/lib/db";
 import { INTAKE_STEPS } from "@/config/client-intake";
 import { ONBOARDING_STAGES } from "@/lib/clients/provision";
 import { DELIVERY_STEPS } from "@/lib/clients/delivery-checklist";
+import { DRAFTS } from "@/lib/clients/client-drafts";
+import { DRAFT_COPY, isUnwritten } from "@/config/client-messages";
+import { reportsOutstanding } from "@/lib/clients/report-reminders";
+import { DNS_RECORDS, fqdn } from "@/lib/clients/dns-records";
 import { TimeLogForm } from "./time-log-form";
 import { DeliveryChecklistForm } from "./delivery-checklist-form";
+import { DraftsForm, type DraftRow } from "./drafts-form";
+import { DnsForm, type DnsRowView } from "./dns-form";
+
+/**
+ * Tokens a human types on the board. Everything else on a draft is derived from the
+ * client record, and letting those be typed would mean a business name on a message
+ * disagreeing with the one on the record it was drafted from.
+ */
+const FREE_TEXT_TOKENS = new Set(["headline", "pageUrl", "firstName"]);
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -42,6 +55,32 @@ function hours(minutes: number): string {
   return (minutes / 60).toFixed(1);
 }
 
+/**
+ * Which channel this client's drafts get addressed to, and whether that address is
+ * actually usable. Amber means it is not: a wa.me link is built from digits, so a phone
+ * that never normalized to E.164 produces a link that opens nothing.
+ */
+function ContactLine({
+  preference,
+  phone,
+  email,
+}: {
+  preference: string;
+  phone: string | null;
+  email: string | null;
+}) {
+  const e164 = phone ? /^\+1\d{10}$/.test(phone) : false;
+
+  if (preference === "email") {
+    return <span className={email ? undefined : "text-[#F5A623]"}>Email {email || "not on file"}</span>;
+  }
+
+  const label = preference === "sms" ? "Text" : "WhatsApp";
+  if (!phone) return <span className="text-[#F5A623]">{label}, no number on file</span>;
+  if (!e164) return <span className="text-[#F5A623]">{label} {phone} (not E.164, links will fail)</span>;
+  return <span>{label} {phone}</span>;
+}
+
 export default async function ClientDetailPage({
   params,
 }: {
@@ -49,8 +88,14 @@ export default async function ClientDetailPage({
 }) {
   const { id } = await params;
 
-  const [{ data: client }, { data: steps }, { data: entries }, { data: delivery }] =
-    await Promise.all([
+  const [
+    { data: client },
+    { data: steps },
+    { data: entries },
+    { data: delivery },
+    { data: messages },
+    { data: dnsRecords },
+  ] = await Promise.all([
       supabaseAdmin.from("clients").select("*").eq("id", id).maybeSingle(),
       supabaseAdmin
         .from("client_onboarding_steps")
@@ -65,6 +110,14 @@ export default async function ClientDetailPage({
       supabaseAdmin
         .from("client_delivery_steps")
         .select("step_key, status")
+        .eq("client_id", id),
+      supabaseAdmin
+        .from("client_messages")
+        .select("draft_key, sent_at, generated_at")
+        .eq("client_id", id),
+      supabaseAdmin
+        .from("client_dns_records")
+        .select("record_key, record_type, host, value, status, observed, last_checked_at, verified_at")
         .eq("client_id", id),
     ]);
 
@@ -92,6 +145,70 @@ export default async function ClientDetailPage({
 
   const name = (client.dba_name as string) || (client.legal_name as string);
 
+  // What has been drafted, what has actually been sent, and which reports are owed.
+  // Reports are the only ones that go stale on their own, so they carry a "due" flag from
+  // the same milestone arithmetic the daily reminder uses. Everything else is here so a
+  // draft can be reissued once its copy is written or a number is corrected.
+  const sentByKey = new Map(
+    (messages ?? []).map((m) => [
+      m.draft_key as string,
+      { sentAt: (m.sent_at as string) ?? null, draftedAt: (m.generated_at as string) ?? null },
+    ])
+  );
+  const dueDays = new Set(
+    (
+      await reportsOutstanding({
+        id: id,
+        legal_name: client.legal_name as string,
+        dba_name: client.dba_name as string,
+        intake_completed_at: (client.intake_completed_at as string) ?? null,
+      })
+    ).map((r) => r.day)
+  );
+
+  // The DNS rows, ordered by DNS_RECORDS rather than by the database so the panel always
+  // reads hub, reviews, TXT. The label-only host and the fully qualified name are both
+  // sent: one to type into the registrar, one to read aloud.
+  const clientDomain = (client.domain as string) || null;
+  const dnsByKey = new Map((dnsRecords ?? []).map((r) => [r.record_key as string, r]));
+  const dnsRows: DnsRowView[] = DNS_RECORDS.flatMap((def) => {
+    const row = dnsByKey.get(def.key);
+    if (!row) return [];
+    const host = row.host as string;
+    return [
+      {
+        key: def.key,
+        label: def.label,
+        type: def.type,
+        host,
+        fqdn: clientDomain ? fqdn(host, clientDomain) : host,
+        why: def.why,
+        value: (row.value as string) ?? null,
+        status: (row.status as string) ?? "pending",
+        observed: (row.observed as string) ?? null,
+        lastCheckedAt: (row.last_checked_at as string) ?? null,
+        external: Boolean(def.valueIsExternal),
+      },
+    ];
+  });
+
+  const draftRows: DraftRow[] = DRAFTS.map((d) => {
+    const copy = DRAFT_COPY[d.copyKey ?? d.key];
+    const milestone = /^report_day_(\d+)$/.exec(d.key);
+    const row = sentByKey.get(d.key);
+    return {
+      key: d.key,
+      label: copy?.label ?? d.key,
+      // dayLabel is derived server-side from the key, never typed, so it cannot end up
+      // saying "day 30" on the day-90 message.
+      inputs: (copy?.tokens ?? []).filter((t) => FREE_TEXT_TOKENS.has(t)),
+      sentAt: row?.sentAt ?? null,
+      draftedAt: row?.draftedAt ?? null,
+      due: milestone ? dueDays.has(Number(milestone[1])) : false,
+      unwritten: copy ? isUnwritten(copy.body) : false,
+    };
+  });
+
   return (
     <div className="mx-auto max-w-4xl">
       <Link href="/dashboard/clients" className="text-xs text-[rgba(255,255,255,0.4)] hover:text-white">
@@ -102,7 +219,20 @@ export default async function ClientDetailPage({
         <h1 className="text-xl font-medium text-white">{name}</h1>
         <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[rgba(255,255,255,0.4)]">
           <span>{client.website as string}</span>
-          {client.slack_channel_name && <span>#{client.slack_channel_name as string}</span>}
+          {/* Legacy, see the note on the clients list. Retired 2026-08-20, kept so the
+              one client that had a channel still shows that it did. */}
+          {client.slack_channel_name && (
+            <span>#{client.slack_channel_name as string} (legacy Slack)</span>
+          )}
+          {/* How we reach them. Every draft in the ops thread is addressed off these two
+              values, so a wrong one is worth spotting here rather than after a message
+              has gone to a stranger. A phone that is not E.164 is shown in amber: wa.me
+              takes digits only, so an unparsed number builds a link to nowhere. */}
+          <ContactLine
+            preference={(client.contact_preference as string) ?? "whatsapp"}
+            phone={(client.phone as string) ?? null}
+            email={(client.email as string) ?? null}
+          />
           {client.subdomain && <span>{client.subdomain as string}</span>}
           <span>Scope: {(client.tier_scope as string) ?? "not set"} (internal)</span>
           {client.pilot_ends_at && (
@@ -158,6 +288,34 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <DeliveryChecklistForm clientId={id} completed={completedSteps} />
+      </div>
+
+      {/* ── DNS ── */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">DNS</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {dnsRows.filter((r) => r.status === "verified").length} of {DNS_RECORDS.length} resolving
+          </span>
+        </div>
+        <DnsForm
+          clientId={id}
+          rows={dnsRows}
+          domain={clientDomain}
+          provider={(client.dns_provider as string) ?? null}
+          nameservers={(client.dns_nameservers as string[]) ?? []}
+        />
+      </div>
+
+      {/* ── Client messages ── */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Messages</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {draftRows.filter((d) => d.sentAt).length} sent
+          </span>
+        </div>
+        <DraftsForm clientId={id} drafts={draftRows} />
       </div>
 
       {/* ── Timing log ── */}

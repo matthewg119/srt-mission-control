@@ -16,13 +16,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { verifyOnboardingToken } from "@/lib/clients/token";
 import { slack } from "@/lib/slack-bot";
-import { postToClientChannel } from "@/lib/clients/client-channel";
 import {
   seedDeliverySteps,
   postDeliveryChecklist,
   autoCompleteStep,
   notifyThread,
 } from "@/lib/clients/delivery-checklist";
+import { postDraft } from "@/lib/clients/client-drafts";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { waitUntil } from "@vercel/functions";
 import {
@@ -31,7 +31,7 @@ import {
   CONSENT_VALUE_BY_LABEL,
   LANGUAGE_VALUE_BY_LABEL,
 } from "@/config/client-intake";
-import { clean } from "@/lib/medspa/validate";
+import { clean, normalizePhone } from "@/lib/medspa/validate";
 import { normalizeAddress, normalizeState } from "@/lib/clients/normalize";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +53,9 @@ const STEP_1_COLUMNS = new Set([
   "email",
   "website",
   "hours",
+  // whatsapp_number is deliberately NOT here. It is derived from two fields rather than
+  // copied from one, and it is stored normalized, so it is set explicitly below. Adding
+  // it to this set would write the raw typed string first and then overwrite it.
 ]);
 
 export async function POST(req: NextRequest) {
@@ -133,9 +136,20 @@ export async function POST(req: NextRequest) {
       patch[key] =
         key === "state"
           ? normalizeState(value as string)
-          : key.startsWith("address_")
-            ? normalizeAddress(value as string)
-            : value;
+          : key === "phone"
+            ? // E.164, never the typed string. The form shows "(336) 833-2303" and the
+              // database stores "+13368332303", so the same human typing their number
+              // three ways produces one value instead of three. See the note on
+              // formatPhoneUS in src/lib/clients/normalize.ts for what that used to cost.
+              //
+              // The `?? value` fallback cannot normally fire, since the client rejects an
+              // unparseable phone before it gets here, but a direct POST is not obliged to
+              // be a browser. Keeping the raw string beats writing null over a number
+              // somebody really did give us.
+              (normalizePhone(value as string) ?? value)
+            : key.startsWith("address_")
+              ? normalizeAddress(value as string)
+              : value;
     }
   } else if (def.bag) {
     patch[def.bag] = answers;
@@ -186,7 +200,6 @@ export async function POST(req: NextRequest) {
     await onIntakeComplete({
       clientId: verified.clientId,
       name: (existing.dba_name as string) || (existing.legal_name as string),
-      channelId: (existing.slack_channel_id as string) ?? null,
       incentiveFlag: Boolean(patch.review_incentive_flag),
     }).catch((e) =>
       console.error("[onboarding/save] completion work failed:", (e as Error).message)
@@ -207,7 +220,6 @@ export async function POST(req: NextRequest) {
 async function onIntakeComplete(args: {
   clientId: string;
   name: string;
-  channelId: string | null;
   incentiveFlag: boolean;
 }): Promise<void> {
   await supabaseAdmin
@@ -245,19 +257,19 @@ async function onIntakeComplete(args: {
     }
   }
 
-  // The client channel may be in a different workspace, so it needs the hub-aware poster
-  // rather than slack.postMessage. Client-facing wording only: the checklist below is
-  // internal and must never land here.
-  if (args.channelId) {
-    await postToClientChannel(args.channelId, ":white_check_mark: Intake received. Thank you.")
-      .catch(() => {});
-  }
-
   // ── The internal delivery checklist ──
   await seedDeliverySteps(args.clientId);
   await autoCompleteStep(args.clientId, "intake_received").catch(() => {});
   await postDeliveryChecklist(args.clientId).catch((e) =>
     console.error("[onboarding/save] checklist post failed:", (e as Error).message)
+  );
+
+  // ── The intro draft ──
+  // Posted for a human to send, never sent. It goes AFTER the checklist so the thread
+  // reads in the order the work happens, and it is caught separately so a copy problem
+  // cannot stop the baseline scan below.
+  await postDraft(args.clientId, "intro").catch((e) =>
+    console.error("[onboarding/save] intro draft failed:", (e as Error).message)
   );
 
   // ── The baseline scan ──

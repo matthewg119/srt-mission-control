@@ -16,6 +16,48 @@ export function slugify(input: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phone display
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// THE FAILURE THIS EXISTS TO STOP. Every funnel in the estate used to keep whatever the
+// visitor typed, so "+13368332303", "13368332303" and "3368332303" were three different
+// strings for one human. findContact() in lead-intake.ts dedupes on an EXACT string match
+// against phone / mobile_phone, so that one person became three contacts, three Zoho leads
+// and three Slack threads. The fix is not a better dedupe, it is never storing the three
+// shapes in the first place.
+//
+// So the split is: this formats for HUMANS as they type, normalizePhone() in
+// src/lib/medspa/validate.ts decides what is STORED, and what is stored is always E.164.
+// Both run on the client and the server, which is why this lives here rather than in a
+// server module: funnel-client.tsx imports it for live formatting and the save route
+// imports it for display, exactly as slugify and normalizeAddress already work.
+
+/**
+ * Format US digits for display as they are typed: `(336) 833-2303`.
+ *
+ * A leading country code is ABSORBED, never duplicated and never left on screen: typing
+ * or pasting "+1 336 833 2303", "13368332303" or "3368332303" all render identically.
+ * That is the whole point, since a "+1" the user typed themselves is the single most
+ * common way a number arrives in a shape nothing else matches.
+ *
+ * Partial input formats progressively so the field is readable mid-typing, and anything
+ * past ten digits is dropped rather than shown, because there is nowhere for it to go in
+ * a US number and silently accepting it is how a mistyped digit survives to the database.
+ */
+export function formatPhoneUS(input: string): string {
+  let digits = input.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+  // Mid-typing a pasted "+1..." can momentarily exceed 11, so trim the country code
+  // whenever it is clearly present rather than only at exactly 11 characters.
+  else if (digits.length > 10 && digits.startsWith("1")) digits = digits.slice(1);
+  digits = digits.slice(0, 10);
+
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Address normalization
 // ─────────────────────────────────────────────────────────────────────────────
 //

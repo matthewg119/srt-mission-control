@@ -14,7 +14,7 @@
 import { useState } from "react";
 import { INTAKE_STEPS, TOTAL_STEPS, COMPLETION_COPY, type FieldDef } from "@/config/client-intake";
 import { clean, validEmail, normalizePhone } from "@/lib/medspa/validate";
-import { normalizeAddress } from "@/lib/clients/normalize";
+import { normalizeAddress, formatPhoneUS } from "@/lib/clients/normalize";
 
 type Values = Record<string, unknown>;
 
@@ -289,10 +289,21 @@ function Field({
         <input
           type={def.kind === "url" ? "text" : def.kind}
           inputMode={def.kind === "tel" ? "tel" : undefined}
+          // autoComplete on tel was missing, so the browser never offered the number it
+          // already knows and every client typed theirs by hand.
+          autoComplete={def.kind === "tel" ? "tel" : undefined}
+          // 14 = "(336) 833-2303". The formatter already caps at ten digits; this stops
+          // the field looking like it accepted more while they were typing.
+          maxLength={def.kind === "tel" ? 14 : undefined}
           className={base}
-          placeholder={def.placeholder}
+          placeholder={def.kind === "tel" ? "(336) 833-2303" : def.placeholder}
           value={String(value ?? "")}
-          onChange={(e) => onChange(e.target.value)}
+          // A phone field formats as it is typed so a country code the client types
+          // themselves is absorbed rather than kept. Everything else passes through
+          // untouched.
+          onChange={(e) =>
+            onChange(def.kind === "tel" ? formatPhoneUS(e.target.value) : e.target.value)
+          }
         />
       )}
 

@@ -79,7 +79,12 @@ export default async function ClientsPage() {
                     {c.state ? `, ${c.state as string}` : ""}
                   </span>
                 )}
-                {c.slack_channel_name && <span>#{c.slack_channel_name as string}</span>}
+                {/* Legacy. Per-client Slack channels were retired on 2026-08-20; this
+                    renders only for the one client provisioned before that, so the record
+                    that the channel existed is not lost. Nothing writes it any more. */}
+                {c.slack_channel_name && (
+                  <span>#{c.slack_channel_name as string} (legacy Slack)</span>
+                )}
                 {remaining && <span>{remaining}</span>}
                 {c.market_conflict === true && (
                   <span className="text-[#F5A623]">market overlap, needs a decision</span>

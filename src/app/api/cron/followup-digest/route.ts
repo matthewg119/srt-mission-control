@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { runFollowupDigest } from "@/lib/followup-operator/digest";
+import { runClientReportReminders } from "@/lib/clients/report-reminders";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -32,7 +33,25 @@ async function handle(req: NextRequest) {
 
   try {
     const result = await runFollowupDigest({ dry });
-    return NextResponse.json({ ok: true, dry, ...result });
+
+    // A PASSENGER on this job, deliberately. Client day 30 / 60 / 90 reminders need a
+    // daily tick and nothing else; vercel.json already carries 14 cron entries against a
+    // Hobby plan that documents 2, so adding a 15th to run one query is the wrong move.
+    // This is already the "what is due today" run.
+    //
+    // Caught separately: a reminder failing must never turn the follow-up digest, which
+    // is the job this route exists for, into a 500.
+    const reports = await runClientReportReminders({ dry }).catch((e) => {
+      console.error("[followup-digest] client report reminders failed:", (e as Error).message);
+      return { checked: 0, reminded: [] };
+    });
+
+    return NextResponse.json({
+      ok: true,
+      dry,
+      ...result,
+      clientReports: { checked: reports.checked, reminded: reports.reminded.length },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[followup-digest] failed:", message);

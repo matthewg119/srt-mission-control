@@ -5,7 +5,7 @@
 // never in the client's channel in the hub.
 //
 // A TRACKER, NOT AN AUTOMATION ENGINE. Two of these steps the system genuinely performs
-// and ticks itself. The rest are a phone call, a DNS record the client types into their
+// and ticks itself. The rest are a phone call, DNS records the client types into their
 // own registrar, photographs uploaded to a Google listing. Pretending otherwise would
 // produce a checklist that lies about what has happened, which is worse than no checklist.
 //
@@ -14,6 +14,13 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
+import { DRAFT_COPY } from "@/config/client-messages";
+import {
+  askForStep,
+  notifyForStep,
+  postDraft,
+  postDnsCallChecklist,
+} from "@/lib/clients/client-drafts";
 
 export interface DeliveryStep {
   key: string;
@@ -35,7 +42,20 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
   { key: "call_booked", phase: "The call", label: "Call booked" },
   { key: "call_held", phase: "The call", label: "Call held: NAP confirmed aloud, question list approved, consent confirmed" },
   { key: "access_granted", phase: "The call", label: "Access granted: GBP manager, Search Console, Analytics" },
-  { key: "dns_records", phase: "The call", label: "DNS: CNAME and TXT added by the client" },
+  // THREE records, and the phrasing is deliberate. "CNAME and TXT" read as two, which is
+  // where the two-versus-three drift came from: there are two CNAMEs, not one. Always
+  // "three DNS records: two CNAMEs and one TXT", so the record count and the CNAME count
+  // can never be mistaken for each other.
+  //
+  // All three go in live on the call even though the reviews. host is not built yet. An
+  // unattached CNAME simply does not resolve, and nobody visits reviews.{domain} before
+  // the cards are printed. Getting a client back into their registrar a second time weeks
+  // later is worse than a record sitting idle for a fortnight.
+  {
+    key: "dns_records",
+    phase: "The call",
+    label: "DNS: three records added by the client, two CNAMEs and one TXT",
+  },
 
   {
     key: "day_zero_archive",
@@ -80,6 +100,12 @@ export async function seedDeliverySteps(clientId: string): Promise<void> {
  * One renderer, used for the first post AND every update, so the message can never drift
  * from the rows. Same doctrine as formatInitialBlocks in src/lib/lead-thread.ts.
  */
+/** The first step not yet complete. Null when the whole list is done. */
+export function nextStep(rows: StepRow[]): DeliveryStep | null {
+  const status = new Map(rows.map((r) => [r.step_key, r.status]));
+  return DELIVERY_STEPS.find((s) => status.get(s.key) !== "complete") ?? null;
+}
+
 export function renderChecklist(name: string, rows: StepRow[]): string {
   const status = new Map(rows.map((r) => [r.step_key, r.status]));
   const done = (key: string) => status.get(key) === "complete";
@@ -103,10 +129,39 @@ export function renderChecklist(name: string, rows: StepRow[]): string {
   lines.push("");
   lines.push(`${completed} of ${DELIVERY_STEPS.length} done.`);
 
+  // What to do next, named. The checklist knowing which step is outstanding and making
+  // someone scan the list to work it out is a small tax paid on every glance, and the
+  // draft that goes with a step is exactly the thing that gets forgotten.
+  const next = nextStep(rows);
+  if (next) {
+    const ask = askForStep(next.key);
+    lines.push(
+      ask
+        ? `Next: ${next.label}. The ${DRAFT_COPY[ask.key]?.label ?? ask.key} draft is in this thread.`
+        : `Next: ${next.label}.`
+    );
+  }
+
   // The Day-0 gate. PILOT §9 and SOP §2.3 both require the archive to exist BEFORE
   // anything changes on the hub, GBP or a directory, because every later scorecard is
   // measured against it. Ticking a build step first does not undo the damage, so the
   // checklist says so out loud rather than silently allowing it.
+  // The MEASURE gate. The call is the meeting where we tell them what the AI is saying
+  // about them and agree who we are going after, and both of those come out of the
+  // baseline. Holding it first means walking in with opinions instead of screenshots, and
+  // it means the hundred prompts get picked against a guess at their ideal customer
+  // rather than against what the engines actually returned.
+  //
+  // Flags, never blocks. Same doctrine as the market-overlap check: a call booked early
+  // is a judgement somebody made, and a checklist that refused would just get worked
+  // around. What it must not do is stay quiet.
+  const measureDone = ["baseline_scan", "findings_doc"].every(done);
+  if (!measureDone && (done("call_booked") || done("call_held"))) {
+    lines.push(
+      `:warning: The call is on the board but the baseline is not finished. Run the audit and write the findings up first, or the call is opinions instead of screenshots.`
+    );
+  }
+
   if (GATE_INDEX >= 0 && !done(DELIVERY_STEPS[GATE_INDEX].key)) {
     const jumped = DELIVERY_STEPS.slice(GATE_INDEX + 1).filter((s) => done(s.key));
     if (jumped.length > 0) {
@@ -238,7 +293,45 @@ export async function setDeliveryStep(args: {
     ).catch(() => {});
   }
 
+  // Drafts follow the checklist rather than the other way round, and they never block it:
+  // the row write above has already happened and a Slack or copy problem must not undo it.
+  await offerDraftsFor(args.clientId, args.stepKey, args.complete).catch(() => {});
+
   return { ok: true };
+}
+
+/**
+ * Post whatever draft this transition earns.
+ *
+ * Two different moments, and mixing them up is the bug worth naming: a NOTIFY is news, so
+ * it fires when the step COMPLETES. An ASK is something we still need from them, so it has
+ * to arrive while the step is outstanding, which means when it becomes the NEXT one. An
+ * ask fired on completion would be a message asking for DNS records the day after they
+ * were added.
+ *
+ * Both are idempotent at the database, so a step toggled off and on again re-runs this
+ * without posting anything twice.
+ */
+async function offerDraftsFor(
+  clientId: string,
+  stepKey: string,
+  completed: boolean
+): Promise<void> {
+  if (!completed) return;
+
+  const notify = notifyForStep(stepKey);
+  if (notify) await postDraft(clientId, notify.key).catch(() => {});
+
+  const rows = await loadRows(clientId);
+  const next = nextStep(rows);
+  if (!next) return;
+
+  const ask = askForStep(next.key);
+  if (ask) await postDraft(clientId, ask.key).catch(() => {});
+
+  // The DNS step is the one that strands a non-technical owner, so the call checklist
+  // goes up with the ask rather than being something to remember to go and find.
+  if (next.key === "dns_records") await postDnsCallChecklist(clientId).catch(() => {});
 }
 
 /** Everything internal about this client goes here, under the intake card. */

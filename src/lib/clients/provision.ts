@@ -25,8 +25,6 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { ingestLead, enrichLead } from "@/lib/lead-intake";
 import { normalizeTarget } from "@/lib/scan/normalize";
-import { ensureClientChannel, usingClientHub } from "@/lib/clients/client-channel";
-import { microsoft } from "@/lib/microsoft";
 import { sendPilotWelcome } from "@/lib/clients/welcome-email";
 import {
   signOnboardingToken,
@@ -313,16 +311,12 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     );
   }
 
-  // ── Slack channel ──
-  const channel = await ensureClientChannel({
-    clientId,
-    slug,
-    legalName: legalName || email,
-  }).catch((e) => {
-    warn(`Slack channel failed: ${(e as Error).message}`);
-    return { channelId: null, channelName: null, created: false };
-  });
-  if (!channel.channelId) warn("Slack channel was not created.");
+  // No client Slack channel is created. Slack is INTERNAL ONLY as of 2026-08-20: guests
+  // bill at 5 per PAID ACTIVE MEMBER, so fifty clients would mean buying ten seats for a
+  // workspace with one human in it. Client conversation is WhatsApp, contracts are email.
+  // See src/lib/clients/client-drafts.ts. The slack_channel_id / slack_channel_name
+  // columns still exist and still hold the one channel that was created before this
+  // reversed, but nothing writes them any more.
 
   // ── Onboarding token ──
   let onboardingUrl: string | null = null;
@@ -370,8 +364,6 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     slug,
     email,
     website,
-    channelId: channel.channelId,
-    channelName: channel.channelName,
     onboardingUrl,
     clientId,
   }).catch((e) => warn(`onboarding card failed: ${(e as Error).message}`));
@@ -524,64 +516,36 @@ async function linkToCrm(
   }
 }
 
+/**
+ * The INTERNAL card in #onboarding-srt-aeo. This is not the client's view of anything and
+ * never was; it is the row of the team's own board. The guest-invite line and the invite
+ * reminder email that used to hang off it are gone with the client channel.
+ */
 async function postOnboardingCard(args: {
   legalName: string;
   slug: string;
   email: string;
   website: string | null;
-  channelId: string | null;
-  channelName: string | null;
   onboardingUrl: string | null;
   clientId: string;
 }): Promise<void> {
-  // The guest invite cannot be automated below Enterprise Grid, so this exists to make
-  // the manual step one click: the channel, the workspace it is in, and the address to
-  // invite, all in one place.
-  const workspace = usingClientHub() ? "the Client Hub workspace" : "this workspace";
-  const inviteLine = args.channelName
-    ? `*Invite them:* in ${workspace}, open #${args.channelName} and add ${args.email} as a single-channel guest.`
-    : `*Invite them:* no channel was created, so this needs doing by hand.`;
-
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (channel) {
-    const text = [
-      `:seedling: *Pilot started: ${args.legalName}*`,
-      ``,
-      args.website ? `*Website:* ${args.website}` : `*Website:* not given yet`,
-      `*Channel:* ${args.channelName ? `#${args.channelName}` : "not created"}`,
-      `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
-      args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,
-      ``,
-      inviteLine,
-    ].join("\n");
-
-    await slack.postMessage(channel, text);
-  } else {
+  if (!channel) {
     console.error(
       "[clients/provision] SLACK_CLIENT_ONBOARDING_CHANNEL is not set. Create #onboarding-srt-aeo and paste its id."
     );
+    return;
   }
 
-  // And by email, because the invite is the one step that stalls onboarding while looking
-  // finished: the client has their link and their channel exists, but they cannot reach
-  // it. A Slack card in a busy channel is easy to scroll past.
-  if (args.channelName) {
-    await microsoft
-      .sendMail({
-        to: process.env.MATTHEW_EMAIL || "matthew@srtagency.com",
-        subject: `Invite ${args.email} to #${args.channelName}`,
-        body:
-          `${args.legalName} has been provisioned and their channel exists, but Slack has no API ` +
-          `to invite a guest, so this part is manual.\n\n` +
-          `In ${workspace}, open #${args.channelName} and add ${args.email} as a single-channel guest.\n\n` +
-          `Board: ${appUrl()}/dashboard/clients/${args.clientId}`,
-        isHtml: false,
-        fromMailbox: process.env.OUTREACH_MAILBOX || "matthew@srtagency.com",
-      })
-      .catch((e) =>
-        console.error("[clients/provision] invite reminder email failed:", (e as Error).message)
-      );
-  }
+  const text = [
+    `:seedling: *Pilot started: ${args.legalName}*`,
+    ``,
+    args.website ? `*Website:* ${args.website}` : `*Website:* not given yet`,
+    `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
+    args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,
+  ].join("\n");
+
+  await slack.postMessage(channel, text);
 }
 
 /** Loud failures go here. Silence about a half-provisioned client is the failure mode. */
