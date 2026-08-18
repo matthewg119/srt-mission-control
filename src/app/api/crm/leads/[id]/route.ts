@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { updateLeadFields } from "@/lib/crm";
 import { CONTACT_EDITABLE_COLUMNS } from "@/lib/field-map";
+import { normalizeLeadPhone } from "@/lib/phone";
 
 // One lead, everything about it: profile, open follow-ups, and the timeline.
 //
@@ -90,6 +91,18 @@ export async function PATCH(
   const patch: Record<string, unknown> = {};
   for (const col of CONTACT_EDITABLE_COLUMNS) {
     if (body[col] !== undefined) patch[col] = body[col] === "" ? null : body[col];
+  }
+
+  // A number typed by hand is a number typed by hand, whether it arrives from a
+  // public funnel or from the lead form. Both go through the same door, or the
+  // three-shapes-per-human problem that phone_last10 exists to clean up walks
+  // straight back in through the CRM. normalizeLeadPhone never returns empty for
+  // non-empty input, so a number that will not parse is stored, not dropped.
+  for (const col of ["phone", "mobile_phone"] as const) {
+    if (typeof patch[col] === "string") {
+      const normalized = normalizeLeadPhone(patch[col] as string);
+      patch[col] = normalized === "" ? null : normalized;
+    }
   }
 
   if (Object.keys(patch).length === 0) {

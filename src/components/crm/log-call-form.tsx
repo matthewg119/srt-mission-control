@@ -32,6 +32,7 @@ export function LogCallForm({
   defaultFollowUpDays = 3,
   initialOutcome,
   onClose,
+  chrome = true,
 }: {
   contactId: string;
   leadName: string;
@@ -39,6 +40,13 @@ export function LogCallForm({
   defaultFollowUpDays?: number;
   initialOutcome?: string;
   onClose?: () => void;
+  /**
+   * Card border + "Log call — name" header. Off when a parent already draws the
+   * card, which is the case on the lead page now that the card carries tabs —
+   * the tab strip says which form this is, so a second title said it twice.
+   * The worklist modal still owns its own copy and passes nothing.
+   */
+  chrome?: boolean;
 }) {
   const router = useRouter();
   const [outcome, setOutcome] = useState(initialOutcome ?? "");
@@ -76,24 +84,8 @@ export function LogCallForm({
     }
   }
 
-  return (
-    <div className="rounded-xl border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.03)] p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-medium text-white">
-          <PhoneCall className="h-4 w-4" />
-          Log call — {leadName}
-        </div>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="text-[rgba(255,255,255,0.4)] hover:text-white"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
+  const body = (
+    <>
       <div className="mb-3 flex flex-wrap gap-2">
         {OUTCOMES.map((o) => (
           <button
@@ -164,6 +156,29 @@ export function LogCallForm({
           {saving ? "Saving…" : "Log call"}
         </button>
       </div>
+    </>
+  );
+
+  if (!chrome) return body;
+
+  return (
+    <div className="rounded-xl border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.03)] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium text-white">
+          <PhoneCall className="h-4 w-4" />
+          Log call — {leadName}
+        </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="text-[rgba(255,255,255,0.4)] hover:text-white"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+      {body}
     </div>
   );
 }
