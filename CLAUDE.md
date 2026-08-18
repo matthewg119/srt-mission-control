@@ -1517,9 +1517,11 @@ unaffected is the entire reason for this design. `sent_at` is stamped by the *Ma
 button, i.e. by a person reporting what they did.
 
 - **Copy lives in `src/config/client-messages.ts` and nothing else does.** Six entries,
-  `guard()`-wrapped, shipping as `TODO:` placeholders. `isUnwritten()` makes a placeholder
-  **refuse to post as a message** — it posts a note naming the key to write instead. An
-  unwritten draft must be impossible to send by accident and impossible to miss.
+  `guard()`-wrapped, **all six written 2026-08-20**. `isUnwritten()` still makes a `TODO:`
+  placeholder **refuse to post as a message** — it posts a note naming the key to write
+  instead, so a seventh draft added later cannot go out unwritten. An unwritten draft must be
+  impossible to send by accident and impossible to miss.
+  Plain text, because WhatsApp renders `*` as bold and a leading hyphen as a literal one.
 - `CHANNEL_LINE` and `NO_CUSTOMER_INFO_LINE` are appended to the intro **structurally**,
   same precedent as `PERMISSION_CLOSE` / `NOT_SELLING_LINE`. The second one is the
   no-patient-information line; for a clinic that is a compliance line, not politeness, so
@@ -1543,8 +1545,29 @@ so `+13368332303` / `13368332303` / `3368332303` were three strings for one huma
 leads and three Slack threads. `wa.me` takes digits only, so a non-E.164 number builds a
 link to nobody; `waLink()` returns null rather than a broken link and the card says so.
 
-> ‼️ **`/PDF` and the other funnels still have this bug.** Only `/onboarding` was fixed.
-> There is no separate WhatsApp number and there must not be one: one number, asked once.
+There is no separate WhatsApp number and there must not be one: one number, asked once.
+
+**Closed across the inbound funnels 2026-08-20.** `normalizeLeadPhone()` in `src/lib/phone.ts`
+is the one door: strict E.164 via `medspa/validate`, falling back to the digits as given so a
+funnel can never DROP a number it captured. `leads/funnel`, `audit/public-intake`,
+`leads/facebook`, `leads/capture`, `start-pilot` and `ingestLead` all go through it instead of
+`.replace(/[^\d+]/g, "")`, which only ever stripped punctuation.
+
+> ‼️ **Normalizing at the door was only half of it.** `findContact` matched `phone.eq` /
+> `mobile_phone.eq` on the exact string, so it fixed nothing already stored in three shapes. It
+> now matches the `phone_last10` / `mobile_last10` generated columns
+> (`docs/2026-06-04-contacts-phone-last10.sql`), which five other lookups in this app were
+> already using. That is the half that collapses the history.
+
+> ‼️ `src/lib/phone.ts` exports **two** normalizers and the loose one stays. `normalizePhone`
+> accepts any 11+ digits as `+<digits>` because iMessage hands it real international handles.
+> `normalizeLeadPhone` is for anything a PERSON TYPED, where `+12345678901234` is a typo rather
+> than a number. Do not consolidate them into one.
+
+**The live-format half needs the other repo.** `/PDF`, `/aivisibility`, `/contact` and the quiz
+funnels are front-ended by `srt-agwb`, so only their receiving routes could be fixed from here.
+That is enough to protect storage and the CRM whatever the static site posts.
+`webflow-aivisibility` was the one in-repo form still missing `formatPhoneUS`.
 
 > ‼️ **`showWhen` on `FieldDef` is CLIENT-SIDE ONLY.** `/api/onboarding/save` loops
 > `def.fields` unconditionally, so a `showWhen` field marked `required: true` is hidden on
@@ -1567,10 +1590,27 @@ worse than a record idle for a fortnight.
   is worse than saying nothing.
 - `host` is stored as the LABEL ONLY (`learn`, `reviews`, `@`). Registrars append the domain
   themselves, so a full name saves as `learn.clinic.com.clinic.com`.
+
+> ‼️ **`clients.subdomain` IS THE LABEL, and it was the full host until 2026-08-20.**
+> `chooseSubdomain` wrote `learn.clinic.com` while `seedDnsRecords` and `baseVars` both read it
+> as a label, so the panel's Host box said `learn.clinic.com` for the registrar to append the
+> domain to, and the DNS ask read `learn.clinic.com.clinic.com` out to the client. The trap
+> documented one line above, reproduced in the code that documents it.
+>
+> Read it through `subdomainLabel(subdomain, domain)` (`clients/normalize.ts`), never raw: it
+> strips a trailing domain, so rows written before the fix need no migration. The client board
+> is the one place that wants the full host and composes it. `seedDnsRecords` also repairs a
+> host that no longer matches the convention, clearing `verified_at` with it, because
+> `ignoreDuplicates` would otherwise preserve a wrong host forever and a verification is a
+> statement about one specific name.
 - TXT answers are joined before comparing: >255-char verification strings arrive chunked.
 - `resolveDnsProvider()` reads the nameservers to name the registrar, because "who is your
   domain with" is a question many owners genuinely cannot answer. Unknown NS returns
   `provider: null` with the nameservers still populated — a real answer, not a guess.
+- A resolver that is DOWN reports `not_found` like an absent record, and `not_found` is never
+  stored, so an outage quietly changes nothing rather than writing a wrong status. Verified
+  against SRT's own domain: with no working resolver every record reads `not_found`; pointed at
+  a real one, the live Search Console TXT reads `verified` and both CNAMEs read `not_found`.
 - `HUB_CNAME_TARGET` is a **default, not a truth**: Vercel issues per-domain targets for
   newer projects, so correct it per record from the Vercel dashboard.
 
