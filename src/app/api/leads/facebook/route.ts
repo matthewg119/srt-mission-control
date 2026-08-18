@@ -26,7 +26,6 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const GRAPH_VERSION = "v25.0";
-const ZOHO_LEAD_SOURCE = "Facebook Lead Ad";
 
 /** Prebuilt Meta field ids. Anything else on the form is a custom question. */
 const KNOWN_FIELDS = new Set(["first_name", "last_name", "full_name", "email", "phone_number"]);
@@ -303,7 +302,6 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
       // nothing to report against, since a lead ad never sets fbc/fbclid.
       fbLeadId: leadgenId,
       source: "facebook_lead",
-      zohoLeadSource: ZOHO_LEAD_SOURCE,
       noteTitle: "Facebook Lead Ad",
       headline: website
         ? `:mag: *AI visibility audit running now* on ${website}. The report lands in this thread in a few minutes.`

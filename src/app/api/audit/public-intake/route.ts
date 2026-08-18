@@ -35,13 +35,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const ZOHO_LEAD_SOURCE = "AI Visibility Audit";
-const ZOHO_LEAD_SOURCE_GUIDE = "Med Spa Guide";
-
-/** The /PDF funnel and the /audit funnel both land here; keep them separable in Zoho. */
-function zohoLeadSourceFor(source: string): string {
-  return source === "pdf" ? ZOHO_LEAD_SOURCE_GUIDE : ZOHO_LEAD_SOURCE;
-}
 
 function clean(v: unknown, max = 200): string {
   if (v === undefined || v === null) return "";
@@ -183,7 +176,6 @@ export async function POST(req: NextRequest) {
       phone: partialPhone,
       website: partialSite,
       source: partialSource,
-      zohoLeadSource: zohoLeadSourceFor(partialSource),
       noteTitle: isComplete ? "Clinic guide, funnel completed" : "Clinic guide, funnel started",
       headline: isComplete
         ? ":white_check_mark: *Guide funnel completed.* Everything below is their own words from the questions."
@@ -237,7 +229,6 @@ export async function POST(req: NextRequest) {
     phone,
     website,
     source,
-    zohoLeadSource: zohoLeadSourceFor(source),
     noteTitle: isGuide ? "Clinic guide request" : "Free AI Visibility Audit request",
     headline: isGuide
       ? `:mag: *Audit running now* on ${website} to build their guide. The report goes to #ai-visibility-audits; this thread keeps the lead and their answers.`

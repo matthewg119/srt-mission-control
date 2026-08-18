@@ -13,7 +13,6 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { toGroups } from "@/lib/outscraper";
 import { processQueryResults, activateExpansionForMetros, TrtJob, METROS } from "@/lib/trt";
-import { syncTrtRows, TrtZohoRow } from "@/lib/trt-zoho-sync";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -106,9 +105,6 @@ export async function POST(req: NextRequest) {
     const groups = toGroups(await extractData(body));
     const result = await processQueryResults(supabaseAdmin, groups, jobs, { write: true });
 
-    // Push the new callable leads to Zoho silently.
-    const zoho = await syncTrtRows(result.inserted as TrtZohoRow[]);
-
     // Coverage per rotation row: fewer than the cap => we got everything, mark exhausted.
     await Promise.all(
       jobs.map(async (job) => {
@@ -162,14 +158,6 @@ export async function POST(req: NextRequest) {
     const avgScore = result.inserted.length
       ? Math.round((result.inserted.reduce((a, r) => a + (r.lead_score ?? 0), 0) / result.inserted.length) * 10) / 10
       : 0;
-    const zohoLine = zoho.disabled
-      ? "⏸️ sync disabled"
-      : zoho.failed === 0 && zoho.ok > 0
-        ? `✅ All ${zoho.ok} added to Zoho`
-        : zoho.ok === 0 && zoho.failed === 0
-          ? "nothing to add"
-          : `${zoho.ok} added, ${zoho.failed} failed`;
-
     if (followups) {
       const blocks: SlackBlock[] = [
         { type: "header", text: { type: "plain_text", text: `💉 Daily TRT Clinic Prospects — ${run.run_date}`, emoji: true } },
@@ -184,7 +172,6 @@ export async function POST(req: NextRequest) {
             { type: "mrkdwn", text: `*🗺️ Core coverage:*\n${exhaustedCore ?? 0}/${totalCore ?? 0} (${pct}%)` },
           ],
         },
-        { type: "section", text: { type: "mrkdwn", text: `*🗂️ Zoho:* ${zohoLine}` } },
       ];
       if (activatedLabels.length) {
         blocks.push({
@@ -205,7 +192,6 @@ export async function POST(req: NextRequest) {
       invalidPhone: result.invalidPhone,
       flaggedChains: result.flaggedChains,
       expansionActivated: activated,
-      zoho: { ok: zoho.ok, failed: zoho.failed },
       runningTotal: runningTotal ?? 0,
     });
   } catch (err) {

@@ -12,7 +12,6 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { ingestLead } from "@/lib/lead-intake";
 
-const ZOHO_LEAD_SOURCE = "AI Visibility Index";
 
 function clean(v: unknown, max = 200): string {
   if (v === undefined || v === null) return "";
@@ -53,7 +52,7 @@ export async function POST(req: NextRequest) {
     const lastName = nameParts.slice(1).join(" ") || "";
     const leadName = name || clinic || email;
 
-    const { contactId, zohoLeadId } = await ingestLead({
+    const { contactId } = await ingestLead({
       firstName,
       lastName,
       email,
@@ -62,7 +61,6 @@ export async function POST(req: NextRequest) {
       businessName: clinic,
       city,
       source,
-      zohoLeadSource: ZOHO_LEAD_SOURCE,
       noteTitle: "AI Visibility Index",
       headline:
         `New Index lead: ${leadName} · ${clinic || "?"} · ${city || "?"} · ${website || "?"}` +
@@ -80,7 +78,7 @@ export async function POST(req: NextRequest) {
       ],
     });
 
-    return NextResponse.json({ success: true, contactId, zohoLeadId });
+    return NextResponse.json({ success: true, contactId });
   } catch (err) {
     console.error("[leads/funnel] fatal:", err);
     return NextResponse.json({ error: "capture failed" }, { status: 500 });
