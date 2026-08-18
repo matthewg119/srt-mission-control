@@ -1,5 +1,4 @@
 import { supabaseAdmin } from "@/lib/db";
-import { getLead } from "@/lib/zoho";
 import { normalizePhone } from "@/lib/phone";
 
 interface ContactData {
@@ -36,29 +35,6 @@ async function resolveContact(contactId: string): Promise<ContactData | null> {
       .eq("id", contactId)
       .maybeSingle();
     row = data;
-  }
-
-  if (!row && isZohoId) {
-    try {
-      const z = await getLead(contactId);
-      if (z) {
-        row = {
-          id: null,
-          first_name: String(z.First_Name ?? ""),
-          last_name:  String(z.Last_Name  ?? ""),
-          email:       z.Email   ? String(z.Email)   : null,
-          phone:       z.Phone   ? String(z.Phone)   : (z.Mobile ? String(z.Mobile) : null),
-          business_name: z.Company  ? String(z.Company)  : null,
-          industry:    z.Industry ? String(z.Industry) : null,
-          biz_city:    z.Mailing_City  ? String(z.Mailing_City)  : null,
-          biz_state:   z.Mailing_State ? String(z.Mailing_State) : null,
-          amount_needed: z.Funding_Amount_Requested ?? null,
-          source:      z.Lead_Source ? String(z.Lead_Source) : null,
-          application_stage: z.Lead_Status ? String(z.Lead_Status) : null,
-          zoho_lead_id: contactId,
-        };
-      }
-    } catch { /* Zoho unavailable */ }
   }
 
   if (!row) return null;
