@@ -97,9 +97,9 @@ async function handleCsvImport(body: Record<string, unknown>): Promise<NextRespo
   return NextResponse.json({ ok: true, contacts, total: contacts.length, skipped });
 }
 
-// ‼️ This used to reach Zoho through a DYNAMIC `await import("@/lib/zoho")`,
-// which a static grep for the module does not see. It is the one call that
-// would have survived the whole cutover silently and then 500'd the first time
+// ‼️ This used to reach Zoho through a DYNAMIC import of the Zoho client,
+// which a static grep for the module did not see. It was the one call that
+// could have survived the whole cutover silently and then 500'd the first time
 // somebody pulled a texting list after the account was closed.
 //
 // The COQL search is now a `contacts` query. Two mapping notes:

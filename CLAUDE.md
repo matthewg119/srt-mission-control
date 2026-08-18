@@ -13,7 +13,6 @@ Internal operations portal for SRT Agency (business financing brokerage). AI-fir
 - Next.js 14 (App Router) + TypeScript + Tailwind CSS v3
 - Supabase PostgreSQL (hosted)
 - Anthropic Claude API (claude-sonnet-4-6) with tool use
-- Zoho CRM v5 (OAuth refresh token flow)
 - Microsoft 365 (email via Graph API, OneDrive for file storage)
 - Vercel deployment
 
@@ -57,15 +56,16 @@ also skipped when the response text is empty, since the API rejects an empty ass
 on it harder than anything else does.
 
 ### CRM Integration
-- `src/lib/zoho.ts` — Zoho CRM v5 API client (leads CRUD, PDF attachment, search)
+- `src/lib/crm.ts` — the single write-through point: `resolveLead()`, `resolveLeadCandidates()`,
+  `getLeadActivities()`, `setLeadStatus()`, `addNote()`, `createTask()`, `logCall()`
 - `src/lib/microsoft.ts` — Microsoft Graph API (email, OneDrive, OAuth)
 - `src/config/pipeline.ts` — Two pipelines: New Deals + Active Deals
 
 ### Lead Capture (from srtagency.com)
 - `src/lib/lead-intake.ts` — **the shared inbound-lead stack.** `ingestLead()` does
-  Supabase contact upsert → Zoho lead (search-then-create, never duplicates) → #hot-leads
-  top-level post + detail reply in that thread → Speed-to-Lead, and returns the contact id.
-  `enrichLead()` appends to a lead that already exists (Zoho note + same-thread reply).
+  Supabase contact upsert → timeline note → #hot-leads top-level post + detail reply in
+  that thread → Speed-to-Lead, and returns the contact id.
+  `enrichLead()` appends to a lead that already exists (timeline note + same-thread reply).
   Used by `/api/leads/funnel`, `/api/audit/public-intake` and `/api/leads/facebook` —
   add new funnels here rather than copying the sequence a fourth time.
 - `src/app/api/leads/funnel/route.ts` — /aivisibility funnel → ingestLead
@@ -75,7 +75,7 @@ on it harder than anything else does.
   Website comes from the form's field ids: set the question's Field ID to `website` in
   Ads Manager, otherwise the route resolves it from `GET /{form_id}?fields=questions{key,label}`.
 - `src/app/api/leads/capture/route.ts` — Contact form → Supabase contact + deal
-- `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create + Zoho + Slack, 100% enrich + PDF + OneDrive + Zoho)
+- `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create + Slack, 100% enrich + PDF + OneDrive)
 
 ### Dashboard Pages
 - `/dashboard` — BrainHeart overview with recent activity
@@ -104,9 +104,6 @@ on it harder than anything else does.
 ## Environment Variables
 ```
 ANTHROPIC_API_KEY=         # Claude API
-ZOHO_CLIENT_ID=            # Zoho OAuth Client ID
-ZOHO_CLIENT_SECRET=        # Zoho OAuth Client Secret
-ZOHO_REFRESH_TOKEN=        # Zoho OAuth Refresh Token
 MICROSOFT_CLIENT_ID=       # Azure AD App Client ID
 MICROSOFT_CLIENT_SECRET=   # Azure AD App Client Secret
 MICROSOFT_TENANT_ID=       # Azure AD Tenant ID
@@ -174,13 +171,12 @@ SCAN_IP_SALT=              # Salt for hashing /scan client IPs. Optional but SET
   MP4 -> variations card. See docs/SOP-content-workflow-session.md.
 
 ## CRM Master Exclusion Sync (Meta)
-Daily cron pushes every Zoho lead + contact (hashed email/phone/name/zip/city/state) into
+Daily cron pushes every CRM contact (hashed email/phone/name/zip/city/state) into
 a Meta Customer List audience set as an EXCLUSION on acquisition ad sets, so Meta stops
 re-serving ads to people already in the CRM. Idempotent (add-only, no diffing).
 - `src/lib/meta-audience.ts` — Marketing API client (create audience + push users)
 - `src/app/api/cron/crm-exclusion-sync/route.ts` — daily sync (08:00 UTC)
 - `src/app/api/admin/create-exclusion-audience/route.ts` — one-time audience bootstrap
-- Zoho full-table scan: `listAllRecords()` in `src/lib/zoho.ts`
 
 One-time setup: (1) create a Meta System User, assign the ad account with Manage, generate
 a token with `ads_management` → `META_ADS_TOKEN`; (2) accept Custom Audience Terms at
@@ -1049,7 +1045,7 @@ rather than reimplemented, so there is one place that turns audit rows into spea
 no audit the numbers block is a **negative assertion** ("NONE. Do not cite a score..."), because every
 brief the model has seen had a score and an absent section invites it to supply one.
 
-**Three live sources, read at scan time** (2026-08-11): Zoho (`buildZohoOnlyContext`), the Outlook
+**Three live sources, read at scan time** (2026-08-11): the CRM (`buildLeadSnapshot`), the Outlook
 mailbox (`readThreadTruth` / `readMailboxThread`), and now the audit's **Slack thread**
 (`slack-thread.ts`). Slack was the hole — `brief.ts` carried `slack_channel_id`/`slack_thread_ts`
 only so the post-call wrap knew where to post, and never read a byte. Everything decided in
@@ -1083,8 +1079,8 @@ table, no backfill of the existing audits, and it cannot drift.
 Call ends -> transcript is read back **from the database** (never from the request, or a client could
 forge a call into a CRM note) -> Sonnet writes it up -> one card in that lead's audit thread.
 
-On thumbs-up: claim the row, write ONE Zoho note, create an Outlook **draft**, print the draft into
-the thread. `wrap_state` is a claim flag (`auto_send_state` precedent) and `zoho_note_at` is checked
+On thumbs-up: claim the row, write ONE CRM note, create an Outlook **draft**, print the draft into
+the thread. `wrap_state` is a claim flag (`auto_send_state` precedent) and `crm_note_at` is checked
 separately, so a Graph failure plus a retry cannot double-write the note. Slack gets 200 in under a
 second and the work runs in `waitUntil`.
 

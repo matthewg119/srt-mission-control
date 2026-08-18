@@ -71,9 +71,6 @@ async function setupChannel(args: {
   }
 
   // Post lead info card
-  const zohoUrl = zohoLeadId
-    ? `https://crm.zoho.com/crm/org/leads/view/${zohoLeadId}`
-    : null;
   const portalUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/dashboard/pipeline`;
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
@@ -87,7 +84,6 @@ async function setupChannel(args: {
     ``,
     `*Phone:* ${phone}`,
     contactId ? `*Contact ID:* ${contactId}` : null,
-    zohoUrl ? `*Zoho:* <${zohoUrl}|Open in Zoho>` : null,
     `*Portal:* <${portalUrl}|Mission Control>`,
     vcardLink,
     ``,
