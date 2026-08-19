@@ -1,4 +1,4 @@
-// The five stages, and the only place they are defined.
+// The seven stages, and the only place they are defined.
 //
 // This file used to be presentation metadata for Zoho's MCA picklist, which is
 // why the old version carried two pipelines and eighteen stages. SRT is off
@@ -37,6 +37,24 @@ export const STAGE_EMAIL_PITCH = "Email Pitch";
 export const STAGE_NEGOTIATING = "Negotiating / Follow-up";
 export const STAGE_CLOSED = "Closed";
 
+/**
+ * Off the book. Never call, never email, never enroll again.
+ *
+ * "Closed" and "Take Off List" are both terminal, and the difference is what
+ * you do with the record afterwards. Closed is an outcome: the deal ended, won
+ * or lost, and the lead is still a real business we may pitch again next
+ * quarter. Take Off List is a verdict on the record itself, a wrong number, a
+ * duplicate, a business that does not exist, or someone who told us to stop.
+ * Those should not sit in the lead book making the count look bigger than the
+ * book actually is.
+ *
+ * Landing on this stage flips contacts.do_not_contact and drops working_state
+ * to 'closed' (see setLeadStatus in src/lib/crm.ts), which is what actually
+ * removes the lead from the call board, the sequences and the leads page. The
+ * stage alone is only the label; the two flags are the teeth.
+ */
+export const STAGE_TAKE_OFF_LIST = "Take Off List";
+
 export const AEO_PIPELINE: StagePipeline = {
   name: "Pipeline",
   stages: [
@@ -46,12 +64,13 @@ export const AEO_PIPELINE: StagePipeline = {
     { name: STAGE_EMAIL_PITCH, color: "#00BCD4" },
     { name: STAGE_NEGOTIATING, color: "#F5A623" },
     { name: STAGE_CLOSED, color: "#6B7280" },
+    { name: STAGE_TAKE_OFF_LIST, color: "#C0392B" },
   ],
 } as const;
 
 export const STAGE_PIPELINES: readonly StagePipeline[] = [AEO_PIPELINE];
 
-/** The five, flat. Filter chips, status pickers and the write allowlist. */
+/** All seven, flat. Filter chips, status pickers and the write allowlist. */
 export const ALL_STAGES: readonly StageMeta[] = AEO_PIPELINE.stages;
 
 export const STAGE_NAMES: readonly string[] = ALL_STAGES.map((s) => s.name);
@@ -68,7 +87,7 @@ export function stageColor(stage: string | null | undefined): string {
 // column is free-form text with no CHECK constraint, and inbound webhooks,
 // the medspa/TRT syncs and any hand-edited row can still hand us something
 // else. Everything that accepts a stage from outside runs it through here, so
-// a stray value can never put a sixth chip on the leads page.
+// a stray value can never put an eighth chip on the leads page.
 
 /** Legacy value -> new stage. Mirrors the SQL migration exactly; if you change
  *  one, change the other. Keys are lowercase. */
@@ -92,23 +111,42 @@ const STAGE_ALIASES: Record<string, string> = {
   "not interested": STAGE_CLOSED,
   unresponsive: STAGE_CLOSED,
   lost: STAGE_CLOSED,
-  "bad lead": STAGE_CLOSED,
-  "wrong number": STAGE_CLOSED,
-  duplicate: STAGE_CLOSED,
-  "junk lead": STAGE_CLOSED,
   "lost lead": STAGE_CLOSED,
-  "take off list": STAGE_CLOSED,
+
+  // Not a lead at all, or a lead that told us to stop. These used to collapse
+  // into Closed, which is why the book still counts thousands of rows nobody
+  // will ever call: they were indistinguishable from finished deals.
+  "take off list": STAGE_TAKE_OFF_LIST,
+  "do not call": STAGE_TAKE_OFF_LIST,
+  "do-not-call": STAGE_TAKE_OFF_LIST,
+  dnc: STAGE_TAKE_OFF_LIST,
+  "remove from list": STAGE_TAKE_OFF_LIST,
+  "opted out": STAGE_TAKE_OFF_LIST,
+  "bad lead": STAGE_TAKE_OFF_LIST,
+  "junk lead": STAGE_TAKE_OFF_LIST,
+  "wrong number": STAGE_TAKE_OFF_LIST,
+  "bad number": STAGE_TAKE_OFF_LIST,
+  "out of business": STAGE_TAKE_OFF_LIST,
+  duplicate: STAGE_TAKE_OFF_LIST,
+  dnq: STAGE_TAKE_OFF_LIST,
 };
 
 /** Substring fallback for the values Zoho stored off-picklist. "Not interested"
  *  was live on 29 of a 2,400-lead sample against a list that said "Not
  *  Interested", so exact matching alone silently left dead leads workable. */
 const CLOSED_KEYWORDS = [
-  "declined", "dead", "dnq", "lost", "junk", "duplicate", "not interested",
+  "declined", "dead", "lost", "not interested",
+];
+
+/** Same idea for the take-off values. Checked BEFORE CLOSED_KEYWORDS, because
+ *  "Junk Lead - Dead" is junk first and dead second. */
+const TAKE_OFF_KEYWORDS = [
+  "dnq", "junk", "duplicate", "do not call", "do-not-call", "opted out",
+  "wrong number", "bad number", "out of business", "take off",
 ];
 
 /**
- * Any stage string -> one of the six.
+ * Any stage string -> one of the seven.
  *
  * Null or blank means nobody ever set one, which is "Untouched". An unrecognized
  * NON-blank value is different: somebody wrote something, we just do not know
@@ -121,6 +159,7 @@ export function normalizeStage(stage: string | null | undefined): string {
   if (!lower) return STAGE_UNTOUCHED;
   if (STAGE_BY_LOWER.has(lower)) return STAGE_BY_LOWER.get(lower)!.name;
   if (STAGE_ALIASES[lower]) return STAGE_ALIASES[lower];
+  if (TAKE_OFF_KEYWORDS.some((k) => lower.includes(k))) return STAGE_TAKE_OFF_LIST;
   if (CLOSED_KEYWORDS.some((k) => lower.includes(k))) return STAGE_CLOSED;
   return STAGE_NO_CONTACT;
 }
@@ -128,11 +167,24 @@ export function normalizeStage(stage: string | null | undefined): string {
 // ── Terminal vs pre-contact ──────────────────────────────────────────
 
 /** Genuinely done. Never call these. */
-export const TERMINAL_STAGES: readonly string[] = [STAGE_CLOSED];
+export const TERMINAL_STAGES: readonly string[] = [STAGE_CLOSED, STAGE_TAKE_OFF_LIST];
+
+const TERMINAL_LOWER = new Set(TERMINAL_STAGES.map((s) => s.toLowerCase()));
 
 export function isTerminalStage(stage: string | null | undefined): boolean {
   if (!stage) return false;
-  return normalizeStage(stage) === STAGE_CLOSED;
+  return TERMINAL_LOWER.has(normalizeStage(stage).toLowerCase());
+}
+
+/**
+ * Stages that mean "stop contacting this record", as opposed to "this deal is
+ * over". setLeadStatus turns this into the do_not_contact flag, and every
+ * outreach path in the codebase already respects that flag, so nothing else
+ * has to learn about the new stage.
+ */
+export function isTakeOffListStage(stage: string | null | undefined): boolean {
+  if (!stage) return false;
+  return normalizeStage(stage) === STAGE_TAKE_OFF_LIST;
 }
 
 /**

@@ -126,8 +126,19 @@ export default async function LeadDetailPage({
                 ? formatRelativeTime(lead.last_activity_at as string)
                 : "never"}
             </span>
-            {tasks.length === 0 && (
+            {tasks.length === 0 && !lead.do_not_contact && (
               <span className="text-[#9C27B0]">no follow-up scheduled</span>
+            )}
+            {/* The flag, not the stage, is what actually silences the outreach —
+                so it is what the header says. A lead can carry it from an opt-out
+                reply without ever having been put on the take-off list. */}
+            {!!lead.do_not_contact && (
+              <span className="rounded-md bg-[rgba(192,57,43,0.18)] px-1.5 py-0.5 text-[#E74C3C]">
+                do not contact
+                {lead.do_not_contact_reason
+                  ? ` — ${String(lead.do_not_contact_reason)}`
+                  : ""}
+              </span>
             )}
           </div>
         </div>

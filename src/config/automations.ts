@@ -3,8 +3,8 @@
 //
 // This file used to carry 18 rules across two MCA pipelines (Underwriting,
 // Shopping, Pre-Approved, VC / DL, Contracts Out/In, Pending Stips, Funding
-// Call, In Funding). Those stages no longer exist; the AEO pipeline is five
-// stages and the rules below are keyed to them.
+// Call, In Funding). Those stages no longer exist; the rules below are keyed
+// to the stages in stage-display.ts and nothing else.
 //
 // The `pipeline` field is kept because automation-engine.ts and the dashboard
 // both read it, but there is only one pipeline now.
@@ -15,6 +15,7 @@ import {
   STAGE_EMAIL_PITCH,
   STAGE_NEGOTIATING,
   STAGE_CLOSED,
+  STAGE_TAKE_OFF_LIST,
 } from "./stage-display";
 
 export interface AutomationAction {
@@ -132,5 +133,20 @@ export const DEFAULT_AUTOMATIONS: AutomationRule[] = [
     ],
     enabled: true,
     description: "Clean up tags when a lead closes out",
+  },
+  {
+    id: "take-off-list",
+    pipeline: "Pipeline",
+    stage: STAGE_TAKE_OFF_LIST,
+    trigger: "on_enter",
+    actions: [
+      { type: "remove_tag", tag: "negotiating" },
+      { type: "remove_tag", tag: "new-lead" },
+      { type: "add_tag", tag: "take-off-list" },
+    ],
+    enabled: true,
+    // Tags only. setLeadStatus has already flipped do_not_contact by the time
+    // this runs, so there is deliberately nothing here that sends.
+    description: "Strip the working tags when a lead comes off the list for good",
   },
 ];

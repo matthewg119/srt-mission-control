@@ -1,4 +1,4 @@
-import { normalizeStage, isDeadStage, isTerminalStage, cadenceFor, STAGE_NAMES, HOT_STAGES } from "@/config/stage-display";
+import { normalizeStage, isDeadStage, isTerminalStage, isTakeOffListStage, cadenceFor, STAGE_NAMES, HOT_STAGES } from "@/config/stage-display";
 
 const LEGACY = [
   "Open - Not Contacted", "Not Contacted", "Working - No Contact", "New", "New Lead",
@@ -9,7 +9,9 @@ const LEGACY = [
   "Contracts Out", "Contracts In", "Pending Stips", "Funding Call", "In Funding",
   "Working - Contacted", "Working - Application Out", "Working", "Contacted",
   "Closed", "Closed - Not Converted", "Converted", "Dead Declined", "Deal Lost",
-  "Not interested", "Take Off List", "Junk Lead", "junk lead", null, "", "Xyzzy",
+  "Not interested", "Take Off List", "Junk Lead", "junk lead", "DNQ", "Duplicate",
+  "Wrong Number", "Do Not Call", "Bad Number", "Out of Business", "Opted Out",
+  null, "", "Xyzzy",
 ];
 
 let bad = 0;
@@ -26,6 +28,14 @@ const checks: [string, boolean, boolean][] = [
   ["No contact is NOT dead (call board survives)", isDeadStage("No contact"), false],
   ["Untouched is NOT dead (call board survives)", isDeadStage("Untouched"), false],
   ["Closed IS dead", isDeadStage("Closed"), true],
+  ["Take Off List IS dead", isDeadStage("Take Off List"), true],
+  ["Take Off List is terminal", isTerminalStage("Take Off List"), true],
+  ["Take Off List is not Closed", normalizeStage("Take Off List") === "Take Off List", true],
+  ["Closed is NOT take-off (the book keeps finished deals)", isTakeOffListStage("Closed"), false],
+  ["DNQ comes off the list", isTakeOffListStage("DNQ"), true],
+  ["a wrong number comes off the list", isTakeOffListStage("Wrong Number"), true],
+  ["a duplicate comes off the list", isTakeOffListStage("Duplicate"), true],
+  ["a lost deal is Closed, not take-off", normalizeStage("Deal Lost") === "Closed", true],
   ["Working is NOT dead", isDeadStage("Working"), false],
   ["Email Pitch is NOT dead", isDeadStage("Email Pitch"), false],
   ["Negotiating is NOT dead", isDeadStage("Negotiating / Follow-up"), false],
@@ -41,7 +51,7 @@ for (const [name, got, want] of checks) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name} (got ${got}, want ${want})`);
 }
 
-console.log("\n-- cadence resolves for all five --");
+console.log("\n-- cadence resolves for every stage --");
 for (const s of STAGE_NAMES) {
   const c = cadenceFor(s);
   console.log(`  ${s.padEnd(24)} firstTouch ${c.firstTouchHours}h  repeat ${c.repeatDays}d`);

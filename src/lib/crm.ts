@@ -14,6 +14,7 @@
 
 import { supabaseAdmin } from "./db";
 import { invalidateWorklistCache } from "./worklist";
+import { isTakeOffListStage } from "@/config/stage-display";
 
 export type CrmOrigin =
   | "mission_control"
@@ -467,6 +468,17 @@ export interface SetLeadStatusInput {
   actor?: string;
 }
 
+/**
+ * Stamped into contacts.do_not_contact_reason when the Take Off List stage is
+ * what raised the flag.
+ *
+ * The flag is older than the stage and other things raise it: an opt-out reply,
+ * a hand edit, the exclusion sync. Moving a lead back onto the board must undo
+ * OUR flag and only ours, so the reason carries a marker instead of the restore
+ * path guessing.
+ */
+export const TAKE_OFF_DNC_REASON = "Take Off List";
+
 export interface SetLeadStatusResult {
   ok: boolean;
   contactId: string | null;
@@ -498,13 +510,49 @@ export async function setLeadStatus(
   const now = new Date().toISOString();
 
   if (oldStatus !== landedStatus) {
+    const update: Record<string, unknown> = {
+      application_stage: landedStatus,
+      application_stage_updated_at: now,
+      application_stage_origin: input.origin,
+    };
+
+    // ── Take Off List ────────────────────────────────────────────────
+    // The stage is only a label. do_not_contact and working_state are what
+    // actually stop the outreach, and every path that could touch this lead
+    // already reads them: the sequence engine, the email and follow-up
+    // directors, the SMS import, the touch policy and the worklist's own
+    // hard drop. Setting them here means nothing else has to learn the stage.
+    const takingOff = isTakeOffListStage(landedStatus);
+    const puttingBack = !takingOff && isTakeOffListStage(oldStatus);
+
+    if (takingOff) {
+      update.do_not_contact = true;
+      update.do_not_contact_reason = input.reason
+        ? `${TAKE_OFF_DNC_REASON}: ${input.reason}`
+        : TAKE_OFF_DNC_REASON;
+      update.do_not_contact_at = now;
+      update.working_state = "closed";
+    } else if (puttingBack) {
+      // Undo our own flag, never somebody else's. A lead that asked us to stop
+      // keeps do_not_contact = true even as the stage goes back to workable,
+      // and the worklist still drops it on that flag alone.
+      const { data: dnc } = await supabaseAdmin
+        .from("contacts")
+        .select("do_not_contact, do_not_contact_reason")
+        .eq("id", contact.id)
+        .maybeSingle();
+      const ours = String(dnc?.do_not_contact_reason ?? "").startsWith(TAKE_OFF_DNC_REASON);
+      if (dnc?.do_not_contact && ours) {
+        update.do_not_contact = false;
+        update.do_not_contact_reason = null;
+        update.do_not_contact_at = null;
+      }
+      update.working_state = "working";
+    }
+
     const { error } = await supabaseAdmin
       .from("contacts")
-      .update({
-        application_stage: landedStatus,
-        application_stage_updated_at: now,
-        application_stage_origin: input.origin,
-      })
+      .update(update)
       .eq("id", contact.id);
 
     if (error) {
@@ -514,6 +562,21 @@ export async function setLeadStatus(
         landedStatus,
         error: error.message,
       };
+    }
+
+    if (takingOff) {
+      // An open task on a lead nobody may call again can only ever be snoozed
+      // or ignored. The lead_tasks trigger recomputes open_task_count and
+      // next_action_at, so cancelling here also clears the row from the
+      // "due today" board rather than leaving a ghost on it.
+      const { error: taskError } = await supabaseAdmin
+        .from("lead_tasks")
+        .update({ status: "cancelled" })
+        .eq("contact_id", contact.id)
+        .eq("status", "open");
+      if (taskError) {
+        console.error("[crm.setLeadStatus] cancelling open tasks failed:", taskError.message);
+      }
     }
 
     await supabaseAdmin.from("lead_status_history").insert({
@@ -859,7 +922,15 @@ async function recordFieldHistory(a: {
 export async function logCall(a: {
   contactId: string;
   outcome: string;
-  nextFollowUpAt: string | Date;
+  /**
+   * Required for every call that leaves the lead workable, which is the rule
+   * the call board is built on. Null ONLY when the same submit takes the lead
+   * off the list: there is no next date for a number that does not ring, and
+   * demanding one is what filled the timeline with "Follow up after bad_number
+   * call" tasks nobody could ever action. The route enforces which case is
+   * which; this signature just allows the second one to exist.
+   */
+  nextFollowUpAt: string | Date | null;
   notes?: string;
   durationSecs?: number;
   nextStep?: string;
@@ -872,11 +943,13 @@ export async function logCall(a: {
   error?: string;
 }> {
   const followUp =
-    a.nextFollowUpAt instanceof Date
-      ? a.nextFollowUpAt
-      : new Date(a.nextFollowUpAt);
+    a.nextFollowUpAt === null
+      ? null
+      : a.nextFollowUpAt instanceof Date
+        ? a.nextFollowUpAt
+        : new Date(a.nextFollowUpAt);
 
-  if (Number.isNaN(followUp.getTime())) {
+  if (followUp !== null && Number.isNaN(followUp.getTime())) {
     return {
       ok: false,
       activityId: null,
@@ -899,14 +972,16 @@ export async function logCall(a: {
     metadata: { nextStep: a.nextStep ?? null, origin: a.origin },
   });
 
-  const task = await createTask({
-    contactId: a.contactId,
-    title: a.nextStep || `Follow up after ${a.outcome} call`,
-    dueAt: followUp,
-    taskType: "call",
-    origin: a.origin,
-    actor: a.actor,
-  });
+  const task = followUp
+    ? await createTask({
+        contactId: a.contactId,
+        title: a.nextStep || `Follow up after ${a.outcome} call`,
+        dueAt: followUp,
+        taskType: "call",
+        origin: a.origin,
+        actor: a.actor,
+      })
+    : { taskId: null };
 
   // A call always makes a lead "working" — it is no longer untouched, and it
   // is no longer snoozed.

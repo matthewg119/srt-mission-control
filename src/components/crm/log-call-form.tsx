@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PhoneCall, X } from "lucide-react";
+import { STAGE_TAKE_OFF_LIST } from "@/config/stage-display";
 
 // The call form. Its whole job is that you cannot leave without a next date.
 //
@@ -10,6 +11,18 @@ import { PhoneCall, X } from "lucide-react";
 // from the lead's stage cadence so the common case is one click. The API route
 // (/api/crm/leads/[id]/call-log) rejects a missing date independently — this
 // is the ergonomic layer, not the enforcement layer.
+//
+// The exception is the take-off box: a lead coming off the list has no next
+// date, so ticking it replaces the date requirement instead of bypassing it.
+
+/**
+ * Outcomes that mean there is nothing left to call. Ticking the box in the form
+ * sends the Take Off List stage with the call, which flips do_not_contact and
+ * drops the lead off every board. Pre-ticked for these two because "bad number"
+ * and "never call me again" have no next date by definition — but it stays a
+ * checkbox, since a wrong number can also just be a typo worth fixing.
+ */
+const TAKE_OFF_OUTCOMES = new Set(["bad_number", "not_interested"]);
 
 const OUTCOMES = [
   { value: "connected", label: "Connected", tone: "#4CAF50" },
@@ -50,13 +63,18 @@ export function LogCallForm({
 }) {
   const router = useRouter();
   const [outcome, setOutcome] = useState(initialOutcome ?? "");
+  const [takeOff, setTakeOff] = useState(
+    initialOutcome ? TAKE_OFF_OUTCOMES.has(initialOutcome) : false
+  );
   const [followUp, setFollowUp] = useState(addDays(defaultFollowUpDays));
   const [notes, setNotes] = useState("");
   const [nextStep, setNextStep] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSave = !!outcome && !!followUp && !saving;
+  // A follow-up date is still mandatory for every call that leaves the lead
+  // workable. Taking the lead off the list is the one thing that replaces it.
+  const canSave = !!outcome && (takeOff || !!followUp) && !saving;
 
   async function submit() {
     if (!canSave) return;
@@ -68,9 +86,11 @@ export function LogCallForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           outcome,
-          next_follow_up_date: followUp,
           notes: notes || undefined,
           next_step: nextStep || undefined,
+          ...(takeOff
+            ? { status: STAGE_TAKE_OFF_LIST }
+            : { next_follow_up_date: followUp }),
         }),
       });
       const json = await res.json();
@@ -90,7 +110,10 @@ export function LogCallForm({
         {OUTCOMES.map((o) => (
           <button
             key={o.value}
-            onClick={() => setOutcome(o.value)}
+            onClick={() => {
+              setOutcome(o.value);
+              setTakeOff(TAKE_OFF_OUTCOMES.has(o.value));
+            }}
             className="rounded-lg border px-3 py-1.5 text-xs transition-all"
             style={{
               borderColor: outcome === o.value ? o.tone : "rgba(255,255,255,0.1)",
@@ -103,7 +126,30 @@ export function LogCallForm({
         ))}
       </div>
 
-      <div className="mb-3">
+      {!!outcome && (
+        <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-xs"
+          style={{
+            borderColor: takeOff ? "#C0392B" : "rgba(255,255,255,0.1)",
+            background: takeOff ? "rgba(192,57,43,0.12)" : "rgba(255,255,255,0.03)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={takeOff}
+            onChange={(e) => setTakeOff(e.target.checked)}
+            className="mt-0.5 accent-[#C0392B]"
+          />
+          <span className={takeOff ? "text-white" : "text-[rgba(255,255,255,0.6)]"}>
+            Take off the list
+            <span className="block text-[11px] text-[rgba(255,255,255,0.4)]">
+              Stops every call, text and email, cancels the open follow-up, and
+              drops the lead off the board. Reversible from the status picker.
+            </span>
+          </span>
+        </label>
+      )}
+
+      <div className={takeOff ? "hidden" : "mb-3"}>
         <label className="mb-1 block text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.4)]">
           Next follow-up — required
         </label>
@@ -146,14 +192,14 @@ export function LogCallForm({
 
       <div className="flex items-center justify-between">
         <p className="text-[11px] text-[rgba(255,255,255,0.35)]">
-          {outcome ? "" : "Pick an outcome to save."}
+          {!outcome ? "Pick an outcome to save." : takeOff ? "No follow-up needed." : ""}
         </p>
         <button
           onClick={submit}
           disabled={!canSave}
           className="rounded-lg bg-[#1B65A7] px-4 py-1.5 text-xs font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {saving ? "Saving…" : "Log call"}
+          {saving ? "Saving…" : takeOff ? "Log call + take off list" : "Log call"}
         </button>
       </div>
     </>
