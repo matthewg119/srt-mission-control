@@ -31,6 +31,7 @@ import { slack } from "@/lib/slack-bot";
 import { microsoft } from "@/lib/microsoft";
 import { buildReportView, type ReportView } from "./report-view";
 import { buildAliases } from "./mention-match";
+import { auditSignatureHtml, buildPitchHtml } from "./lead-pitch";
 import {
   draftEmailOptions,
   draftPermissionEmail,
@@ -78,14 +79,6 @@ import {
 import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, selectBelief } from "./seed-ledger";
 import { runThreadAgent } from "./thread-agent";
 import type { AuditReportRow, AuditRunRow } from "./types";
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 /**
  * The command menu, printed under EVERY draft.
@@ -412,10 +405,17 @@ async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): 
   // person who requested a public free audit). A cold /audit run only ever has the former,
   // and before it existed those drafts opened with an empty To.
   const to = report.prospect_email ?? report.requester_email ?? undefined;
-  // Outlook renders Matthew's signature block under the body, so the plain-text agency line
-  // would print the agency twice. He deletes it by hand every time; do it here instead.
-  const outlookBody = stripAgencyLine(chosen.body);
-  const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(outlookBody)}</div>`;
+  // The signature block is ATTACHED here, it is not something Outlook adds. A draft created
+  // through Graph is not composed in the client, so nothing auto-inserts a sign-off, and the
+  // drafts this path made were arriving with the body's bare "Matthew Garcia" and no block
+  // under it. auditSignatureHtml() reads the "AI Ops" block out of Outlook by name, so it can
+  // still be edited there without a deploy, and falls back to the repo copy if Microsoft is
+  // disconnected. Since that block already names the agency, stripAgencyLine() takes the
+  // plain-text agency line off the body so it is not printed twice.
+  //
+  // buildPitchHtml is shared with the public free-audit pitch on purpose: one builder means the
+  // email cannot render one way from the thread and another way from finishReport.
+  const htmlBody = buildPitchHtml(stripAgencyLine(chosen.body), await auditSignatureHtml());
 
   // The scorecard is regenerated here rather than stored on the row: it is derived from the
   // runs, so a fresh render can never disagree with the report the email links to.
