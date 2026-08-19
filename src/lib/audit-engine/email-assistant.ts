@@ -35,10 +35,18 @@
 // them, sending it is the fulfillment, so there is no permission to earn.
 
 import { callClaudeText, callClaudeJSON } from "@/lib/claude-calls";
-import { OFFER_EXIT_LINE, PRICE_COMPLETE, PRICE_CORE, VIDEO_LENGTH_LABEL } from "@/config/pitch";
+import {
+  crawlBlockAngle,
+  noWebsiteAngle,
+  OFFER_EXIT_LINE,
+  PRICE_COMPLETE,
+  PRICE_CORE,
+  VIDEO_LENGTH_LABEL,
+} from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
+import { displayName } from "./display-name";
 
 // One mechanism per email. Email 1 is a cold first touch and deliberately gets
 // only the present-tense reframe (stacking scarcity on a first email reads
@@ -626,10 +634,10 @@ export function reportContext(report: AuditReportRow, view: ReportView): string 
   const absent = view.totalPrompts - view.totalMentioned;
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
 
-  const name = report.client_name || report.business_type || report.website;
+  const name = displayName(report);
   const signals = (report.site_signals ?? []).map((s) => `- ${s.detail}`).join("\n");
   return [
-    `Business: ${name}, a ${report.business_type ?? "unknown category"} (${report.website})${report.city ? ", " + report.city : ""}`,
+    `Business: ${name}, a ${report.business_type ?? "unknown category"}${report.website ? ` (${report.website})` : " (no website of their own)"}${report.city ? ", " + report.city : ""}`,
     report.prospect_name ? `Writing to: ${report.prospect_name}` : "",
     `Buyer persona: ${report.buyer_persona ?? "unknown"}`,
     `AI Visibility Score: ${report.score ?? 0}/100`,
@@ -638,6 +646,16 @@ export function reportContext(report: AuditReportRow, view: ReportView): string 
     missedExample ? `Example of a question they are missing: "${missedExample.prompt}"` : "",
     signals
       ? `Things found on their OWN site working against them (verified in their markup, safe to state as fact):\n${signals}`
+      : "",
+    // The two gated angles. Both are facts about THEM rather than about our fetcher, which is
+    // the test each gate applies before returning anything — see crawlBlockAngle() and
+    // noWebsiteAngle() in config/pitch.ts. When a gate returns null the drafter is never handed
+    // the words at all, because absent beats forbidden.
+    noWebsiteAngle(report.research_source)
+      ? `THE LEAD FINDING, and it is a fact about them, so state it plainly: ${noWebsiteAngle(report.research_source)}. Everything else in this report is downstream of it. Do NOT suggest anything about a website of theirs beyond this, because there is none.`
+      : "",
+    crawlBlockAngle(report.crawl_block)
+      ? `Safe to raise, carefully and as an observation rather than a diagnosis: ${crawlBlockAngle(report.crawl_block)}.`
       : "",
     `Full report link: ${baseUrl}/r/${report.slug}`,
     `Today's date (for the "snapshot dated" line): ${today()}`,

@@ -36,6 +36,7 @@ import {
 import { polishBody } from "./format-guard";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
+import { displayName } from "./display-name";
 
 const MODEL = "claude-sonnet-4-6" as const;
 
@@ -110,10 +111,6 @@ export async function buildIntakeQuestions(
   }
 
   return questions;
-}
-
-function displayName(report: AuditReportRow): string {
-  return report.client_name || report.business_type || report.website;
 }
 
 /** Persist the questions, flip the thread into awaiting_intake, and post the card. */

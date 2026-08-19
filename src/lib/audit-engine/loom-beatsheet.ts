@@ -26,6 +26,7 @@ import { buildAliases } from "./mention-match";
 import { robotsVerdict, searchBotFindings, type RobotsVerdict } from "./robots-check";
 import type { AuditReportRow, AuditRunRow } from "./types";
 import type { ReportView, PromptRowView } from "./report-view";
+import { displayName } from "./display-name";
 
 const MODEL = "claude-sonnet-4-6" as const;
 
@@ -185,7 +186,7 @@ export async function computeBeatSheetFacts(
   view: ReportView,
   runs: AuditRunRow[]
 ): Promise<FactsResult> {
-  const company = report.client_name || report.business_type || report.website;
+  const company = displayName(report);
 
   // isBranded is computed from aliases, and buildAliases falls back to business_type when
   // client_name is null. That fallback would flag every prompt containing the category phrase

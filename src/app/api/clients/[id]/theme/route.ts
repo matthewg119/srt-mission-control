@@ -80,8 +80,10 @@ export async function POST(
         // Reuse the audit engine's fetcher rather than adding a second one. The parse
         // itself is pure, the same shape site-signals.ts uses over the same HTML.
         const research = await researchWebsite(site);
-        from = research.website;
-        found = extractThemeFromHtml(research.homepageHtml, research.website);
+        // researchWebsite is always given a real URL here, so it always echoes one back;
+        // the nullable type exists for the no-website audit path, which never reaches this.
+        from = research.website ?? site;
+        found = extractThemeFromHtml(research.homepageHtml, research.website ?? site);
       } catch (e) {
         return NextResponse.json({
           ok: false,
