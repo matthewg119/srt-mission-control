@@ -76,7 +76,8 @@ async function main(): Promise<void> {
 
   console.log(`\n  websites (${id.websites.length}):`);
   for (const w of id.websites) {
-    console.log(`    • ${w}  ${isOwnDomain(w) ? "← own domain, run would upgrade to a real crawl" : "(third-party platform)"}`);
+    const own = isOwnDomain(w, id.tradingName);
+    console.log(`    • ${w}  ${own ? "← OWN DOMAIN, run would upgrade to a real crawl" : "(third-party, ignored)"}`);
   }
   if (id.websites.length === 0) console.log("    — none found, run stays 'declared'");
 

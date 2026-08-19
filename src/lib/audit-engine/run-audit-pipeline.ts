@@ -224,7 +224,11 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
     // declared run, and those are what the cold-email hooks are built from. So a discovered
     // site upgrades this run from `declared` to a real crawl rather than being noted and
     // ignored.
-    const candidate = (identity?.websites ?? []).find(isOwnDomain) ?? null;
+    // The name to test affinity against is the one RESEARCH returned, falling back to the one
+    // Matthew typed. A trading name found in sources ("Hernandez Auto Repair Inc.") matches a
+    // domain more reliably than an abbreviation he typed from a Google result.
+    const affinityName = identity?.tradingName ?? declaredName ?? null;
+    const candidate = (identity?.websites ?? []).find((w) => isOwnDomain(w, affinityName)) ?? null;
     if (candidate) {
       // ‼️ THIS IS A MODEL-SUPPLIED URL ABOUT TO BE FETCHED SERVER-SIDE.
       //

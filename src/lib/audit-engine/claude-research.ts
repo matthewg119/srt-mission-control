@@ -30,10 +30,23 @@ import type { ResearchTarget } from "./search-research";
  *  Same floor as search-research.ts, and deliberately the same number. */
 const MIN_PROFILE_CHARS = 250;
 
-/** Searches per identification. A business is either findable in a handful of queries or it is
- *  not findable, and every extra use is latency in front of 20 engine calls that have not
- *  started yet. */
-const MAX_SEARCHES = 6;
+/**
+ * Searches per identification. A business is either findable in a handful of queries or it is
+ * not findable, and every extra use is latency in front of 20 engine calls that have not
+ * started yet.
+ *
+ * ‼️ MEASURED, not guessed, and 6 was too many. Each web_search round trip on this tool version
+ * costs roughly 13s and adds several thousand input tokens the model then re-reads, so cost is
+ * worse than linear: a 3-search request measured 40s end to end, and a 6-search one blew a
+ * 120s budget outright. Four keeps a real identification comfortably inside the timeout below.
+ * Raising this means raising RESEARCH_TIMEOUT_MS with it, and that budget is not free.
+ */
+const MAX_SEARCHES = 4;
+
+/** Wall-clock budget for the identification call. Generous, because a real web_search run
+ *  legitimately takes over a minute, but finite: the whole audit lives inside a 300s
+ *  maxDuration and this step runs before any of the 20 engine calls. */
+const RESEARCH_TIMEOUT_MS = 200_000;
 
 /**
  * ‼️ THIS IS NOT `BRIEF_BLOCKED_DOMAINS` AND MUST NOT BE REPLACED WITH IT.
@@ -115,11 +128,58 @@ function hostOf(url: string): string {
   }
 }
 
-/** Is this URL the business's OWN site, rather than a profile on somebody else's platform? */
-export function isOwnDomain(url: string): boolean {
+/** Words that carry no identity: they appear in the business name AND in half the directory
+ *  hostnames on the internet, so a match on one of them proves nothing. */
+const GENERIC_NAME_TOKENS = new Set([
+  "the", "and", "for", "inc", "llc", "ltd", "corp", "co", "company", "group", "holdings",
+  "services", "service", "solutions", "enterprises", "partners", "associates", "brothers",
+  "sons", "reviews", "review", "best", "local", "usa", "america", "american", "national",
+]);
+
+/** Name → the distinctive lowercase tokens a real domain of theirs would plausibly contain. */
+function nameTokens(businessName: string): string[] {
+  return businessName
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && !GENERIC_NAME_TOKENS.has(t));
+}
+
+/**
+ * Is this URL the business's OWN site, rather than a profile on somebody else's platform?
+ *
+ * ‼️ TWO CHECKS, AND THE SECOND ONE IS NOT OPTIONAL. A blocklist alone was wrong and a live
+ * probe proved it: researching "Hernandez Auto Repair" returned surecritic.com and carfax.com
+ * among its URLs, and a name-blind blocklist called both of them the business's own website.
+ * The pipeline would then have crawled SureCritic, and reported ITS site_signals and ITS
+ * robots.txt verdict to the prospect as facts about their business.
+ *
+ * There is no version of PLATFORM_HOSTS that is complete — review platforms, aggregators and
+ * directory sites are effectively unbounded, and the ones that matter are the ones nobody
+ * thought of. So the real test is affinity to the name: a business's own domain almost always
+ * contains a distinctive word from its trading name (hdzautorepair.com for Hernandez AUTO
+ * REPAIR, katzsdelicatessen.com for KATZ'S DELICATESSEN), and a third-party platform almost
+ * never does. That inverts the guarantee from "block the ones we listed" to "allow only the
+ * ones that look like theirs", which is the same move BRIEF_BLOCKED_DOMAINS had to give up and
+ * this one can still make.
+ *
+ * Generic tokens are excluded because "services" or "reviews" would match a directory as
+ * readily as an owner's domain. With no distinctive token left (a business genuinely called
+ * "The Best Local Services"), this returns false and the run stays `declared` — refusing to
+ * upgrade is the cheap failure here; crawling the wrong site is not.
+ */
+export function isOwnDomain(url: string, businessName: string | null): boolean {
   const host = hostOf(url);
   if (!host || !host.includes(".")) return false;
-  return !PLATFORM_HOSTS.some((p) => host === p || host.endsWith(`.${p}`));
+  if (PLATFORM_HOSTS.some((p) => host === p || host.endsWith(`.${p}`))) return false;
+
+  const tokens = nameTokens(businessName ?? "");
+  if (tokens.length === 0) return false;
+
+  // Compare against the host with punctuation removed, so "hdz-auto-repair.com" and
+  // "hdzautorepair.com" behave the same.
+  const flat = host.replace(/[^a-z0-9]/g, "");
+  return tokens.some((t) => flat.includes(t));
 }
 
 /** How sure the model is that it found the right city. `low` is a real answer, not a failure. */
@@ -190,6 +250,13 @@ const SYSTEM = [
   "4. `websites` is for URLs the business appears to OWN. Include social and directory profiles",
   "   too if that is all that exists, but never invent a domain from the business name.",
   "5. `sources` must list the URLs you actually consulted.",
+  "6. BE DECISIVE. You have a small search budget and a hard time limit. The moment you can name",
+  "   the business and say what it does, stop searching and report what you have, leaving the",
+  "   fields you could not fill as null or empty. A thin sourced answer is useful; an exhaustive",
+  "   search that never returns is worth nothing to the person waiting for it.",
+  "",
+  "PRIORITY, when the budget is tight: trading name, what they do, and city come first. services,",
+  "competitors and reviews are nice to have — never spend a search on them alone.",
 ].join("\n");
 
 function buildUserPrompt(target: ResearchTarget): string {
@@ -409,6 +476,11 @@ export async function researchViaClaude(
       system: SYSTEM,
       user: buildUserPrompt(target),
       maxTokens: 3000,
+      // ‼️ Bounded on purpose. This runs inside waitUntil against a 300s maxDuration, in front
+      // of 20 engine calls that have not started yet, and web_search can run for minutes. A
+      // request that never returns would eat the whole audit and post nothing — a timeout drops
+      // us to the OpenAI backup in researchProfile(), which is the entire reason it was kept.
+      timeoutMs: RESEARCH_TIMEOUT_MS,
       // Identification is a recall task, not a creative one. classify.ts runs at 0.4 because it
       // is writing questions; this is reporting what sources say.
       temperature: 0.1,
