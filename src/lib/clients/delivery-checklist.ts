@@ -64,15 +64,31 @@ export async function seedDeliverySteps(clientId: string): Promise<void> {
  * One renderer, used for the first post AND every update, so the message can never drift
  * from the rows. Same doctrine as formatInitialBlocks in src/lib/lead-thread.ts.
  */
-/** The first step not yet complete. Null when the whole list is done. */
+/**
+ * ‼️ RESOLVED IS NOT THE SAME AS DONE, AND BOTH READINGS ARE NEEDED HERE.
+ *
+ * `resolved` means the step is not outstanding: it was ticked OR marked not applicable. That
+ * is the reading the SCHEDULERS use (step-engine counts both when it walks blockedBy), so it
+ * has to be the reading `nextStep` uses too. It was `!== "complete"`, which meant a skipped
+ * step was the answer to "what is next" forever — the checklist kept pointing at the one
+ * piece of work somebody had explicitly decided not to do.
+ *
+ * `done` means it was actually ticked, and that is the reading the WARNINGS use. A skipped
+ * step must never satisfy the measure gate or the Day-0 check: "we decided not to" and "we
+ * did it" are opposite claims, and those two warnings exist to catch exactly that confusion.
+ */
+const isResolved = (s: string | undefined) => s === "complete" || s === "skipped";
+
+/** The first step still outstanding. Skipped counts as settled. Null when nothing is left. */
 export function nextStep(rows: StepRow[]): DeliveryStep | null {
   const status = new Map(rows.map((r) => [r.step_key, r.status]));
-  return DELIVERY_STEPS.find((s) => status.get(s.key) !== "complete") ?? null;
+  return DELIVERY_STEPS.find((s) => !isResolved(status.get(s.key))) ?? null;
 }
 
 export function renderChecklist(name: string, rows: StepRow[]): string {
   const status = new Map(rows.map((r) => [r.step_key, r.status]));
   const done = (key: string) => status.get(key) === "complete";
+  const skipped = (key: string) => status.get(key) === "skipped";
 
   const lines: string[] = [`*Delivery checklist: ${name}*`, ""];
   let phase = "";
@@ -84,14 +100,22 @@ export function renderChecklist(name: string, rows: StepRow[]): string {
       phase = step.phase;
       lines.push(`*${phase}*`);
     }
-    const box = done(step.key) ? ":white_check_mark:" : "·";
+    // A skipped step gets its own mark. Rendering it as a tick would claim work nobody did;
+    // rendering it as an empty dot leaves it looking outstanding and invites someone to do
+    // it again. It reads as "not checked", never as "no issues found" — the same wording
+    // rule the presence PDF enforces.
+    const box = done(step.key) ? ":white_check_mark:" : skipped(step.key) ? ":heavy_minus_sign:" : "·";
     const auto = step.auto ? "  _auto_" : "";
     lines.push(`${box}  ${n}. ${step.label}${auto}`);
   }
 
   const completed = DELIVERY_STEPS.filter((s) => done(s.key)).length;
+  const skippedCount = DELIVERY_STEPS.filter((s) => skipped(s.key)).length;
   lines.push("");
-  lines.push(`${completed} of ${DELIVERY_STEPS.length} done.`);
+  lines.push(
+    `${completed} of ${DELIVERY_STEPS.length} done.` +
+      (skippedCount > 0 ? ` ${skippedCount} skipped.` : "")
+  );
 
   // What to do next, named. The checklist knowing which step is outstanding and making
   // someone scan the list to work it out is a small tax paid on every glance, and the
@@ -316,22 +340,54 @@ export async function refreshDeliveryChecklist(clientId: string): Promise<void> 
  * and no history, so the checklist shows the current state and the thread underneath it
  * reads as a log of who did what and when.
  */
+/**
+ * ‼️ THREE STATES, NOT A BOOLEAN, AND `skipped` IS WHY.
+ *
+ * This took `complete: boolean` and the Slack [Skip] button therefore could not use it — so
+ * that handler wrote `status: 'skipped'` to Supabase directly and called `postReadySteps`
+ * on its own. Everything else this function does was skipped with it: no `refreshStages`,
+ * no `refreshDeliveryChecklist`, and above all no `runReadyAutoSteps`.
+ *
+ * That is not a cosmetic gap. `postReadySteps` and `runReadyAutoSteps` both count a skipped
+ * row as done when they read the blocker graph, so skipping a step is supposed to release
+ * whatever it was blocking. Instead the generators sat there: skip `competitor_shortlist`
+ * and `review_audit` never starts, skip the manual sweep and the presence PDF never builds.
+ * The checklist went quiet and looked like it was thinking.
+ *
+ * A skip is a real transition and it goes through the same door as a tick.
+ */
+export type StepTransition = "complete" | "skipped" | "reopened";
+
 export async function setDeliveryStep(args: {
   clientId: string;
   stepKey: string;
-  complete: boolean;
+  transition: StepTransition;
+  /** Only read on 'skipped'. Written to the row so the artifacts can say WHY it was skipped. */
+  skippedReason?: string | null;
   actor?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   const step = stepByKey(args.stepKey);
   if (!step) return { ok: false, error: "Unknown step." };
 
+  const complete = args.transition === "complete";
+  const skipped = args.transition === "skipped";
+  // Both a tick and a skip are somebody RESOLVING the step, so both stamp who and when.
+  // Only 'reopened' clears them, because only that one says the work is outstanding again.
+  const resolved = complete || skipped;
+  const now = new Date().toISOString();
+
   const { error } = await supabaseAdmin
     .from("client_delivery_steps")
     .update({
-      status: args.complete ? "complete" : "pending",
-      completed_at: args.complete ? new Date().toISOString() : null,
-      completed_by: args.complete ? (args.actor ?? null) : null,
-      updated_at: new Date().toISOString(),
+      status: complete ? "complete" : skipped ? "skipped" : "pending",
+      completed_at: resolved ? now : null,
+      completed_by: resolved ? (args.actor ?? null) : null,
+      // Cleared on reopen and on a plain tick: a reason left behind from an earlier skip
+      // would print on the artifact next to a step that is now genuinely done.
+      skipped_reason: skipped
+        ? (args.skippedReason ?? `Marked not applicable by ${args.actor ?? "Mission Control"}`)
+        : null,
+      updated_at: now,
     })
     .eq("client_id", args.clientId)
     .eq("step_key", args.stepKey);
@@ -346,9 +402,15 @@ export async function setDeliveryStep(args: {
   //
   // source 'manual_step', never 'photograph_2': a tick asserts the archive happened, it is
   // not evidence that it did. See day-zero.ts.
+  //
+  // ‼️ A SKIP DOES NOT OPEN THE WALL, and it is the one place skip and tick diverge.
+  // Everywhere else a skipped step counts as resolved. Here it cannot: the wall protects the
+  // baseline the day 30/60/90 numbers are measured against, and "not applicable" is not a
+  // statement that the archive happened. Skipping is treated as reopening for this purpose,
+  // so the stamp is cleared and publishing stays blocked until somebody signs a waiver.
   if (args.stepKey === DAY_ZERO_STEP_KEY) {
     try {
-      if (args.complete) {
+      if (complete) {
         await stampDay0({
           clientId: args.clientId,
           source: "manual_step",
@@ -363,7 +425,7 @@ export async function setDeliveryStep(args: {
       return {
         ok: false,
         error:
-          `The step was ${args.complete ? "ticked" : "unticked"}, but the Day-0 stamp on ` +
+          `The step was ${complete ? "ticked" : args.transition}, but the Day-0 stamp on ` +
           `the client record failed: ${(e as Error).message}. Publishing is still blocked. ` +
           `Un-tick and tick again once that is fixed.`,
       };
@@ -380,22 +442,31 @@ export async function setDeliveryStep(args: {
 
   await refreshDeliveryChecklist(args.clientId).catch(() => {});
 
-  if (args.complete) {
+  if (complete) {
     await notifyThread(
       args.clientId,
       `:white_check_mark: ${step.label}${args.actor ? `  _${args.actor}_` : ""}`
+    ).catch(() => {});
+  } else if (skipped) {
+    await notifyThread(
+      args.clientId,
+      `:heavy_minus_sign: ${step.label} — skipped${args.actor ? `  _${args.actor}_` : ""}`
     ).catch(() => {});
   }
 
   // Drafts follow the checklist rather than the other way round, and they never block it:
   // the row write above has already happened and a Slack or copy problem must not undo it.
-  await offerDraftsFor(args.clientId, args.stepKey, args.complete).catch(() => {});
+  await offerDraftsFor(args.clientId, args.stepKey, args.transition).catch(() => {});
 
   // Completing a step can unblock others. Posting them is what makes this a step engine
   // rather than a list: the next piece of work appears in the thread without anyone going
   // to look for it. Imported lazily to keep the module cycle one-directional — step-engine
   // reads DELIVERY_STEPS from here.
-  if (args.complete) {
+  //
+  // ‼️ A SKIP CASCADES TOO. postReadySteps and runReadyAutoSteps both read a skipped row as
+  // done, so a skip releases whatever that step was blocking. Gating this on `complete` is
+  // what left the [Skip] button looking like it had hung the checklist.
+  if (resolved) {
     const { postReadySteps, runReadyAutoSteps } = await import("@/lib/clients/step-engine");
     await postReadySteps(args.clientId).catch((e) =>
       console.error("[delivery-checklist] posting ready steps failed:", (e as Error).message)
@@ -427,11 +498,16 @@ export async function setDeliveryStep(args: {
 async function offerDraftsFor(
   clientId: string,
   stepKey: string,
-  completed: boolean
+  transition: StepTransition
 ): Promise<void> {
-  if (!completed) return;
+  if (transition === "reopened") return;
 
-  const notify = notifyForStep(stepKey);
+  // ‼️ A SKIPPED STEP GETS THE ASK BUT NEVER THE NOTIFY, and the asymmetry is the point.
+  // A NOTIFY is news about work we did — "your first page is up", "the scan is done". Firing
+  // one because the step was marked not applicable tells a paying client we did something we
+  // explicitly did not do. The ASK below is unaffected: whatever is next still needs asking
+  // for, and that is exactly why the skip cascades at all.
+  const notify = transition === "complete" ? notifyForStep(stepKey) : null;
   // Vars, not bare. postDraft() defaults to {} and the notify_first_page copy puts
   // {pageUrl} on a line of its own, so with no vars fill() blanked the token and the
   // client got told a page was live with no link to it. The URL is DERIVED here rather
@@ -468,6 +544,6 @@ export async function autoCompleteStep(
   stepKey: string,
   note?: string
 ): Promise<void> {
-  await setDeliveryStep({ clientId, stepKey, complete: true, actor: "Mission Control" });
+  await setDeliveryStep({ clientId, stepKey, transition: "complete", actor: "Mission Control" });
   if (note) await notifyThread(clientId, note).catch(() => {});
 }

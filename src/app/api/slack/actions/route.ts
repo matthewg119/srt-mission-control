@@ -1099,7 +1099,9 @@ async function deliveryStepAction(args: {
   waitUntil(
     (async () => {
       const { setDeliveryStep, stepByKey } = await import("@/lib/clients/delivery-checklist");
-      const { uploadsFor, expectedFor, postReadySteps } = await import("@/lib/clients/step-engine");
+      // No postReadySteps here any more: setDeliveryStep runs the whole cascade for both
+      // outcomes now, and calling it again from this side would double-post the next card.
+      const { uploadsFor, expectedFor } = await import("@/lib/clients/step-engine");
       const step = stepByKey(stepKey);
       if (!step) return;
 
@@ -1124,25 +1126,27 @@ async function deliveryStepAction(args: {
           }
         }
 
-        await setDeliveryStep({ clientId, stepKey, complete: true, actor });
+        await setDeliveryStep({ clientId, stepKey, transition: "complete", actor });
         await resolveStepCard(args.channel, clientId, stepKey, `:white_check_mark: *${step.label}* — done by ${actor}.`);
-        await postReadySteps(clientId).catch(() => {});
         return;
       }
 
       // ── Skip ────────────────────────────────────────────────────────────
+      //
+      // ‼️ THIS GOES THROUGH setDeliveryStep, and it used to write the row itself.
+      // Doing it directly meant a skip got `postReadySteps` and nothing else — no
+      // `refreshStages`, no checklist re-render, and no `runReadyAutoSteps`. Since both
+      // schedulers count a skipped row as done, the step released its blockers on paper
+      // while the generators behind them were never asked to run. Skipping the manual
+      // presence sweep left the presence PDF, and everything downstream of it, parked.
       if (args.actionId === "step_skip") {
-        await supabaseAdmin
-          .from("client_delivery_steps")
-          .update({
-            status: "skipped",
-            completed_by: actor,
-            completed_at: new Date().toISOString(),
-            skipped_reason: `Marked not applicable by ${actor}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("client_id", clientId)
-          .eq("step_key", stepKey);
+        await setDeliveryStep({
+          clientId,
+          stepKey,
+          transition: "skipped",
+          skippedReason: `Marked not applicable by ${actor}`,
+          actor,
+        });
 
         await resolveStepCard(
           args.channel,
@@ -1152,7 +1156,6 @@ async function deliveryStepAction(args: {
             `It renders as "not checked" everywhere, never as "no issues found". ` +
             `Reply here with why, so the artifact can say it.`
         );
-        await postReadySteps(clientId).catch(() => {});
         return;
       }
 

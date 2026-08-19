@@ -52,7 +52,9 @@ export async function POST(
   const result = await setDeliveryStep({
     clientId: id,
     stepKey,
-    complete: Boolean(body.complete),
+    // The board sends a checkbox, so it can only ever tick or reopen. Skipping is a Slack
+    // affordance: it wants a reason typed into the thread next to it.
+    transition: body.complete ? "complete" : "reopened",
     actor: session.user.name ?? session.user.email ?? null,
   });
 
