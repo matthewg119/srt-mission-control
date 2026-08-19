@@ -2,22 +2,21 @@
 // test. Because the nightly webhook is async (needs a public callback URL), this
 // script instead SUBMITS + POLLS Outscraper synchronously, then runs the exact
 // shared pipeline: filter -> flag chains -> dedupe -> verify phones -> insert
-// trt_leads -> scrape owner names -> sync Zoho -> post the Slack report ->
+// trt_leads -> scrape owner names -> post the Slack report ->
 // stamp rotation coverage + activate expansion queries.
 //
 //   bun run trt:run                     # 15 queries (Sun Belt first)
 //   bun run trt:run -- --queries 5      # smaller batch
 //   bun run trt:run -- --metro dfw      # one metro only (metro_key or label)
-//   bun run trt:run -- --dry-run        # no writes / Zoho / Slack
-//   flags: --limit N  --no-owners  --no-zoho  --no-slack
+//   bun run trt:run -- --dry-run        # no writes / Slack
+//   flags: --limit N  --no-owners  --no-slack
 //
-// Needs OUTSCRAPER_API_KEY, Supabase, Zoho, and Slack envs (pull from Vercel).
+// Needs OUTSCRAPER_API_KEY, Supabase and Slack envs (pull from Vercel).
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { toGroups, OutscraperRecord } from "@/lib/outscraper";
 import { processQueryResults, activateExpansionForMetros, TrtJob, METROS } from "@/lib/trt";
-import { syncTrtRows, TrtZohoRow } from "@/lib/trt-zoho-sync";
 import { enrichOwners } from "@/lib/medspa-owner-scrape";
 
 const BASE = "https://api.outscraper.com";
@@ -34,7 +33,6 @@ const optStr = (name: string) => {
 
 const DRY = flag("dry-run");
 const DO_OWNERS = !flag("no-owners");
-const DO_ZOHO = !DRY && !flag("no-zoho");
 const DO_SLACK = !DRY && !flag("no-slack");
 const QUERY_COUNT = opt("queries", Math.max(1, Number(process.env.TRT_QUERIES_PER_RUN) || 15));
 const LIMIT = opt("limit", Math.max(1, Number(process.env.TRT_LIMIT_PER_QUERY) || 40));
@@ -119,7 +117,7 @@ async function main() {
 
   const result = await processQueryResults(supabaseAdmin, groups, jobs, { write: !DRY });
 
-  // Owner scrape (best-effort) on the new leads, then persist + it flows to Zoho.
+  // Owner scrape (best-effort) on the new leads, then persist.
   if (DO_OWNERS && result.inserted.length) {
     const found = await enrichOwners(result.inserted, {
       onProgress: (d, t) => process.stdout.write(`\r   scraping owners… ${d}/${t}   `),
@@ -135,14 +133,6 @@ async function main() {
     }
   }
 
-  // Zoho sync (verified-phone rows only — see trt-zoho-sync).
-  let zohoLine = "skipped";
-  if (DO_ZOHO && result.inserted.length) {
-    const zoho = await syncTrtRows(result.inserted as TrtZohoRow[]);
-    zohoLine = zoho.disabled ? "disabled" : `${zoho.ok} added, ${zoho.failed} failed`;
-    console.log(`   Zoho: ${zohoLine}`);
-    if (zoho.errors.length) console.log("   Zoho errors:", zoho.errors.join("; "));
-  }
 
   // Stamp rotation coverage + activate expansion for drained metros.
   let activatedLabels: string[] = [];
@@ -196,7 +186,6 @@ async function main() {
   console.log(`With website:   ${result.withWebsite}`);
   console.log(`With owner:     ${withOwner}`);
   console.log(`Avg score:      ${avg}`);
-  console.log(`Zoho:           ${zohoLine}`);
   if (activatedLabels.length) console.log(`Expansion on:   ${activatedLabels.join(", ")}`);
   console.log("────────────────────────────────────────────");
 
@@ -214,14 +203,13 @@ async function main() {
           { type: "mrkdwn", text: `*📞 Callable / 🌐 Site:*\n${result.withPhone} / ${result.withWebsite}` },
           { type: "mrkdwn", text: `*🏢 Chains / ⭐ Avg:*\n${result.flaggedChains} / ${avg}` },
           { type: "mrkdwn", text: `*📊 Total in DB:*\n${runningTotal ?? 0}` },
-          { type: "mrkdwn", text: `*🗂️ Zoho:*\n${zohoLine}` },
         ],
       },
     ];
     await slack.postMessage(followups, `💉 TRT clinic prospects — ${result.newLeads} new`, blocks);
     console.log("📨 posted report to Slack.");
   } else if (DRY) {
-    console.log("(dry-run — no writes, no Zoho, no Slack.)");
+    console.log("(dry-run — no writes, no Slack.)");
   }
 }
 

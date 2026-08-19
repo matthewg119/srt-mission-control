@@ -2,14 +2,17 @@ export const dynamic = "force-dynamic";
 // Inbound iMessage webhook — fed by the Mac bridge (mac-bridge/imessage-bridge.mjs),
 // which reads ~/Library/Messages/chat.db and POSTs new rows here.
 //
-// Resolve-or-create: every message's sender is normalized and looked up in
-// `contacts` (phone OR mobile_phone). On a miss we ask Zoho live (searchLeads by
-// Phone/Mobile) and seed a contacts row so the lead shows up named + searchable
-// and future lookups hit instantly. If Zoho has nothing either, the thread is
-// still stored under the bare phone number (contact stays null) — a real text is
-// NEVER silently dropped. Matched/resolved → mirrored into the lead's per-lead
-// Slack channel (same model as the old SMS path), with a Vektor-drafted
+// Every message's sender is normalized and resolved through resolveLead(), which
+// matches the last 10 digits across phone_last10 AND mobile_last10. A miss leaves
+// `contact` null and the thread is stored under the bare phone number — a real
+// text is NEVER silently dropped. Either way it is mirrored into the lead's
+// per-lead Slack channel (same model as the old SMS path), with a Vektor-drafted
 // suggestion card for inbound merchant messages.
+//
+// ‼️ An unknown number no longer BECOMES a named contact. This used to fall back
+// to a live Zoho searchLeads and seed a contacts row from the hit. With Zoho gone
+// there is nothing to seed from, so an unrecognized number stays unnamed until
+// someone names it. The thread survives either way, which is the part that matters.
 //
 // chat.db has BOTH directions, so the bridge sends is_from_me too:
 //   is_from_me=0 → merchant message → post + suggest
@@ -24,7 +27,8 @@ import { ensureSmsChannel, postInboundMessage } from "@/lib/sms-channel";
 import { draftSmsReply } from "@/lib/sms-ai-engine";
 import { appendApprovedReplyToVoice } from "@/lib/voice-ingest";
 import { postImessageSuggestion, cancelPendingSuggestion } from "@/lib/imessage-suggestion";
-import { markZohoHotLead, searchLeads, type ZohoApiRecord } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
+import { markHotLead } from "@/lib/hot-lead";
 import { slack } from "@/lib/slack-bot";
 import { bridgeActionElements } from "@/lib/imessage-control";
 
@@ -144,10 +148,10 @@ export async function POST(req: NextRequest) {
     const phone = normalizePhone(msg.handle);
     if (!phone) { discarded++; continue; }
 
-    // Known locally → use it. Unknown → resolve via Zoho + seed a contact.
-    // Returns null only when even Zoho can't name the lead; we still store the
-    // thread under the phone number so a real text is never dropped.
-    const contact = await resolveContact(phone);
+    // Null means we do not know this number. It does NOT mean discard: the
+    // thread is still stored under the bare phone, because dropping a real
+    // reply from an unrecognized number is worse than an unnamed one.
+    const contact = await resolveLead({ phone });
 
     const isOutbound = msg.is_from_me === true;
 
@@ -204,8 +208,8 @@ export async function POST(req: NextRequest) {
 
     // Ensure the per-lead Slack channel exists (also stores slack_channel_id).
     const displayName =
-      [contact?.first_name, contact?.last_name].filter(Boolean).join(" ") ||
-      contact?.business_name ||
+      [contact?.firstName, contact?.lastName].filter(Boolean).join(" ") ||
+      contact?.businessName ||
       phone;
 
     const { channelId } = await ensureSmsChannel({
@@ -213,8 +217,8 @@ export async function POST(req: NextRequest) {
       phone,
       displayName,
       contactId: contact?.id ?? null,
-      zohoLeadId: contact?.zoho_lead_id ?? null,
-      businessName: contact?.business_name ?? null,
+      zohoLeadId: contact?.zohoLeadId ?? null,
+      businessName: contact?.businessName ?? null,
     });
 
     // Backfill = history only: no Slack posts, no suggestions.
@@ -234,13 +238,18 @@ export async function POST(req: NextRequest) {
     // Mark hot + learn whether THIS reply is the transition into Hot Lead. We await
     // so the suggestion below can be posted as a never-auto-fire card on the exact
     // moment a lead turns hot (one tap to send), instead of the usual auto-armed one.
-    const zohoLeadId = contact?.zoho_lead_id ?? null;
-    const becameHot = zohoLeadId
-      ? await markZohoHotLead(zohoLeadId, body, channelId).catch((e) => {
-          console.error("[imessage/inbound] hot lead failed:", e);
-          return false;
-        })
-      : false;
+    // Gated on the CHANNEL, not on a CRM id. It used to require zoho_lead_id, so
+    // a lead we knew perfectly well but had never pushed to Zoho could reply and
+    // never go hot. The reply is the signal; who they are only decides whether
+    // there is a record to note it against.
+    const becameHot = await markHotLead({
+      contactId: contact?.id ?? null,
+      replyText: body,
+      slackChannelId: channelId,
+    }).catch((e) => {
+      console.error("[imessage/inbound] hot lead failed:", e);
+      return false;
+    });
 
     draftSmsReply(conv.id as string, body)
       .then(({ draft, suggestedFollowup }) => {
@@ -288,99 +297,6 @@ async function assertSchemaReady(): Promise<{ ok: boolean; missing: string[]; de
         missing,
         detail: `Apply in the Supabase SQL editor: ${missing.join("; ")}`,
       };
-}
-
-// Match by the last 10 digits, format-agnostic. Contacts store phones in mixed
-// formats ("7865909616", "(684) 984-6516", "+1…") — an exact compare misses most.
-// `phone_last10` / `mobile_last10` are STORED generated columns (see
-// docs/2026-06-04-contacts-phone-last10.sql) holding the last 10 digits.
-async function findContactByPhone(phone: string): Promise<{
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-  business_name: string | null;
-  zoho_lead_id: string | null;
-} | null> {
-  const last10 = phone.replace(/\D/g, "").slice(-10);
-  if (last10.length < 10) return null;
-  const { data, error } = await supabaseAdmin
-    .from("contacts")
-    .select("id, first_name, last_name, business_name, zoho_lead_id")
-    .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
-    .limit(1)
-    .maybeSingle();
-  // Never fail silently: a query error here (e.g. the phone_last10 columns were
-  // never migrated) would otherwise look identical to "no such contact" and
-  // discard every message. assertSchemaReady() gates the batch, but log anyway.
-  if (error) console.error("[imessage/inbound] contact lookup failed:", error.message);
-  return (data as Contact | null) ?? null;
-}
-
-interface Contact {
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-  business_name: string | null;
-  zoho_lead_id: string | null;
-}
-
-const CONTACT_COLS = "id, first_name, last_name, business_name, zoho_lead_id";
-
-// Resolve the sender to a CRM contact. Known locally → return it. Unknown → ask
-// Zoho live (Phone OR Mobile, across the formats leads are stored in) and seed a
-// contacts row so the lead is named + searchable and the next inbound matches
-// instantly via the generated phone_last10/mobile_last10 columns. If Zoho has
-// nothing either, return null — the caller still stores the thread under the bare
-// phone number, so a real text is never dropped.
-async function resolveContact(phone: string): Promise<Contact | null> {
-  const existing = await findContactByPhone(phone);
-  if (existing) return existing;
-
-  const last10 = phone.replace(/\D/g, "").slice(-10);
-  if (last10.length < 10) return null; // not a real US number → nothing to seed
-
-  // Common Zoho phone formats. Kept to 3 variants × 2 fields = 6 clauses to stay
-  // under Zoho's per-search criteria limit.
-  const variants = [
-    last10,
-    `+1${last10}`,
-    `(${last10.slice(0, 3)}) ${last10.slice(3, 6)}-${last10.slice(6)}`,
-  ];
-  const criteria =
-    "(" +
-    variants.flatMap((v) => [`(Phone:equals:${v})`, `(Mobile:equals:${v})`]).join("or") +
-    ")";
-
-  let lead: ZohoApiRecord | undefined;
-  try {
-    const results = await searchLeads({ criteria });
-    lead = results[0];
-  } catch (e) {
-    console.error("[imessage/inbound] Zoho lookup failed:", (e as Error).message);
-  }
-  if (!lead) return null; // unknown to Zoho too → thread stored under phone only
-
-  const { data: created, error } = await supabaseAdmin
-    .from("contacts")
-    .insert({
-      first_name: (lead.First_Name as string | undefined) ?? null,
-      last_name: (lead.Last_Name as string | undefined) ?? null,
-      business_name: (lead.Company as string | undefined) ?? null,
-      phone, // E.164; phone_last10 is generated from this for future lookups
-      zoho_lead_id: (lead.id as string | undefined) ?? null,
-      source: "iMessage",
-    })
-    .select(CONTACT_COLS)
-    .single();
-
-  if (error || !created) {
-    // A concurrent inbound from the same number may have seeded it first
-    // (contacts has no unique phone constraint, so the insert wouldn't conflict —
-    // re-read to converge on a single contact).
-    console.error("[imessage/inbound] contact seed failed:", error?.message);
-    return findContactByPhone(phone);
-  }
-  return created as Contact;
 }
 
 async function relayDiagnostics(diag: { checks?: DoctorCheck[]; host?: string }): Promise<NextResponse> {

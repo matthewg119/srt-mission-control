@@ -15,14 +15,24 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { logActivity, updateLeadFields } from "@/lib/crm";
+import { slackThreadLink } from "@/lib/slack-bot";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
 
-/** Fields the audit is allowed to touch. Anything not listed is never overwritten. */
+// Fields the audit is allowed to touch. Anything not listed is never overwritten.
+//
+// ‼️ `biz_city`, NOT `city`. There is no bare `city` column on contacts and there never
+// was, and this wrote one until 2026-08-19. It did not degrade: updateLeadFields() does
+// select(fields) then update(patch), PostgREST fails the WHOLE statement on one unknown
+// column, and patchLeadFields() only console.errors the result. So a single wrong name
+// meant industry and website were never written back either, for every audit ever run.
+// Same trap as docs/2026-08-19-contacts-drift-repair.sql. Verify any addition here with
+// `bun run scripts/_probe-contacts-columns.ts <name>` before committing it.
 type ContactPatch = {
   business_name?: string;
   industry?: string;
-  city?: string;
+  biz_city?: string;
+  biz_state?: string;
   website?: string;
 };
 
@@ -61,6 +71,13 @@ async function logAuditActivity(
       ? `Recommended instead: ${view.mostRecommended.slice(0, 5).join(", ")}.`
       : null,
     report.slug ? `${appUrl.replace("mission.", "")}/r/${report.slug}` : null,
+    // Where the report was POSTED, not just where it can be read. Everything that
+    // happens to an audit after it finishes -- the intake card, every draft, the
+    // avatars, the call script, the loom wizard -- happens in that thread, and
+    // until now the only way to find it from a lead was to scroll the channel.
+    report.slack_channel_id && report.slack_thread_ts
+      ? `Report posted in Slack: ${slackThreadLink(report.slack_channel_id, report.slack_thread_ts)}`
+      : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -100,7 +117,19 @@ async function patchLeadFields(report: AuditReportRow, contactId: string): Promi
   // business_type is the audit's read of what this business actually is, in buyer
   // language. It is the field that was empty in every screenshot.
   if (report.business_type) patch.industry = report.business_type;
-  if (report.city) patch.city = report.city;
+  // audit_reports.city is whatever was typed after the pipe on /audit, so it is
+  // "Homestead, FL" about as often as it is "Homestead". Writing the whole string
+  // into a city field is the kind of garbage that reads fine until it is
+  // mail-merged. Split only on an unambiguous trailing two-letter code.
+  if (report.city) {
+    const m = report.city.trim().match(/^(.+?),\s*([A-Za-z]{2})$/);
+    if (m) {
+      patch.biz_city = m[1].trim();
+      patch.biz_state = m[2].toUpperCase();
+    } else {
+      patch.biz_city = report.city.trim();
+    }
+  }
   if (report.website) patch.website = report.website;
 
   // The business NAME is the one thing the audit does NOT overwrite. client_name is

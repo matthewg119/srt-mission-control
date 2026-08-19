@@ -1,15 +1,25 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getCorsHeaders } from "@/lib/lead-validation";
-import { sendPdfGuideEmail } from "@/lib/pdf-guide-email";
-import { supabaseAdmin } from "@/lib/db";
+import { sendMedspaGuideEmail } from "@/lib/medspa/guide-email";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: getCorsHeaders(request) });
 }
 
-// Resend the free PDF guide on demand — called by the DNQ "Resend" button on the
+// Resend the free guide on demand — called by the DNQ "Resend" button on the
 // srtagency.com/PDF landing page (cross-origin, hence CORS).
+//
+// This used to send pdf-guide-email.ts, the "Business Owner's Guide to Funding
+// Without a Bank". /PDF has been the AI visibility guide since 2026-08-03, so
+// the button was mailing the wrong lead magnet from matthew@srtagency.com, and
+// the route takes an arbitrary address with no auth. It now sends the same
+// guide the landing page actually promises. sendMedspaGuideEmail degrades to a
+// no-button email when MEDSPA_QUESTIONS_PDF_URL is unset rather than rendering
+// a dead link, so this is safe with the env var still missing.
+//
+// The old funding personalization (contacts.amount_needed, "how much funding
+// are you looking for") went with it; there is nothing to personalize on here.
 export async function POST(request: NextRequest) {
   const corsHeaders = getCorsHeaders(request);
   try {
@@ -18,22 +28,10 @@ export async function POST(request: NextRequest) {
     if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return NextResponse.json({ success: false, error: "invalid_email" }, { status: 400, headers: corsHeaders });
     }
-    // Pull the lead's stored funding amount so the resend stays personalized.
-    // Falls back to the "How much funding…" ask when absent.
-    let amountNeeded: string | undefined;
-    try {
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("amount_needed")
-        .ilike("email", normalizedEmail)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      amountNeeded = (contact?.amount_needed as string) || undefined;
-    } catch (lookupErr) {
-      console.warn("[resend-guide] amount lookup failed:", lookupErr instanceof Error ? lookupErr.message : lookupErr);
-    }
-    await sendPdfGuideEmail(normalizedEmail, typeof firstName === "string" ? firstName : undefined, amountNeeded);
+    await sendMedspaGuideEmail({
+      to: normalizedEmail,
+      firstName: typeof firstName === "string" ? firstName : undefined,
+    });
     return NextResponse.json({ success: true }, { headers: corsHeaders });
   } catch (err) {
     console.error("[resend-guide] failed:", err instanceof Error ? err.message : err);

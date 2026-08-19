@@ -15,9 +15,6 @@
     "seed:trt": "bun run scripts/seed-trt-rotation.ts",
     "trt:run": "bun run scripts/run-trt.ts",
     "trt:owners": "bun run scripts/enrich-trt-owners.ts",
-    "trt:emails": "bun run scripts/enrich-trt-emails.ts",
-    "crm:probe": "bun run scripts/probe-zoho-modules.ts",
-    "crm:pull": "bun run scripts/pull-zoho-crm.ts",
     "migration:check": "bun run scripts/_probe-migration-state.ts",
     "test:artifacts": "bun run scripts/test-onboarding-artifacts.ts",
     "notes:archive": "bun run scripts/export-funding-notes.ts"

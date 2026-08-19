@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { parseBusinessDate } from "@/lib/business-time";
 import { logCall, setLeadStatus } from "@/lib/crm";
+import { isTakeOffListStage, STAGE_NAMES } from "@/config/stage-display";
 
 // Log a call against a lead.
 //
@@ -13,6 +14,10 @@ import { logCall, setLeadStatus } from "@/lib/crm";
 // exactly what /dashboard/worklist surfaces as neglected, so a call that
 // leaves no next date silently drops that lead into the pile it was just
 // pulled out of.
+//
+// The one exception is a lead that comes off the list in the same submit. A
+// wrong number or a hard "never call me again" has no next date by definition,
+// and forcing one only produced tasks nobody could action.
 
 const VALID_OUTCOMES = [
   "connected",
@@ -49,8 +54,17 @@ export async function POST(
     );
   }
 
+  const status = body.status ? String(body.status).trim() : "";
+  if (status && !STAGE_NAMES.includes(status)) {
+    return NextResponse.json(
+      { error: `Unknown status "${status}"`, validStatuses: STAGE_NAMES },
+      { status: 400 }
+    );
+  }
+  const takingOff = !!status && isTakeOffListStage(status);
+
   const raw = String(body.next_follow_up_date ?? "").trim();
-  if (!raw) {
+  if (!raw && !takingOff) {
     return NextResponse.json(
       {
         error: "A follow-up date is required on every logged call.",
@@ -63,8 +77,8 @@ export async function POST(
   // A bare date lands at 9am ET, not midnight — otherwise a follow-up set "for
   // Friday" reads as overdue for the whole of Friday morning. Vercel's clock is
   // UTC, so "local" had to become explicit; see src/lib/business-time.ts.
-  const followUp = parseBusinessDate(raw);
-  if (!followUp) {
+  const followUp = raw ? parseBusinessDate(raw) : null;
+  if (raw && !followUp) {
     return NextResponse.json(
       { error: "next_follow_up_date is not a valid date", field: "next_follow_up_date" },
       { status: 400 }
@@ -93,11 +107,13 @@ export async function POST(
     }
 
     // Optional status move in the same submit, so working a lead is one action.
+    // Deliberately AFTER logCall: logCall pulls a lead back to working_state
+    // 'working', and a take-off has to be the last word on that.
     let statusResult = null;
-    if (body.status) {
+    if (status) {
       statusResult = await setLeadStatus({
         contactId,
-        status: String(body.status),
+        status,
         reason: `Call outcome: ${outcome}`,
         origin: "mission_control",
         actor,
@@ -109,7 +125,7 @@ export async function POST(
       contactId,
       activityId: res.activityId,
       taskId: res.taskId,
-      followUpAt: followUp.toISOString(),
+      followUpAt: followUp ? followUp.toISOString() : null,
       statusResult,
     });
   } catch (err) {

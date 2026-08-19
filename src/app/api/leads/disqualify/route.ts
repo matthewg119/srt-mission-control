@@ -2,8 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { getCorsHeaders } from "@/lib/lead-validation";
-import { addNoteToLead as zohoAddNote, updateLead as zohoUpdateLead } from "@/lib/zoho";
-import { setLeadStatus } from "@/lib/crm";
+import { setLeadStatus, addNote } from "@/lib/crm";
 import { STAGE_CLOSED } from "@/config/stage-display";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 import { sendEvent } from "@/lib/meta-capi";
@@ -17,10 +16,9 @@ export async function OPTIONS(request: NextRequest) {
 //
 // Called from gated funnels (e.g. /bfunding v4) when an applicant fails a
 // pre-qualification check AFTER their initial Lead has been captured. Marks
-// the lead as DNQ and lets the existing Zoho-webhook → Meta CAPI pathway fire
-// the DNQ event. We deliberately do NOT call sendEvent() here — single-path
-// firing keeps us consistent with the manual-DNQ flow in Zoho and avoids
-// double-counting in Meta.
+// the lead as DNQ, writes the reason onto the timeline and fires the Meta CAPI
+// DNQ event. The deterministic eventId keeps the browser pixel and this fire
+// deduped to a single Meta event.
 //
 // Body: { contactId?, email?, monthlyRevenue, amountNeeded?, reason, source,
 //         _fbc?, _fbp?, fbclid? }
@@ -61,12 +59,12 @@ export async function POST(request: NextRequest) {
     const lookup = contactId
       ? await supabaseAdmin
           .from("contacts")
-          .select("id, email, first_name, last_name, zoho_lead_id, application_stage, phone, mobile_phone, fbc, fbp")
+          .select("id, email, first_name, last_name, application_stage, phone, mobile_phone, fbc, fbp")
           .eq("id", contactId)
           .maybeSingle()
       : await supabaseAdmin
           .from("contacts")
-          .select("id, email, first_name, last_name, zoho_lead_id, application_stage, phone, mobile_phone, fbc, fbp")
+          .select("id, email, first_name, last_name, application_stage, phone, mobile_phone, fbc, fbp")
           .ilike("email", (email as string).trim())
           .limit(1)
           .maybeSingle();
@@ -89,8 +87,7 @@ export async function POST(request: NextRequest) {
       contact.email ||
       "Unknown";
 
-    // 1. Mark the contact as DNQ in Supabase. application_stage maps to
-    //    Zoho Lead_Status via field-map.ts, so this mirrors the Zoho write.
+    // 1. Mark the contact as DNQ in Supabase.
     try {
       await supabaseAdmin
         .from("contacts")
@@ -121,98 +118,43 @@ export async function POST(request: NextRequest) {
       console.error("[leads/disqualify] status write failed:", (e as Error).message);
     }
 
-    // 3. Push Lead_Status="DNQ" to Zoho. This is what triggers the Zoho
-    //    workflow → /api/webhooks/zoho-lead → Meta CAPI DNQ event (gated by
-    //    attribution inside the webhook). If Zoho update fails, Meta won't
-    //    see the DNQ — log loudly.
-    //
-    //    Zoho's Funding_Amount_Requested / Monthly_Revenue fields are typed
-    //    as Currency and silently reject strings with "$" or commas AND
-    //    reject the entire PUT when any one field is invalid. So we send
-    //    Lead_Status in its own call (guaranteed to land) and put the
-    //    funding/revenue context into a Note — same pattern the 25%+ block
-    //    uses via buildLeadMagnetNote().
-    //
-    //    Parse amountNeeded into a plain integer so we can ALSO attempt the
-    //    structured fields in a separate best-effort call.
+    // 3. Close the lead out and record why.
     const parsedAmountNeeded =
       amountNeeded ? parseInt(String(amountNeeded).replace(/[^\d]/g, ""), 10) || null : null;
 
-    if (contact.zoho_lead_id) {
-      // 3a. Critical: flip Lead_Status to the terminal-declined picklist value.
-      //     Try candidates in priority order — first that lands wins. Zoho's
-      //     picklist values are configured per-org; "Dead Declined" matches
-      //     TERMINAL_ZOHO_STATUSES in zoho-guardian and is the most likely
-      //     valid value. "DNQ" is what the webhook reader checks for — keep
-      //     it as a fallback in case that is configured too.
-      //     The candidate loop now lives inside crm.setLeadStatus, which also
-      //     records the landed value in lead_status_history so the inbound
-      //     webhook can tell this write apart from a real Zoho-side edit.
-      const statusCandidates = ["Dead Declined", "DNQ", "Declined", "Dead"];
-      const attemptErrors: Array<{ status: string; error: string }> = [];
-      const statusRes = await setLeadStatus({
-        contactId: contact.id as string,
-        zohoLeadId: contact.zoho_lead_id,
-        status: statusCandidates[0],
-        statusCandidates,
-        reason,
-        origin: "mission_control",
-      });
-      const landedStatus = statusRes.pushedToZoho ? statusRes.landedStatus : null;
-      if (!landedStatus && statusRes.error) {
-        attemptErrors.push({ status: statusCandidates.join("|"), error: statusRes.error });
-      }
-      if (!landedStatus) {
-        console.error("[disqualify] All Zoho Lead_Status candidates rejected:", JSON.stringify(attemptErrors));
-        try {
-          await supabaseAdmin.from("system_logs").insert({
-            event_type: "lead_auto_dnq_error",
-            description: `Zoho DNQ Lead_Status update failed for ${contactName} — all picklist candidates rejected`,
-            metadata: { contactId: contact.id, zohoLeadId: contact.zoho_lead_id, reason, attempts: attemptErrors },
-          });
-        } catch { /* ignore */ }
-      } else {
-        console.log(`[disqualify] Zoho Lead_Status landed as "${landedStatus}" for ${contactName}`);
-      }
-
-      // 3b. Best-effort: try to populate the structured Currency fields
-      //     using numbers (so Zoho doesn't reject). Failure here is fine —
-      //     the Note below is the reliable record.
-      try {
-        const structuredUpdate: Record<string, unknown> = {};
-        if (parsedRevenue) structuredUpdate.Monthly_Revenue = parsedRevenue;
-        if (parsedAmountNeeded) structuredUpdate.Funding_Amount_Requested = parsedAmountNeeded;
-        if (Object.keys(structuredUpdate).length > 0) {
-          await zohoUpdateLead(contact.zoho_lead_id, structuredUpdate);
-        }
-      } catch (err) {
-        console.warn("[disqualify] Zoho structured-field update skipped:", err instanceof Error ? err.message : err);
-      }
-
-      // 3c. Always attach a Note — this is what the sales team actually
-      //     reads. Safe if any structured field write failed.
-      try {
-        const noteLines: string[] = ["Auto-DNQ — below revenue threshold"];
-        if (parsedRevenue) noteLines.push(`Monthly Revenue: $${parsedRevenue.toLocaleString()}`);
-        if (amountNeeded || parsedAmountNeeded) {
-          noteLines.push(`Funding Requested: ${amountNeeded || "$" + parsedAmountNeeded!.toLocaleString()}`);
-        }
-        if (reason) noteLines.push(`Reason: ${reason}`);
-        if (source) noteLines.push(`Source: ${source}`);
-        await zohoAddNote(contact.zoho_lead_id, "Auto-DNQ", noteLines.join("\n"));
-      } catch (err) {
-        console.error("[disqualify] Zoho addNote failed:", err instanceof Error ? err.message : err);
-      }
-    } else {
-      console.warn(`[disqualify] contact ${contact.id} has no zoho_lead_id — skipping Zoho update`);
+    // 3a. Flip the stage to the terminal-declined value and record why.
+    const statusRes = await setLeadStatus({
+      contactId: contact.id as string,
+      status: "Dead Declined",
+      reason,
+      origin: "mission_control",
+    });
+    if (!statusRes.ok) {
+      console.error("[disqualify] status write failed:", statusRes.error);
       try {
         await supabaseAdmin.from("system_logs").insert({
           event_type: "lead_auto_dnq_error",
-          description: `Zoho DNQ skipped for ${contactName} — contact has no zoho_lead_id`,
-          metadata: { contactId: contact.id, reason },
+          description: `DNQ status write failed for ${contactName}`,
+          metadata: { contactId: contact.id, reason, error: statusRes.error },
         });
       } catch { /* ignore */ }
     }
+
+    // 3b. The note is what the sales team actually reads.
+    const noteLines: string[] = ["Auto-DNQ — below revenue threshold"];
+    if (parsedRevenue) noteLines.push(`Monthly Revenue: $${parsedRevenue.toLocaleString()}`);
+    if (amountNeeded || parsedAmountNeeded) {
+      noteLines.push(`Requested: ${amountNeeded || "$" + parsedAmountNeeded!.toLocaleString()}`);
+    }
+    if (reason) noteLines.push(`Reason: ${reason}`);
+    if (source) noteLines.push(`Source: ${source}`);
+    await addNote({
+      contactId: contact.id as string,
+      title: "Auto-DNQ",
+      content: noteLines.join("\n"),
+      origin: "webhook",
+      actor: "disqualify",
+    });
 
     // 4. Audit trail
     try {
@@ -233,13 +175,10 @@ export async function POST(request: NextRequest) {
     postOrThreadLeadUpdate({ contactId: contact.id, action: "auto_dnq" })
       .catch(err => console.error("[disqualify] slack thread reply failed:", err instanceof Error ? err.message : err));
 
-    // 6. Meta CAPI DNQ — fire directly (don't rely solely on the Zoho-webhook
-    //    path, which silently drops the event whenever zoho_lead_id is missing,
-    //    Lead_Status fails to land, or the webhook doesn't fire). Deterministic
-    //    eventId `dnq_<contactId>` means the browser DNQ pixel, this CAPI fire,
-    //    and the Zoho-webhook DNQ all dedup to a single Meta event — redundant
-    //    paths, one count. Gated on attribution (body _fbc, or the contact's
-    //    stored fbc), same as every other funnel event.
+    // 6. Meta CAPI DNQ. Deterministic eventId `dnq_<contactId>` means the
+    //    browser DNQ pixel and this CAPI fire dedup to a single Meta event —
+    //    redundant paths, one count. Gated on attribution (body _fbc, or the
+    //    contact's stored fbc), same as every other funnel event.
     const dnqFbc = _fbc || contact.fbc || undefined;
     const dnqFbp = _fbp || contact.fbp || undefined;
     if (hasMetaAttributionServer({ fbc: dnqFbc })) {

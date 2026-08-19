@@ -1,30 +1,29 @@
 export const dynamic = "force-dynamic";
 
-// The brief for a Zoho record we already know the id of.
+// The brief for a contact we already know the id of.
 //
 // Two callers, two auth lanes, one implementation:
 //   - The Auto-Dialer, which has the record id on screen and uses the CRON_SECRET bearer it
-//     already carries for every other /api/zoho/* call.
+//     already carries.
 //   - The Call Coach's confirm strip, which uses the per-rep call-coach key.
 //
 // Both get the same brief and both write the same session row, so whichever surface starts the
 // call, the post-call wrap finds one place to read the identity from.
+//
+// ‼️ A legacy 6+ digit Zoho record id is still accepted and resolved through
+// contacts.zoho_lead_id. The dialer that sends it lives in another repo and ships on its own
+// schedule, so rejecting the old shape would break calling before that release lands.
 
 import { NextRequest, NextResponse } from "next/server";
 import { extractApiKey, validateCallCoachKey } from "@/lib/call-coach-auth";
 import { buildCallBrief } from "@/lib/call-coach/brief";
-import { attachContactId, whoLine, type CallTarget } from "@/lib/call-coach/resolve-target";
-import { zohoRecordUrl, type ZohoModule } from "@/lib/call-coach/zoho-url";
+import { whoLine, type CallTarget } from "@/lib/call-coach/resolve-target";
 import { createPendingSession, attachIdentityToSession, latestPendingTarget } from "@/lib/call-coach/session";
-import { getLead, getDeal } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
+import { crmRecordUrl } from "@/lib/call-coach/record-url";
 
-const MODULES: ZohoModule[] = ["Leads", "Deals", "Contacts", "Accounts"];
-
-/** Zoho returns "" for unset text fields, never null, so `??` chains over it silently keep blanks. */
-function str(v: unknown): string | null {
-  const t = typeof v === "string" ? v.trim() : "";
-  return t.length > 0 ? t : null;
-}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ZOHO_ID = /^\d{6,}$/;
 
 /** Either lane opens the door. The dialer has no per-rep key and never will. */
 async function authorize(req: NextRequest): Promise<{ userId: string | null } | null> {
@@ -42,42 +41,42 @@ export async function POST(req: NextRequest) {
   const auth = await authorize(req);
   if (!auth) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  let body: { module?: string; recordId?: string; record_id?: string; sessionId?: string };
+  let body: { contactId?: string; contact_id?: string; recordId?: string; record_id?: string; sessionId?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "bad_json" }, { status: 400 });
   }
 
-  const recordId = String(body.recordId ?? body.record_id ?? "").trim();
-  const rawModule = String(body.module ?? "Leads").trim();
-  const module = MODULES.find((m) => m.toLowerCase() === rawModule.toLowerCase()) ?? "Leads";
+  const id = String(
+    body.contactId ?? body.contact_id ?? body.recordId ?? body.record_id ?? ""
+  ).trim();
 
-  if (!/^\d{6,}$/.test(recordId)) {
-    return NextResponse.json({ error: "bad_record_id", detail: "Expected an 18 or 19 digit Zoho record id." }, { status: 400 });
+  if (!UUID.test(id) && !ZOHO_ID.test(id)) {
+    return NextResponse.json(
+      { error: "bad_record_id", detail: "Expected a contact uuid, or a legacy 18-19 digit Zoho lead id." },
+      { status: 400 }
+    );
   }
 
   try {
-    const rec = module === "Deals" ? await getDeal(recordId) : await getLead(recordId);
-    if (!rec) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    const lead = await resolveLead(UUID.test(id) ? { contactId: id } : { zohoLeadId: id });
+    if (!lead) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    const base: CallTarget = {
-      module,
-      recordId,
-      // Zoho gives "" for unset text fields, so `??` never falls through. See blank() in brief.ts.
-      businessName: str(rec.Company) ?? str(rec.Deal_Name),
-      personName: [str(rec.First_Name), str(rec.Last_Name)].filter(Boolean).join(" ") || null,
-      email: str(rec.Email),
-      phone: str(rec.Phone) ?? str(rec.Mobile),
-      website: str(rec.Website),
-      contactId: null,
+    const target: CallTarget = {
+      contactId: lead.id,
+      businessName: lead.businessName,
+      personName: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || null,
+      email: lead.email,
+      phone: lead.phone ?? lead.mobilePhone,
+      website: lead.website,
       // The id came from the caller's own page, so there is nothing to be uncertain about.
       confidence: "exact",
       source: "dialer",
-      zohoUrl: zohoRecordUrl({ module, recordId }),
+      crmUrl: crmRecordUrl(lead.id),
+      zohoLeadId: lead.zohoLeadId,
     };
 
-    const target = await attachContactId(base);
     const brief = await buildCallBrief(target);
 
     const sessionId =
@@ -93,7 +92,17 @@ export async function POST(req: NextRequest) {
       // `brief.who`, NOT the local `target`. buildCallBrief fills in a missing business name from
       // the audit report and then the website host, and reading the pre-correction copy here meant
       // the API kept answering "unknown business" while the brief itself had the real one.
-      who: { label: whoLine(brief.who), zohoUrl: brief.who.zohoUrl, businessName: brief.who.businessName },
+      // `module`, `recordId` and `zohoUrl` are the pre-cutover wire shape. The shipped extension
+      // and dialer read them by those names, so they stay populated until those repos ship.
+      who: {
+        module: "Leads",
+        recordId: brief.who.zohoLeadId ?? brief.who.contactId,
+        contactId: brief.who.contactId,
+        label: whoLine(brief.who),
+        crmUrl: brief.who.crmUrl,
+        zohoUrl: brief.who.crmUrl,
+        businessName: brief.who.businessName,
+      },
       reasons: brief.reasons,
       briefText: brief.text,
     });

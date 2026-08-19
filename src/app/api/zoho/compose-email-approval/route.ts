@@ -5,13 +5,15 @@ export const dynamic = "force-dynamic";
 // ("Hello {firstName}," + copy + Outlook "S" signature appended at send) and
 // posts a Vektor 👍/✏️/🚫 card into the lead's Slack channel. He confirms with
 // 👍 and the existing send_email pipeline mails it from matthew@srtagency.com
-// and writes a Zoho note.
+// and writes a CRM note.
 //
-// POST body: { zoho_lead_id, subject, copy }
+// POST body: { zoho_lead_id | contact_id, subject, copy }
+//
+// `zoho_lead_id` is still accepted because the shipped dialer sends it; it now
+// resolves against contacts.zoho_lead_id rather than against Zoho.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/db";
-import { getLead, addNoteToLead } from "@/lib/zoho";
+import { resolveLead, addNote } from "@/lib/crm";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction } from "@/lib/ai-intel/execute-action";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
@@ -46,36 +48,34 @@ export async function POST(req: NextRequest) {
 
   const body = (await req.json().catch(() => ({}))) as {
     zoho_lead_id?: string;
+    contact_id?: string;
     subject?: string;
     copy?: string;
     template_key?: string;
     send_now?: boolean;
   };
 
-  const { zoho_lead_id, subject, copy, template_key, send_now } = body;
+  const { zoho_lead_id, contact_id, subject, copy, template_key, send_now } = body;
 
   // Full-HTML templates (e.g. "next-steps") are sent verbatim — no greeting,
   // no signature. They only need a zoho_lead_id; subject + body come from the
   // stored template, so the dialer's textarea copy is ignored.
   const fullHtmlTemplate = template_key ? FULL_HTML_EMAIL_TEMPLATES[template_key] : undefined;
 
-  if (!zoho_lead_id) {
-    return NextResponse.json({ error: "missing zoho_lead_id" }, { status: 400 });
+  if (!zoho_lead_id && !contact_id) {
+    return NextResponse.json({ error: "missing zoho_lead_id or contact_id" }, { status: 400 });
   }
   if (!fullHtmlTemplate && (!subject || !copy)) {
-    return NextResponse.json({ error: "missing zoho_lead_id, subject, or copy" }, { status: 400 });
+    return NextResponse.json({ error: "missing subject or copy" }, { status: 400 });
   }
 
-  // Fetch lead email + first name from Zoho
-  let zohoLead;
-  try {
-    zohoLead = await getLead(zoho_lead_id);
-  } catch (err) {
-    return NextResponse.json({ error: `zoho_fetch_failed: ${(err as Error).message}` }, { status: 500 });
+  const lead = await resolveLead({ contactId: contact_id, zohoLeadId: zoho_lead_id });
+  if (!lead) {
+    return NextResponse.json({ error: "lead_not_found" }, { status: 404 });
   }
 
-  const email = (zohoLead.Email ?? "") as string;
-  const firstName = ((zohoLead.First_Name ?? "") as string).trim() || "there";
+  const email = lead.email;
+  const firstName = lead.firstName ?? "there";
   if (!email) {
     return NextResponse.json({ error: "no_email_on_lead" }, { status: 422 });
   }
@@ -88,24 +88,17 @@ export async function POST(req: NextRequest) {
     ? fillTokens(fullHtmlTemplate.html, firstName, copy)
     : `Hello ${firstName},\n\n${copy}`;
 
-  // Everything past Zoho is wrapped so any Supabase/Slack failure returns a
-  // readable JSON error instead of a 500 HTML page (which the extension can
+  // Everything past the lookup is wrapped so any Supabase/Slack failure returns
+  // a readable JSON error instead of a 500 HTML page (which the extension can
   // only render as a generic "compose_failed").
   try {
-    // Look up the contact only for contact_id / merchant linkage on the payload.
-    const { data: contact } = await supabaseAdmin
-      .from("contacts")
-      .select("id")
-      .eq("zoho_lead_id", zoho_lead_id)
-      .maybeSingle();
-
     // Dialer email-approval cards post to #vektor-email-director (not the lead's
     // hot-leads channel). If SLACK_VEKTOR_EMAIL_DIRECTOR_CHANNEL isn't set,
     // postApprovalRequest falls back via the working_lead category.
     const channel: string | undefined = VEKTOR_CHANNELS.emailDirector || undefined;
 
-    // Tracking note: who got which template. Logged to the Zoho lead so every
-    // send is auditable from the CRM timeline.
+    // Tracking note: who got which template, so every send is auditable from
+    // the lead's CRM timeline.
     const templateLabel = template_key || "custom copy";
     const noteTitle = `Email sent — ${emailSubject}`;
     const noteContent = `Sent to ${email}${firstName !== "there" ? ` (${firstName})` : ""} from matthew@srtagency.com. Template: ${templateLabel}. Subject: "${emailSubject}".`;
@@ -118,8 +111,8 @@ export async function POST(req: NextRequest) {
       // Full-HTML templates send verbatim (is_html:true → no greeting/signature);
       // normal templates send plain text with the "S" signature appended.
       is_html: !!fullHtmlTemplate,
-      zoho_id: zoho_lead_id,
-      contact_id: contact?.id ?? undefined,
+      zoho_id: lead.zohoLeadId ?? undefined,
+      contact_id: lead.id,
       ...(fullHtmlTemplate ? {} : { signature_name: "S" }),
       note: { title: noteTitle, content: noteContent },
     };
@@ -127,7 +120,7 @@ export async function POST(req: NextRequest) {
     // Direct send (dialer default): skip the Slack 👍 round-trip and mail the
     // email immediately via the same executor the Slack approval would have run.
     // The tracking note is written here (not inside sendEmail) so we can report
-    // back whether it landed in Zoho — payload.note is dropped to avoid a double note.
+    // back whether it landed — payload.note is dropped to avoid a double note.
     if (send_now) {
       const result = await executePendingAction({
         actionId: "dialer-direct",
@@ -142,8 +135,14 @@ export async function POST(req: NextRequest) {
       let noteWritten = false;
       let noteError: string | undefined;
       try {
-        await addNoteToLead(zoho_lead_id, noteTitle, noteContent);
-        noteWritten = true;
+        const noteRes = await addNote({
+          contactId: lead.id,
+          title: noteTitle,
+          content: noteContent,
+          origin: "mission_control",
+          actor: "dialer",
+        });
+        noteWritten = noteRes.ok;
       } catch (e) {
         noteError = (e as Error).message;
         console.error("[compose-email-approval] note write failed:", noteError);
@@ -176,8 +175,8 @@ export async function POST(req: NextRequest) {
       payload,
       channel,
       category: "working_lead",
-      zohoId: zoho_lead_id,
-      merchantId: contact?.id ?? undefined,
+      zohoId: lead.zohoLeadId ?? undefined,
+      merchantId: lead.id,
     });
 
     if (!res.slackTs) {

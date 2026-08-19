@@ -80,13 +80,28 @@ export async function auditSignatureHtml(): Promise<string> {
   return EMAIL_SIGNATURE_HTML;
 }
 
-/** Plain-text body + signature, as the HTML Outlook will store. */
+/**
+ * Plain-text body + signature, as the HTML Outlook will store.
+ *
+ * Real <p> and <br> tags, NOT white-space:pre-wrap. Outlook's compose editor rewrites the HTML
+ * it loads, and a pre-wrap div is a hint it is free to drop: when it does, every newline in the
+ * body collapses and a six-paragraph email opens as one run-on block. Paragraph tags are
+ * structure rather than styling, so nothing downstream is at liberty to flatten them.
+ *
+ * Blank lines separate paragraphs; a single newline inside one becomes a <br>. That distinction
+ * is what keeps "Thanks," sitting directly on top of "Matthew Garcia" instead of a gap opening
+ * between them.
+ */
 export function buildPitchHtml(body: string, signatureHtml: string): string {
-  const escaped = body.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return (
-    `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escaped}</div>` +
-    signatureHtml
-  );
+  const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const paragraphs = body
+    .trim()
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `<p style="margin:0 0 12px 0;">${escape(block).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<div style="font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${paragraphs}</div>${signatureHtml}`;
 }
 
 export interface PitchCardArgs {

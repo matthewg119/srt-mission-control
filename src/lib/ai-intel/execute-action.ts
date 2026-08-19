@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft } from "@/lib/microsoft";
 import { slack } from "@/lib/slack-bot";
-import { addNoteToLead, updateLead, createLead } from "@/lib/zoho";
+import { addNote } from "@/lib/crm";
 import type { PendingActionPayload } from "./types";
 import { DEFAULTS } from "@/config/defaults";
 import { EMAIL_SIGNATURE_HTML, SIGNATURE_S_HTML, resolveSubmissionSignature } from "@/config/email-signature";
@@ -88,11 +88,17 @@ async function sendEmail(payload: PendingActionPayload): Promise<ExecuteResult> 
     });
   }
 
-  // Log the send back to the Zoho lead (e.g. "Email sent successfully …").
+  // Log the send back onto the lead (e.g. "Email sent successfully …").
   // Best-effort — a note failure must not mark the send as failed.
-  if (payload.zoho_id && payload.note) {
+  if (payload.note && (payload.contact_id || payload.zoho_id)) {
     try {
-      await addNoteToLead(payload.zoho_id, payload.note.title, payload.note.content);
+      await addNote({
+        contactId: payload.contact_id as string | undefined,
+        zohoLeadId: payload.zoho_id as string | undefined,
+        title: payload.note.title,
+        content: payload.note.content,
+        origin: "ai",
+      });
     } catch (e) {
       console.error("[execute-action] sendEmail note write failed:", (e as Error).message);
     }
@@ -142,18 +148,30 @@ async function fileToOneDrive(payload: PendingActionPayload): Promise<ExecuteRes
   return { ok: true, details: { filed, folder: `Deals/${biz}/Bank Statements` } };
 }
 
+// Historically "update the Zoho lead". It has been note-only for a long time
+// (field writes were removed because each one tripped a Zoho workflow webhook
+// against a 100/day limit), so with Zoho gone it is simply a note.
 async function updateZoho(payload: PendingActionPayload): Promise<ExecuteResult> {
-  if (!payload.zoho_id) return { ok: false, error: "missing_zoho_id" };
-  // Lead_Status / field updates removed — each updateLead() call triggers a Zoho
-  // workflow webhook (100/day limit). Stage changes go through the Mission Control
-  // dashboard only.
+  if (!payload.contact_id && !payload.zoho_id) {
+    return { ok: false, error: "missing_contact_id" };
+  }
   if (payload.note) {
-    await addNoteToLead(payload.zoho_id, payload.note.title, payload.note.content);
+    await addNote({
+      contactId: payload.contact_id as string | undefined,
+      zohoLeadId: payload.zoho_id as string | undefined,
+      title: payload.note.title,
+      content: payload.note.content,
+      origin: "ai",
+    });
   }
 
   return {
     ok: true,
-    details: { zoho_id: payload.zoho_id, note: !!payload.note, followup: payload.followup ?? null },
+    details: {
+      contact_id: payload.contact_id ?? null,
+      note: !!payload.note,
+      followup: payload.followup ?? null,
+    },
   };
 }
 

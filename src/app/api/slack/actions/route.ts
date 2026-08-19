@@ -654,7 +654,7 @@ async function scheduleSuggestedFollowup(args: { slackTs: string; channel: strin
     contactId: conv.contact_id as string,
     reason,
     dueDate: `in ${days} days`,
-    createZohoTask: true,
+    createCrmTask: true,
   });
 
   if (!res.ok) {
@@ -853,9 +853,9 @@ async function sequenceCancel(args: {
  * switch is ever turned on.
  */
 /**
- * The post-call wrap card: 👍 writes the Zoho note and creates the Outlook draft.
+ * The post-call wrap card: 👍 writes the CRM note and creates the Outlook draft.
  *
- * ‼️ Slack gives an interaction 3 seconds. Zoho plus Graph plus a Slack post is 2 to 5, so the
+ * ‼️ Slack gives an interaction 3 seconds. The CRM plus Graph plus a Slack post is 2 to 5, so the
  * row is CLAIMED synchronously (which is what makes a retry safe) and the actual work runs in
  * waitUntil. Same shape as leadDispositionAction.
  */
@@ -870,17 +870,17 @@ async function callWrapAction(args: {
       .update({ wrap_state: "discarded" })
       .eq("id", args.sessionId)
       .neq("wrap_state", "done");
-    await slack.postThreadReply(args.channel, args.slackTs, `🚫 Discarded by <@${args.userId}>. Nothing was written to Zoho.`);
+    await slack.postThreadReply(args.channel, args.slackTs, `🚫 Discarded by <@${args.userId}>. Nothing was written to the CRM.`);
     return NextResponse.json({ ok: true });
   }
 
   if (args.actionId === "cc_wrap_attach") {
     // Deliberately a plain instruction rather than a modal: attaching is rare, and the record id
-    // is already in his clipboard-adjacent Zoho tab. A modal here would be more code than value.
+    // is already in the CRM tab next to him. A modal here would be more code than value.
     await slack.postThreadReply(
       args.channel,
       args.slackTs,
-      "🔍 Paste the Zoho record URL for this call in this thread and I'll attach it, then the buttons come back."
+      "🔍 Paste the contact URL for this call in this thread and I'll attach it, then the buttons come back."
     );
     return NextResponse.json({ ok: true });
   }

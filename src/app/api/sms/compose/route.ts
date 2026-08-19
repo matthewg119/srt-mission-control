@@ -3,25 +3,21 @@ export const dynamic = "force-dynamic";
 //
 // Two shapes:
 //   • Lookup  { phone }                       → resolve an existing contact/conversation.
-//   • Create  { phone, first_name, ... }      → create the lead in Supabase + Zoho.
+//   • Create  { phone, first_name, ... }      → create the lead in Supabase.
 //
-// Lookup flow: normalize → match contacts by last-10 → if miss, ask Zoho live
-// (searchLeads, same criteria builder as the inbound webhook) and seed a contact.
-// If nothing exists and no create fields were sent, return { found:false } so the
-// caller (textwin) can pop the "new contact" form. Either way we upsert an
-// sms_conversations row (stamping last_outbound_at so the fresh chat surfaces in
-// textwin's "Recent" before any message exists) and ensure the per-lead Slack
-// channel, so the first outbound has somewhere to mirror.
-//
-// Zoho currency note: Monthly_Revenue is passed as an INT (never a "$X,XXX"
-// string) and Lead_Status is left to createLead's default — a bad currency value
-// would otherwise drop the whole create.
+// Lookup flow: normalize → resolveLead({ phone }), which matches the last 10
+// digits across phone_last10 AND mobile_last10. If nothing exists and no create
+// fields were sent, return { found:false } so the caller (textwin) can pop the
+// "new contact" form. Either way we upsert an sms_conversations row (stamping
+// last_outbound_at so the fresh chat surfaces in textwin's "Recent" before any
+// message exists) and ensure the per-lead Slack channel, so the first outbound
+// has somewhere to mirror.
 //
 // POST — Bearer CRON_SECRET (same gate + CORS as zoho/draft-sms).
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { createLead, searchLeads, type ZohoApiRecord } from "@/lib/zoho";
+import { resolveLead, type LeadRef } from "@/lib/crm";
 import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel } from "@/lib/sms-channel";
 
@@ -44,59 +40,11 @@ interface ComposeBody {
   time_in_business?: string;
 }
 
-interface ContactRow {
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-  business_name: string | null;
-  zoho_lead_id: string | null;
-}
-
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true;
   const header = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
   return header === `Bearer ${secret}`;
-}
-
-const CONTACT_COLS = "id, first_name, last_name, business_name, zoho_lead_id";
-
-// Format-agnostic match on the last 10 digits (phone_last10 / mobile_last10 are
-// stored generated columns). Mirrors the inbound webhook's findContactByPhone.
-async function findContactByPhone(phone: string): Promise<ContactRow | null> {
-  const last10 = phone.replace(/\D/g, "").slice(-10);
-  if (last10.length < 10) return null;
-  const { data, error } = await supabaseAdmin
-    .from("contacts")
-    .select(CONTACT_COLS)
-    .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
-    .limit(1)
-    .maybeSingle();
-  if (error) console.error("[sms/compose] contact lookup failed:", error.message);
-  return (data as ContactRow | null) ?? null;
-}
-
-// Ask Zoho live for a lead at this number (3 formats × 2 fields = 6 clauses, under
-// Zoho's per-search criteria limit). Same builder as inbound/route.ts resolveContact.
-async function searchZohoByPhone(phone: string): Promise<ZohoApiRecord | undefined> {
-  const last10 = phone.replace(/\D/g, "").slice(-10);
-  if (last10.length < 10) return undefined;
-  const variants = [
-    last10,
-    `+1${last10}`,
-    `(${last10.slice(0, 3)}) ${last10.slice(3, 6)}-${last10.slice(6)}`,
-  ];
-  const criteria =
-    "(" +
-    variants.flatMap((v) => [`(Phone:equals:${v})`, `(Mobile:equals:${v})`]).join("or") +
-    ")";
-  try {
-    const results = await searchLeads({ criteria });
-    return results[0];
-  } catch (e) {
-    console.error("[sms/compose] Zoho lookup failed:", (e as Error).message);
-    return undefined;
-  }
 }
 
 export async function OPTIONS() {
@@ -126,69 +74,26 @@ export async function POST(req: NextRequest) {
   const hasCreateFields = Boolean((body.first_name ?? "").trim());
 
   // ── Resolve the contact ─────────────────────────────────────────────────────
-  let contact: ContactRow | null = await findContactByPhone(phone);
-
-  if (!contact) {
-    // Try Zoho live before giving up — the lead may exist in the CRM but not yet
-    // be mirrored into Supabase.
-    const lead = await searchZohoByPhone(phone);
-    if (lead) {
-      const { data: seeded } = await supabaseAdmin
-        .from("contacts")
-        .upsert(
-          {
-            first_name: (lead.First_Name as string | undefined) ?? null,
-            last_name: (lead.Last_Name as string | undefined) ?? null,
-            business_name: (lead.Company as string | undefined) ?? null,
-            phone,
-            zoho_lead_id: (lead.id as string | undefined) ?? null,
-            source: "textwin compose",
-          },
-          { onConflict: "phone" }
-        )
-        .select(CONTACT_COLS)
-        .single();
-      contact = (seeded as ContactRow | null) ?? (await findContactByPhone(phone));
-    }
-  }
+  let lead: LeadRef | null = await resolveLead({ phone });
 
   // Still nothing, and the caller hasn't sent contact details → ask for them.
-  if (!contact && !hasCreateFields) {
+  if (!lead && !hasCreateFields) {
     return NextResponse.json({ ok: true, found: false, phone }, { headers: CORS_HEADERS });
   }
 
-  // ── Create a brand-new lead (Supabase + Zoho) ───────────────────────────────
+  // ── Create a brand-new lead ─────────────────────────────────────────────────
   let created = false;
-  if (!contact && hasCreateFields) {
+  if (!lead && hasCreateFields) {
     const firstName = (body.first_name ?? "").trim();
     const lastName = (body.last_name ?? "").trim();
     const businessName = (body.business_name ?? "").trim();
     const email = (body.email ?? "").trim();
-    // Strict numeric only — never a "$X,XXX" string (Zoho currency rejects it and
-    // drops the whole create).
     const revNum =
       body.monthly_revenue != null && `${body.monthly_revenue}`.trim() !== ""
         ? Math.round(Number(`${body.monthly_revenue}`.replace(/[^0-9.]/g, "")))
         : null;
-    const monthlyRevenue = revNum != null && Number.isFinite(revNum) && revNum > 0 ? revNum : undefined;
-    const timeInBusiness = (body.time_in_business ?? "").trim() || undefined;
-
-    let zohoLeadId: string | null = null;
-    try {
-      zohoLeadId = await createLead({
-        firstName,
-        lastName,
-        businessName: businessName || undefined,
-        email: email || undefined,
-        phone,
-        monthlyRevenue,
-        timeInBusiness,
-        source: "textwin compose",
-      });
-    } catch (e) {
-      // Don't lose the contact if Zoho rejects — seed Supabase anyway and report.
-      console.error("[sms/compose] createLead failed:", (e as Error).message);
-    }
+    const monthlyRevenue = revNum != null && Number.isFinite(revNum) && revNum > 0 ? revNum : null;
+    const timeInBusiness = (body.time_in_business ?? "").trim() || null;
 
     const { data: newContact, error: insErr } = await supabaseAdmin
       .from("contacts")
@@ -199,14 +104,13 @@ export async function POST(req: NextRequest) {
           business_name: businessName || null,
           email: email || null,
           phone,
-          monthly_revenue: monthlyRevenue ?? null,
-          time_in_business: timeInBusiness ?? null,
-          zoho_lead_id: zohoLeadId,
+          monthly_revenue: monthlyRevenue,
+          time_in_business: timeInBusiness,
           source: "textwin compose",
         },
         { onConflict: "phone" }
       )
-      .select(CONTACT_COLS)
+      .select("id")
       .single();
 
     if (insErr || !newContact) {
@@ -215,7 +119,9 @@ export async function POST(req: NextRequest) {
         { status: 500, headers: CORS_HEADERS }
       );
     }
-    contact = newContact as ContactRow;
+    // Re-read through resolveLead so the response shape is identical whether the
+    // lead already existed or was just created, blank-normalization included.
+    lead = await resolveLead({ contactId: newContact.id as string });
     created = true;
   }
 
@@ -225,7 +131,7 @@ export async function POST(req: NextRequest) {
     .upsert(
       {
         phone,
-        contact_id: contact?.id ?? null,
+        contact_id: lead?.id ?? null,
         outcome: "open",
         // Stamp activity so a freshly composed (no-inbound-yet) chat still surfaces
         // in textwin's "Recent" list.
@@ -243,18 +149,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const displayName =
-    contact?.business_name ||
-    [contact?.first_name, contact?.last_name].filter(Boolean).join(" ") ||
-    phone;
+  // displayName falls back to the bare phone, which is the whole no-drop rule:
+  // an unrecognized number still gets a thread, just an unnamed one.
+  const displayName = lead?.displayName ?? phone;
 
   const { channelId } = await ensureSmsChannel({
     conversationId: conv.id as string,
     phone,
     displayName,
-    contactId: contact?.id ?? null,
-    zohoLeadId: contact?.zoho_lead_id ?? null,
-    businessName: contact?.business_name ?? null,
+    contactId: lead?.id ?? null,
+    zohoLeadId: lead?.zohoLeadId ?? undefined,
+    businessName: lead?.businessName ?? null,
   });
 
   return NextResponse.json(
@@ -263,8 +168,8 @@ export async function POST(req: NextRequest) {
       found: true,
       created,
       conversation_id: conv.id,
-      contact_id: contact?.id ?? null,
-      zoho_lead_id: contact?.zoho_lead_id ?? null,
+      contact_id: lead?.id ?? null,
+      zoho_lead_id: lead?.zohoLeadId ?? null,
       display_name: displayName,
       phone,
       channel_id: channelId ?? null,

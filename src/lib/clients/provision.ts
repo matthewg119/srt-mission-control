@@ -46,7 +46,6 @@ import { normalizePhone } from "@/lib/medspa/validate";
 export const MAX_CONCURRENT_CLIENTS = 6;
 
 const PILOT_DAYS = 90;
-const ZOHO_LEAD_SOURCE = "AEO Pilot";
 
 /** The eight stages, in order. Seeded whole so the board renders the journey on day 1. */
 export const ONBOARDING_STAGES = [
@@ -527,7 +526,6 @@ async function linkToCrm(
       businessName: who.legalName,
       city: who.city || undefined,
       source: "aeo_pilot",
-      zohoLeadSource: ZOHO_LEAD_SOURCE,
       noteTitle: "Pilot started",
       headline,
       detailLines,
@@ -538,7 +536,7 @@ async function linkToCrm(
 
     await supabaseAdmin
       .from("clients")
-      .update({ contact_id: res.contactId, zoho_lead_id: res.zohoLeadId })
+      .update({ contact_id: res.contactId })
       .eq("id", clientId);
     return;
   }

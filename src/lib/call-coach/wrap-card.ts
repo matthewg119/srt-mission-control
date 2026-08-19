@@ -1,13 +1,14 @@
 // The post-call card, and what 👍 actually does.
 //
-// On approve, in this order: claim the row, write ONE Zoho note, create an Outlook DRAFT, print the
+// On approve, in this order: claim the row, write ONE CRM note, create an Outlook DRAFT, print the
 // draft back into the thread. Nothing sends. `microsoft.sendDraft` is deliberately not imported by
 // this file.
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { microsoft } from "@/lib/microsoft";
-import { addNoteResilient, addNoteToRecord } from "@/lib/zoho";
+import { addNote } from "@/lib/crm";
+import { crmRecordUrl } from "./record-url";
 import { auditSignatureHtml } from "@/lib/audit-engine/lead-pitch";
 import { resolveReplyAnchor } from "@/lib/audit-engine/reply-anchor";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
@@ -15,7 +16,8 @@ import { outcomeLabel, type CallWrap } from "./wrap";
 
 export interface WrapSessionRow {
   id: string;
-  zoho_module: string | null;
+  contact_id: string | null;
+  /** Legacy provenance, for sessions opened from an old Zoho link. Never the identity. */
   zoho_record_id: string | null;
   audit_report_id: string | null;
   business_name: string | null;
@@ -28,6 +30,8 @@ export interface WrapSessionRow {
   slack_channel: string | null;
   slack_thread_ts: string | null;
   wrap_card_ts: string | null;
+  crm_note_at: string | null;
+  /** Pre-cutover name for crm_note_at. Read, never written. */
   zoho_note_at: string | null;
   duration_seconds: number | null;
 }
@@ -36,13 +40,19 @@ function whoLabel(s: WrapSessionRow): string {
   return (
     [s.business_name ?? "unidentified", s.person_name, s.prospect_phone]
       .filter(Boolean)
-      .join(" · ") + (s.zoho_record_id ? ` · Zoho ${s.zoho_module}/${s.zoho_record_id}` : "")
+      .join(" · ") + (s.contact_id ? ` · ${crmRecordUrl(s.contact_id)}` : "")
   );
 }
 
-function zohoLink(s: WrapSessionRow): string | null {
-  if (!s.zoho_record_id) return null;
-  return `https://crm.zoho.com/crm/tab/${s.zoho_module ?? "Leads"}/${s.zoho_record_id}`;
+/** Non-null exactly when the note write is possible, which is the same condition. */
+function crmLink(s: WrapSessionRow): string | null {
+  return s.contact_id ? crmRecordUrl(s.contact_id) : null;
+}
+
+/** The note was written on an earlier attempt. Sessions predating the cutover latch on the
+ *  old column name, so both are consulted or an old card would write its note twice. */
+function noteAlreadyWritten(s: WrapSessionRow): boolean {
+  return Boolean(s.crm_note_at ?? s.zoho_note_at);
 }
 
 /**
@@ -59,8 +69,8 @@ export async function postWrapCard(session: WrapSessionRow, wrap: CallWrap): Pro
     return null;
   }
 
-  const identified = Boolean(session.zoho_record_id);
-  const link = zohoLink(session);
+  const identified = Boolean(session.contact_id);
+  const link = crmLink(session);
 
   const header = identified
     ? `:telephone_receiver: *Call wrap* · ${whoLabel(session)}`
@@ -70,7 +80,7 @@ export async function postWrapCard(session: WrapSessionRow, wrap: CallWrap): Pro
     header,
     `_${outcomeLabel(wrap.outcome)}${session.duration_seconds ? ` · ${Math.round(session.duration_seconds / 60)} min` : ""}${session.call_type ? ` · dialed as ${session.call_type.toUpperCase()}` : ""}_`,
     "",
-    "*Zoho note*",
+    "*CRM note*",
     "```",
     wrap.noteText,
     "```",
@@ -82,9 +92,9 @@ export async function postWrapCard(session: WrapSessionRow, wrap: CallWrap): Pro
     wrap.emailBody,
     "```",
     wrap.flags.length ? `:warning: ${wrap.flags.join("\n:warning: ")}` : "",
-    link ? `<${link}|Open in Zoho>` : "",
+    link ? `<${link}|Open in the CRM>` : "",
     identified
-      ? "_:+1: writes the note to Zoho and creates the Outlook draft. Nothing sends._"
+      ? "_:+1: writes the note to the CRM and creates the Outlook draft. Nothing sends._"
       : "_I could not work out which record this call belongs to, so there is nothing to write to. Attach it to a lead and the buttons come back._",
   ].filter(Boolean);
 
@@ -150,27 +160,27 @@ export async function applyWrap(session: WrapSessionRow, approvedBy: string): Pr
     if (channel && threadTs) await slack.postThreadReply(channel, threadTs, text).catch(() => {});
   };
 
-  if (!wrap || !session.zoho_record_id) {
+  if (!wrap || !session.contact_id) {
     await supabaseAdmin
       .from("call_coach_sessions")
       .update({ wrap_state: "failed", wrap_error: "no wrap or no record" })
       .eq("id", session.id);
-    await say("⚠️ There is no write-up or no Zoho record on this session, so nothing was written.");
+    await say("⚠️ There is no write-up or no contact on this session, so nothing was written.");
     return;
   }
 
   const done: string[] = [];
   let failed: string | null = null;
 
-  // ── 1. The Zoho note. NOTE ONLY. ────────────────────────────────────────
+  // ── 1. The CRM note. NOTE ONLY. ─────────────────────────────────────────
   //
-  // ‼️ No updateLead, no Lead_Status, no structured field, ever. That is Matthew's explicit call
+  // ‼️ No field write, no stage change, ever. That is Matthew's explicit call
   // and it is the edit a future contributor will add "for convenience": a garbled transcript that
   // writes a paragraph into a note is recoverable, one that flips a lead to Not Interested is not.
   //
   // Skipped when a previous attempt already wrote it, so a Graph failure and a retry cannot
   // produce two notes for one call.
-  if (!session.zoho_note_at) {
+  if (!noteAlreadyWritten(session)) {
     try {
       const title = `Call ${new Date().toISOString().slice(0, 10)} — ${outcomeLabel(wrap.outcome)}`;
       const body = [
@@ -181,27 +191,26 @@ export async function applyWrap(session: WrapSessionRow, approvedBy: string): Pr
         .filter(Boolean)
         .join("\n");
 
-      if ((session.zoho_module ?? "Leads") === "Leads") {
-        // addNoteResilient survives a lead that has since been converted to a deal.
-        await addNoteResilient({
-          zohoLeadId: session.zoho_record_id,
-          businessName: session.business_name ?? undefined,
-          title,
-          content: body,
-        });
-      } else {
-        await addNoteToRecord(session.zoho_module ?? "Deals", session.zoho_record_id, title, body);
-      }
+      const res = await addNote({
+        contactId: session.contact_id ?? undefined,
+        businessName: session.business_name ?? undefined,
+        title,
+        content: body,
+        origin: "ai",
+        actor: `call_coach:${approvedBy}`,
+      });
+      if (!res.ok) throw new Error("note was not written");
+
       await supabaseAdmin
         .from("call_coach_sessions")
-        .update({ zoho_note_at: new Date().toISOString() })
+        .update({ crm_note_at: new Date().toISOString() })
         .eq("id", session.id);
-      done.push(`Note on Zoho ${session.zoho_module}/${session.zoho_record_id}`);
+      done.push(`Note on ${session.business_name ?? session.contact_id}`);
     } catch (e) {
-      failed = `Zoho note failed: ${(e as Error).message}`;
+      failed = `Note failed: ${(e as Error).message}`;
     }
   } else {
-    done.push("Zoho note was already written on an earlier attempt, so it was not written twice");
+    done.push("The note was already written on an earlier attempt, so it was not written twice");
   }
 
   // ── 2. The Outlook DRAFT. Never a send. ─────────────────────────────────

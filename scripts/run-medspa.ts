@@ -2,21 +2,20 @@
 // test. Because the daily webhook is async (needs a public callback URL), this
 // script instead SUBMITS + POLLS Outscraper synchronously, then runs the exact
 // shared pipeline: filter -> dedupe -> score -> insert med_spa_leads -> scrape
-// owner names -> sync Zoho -> post the Slack report -> mark ZIP coverage.
+// owner names -> post the Slack report -> mark ZIP coverage.
 //
 //   bun run medspa:run                 # 25 ZIPs (density-first), ~500 leads
 //   bun run medspa:run -- --zips 10    # smaller batch
 //   bun run medspa:run -- --city Charlotte
-//   bun run medspa:run -- --dry-run    # no writes / Zoho / Slack
-//   flags: --limit N  --no-owners  --no-zoho  --no-slack
+//   bun run medspa:run -- --dry-run    # no writes / Slack
+//   flags: --limit N  --no-owners  --no-slack
 //
-// Needs OUTSCRAPER_API_KEY, Supabase, Zoho, and Slack envs (pull from Vercel).
+// Needs OUTSCRAPER_API_KEY, Supabase and Slack envs (pull from Vercel).
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { toGroups, OutscraperRecord } from "@/lib/outscraper";
 import { buildQuery, processZipResults } from "@/lib/medspa";
-import { syncMedSpaRows, MedSpaZohoRow } from "@/lib/medspa-zoho-sync";
 import { enrichOwners } from "@/lib/medspa-owner-scrape";
 
 const BASE = "https://api.outscraper.com";
@@ -33,7 +32,6 @@ const optStr = (name: string) => {
 
 const DRY = flag("dry-run");
 const DO_OWNERS = !flag("no-owners");
-const DO_ZOHO = !DRY && !flag("no-zoho");
 const DO_SLACK = !DRY && !flag("no-slack");
 const ZIP_COUNT = opt("zips", Math.max(1, Number(process.env.MEDSPA_ZIPS_PER_RUN) || 25));
 const LIMIT = opt("limit", Math.max(1, Number(process.env.MEDSPA_LIMIT_PER_ZIP) || 20));
@@ -117,7 +115,7 @@ async function main() {
 
   const result = await processZipResults(supabaseAdmin, groups, zips, { write: !DRY });
 
-  // Owner scrape (best-effort) on the new leads, then persist + it flows to Zoho.
+  // Owner scrape (best-effort) on the new leads, then persist.
   if (DO_OWNERS && result.inserted.length) {
     const found = await enrichOwners(result.inserted, {
       onProgress: (d, t) => process.stdout.write(`\r   scraping owners… ${d}/${t}   `),
@@ -133,14 +131,6 @@ async function main() {
     }
   }
 
-  // Zoho sync.
-  let zohoLine = "skipped";
-  if (DO_ZOHO && result.inserted.length) {
-    const zoho = await syncMedSpaRows(result.inserted as MedSpaZohoRow[]);
-    zohoLine = zoho.disabled ? "disabled" : `${zoho.ok} added, ${zoho.failed} failed`;
-    console.log(`   Zoho: ${zohoLine}`);
-    if (zoho.errors.length) console.log("   Zoho errors:", zoho.errors.join("; "));
-  }
 
   // Mark ZIP coverage (exhausted when a ZIP returned fewer than the cap).
   if (!DRY) {
@@ -183,7 +173,6 @@ async function main() {
   console.log(`With website:   ${result.withWebsite}`);
   console.log(`With owner:     ${withOwner}`);
   console.log(`Avg score:      ${avg}`);
-  console.log(`Zoho:           ${zohoLine}`);
   console.log("────────────────────────────────────────────");
 
   // Slack report (same shape as the daily webhook).
@@ -200,14 +189,13 @@ async function main() {
           { type: "mrkdwn", text: `*📞 Phone / 🌐 Site:*\n${result.withPhone} / ${result.withWebsite}` },
           { type: "mrkdwn", text: `*👤 Owner / ⭐ Avg:*\n${withOwner} / ${avg}` },
           { type: "mrkdwn", text: `*📊 Total in DB:*\n${runningTotal ?? 0}` },
-          { type: "mrkdwn", text: `*🗂️ Zoho:*\n${zohoLine}` },
         ],
       },
     ];
     await slack.postMessage(followups, `💆 Med spa prospects — ${result.newLeads} new`, blocks);
     console.log("📨 posted report to Slack.");
   } else if (DRY) {
-    console.log("(dry-run — no writes, no Zoho, no Slack.)");
+    console.log("(dry-run — no writes, no Slack.)");
   }
 }
 

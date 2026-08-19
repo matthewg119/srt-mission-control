@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
+import { slackThreadLink } from "@/lib/slack-bot";
+import { RUN_IN_FLIGHT_MINUTES } from "@/lib/audit-engine/run-audit-pipeline";
 import { STAGE_PIPELINES, cadenceFor } from "@/config/stage-display";
 import { formatRelativeTime } from "@/lib/utils";
 import {
@@ -8,9 +10,13 @@ import {
   type TimelineActivity,
   type TimelineFieldChange,
 } from "@/components/crm/lead-timeline";
-import { LogCallForm } from "@/components/crm/log-call-form";
+import { LeadLogCard } from "@/components/crm/lead-log-card";
+import { LeadFieldPanels } from "@/components/crm/lead-field-panels";
+import { CommsSync } from "@/components/crm/comms-sync";
 import { LeadStatusPicker } from "@/components/crm/status-picker";
 import { HuntNav } from "@/components/crm/hunt-nav";
+import { LeadWorkflows } from "@/components/crm/lead-workflows";
+import { pickLeadPanelValues } from "@/config/lead-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -39,54 +45,10 @@ function fmt(v: unknown): string {
   return String(v);
 }
 
-const FIELD_GROUPS: Array<{ title: string; fields: Array<[string, string]> }> = [
-  {
-    title: "Contact",
-    fields: [
-      ["first_name", "First name"],
-      ["last_name", "Last name"],
-      ["email", "Email"],
-      ["phone", "Phone"],
-      ["mobile_phone", "Mobile"],
-      ["home_address", "Home address"],
-    ],
-  },
-  {
-    title: "Business",
-    fields: [
-      ["business_name", "Business"],
-      ["legal_name", "Legal name"],
-      ["dba", "DBA"],
-      ["industry", "Industry"],
-      ["ein", "EIN"],
-      ["inc_date", "Incorporated"],
-      ["biz_address", "Address"],
-      ["biz_city", "City"],
-      ["biz_state", "State"],
-      ["biz_zip", "Zip"],
-    ],
-  },
-  {
-    title: "Financials",
-    fields: [
-      ["amount_needed", "Requested"],
-      ["monthly_revenue", "Monthly revenue"],
-      ["monthly_deposits", "Monthly deposits"],
-      ["credit_score", "Credit"],
-      ["use_of_funds", "Use of funds"],
-      ["existing_loans", "Existing loans"],
-    ],
-  },
-  {
-    title: "Source",
-    fields: [
-      ["source", "Lead source"],
-      ["utm_campaign", "Campaign"],
-      ["utm_medium", "Medium"],
-      ["created_at", "Created"],
-    ],
-  },
-];
+// The panels themselves now live in src/config/lead-fields.ts, because the
+// client island that edits them needs the same list and the same per-field
+// input kinds. See that file for why a plain [column, label] tuple was not
+// enough once the values became editable.
 
 export default async function LeadDetailPage({
   params,
@@ -95,7 +57,7 @@ export default async function LeadDetailPage({
 }) {
   const { id } = await params;
 
-  const [leadRes, tasksRes, activityRes, fieldRes, auditRes] = await Promise.all([
+  const [leadRes, tasksRes, activityRes, fieldRes, auditRes, runningRes] = await Promise.all([
     supabaseAdmin.from("contacts").select("*").eq("id", id).maybeSingle(),
     supabaseAdmin
       .from("lead_tasks")
@@ -121,9 +83,23 @@ export default async function LeadDetailPage({
     // appear here: a cold /audit from Slack has no contact_id and no lead to attach to.
     supabaseAdmin
       .from("audit_reports")
-      .select("id, slug, score, city, business_type, vertical_slug, competitors, created_at")
+      .select(
+        "id, slug, score, city, business_type, vertical_slug, competitors, created_at, slack_channel_id, slack_thread_ts"
+      )
       .eq("contact_id", id)
       .eq("status", "done")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // Whether a run is in flight, asked SEPARATELY from the query above rather than by
+    // dropping its status filter. Folding them would let a run that failed this morning
+    // hide a perfectly good report from last week, which is the card that says why to
+    // call this lead at all.
+    supabaseAdmin
+      .from("audit_reports")
+      .select("id, created_at")
+      .eq("contact_id", id)
+      .in("status", ["classifying", "running"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -136,6 +112,17 @@ export default async function LeadDetailPage({
   const activities = (activityRes.data ?? []) as unknown as TimelineActivity[];
   const fieldChanges = (fieldRes.data ?? []) as unknown as TimelineFieldChange[];
   const audit = auditRes.data as Record<string, unknown> | null;
+  // Anything older than the window is a run that died without ever reaching `done`, and
+  // the watchdog only sweeps once a day. Treating it as live would leave the audit
+  // button disabled until tomorrow morning. Same constant the route refuses on.
+  const running = runningRes.data as { created_at: string } | null;
+  const auditRunning =
+    !!running &&
+    Date.now() - new Date(running.created_at).getTime() < RUN_IN_FLIGHT_MINUTES * 60_000;
+  const auditThreadUrl =
+    audit && typeof audit.slack_channel_id === "string" && typeof audit.slack_thread_ts === "string"
+      ? slackThreadLink(audit.slack_channel_id, audit.slack_thread_ts)
+      : null;
 
   const status = (lead.application_stage as string | null) ?? null;
   const displayName =
@@ -167,8 +154,19 @@ export default async function LeadDetailPage({
                 ? formatRelativeTime(lead.last_activity_at as string)
                 : "never"}
             </span>
-            {tasks.length === 0 && (
+            {tasks.length === 0 && !lead.do_not_contact && (
               <span className="text-[#9C27B0]">no follow-up scheduled</span>
+            )}
+            {/* The flag, not the stage, is what actually silences the outreach —
+                so it is what the header says. A lead can carry it from an opt-out
+                reply without ever having been put on the take-off list. */}
+            {!!lead.do_not_contact && (
+              <span className="rounded-md bg-[rgba(192,57,43,0.18)] px-1.5 py-0.5 text-[#E74C3C]">
+                do not contact
+                {lead.do_not_contact_reason
+                  ? ` — ${String(lead.do_not_contact_reason)}`
+                  : ""}
+              </span>
             )}
           </div>
         </div>
@@ -227,31 +225,15 @@ export default async function LeadDetailPage({
             </div>
           )}
 
-          {FIELD_GROUPS.map((g) => (
-            <div
-              key={g.title}
-              className="rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-3"
-            >
-              <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
-                {g.title}
-              </p>
-              <dl className="space-y-1.5">
-                {g.fields.map(([key, label]) => (
-                  <div key={key} className="flex justify-between gap-3 text-[11px]">
-                    <dt className="shrink-0 text-[rgba(255,255,255,0.35)]">{label}</dt>
-                    <dd className="truncate text-right text-[rgba(255,255,255,0.75)]">
-                      {fmt(lead[key])}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          ))}
+          {/* Click any value to edit it. Only the panel columns are handed to the
+              client — the page selects *, which includes ssn_full, and passing the
+              whole row would serialize it into the HTML payload. */}
+          <LeadFieldPanels contactId={id} values={pickLeadPanelValues(lead)} />
         </div>
 
         {/* Centre — log a call, then the history */}
         <div className="space-y-4">
-          <LogCallForm
+          <LeadLogCard
             contactId={id}
             leadName={displayName}
             defaultFollowUpDays={cadenceFor(status).repeatDays}
@@ -260,6 +242,9 @@ export default async function LeadDetailPage({
             <p className="mb-3 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
               History · {activities.length}
             </p>
+            {/* Mirrors Outlook + sms_messages onto the timeline after first paint,
+                so the record and the call form never wait on a mailbox. */}
+            <CommsSync contactId={id} />
             <LeadTimeline activities={activities} fieldChanges={fieldChanges} />
           </div>
         </div>
@@ -294,6 +279,15 @@ export default async function LeadDetailPage({
               </ul>
             )}
           </div>
+
+          <LeadWorkflows
+            contactId={id}
+            hasWebsite={!!(lead.website as string | null)}
+            hasBusinessName={!!(lead.business_name as string | null)?.trim()}
+            hasAudit={!!audit}
+            auditRunning={auditRunning}
+            threadUrl={auditThreadUrl}
+          />
 
           <Link
             href={`/dashboard/assistant?q=${encodeURIComponent(`Tell me about ${displayName}`)}`}

@@ -60,6 +60,19 @@ export interface ClaudeJSONOptions<T> {
    * web_search tool version.
    */
   tools?: unknown[];
+  /**
+   * Wall-clock budget for a SINGLE request, in ms. Omitted = no timeout, which is the behaviour
+   * every existing caller has always had.
+   *
+   * ‼️ A timeout here is NOT retried. Retrying it would multiply the budget by
+   * MAX_ATTEMPTS_PER_MODEL and defeat the point of setting one — the caller asked for a bound on
+   * wall clock, not on attempts. It throws so the caller can fail over to whatever it has.
+   *
+   * Worth setting on any tool-using call. web_search turns a normally-fast request into one that
+   * can run for minutes, and the audit pipeline runs inside waitUntil against a 300s maxDuration:
+   * a request that never returns eats the whole budget and the run dies with nothing posted.
+   */
+  timeoutMs?: number;
 }
 
 // --- Transient-error retry + model fallback ---------------------------------
@@ -110,7 +123,8 @@ interface AnthropicRequestBody {
 async function fetchAnthropicWithRetry(
   apiKey: string,
   body: Omit<AnthropicRequestBody, "model">,
-  models: ClaudeModel[]
+  models: ClaudeModel[],
+  timeoutMs?: number
 ): Promise<{ content: Array<{ type: string; text?: string }>; usage: { input_tokens: number; output_tokens: number }; stop_reason?: string }> {
   let lastError: Error | null = null;
 
@@ -129,8 +143,15 @@ async function fetchAnthropicWithRetry(
             "content-type": "application/json",
           },
           body: JSON.stringify({ ...body, model }),
+          ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
         });
       } catch (e) {
+        // ‼️ A timeout is NOT transient and must not be retried. The caller set a wall-clock
+        // budget; spending it five more times is the opposite of honouring it. Throw so the
+        // caller can fail over (the audit's research step drops to its OpenAI backup here).
+        if ((e as Error).name === "TimeoutError" || (e as Error).name === "AbortError") {
+          throw new Error(`Anthropic request exceeded ${timeoutMs}ms on ${model}`);
+        }
         // Network/fetch error — transient, retry.
         lastError = e as Error;
         if (attempt < MAX_ATTEMPTS_PER_MODEL - 1) {
@@ -307,7 +328,8 @@ export async function callClaudeJSON<T>(opts: ClaudeJSONOptions<T>): Promise<Cla
         messages: [{ role: "user", content: userContent }, ...followUp],
         ...(hasTools ? { tools: opts.tools } : {}),
       },
-      models
+      models,
+      opts.timeoutMs
     );
     const raw = json.content
       .filter((c) => c.type === "text")

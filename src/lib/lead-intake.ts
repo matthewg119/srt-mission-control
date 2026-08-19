@@ -1,12 +1,12 @@
 // Shared inbound-lead stack. One call turns a raw inbound lead into:
-//   Supabase contact upsert → Zoho lead (create or update, never duplicate)
+//   Supabase contact upsert → timeline note
 //   → #hot-leads top-level Slack post + a detail reply in that thread
 //   → Speed-to-Lead RingOut.
 //
 // Extracted from /api/leads/funnel, which grew this sequence first. Every
 // funnel now shares it: /aivisibility, the free-audit intake (/audit, /PDF,
 // /contact) and Facebook Lead Ads. Every step is best-effort and logs rather
-// than throws — a Zoho outage must never cost us the Slack ping, and vice
+// than throws — a Slack outage must never cost us the contact row, and vice
 // versa. Returns the contact id so the caller can link whatever it creates
 // next (an audit report, a deal) back to the same lead thread.
 
@@ -15,13 +15,7 @@ import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { postOrThreadLeadUpdate } from "@/lib/lead-thread";
 import { companiesConflict, type CompanyIdentity } from "@/lib/company-identity";
-import {
-  createLead as zohoCreateLead,
-  updateLead as zohoUpdateLead,
-  searchLeads as zohoSearchLeads,
-  addNoteToLead as zohoAddNote,
-} from "@/lib/zoho";
-import { crmMode, logActivity } from "@/lib/crm";
+import { logActivity } from "@/lib/crm";
 import { normalizeLeadPhone } from "@/lib/phone";
 
 export interface IngestLeadInput {
@@ -29,7 +23,6 @@ export interface IngestLeadInput {
   lastName?: string;
   email?: string;
   phone?: string;
-  /** The lead's own website. Not part of ZohoLeadData, set via a raw-field update. */
   website?: string;
   businessName?: string;
   city?: string;
@@ -38,20 +31,17 @@ export interface IngestLeadInput {
   /** Meta's leadgen_id. The only join key back to the ad for Conversions API
    *  for Leads — a lead ad never touches the site, so there is no fbc/fbclid. */
   fbLeadId?: string;
-  /** What shows in Zoho's Lead Source picklist. */
-  zohoLeadSource: string;
-  /** Rendered into both the Zoho note and the Slack thread reply. */
+  /** Rendered into both the timeline note and the Slack thread reply. */
   detailLines?: string[];
   /** First line of the Slack thread reply. Omit to skip the reply entirely. */
   headline?: string;
-  /** Title of the Zoho note. Omit to skip the note. */
+  /** Subject of the timeline note. Omit to skip the note. */
   noteTitle?: string;
   speedToLead?: boolean;
 }
 
 export interface IngestLeadResult {
   contactId: string | null;
-  zohoLeadId: string | null;
   /** True when this call created the top-level #hot-leads message. */
   threadTs: string | null;
 }
@@ -90,7 +80,7 @@ async function findContact(email: string, phone: string, identity: CompanyIdenti
 
   const { data } = await supabaseAdmin
     .from("contacts")
-    .select("id, zoho_lead_id, website, business_name")
+    .select("id, website, business_name")
     .or(filters.join(","))
     .order("created_at", { ascending: false })
     .limit(CONTACT_CANDIDATES);
@@ -99,7 +89,7 @@ async function findContact(email: string, phone: string, identity: CompanyIdenti
   // Newest first, so the most recent compatible contact still wins as before.
   for (const c of candidates) {
     if (!companiesConflict({ website: c.website, businessName: c.business_name }, identity)) {
-      return { id: c.id as string, zoho_lead_id: c.zoho_lead_id as string | null };
+      return { id: c.id as string };
     }
   }
 
@@ -128,12 +118,10 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
 
   // ── Supabase contact upsert ──
   let contactId: string | null = null;
-  let existingZohoId: string | null = null;
   try {
     const existing = await findContact(email, phone, { website, businessName });
     if (existing) {
       contactId = existing.id;
-      existingZohoId = existing.zoho_lead_id || null;
       await supabaseAdmin
         .from("contacts")
         .update({
@@ -173,81 +161,13 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
 
   const detailLines = (input.detailLines ?? []).filter(Boolean);
 
-  // ── Zoho: update the existing lead or search-then-create. Awaited so the
-  // serverless function isn't torn down mid-write. ──
+  // ── The intake detail goes straight onto the timeline. ──
   //
-  // GATED ON CRM_WRITE_MODE. This is the one Zoho write that does NOT go
-  // through crm.ts — it calls the client directly — so without this check
-  // flipping the mode to supabase_only would still create a Zoho lead for
-  // every inbound funnel, Meta lead ad and public audit request.
-  //
-  // Note what is NOT inside this block: the Supabase contact upsert already
-  // happened above, and the #hot-leads Slack post and the Speed-to-Lead
-  // RingOut below both key off `contactId`, never off `zohoLeadId`. Turning
-  // Zoho off costs the lead nothing operationally.
-  let zohoLeadId: string | null = existingZohoId;
-  const zohoEnabled = crmMode() !== "supabase_only";
-  if (zohoEnabled) {
-  try {
-    if (!zohoLeadId && email) {
-      const found = await zohoSearchLeads({ email });
-      if (found && found.length > 0) zohoLeadId = found[0].id as string;
-    }
-
-    if (zohoLeadId) {
-      await zohoUpdateLead(zohoLeadId, {
-        ...(firstName ? { First_Name: firstName } : {}),
-        Last_Name: lastName || firstName || businessName || "Unknown",
-        ...(businessName ? { Company: businessName } : {}),
-        ...(phone ? { Phone: phone } : {}),
-        ...(email ? { Email: email } : {}),
-        ...(website ? { Website: website } : {}),
-        ...(city ? { City: city } : {}),
-      });
-    } else {
-      zohoLeadId = await zohoCreateLead({
-        firstName,
-        lastName: lastName || firstName || businessName,
-        businessName,
-        email,
-        phone,
-        bizCity: city || undefined,
-        source: input.zohoLeadSource,
-        Lead_Status: "New Lead",
-      });
-      // Website isn't part of ZohoLeadData — set it with a raw-field update.
-      if (zohoLeadId && website) {
-        await zohoUpdateLead(zohoLeadId, { Website: website });
-      }
-    }
-
-    if (zohoLeadId) {
-      if (contactId && zohoLeadId !== existingZohoId) {
-        await supabaseAdmin.from("contacts").update({ zoho_lead_id: zohoLeadId }).eq("id", contactId);
-      }
-      if (input.noteTitle && detailLines.length) {
-        await zohoAddNote(zohoLeadId, input.noteTitle, detailLines.join("\n")).catch((err) =>
-          console.error("[lead-intake] zoho note failed:", err instanceof Error ? err.message : err)
-        );
-      }
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[lead-intake] zoho sync failed:", msg);
-    await supabaseAdmin
-      .from("system_logs")
-      .insert({
-        event_type: "zoho_sync_error",
-        description: `Zoho sync failed for ${input.source} lead ${email || phone}: ${msg.slice(0, 300)}`,
-        metadata: { contactId, email, phone, source: input.source },
-      })
-      .then(undefined, () => {});
-  }
-  } else if (contactId && input.noteTitle && detailLines.length) {
-    // With Zoho off, the intake detail has nowhere else to go — the Zoho note
-    // above was the only record of it. Write it straight to the timeline.
-    // (When Zoho IS on, addNoteToLead already mirrors it, so doing it here too
-    // would double every intake note.)
+  // This used to be a Zoho note, and that note was the only record of it. The
+  // #hot-leads Slack post and the Speed-to-Lead RingOut below always keyed off
+  // `contactId`, never off a Zoho id, so nothing else here changed when Zoho
+  // went away.
+  if (contactId && input.noteTitle && detailLines.length) {
     await logActivity({
       contactId,
       activityType: "note",
@@ -266,7 +186,7 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
     .insert({
       event_type: "lead_capture",
       description: `New ${input.source} lead: ${leadName}${businessName ? " — " + businessName : ""}`,
-      metadata: { contactId, zohoLeadId, email, phone, website, city, source: input.source },
+      metadata: { contactId, email, phone, website, city, source: input.source },
     })
     .then(undefined, () => {});
 
@@ -307,11 +227,11 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
     });
   }
 
-  return { contactId, zohoLeadId, threadTs };
+  return { contactId, threadTs };
 }
 
 /**
- * Append a follow-up to a lead that already exists: a Zoho note plus a reply in
+ * Append a follow-up to a lead that already exists: a timeline note plus a reply in
  * the same #hot-leads thread. Used for post-lead quiz answers, which arrive
  * after the lead has already been created and the audit already kicked off.
  * No-op when the email matches nothing.
@@ -327,7 +247,7 @@ export async function enrichLead(opts: {
 
   const { data: contact } = await supabaseAdmin
     .from("contacts")
-    .select("id, zoho_lead_id, slack_thread_ts, slack_channel")
+    .select("id, slack_thread_ts, slack_channel")
     .ilike("email", email)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -337,10 +257,17 @@ export async function enrichLead(opts: {
 
   const detailLines = opts.detailLines.filter(Boolean);
 
-  if (contact.zoho_lead_id && detailLines.length) {
-    await zohoAddNote(contact.zoho_lead_id, opts.noteTitle, detailLines.join("\n")).catch((err) =>
-      console.error("[lead-intake] enrich zoho note failed:", err instanceof Error ? err.message : err)
-    );
+  if (detailLines.length) {
+    await logActivity({
+      contactId: contact.id as string,
+      activityType: "note",
+      direction: "internal",
+      channel: "web",
+      subject: opts.noteTitle,
+      body: detailLines.join("\n"),
+      actor: "lead-intake",
+      source: "mission_control",
+    });
   }
 
   const channel = contact.slack_channel || process.env.SLACK_HOT_LEADS_CHANNEL || "";

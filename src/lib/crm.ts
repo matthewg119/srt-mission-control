@@ -7,31 +7,14 @@
 // time was to split contacts.disposition out of application_stage
 // (docs/2026-07-27-lead-disposition.sql) and stop writing the status at all.
 //
-// The real fix lives here: every write records WHERE it came from
-// (lead_status_history.origin), and applyZohoStatus() refuses to apply an
-// inbound Zoho status that matches something we ourselves wrote seconds ago.
-// With the echo broken, writing Lead_Status from Mission Control is safe again.
-//
-// ── CRM_WRITE_MODE ─────────────────────────────────────────────────────
-//   zoho_authority  (default) Zoho is the boss. Write there first and let it
-//                   throw; Supabase mirrors after. Byte-identical to the
-//                   behaviour before this module existed.
-//   dual_write      Supabase is authoritative. Zoho still gets everything,
-//                   best-effort — failures land in system_logs, never throw.
-//   supabase_only   Zoho is gone. Nothing is pushed, nothing inbound applies.
-//
-// Flipping that env var IS the migration. Nothing else changes.
+// Zoho is gone and this is the only CRM. Every write still records WHERE it
+// came from (lead_status_history.origin), which is what made the round trip
+// safe to break and is worth keeping now that there is nothing to echo: it is
+// how the worklist tells a human edit from an audit inferring a field.
 
 import { supabaseAdmin } from "./db";
-import {
-  updateLead,
-  addNoteResilient,
-  createZohoTask,
-  closeZohoTask,
-} from "./zoho";
 import { invalidateWorklistCache } from "./worklist";
-
-export type CrmMode = "zoho_authority" | "dual_write" | "supabase_only";
+import { isTakeOffListStage } from "@/config/stage-display";
 
 export type CrmOrigin =
   | "mission_control"
@@ -46,25 +29,6 @@ export type CrmOrigin =
   // but does NOT log the summary activity, so a scan cannot reorder the worklist.
   // lead_field_history's check constraint mirrors this union.
   | "audit_engine";
-
-export function crmMode(): CrmMode {
-  const raw = (process.env.CRM_WRITE_MODE || "").trim();
-  if (raw === "dual_write" || raw === "supabase_only") return raw;
-  return "zoho_authority";
-}
-
-/** True while Zoho should still receive writes. */
-function pushesToZoho(): boolean {
-  return crmMode() !== "supabase_only";
-}
-
-/**
- * How long a Mission-Control-originated status write suppresses the matching
- * inbound Zoho echo. Zoho's workflow webhook typically fires within a couple
- * of seconds; three minutes is generous without being long enough to swallow
- * a genuine edit somebody made in the Zoho UI right after ours.
- */
-const ECHO_WINDOW_MS = 180_000;
 
 type Rec = Record<string, unknown>;
 
@@ -85,46 +49,213 @@ async function logSystem(
 // ─────────────────────────────────────────────────────────────────────
 // Contact resolution
 // ─────────────────────────────────────────────────────────────────────
+//
+// ONE lookup, five keys. Before this, "find the person behind this phone
+// number" was written six times across the tree — in api/imessage/inbound,
+// api/loopmessage/inbound, api/ext/lead/resolve, api/sms/compose,
+// ai-intel/smart-followup and here — each with its own column list, its own
+// null handling, and three of them with their own live Zoho fallback. They
+// disagreed about what a match even was, so the extension could name a lead the
+// inbound webhook had already discarded.
+//
+// Everything that needs to turn a phone, an email or an id into a person calls
+// resolveLead(). It is the seam the Zoho cutover, the email panel, the text
+// thread and the dialer all sit on.
 
-interface ContactRef {
+/** A person, as the rest of the app should see them. Never a Zoho record. */
+export interface LeadRef {
   id: string;
-  zoho_lead_id: string | null;
-  application_stage: string | null;
-  business_name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  businessName: string | null;
+  email: string | null;
+  phone: string | null;
+  mobilePhone: string | null;
+  website: string | null;
+  applicationStage: string | null;
+  doNotContact: boolean;
+  zohoLeadId: string | null;
+  workingState: string | null;
+  /** Where the lead came from. The successor of Zoho's Lead_Source. */
+  source: string | null;
+  /** Business name, else person name, else email, else phone. Never empty. */
+  displayName: string;
 }
 
-const CONTACT_COLS = "id, zoho_lead_id, application_stage, business_name";
+/**
+ * Verified against the live table with scripts/_probe-contacts-columns.ts.
+ *
+ * `contacts` was built in the Supabase console and has drifted from the code's
+ * assumptions more than once, and PostgREST fails the WHOLE query on a single
+ * unknown column — it does not degrade, it 400s the entire lane. So this list
+ * is checked, not assumed, and the probe script is how you check it again.
+ */
+const LEAD_COLS =
+  "id, first_name, last_name, business_name, email, phone, mobile_phone, " +
+  "website, application_stage, do_not_contact, zoho_lead_id, working_state, source";
 
-async function findContact(a: {
-  contactId?: string;
-  zohoLeadId?: string;
-  businessName?: string;
-}): Promise<ContactRef | null> {
+/** Zoho handed back "" for unset text, never null, so `a ?? b` never reached b.
+ *  Callers were written around that. Normalizing here means they no longer have
+ *  to be, and a blank name can never pass a "did we get a name" check again. */
+function blank(v: unknown): string | null {
+  const t = typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
+  return t.length > 0 ? t : null;
+}
+
+type ContactRow = Record<string, unknown>;
+
+/** Takes `unknown` on purpose. PostgREST types a runtime column-list string as
+ *  a union with GenericStringError, so every caller would otherwise need the
+ *  same cast. blank() already treats anything non-string as absent, so a
+ *  surprise shape degrades to nulls rather than throwing. */
+function toLeadRef(raw: unknown): LeadRef {
+  const row = raw as ContactRow;
+  const firstName = blank(row.first_name);
+  const lastName = blank(row.last_name);
+  const businessName = blank(row.business_name);
+  const email = blank(row.email);
+  const phone = blank(row.phone);
+  const mobilePhone = blank(row.mobile_phone);
+  const personName = [firstName, lastName].filter(Boolean).join(" ") || null;
+
+  return {
+    id: String(row.id),
+    firstName,
+    lastName,
+    businessName,
+    email,
+    phone,
+    mobilePhone,
+    website: blank(row.website),
+    applicationStage: blank(row.application_stage),
+    doNotContact: row.do_not_contact === true,
+    zohoLeadId: blank(row.zoho_lead_id),
+    workingState: blank(row.working_state),
+    source: blank(row.source),
+    displayName:
+      businessName ?? personName ?? email ?? phone ?? mobilePhone ?? "Unknown lead",
+  };
+}
+
+export interface ResolveLeadInput {
+  contactId?: string | null;
+  zohoLeadId?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  businessName?: string | null;
+}
+
+/**
+ * Find a person in `contacts`, cheapest and most certain first.
+ *
+ * The ladder is ordered by how a step can be WRONG, not by convenience:
+ *   id            cannot be wrong.
+ *   zoho_lead_id  unique index; cannot be wrong while the column survives.
+ *   phone         a shared front-desk line legitimately matches two businesses,
+ *                 so this takes the first hit and does not pretend to be sure.
+ *   email         near-certain for one hit.
+ *   businessName  weakest. Only accepted when EXACTLY one row comes back.
+ *
+ * Returns null when nothing matches. A null is not permission to discard the
+ * work: inbound messaging keeps the thread under the bare phone number, because
+ * dropping a real reply from an unrecognized number is worse than an unnamed one.
+ */
+export async function resolveLead(a: ResolveLeadInput): Promise<LeadRef | null> {
+  const { matches, rung } = await resolveLeadCandidates(a);
+  if (!matches.length) return null;
+  // businessName is the one rung that refuses an ambiguous answer outright.
+  if (rung === "businessName" && matches.length !== 1) return null;
+  return matches[0];
+}
+
+/** Which lookup key produced the match. Callers turn this into a confidence. */
+export type ResolveRung = "contactId" | "zohoLeadId" | "phone" | "email" | "businessName";
+
+export interface ResolveCandidates {
+  /** Everyone the first matching rung returned. Empty when nothing matched. */
+  matches: LeadRef[];
+  /** The rung that produced `matches`. Null when nothing matched. */
+  rung: ResolveRung | null;
+}
+
+/** How many rows an ambiguous rung reports. Enough for a 1/2/3 confirm strip. */
+const CANDIDATE_LIMIT = 3;
+
+/**
+ * The same ladder as resolveLead(), but it says WHICH rung answered and hands
+ * back every row that rung found instead of silently taking the first.
+ *
+ * Call Coach needs both: a phone that matches two businesses must not
+ * auto-commit, and "one hit on a unique business name" is a far weaker claim
+ * than "this is the contact id". resolveLead() is a thin wrapper over this so
+ * there is still exactly one ladder to keep correct.
+ */
+export async function resolveLeadCandidates(a: ResolveLeadInput): Promise<ResolveCandidates> {
+  const none: ResolveCandidates = { matches: [], rung: null };
+
   if (a.contactId) {
     const { data } = await supabaseAdmin
       .from("contacts")
-      .select(CONTACT_COLS)
+      .select(LEAD_COLS)
       .eq("id", a.contactId)
       .maybeSingle();
-    if (data) return data as ContactRef;
+    if (data) return { matches: [toLeadRef(data)], rung: "contactId" };
   }
+
   if (a.zohoLeadId) {
     const { data } = await supabaseAdmin
       .from("contacts")
-      .select(CONTACT_COLS)
+      .select(LEAD_COLS)
       .eq("zoho_lead_id", a.zohoLeadId)
       .maybeSingle();
-    if (data) return data as ContactRef;
+    if (data) return { matches: [toLeadRef(data)], rung: "zohoLeadId" };
   }
+
+  if (a.phone) {
+    // phone_last10 and mobile_last10 are STORED generated columns
+    // (docs/2026-06-04-contacts-phone-last10.sql). They are phone-only and
+    // mobile-only respectively and are NOT coalesced, so both must be checked
+    // or 10% of the book silently stops matching. Contacts store phones in
+    // mixed formats with none in E.164, which is why exact matching on `phone`
+    // found nobody and every inbound iMessage used to be discarded.
+    const last10 = a.phone.replace(/\D/g, "").slice(-10);
+    if (last10.length === 10) {
+      const { data } = await supabaseAdmin
+        .from("contacts")
+        .select(LEAD_COLS)
+        .or(`phone_last10.eq.${last10},mobile_last10.eq.${last10}`)
+        .limit(CANDIDATE_LIMIT);
+      if (data?.length) return { matches: data.map(toLeadRef), rung: "phone" };
+    }
+  }
+
+  if (a.email) {
+    const email = a.email.trim();
+    // ilike, not eq: the index is on lower(email) (contacts_email_lower_idx),
+    // and an eq would neither use it nor match a differently-cased address.
+    if (email) {
+      const { data } = await supabaseAdmin
+        .from("contacts")
+        .select(LEAD_COLS)
+        .ilike("email", email)
+        .limit(CANDIDATE_LIMIT);
+      if (data?.length) return { matches: data.map(toLeadRef), rung: "email" };
+    }
+  }
+
   if (a.businessName) {
     const { data } = await supabaseAdmin
       .from("contacts")
-      .select(CONTACT_COLS)
+      .select(LEAD_COLS)
       .ilike("business_name", a.businessName)
-      .limit(2);
-    if (data && data.length === 1) return data[0] as ContactRef;
+      .limit(CANDIDATE_LIMIT);
+    // More than one hit means we do not know which, and guessing writes a call
+    // note onto the wrong company's record, where it stays. resolveLead()
+    // refuses outright; a caller with a confirm strip can offer the choice.
+    if (data?.length) return { matches: data.map(toLeadRef), rung: "businessName" };
   }
-  return null;
+
+  return none;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -227,6 +358,104 @@ export async function logActivity(input: LogActivityInput): Promise<string | nul
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Activity log — reads
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Every column anything in the app reads off `lead_activities`, verified against
+ * the table definition in docs/2026-08-17-crm-core.sql.
+ *
+ * Deliberately not select("*"): `metadata` is a jsonb bag no reader uses, and
+ * most callers JSON.stringify these rows straight into an LLM prompt, where it
+ * would be paid for by the token.
+ */
+const ACTIVITY_COLS =
+  "id, contact_id, activity_type, direction, channel, subject, body, " +
+  "outcome, duration_secs, occurred_at, actor, source";
+
+const ACTIVITY_LIMIT_DEFAULT = 50;
+const ACTIVITY_LIMIT_MAX = 500;
+
+/**
+ * A timeline row, raw.
+ *
+ * snake_case on purpose. `LeadRef` is camelCase because `contacts` is a drifted
+ * 169-column table that needs a translation layer; `lead_activities` was defined
+ * once and every existing reader in the app already consumes the raw column
+ * names. Renaming them here would mean no existing caller could adopt this
+ * without a rewrite, which is the opposite of the point.
+ */
+export interface LeadActivityRow {
+  id: string;
+  contact_id: string;
+  activity_type: string;
+  direction: string | null;
+  channel: string | null;
+  subject: string | null;
+  body: string | null;
+  outcome: string | null;
+  duration_secs: number | null;
+  occurred_at: string;
+  actor: string | null;
+  source: string;
+}
+
+export interface GetLeadActivitiesInput {
+  /** One contact, or many. Many is how a board scan reads N contacts in one
+   *  round trip instead of N round trips. */
+  contactId: string | string[];
+  /** Restrict to these `activity_type` values. Omit for the whole timeline. */
+  types?: string[];
+  /** Clamped to 1..500. Defaults to 50. */
+  limit?: number;
+}
+
+/**
+ * The lead timeline. One reader, so the column list and the ordering are decided
+ * in one place rather than in each of the seven near-identical copies that grew
+ * across the app.
+ */
+export async function getLeadActivities(
+  a: GetLeadActivitiesInput
+): Promise<LeadActivityRow[]> {
+  const ids = (Array.isArray(a.contactId) ? a.contactId : [a.contactId]).filter(Boolean);
+  // .in("contact_id", []) goes on the wire as `in.()` and 400s the query. An
+  // empty caller list is a no-op, not an error, so it never reaches PostgREST.
+  if (ids.length === 0) return [];
+
+  const raw = Number(a.limit);
+  const limit = Number.isFinite(raw)
+    ? Math.min(Math.max(Math.trunc(raw), 1), ACTIVITY_LIMIT_MAX)
+    : ACTIVITY_LIMIT_DEFAULT;
+
+  try {
+    let q = supabaseAdmin.from("lead_activities").select(ACTIVITY_COLS);
+    q = ids.length === 1 ? q.eq("contact_id", ids[0]) : q.in("contact_id", ids);
+    if (a.types?.length) q = q.in("activity_type", a.types);
+
+    // Newest first, always, and not an option. Both composite indexes are
+    // occurred_at DESC, so it is the only ordering that is free. created_at
+    // breaks the tie, because setLeadStatus writes a status_change and logCall
+    // writes a call in the same millisecond, and "whichever row came back" is
+    // not an ordering.
+    const { data, error } = await q
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) throw new Error(error.message);
+    // Same cast as toLeadRef: PostgREST types a runtime column-list string as a
+    // union with GenericStringError.
+    return (data ?? []) as unknown as LeadActivityRow[];
+  } catch (e) {
+    // Same posture as logActivity. A timeline read is context, never the point
+    // of the request, so losing it beats failing the caller's actual job.
+    console.error("[crm.getLeadActivities] failed:", (e as Error).message);
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Status
 // ─────────────────────────────────────────────────────────────────────
 
@@ -237,104 +466,93 @@ export interface SetLeadStatusInput {
   reason?: string;
   origin: CrmOrigin;
   actor?: string;
-  /**
-   * Ordered fallbacks for orgs whose Lead_Status picklist doesn't contain the
-   * first choice. Absorbs the candidate loop that /api/leads/disqualify used
-   * to run inline (["Dead Declined","DNQ","Declined","Dead"]): the first value
-   * Zoho accepts wins, and that is the one recorded locally.
-   */
-  statusCandidates?: string[];
 }
+
+/**
+ * Stamped into contacts.do_not_contact_reason when the Take Off List stage is
+ * what raised the flag.
+ *
+ * The flag is older than the stage and other things raise it: an opt-out reply,
+ * a hand edit, the exclusion sync. Moving a lead back onto the board must undo
+ * OUR flag and only ours, so the reason carries a marker instead of the restore
+ * path guessing.
+ */
+export const TAKE_OFF_DNC_REASON = "Take Off List";
 
 export interface SetLeadStatusResult {
   ok: boolean;
   contactId: string | null;
   landedStatus: string | null;
-  pushedToZoho: boolean;
   error?: string;
 }
 
 export async function setLeadStatus(
   input: SetLeadStatusInput
 ): Promise<SetLeadStatusResult> {
-  const mode = crmMode();
-  const contact = await findContact({
+  const contact = await resolveLead({
     contactId: input.contactId,
     zohoLeadId: input.zohoLeadId,
   });
 
-  const zohoLeadId = input.zohoLeadId ?? contact?.zoho_lead_id ?? null;
-  const candidates =
-    input.statusCandidates && input.statusCandidates.length > 0
-      ? input.statusCandidates
-      : [input.status];
-
-  let landedStatus: string | null = null;
-  let pushedToZoho = false;
-  let pushError: string | undefined;
-
-  // ── Zoho push ──────────────────────────────────────────────────────
-  if (pushesToZoho() && zohoLeadId) {
-    for (const candidate of candidates) {
-      try {
-        // mirror:false — updateLead() mirrors bare Lead_Status writes for the
-        // callers that bundle status into a bulk field update. We write our own
-        // history row below with a real reason and origin.
-        await updateLead(zohoLeadId, { Lead_Status: candidate }, { mirror: false });
-        landedStatus = candidate;
-        pushedToZoho = true;
-        break;
-      } catch (e) {
-        pushError = (e as Error).message;
-        // Try the next picklist candidate; a rejected value is the expected
-        // failure here, not an outage.
-      }
-    }
-
-    if (!pushedToZoho) {
-      if (mode === "zoho_authority") {
-        // Zoho is the boss in this mode — surface the failure rather than
-        // silently letting Supabase drift ahead of it.
-        return {
-          ok: false,
-          contactId: contact?.id ?? null,
-          landedStatus: null,
-          pushedToZoho: false,
-          error: pushError ?? "Zoho rejected every status candidate",
-        };
-      }
-      await logSystem(
-        "crm_zoho_push_failed",
-        `Lead_Status push failed for ${zohoLeadId}: ${(pushError ?? "unknown").slice(0, 300)}`,
-        { zohoLeadId, candidates, kind: "status" }
-      );
-    }
-  }
-
-  if (!landedStatus) landedStatus = candidates[0];
+  const landedStatus = input.status;
 
   // ── Supabase ───────────────────────────────────────────────────────
   if (!contact) {
     return {
-      ok: pushedToZoho,
+      ok: false,
       contactId: null,
       landedStatus,
-      pushedToZoho,
       error: "no matching contact in Supabase",
     };
   }
 
-  const oldStatus = contact.application_stage;
+  const oldStatus = contact.applicationStage;
   const now = new Date().toISOString();
 
   if (oldStatus !== landedStatus) {
+    const update: Record<string, unknown> = {
+      application_stage: landedStatus,
+      application_stage_updated_at: now,
+      application_stage_origin: input.origin,
+    };
+
+    // ── Take Off List ────────────────────────────────────────────────
+    // The stage is only a label. do_not_contact and working_state are what
+    // actually stop the outreach, and every path that could touch this lead
+    // already reads them: the sequence engine, the email and follow-up
+    // directors, the SMS import, the touch policy and the worklist's own
+    // hard drop. Setting them here means nothing else has to learn the stage.
+    const takingOff = isTakeOffListStage(landedStatus);
+    const puttingBack = !takingOff && isTakeOffListStage(oldStatus);
+
+    if (takingOff) {
+      update.do_not_contact = true;
+      update.do_not_contact_reason = input.reason
+        ? `${TAKE_OFF_DNC_REASON}: ${input.reason}`
+        : TAKE_OFF_DNC_REASON;
+      update.do_not_contact_at = now;
+      update.working_state = "closed";
+    } else if (puttingBack) {
+      // Undo our own flag, never somebody else's. A lead that asked us to stop
+      // keeps do_not_contact = true even as the stage goes back to workable,
+      // and the worklist still drops it on that flag alone.
+      const { data: dnc } = await supabaseAdmin
+        .from("contacts")
+        .select("do_not_contact, do_not_contact_reason")
+        .eq("id", contact.id)
+        .maybeSingle();
+      const ours = String(dnc?.do_not_contact_reason ?? "").startsWith(TAKE_OFF_DNC_REASON);
+      if (dnc?.do_not_contact && ours) {
+        update.do_not_contact = false;
+        update.do_not_contact_reason = null;
+        update.do_not_contact_at = null;
+      }
+      update.working_state = "working";
+    }
+
     const { error } = await supabaseAdmin
       .from("contacts")
-      .update({
-        application_stage: landedStatus,
-        application_stage_updated_at: now,
-        application_stage_origin: input.origin,
-      })
+      .update(update)
       .eq("id", contact.id);
 
     if (error) {
@@ -342,9 +560,23 @@ export async function setLeadStatus(
         ok: false,
         contactId: contact.id,
         landedStatus,
-        pushedToZoho,
         error: error.message,
       };
+    }
+
+    if (takingOff) {
+      // An open task on a lead nobody may call again can only ever be snoozed
+      // or ignored. The lead_tasks trigger recomputes open_task_count and
+      // next_action_at, so cancelling here also clears the row from the
+      // "due today" board rather than leaving a ghost on it.
+      const { error: taskError } = await supabaseAdmin
+        .from("lead_tasks")
+        .update({ status: "cancelled" })
+        .eq("contact_id", contact.id)
+        .eq("status", "open");
+      if (taskError) {
+        console.error("[crm.setLeadStatus] cancelling open tasks failed:", taskError.message);
+      }
     }
 
     await supabaseAdmin.from("lead_status_history").insert({
@@ -370,106 +602,7 @@ export async function setLeadStatus(
     });
   }
 
-  return { ok: true, contactId: contact.id, landedStatus, pushedToZoho };
-}
-
-export interface ApplyZohoStatusResult {
-  applied: boolean;
-  contactId: string | null;
-  reason: "applied" | "echo_suppressed" | "stale" | "unchanged" | "no_contact" | "disabled";
-}
-
-/**
- * Inbound direction: a status arriving FROM Zoho (webhook or delta sync).
- *
- * The echo guard is the whole point. When Mission Control writes a status it
- * pushes to Zoho, Zoho's workflow rule POSTs straight back, and applying that
- * as a fresh Zoho-originated change would re-trigger every downstream side
- * effect. So: if we already recorded this exact status for this contact from a
- * non-Zoho origin inside the echo window, this is our own voice coming back.
- */
-export async function applyZohoStatus(a: {
-  zohoLeadId: string;
-  status: string;
-  zohoModifiedTime?: string;
-  actor?: string;
-}): Promise<ApplyZohoStatusResult> {
-  const mode = crmMode();
-  if (mode === "supabase_only") {
-    return { applied: false, contactId: null, reason: "disabled" };
-  }
-
-  const { data } = await supabaseAdmin
-    .from("contacts")
-    .select("id, application_stage, application_stage_updated_at")
-    .eq("zoho_lead_id", a.zohoLeadId)
-    .maybeSingle();
-
-  if (!data) return { applied: false, contactId: null, reason: "no_contact" };
-  const contactId = data.id as string;
-  const current = data.application_stage as string | null;
-
-  if (current === a.status) {
-    return { applied: false, contactId, reason: "unchanged" };
-  }
-
-  // Echo check.
-  const since = new Date(Date.now() - ECHO_WINDOW_MS).toISOString();
-  const { data: echo } = await supabaseAdmin
-    .from("lead_status_history")
-    .select("id")
-    .eq("contact_id", contactId)
-    .eq("new_status", a.status)
-    .neq("origin", "zoho")
-    .gte("occurred_at", since)
-    .limit(1);
-
-  if (echo && echo.length > 0) {
-    return { applied: false, contactId, reason: "echo_suppressed" };
-  }
-
-  // In dual_write, Supabase is authoritative: only accept Zoho's version if
-  // it is genuinely newer than our own last write.
-  if (mode === "dual_write" && a.zohoModifiedTime) {
-    const ours = data.application_stage_updated_at as string | null;
-    if (ours && new Date(a.zohoModifiedTime) <= new Date(ours)) {
-      return { applied: false, contactId, reason: "stale" };
-    }
-  }
-
-  const now = new Date().toISOString();
-  await supabaseAdmin
-    .from("contacts")
-    .update({
-      application_stage: a.status,
-      application_stage_updated_at: a.zohoModifiedTime ?? now,
-      application_stage_origin: "zoho",
-    })
-    .eq("id", contactId);
-
-  await supabaseAdmin.from("lead_status_history").insert({
-    contact_id: contactId,
-    old_status: current,
-    new_status: a.status,
-    reason: "changed in Zoho",
-    origin: "zoho",
-    actor: a.actor ?? null,
-    occurred_at: a.zohoModifiedTime ?? now,
-  });
-
-  await logActivity({
-    contactId,
-    activityType: "status_change",
-    direction: "internal",
-    channel: "zoho",
-    subject: `${current ?? "—"} → ${a.status}`,
-    actor: a.actor,
-    source: "zoho",
-    occurredAt: a.zohoModifiedTime ?? now,
-    metadata: { oldStatus: current, newStatus: a.status, origin: "zoho" },
-  });
-
-  return { applied: true, contactId, reason: "applied" };
+  return { ok: true, contactId: contact.id, landedStatus };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -484,7 +617,7 @@ export interface AddNoteInput {
   content: string;
   origin: CrmOrigin;
   actor?: string;
-  /** Set when mirroring an existing Zoho note, for idempotency. */
+  /** Set when replaying an already-recorded note, for idempotency. */
   externalId?: string;
   dealId?: string | null;
 }
@@ -493,59 +626,15 @@ export async function addNote(input: AddNoteInput): Promise<{
   ok: boolean;
   activityId: string | null;
   contactId: string | null;
-  zohoTarget: string | null;
 }> {
-  const contact = await findContact({
+  const contact = await resolveLead({
     contactId: input.contactId,
     zohoLeadId: input.zohoLeadId,
     businessName: input.businessName,
   });
 
-  let zohoTarget: string | null = null;
-  if (pushesToZoho() && input.origin !== "zoho") {
-    try {
-      const res = await addNoteResilient({
-        zohoLeadId: input.zohoLeadId ?? contact?.zoho_lead_id ?? null,
-        businessName: input.businessName ?? contact?.business_name ?? null,
-        title: input.title,
-        content: input.content,
-        // addNoteToLead mirrors into lead_activities by default so that the
-        // ~12 direct callers elsewhere can't miss it. We log our own row below
-        // with proper origin metadata, so suppress the generic one.
-        mirror: false,
-      });
-      zohoTarget = res.target;
-
-      // addNoteResilient SWALLOWS its failures — it tries the Lead, then the
-      // converted Deal, and returns {ok:false} rather than throwing. So the
-      // catch below never fires on a normal push failure, and for a while
-      // nothing at all was recorded. That matters more than it looks: the gate
-      // for flipping CRM_WRITE_MODE to supabase_only is "two weeks of
-      // dual_write with no crm_zoho_push_failed in system_logs", and a gate
-      // that cannot fail is not a gate.
-      if (!res.ok) {
-        await logSystem(
-          "crm_zoho_push_failed",
-          `Note push failed: Zoho rejected both the lead and the converted deal`,
-          {
-            kind: "note",
-            title: input.title,
-            contactId: contact?.id ?? null,
-            zohoLeadId: input.zohoLeadId ?? contact?.zoho_lead_id ?? null,
-          }
-        );
-      }
-    } catch (e) {
-      await logSystem(
-        "crm_zoho_push_failed",
-        `Note push failed: ${(e as Error).message.slice(0, 300)}`,
-        { kind: "note", title: input.title, contactId: contact?.id ?? null }
-      );
-    }
-  }
-
   if (!contact) {
-    return { ok: !!zohoTarget, activityId: null, contactId: null, zohoTarget };
+    return { ok: false, activityId: null, contactId: null };
   }
 
   const activityId = await logActivity({
@@ -563,7 +652,7 @@ export async function addNote(input: AddNoteInput): Promise<{
     metadata: { origin: input.origin },
   });
 
-  return { ok: !!activityId, activityId, contactId: contact.id, zohoTarget };
+  return { ok: !!activityId, activityId, contactId: contact.id };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -580,59 +669,18 @@ export interface CreateTaskInput {
   origin: CrmOrigin;
   actor?: string;
   dealId?: string | null;
-  /** Default true while Zoho is alive, so Matt's Zoho task list stays usable. */
-  pushToZoho?: boolean;
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{
   ok: boolean;
   taskId: string | null;
-  zohoTaskId: string | null;
   error?: string;
 }> {
   const dueAt =
     input.dueAt instanceof Date ? input.dueAt.toISOString() : new Date(input.dueAt).toISOString();
 
   if (Number.isNaN(new Date(dueAt).getTime())) {
-    return { ok: false, taskId: null, zohoTaskId: null, error: "invalid dueAt" };
-  }
-
-  let zohoTaskId: string | null = null;
-  const shouldPush = input.pushToZoho ?? true;
-  if (shouldPush && pushesToZoho()) {
-    const { data: c } = await supabaseAdmin
-      .from("contacts")
-      .select("zoho_lead_id")
-      .eq("id", input.contactId)
-      .maybeSingle();
-    const zohoLeadId = c?.zoho_lead_id as string | null | undefined;
-    if (zohoLeadId) {
-      try {
-        zohoTaskId = await createZohoTask({
-          leadId: zohoLeadId,
-          subject: input.title,
-          dueDate: dueAt.slice(0, 10),
-          description: input.description,
-          priority:
-            input.priority === "high" ? "High" : input.priority === "low" ? "Low" : "Normal",
-        });
-        // Same swallowed-failure problem as the note push above: createZohoTask
-        // catches internally and returns null rather than throwing.
-        if (!zohoTaskId) {
-          await logSystem(
-            "crm_zoho_push_failed",
-            `Task push failed: Zoho returned no task id`,
-            { kind: "task", title: input.title, contactId: input.contactId, zohoLeadId }
-          );
-        }
-      } catch (e) {
-        await logSystem(
-          "crm_zoho_push_failed",
-          `Task push failed: ${(e as Error).message.slice(0, 300)}`,
-          { kind: "task", title: input.title, contactId: input.contactId }
-        );
-      }
-    }
+    return { ok: false, taskId: null, error: "invalid dueAt" };
   }
 
   const { data, error } = await supabaseAdmin
@@ -648,13 +696,12 @@ export async function createTask(input: CreateTaskInput): Promise<{
       due_at: dueAt,
       created_by: input.actor ?? input.origin,
       source: "mission_control",
-      zoho_task_id: zohoTaskId,
     })
     .select("id")
     .single();
 
   if (error || !data) {
-    return { ok: false, taskId: null, zohoTaskId, error: error?.message };
+    return { ok: false, taskId: null, error: error?.message };
   }
 
   await logActivity({
@@ -669,7 +716,7 @@ export async function createTask(input: CreateTaskInput): Promise<{
     metadata: { taskId: data.id, dueAt, origin: input.origin },
   });
 
-  return { ok: true, taskId: data.id as string, zohoTaskId };
+  return { ok: true, taskId: data.id as string };
 }
 
 export async function completeTask(
@@ -700,10 +747,6 @@ export async function completeTask(
     .eq("id", taskId);
 
   if (error) return { ok: false, contactId: task.contact_id as string, error: error.message };
-
-  if (pushesToZoho() && task.zoho_task_id) {
-    await closeZohoTask(task.zoho_task_id as string).catch(() => {});
-  }
 
   await logActivity({
     contactId: task.contact_id as string,
@@ -806,34 +849,6 @@ export async function updateLeadFields(a: {
     actor: a.actor,
   });
 
-  if (pushesToZoho()) {
-    const { data: c } = await supabaseAdmin
-      .from("contacts")
-      .select("zoho_lead_id")
-      .eq("id", a.contactId)
-      .maybeSingle();
-    const zohoLeadId = c?.zoho_lead_id as string | null | undefined;
-    if (zohoLeadId) {
-      try {
-        const { buildZohoPayloadFromContact } = await import("./field-map");
-        const payload = buildZohoPayloadFromContact(patch);
-        // buildZohoPayloadFromContact maps application_stage → Lead_Status;
-        // it was deleted above, but belt and braces — status never rides along
-        // on a field edit.
-        delete payload.Lead_Status;
-        if (Object.keys(payload).length > 0) {
-          await updateLead(zohoLeadId, payload);
-        }
-      } catch (e) {
-        await logSystem(
-          "crm_zoho_push_failed",
-          `Field push failed: ${(e as Error).message.slice(0, 300)}`,
-          { kind: "fields", contactId: a.contactId, fields: Object.keys(patch) }
-        );
-      }
-    }
-  }
-
   // The per-field rows above are the record. This summary activity exists only because
   // it TOUCHES the lead: inserting into lead_activities fires the trigger that bumps
   // contacts.last_activity_at and reorders the worklist. A human editing a lead is a
@@ -907,7 +922,15 @@ async function recordFieldHistory(a: {
 export async function logCall(a: {
   contactId: string;
   outcome: string;
-  nextFollowUpAt: string | Date;
+  /**
+   * Required for every call that leaves the lead workable, which is the rule
+   * the call board is built on. Null ONLY when the same submit takes the lead
+   * off the list: there is no next date for a number that does not ring, and
+   * demanding one is what filled the timeline with "Follow up after bad_number
+   * call" tasks nobody could ever action. The route enforces which case is
+   * which; this signature just allows the second one to exist.
+   */
+  nextFollowUpAt: string | Date | null;
   notes?: string;
   durationSecs?: number;
   nextStep?: string;
@@ -920,11 +943,13 @@ export async function logCall(a: {
   error?: string;
 }> {
   const followUp =
-    a.nextFollowUpAt instanceof Date
-      ? a.nextFollowUpAt
-      : new Date(a.nextFollowUpAt);
+    a.nextFollowUpAt === null
+      ? null
+      : a.nextFollowUpAt instanceof Date
+        ? a.nextFollowUpAt
+        : new Date(a.nextFollowUpAt);
 
-  if (Number.isNaN(followUp.getTime())) {
+  if (followUp !== null && Number.isNaN(followUp.getTime())) {
     return {
       ok: false,
       activityId: null,
@@ -947,32 +972,16 @@ export async function logCall(a: {
     metadata: { nextStep: a.nextStep ?? null, origin: a.origin },
   });
 
-  // Mirror the call into Zoho as a note while it is still the system of
-  // record for anything we haven't migrated yet.
-  if (pushesToZoho()) {
-    await addNote({
-      contactId: a.contactId,
-      title: `Call — ${a.outcome}`,
-      content: [
-        a.notes ?? "",
-        a.nextStep ? `Next step: ${a.nextStep}` : "",
-        `Follow-up: ${followUp.toISOString().slice(0, 10)}`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      origin: a.origin,
-      actor: a.actor,
-    }).catch(() => {});
-  }
-
-  const task = await createTask({
-    contactId: a.contactId,
-    title: a.nextStep || `Follow up after ${a.outcome} call`,
-    dueAt: followUp,
-    taskType: "call",
-    origin: a.origin,
-    actor: a.actor,
-  });
+  const task = followUp
+    ? await createTask({
+        contactId: a.contactId,
+        title: a.nextStep || `Follow up after ${a.outcome} call`,
+        dueAt: followUp,
+        taskType: "call",
+        origin: a.origin,
+        actor: a.actor,
+      })
+    : { taskId: null };
 
   // A call always makes a lead "working" — it is no longer untouched, and it
   // is no longer snoozed.

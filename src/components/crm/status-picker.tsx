@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ALL_STAGES, normalizeStage } from "@/config/stage-display";
+import { ALL_STAGES, isTakeOffListStage, normalizeStage, STAGE_TAKE_OFF_LIST } from "@/config/stage-display";
 
 // Status changes go through /api/crm/leads/[id]/status → crm.setLeadStatus,
 // never a direct contacts UPDATE. That path is what writes lead_status_history
@@ -22,6 +22,17 @@ export function LeadStatusPicker({
 
   async function change(status: string) {
     if (status === current || saving) return;
+    // The only stage with side effects beyond the label: it flips
+    // do_not_contact, cancels the open follow-up and pulls the lead off every
+    // board. Reversible, but not something to land on by mis-clicking a select.
+    if (
+      isTakeOffListStage(status) &&
+      !window.confirm(
+        "Take this lead off the list? No more calls, texts or emails, and the open follow-up is cancelled. You can put it back by picking another status."
+      )
+    ) {
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -59,6 +70,11 @@ export function LeadStatusPicker({
           </option>
         ))}
       </select>
+      {current && isTakeOffListStage(current) && (
+        <p className="mt-1.5 text-[11px] text-[#C0392B]">
+          Off the list. Nothing will call, text or email this lead.
+        </p>
+      )}
       {error && <p className="mt-1.5 text-[11px] text-[#E74C3C]">{error}</p>}
     </div>
   );

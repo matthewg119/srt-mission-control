@@ -38,7 +38,7 @@ const BASE_TOOLS = [
   {
     name: "schedule_followup",
     description:
-      "Schedule a follow-up reminder for a contact on a future date. On the due date this auto-posts a reminder header AND a Vektor-drafted check-in suggestion card into the lead's OWN Slack channel (which then arms the 2-minute auto-send), and it is logged as a Zoho task tied to the lead. Use when asked to 'follow up with [contact] tomorrow', 'remind me to check on [name] in 3 days', or 'set a follow-up for [date]'.",
+      "Schedule a follow-up reminder for a contact on a future date. On the due date this auto-posts a reminder header AND a Vektor-drafted check-in suggestion card into the lead's OWN Slack channel (which then arms the 2-minute auto-send), and it opens a task on the lead. Use when asked to 'follow up with [contact] tomorrow', 'remind me to check on [name] in 3 days', or 'set a follow-up for [date]'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -54,9 +54,9 @@ const BASE_TOOLS = [
           type: "string",
           description: "When to follow up. Accepts ISO datetime, YYYY-MM-DD, or relative phrases like 'tomorrow', 'in 3 days', 'next week'.",
         },
-        create_zoho_task: {
+        create_crm_task: {
           type: "boolean",
-          description: "Whether to also log a Zoho task. Default true.",
+          description: "Whether to also open a task on the lead. Default true.",
         },
       },
       required: ["contact_id", "reason", "due_date"],
@@ -200,7 +200,7 @@ export async function executeTool(
       case "send_sms":
         content = await sendSms(input.contact_id as string, input.message as string); break;
       case "schedule_followup":
-        content = await scheduleFollowupTool(input.contact_id as string, input.reason as string, input.due_date as string, input.create_zoho_task as boolean | undefined); break;
+        content = await scheduleFollowupTool(input.contact_id as string, input.reason as string, input.due_date as string, input.create_crm_task as boolean | undefined); break;
       case "send_email":
         content = await sendEmail(input.contact_id as string, input.subject as string, input.message as string); break;
       case "get_templates":
@@ -298,17 +298,17 @@ async function scheduleFollowupTool(
   contactId: string,
   reason: string,
   dueDate: string,
-  createZohoTask?: boolean
+  createCrmTask?: boolean
 ): Promise<string> {
   try {
-    const result = await scheduleFollowup({ contactId, reason, dueDate, createZohoTask });
+    const result = await scheduleFollowup({ contactId, reason, dueDate, createCrmTask });
     if (!result.ok) {
       return JSON.stringify({ error: result.error ?? "Failed to schedule follow-up." });
     }
     return JSON.stringify({
       success: true,
       followup_id: result.followupId,
-      message: `Follow-up scheduled. On the due date a reminder + check-in draft will post in the lead's Slack channel${createZohoTask === false ? "" : " and a Zoho task was logged"}.`,
+      message: `Follow-up scheduled. On the due date a reminder + check-in draft will post in the lead's Slack channel${createCrmTask === false ? "" : " and a task was opened on the lead"}.`,
     });
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "Failed to schedule follow-up" });

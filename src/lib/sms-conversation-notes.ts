@@ -10,7 +10,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeText } from "@/lib/claude-calls";
 import { slack } from "@/lib/slack-bot";
-import { addNoteResilient } from "@/lib/zoho";
+import { addNote } from "@/lib/crm";
 
 const IDLE_MINUTES = 10;
 const MAX_PER_RUN = 25;
@@ -84,19 +84,6 @@ export async function summarizeIdleConversations(): Promise<{ processed: number;
       continue;
     }
 
-    // Look up contact for Zoho note targeting
-    let zohoLeadId: string | null = null;
-    let businessName: string | null = null;
-    if (c.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("zoho_lead_id, business_name")
-        .eq("id", c.contact_id)
-        .maybeSingle();
-      zohoLeadId = contact?.zoho_lead_id ?? null;
-      businessName = contact?.business_name ?? null;
-    }
-
     // Post to the lead's Slack channel
     if (c.slack_channel_id) {
       await slack
@@ -104,14 +91,16 @@ export async function summarizeIdleConversations(): Promise<{ processed: number;
         .catch((err: unknown) => console.error("[conversation-notes] slack post failed:", err instanceof Error ? err.message : err));
     }
 
-    // Write a Zoho note (lead or converted deal)
-    if (zohoLeadId || businessName) {
-      await addNoteResilient({
-        zohoLeadId,
-        businessName,
+    // The note needs a contact to hang off. A conversation with no contact_id is
+    // an unrecognized number, which still gets the Slack post above.
+    if (c.contact_id) {
+      await addNote({
+        contactId: c.contact_id as string,
         title: "SMS conversation notes",
         content: summary,
-      }).catch((err: unknown) => console.error("[conversation-notes] zoho note failed:", err instanceof Error ? err.message : err));
+        origin: "ai",
+        actor: "conversation_notes",
+      }).catch((err: unknown) => console.error("[conversation-notes] note failed:", err instanceof Error ? err.message : err));
     }
 
     await supabaseAdmin

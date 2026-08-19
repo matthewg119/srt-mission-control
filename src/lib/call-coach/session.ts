@@ -10,13 +10,12 @@ import type { CallTarget, TargetConfidence } from "./resolve-target";
 
 export interface SessionIdentity {
   sessionId: string;
-  zohoModule: string | null;
-  zohoRecordId: string | null;
+  contactId: string | null;
+  zohoLeadId: string | null;
   businessName: string | null;
   personName: string | null;
   prospectEmail: string | null;
   prospectPhone: string | null;
-  contactId: string | null;
   auditReportId: string | null;
   callType: string | null;
   briefText: string | null;
@@ -34,9 +33,10 @@ export interface SessionIdentity {
  */
 function identityColumns(target: CallTarget, brief: CallBrief, confidence: TargetConfidence) {
   return {
-    zoho_module: target.module,
-    zoho_record_id: target.recordId,
     contact_id: target.contactId,
+    // Still written so a session opened from an old Zoho link keeps its trail.
+    // contact_id is the identity; this is provenance.
+    zoho_record_id: target.zohoLeadId,
     audit_report_id: brief.auditReportId,
     business_name: target.businessName,
     person_name: target.personName,
@@ -73,7 +73,7 @@ export async function attachIdentityToSession(
 /**
  * Create a session row that has no capture behind it yet.
  *
- * This is what lets the DIALER ask for a brief. It has a Zoho record and no coach session, and
+ * This is what lets the DIALER ask for a brief. It has a record and no coach session, and
  * inventing a second table for "a brief that has not become a call yet" would mean two places to
  * look for the same thing. The coach adopts this id instead of minting its own.
  */
@@ -112,10 +112,10 @@ export async function latestPendingTarget(userId: string): Promise<SessionIdenti
   const { data } = await supabaseAdmin
     .from("call_coach_sessions")
     .select(
-      "id, zoho_module, zoho_record_id, business_name, person_name, prospect_email, prospect_phone, contact_id, audit_report_id, call_type, brief_text, slack_channel, slack_thread_ts"
+      "id, contact_id, zoho_record_id, business_name, person_name, prospect_email, prospect_phone, audit_report_id, call_type, brief_text, slack_channel, slack_thread_ts"
     )
     .eq("user_id", userId)
-    .not("zoho_record_id", "is", null)
+    .not("contact_id", "is", null)
     .gte("started_at", since)
     .order("started_at", { ascending: false })
     .limit(1)
@@ -124,13 +124,12 @@ export async function latestPendingTarget(userId: string): Promise<SessionIdenti
   if (!data) return null;
   return {
     sessionId: data.id as string,
-    zohoModule: data.zoho_module as string | null,
-    zohoRecordId: data.zoho_record_id as string | null,
+    contactId: data.contact_id as string | null,
+    zohoLeadId: data.zoho_record_id as string | null,
     businessName: data.business_name as string | null,
     personName: data.person_name as string | null,
     prospectEmail: data.prospect_email as string | null,
     prospectPhone: data.prospect_phone as string | null,
-    contactId: data.contact_id as string | null,
     auditReportId: data.audit_report_id as string | null,
     callType: data.call_type as string | null,
     briefText: data.brief_text as string | null,

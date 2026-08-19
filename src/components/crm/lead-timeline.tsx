@@ -114,6 +114,7 @@ const FILTERS = [
   { key: "note", label: "Notes" },
   { key: "call", label: "Calls" },
   { key: "email", label: "Email" },
+  { key: "sms", label: "Texts" },
   { key: "status_change", label: "Status" },
   { key: "field_change", label: "Field changes" },
   { key: "audit", label: "Audits" },
@@ -230,14 +231,35 @@ function Dot({ tone, Icon }: { tone: string; Icon: typeof FileText }) {
   );
 }
 
+/** On a conversation row, who sent it is the first thing you need to know. */
+const DIRECTIONAL = new Set(["email", "sms", "call"]);
+
 function ActivityRow({ a }: { a: TimelineActivity }) {
   const m = meta(a.activity_type);
+  const showDirection =
+    DIRECTIONAL.has(a.activity_type) &&
+    (a.direction === "inbound" || a.direction === "outbound");
   return (
     <li className="relative">
       <Dot tone={m.tone} Icon={m.icon} />
       <div className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] px-3 py-2">
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           <span style={{ color: m.tone }}>{m.label}</span>
+          {showDirection && (
+            <span
+              className="rounded px-1 text-[10px]"
+              style={{
+                background:
+                  a.direction === "inbound"
+                    ? "rgba(76,175,80,0.15)"
+                    : "rgba(255,255,255,0.07)",
+                color:
+                  a.direction === "inbound" ? "#4CAF50" : "rgba(255,255,255,0.5)",
+              }}
+            >
+              {a.direction === "inbound" ? "in" : "out"}
+            </span>
+          )}
           {a.outcome && <span className="text-[rgba(255,255,255,0.5)]">{a.outcome}</span>}
           {a.duration_secs ? (
             <span className="text-[rgba(255,255,255,0.35)]">

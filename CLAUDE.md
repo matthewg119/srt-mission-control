@@ -13,7 +13,6 @@ Internal operations portal for SRT Agency (business financing brokerage). AI-fir
 - Next.js 14 (App Router) + TypeScript + Tailwind CSS v3
 - Supabase PostgreSQL (hosted)
 - Anthropic Claude API (claude-sonnet-4-6) with tool use
-- Zoho CRM v5 (OAuth refresh token flow)
 - Microsoft 365 (email via Graph API, OneDrive for file storage)
 - Vercel deployment
 
@@ -57,15 +56,16 @@ also skipped when the response text is empty, since the API rejects an empty ass
 on it harder than anything else does.
 
 ### CRM Integration
-- `src/lib/zoho.ts` — Zoho CRM v5 API client (leads CRUD, PDF attachment, search)
+- `src/lib/crm.ts` — the single write-through point: `resolveLead()`, `resolveLeadCandidates()`,
+  `getLeadActivities()`, `setLeadStatus()`, `addNote()`, `createTask()`, `logCall()`
 - `src/lib/microsoft.ts` — Microsoft Graph API (email, OneDrive, OAuth)
 - `src/config/pipeline.ts` — Two pipelines: New Deals + Active Deals
 
 ### Lead Capture (from srtagency.com)
 - `src/lib/lead-intake.ts` — **the shared inbound-lead stack.** `ingestLead()` does
-  Supabase contact upsert → Zoho lead (search-then-create, never duplicates) → #hot-leads
-  top-level post + detail reply in that thread → Speed-to-Lead, and returns the contact id.
-  `enrichLead()` appends to a lead that already exists (Zoho note + same-thread reply).
+  Supabase contact upsert → timeline note → #hot-leads top-level post + detail reply in
+  that thread → Speed-to-Lead, and returns the contact id.
+  `enrichLead()` appends to a lead that already exists (timeline note + same-thread reply).
   Used by `/api/leads/funnel`, `/api/audit/public-intake` and `/api/leads/facebook` —
   add new funnels here rather than copying the sequence a fourth time.
 - `src/app/api/leads/funnel/route.ts` — /aivisibility funnel → ingestLead
@@ -75,7 +75,7 @@ on it harder than anything else does.
   Website comes from the form's field ids: set the question's Field ID to `website` in
   Ads Manager, otherwise the route resolves it from `GET /{form_id}?fields=questions{key,label}`.
 - `src/app/api/leads/capture/route.ts` — Contact form → Supabase contact + deal
-- `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create + Zoho + Slack, 100% enrich + PDF + OneDrive + Zoho)
+- `src/app/api/leads/application/route.ts` — Apply form → progressive capture (25% create + Slack, 100% enrich + PDF + OneDrive)
 
 ### Dashboard Pages
 - `/dashboard` — BrainHeart overview with recent activity
@@ -104,9 +104,6 @@ on it harder than anything else does.
 ## Environment Variables
 ```
 ANTHROPIC_API_KEY=         # Claude API
-ZOHO_CLIENT_ID=            # Zoho OAuth Client ID
-ZOHO_CLIENT_SECRET=        # Zoho OAuth Client Secret
-ZOHO_REFRESH_TOKEN=        # Zoho OAuth Refresh Token
 MICROSOFT_CLIENT_ID=       # Azure AD App Client ID
 MICROSOFT_CLIENT_SECRET=   # Azure AD App Client Secret
 MICROSOFT_TENANT_ID=       # Azure AD Tenant ID
@@ -174,13 +171,12 @@ SCAN_IP_SALT=              # Salt for hashing /scan client IPs. Optional but SET
   MP4 -> variations card. See docs/SOP-content-workflow-session.md.
 
 ## CRM Master Exclusion Sync (Meta)
-Daily cron pushes every Zoho lead + contact (hashed email/phone/name/zip/city/state) into
+Daily cron pushes every CRM contact (hashed email/phone/name/zip/city/state) into
 a Meta Customer List audience set as an EXCLUSION on acquisition ad sets, so Meta stops
 re-serving ads to people already in the CRM. Idempotent (add-only, no diffing).
 - `src/lib/meta-audience.ts` — Marketing API client (create audience + push users)
 - `src/app/api/cron/crm-exclusion-sync/route.ts` — daily sync (08:00 UTC)
 - `src/app/api/admin/create-exclusion-audience/route.ts` — one-time audience bootstrap
-- Zoho full-table scan: `listAllRecords()` in `src/lib/zoho.ts`
 
 One-time setup: (1) create a Meta System User, assign the ad account with Manage, generate
 a token with `ads_management` → `META_ADS_TOKEN`; (2) accept Custom Audience Terms at
@@ -527,6 +523,64 @@ have to be buying questions. Someone who wants to be found by future employees i
 pointed at a different question. Promising to run their job ads is not, and `offerBlock()` hands the
 model `OFFER_TIERS` as a closed list so "can you also do X" has a definite answer.
 
+### The "No website" button (`no-website-pitch.ts`, 2026-08-19)
+
+A business with a Google profile and nothing else is the best AEO lead SRT has, and pitching one
+used to mean running the whole audit at it. This is the cheap version of the same conversation:
+**three buyer questions and one permission email, about ninety seconds.** Right rail of the lead
+page, under Loom, `action: "nowebsite"` on the existing workflow route. Run the real audit after
+they say yes.
+
+**Enabled by the ABSENCE of a website**, which makes it the only control in that panel a website
+disables rather than enables. Every angle it can write rests on nothing describing this business
+having been written by them, and that premise is false the moment a site exists. The route
+re-checks and 400s, so the disabled state is not the guard.
+
+> ‼️ **IT IS NOT A SECOND EMAIL PIPELINE.** `prePitchRules`, `PARAGRAPH_RULES`, `VOICE_RULES`,
+> `STYLE_RULES`, `COMPLIANCE_RULES`, then `noDashes` + `enforceLinkPolicy` + `polishBody` +
+> `ensurePermissionClose` + `ensureSignoff`, with `draftWithLint` gating the whole thing. All
+> IMPORTED, none restated. The workflow route's own header says why: a button that assembles its
+> own prompt bypasses the linter and the no-fabrication rules silently, and the failure looks like
+> slightly worse copy rather than like a bug.
+
+> ‼️ **THREE ANGLES, PICKED BY THE EVIDENCE, and the gate is honesty not preference.** `substitute`
+> (the engine named others, you were not among them) and `buying-question` assert that we ASKED an
+> engine something, so `pickAngle` offers them only when an engine call actually returned data.
+> When none did, it falls through to `written-by-others`, which rests solely on research. Same rule
+> `run-prompts.ts` enforces with `status:"no_data"` and the call script enforces with "offer to
+> look, never claim to have looked". `miniCheckContext` states the absence out loud in the prompt
+> rather than staying silent about it, because absent beats forbidden.
+>
+> An absence angle is also skipped when the business actually DID appear in every answer. Writing
+> "you were not in it" to someone who was is the one error the prospect corrects on the first line.
+
+**The three questions are template-generated, not model-written.** `classify.ts` writes 20 because
+an audit measures a whole buying journey; this measures one thing, and a template cannot invent a
+question about a service they do not offer. It also makes two prospects in the same trade
+genuinely comparable.
+
+**`NAME_COMPETITORS_IN_COLD_EMAIL`** (`config/pitch.ts`) decides whether the competitor-naming
+angles are offered at all. It is a different question from the standing rule that we never name a
+competitor who FAILED the prospect: reporting who an engine returned is a fact about the engine
+that the prospect can reproduce in thirty seconds, not a judgement about the competitor. Set it
+false and those angles are simply never chosen; nothing else changes.
+
+**`stripEchoedClose` exists because of a measured failure.** `prePitchRules()` tells the model not
+to write the close by QUOTING both lines at it, and a live draft came back having reproduced them
+verbatim in quotation marks mid-body; `ensurePermissionClose` then appended the real close
+underneath, so the email said it twice and carried two question marks, which is itself a
+`missing-close` linter failure. `CLOSE_ATTEMPT_RE` does not catch it because it anchors on the
+first word and a line opening with a quote mark never matches. Rather than loosen a regex the
+whole cold lane depends on, this strips only the exact echo.
+
+**The Slack card prints the questions and the verdicts above the draft**, same reason the prompt
+drop prints all 20: the email states one finding as fact, and the only way to see whether that
+fact is right is to see what it came from. A refused draft is posted too, labelled as rejected,
+never silently swallowed.
+
+Probes: `scripts/_probe-no-website-pitch.ts` (synthetic checks, both the engines-answered and the
+engines-silent case) and `scripts/_probe-own-domain.ts` (19 real URLs).
+
 ## /scan — the self-serve public funnel (2026-08-05)
 `srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
 agent steps run, trade an email for the report. It is a FRONT END over the audit engine — no
@@ -624,6 +678,58 @@ channel is now fed by strangers, not just `/audit` runs. The rate limit plus the
 what bounds that. `lead_source = "scan"`; the email gate calls `ingestLead()` and back-fills
 `requester_email` onto the report only when it is still blank — a report already belonging to a
 lead is never reassigned.
+
+## /onboardingfree — the constraint quiz (2026-08-19)
+`srtagency.com/onboardingfree` (Vercel rewrite → `mission.srtagency.com/onboardingfree`). The
+quiz the free-build email promises after a prospect replies "Yes". **PUBLIC and untokenized**,
+which is the whole difference from `/onboarding`: there is no `clients` row, identity is typed
+on the last screen, and it is deliberately not resumable.
+
+**No migration.** The submission is a `system_logs` row (`event_type = onboardingfree_intake`),
+which is simultaneously the durable copy of the answers, the per-IP rate-limit ledger, and the
+anchor the access screen reads its Slack thread ts back out of. `ONBOARDING_FREE_EVENT` lives in
+`src/lib/onboarding-free/log.ts` and **cannot move into either route file**: Next validates route
+module exports against a fixed list, so a `route.ts` exporting a constant fails `next build`.
+
+> ‼️ **Q1 and Q2 are the owner's OPINION. Q3, Q4, Q5 and Q12 are the numbers that contradict it.**
+> `computeVerdict()` (`src/lib/onboarding-free/verdict.ts`) is a PURE function, no model call, same
+> precedent as `delivery-guards.ts`. It prints the stated constraint AND the verdict side by side
+> and **never reconciles them** — the disagreement is the product. Priority order is
+> `capacity` → `conversion` → `speed` → `top_of_funnel` → `unclear`, and the order is the argument.
+
+> ‼️ **`capacity` is the guardrail and it outranks everything.** Booked out or needs to hire means
+> selling customer-side visibility is wrong, because a saturated business does not produce the
+> testimonial the free build was traded for. It **flags internally only** — the prospect sees the
+> same normal ending, and the warning is on the Slack card. Same doctrine as the market-overlap
+> check: flags, never blocks.
+
+`money_maker` and `fewer_of` are the ICP and anti-ICP **in the owner's own words**. Every other
+lane infers those from `niche_briefs.avatars`, which is a guess about the vertical.
+
+- `src/config/onboarding-free.ts` — the single question set, read by the client AND the submit
+  route. Answer labels are exported CONSTANTS (`NEED`, `CAPACITY`, …) because the verdict engine
+  branches on those strings; a label reworded here and matched as a literal there is a verdict
+  that silently stops firing. Every string is `guard()`-wrapped, so ranges are "0 to 5".
+- `isVisible()` / `visibleQuestions()` are exported and **the server calls them too**. That is the
+  opposite of `/api/onboarding/save`, whose `showWhen` is client-side only, so a hidden required
+  field 400s with no way past it.
+- Guards on `POST /api/onboardingfree/submit`, cheapest first, same order as `api/clients/start`:
+  honeypot (silent 200) → time trap (2s) → per-IP ledger (`ONBOARDINGFREE_RATE_LIMIT`, default 5).
+- Contact lookup is **read only** and matches the `phone_last10` / `mobile_last10` generated
+  columns. It never writes or creates a contact; it only lets the card link a known lead.
+
+> ‼️ **The submit route returns the ROW ID, never the Slack `ts`.** Handing a browser a real
+> message timestamp would turn `/api/onboardingfree/access` into a way to post arbitrary replies
+> into `#onboarding-srt-aeo` from anywhere. The id is an opaque uuid and the server looks the ts
+> up itself. `metadata.access` doubles as the replay guard.
+
+Card is built in CODE (`src/lib/onboarding-free/card.ts`), never by a model, same reason
+`buildCoachNotes()` is: it is the framing the whole call gets planned around. Channel is
+`SLACK_CLIENT_ONBOARDING_CHANNEL`; unset logs the card rather than throwing.
+
+**Not wired, on purpose:** the answers do not feed the Call Coach brief and do not write to
+`contacts` or `audit_reports`. The `system_logs` row keeps them queryable so either can be added
+without re-asking anybody.
 
 ## /v2 — the srtagency.com rebuild, PREVIEW ONLY (2026-08-05)
 `mission.srtagency.com/v2`. An explee-styled rebuild of the marketing site, built to be looked
@@ -1049,7 +1155,7 @@ rather than reimplemented, so there is one place that turns audit rows into spea
 no audit the numbers block is a **negative assertion** ("NONE. Do not cite a score..."), because every
 brief the model has seen had a score and an absent section invites it to supply one.
 
-**Three live sources, read at scan time** (2026-08-11): Zoho (`buildZohoOnlyContext`), the Outlook
+**Three live sources, read at scan time** (2026-08-11): the CRM (`buildLeadSnapshot`), the Outlook
 mailbox (`readThreadTruth` / `readMailboxThread`), and now the audit's **Slack thread**
 (`slack-thread.ts`). Slack was the hole — `brief.ts` carried `slack_channel_id`/`slack_thread_ts`
 only so the post-call wrap knew where to post, and never read a byte. Everything decided in
@@ -1083,8 +1189,8 @@ table, no backfill of the existing audits, and it cannot drift.
 Call ends -> transcript is read back **from the database** (never from the request, or a client could
 forge a call into a CRM note) -> Sonnet writes it up -> one card in that lead's audit thread.
 
-On thumbs-up: claim the row, write ONE Zoho note, create an Outlook **draft**, print the draft into
-the thread. `wrap_state` is a claim flag (`auto_send_state` precedent) and `zoho_note_at` is checked
+On thumbs-up: claim the row, write ONE CRM note, create an Outlook **draft**, print the draft into
+the thread. `wrap_state` is a claim flag (`auto_send_state` precedent) and `crm_note_at` is checked
 separately, so a Graph failure plus a retry cannot double-write the note. Slack gets 200 in under a
 second and the work runs in `waitUntil`.
 

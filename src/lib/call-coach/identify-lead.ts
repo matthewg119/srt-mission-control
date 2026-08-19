@@ -30,7 +30,7 @@ export interface VisionRead {
   website: string | null;
   /** The browser address bar, character for character. The single most useful field here. */
   urlText: string | null;
-  zohoModule: "Leads" | "Deals" | "Contacts" | "Accounts" | null;
+  /** Legacy: an 18-19 digit Zoho lead id, still resolvable via contacts.zoho_lead_id. */
   zohoRecordId: string | null;
   /** How legibly a record was on screen. NOT how confident it is about the business. */
   confidence: number;
@@ -45,7 +45,6 @@ const EMPTY: VisionRead = {
   email: null,
   website: null,
   urlText: null,
-  zohoModule: null,
   zohoRecordId: null,
   confidence: 0,
   evidence: "nothing readable",
@@ -63,9 +62,9 @@ export async function identifyFromScreenshot(image: ScreenImage): Promise<Vision
         "- If something is partially covered, cut off, or too small to read, return null for it. A partial phone number is worse than no phone number, because it will be dialed.",
         "- Never guess a person's role, never expand an abbreviation, never fix an apparent typo in a business name. Businesses really are called things like 'Grey Seal Services LLC.'.",
         "",
-        "THE ADDRESS BAR IS THE MOST IMPORTANT THING ON SCREEN. If a browser URL is visible, transcribe it into urlText exactly as written, the whole thing including the long number. A Zoho CRM record URL contains the module and an 18 or 19 digit record id, and that id identifies the record with certainty. Copy the digits one at a time.",
+        "THE ADDRESS BAR IS THE MOST IMPORTANT THING ON SCREEN. If a browser URL is visible, transcribe it into urlText exactly as written, the whole thing. Two shapes identify a record with certainty: a Mission Control URL ending in /contacts/ followed by a long dashed id, and an older Zoho CRM URL containing /Leads/ followed by an 18 or 19 digit number. Copy the characters one at a time.",
         "",
-        "‼️ WHICH RECORD. Zoho shows a 'Recently Visited' or 'Recent Items' list in a sidebar, and a list view can show dozens of businesses at once. Those are OTHER companies, not the one he is calling. Take the business from the RECORD HEADER, the page title, or the largest heading of the detail panel. If all you can see is a list or a sidebar, return null for businessName and say so in evidence rather than picking the first row.",
+        "‼️ WHICH RECORD. A CRM shows a 'Recently Visited' or 'Recent Items' list in a sidebar, and a list view can show dozens of businesses at once. Those are OTHER companies, not the one he is calling. Take the business from the RECORD HEADER, the page title, or the largest heading of the detail panel. If all you can see is a list or a sidebar, return null for businessName and say so in evidence rather than picking the first row.",
         "",
         "confidence is 0 to 1 and measures LEGIBILITY: how clearly a single CRM record is open and readable on this screen. It is not how sure you are that this is the right business. A crisp full-screen record is 0.9; a record behind a video call window is 0.4; a list view with no record open is 0.1.",
         "evidence is one short phrase naming WHERE you read the business name from: 'record header', 'browser tab title', 'recently visited sidebar', 'list view row'.",
@@ -73,12 +72,12 @@ export async function identifyFromScreenshot(image: ScreenImage): Promise<Vision
         "If there is no CRM on screen at all, return nulls, confidence 0, and say what is on screen instead in evidence.",
       ].join("\n"),
       user:
-        "Read the CRM record on this screen. Return the business, the person, their contact details, the address bar verbatim, and the Zoho module and record id if the URL shows them.",
+        "Read the CRM record on this screen. Return the business, the person, their contact details, the address bar verbatim, and the record id if the URL shows one.",
       images: [image],
       maxTokens: 700,
       temperature: 0,
       schemaHint:
-        '{ "businessName": string|null, "personName": string|null, "phone": string|null, "email": string|null, "website": string|null, "urlText": string|null, "zohoModule": "Leads"|"Deals"|"Contacts"|"Accounts"|null, "zohoRecordId": string|null, "confidence": number, "evidence": string }',
+        '{ "businessName": string|null, "personName": string|null, "phone": string|null, "email": string|null, "website": string|null, "urlText": string|null, "zohoRecordId": string|null, "confidence": number, "evidence": string }',
       coerce: camelizeKeys,
       validate: (v: unknown): v is VisionRead => {
         const o = v as VisionRead;

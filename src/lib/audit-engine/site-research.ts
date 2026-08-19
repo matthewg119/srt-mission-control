@@ -131,7 +131,31 @@ function findInnerPaths(html: string, origin: string, limit: number): string[] {
 
 export async function researchWebsite(websiteInput: string): Promise<SiteResearch> {
   const website = normalizeUrl(websiteInput);
-  const origin = new URL(website).origin;
+
+  // ‼️ This parse used to be unguarded, and it is the whole reason `/audit JBR CRANE SERVICES,
+  // LLC` answered "Couldn't fetch JBR CRANE SERVICES, LLC: Invalid URL". A business name became
+  // `https://JBR CRANE SERVICES, LLC`, `new URL` threw a bare TypeError, and the pipeline's
+  // catch reported the message of an error that was never about fetching anything.
+  //
+  // The parser upstream makes that specific case unreachable now, but the guard stays: a raw
+  // TypeError here is caught by a handler that assumes a fetch failure, so anything malformed
+  // arriving from anywhere would be reported as a network problem. A SiteFetchError says what
+  // actually happened and carries the tri-state block every downstream reader expects.
+  let origin: string;
+  try {
+    origin = new URL(website).origin;
+  } catch {
+    throw new SiteFetchError(
+      {
+        reason: "network",
+        status: null,
+        detail: "url_unparseable",
+        checked_at: new Date().toISOString(),
+        engines_cited_site: null,
+      },
+      `${websiteInput} is not a usable web address.`
+    );
+  }
 
   const res = await fetchPage(website, { timeoutMs: HOMEPAGE_TIMEOUT_MS, retries: HOMEPAGE_RETRIES });
   if (!res.ok) {

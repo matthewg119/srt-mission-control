@@ -1,7 +1,13 @@
 import { supabaseAdmin } from "./db";
 import { slack } from "./slack-bot";
 import { isAIConfigured } from "./ai";
-import { normalizeStage, STAGE_CLOSED, STAGE_NO_CONTACT, STAGE_UNTOUCHED } from "@/config/stage-display";
+import {
+  normalizeStage,
+  STAGE_CLOSED,
+  STAGE_NO_CONTACT,
+  STAGE_TAKE_OFF_LIST,
+  STAGE_UNTOUCHED,
+} from "@/config/stage-display";
 
 interface PulseResult {
   summary: string;
@@ -33,7 +39,8 @@ async function gatherSystemState(): Promise<SystemState> {
       .from("contacts")
       .select("application_stage")
       .neq("working_state", "closed")
-      .neq("application_stage", STAGE_CLOSED),
+      .neq("application_stage", STAGE_CLOSED)
+      .neq("application_stage", STAGE_TAKE_OFF_LIST),
 
     // New leads in last 24h
     supabaseAdmin
@@ -47,6 +54,7 @@ async function gatherSystemState(): Promise<SystemState> {
       .select("application_stage, last_activity_at, first_name, last_name, business_name")
       .neq("working_state", "closed")
       .neq("application_stage", STAGE_CLOSED)
+      .neq("application_stage", STAGE_TAKE_OFF_LIST)
       // A lead nobody has reached yet cannot have "gone quiet", and after the
       // migration these two stages are most of the book. Without them the
       // pulse would report ~8,000 quiet leads every morning and mean nothing.

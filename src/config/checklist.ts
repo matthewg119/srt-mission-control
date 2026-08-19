@@ -473,8 +473,6 @@ export const QA_CHECKLIST: ChecklistCategory[] = [
           { id: "env-03", label: "NEXT_PUBLIC_SUPABASE_URL correct", priority: "critical" },
           { id: "env-04", label: "SUPABASE_SERVICE_ROLE_KEY valid", priority: "critical" },
           { id: "env-05", label: "ANTHROPIC_API_KEY valid", priority: "critical" },
-          { id: "env-06", label: "ZOHO_CLIENT_ID set", priority: "critical" },
-          { id: "env-07", label: "ZOHO_REFRESH_TOKEN valid", priority: "critical" },
           { id: "env-08", label: "META_PIXEL_ID = 2319215808600729", priority: "high" },
           { id: "env-09", label: "META_CAPI_TOKEN valid", priority: "high" },
           { id: "env-10", label: "MICROSOFT_CLIENT_ID valid", priority: "high" },

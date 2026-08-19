@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
       who: {
         businessName: session.business_name,
         personName: session.person_name,
-        zohoRef: session.zoho_record_id ? `Zoho ${session.zoho_module}/${session.zoho_record_id}` : "no CRM record identified",
+        zohoRef: session.contact_id ? `contact ${session.contact_id}` : "no CRM record identified",
       },
       qualification,
       notes: Array.isArray(body.notes) ? body.notes : [],

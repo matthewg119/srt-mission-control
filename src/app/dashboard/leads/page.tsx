@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { supabaseAdmin } from "@/lib/db";
-import { ALL_STAGES, stageColor } from "@/config/stage-display";
+import { ALL_STAGES, isTerminalStage, stageColor } from "@/config/stage-display";
 import { formatRelativeTime } from "@/lib/utils";
 import { HuntLink } from "@/components/crm/hunt-nav";
 
@@ -40,12 +40,18 @@ export default async function LeadsPage({
 }) {
   const sp = await searchParams;
 
+  // A lead on the Take Off List is parked at working_state 'closed', which is
+  // the predicate every live-lead query in the app already uses — so it drops
+  // out of this list for free. The one place it must still be visible is its
+  // own chip: without this, clicking "Take Off List" would show an empty table
+  // and look like the leads had been deleted rather than shelved.
+  const showingTerminal = !!sp.status && isTerminalStage(sp.status);
+
   let query = supabaseAdmin
     .from("contacts")
     .select(
       "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, last_activity_at, next_action_at, next_action_reason, open_task_count"
     )
-    .neq("working_state", "closed")
     .order("last_activity_at", { ascending: false, nullsFirst: false })
     // Secondary key so the order is TOTAL. Roughly 7,400 of 8,300 contacts have never
     // been touched and so share a NULL last_activity_at; without a tiebreaker Postgres
@@ -54,6 +60,7 @@ export default async function LeadsPage({
     .order("id", { ascending: true })
     .limit(200);
 
+  if (!showingTerminal) query = query.neq("working_state", "closed");
   if (sp.status) query = query.eq("application_stage", sp.status);
   if (sp.unscheduled === "1") query = query.eq("open_task_count", 0);
   if (sp.q) {

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 // Route B (med spa) — Outscraper results webhook. Outscraper POSTs here when an
 // async Google Maps job finishes. We dedupe/filter/score businesses into
-// med_spa_leads, sync the new ones to Zoho (silent), mark each ZIP's coverage,
+// med_spa_leads, mark each ZIP's coverage,
 // close the med_spa_runs row, and post the morning report to Slack.
 //
 // Paired with src/app/api/cron/pull-medspa/route.ts (Route A). Shared record logic
@@ -12,7 +12,6 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { toGroups } from "@/lib/outscraper";
 import { processZipResults } from "@/lib/medspa";
-import { syncMedSpaRows, MedSpaZohoRow } from "@/lib/medspa-zoho-sync";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -96,8 +95,6 @@ export async function POST(req: NextRequest) {
     const groups = toGroups(await extractData(body));
     const result = await processZipResults(supabaseAdmin, groups, zips, { write: true });
 
-    // Push the new leads to Zoho silently.
-    const zoho = await syncMedSpaRows(result.inserted as MedSpaZohoRow[]);
 
     // Coverage per ZIP: fewer than the cap => we got everything, mark exhausted.
     await Promise.all(
@@ -143,14 +140,6 @@ export async function POST(req: NextRequest) {
     const avgScore = result.inserted.length
       ? Math.round((result.inserted.reduce((a, r) => a + (r.lead_score ?? 0), 0) / result.inserted.length) * 10) / 10
       : 0;
-    const zohoLine = zoho.disabled
-      ? "⏸️ sync disabled"
-      : zoho.failed === 0 && zoho.ok > 0
-        ? `✅ All ${zoho.ok} added to Zoho`
-        : zoho.ok === 0 && zoho.failed === 0
-          ? "— nothing to add"
-          : `${zoho.ok} added, ${zoho.failed} failed`;
-
     if (followups) {
       const blocks: SlackBlock[] = [
         { type: "header", text: { type: "plain_text", text: `💆 Daily Med Spa Prospects — ${run.run_date}`, emoji: true } },
@@ -165,7 +154,6 @@ export async function POST(req: NextRequest) {
             { type: "mrkdwn", text: `*🗺️ USA coverage:*\n${exhaustedZips ?? 0}/${totalZips ?? 0} (${pct}%)` },
           ],
         },
-        { type: "section", text: { type: "mrkdwn", text: `*🗂️ Zoho:* ${zohoLine}` } },
       ];
       await slack.postMessage(followups, `💆 Med spa prospects — ${result.newLeads} new (${statesLabel})`, blocks);
     }
@@ -177,7 +165,6 @@ export async function POST(req: NextRequest) {
       newLeads: result.newLeads,
       duplicates: result.duplicates,
       filteredOut: result.filteredOut,
-      zoho: { ok: zoho.ok, failed: zoho.failed },
       runningTotal: runningTotal ?? 0,
     });
   } catch (err) {

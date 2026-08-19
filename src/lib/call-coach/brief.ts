@@ -179,13 +179,13 @@ export async function buildCallBrief(input: CallTarget): Promise<CallBrief> {
   }
 
   // ── The CRM block ────────────────────────────────────────────────────────
-  const zoho = await buildLeadSnapshot(target.recordId).catch(() => null);
-  const crm = zoho ? crmBlock(zoho) : "";
+  const snapshot = await buildLeadSnapshot(target.contactId).catch(() => null);
+  const crm = snapshot ? crmBlock(snapshot) : "";
 
   const email = truth ? formatThreadTruth(truth) : "EMAIL HISTORY: no audit thread, so nothing was checked.";
 
   // ── What we said about them in Slack ─────────────────────────────────────
-  // The third live source, alongside Zoho and the mailbox. Until this existed, everything decided
+  // The third live source, alongside the CRM and the mailbox. Until this existed, everything decided
   // in the audit thread was invisible on the call unless a recognised command persisted it to a
   // column. Fails open: no thread, no bot token, or a Slack outage all resolve to "".
   const threadNotes = report

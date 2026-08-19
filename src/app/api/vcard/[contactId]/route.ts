@@ -1,10 +1,10 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { getLead } from "@/lib/zoho";
 import { buildVCard, sanitizeFilename } from "@/lib/vcard";
 
-// Accepts either a Zoho Lead ID (numeric string) or a Supabase UUID.
+// Accepts either a Supabase UUID or a legacy Zoho lead id (numeric string),
+// which still resolves against the contacts.zoho_lead_id column.
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ contactId: string }> }
@@ -29,31 +29,6 @@ export async function GET(
       .eq("id", contactId)
       .maybeSingle();
     contact = data;
-  }
-
-  // ── 2. Zoho fallback ────────────────────────────────────────────────────────
-  if (!contact && isZohoId) {
-    try {
-      const zohoRecord = await getLead(contactId);
-      if (zohoRecord) {
-        contact = {
-          first_name: String(zohoRecord.First_Name ?? ""),
-          last_name:  String(zohoRecord.Last_Name  ?? ""),
-          email:       zohoRecord.Email   ? String(zohoRecord.Email)   : null,
-          phone:       zohoRecord.Phone   ? String(zohoRecord.Phone)   : (zohoRecord.Mobile ? String(zohoRecord.Mobile) : null),
-          business_name: zohoRecord.Company  ? String(zohoRecord.Company)  : null,
-          industry:    zohoRecord.Industry ? String(zohoRecord.Industry) : null,
-          biz_city:    zohoRecord.Mailing_City  ? String(zohoRecord.Mailing_City)  : null,
-          biz_state:   zohoRecord.Mailing_State ? String(zohoRecord.Mailing_State) : null,
-          amount_needed: zohoRecord.Funding_Amount_Requested ?? null,
-          source:      zohoRecord.Lead_Source ? String(zohoRecord.Lead_Source) : null,
-          zoho_lead_id: contactId,
-          id: null,
-        };
-      }
-    } catch {
-      // Zoho unavailable — fall through to 404
-    }
   }
 
   if (!contact) {

@@ -7,7 +7,10 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { isThinResearch, researchWebsite, SiteFetchError, type SiteResearch } from "./site-research";
-import { researchViaSearch, describeTarget, type ResearchTarget } from "./search-research";
+import { researchProfile, describeTarget, type ResearchTarget } from "./search-research";
+import { isOwnDomain, type BusinessIdentity } from "./claude-research";
+import { normalizeTarget } from "@/lib/scan/normalize";
+import { assertPublicHost } from "@/lib/scan/public-host";
 import { classifyBusiness } from "./classify";
 import { generateSlug } from "./slug";
 import { getOrCreateAuditChannel } from "./audit-channel";
@@ -54,7 +57,20 @@ export interface RunAuditPipelineParams {
   leadSource?: string;
   /** Public intake has no one to ask for a city — proceed on the best guess instead of blocking. */
   allowLowConfidenceCity?: boolean;
-  onNeedsCity?: (website: string, bestGuess: string | null) => Promise<void>;
+  /**
+   * Ask which city this is, and do not score until the answer comes back.
+   *
+   * `subject` is the website or the business name, whichever identifies this run. `alternates`
+   * is populated only on the name-research path, where the research step found the same trading
+   * name in more than one metro — that list is the whole reason a bare `/audit Business Name` is
+   * safe, so a caller that renders this should offer the candidates rather than just repeating
+   * the best guess.
+   */
+  onNeedsCity?: (
+    subject: string,
+    bestGuess: string | null,
+    alternates?: Array<{ city: string; state: string; note: string }>
+  ) => Promise<void>;
   onError?: (message: string) => Promise<void>;
   /**
    * The client this run is being fired FOR, when it is a client baseline rather than a
@@ -93,6 +109,17 @@ export interface RunAuditPipelineResult {
   reportId?: string;
 }
 
+/**
+ * How long after it started a run may still plausibly be alive.
+ *
+ * A full run is 4 to 6 minutes; past this it died without reaching `done` and the
+ * watchdog is the only thing that will notice, once a day. Shared so the button that
+ * refuses to start a second run and the page that greys it out cannot disagree — two
+ * literals is exactly how a lead ends up with its audit button stuck off until
+ * tomorrow morning.
+ */
+export const RUN_IN_FLIGHT_MINUTES = 15;
+
 /** Minutes within which a repeat request for the same website+email is treated
  *  as a double submit rather than a genuine re-audit. A full run is 20 engine
  *  calls plus classification, so a stray second beacon is expensive. */
@@ -107,7 +134,7 @@ const DEDUP_WINDOW_MINUTES = 30;
  * duplicate check.
  */
 async function findRecentReport(
-  target: { website: string } | { name: string; city: string },
+  target: { website: string } | { name: string; city?: string },
   email?: string
 ): Promise<string | null> {
   if (!email) return null;
@@ -119,7 +146,16 @@ async function findRecentReport(
     .in("status", ["classifying", "running", "done"])
     .gte("created_at", cutoff);
 
-  q = "website" in target ? q.eq("website", target.website) : q.is("website", null).eq("client_name", target.name).eq("city", target.city);
+  if ("website" in target) {
+    q = q.eq("website", target.website);
+  } else {
+    q = q.is("website", null).eq("client_name", target.name);
+    // The city is only part of the key when it was actually supplied. This check runs BEFORE
+    // research, so on a bare-name run there is no city to compare yet — matching on name alone
+    // is looser than ideal, but this is a 30-minute double-submit guard, and the alternative
+    // (comparing against a null city that research is about to fill in) never matches anything.
+    if (target.city) q = q.eq("city", target.city);
+  }
 
   const { data } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
   return data?.id ?? null;
@@ -133,20 +169,23 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
     await params.onError?.("No website and no business name, so there was nothing to identify.");
     return { ok: false };
   }
-  if (!params.website && !params.city?.trim()) {
-    await params.onError?.(
-      `A city is required when auditing by name. Try \`/audit ${declaredName} | City, ST\`.`
-    );
-    return { ok: false };
-  }
+  // ‼️ There is deliberately no "a city is required" guard here any more.
+  //
+  // There used to be, and its reasoning still holds: a trading name is not unique, so a run with
+  // no city scores whichever business search happened to surface. What changed is WHERE that is
+  // enforced. The research step below is now required to report every candidate metro, and this
+  // function refuses to score while the answer is ambiguous (see the city-resolution block after
+  // the research). Blocking at the door additionally demanded that Matthew already know the city
+  // for the one segment of prospects who have the least published about them.
+  const typedCity = params.city?.trim() || undefined;
 
   const target: ResearchTarget = params.website
     ? { kind: "website", website: params.website }
-    : { kind: "name", name: declaredName as string, city: (params.city as string).trim() };
+    : { kind: "name", name: declaredName as string, city: typedCity };
   const label = describeTarget(target);
 
   const duplicateOf = await findRecentReport(
-    params.website ? { website: params.website } : { name: declaredName as string, city: (params.city as string).trim() },
+    params.website ? { website: params.website } : { name: declaredName as string, city: typedCity },
     params.requesterEmail
   );
   if (duplicateOf) {
@@ -161,16 +200,71 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
   // A business with no site at all is the same situation arrived at from the other end: there
   // was never a page to read, so third-party research is not a fallback here, it is the plan.
   let research: SiteResearch;
+  /** Populated only when a research engine returned STRUCTURE (Claude did the identifying).
+   *  Null after an OpenAI-backup run, which returns prose — see researchProfile(). */
+  let identity: BusinessIdentity | null = null;
+  /** A site the research turned up for a business we were told had none. */
+  let discoveredWebsite: string | null = null;
+
   if (target.kind === "name") {
-    const found = await researchViaSearch(target, null);
-    if (!found) {
-      await params.onError?.(
-        `Could not find a business called "${target.name}" in ${target.city} in any third-party source, ` +
-          `so there was nothing to build questions from. Check the spelling and the city. Nothing was scored.`
-      );
+    try {
+      const found = await researchProfile(target, null);
+      research = found.research;
+      identity = found.identity;
+    } catch (e) {
+      await params.onError?.((e as Error).message);
       return { ok: false };
     }
-    research = found;
+
+    // ‼️ THE BUSINESS MAY HAVE A SITE AFTER ALL, and if it does we want to read it.
+    //
+    // "No website" is Matthew's read of a Google result, not a verified fact, and research
+    // routinely turns one up. A crawlable site is strictly better input than a directory
+    // profile: it re-enables site_signals and robots_check, both of which are null on a
+    // declared run, and those are what the cold-email hooks are built from. So a discovered
+    // site upgrades this run from `declared` to a real crawl rather than being noted and
+    // ignored.
+    // The name to test affinity against is the one RESEARCH returned, falling back to the one
+    // Matthew typed. A trading name found in sources ("Hernandez Auto Repair Inc.") matches a
+    // domain more reliably than an abbreviation he typed from a Google result.
+    const affinityName = identity?.tradingName ?? declaredName ?? null;
+    const candidate = (identity?.websites ?? []).find((w) => isOwnDomain(w, affinityName)) ?? null;
+    if (candidate) {
+      // ‼️ THIS IS A MODEL-SUPPLIED URL ABOUT TO BE FETCHED SERVER-SIDE.
+      //
+      // Until now /scan was the only place in this app that did that, and it is guarded for a
+      // reason — a hostname that resolves to link-local or private space turns our own fetcher
+      // into an SSRF probe. Reuse those guards rather than writing a second pair: normalizeTarget
+      // rejects junk and obvious private hosts with no DNS, assertPublicHost resolves the name
+      // and fails closed on a private answer.
+      const normalized = normalizeTarget(candidate);
+      if (!normalized.ok) {
+        console.warn(`[run-audit-pipeline] ${label}: rejected discovered URL ${candidate} (${normalized.error})`);
+      } else if (!(await assertPublicHost(normalized.target.domain))) {
+        // Returns false rather than throwing, and false covers both "resolves to private space"
+        // and "does not resolve at all". Either way we are not fetching it.
+        console.warn(`[run-audit-pipeline] ${label}: discovered host ${normalized.target.domain} is not public`);
+      } else {
+        try {
+          const site = await researchWebsite(normalized.target.website);
+          if (isThinResearch(site)) {
+            console.warn(
+              `[run-audit-pipeline] ${label}: ${normalized.target.website} too thin, staying declared`
+            );
+          } else {
+            console.log(`[run-audit-pipeline] ${label}: found and read ${normalized.target.website}`);
+            research = site;
+            discoveredWebsite = normalized.target.website;
+          }
+        } catch (e) {
+          // A site we found but cannot read is not a reason to fail: the third-party profile we
+          // already have is exactly what this run was going to use anyway.
+          console.warn(
+            `[run-audit-pipeline] ${label}: could not read discovered site ${normalized.target.website} — ${(e as Error).message}`
+          );
+        }
+      }
+    }
   } else {
     try {
       research = await researchWebsite(target.website);
@@ -178,13 +272,22 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
         // Readable, but it says almost nothing — a splash page or a JS-only shell. Classifying
         // from this produces 20 generic questions that measure nothing.
         console.warn(`[run-audit-pipeline] ${label}: page text too thin, adding search research`);
-        const enriched = await researchViaSearch(target, null, research);
-        if (enriched) research = enriched;
+        try {
+          const enriched = await researchProfile(target, null, research);
+          research = enriched.research;
+          identity = enriched.identity;
+        } catch {
+          // Thin is survivable on its own — the page WAS readable. Keep what we have.
+          console.warn(`[run-audit-pipeline] ${label}: enrichment found nothing, using thin page`);
+        }
       }
     } catch (e) {
       const block = e instanceof SiteFetchError ? e.block : null;
-      const fallback = await researchViaSearch(target, block);
-      if (!fallback) {
+      try {
+        const fallback = await researchProfile(target, block);
+        research = fallback.research;
+        identity = fallback.identity;
+      } catch {
         await params.onError?.(
           `${(e as Error).message} Third-party sources could not identify the business either, ` +
             `so there was nothing to build questions from. Nothing was scored.`
@@ -194,14 +297,44 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       console.warn(
         `[run-audit-pipeline] ${label}: site unreadable (${block?.reason ?? "unknown"}), running on search research`
       );
-      research = fallback;
+    }
+  }
+
+  // --- City resolution ------------------------------------------------------
+  // Only reachable on a name run with no city typed. A city Matthew supplied always wins: he is
+  // looking at the Google result and the model is not.
+  let resolvedCity = typedCity;
+  if (!resolvedCity && identity) {
+    const ambiguous = identity.alternates.length > 0 || identity.cityConfidence === "low";
+
+    if (ambiguous && !params.allowLowConfidenceCity) {
+      // ‼️ Ask, do not guess. This is the entire safety property that made it acceptable to drop
+      // the city requirement at the parser: two businesses sharing a trading name is the normal
+      // case, not an edge one, and scoring the wrong one produces a full report, a scorecard and
+      // a cold email about a company nobody asked about.
+      await params.onNeedsCity?.(
+        declaredName as string,
+        identity.city ? [identity.city, identity.state].filter(Boolean).join(", ") : null,
+        identity.alternates
+      );
+      return { ok: false };
+    }
+
+    if (identity.city) {
+      resolvedCity = [identity.city, identity.state].filter(Boolean).join(", ");
+      console.log(
+        `[run-audit-pipeline] ${label}: resolved city to ${resolvedCity} (${identity.cityConfidence ?? "unstated"} confidence)`
+      );
     }
   }
 
   let classification;
   try {
     classification = await classifyBusiness(research, {
-      city: params.city,
+      // The RESOLVED city, not the typed one. On a bare-name run this is what research settled
+      // on (and what the ambiguity gate above already cleared), so the 20 questions carry the
+      // right geo-modifiers instead of none at all.
+      city: resolvedCity,
       competitors: params.competitors,
       businessName: declaredName,
     });
@@ -269,7 +402,11 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
     .from("audit_reports")
     .insert({
       slug,
-      website: params.website ?? null,
+      // discoveredWebsite is set only when a name-mode run turned up a real own-domain site AND
+      // successfully read it, so `website` here is never a URL nobody fetched. That matters: the
+      // whole readership of this column treats a non-null value as "there is a site and we have
+      // seen it", and robots_check / site_signals below are computed on exactly that basis.
+      website: params.website ?? discoveredWebsite ?? null,
       client_name: classification.business_name,
       city: classification.city_detected,
       business_type: classification.business_type,
@@ -310,7 +447,10 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
     console.error("[run-audit-pipeline] onReportCreated failed:", (e as Error).message);
   }
 
-  const { text: dropText } = formatPromptDrop(report);
+  const { text: dropText } = formatPromptDrop(report, {
+    cityResolvedByResearch: !typedCity && !!resolvedCity,
+    discoveredWebsite,
+  });
 
   if (destination.threadTs) {
     // ‼️ The prompt drop is a REPLY here, and slack_thread_ts is deliberately NOT touched. A

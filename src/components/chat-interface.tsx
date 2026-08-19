@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CHAT_MARKDOWN_COMPONENTS } from "@/components/chat-markdown";
 import { formatRelativeTime } from "@/lib/utils";
 import { ToolCard } from "@/components/tool-cards/tool-card";
 
@@ -500,7 +501,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
                   {/* Message text */}
                   {msg.role === "assistant" ? (
                     <div className="prose prose-invert prose-sm max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>{msg.content}</ReactMarkdown>
                     </div>
                   ) : (
                     <p className="text-sm whitespace-pre-wrap">{msg.content}</p>

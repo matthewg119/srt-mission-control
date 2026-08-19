@@ -25,7 +25,6 @@ export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 export const maxDuration = 60;
 
-const ZOHO_LEAD_SOURCE = "AI Visibility Scan";
 
 /** Anchored, so a string of 36 dashes cannot reach Postgres and 500 on the uuid cast. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -139,7 +138,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     businessName: report?.client_name ?? undefined,
     city: report?.city ?? undefined,
     source: "scan",
-    zohoLeadSource: ZOHO_LEAD_SOURCE,
     // No phone was collected, so there is nothing to dial and nothing to promise.
     speedToLead: false,
     noteTitle: "Self-serve AI visibility scan",

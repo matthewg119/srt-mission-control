@@ -16,6 +16,7 @@
 // produce 20 confident questions about a company that does not exist.
 
 import { runOpenAI } from "./run-prompts";
+import { researchViaClaude, type BusinessIdentity } from "./claude-research";
 import type { SiteResearch } from "./site-research";
 import type { CrawlBlock } from "./types";
 
@@ -33,13 +34,20 @@ const MIN_PROFILE_CHARS = 250;
  * is who is behind it. `name` is the "there is no site" path, where Matthew has named the
  * business and its city off a Google result.
  *
- * ‼️ The city is REQUIRED on the name form and that is not incidental. It is the only thing
- * separating one trading name from another business trading under the same one, and search will
- * cheerfully return the wrong Hernandez Auto Repair three states away if nothing pins it down.
+ * ‼️ The city on the name form is what separates one trading name from another business trading
+ * under the same one — search will cheerfully return the wrong Hernandez Auto Repair three
+ * states away if nothing pins it down.
+ *
+ * It became OPTIONAL on 2026-08-19, and the guarantee moved rather than disappeared. When
+ * Matthew supplies a city it still pins the search exactly as before. When he does not,
+ * claude-research.ts is required to treat finding the city as part of the task and to report
+ * every candidate metro in `alternates` instead of quietly choosing one; the pipeline then asks
+ * rather than guesses. What must never happen is a run that silently settles on a city — that is
+ * the failure this comment has always been about, and an absent city does not change it.
  */
 export type ResearchTarget =
   | { kind: "website"; website: string }
-  | { kind: "name"; name: string; city: string };
+  | { kind: "name"; name: string; city?: string };
 
 /** Directory/marketplace hosts do not tell us the profile is right, but a profile assembled
  *  with NO third-party source behind it is the model talking from memory, which is the one
@@ -74,7 +82,8 @@ function hostOf(website: string): string {
 
 /** How the target reads in a log line or an error message. */
 export function describeTarget(target: ResearchTarget): string {
-  return target.kind === "website" ? target.website : `${target.name} (${target.city})`;
+  if (target.kind === "website") return target.website;
+  return target.city ? `${target.name} (${target.city})` : target.name;
 }
 
 function buildProfilePrompt(target: ResearchTarget): string {
@@ -87,13 +96,20 @@ function buildProfilePrompt(target: ResearchTarget): string {
           `I am trying to identify the business that operates the website ${hostOf(target.website)}.`,
           `If you cannot find a real business at ${hostOf(target.website)}, reply with exactly ${NOT_FOUND} and nothing else.`,
         ]
-      : [
-          `I am trying to identify a business called "${target.name}" in ${target.city}. It appears to have no website of its own, so every source you find will be a third-party one.`,
-          // The second sentence is load-bearing. Told only to return NOT_FOUND, the model
-          // reaches for the same trading name in another metro rather than give up, and 20
-          // questions then get written about a business three states away.
-          `If you cannot find a real business called "${target.name}" in ${target.city}, reply with exactly ${NOT_FOUND} and nothing else. Do NOT substitute a business with a similar name in a different city.`,
-        ];
+      : target.city
+        ? [
+            `I am trying to identify a business called "${target.name}" in ${target.city}. It appears to have no website of its own, so every source you find will be a third-party one.`,
+            // The second sentence is load-bearing. Told only to return NOT_FOUND, the model
+            // reaches for the same trading name in another metro rather than give up, and 20
+            // questions then get written about a business three states away.
+            `If you cannot find a real business called "${target.name}" in ${target.city}, reply with exactly ${NOT_FOUND} and nothing else. Do NOT substitute a business with a similar name in a different city.`,
+          ]
+        : [
+            `I am trying to identify a business called "${target.name}". I do not know what city it is in, so say which city it operates from. It appears to have no website of its own, so every source you find will be a third-party one.`,
+            // With no city to pin it, the same substitution risk becomes a risk of silently
+            // MERGING two businesses that share a name. Naming the ambiguity is the answer.
+            `If businesses trade under this name in more than one city, say so explicitly and name every city rather than picking one. If you cannot find a real business called "${target.name}" at all, reply with exactly ${NOT_FOUND} and nothing else.`,
+          ];
 
   return [
     opening,
@@ -160,8 +176,8 @@ export async function researchViaSearch(
           `because the site itself could not be read. Sources: ${sources}.`,
         ]
       : [
-          `Profile of "${target.name}" in ${target.city}, assembled from third-party sources`,
-          `because the business has no website of its own. Sources: ${sources}.`,
+          `Profile of "${target.name}"${target.city ? ` in ${target.city}` : ""}, assembled from third-party`,
+          `sources because the business has no website of its own. Sources: ${sources}.`,
         ]
     ).join("\n") + "\n\n";
 
@@ -198,4 +214,54 @@ export async function researchViaSearch(
     source: target.kind === "website" ? "search" : "declared",
     blocked: block,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The dispatcher: Claude first, OpenAI second
+// ---------------------------------------------------------------------------
+
+/**
+ * Identify a business, whichever engine can do it.
+ *
+ * ORDER, and why it is this way round:
+ *   1. claude-research.ts — Anthropic's server-side web_search on ANTHROPIC_API_KEY, which is
+ *      set and working in production. It also returns STRUCTURE (city, alternates, discovered
+ *      websites) that the caller needs and cannot reliably regex back out of prose.
+ *   2. researchViaSearch above — the original OpenAI path. Kept, not deleted: it is a genuinely
+ *      independent second opinion from a different index, and the day Anthropic is having an
+ *      outage is exactly the day an audit should still run.
+ *
+ * The backup returns no `identity`, so a caller that needs a city from it has to ask. That is
+ * correct rather than unfortunate: prose does not carry a confidence, and inventing one from a
+ * regex is how a low-confidence city gets promoted to a fact.
+ */
+export async function researchProfile(
+  target: ResearchTarget,
+  block: CrawlBlock | null,
+  existing?: SiteResearch
+): Promise<{ research: SiteResearch; identity: BusinessIdentity | null }> {
+  const label = describeTarget(target);
+
+  const viaClaude = await researchViaClaude(target, block, existing);
+  if (viaClaude) return { research: viaClaude.research, identity: viaClaude.identity };
+
+  console.warn(`[search-research] ${label}: Claude research came back empty, trying OpenAI`);
+  const viaOpenAI = await researchViaSearch(target, block, existing);
+  if (viaOpenAI) return { research: viaOpenAI, identity: null };
+
+  // Both engines declined to identify the business. The caller fails the audit with a real
+  // reason; nothing here invents one to keep the run alive.
+  throw new ResearchFailedError(label);
+}
+
+/** Neither engine could identify the business. Thrown rather than returned null so a caller
+ *  cannot accidentally treat "not identified" as "identified with empty fields". */
+export class ResearchFailedError extends Error {
+  constructor(public readonly label: string) {
+    super(
+      `Could not identify "${label}" from any third-party source, so there was nothing to build ` +
+        `questions from. Check the spelling. Nothing was scored.`
+    );
+    this.name = "ResearchFailedError";
+  }
 }

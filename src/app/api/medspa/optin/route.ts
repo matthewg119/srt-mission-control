@@ -30,7 +30,6 @@ export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 export const maxDuration = 60;
 
-const ZOHO_LEAD_SOURCE = "Med Spa AI Training";
 const SOURCE = "medspa_vsl";
 
 /** Opt-ins per IP per day. Generous, because this costs us nothing but an email. */
@@ -117,7 +116,6 @@ export async function POST(req: NextRequest) {
       // match an existing contact correctly. A guessed value would fork the contact
       // and split the #hot-leads thread.
       source: SOURCE,
-      zohoLeadSource: ZOHO_LEAD_SOURCE,
       noteTitle: "Med Spa AI Training opt-in",
       headline: `New med spa training opt-in: ${result.name}`,
       detailLines: [

@@ -3,11 +3,16 @@ export const dynamic = "force-dynamic";
 // Creates a Slack channel for the lead and posts an AI draft for ✅ approval.
 // Does NOT send the SMS — approval via Slack reaction triggers sending.
 //
-// POST body: { zoho_lead_id, template_name, first_name }
+// POST body: { zoho_lead_id | contact_id, template_name, first_name }
+//
+// `zoho_lead_id` is still accepted because the shipped extension sends it, but
+// it now resolves against contacts.zoho_lead_id rather than against Zoho. A
+// lead that is not in `contacts` can no longer be conjured from a live Zoho
+// fetch, so it 404s rather than texting off a half-built record.
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { getLead } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
 import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel, postAIDraft } from "@/lib/sms-channel";
 import { buildVCard, sanitizeFilename } from "@/lib/vcard";
@@ -15,18 +20,24 @@ import { slack } from "@/lib/slack-bot";
 import { generateDraft } from "@/lib/sms-ai-engine";
 import { resolveTenantId } from "@/lib/persona";
 
-// Map each template to the funnel stage that best frames its rewrite. Openers +
-// app link are Stage 1 (soft pitch); the follow-ups keep a warm Stage 2 tone.
+// Map each template to the funnel stage in sms-ai-engine.ts that best frames its
+// rewrite. Almost everything the dialer sends is still first touch: we are
+// trying to get one yes to the free visibility check, and the follow-ups are
+// nudges toward that same yes. Stage 2 is deliberately unused here, because it
+// means "their check is running" and instructs the engine not to invent a
+// result, which is the wrong frame for a lead who has not said yes yet.
+// fu2-authorized is the exception: it claims we have already looked at their
+// site, which is Stage 3.
 const TEMPLATE_STAGE: Record<string, number> = {
   "nice-speaking": 1,
   "app-link": 1,
   "tuesday-opener": 1,
-  "fu1-guide": 2,
-  "fu2-authorized": 2,
-  "fu3-worth-reply": 2,
-  "fu4-black-hole": 2,
-  "fu5-last-ping": 2,
-  "fu6-say-anything": 2,
+  "fu1-guide": 1,
+  "fu2-authorized": 3,
+  "fu3-worth-reply": 1,
+  "fu4-black-hole": 1,
+  "fu5-last-ping": 1,
+  "fu6-say-anything": 1,
 };
 
 export const runtime = "nodejs";
@@ -38,33 +49,36 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
+// The template KEYS are frozen. The shipped Chrome extension sends them by name
+// and lives in a separate repo, so renaming one here silently 400s the dialer
+// button that uses it. Only the copy changed when SRT moved off funding.
 const SMS_TEMPLATES: Record<string, string> = {
   "nice-speaking":
     "Hey {{firstName}}! Was great speaking with you. Going to save your number and shoot you an email from matthew@srtagency.com so you have my info. Talk soon! 💪",
   "app-link":
-    "Hey {{firstName}}! Here is the link to start your application — only takes 2 min 👉 srtagency.com/fullapp Let me know if you have any questions!",
+    "Hey {{firstName}}! Here's the free AI visibility check 👉 srtagency.com/audit We ask ChatGPT the questions your buyers ask and send you back who it actually names. Takes you 2 min.",
   "fu1-guide":
-    "Hey {{firstName}}, quick question — would it be cool if I sent over our funding guide PDF? No strings, just want to make sure you have all the info 💪",
+    "Hey {{firstName}}, quick one, want me to run your business through ChatGPT and send you what it says about you? Free, no card, takes me about a day 💪",
   "fu2-authorized":
-    "Hey {{firstName}}! Based on everything we talked about, you're looking solid for funding. Just need a few docs from you. What's the best time to connect?",
+    "Hey {{firstName}}! Had a look at your site and I can see exactly why the AI isn't naming you yet. Easier to show you than type it. What's a good time to connect?",
   "fu3-worth-reply":
     "Worth a Reply? KHRT 👊",
   "fu4-black-hole":
     "Did your inbox turn into a black hole? 😅 Still here when you're ready {{firstName}}",
   "fu5-last-ping":
-    "Last ping {{firstName}} — unless you're still curious about funding options? No pressure either way 🤙",
+    "Last ping {{firstName}}, unless you still want to see what ChatGPT says about you? No pressure either way 🤙",
   "fu6-say-anything":
     "Say anything and I'll take it as a win {{firstName}} 😂",
   "tuesday-opener":
-    "Happy Tuesday! Are you still looking for money for your business? 💰",
+    "Happy Tuesday! Quick question, have you ever checked what ChatGPT says when someone asks it for a business like yours? 🤖",
 };
 
 // Human-readable labels for each template key (used in Slack copy-paste block header)
 const SMS_TEMPLATES_LABELS: Record<string, string> = {
   "nice-speaking":    "Nice Speaking With You",
-  "app-link":         "Application Link",
-  "fu1-guide":        "FU1: PDF Guide Ask",
-  "fu2-authorized":   "FU2: Authorized + Contact Info",
+  "app-link":         "Free AI Visibility Check Link",
+  "fu1-guide":        "FU1: Offer to Run Their Check",
+  "fu2-authorized":   "FU2: Looked At Your Site + Book a Call",
   "fu3-worth-reply":  "FU3: Worth a Reply? KHRT",
   "fu4-black-hole":   "FU4: Black Hole Inbox",
   "fu5-last-ping":    "FU5: Last Ping",
@@ -89,16 +103,17 @@ export async function POST(req: NextRequest) {
   }
 
   const body = (await req.json()) as {
-    zoho_lead_id: string;
+    zoho_lead_id?: string;
+    contact_id?: string;
     template_name: string;
     first_name?: string;
   };
 
-  const { zoho_lead_id, template_name, first_name: firstNameHint } = body;
+  const { zoho_lead_id, contact_id, template_name, first_name: firstNameHint } = body;
 
-  if (!zoho_lead_id || !template_name) {
+  if ((!zoho_lead_id && !contact_id) || !template_name) {
     return NextResponse.json(
-      { error: "missing zoho_lead_id or template_name" },
+      { error: "missing zoho_lead_id/contact_id or template_name" },
       { status: 400, headers: CORS_HEADERS }
     );
   }
@@ -111,21 +126,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Fetch lead from Zoho
-  let zohoLead;
-  try {
-    zohoLead = await getLead(zoho_lead_id);
-  } catch (err) {
-    return NextResponse.json(
-      { error: `zoho_fetch_failed: ${(err as Error).message}` },
-      { status: 500, headers: CORS_HEADERS }
-    );
+  const lead = await resolveLead({ contactId: contact_id, zohoLeadId: zoho_lead_id });
+  if (!lead) {
+    return NextResponse.json({ error: "lead_not_found" }, { status: 404, headers: CORS_HEADERS });
   }
 
-  const phoneRaw = (zohoLead.Mobile ?? zohoLead.Phone) as string | undefined;
-  const firstName = firstNameHint || (zohoLead.First_Name ?? "") as string;
-  const lastName = (zohoLead.Last_Name ?? "") as string;
-  const businessName = (zohoLead.Company ?? zohoLead.Account_Name ?? "") as string;
+  const phoneRaw = lead.mobilePhone ?? lead.phone ?? undefined;
+  const firstName = firstNameHint || lead.firstName || "";
+  const lastName = lead.lastName ?? "";
+  const businessName = lead.businessName ?? "";
 
   if (!phoneRaw) {
     return NextResponse.json(
@@ -142,33 +151,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Look up or create contact in Supabase
-  let contactId: string | null = null;
-  const { data: existingContact } = await supabaseAdmin
-    .from("contacts")
-    .select("id")
-    .eq("zoho_lead_id", zoho_lead_id)
-    .maybeSingle();
-
-  if (existingContact) {
-    contactId = existingContact.id as string;
-  } else {
-    const { data: newContact } = await supabaseAdmin
-      .from("contacts")
-      .upsert(
-        {
-          first_name: firstName,
-          last_name: lastName,
-          business_name: businessName || null,
-          phone,
-          zoho_lead_id,
-        },
-        { onConflict: "phone" }
-      )
-      .select("id")
-      .single();
-    contactId = newContact?.id ?? null;
-  }
+  const contactId: string = lead.id;
 
   // Create or find SMS conversation
   const { data: conv } = await supabaseAdmin
@@ -203,7 +186,7 @@ export async function POST(req: NextRequest) {
     phone,
     displayName,
     contactId,
-    zohoLeadId: zoho_lead_id,
+    zohoLeadId: lead.zohoLeadId ?? undefined,
     businessName: businessName || null,
   });
 
@@ -223,16 +206,12 @@ export async function POST(req: NextRequest) {
   // revenue. Falls back to the raw template so the card is never empty.
   let draft = templateRendered;
   try {
-    const { data: contactRow } = contactId
-      ? await supabaseAdmin
-          .from("contacts")
-          .select("monthly_revenue")
-          .eq("id", contactId)
-          .maybeSingle()
-      : { data: null };
-    const monthlyRevenue =
-      (contactRow?.monthly_revenue as number | null) ??
-      (typeof zohoLead.Monthly_Revenue === "number" ? (zohoLead.Monthly_Revenue as number) : null);
+    const { data: contactRow } = await supabaseAdmin
+      .from("contacts")
+      .select("monthly_revenue")
+      .eq("id", contactId)
+      .maybeSingle();
+    const monthlyRevenue = (contactRow?.monthly_revenue as number | null) ?? null;
 
     const tenantId = (await resolveTenantId()) ?? "";
     const seed =
@@ -254,13 +233,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Upload vCard so Matthew can tap to add contact to his phone
-  const email = (zohoLead.Email ?? "") as string;
   const vCardText = buildVCard({
     firstName,
     lastName,
     businessName: businessName || null,
     phone,
-    email: email || null,
+    email: lead.email,
   });
   const vcfName = `${sanitizeFilename([firstName, lastName].filter(Boolean).join("_") || phone)}.vcf`;
   try {

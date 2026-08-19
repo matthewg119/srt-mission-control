@@ -24,7 +24,6 @@ import { fulfillMedspaOrder } from "@/lib/medspa/fulfillment";
 import { dollars, funnelUrl } from "@/config/medspa-funnel";
 import type Stripe from "stripe";
 
-const ZOHO_LEAD_SOURCE = "Med Spa AI Audit ($39)";
 
 export interface ProvisionResult {
   ok: true;
@@ -164,7 +163,6 @@ async function onFirstPayment(order: OrderRow): Promise<void> {
       email,
       website,
       source: "medspa_paid",
-      zohoLeadSource: ZOHO_LEAD_SOURCE,
       noteTitle: "Paid the $39 audit",
       headline: `:moneybag: PAID ${dollars(amount)} audit: ${name || email}`,
       detailLines,

@@ -23,6 +23,17 @@ async function count(table: string, apply?: (q: never) => unknown): Promise<numb
   return n ?? 0;
 }
 
+// One scalar out of the read-only SQL RPC. Used for catalog questions that
+// PostgREST cannot answer honestly (see the deal_notes note below).
+async function scalar(sql: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin.rpc("crm_readonly_query", { q: sql });
+  if (error) throw new Error(`scalar: ${error.message}`);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (!rows.length) return null;
+  const v = Object.values(rows[0])[0];
+  return v == null ? null : String(v);
+}
+
 function line(ok: boolean, label: string, detail: string) {
   console.log(`  ${ok ? "OK  " : "TODO"}  ${label.padEnd(42)} ${detail}`);
   return ok;
@@ -60,19 +71,43 @@ async function main() {
   console.log();
   if (!line(legacy.length === 0, "block B (stage collapse)", legacy.length === 0 ? "done" : `${legacy.length} legacy stage values left`)) blocking++;
 
-  // ── The wipe ──────────────────────────────────────────────────────
-  console.log("\nWIPE");
+  // ── The imported Zoho history ──────────────────────────────────────────────────────
+  //
+  // This used to assert these were ZERO - the funding decommission deliberately
+  // wiped them on 2026-08-17. That decision was reversed on 2026-08-18 and the
+  // history was re-pulled from Zoho, so the assertion is inverted: an empty
+  // lead_activities is now the failure, not the goal.
+  //
+  // The floor sits well under the ~30,400 rows the restore brought back. It is
+  // here to catch "the table is empty again", not to pin an exact count.
+  console.log("\nIMPORTED ZOHO HISTORY");
+  const MIN_ZOHO_ACTS = 25_000;
   const zohoActs = await count("lead_activities", (q) => (q as unknown as { eq: (a: string, b: string) => unknown }).eq("source", "zoho"));
   const zohoTasks = await count("lead_tasks", (q) => (q as unknown as { eq: (a: string, b: string) => unknown }).eq("source", "zoho"));
-  line(zohoActs === 0, "lead_activities source='zoho'", zohoActs === 0 ? "cleared" : `${zohoActs} rows remain`);
-  line(zohoTasks === 0, "lead_tasks source='zoho'", zohoTasks === 0 ? "cleared" : `${zohoTasks} rows remain`);
+  if (!line(
+    zohoActs >= MIN_ZOHO_ACTS,
+    "lead_activities source='zoho'",
+    zohoActs >= MIN_ZOHO_ACTS
+      ? `${zohoActs} rows present`
+      : `only ${zohoActs} rows, expected >= ${MIN_ZOHO_ACTS}; re-run bun run crm:pull -- --entity=notes`,
+  )) blocking++;
+  line(zohoTasks > 0, "lead_tasks source='zoho'", zohoTasks > 0 ? `${zohoTasks} rows present` : "empty - re-pull tasks");
 
-  let dealNotes = "dropped";
-  try {
-    const n = await count("deal_notes");
-    dealNotes = `${n} rows — hold until the branch deploys, main still reads it`;
-  } catch { /* table is gone, which is the goal */ }
-  line(dealNotes === "dropped", "deal_notes table", dealNotes);
+  // ‼️ Ask the CATALOG, not PostgREST. This used to call count("deal_notes") and
+  // treat a throw as "the table is gone" — but PostgREST answers a head-count on
+  // a missing table with count=null and NO error, and count()'s `n ?? 0` turned
+  // that into a confident "0 rows". So the check could never once report the
+  // thing it exists to report: after the table was really dropped it went on
+  // printing TODO / 0 rows, which reads exactly like "the drop silently failed".
+  const dealNotesOid = await scalar(
+    `select to_regclass('public.deal_notes')::text as v`
+  );
+  const dealNotesGone = dealNotesOid === null;
+  line(
+    dealNotesGone,
+    "deal_notes table",
+    dealNotesGone ? "dropped" : `still present (${dealNotesOid})`
+  );
 
   // ── Rollups. The one that silently breaks the call board. ─────────
   console.log("\nROLLUPS  (stale after any delete until the recompute runs)");
