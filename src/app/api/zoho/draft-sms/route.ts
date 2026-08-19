@@ -3,11 +3,16 @@ export const dynamic = "force-dynamic";
 // Creates a Slack channel for the lead and posts an AI draft for ✅ approval.
 // Does NOT send the SMS — approval via Slack reaction triggers sending.
 //
-// POST body: { zoho_lead_id, template_name, first_name }
+// POST body: { zoho_lead_id | contact_id, template_name, first_name }
+//
+// `zoho_lead_id` is still accepted because the shipped extension sends it, but
+// it is now resolved against contacts.zoho_lead_id rather than against Zoho.
+// A lead that is not in `contacts` can no longer be created from a live Zoho
+// fetch, so it 404s instead of silently texting from a half-built record.
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { getLead } from "@/lib/zoho";
+import { resolveLead } from "@/lib/crm";
 import { normalizePhone } from "@/lib/phone";
 import { ensureSmsChannel, postAIDraft } from "@/lib/sms-channel";
 import { buildVCard, sanitizeFilename } from "@/lib/vcard";
@@ -89,16 +94,17 @@ export async function POST(req: NextRequest) {
   }
 
   const body = (await req.json()) as {
-    zoho_lead_id: string;
+    zoho_lead_id?: string;
+    contact_id?: string;
     template_name: string;
     first_name?: string;
   };
 
-  const { zoho_lead_id, template_name, first_name: firstNameHint } = body;
+  const { zoho_lead_id, contact_id, template_name, first_name: firstNameHint } = body;
 
-  if (!zoho_lead_id || !template_name) {
+  if ((!zoho_lead_id && !contact_id) || !template_name) {
     return NextResponse.json(
-      { error: "missing zoho_lead_id or template_name" },
+      { error: "missing zoho_lead_id/contact_id or template_name" },
       { status: 400, headers: CORS_HEADERS }
     );
   }
@@ -111,21 +117,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Fetch lead from Zoho
-  let zohoLead;
-  try {
-    zohoLead = await getLead(zoho_lead_id);
-  } catch (err) {
+  const lead = await resolveLead({ contactId: contact_id, zohoLeadId: zoho_lead_id });
+  if (!lead) {
     return NextResponse.json(
-      { error: `zoho_fetch_failed: ${(err as Error).message}` },
-      { status: 500, headers: CORS_HEADERS }
+      { error: "lead_not_found" },
+      { status: 404, headers: CORS_HEADERS }
     );
   }
 
-  const phoneRaw = (zohoLead.Mobile ?? zohoLead.Phone) as string | undefined;
-  const firstName = firstNameHint || (zohoLead.First_Name ?? "") as string;
-  const lastName = (zohoLead.Last_Name ?? "") as string;
-  const businessName = (zohoLead.Company ?? zohoLead.Account_Name ?? "") as string;
+  const phoneRaw = lead.mobilePhone ?? lead.phone ?? undefined;
+  const firstName = firstNameHint || lead.firstName || "";
+  const lastName = lead.lastName ?? "";
+  const businessName = lead.businessName ?? "";
 
   if (!phoneRaw) {
     return NextResponse.json(
@@ -142,33 +145,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Look up or create contact in Supabase
-  let contactId: string | null = null;
-  const { data: existingContact } = await supabaseAdmin
-    .from("contacts")
-    .select("id")
-    .eq("zoho_lead_id", zoho_lead_id)
-    .maybeSingle();
-
-  if (existingContact) {
-    contactId = existingContact.id as string;
-  } else {
-    const { data: newContact } = await supabaseAdmin
-      .from("contacts")
-      .upsert(
-        {
-          first_name: firstName,
-          last_name: lastName,
-          business_name: businessName || null,
-          phone,
-          zoho_lead_id,
-        },
-        { onConflict: "phone" }
-      )
-      .select("id")
-      .single();
-    contactId = newContact?.id ?? null;
-  }
+  const contactId: string = lead.id;
 
   // Create or find SMS conversation
   const { data: conv } = await supabaseAdmin
@@ -203,7 +180,7 @@ export async function POST(req: NextRequest) {
     phone,
     displayName,
     contactId,
-    zohoLeadId: zoho_lead_id,
+    zohoLeadId: lead.zohoLeadId ?? undefined,
     businessName: businessName || null,
   });
 
@@ -223,16 +200,12 @@ export async function POST(req: NextRequest) {
   // revenue. Falls back to the raw template so the card is never empty.
   let draft = templateRendered;
   try {
-    const { data: contactRow } = contactId
-      ? await supabaseAdmin
-          .from("contacts")
-          .select("monthly_revenue")
-          .eq("id", contactId)
-          .maybeSingle()
-      : { data: null };
-    const monthlyRevenue =
-      (contactRow?.monthly_revenue as number | null) ??
-      (typeof zohoLead.Monthly_Revenue === "number" ? (zohoLead.Monthly_Revenue as number) : null);
+    const { data: contactRow } = await supabaseAdmin
+      .from("contacts")
+      .select("monthly_revenue")
+      .eq("id", contactId)
+      .maybeSingle();
+    const monthlyRevenue = (contactRow?.monthly_revenue as number | null) ?? null;
 
     const tenantId = (await resolveTenantId()) ?? "";
     const seed =
@@ -254,13 +227,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Upload vCard so Matthew can tap to add contact to his phone
-  const email = (zohoLead.Email ?? "") as string;
   const vCardText = buildVCard({
     firstName,
     lastName,
     businessName: businessName || null,
     phone,
-    email: email || null,
+    email: lead.email,
   });
   const vcfName = `${sanitizeFilename([firstName, lastName].filter(Boolean).join("_") || phone)}.vcf`;
   try {

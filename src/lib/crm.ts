@@ -127,6 +127,77 @@ async function findContact(a: {
   return null;
 }
 
+/**
+ * A lead, by our id or by the Zoho id the shipped Chrome extension still sends.
+ *
+ * findContact answers "which contact row is this" and returns the four columns
+ * the write paths need. The extension endpoints need the PERSON — name, phone,
+ * email — which is why this exists alongside it rather than widening that one:
+ * every caller of findContact would pay for columns it never reads.
+ *
+ * Lookup only. It does NOT create, and that is the point of moving these
+ * endpoints off Zoho: a lead absent from `contacts` now 404s instead of being
+ * conjured from a live Zoho fetch and texted from a half-built record.
+ *
+ * camelCase out, because these are read into local variables by their callers
+ * rather than written back to a column.
+ */
+export interface ResolvedLead {
+  id: string;
+  zohoLeadId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  businessName: string | null;
+  email: string | null;
+  phone: string | null;
+  mobilePhone: string | null;
+}
+
+export async function resolveLead(a: {
+  contactId?: string;
+  zohoLeadId?: string;
+}): Promise<ResolvedLead | null> {
+  const cols =
+    "id, zoho_lead_id, first_name, last_name, business_name, email, phone, mobile_phone";
+
+  // Our own id wins when both are supplied: it is unambiguous, while
+  // zoho_lead_id is a mirrored value that a merge or a re-import can duplicate.
+  let row: Rec | null = null;
+  if (a.contactId) {
+    const { data } = await supabaseAdmin
+      .from("contacts")
+      .select(cols)
+      .eq("id", a.contactId)
+      .maybeSingle();
+    row = (data as Rec | null) ?? null;
+  }
+  if (!row && a.zohoLeadId) {
+    const { data } = await supabaseAdmin
+      .from("contacts")
+      .select(cols)
+      .eq("zoho_lead_id", a.zohoLeadId)
+      .maybeSingle();
+    row = (data as Rec | null) ?? null;
+  }
+  if (!row) return null;
+
+  const str = (v: unknown): string | null => {
+    const s = typeof v === "string" ? v.trim() : "";
+    return s === "" ? null : s;
+  };
+
+  return {
+    id: row.id as string,
+    zohoLeadId: str(row.zoho_lead_id),
+    firstName: str(row.first_name),
+    lastName: str(row.last_name),
+    businessName: str(row.business_name),
+    email: str(row.email),
+    phone: str(row.phone),
+    mobilePhone: str(row.mobile_phone),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Activity log
 // ─────────────────────────────────────────────────────────────────────
