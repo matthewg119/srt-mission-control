@@ -9,6 +9,7 @@ import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execu
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { clientForThread, captureOnboardingFile } from "@/lib/clients/onboarding-docs";
+import { isVoiceNote, handleClientVoiceNote } from "@/lib/clients/voice-notes";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
   startSlideGenerationWithHook,
@@ -1562,6 +1563,22 @@ async function handleFileShared(fileId: string): Promise<void> {
             `:warning: Could not file *${file.name ?? "that file"}*: ${result.error}. It is not saved — please try again.`
           )
           .catch(() => {});
+      }
+
+      // A voice note is the client answering this week's content ask, so it is filed like
+      // any other evidence and then turned into text. Fired after the capture, never
+      // instead of it: the audio is the record and the transcript is a convenience.
+      // Deliberately not awaited into the capture result, because a transcription failure
+      // must not read as a filing failure.
+      if (result.ok && isVoiceNote(file)) {
+        void handleClientVoiceNote({
+          clientId: client.id,
+          channelId,
+          threadTs,
+          file,
+        }).catch((e) =>
+          console.error("[slack/events] voice note transcription failed:", (e as Error).message)
+        );
       }
       return;
     }

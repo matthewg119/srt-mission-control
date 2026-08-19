@@ -36,7 +36,7 @@ export type DraftKind = "send" | "ask" | "notify" | "report";
  * Getting those the wrong way round produces a message asking for DNS records the day
  * after they were added.
  */
-export type DraftTrigger = "intake" | "step_next" | "step_complete" | "manual";
+export type DraftTrigger = "intake" | "step_next" | "step_complete" | "manual" | "recurring";
 
 export interface DraftDef {
   key: string;
@@ -77,8 +77,50 @@ export const DRAFTS: DraftDef[] = [
   })),
 ];
 
+/**
+ * The twice-weekly content pair.
+ *
+ * ‼️ THEIR KEYS CARRY THE WEEK, and that is not decoration. client_messages has a UNIQUE
+ * constraint on (client_id, draft_key), which is exactly what stops a step toggled off and
+ * on again posting the same message three times. A recurring draft under a bare key would
+ * inherit that: it would post once, ever, and then silently never again. Stamping the week
+ * into the key makes it idempotent PER WEEK instead of forever, which is what "twice a
+ * week" actually needs. Same trick as report_day_30 / 60 / 90, one axis over.
+ */
+export const RECURRING_DRAFTS = ["ask_stories", "ask_content"] as const;
+export type RecurringDraft = (typeof RECURRING_DRAFTS)[number];
+
+/** ISO week, e.g. "2026W34". UTC, so a Sunday evening send cannot land in two weeks. */
+export function isoWeekStamp(at: Date = new Date()): string {
+  const d = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  // ISO weeks run Monday to Sunday and belong to the year containing their Thursday.
+  const dayNum = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - dayNum + 3);
+  const isoYear = d.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  const week = 1 + Math.round((d.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
+  return `${isoYear}W${String(week).padStart(2, "0")}`;
+}
+
+export function recurringDraftKey(base: RecurringDraft, at: Date = new Date()): string {
+  return `${base}_${isoWeekStamp(at)}`;
+}
+
+/** Split a weekly key back into its base, or null when it is not one. */
+function recurringBase(key: string): RecurringDraft | null {
+  return RECURRING_DRAFTS.find((b) => new RegExp(`^${b}_\\d{4}W\\d{2}$`).test(key)) ?? null;
+}
+
 export function draftByKey(key: string): DraftDef | undefined {
-  return DRAFTS.find((d) => d.key === key);
+  const found = DRAFTS.find((d) => d.key === key);
+  if (found) return found;
+
+  // A weekly key is resolved rather than enumerated: DRAFTS cannot list every week that
+  // will ever exist, and a static list would need editing every January.
+  const base = recurringBase(key);
+  return base ? { key, kind: "ask", trigger: "recurring", copyKey: base } : undefined;
 }
 
 /** The draft offered when a given step is the next unfinished one, if any. */

@@ -5,6 +5,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { BarChart3 } from "lucide-react";
 import { supabaseAdmin } from "@/lib/db";
 import { INTAKE_STEPS } from "@/config/client-intake";
 import { ONBOARDING_STAGES } from "@/lib/clients/provision";
@@ -305,7 +306,19 @@ export default async function ClientDetailPage({
       </Link>
 
       <div className="mb-6 mt-2">
-        <h1 className="text-xl font-medium text-white">{name}</h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl font-medium text-white">{name}</h1>
+          {/* Traffic. The one number this whole hub exists to move, one click away. */}
+          <Link
+            href={`/dashboard/clients/${id}/metrics`}
+            title="Traffic"
+            aria-label="Traffic"
+            className="flex items-center gap-1.5 rounded-lg border border-[rgba(255,255,255,0.07)] px-2.5 py-1.5 text-xs text-[rgba(255,255,255,0.5)] hover:bg-[rgba(255,255,255,0.03)] hover:text-white"
+          >
+            <BarChart3 className="h-4 w-4" aria-hidden />
+            Traffic
+          </Link>
+        </div>
         <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[rgba(255,255,255,0.4)]">
           <span>{client.website as string}</span>
           {/* Legacy, see the note on the clients list. Retired 2026-08-20, kept so the

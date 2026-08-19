@@ -178,6 +178,45 @@ export const DRAFT_COPY: Record<string, DraftCopy> = {
         "Anything that has not moved, I have said so rather than dressed it up. Full sheet is on its way over and we can go through any of it."
     ),
   },
+
+  // 7 ── ASK: the story nudge. Early in the week, twice-weekly rhythm, first of the pair.
+  //
+  // ‼️ THE ASK IS A VOICE NOTE AND THAT IS THE WHOLE MECHANIC. A business owner between
+  // appointments will not type three paragraphs about a case, and asking them to is how
+  // this goes quiet in week two. Talking for forty seconds costs them nothing and gives
+  // us more usable material than a typed answer would. Say so explicitly every time.
+  //
+  // It goes out BEFORE the question set, deliberately. A story they volunteered is better
+  // material than an answer to a question we picked, so it gets first refusal on the week.
+  ask_stories: {
+    label: "Ask: anything interesting this week",
+    tokens: ["businessName", "firstName", "city"],
+    body: guard(
+      "draft ask stories",
+      "{firstName}, quick one. Anything interesting come through the door this week?\n\n" +
+        "A job that went better than expected, a question somebody asked that you had not heard before, something you talked a customer out of. Whatever is fresh.\n\n" +
+        "Send it as a voice note, no need to write anything. If there is a story in it I will turn it into a page and send it to you before it goes up."
+    ),
+  },
+
+  // 8 ── ASK: the question set. Later in the week, second of the pair.
+  //
+  // {questions} arrives already formatted as lines, derived from what the engines actually
+  // asked about this business. It is NOT typed on the board: a question nobody is asking
+  // produces a page nobody is looking for, which is the entire failure this product exists
+  // to fix. When there are no questions to send, the digest skips the week rather than
+  // inventing some, so this token is never empty.
+  ask_content: {
+    label: "Ask: this week's questions",
+    tokens: ["businessName", "firstName", "questions"],
+    body: guard(
+      "draft ask content",
+      "{firstName}, here is this week's pair. Both are things people actually ask before they pick somebody in your line of work.\n\n" +
+        "{questions}\n\n" +
+        "Voice note is easiest, just answer them the way you would answer a customer standing in front of you. Say more than you think is needed, I will cut it down.\n\n" +
+        "I write it up in your words, you read it, and nothing goes live until you say so."
+    ),
+  },
 };
 
 /** True while a draft is still the placeholder rather than real copy. */

@@ -23,6 +23,7 @@ import {
 } from "@/lib/clients/client-drafts";
 import { subdomainLabel } from "@/lib/clients/normalize";
 import { DAY_ZERO_STEP_KEY, stampDay0, clearDay0IfManual } from "@/lib/clients/day-zero";
+import { refreshStages } from "@/lib/clients/stage-rollup";
 
 export interface DeliveryStep {
   key: string;
@@ -431,6 +432,14 @@ export async function setDeliveryStep(args: {
       };
     }
   }
+
+  // The eight pilot stages on the board are DERIVED from these rows, so they are
+  // recomputed on every transition rather than maintained separately. Before this, nothing
+  // advanced them past 'intake' and the board contradicted this very checklist. Swallowed
+  // like everything else below: the row write has already happened.
+  await refreshStages(args.clientId).catch((e) =>
+    console.error("[delivery-checklist] stage rollup failed:", (e as Error).message)
+  );
 
   await refreshDeliveryChecklist(args.clientId).catch(() => {});
 

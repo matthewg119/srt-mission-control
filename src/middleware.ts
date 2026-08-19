@@ -53,8 +53,112 @@ const HUB_FILES = new Set(["/robots.txt", "/sitemap.xml", "/llms.txt"]);
  */
 const HUB_SLUG = /^\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 
-/** The only API route reachable on a client-controlled hostname. Named, not prefixed. */
+/**
+ * The only API route reachable on a client-controlled hostname.
+ *
+ * ‼️ A NAME, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on
+ * "/api/hub/" would publish every present and future route under that folder on every
+ * hostname a client's registrar points at us. The hit log deliberately lives outside that
+ * folder for the same reason -- see HIT_ENDPOINT below.
+ */
 const HUB_API = "/api/hub/reviews/submit";
+
+/**
+ * Where the hit log is posted.
+ *
+ * Under /api/internal/ rather than /api/hub/, so that the "name, not a prefix" rule above
+ * cannot be relaxed into publishing a database write endpoint on a client's domain. It is
+ * already refused on external hosts by the allowlist with no rule of its own: HUB_SLUG
+ * forbids slashes, so a two-segment path can never match.
+ */
+const HIT_ENDPOINT = "/api/internal/hub-hit";
+
+/**
+ * Record one hub request, out of band.
+ *
+ * WHY HERE. The hub pages are ISR (revalidate = 300), so a server component runs on
+ * regeneration rather than on request and cannot count anything. And a browser beacon --
+ * the existing /api/marketing/page-visit pattern -- cannot see GPTBot, OAI-SearchBot or
+ * PerplexityBot at all, because they do not run JavaScript. Middleware is the only place
+ * that sees every request, and AI crawlers are the audience this whole product is sold on.
+ *
+ * NO DATABASE WORK HAPPENS HERE. This builds a small JSON body and posts it to a Node route
+ * that does the resolving and the hashing. The file's own rule stands.
+ *
+ * ‼️ IT MUST NOT BE ABLE TO AFFECT THE RESPONSE. It is called inside waitUntil on a
+ * response that has already been returned, and it swallows everything. A hub page rendering
+ * correctly may never depend on the analytics row landing.
+ */
+function logHubHit(req: NextRequest, host: string, path: string): Promise<void> {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const secret = process.env.CRON_SECRET;
+  if (!appUrl || !secret) return Promise.resolve();
+
+  // Vercel APPENDS the real client IP to any x-forwarded-for the caller sent, so index 0 is
+  // whatever a caller chose to write. Same reasoning, and the same ordering, as
+  // clientIpFrom() in src/lib/scan/session.ts.
+  const ip =
+    req.ip ??
+    req.headers.get("x-vercel-forwarded-for")?.split(",")[0].trim() ??
+    req.headers.get("x-forwarded-for")?.split(",").pop()?.trim() ??
+    null;
+
+  return fetch(`${appUrl}${HIT_ENDPOINT}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-hub-hit-secret": secret },
+    body: JSON.stringify({
+      host,
+      path,
+      ua: req.headers.get("user-agent"),
+      ip,
+      referrer: req.headers.get("referer"),
+    }),
+    // A hung ingest must not hold an edge invocation open behind a response that has
+    // already been sent.
+    signal: AbortSignal.timeout(2000),
+  })
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
+/**
+ * Is this a request worth counting?
+ *
+ * Only the things the allowlist cannot already see. By the time this runs, HUB_SLUG has
+ * refused anything containing a dot, and the matcher has excluded _next/static and
+ * _next/image, so there is no asset path left to filter and a file-extension regex here
+ * would be dead code.
+ *
+ * Header reads and string compares only. No allocation, no database, no exceptions.
+ */
+function isCountable(req: NextRequest): boolean {
+  // No secret means no ingest route to talk to. Checked first so an unconfigured
+  // deployment does not fire a fetch per request that can only ever 404.
+  if (!process.env.CRON_SECRET || !process.env.NEXT_PUBLIC_APP_URL) return false;
+
+  // HEAD is what link checkers and uptime monitors send. A crawler that HEADs and then GETs
+  // is counted once, on the GET, which is the fetch that actually read the page.
+  if (req.method !== "GET") return false;
+
+  // Next prefetches a link before anybody clicks it, and fetches an RSC payload on a soft
+  // navigation. Counting either reports a visit to a page nobody opened.
+  if (req.headers.has("next-router-prefetch")) return false;
+  if (req.headers.has("rsc")) return false;
+  const purpose = req.headers.get("purpose") ?? req.headers.get("x-purpose");
+  if (purpose === "prefetch" || purpose === "preview") return false;
+  if (req.headers.get("sec-purpose")?.includes("prefetch")) return false;
+
+  // A PRESENT non-document destination is a subresource. A MISSING one is deliberately
+  // allowed through: crawlers and curl do not send Sec-Fetch-*, and they are precisely the
+  // requests this whole feature exists to count.
+  const dest = req.headers.get("sec-fetch-dest");
+  if (dest && dest !== "document") return false;
+
+  // ‼️ The generated files ARE counted. A GPTBot fetch of llms.txt is some of the
+  // strongest crawler evidence available and it is low volume. They carry no client_pages
+  // row, so the ingest route allows them by name and they appear as their own rows.
+  return true;
+}
 
 export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   const host = normalizeHost(req.headers.get("host"));
@@ -84,6 +188,11 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
     // clinic's hostname. The host segment is what keeps those cache entries disjoint.
     const url = req.nextUrl.clone();
     url.pathname = `/hub/${host}${path === "/" ? "" : path}`;
+
+    // AFTER the allowlist, so nothing refused above is ever counted, and out of band so the
+    // rewrite below is returned at the same speed it always was.
+    if (isCountable(req)) ev.waitUntil(logHubHit(req, host, path));
+
     return NextResponse.rewrite(url);
   }
 

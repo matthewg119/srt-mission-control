@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { runFollowupDigest } from "@/lib/followup-operator/digest";
 import { runClientReportReminders } from "@/lib/clients/report-reminders";
+import { runContentDigest } from "@/lib/clients/content-digest";
 import { stepDigest } from "@/lib/clients/step-engine";
 import { slack } from "@/lib/slack-bot";
 
@@ -60,11 +61,19 @@ ${text}`);
       return { checked: 0, reminded: [] };
     });
 
+    // Another passenger, same reasoning and the same isolation. It only does anything on
+    // two weekdays; every other day it returns immediately without touching the database.
+    const content = await runContentDigest({ dry }).catch((e) => {
+      console.error("[followup-digest] content digest failed:", (e as Error).message);
+      return { posted: [], skipped: [] };
+    });
+
     return NextResponse.json({
       ok: true,
       dry,
       ...result,
       clientReports: { checked: reports.checked, reminded: reports.reminded.length },
+      contentDigest: { posted: content.posted.length, skipped: content.skipped },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
