@@ -60,12 +60,27 @@ async function main() {
   console.log();
   if (!line(legacy.length === 0, "block B (stage collapse)", legacy.length === 0 ? "done" : `${legacy.length} legacy stage values left`)) blocking++;
 
-  // ── The wipe ──────────────────────────────────────────────────────
-  console.log("\nWIPE");
+  // ── The imported Zoho history ──────────────────────────────────────────────────────
+  //
+  // This used to assert these were ZERO - the funding decommission deliberately
+  // wiped them on 2026-08-17. That decision was reversed on 2026-08-18 and the
+  // history was re-pulled from Zoho, so the assertion is inverted: an empty
+  // lead_activities is now the failure, not the goal.
+  //
+  // The floor sits well under the ~30,400 rows the restore brought back. It is
+  // here to catch "the table is empty again", not to pin an exact count.
+  console.log("\nIMPORTED ZOHO HISTORY");
+  const MIN_ZOHO_ACTS = 25_000;
   const zohoActs = await count("lead_activities", (q) => (q as unknown as { eq: (a: string, b: string) => unknown }).eq("source", "zoho"));
   const zohoTasks = await count("lead_tasks", (q) => (q as unknown as { eq: (a: string, b: string) => unknown }).eq("source", "zoho"));
-  line(zohoActs === 0, "lead_activities source='zoho'", zohoActs === 0 ? "cleared" : `${zohoActs} rows remain`);
-  line(zohoTasks === 0, "lead_tasks source='zoho'", zohoTasks === 0 ? "cleared" : `${zohoTasks} rows remain`);
+  if (!line(
+    zohoActs >= MIN_ZOHO_ACTS,
+    "lead_activities source='zoho'",
+    zohoActs >= MIN_ZOHO_ACTS
+      ? `${zohoActs} rows present`
+      : `only ${zohoActs} rows, expected >= ${MIN_ZOHO_ACTS}; re-run bun run crm:pull -- --entity=notes`,
+  )) blocking++;
+  line(zohoTasks > 0, "lead_tasks source='zoho'", zohoTasks > 0 ? `${zohoTasks} rows present` : "empty - re-pull tasks");
 
   let dealNotes = "dropped";
   try {

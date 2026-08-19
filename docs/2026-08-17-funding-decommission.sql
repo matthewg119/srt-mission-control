@@ -1,20 +1,25 @@
--- Business-funding decommission: collapse to five stages, wipe the funding notes.
+-- Business-funding decommission: collapse eighteen stages to five.
 --
 -- SRT is off business funding and onto AEO. The contacts stay, because they are
--- still good AEO prospects. The funding context around them does not: the notes
--- are all "needs $200K", "wants a new truck", "said call back about the loan",
--- and the stage vocabulary is an MCA pipeline.
+-- still good AEO prospects, and the stage vocabulary they carried was an MCA
+-- pipeline, so Block B remaps it.
 --
--- RUN IN ORDER. Block A is a read-only preview. Read its output before B.
--- Block C is IRREVERSIBLE and must not run until the Phase 0 CSV exists:
+-- ⚠ THIS FILE HAS ALREADY BEEN RUN, ON 2026-08-17. It is kept as the record of
+-- what was done, not as a script to run again.
 --
---     bun run notes:archive -- --dry-run    # counts, writes nothing
---     bun run notes:archive                 # writes Desktop/SRT-Funding-Notes-Archive.csv
+-- It originally also wiped the imported Zoho call history. That part — Block C
+-- — WAS REVERSED ON 2026-08-18 and is now commented out. The history was
+-- restored by re-pulling from Zoho. Do not uncomment it; see Block C's own
+-- header for the full reasoning.
 --
--- Block D is NOT optional. The lead_activities / lead_tasks triggers only fire
--- on INSERT, so after Block C every contacts.last_activity_at, next_action_at
--- and open_task_count is stale and the call board ranks on numbers that no
--- longer describe anything.
+-- Block A is a read-only preview and is still safe to run on its own.
+--
+-- Block D recomputes contacts.last_activity_at / next_action_at /
+-- open_task_count from lead_activities and lead_tasks. The triggers only fire
+-- on INSERT, so any bulk change to those tables — the original wipe, and
+-- equally the 2026-08-18 restore — leaves the rollups stale and the call board
+-- ranking on numbers that no longer describe anything. Re-run Block D after
+-- any such change.
 
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -121,27 +126,41 @@ select application_stage, count(*) from contacts group by 1 order by 2 desc;
 
 
 -- ═══════════════════════════════════════════════════════════════════════
--- BLOCK C — wipe the funding notes. IRREVERSIBLE.
+-- BLOCK C — REVERSED 2026-08-18. DO NOT RUN. DO NOT UNCOMMENT.
 --
--- Do NOT run until Desktop/SRT-Funding-Notes-Archive.csv exists and its row
--- count matches the second query in Block A.
+-- This block ran once, on 2026-08-17, and deleted all 30,472 imported Zoho
+-- activities (14,156 notes + 16,316 calls) plus 56 tasks. The reasoning was
+-- that funding notes — "needs $200K", "wants a new truck" — are noise now that
+-- SRT sells AEO.
 --
--- source = 'zoho' is the whole imported funding history: notes, calls, tasks
--- and events. Leads created by the AEO funnels carry source = 'mission_control'
--- and are untouched.
+-- That was wrong, and the decision is reversed. The notes are the call history
+-- on 8,353 leads we are still working: who picked up, who said call back in
+-- August, who is busy until graduation season ends. Stripping the money out of
+-- them also stripped out every record of the relationship. A lead page that
+-- reads "last touch never" on somebody we called eleven times is worse than a
+-- lead page that mentions a loan.
+--
+-- The history was restored on 2026-08-18 by re-pulling Notes, Calls and Tasks
+-- from Zoho (`bun run crm:pull -- --entity=notes|calls|tasks`, no --resume and
+-- no --since, which forces a full re-pull). Running the statements below again
+-- would destroy it a second time, and the re-pull is only possible while the
+-- Zoho subscription is live — so treat this as permanently disarmed.
+--
+-- Keep Blocks A, B and D. The five-stage collapse in Block B stands; only the
+-- wipe is reversed.
+--
+-- The statements are kept, commented, as the record of what was run:
+--
+--   delete from lead_activities     where source = 'zoho';
+--   delete from lead_tasks          where source = 'zoho';
+--   delete from lead_status_history where origin in ('import', 'zoho');
+--   drop table if exists deal_notes;
+--
+-- `deal_notes` is the one piece not restored, and does not need to be: its
+-- contents were folded into lead_activities before the drop, so the re-pull
+-- covers them. lead_status_history is not restored either — those rows were
+-- funding-stage transitions and no pull entity produces them.
 -- ═══════════════════════════════════════════════════════════════════════
-
-delete from lead_activities where source = 'zoho';
-
--- Follow-up tasks carried over from the funding pipeline.
-delete from lead_tasks where source = 'zoho';
-
--- Stage history is entirely funding-stage transitions.
-delete from lead_status_history where origin in ('import', 'zoho');
-
--- The legacy funding notes table. Nothing reads it any more: the AI tool that
--- did (get_deal_notes) is gone, and the CRM timeline reads lead_activities.
-drop table if exists deal_notes;
 
 
 -- ═══════════════════════════════════════════════════════════════════════
