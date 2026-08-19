@@ -81,17 +81,33 @@ export async function deliverArtifact(args: {
     return { ok: true, docId: stored.docId, uploaded: false };
   }
 
+  // ‼️ ok:true IS NOT PROOF THE FILE ARRIVED, AND THIS IS THE ONE FAILURE THAT LOOKS LIKE SUCCESS.
+  //
+  // slack-bot.ts's joinChannel docstring records it: "files.completeUploadExternal's channel
+  // share silently no-ops (still returns ok:true) if the bot isn't actually a member." So a
+  // check of `upload.ok` alone would post the message, report uploaded:true, tick the step, and
+  // deliver nothing — the worst shape a bug can take here, because every surface says the
+  // artifact went out.
+  //
+  // The response carries the files it actually shared. An empty list means nothing landed,
+  // whatever the ok flag says, and that falls through to the link path below.
   const upload = await slack.uploadFilePDF(channel, args.filename, args.buffer, threadTs);
+  const sharedFiles = (upload as { files?: unknown[] })?.files;
+  const reallyShared = upload?.ok === true && Array.isArray(sharedFiles) && sharedFiles.length > 0;
 
-  if (upload?.ok) {
+  if (reallyShared) {
     await slack.postThreadReply(channel, threadTs, args.message).catch(() => {});
     return { ok: true, docId: stored.docId, uploaded: true };
   }
 
-  const why = (upload as { error?: string })?.error ?? "unknown";
+  const why =
+    (upload as { error?: string })?.error ??
+    (upload?.ok === true ? "Slack accepted the upload but shared no file" : "unknown");
   const hint =
-    why.includes("not_in_channel") || why.includes("channel_not_found")
-      ? " The bot is not a member of this channel, so it cannot attach files here. Invite it and the next artifact will arrive as a file."
+    why.includes("not_in_channel") ||
+    why.includes("channel_not_found") ||
+    why.includes("shared no file")
+      ? " That usually means the bot is not a member of this channel. Invite it and the next artifact arrives as a file."
       : "";
 
   await slack
