@@ -621,6 +621,58 @@ what bounds that. `lead_source = "scan"`; the email gate calls `ingestLead()` an
 `requester_email` onto the report only when it is still blank — a report already belonging to a
 lead is never reassigned.
 
+## /onboardingfree — the constraint quiz (2026-08-19)
+`srtagency.com/onboardingfree` (Vercel rewrite → `mission.srtagency.com/onboardingfree`). The
+quiz the free-build email promises after a prospect replies "Yes". **PUBLIC and untokenized**,
+which is the whole difference from `/onboarding`: there is no `clients` row, identity is typed
+on the last screen, and it is deliberately not resumable.
+
+**No migration.** The submission is a `system_logs` row (`event_type = onboardingfree_intake`),
+which is simultaneously the durable copy of the answers, the per-IP rate-limit ledger, and the
+anchor the access screen reads its Slack thread ts back out of. `ONBOARDING_FREE_EVENT` lives in
+`src/lib/onboarding-free/log.ts` and **cannot move into either route file**: Next validates route
+module exports against a fixed list, so a `route.ts` exporting a constant fails `next build`.
+
+> ‼️ **Q1 and Q2 are the owner's OPINION. Q3, Q4, Q5 and Q12 are the numbers that contradict it.**
+> `computeVerdict()` (`src/lib/onboarding-free/verdict.ts`) is a PURE function, no model call, same
+> precedent as `delivery-guards.ts`. It prints the stated constraint AND the verdict side by side
+> and **never reconciles them** — the disagreement is the product. Priority order is
+> `capacity` → `conversion` → `speed` → `top_of_funnel` → `unclear`, and the order is the argument.
+
+> ‼️ **`capacity` is the guardrail and it outranks everything.** Booked out or needs to hire means
+> selling customer-side visibility is wrong, because a saturated business does not produce the
+> testimonial the free build was traded for. It **flags internally only** — the prospect sees the
+> same normal ending, and the warning is on the Slack card. Same doctrine as the market-overlap
+> check: flags, never blocks.
+
+`money_maker` and `fewer_of` are the ICP and anti-ICP **in the owner's own words**. Every other
+lane infers those from `niche_briefs.avatars`, which is a guess about the vertical.
+
+- `src/config/onboarding-free.ts` — the single question set, read by the client AND the submit
+  route. Answer labels are exported CONSTANTS (`NEED`, `CAPACITY`, …) because the verdict engine
+  branches on those strings; a label reworded here and matched as a literal there is a verdict
+  that silently stops firing. Every string is `guard()`-wrapped, so ranges are "0 to 5".
+- `isVisible()` / `visibleQuestions()` are exported and **the server calls them too**. That is the
+  opposite of `/api/onboarding/save`, whose `showWhen` is client-side only, so a hidden required
+  field 400s with no way past it.
+- Guards on `POST /api/onboardingfree/submit`, cheapest first, same order as `api/clients/start`:
+  honeypot (silent 200) → time trap (2s) → per-IP ledger (`ONBOARDINGFREE_RATE_LIMIT`, default 5).
+- Contact lookup is **read only** and matches the `phone_last10` / `mobile_last10` generated
+  columns. It never writes or creates a contact; it only lets the card link a known lead.
+
+> ‼️ **The submit route returns the ROW ID, never the Slack `ts`.** Handing a browser a real
+> message timestamp would turn `/api/onboardingfree/access` into a way to post arbitrary replies
+> into `#onboarding-srt-aeo` from anywhere. The id is an opaque uuid and the server looks the ts
+> up itself. `metadata.access` doubles as the replay guard.
+
+Card is built in CODE (`src/lib/onboarding-free/card.ts`), never by a model, same reason
+`buildCoachNotes()` is: it is the framing the whole call gets planned around. Channel is
+`SLACK_CLIENT_ONBOARDING_CHANNEL`; unset logs the card rather than throwing.
+
+**Not wired, on purpose:** the answers do not feed the Call Coach brief and do not write to
+`contacts` or `audit_reports`. The `system_logs` row keeps them queryable so either can be added
+without re-asking anybody.
+
 ## /v2 — the srtagency.com rebuild, PREVIEW ONLY (2026-08-05)
 `mission.srtagency.com/v2`. An explee-styled rebuild of the marketing site, built to be looked
 at and argued about, not shipped. **The live site is untouched**: srtagency.com is still the
