@@ -91,7 +91,63 @@ const NS_PROVIDERS: Array<[RegExp, string]> = [
   [/ui-dns\./i, "IONOS"],
   [/hover\.com$/i, "Hover"],
   [/gandi\.net$/i, "Gandi"],
+  // Added 2026-08-19 for Runner v3 section 5, which names both and neither of which was here.
+  // GoHighLevel matters disproportionately for this vertical: agencies park clinic domains on
+  // it constantly, and the client usually does not know that is where their DNS lives.
+  [/leadconnectorhq\.com$/i, "GoHighLevel"],
+  [/msging\.net$/i, "GoHighLevel"],
+  [/porkbun\.com$/i, "Porkbun"],
+  [/withgoogle\.com$/i, "Google Domains"],
 ];
+
+/**
+ * The literal instruction printed on the call sheet, keyed by the SAME strings
+ * resolveDnsProvider returns. Runner v3 section 5: "Maintain a lookup table keyed by DNS
+ * provider giving the literal instruction printed on the call sheet."
+ *
+ * ‼️ NEVER "check your DNS settings". The whole point of resolving the provider before the call
+ * is that the owner is told which website to open and which button to press, by name, while
+ * somebody is on the phone with them. A generic instruction wastes the call, and the call is
+ * the only time they will be sitting in front of their registrar.
+ *
+ * {domain} is substituted at print time. An unknown provider gets no entry and the call sheet
+ * prints the nameservers instead, which is the honest answer rather than a guess.
+ */
+export const PROVIDER_CLICK_PATHS: Record<string, string> = {
+  GoDaddy:
+    "Open godaddy.com, sign in, My Products, find {domain}, click DNS, then Add New Record",
+  Cloudflare:
+    "Open dash.cloudflare.com, select {domain}, click DNS, then Add record. Set Proxy status to DNS only",
+  Namecheap:
+    "Open namecheap.com, Domain List, Manage next to {domain}, Advanced DNS, Add New Record",
+  Squarespace:
+    "Open account.squarespace.com, Domains, {domain}, DNS Settings, Add Record",
+  "Google Domains":
+    "Google Domains moved to Squarespace. Open account.squarespace.com, Domains, {domain}, DNS Settings, Add Record",
+  Wix: "Open manage.wix.com, Domains, {domain}, Advanced, Edit DNS",
+  "AWS Route 53":
+    "Open console.aws.amazon.com/route53, Hosted zones, {domain}, Create record",
+  "Network Solutions":
+    "Open networksolutions.com, Account Manager, My Domain Names, {domain}, Manage, Change Where Domain Points, Advanced DNS",
+  Bluehost: "Open bluehost.com, Domains, {domain}, DNS, Add Record",
+  HostGator: "Open portal.hostgator.com, Domains, {domain}, Manage DNS, Add Record",
+  Shopify: "Open admin.shopify.com, Settings, Domains, {domain}, Manage DNS settings, Add custom record",
+  IONOS: "Open ionos.com, Domains and SSL, {domain}, DNS, Add Record",
+  Hover: "Open hover.com, Domains, {domain}, DNS tab, Add A Record",
+  Gandi: "Open admin.gandi.net, Domains, {domain}, DNS Records, Add",
+  DNSimple: "Open dnsimple.com, Domains, {domain}, DNS, Manage records, Add record",
+  GoHighLevel:
+    "The DNS is on GoHighLevel, which usually means an agency set it up. Open app.gohighlevel.com, Settings, Domains, {domain}. If they cannot get in, whoever built their site holds this and we need that person on the call",
+  Porkbun: "Open porkbun.com, Account, Domain Management, {domain}, DNS Records, Add",
+  Vercel: "Open vercel.com, the project, Settings, Domains, {domain}",
+};
+
+/** The instruction for a provider, with {domain} filled in. Null when we do not know it. */
+export function clickPathFor(provider: string | null, domain: string): string | null {
+  if (!provider) return null;
+  const path = PROVIDER_CLICK_PATHS[provider];
+  return path ? path.replace(/\{domain\}/g, domain) : null;
+}
 
 export interface DnsProvider {
   provider: string | null;

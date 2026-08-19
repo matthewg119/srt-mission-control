@@ -307,7 +307,7 @@ async function onIntakeComplete(args: {
 async function startBaselineScan(clientId: string): Promise<void> {
   const { data: client } = await supabaseAdmin
     .from("clients")
-    .select("id, website, city, state, email, legal_name, dba_name, contact_id")
+    .select("id, website, city, state, email, legal_name, dba_name, contact_id, ops_thread_ts")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -323,12 +323,37 @@ async function startBaselineScan(clientId: string): Promise<void> {
     `:mag: Baseline scan started for ${client.website as string}. One engine, ChatGPT with web search.`
   ).catch(() => {});
 
+  // ‼️ WHERE THE REPORT COMES BACK. Without this the pipeline resolves #ai-visibility-audits
+  // and finishReport uploads the scorecard there, so an already-onboarded client's baseline
+  // lands in the prospecting channel and reads as a new lead. The ops thread is where every
+  // other thing about this client already is.
+  //
+  // Both halves are required: no channel id and there is nowhere to post, no ops_thread_ts and
+  // the reply has no parent. If either is missing the run still happens and still writes its
+  // rows — it just falls back to the audit channel rather than silently posting nowhere.
+  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const opsThreadTs = (client.ops_thread_ts as string | null) ?? null;
+  const deliveryThread =
+    onboardingChannel && opsThreadTs
+      ? { channelId: onboardingChannel, threadTs: opsThreadTs }
+      : undefined;
+
+  if (!deliveryThread) {
+    console.error(
+      `[onboarding/save] no delivery thread for client ${clientId} ` +
+        `(channel=${onboardingChannel ? "set" : "missing"}, ops_thread_ts=${opsThreadTs ? "set" : "missing"}); ` +
+        `the baseline scorecard will land in the audit channel`
+    );
+  }
+
   const result = await runAuditPipeline({
     website: client.website as string,
     city,
     requesterEmail: (client.email as string) ?? undefined,
     requesterName: ((client.dba_name || client.legal_name) as string) ?? undefined,
     contactId: (client.contact_id as string) ?? undefined,
+    clientId,
+    deliveryThread,
     leadSource: "aeo_client_onboarding",
     allowLowConfidenceCity: true,
     onError: async (message: string) => {

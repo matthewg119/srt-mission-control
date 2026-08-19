@@ -9,14 +9,26 @@ import { jsPDF } from "jspdf";
 import type { AuditReportRow } from "./types";
 import type { ReportView, PromptRowView, WeightedScore } from "./report-view";
 import { displayName } from "./display-name";
-
-const MIDNIGHT: [number, number, number] = [11, 20, 38];
-const OCEAN: [number, number, number] = [27, 101, 167];
-const REEF: [number, number, number] = [0, 201, 167];
-const WHITE: [number, number, number] = [255, 255, 255];
-const MUTED: [number, number, number] = [150, 162, 180]; // ~text-secondary
-const CARD_BORDER: [number, number, number] = [45, 55, 78];
-const RED: [number, number, number] = [231, 76, 60];
+import {
+  MIDNIGHT,
+  OCEAN,
+  REEF,
+  WHITE,
+  MUTED,
+  CARD_BORDER,
+  RED,
+  PAGE_W,
+  PAGE_H,
+  MARGIN,
+  CONTENT_W,
+  FOOTER_Y,
+  setColor,
+  drawBrandIcon,
+  newPage,
+  ensureSpace,
+  type PageState,
+  type FooterFn,
+} from "@/lib/pdf/kit";
 
 /** The four blocks as a buyer would name them. Exported: the delivery email says them out loud. */
 export const BLOCK_LABEL: Record<string, string> = {
@@ -25,31 +37,6 @@ export const BLOCK_LABEL: Record<string, string> = {
   INFO: "Info",
   COMPARATIVO: "Comparison",
 };
-
-const PAGE_W = 210;
-const PAGE_H = 297;
-const MARGIN = 15;
-const CONTENT_W = PAGE_W - MARGIN * 2;
-const FOOTER_Y = PAGE_H - 12;
-
-function setColor(doc: jsPDF, kind: "fill" | "text" | "draw", c: [number, number, number]) {
-  if (kind === "fill") doc.setFillColor(c[0], c[1], c[2]);
-  else if (kind === "text") doc.setTextColor(c[0], c[1], c[2]);
-  else doc.setDrawColor(c[0], c[1], c[2]);
-}
-
-/** The SRT 3-bar mark (2 ocean + 1 taller reef), matching the site's icon. */
-function drawBrandIcon(doc: jsPDF, x: number, y: number, scale: number) {
-  const bw = 1.6 * scale;
-  const gap = 0.8 * scale;
-  const draw = (barX: number, h: number, color: [number, number, number]) => {
-    setColor(doc, "fill", color);
-    doc.roundedRect(barX, y + (7 * scale - h), bw, h, 0.4, 0.4, "F");
-  };
-  draw(x, 3.6 * scale, OCEAN);
-  draw(x + bw + gap, 5.2 * scale, OCEAN);
-  draw(x + (bw + gap) * 2, 7 * scale, REEF);
-}
 
 /** Ring gauge approximated with short line segments (jsPDF has no native arc). */
 function drawScoreRing(doc: jsPDF, cx: number, cy: number, radius: number, pct: number) {
@@ -78,61 +65,35 @@ function drawScoreRing(doc: jsPDF, cx: number, cy: number, radius: number, pct: 
   doc.setLineCap("butt");
 }
 
-interface PageState {
-  doc: jsPDF;
-  y: number;
-  page: number;
-  title: string;
-}
-
-function fillPageBackground(doc: jsPDF) {
-  setColor(doc, "fill", MIDNIGHT);
-  doc.rect(0, 0, PAGE_W, PAGE_H, "F");
-}
-
-function drawFooter(doc: jsPDF, reportUrl: string) {
-  setColor(doc, "draw", REEF);
-  doc.setLineWidth(0.5);
-  doc.line(MARGIN, FOOTER_Y, PAGE_W - MARGIN, FOOTER_Y);
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "normal");
-  setColor(doc, "text", MUTED);
-  doc.text("Run via the official OpenAI API with web search, neutral account, no personalization. We report visibility, not customers or revenue.", PAGE_W / 2, FOOTER_Y + 4, { align: "center" });
-  setColor(doc, "text", REEF);
-  doc.text(`View the live report: ${reportUrl}`, PAGE_W / 2, FOOTER_Y + 8, { align: "center" });
-}
-
-function newPage(state: PageState, reportUrl: string): void {
-  if (state.page > 0) drawFooter(state.doc, reportUrl);
-  if (state.page > 0) state.doc.addPage();
-  fillPageBackground(state.doc);
-  state.page += 1;
-  state.y = MARGIN;
-
-  if (state.page > 1) {
-    // Slim running header on continuation pages.
-    state.doc.setFontSize(9);
-    state.doc.setFont("helvetica", "bold");
-    setColor(state.doc, "text", MUTED);
-    state.doc.text(state.title, MARGIN, state.y + 3);
-    setColor(state.doc, "text", MUTED);
-    state.doc.setFont("helvetica", "normal");
-    state.doc.text(`Page ${state.page}`, PAGE_W - MARGIN, state.y + 3, { align: "right" });
-    state.y += 9;
-  }
-}
-
-function ensureSpace(state: PageState, needed: number, reportUrl: string): void {
-  if (state.y + needed > FOOTER_Y - 4) newPage(state, reportUrl);
+/**
+ * The audit's own footer, kept word for word.
+ *
+ * ‼️ This is the ONE thing that did not move to @/lib/pdf/kit. The methodology sentence and the
+ * live-report link are true of an audit scorecard and false of every other document, so the kit
+ * takes a footer callback and each artifact supplies its own. Client-facing onboarding artifacts
+ * supply `fidelityFooter` instead, which prints the engine count that actually ran.
+ */
+function auditFooter(reportUrl: string): FooterFn {
+  return (doc) => {
+    setColor(doc, "draw", REEF);
+    doc.setLineWidth(0.5);
+    doc.line(MARGIN, FOOTER_Y, PAGE_W - MARGIN, FOOTER_Y);
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "normal");
+    setColor(doc, "text", MUTED);
+    doc.text("Run via the official OpenAI API with web search, neutral account, no personalization. We report visibility, not customers or revenue.", PAGE_W / 2, FOOTER_Y + 4, { align: "center" });
+    setColor(doc, "text", REEF);
+    doc.text(`View the live report: ${reportUrl}`, PAGE_W / 2, FOOTER_Y + 8, { align: "center" });
+  };
 }
 
 export function generateScorecardPDF(report: AuditReportRow, view: ReportView, weighted: WeightedScore): Buffer {
   const doc = new jsPDF();
   const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/r/${report.slug}`;
   const title = displayName(report);
-  const state: PageState = { doc, y: 0, page: 0, title };
+  const state: PageState = { doc, y: 0, page: 0, title, footer: auditFooter(reportUrl) };
 
-  newPage(state, reportUrl);
+  newPage(state);
 
   // ---- HEADER (mirrors the web /r/[slug] ReportHeader: a small icon + eyebrow
   // on one row, the title below, subtitle, a divider, then a centered lead-in.
@@ -220,17 +181,17 @@ export function generateScorecardPDF(report: AuditReportRow, view: ReportView, w
   doc.setFontSize(10.5);
   doc.setFont("helvetica", "bold");
   setColor(doc, "text", WHITE);
-  ensureSpace(state, 8, reportUrl);
+  ensureSpace(state, 8);
   doc.text("EVERY QUESTION WE TESTED", MARGIN, state.y);
   state.y += 7;
 
   for (const p of view.prompts) {
-    drawPromptBlock(state, p, reportUrl);
+    drawPromptBlock(state, p);
   }
 
   // ---- WHO OWNS THE ANSWERS ----
   if (view.mostRecommended.length > 0 || view.citedDomains.length > 0) {
-    ensureSpace(state, 20, reportUrl);
+    ensureSpace(state, 20);
     doc.setFontSize(10.5);
     doc.setFont("helvetica", "bold");
     setColor(doc, "text", WHITE);
@@ -241,7 +202,7 @@ export function generateScorecardPDF(report: AuditReportRow, view: ReportView, w
       doc.setFontSize(8.5);
       doc.setFont("helvetica", "normal");
       for (const r of view.mostRecommended.slice(0, 6)) {
-        ensureSpace(state, 5.5, reportUrl);
+        ensureSpace(state, 5.5);
         setColor(doc, "text", [200, 210, 225]);
         doc.text(r.name, MARGIN, state.y);
         setColor(doc, "text", MUTED);
@@ -252,7 +213,7 @@ export function generateScorecardPDF(report: AuditReportRow, view: ReportView, w
     }
   }
 
-  drawFooter(doc, reportUrl);
+  state.footer(doc, state.page);
 
   const arrayBuffer = doc.output("arraybuffer");
   return Buffer.from(arrayBuffer);
@@ -290,7 +251,7 @@ function engineLabel(doc: jsPDF, x: number, y: number, label: string, status: "o
   return tx - x + doc.getTextWidth(text) + 6;
 }
 
-function drawPromptBlock(state: PageState, p: PromptRowView, reportUrl: string): void {
+function drawPromptBlock(state: PageState, p: PromptRowView): void {
   const { doc } = state;
 
   doc.setFontSize(9);
@@ -305,7 +266,7 @@ function drawPromptBlock(state: PageState, p: PromptRowView, reportUrl: string):
   const recommendedLine = p.recommended.length > 0 ? `Recommended: ${p.recommended.map((r) => r.name).join(", ")}` : "";
 
   const blockHeight = headerHeight + 5 + snippetLines.length * 3.6 + (recommendedLine ? 5 : 0) + 6;
-  ensureSpace(state, blockHeight, reportUrl);
+  ensureSpace(state, blockHeight);
 
   setColor(doc, "fill", MIDNIGHT);
   setColor(doc, "draw", CARD_BORDER);

@@ -137,12 +137,72 @@ export async function captureOnboardingFile(args: {
   return { ok: true };
 }
 
+/**
+ * File a PDF this app GENERATED, as opposed to evidence somebody uploaded.
+ *
+ * captureOnboardingFile above cannot do this: it is Slack-inbound-shaped, requiring a
+ * `file.id` and a `url_private_download`, and it dedupes on the unique slack_file_id index.
+ * A generated artifact has neither. It writes slack_file_id null, which the index already
+ * permits (it is partial, `where slack_file_id is not null`).
+ *
+ * ‼️ NOT IDEMPOTENT, ON PURPOSE. Re-running an auto step is how a findings doc gets
+ * regenerated after the manual sweep fills in, and each run is a different document about a
+ * different set of facts. Runner v3 section 2 says a re-run "writes a new output_ref and
+ * supersedes"; it never edits the previous file, so the artifact that was actually sent to a
+ * client on a given day is still there to be read back.
+ */
+export async function storeGeneratedDoc(args: {
+  clientId: string;
+  stepKey: string;
+  filename: string;
+  buffer: Buffer;
+  contentType?: string;
+}): Promise<{ ok: boolean; docId?: string; error?: string }> {
+  const ext = (args.filename.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const key = `${args.clientId}/generated/${args.stepKey}-${stamp}.${ext}`;
+
+  const up = await supabaseAdmin.storage
+    .from(BUCKET)
+    .upload(key, args.buffer, {
+      contentType: args.contentType ?? "application/pdf",
+      upsert: false,
+    });
+
+  if (up.error) return { ok: false, error: `upload failed: ${up.error.message}` };
+
+  const { data, error } = await supabaseAdmin
+    .from("client_docs")
+    .insert({
+      client_id: args.clientId,
+      filename: args.filename,
+      content_type: args.contentType ?? "application/pdf",
+      size_bytes: args.buffer.byteLength,
+      storage_ref: key,
+      // Same reasoning as the capture path: the bucket is private, so a stored URL would be a
+      // dead link. Minted on request instead.
+      web_url: null,
+      delivery_step_key: args.stepKey,
+      source: "generated",
+      slack_file_id: null,
+      slack_thread_ts: null,
+      uploaded_by: "Mission Control",
+    })
+    .select("id")
+    .single();
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, docId: data.id as string };
+}
+
 export interface OnboardingDocView {
   id: string;
   filename: string;
   contentType: string | null;
   sizeBytes: number | null;
   stepKey: string | null;
+  /** 'slack' = evidence somebody filed. 'generated' = an artifact this app produced. */
+  source: "slack" | "generated";
   uploadedAt: string;
   uploadedBy: string | null;
 }
@@ -150,7 +210,7 @@ export interface OnboardingDocView {
 export async function listOnboardingDocs(clientId: string): Promise<OnboardingDocView[]> {
   const { data, error } = await supabaseAdmin
     .from("client_docs")
-    .select("id, filename, content_type, size_bytes, delivery_step_key, uploaded_at, uploaded_by")
+    .select("id, filename, content_type, size_bytes, delivery_step_key, source, uploaded_at, uploaded_by")
     .eq("client_id", clientId)
     .order("uploaded_at", { ascending: false });
 
@@ -165,6 +225,7 @@ export async function listOnboardingDocs(clientId: string): Promise<OnboardingDo
     contentType: (d.content_type as string | null) ?? null,
     sizeBytes: (d.size_bytes as number | null) ?? null,
     stepKey: (d.delivery_step_key as string | null) ?? null,
+    source: ((d.source as string | null) ?? "slack") as "slack" | "generated",
     uploadedAt: d.uploaded_at as string,
     uploadedBy: (d.uploaded_by as string | null) ?? null,
   }));

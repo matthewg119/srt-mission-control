@@ -10,7 +10,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { DELIVERY_STEPS } from "@/lib/clients/delivery-checklist";
+// From @/config, not @/lib/clients/delivery-checklist: this is a client component, and that
+// module reaches the step engine, which reaches node:dns. See the header of the config file.
+import { DELIVERY_STEPS } from "@/config/delivery-steps";
 
 export function DeliveryChecklistForm({
   clientId,

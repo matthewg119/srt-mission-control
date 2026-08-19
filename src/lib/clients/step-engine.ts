@@ -314,6 +314,107 @@ export async function postReadySteps(clientId: string): Promise<void> {
 }
 
 /**
+ * Run whichever AUTO steps are now runnable and have not run.
+ *
+ * ‼️ THE COUNTERPART TO postReadySteps, AND THE THING THAT WAS MISSING.
+ * postReadySteps skips `mode === "auto"` on the first line of its loop, and nothing else ran
+ * those steps either — so five rows rendered `_auto_` in Slack forever while no code behind them
+ * existed. This is the other half: manual steps get posted to a person, auto steps get executed.
+ *
+ * Conservative in the same way postReadySteps is:
+ *  - only when every blocker is complete, so work happens in the order it actually happens;
+ *  - only when the step has never started, so a re-entrant call cannot run a generator twice;
+ *  - claimed with a conditional UPDATE before running, because two step transitions landing at
+ *    once would otherwise both see 'ready' and both generate a PDF.
+ *
+ * An auto step that FAILS goes to 'error' with the reason on the row. It does not retry itself
+ * and it does not block: the daily digest surfaces errors, and a human decides. A generator that
+ * silently retried would spend an audit's worth of fetches on a client whose website is down.
+ *
+ * ‼️ A STEP THAT GENERATES SOMETHING BUT STILL NEEDS A PERSON DOES NOT COMPLETE ITSELF.
+ * `auto_then_manual` runs its generator and then posts the card and waits, exactly as Runner v3
+ * §2 requires: "Never auto-advance past a human." avatar_harvest is the live example — the
+ * cited-source harvest is finished, the deep-research brief is not until somebody runs it.
+ */
+export async function runReadyAutoSteps(clientId: string): Promise<void> {
+  const { AUTO_RUNNERS } = await import("./artifacts/registry");
+
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("step_key, status")
+    .eq("client_id", clientId);
+
+  const rows = data ?? [];
+  const done = new Set(
+    rows.filter((r) => r.status === "complete" || r.status === "skipped").map((r) => r.step_key as string)
+  );
+  const byKey = new Map(rows.map((r) => [r.step_key as string, r.status as string]));
+
+  for (const step of DELIVERY_STEPS) {
+    const runner = AUTO_RUNNERS[step.key];
+    if (!runner) continue;
+
+    const status = byKey.get(step.key);
+    // 'pending', 'blocked' and 'ready' are all startable. 'running', 'awaiting_me', 'complete',
+    // 'skipped' and 'error' are not: the first is in flight, the rest have had their turn.
+    if (!status || !["pending", "blocked", "ready"].includes(status)) continue;
+    if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
+
+    // The claim. `.in("status", ...)` makes this conditional: the loser of a race updates zero
+    // rows and gets no data back, so exactly one caller runs the generator.
+    const { data: claimed } = await supabaseAdmin
+      .from("client_delivery_steps")
+      .update({ status: "running", started_at: new Date().toISOString(), error_detail: null })
+      .eq("client_id", clientId)
+      .eq("step_key", step.key)
+      .in("status", ["pending", "blocked", "ready"])
+      .select("id");
+
+    if (!claimed?.length) continue;
+
+    let result: { ok: boolean; error?: string; note?: string };
+    try {
+      result = await runner(clientId);
+    } catch (e) {
+      result = { ok: false, error: (e as Error).message };
+    }
+
+    if (!result.ok) {
+      await supabaseAdmin
+        .from("client_delivery_steps")
+        .update({ status: "error", error_detail: result.error ?? "unknown", updated_at: new Date().toISOString() })
+        .eq("client_id", clientId)
+        .eq("step_key", step.key);
+
+      const { notifyThread } = await import("./delivery-checklist");
+      await notifyThread(clientId, `:warning: *${step.label}* failed: ${result.error ?? "unknown"}`).catch(() => {});
+      continue;
+    }
+
+    if (result.note) {
+      const { notifyThread } = await import("./delivery-checklist");
+      await notifyThread(clientId, result.note).catch(() => {});
+    }
+
+    if (step.mode === "auto_then_manual") {
+      // Generated, now waiting on a person. Post the card and stop.
+      await supabaseAdmin
+        .from("client_delivery_steps")
+        .update({ status: "ready", updated_at: new Date().toISOString() })
+        .eq("client_id", clientId)
+        .eq("step_key", step.key);
+      await postStep(clientId, step.key).catch(() => {});
+      continue;
+    }
+
+    const { autoCompleteStep } = await import("./delivery-checklist");
+    await autoCompleteStep(clientId, step.key).catch((e) =>
+      console.error(`[step-engine] completing ${step.key} failed:`, (e as Error).message)
+    );
+  }
+}
+
+/**
  * The daily #alerts-infra digest. Runner v3 §3.
  *
  * "Tasks in 'error', and tasks 'awaiting_me' longer than 48h."
