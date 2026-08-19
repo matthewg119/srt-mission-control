@@ -6,7 +6,8 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { researchWebsite } from "./site-research";
+import { isThinResearch, researchWebsite, SiteFetchError, type SiteResearch } from "./site-research";
+import { researchViaSearch, describeTarget, type ResearchTarget } from "./search-research";
 import { classifyBusiness } from "./classify";
 import { generateSlug } from "./slug";
 import { getOrCreateAuditChannel } from "./audit-channel";
@@ -20,7 +21,23 @@ function appUrl(): string {
 }
 
 export interface RunAuditPipelineParams {
-  website: string;
+  /**
+   * The prospect's website. OPTIONAL, because a large share of local businesses do not have
+   * one: a Google Business Profile, a Yelp page, and nothing they own.
+   *
+   * Supply this OR `businessName`. With neither there is nothing to identify and the run is
+   * refused; with both, the website wins and the name is only a hint to the classifier.
+   */
+  website?: string;
+  /**
+   * Name-mode: the business as Matthew typed it in `/audit Business Name | City, ST`.
+   *
+   * ‼️ `city` becomes REQUIRED alongside it. There is no site to detect a city from, and a
+   * trading name on its own is not unique — search will happily return the Hernandez Auto
+   * Repair in Durham for a run meant for the one in Chicago, and the whole score would then
+   * describe a business nobody asked about.
+   */
+  businessName?: string;
   city?: string;
   competitors?: string[];
   requestedBy?: string; // Slack user id, when triggered from Slack
@@ -39,6 +56,23 @@ export interface RunAuditPipelineParams {
   allowLowConfidenceCity?: boolean;
   onNeedsCity?: (website: string, bestGuess: string | null) => Promise<void>;
   onError?: (message: string) => Promise<void>;
+  /**
+   * The client this run is being fired FOR, when it is a client baseline rather than a
+   * prospecting audit. Stored on the row so every artifact generator can ask "which run is
+   * this client's" without going through the soft contact_id link.
+   */
+  clientId?: string;
+  /**
+   * Where the finished scorecard should land. Supplied by client onboarding so the report
+   * comes back in the client's own ops thread instead of #ai-visibility-audits.
+   *
+   * ‼️ THIS HAS TO BE A PARAMETER, not something the caller patches on afterwards. The row is
+   * inserted with the audit channel below, and `slack_thread_ts` is OVERWRITTEN a few lines
+   * further down with the prompt drop's ts. Anything an onReportCreated callback wrote to
+   * either field would be gone before the batches even start. Passing it in is what lets the
+   * insert and the post agree in the first place.
+   */
+  deliveryThread?: { channelId: string; threadTs: string };
   /**
    * Fired the moment the audit_reports row exists, BEFORE the Slack post and before the
    * batch kick-off.
@@ -75,83 +109,178 @@ export const RUN_IN_FLIGHT_MINUTES = 15;
  *  calls plus classification, so a stray second beacon is expensive. */
 const DEDUP_WINDOW_MINUTES = 30;
 
-async function findRecentReport(website: string, email?: string): Promise<string | null> {
+/**
+ * Has this exact request already been made in the last half hour?
+ *
+ * Keyed on the WEBSITE when there is one and on the name+city when there is not. Keying a
+ * name-mode run on `website` would compare null to null and either match every other
+ * website-less report or, with Postgres null semantics, match none of them. Neither is a
+ * duplicate check.
+ */
+async function findRecentReport(
+  target: { website: string } | { name: string; city: string },
+  email?: string
+): Promise<string | null> {
   if (!email) return null;
   const cutoff = new Date(Date.now() - DEDUP_WINDOW_MINUTES * 60_000).toISOString();
-  const { data } = await supabaseAdmin
+  let q = supabaseAdmin
     .from("audit_reports")
     .select("id")
-    .eq("website", website)
     .eq("requester_email", email)
     .in("status", ["classifying", "running", "done"])
-    .gte("created_at", cutoff)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .gte("created_at", cutoff);
+
+  q = "website" in target ? q.eq("website", target.website) : q.is("website", null).eq("client_name", target.name).eq("city", target.city);
+
+  const { data } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
   return data?.id ?? null;
 }
 
 export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<RunAuditPipelineResult> {
-  const duplicateOf = await findRecentReport(params.website, params.requesterEmail);
+  // One of the two identities is required. Name mode additionally requires a city — see the
+  // doc on businessName for why that is a correctness rule and not a convenience.
+  const declaredName = params.businessName?.trim();
+  if (!params.website && !declaredName) {
+    await params.onError?.("No website and no business name, so there was nothing to identify.");
+    return { ok: false };
+  }
+  if (!params.website && !params.city?.trim()) {
+    await params.onError?.(
+      `A city is required when auditing by name. Try \`/audit ${declaredName} | City, ST\`.`
+    );
+    return { ok: false };
+  }
+
+  const target: ResearchTarget = params.website
+    ? { kind: "website", website: params.website }
+    : { kind: "name", name: declaredName as string, city: (params.city as string).trim() };
+  const label = describeTarget(target);
+
+  const duplicateOf = await findRecentReport(
+    params.website ? { website: params.website } : { name: declaredName as string, city: (params.city as string).trim() },
+    params.requesterEmail
+  );
   if (duplicateOf) {
-    console.log(`[run-audit-pipeline] skipping duplicate for ${params.website} (report ${duplicateOf})`);
+    console.log(`[run-audit-pipeline] skipping duplicate for ${label} (report ${duplicateOf})`);
     return { ok: true, reportId: duplicateOf };
   }
 
-  let research;
-  try {
-    research = await researchWebsite(params.website);
-  } catch (e) {
-    await params.onError?.(`Couldn't fetch ${params.website}: ${(e as Error).message}`);
-    return { ok: false };
+  // The crawl feeds the QUESTIONS, never the answers — the score comes entirely from
+  // audit_runs. So a page we cannot read is not a reason to skip 20 engine calls; it is a
+  // reason to find out who this business is some other way. What we must NOT do is guess.
+  //
+  // A business with no site at all is the same situation arrived at from the other end: there
+  // was never a page to read, so third-party research is not a fallback here, it is the plan.
+  let research: SiteResearch;
+  if (target.kind === "name") {
+    const found = await researchViaSearch(target, null);
+    if (!found) {
+      await params.onError?.(
+        `Could not find a business called "${target.name}" in ${target.city} in any third-party source, ` +
+          `so there was nothing to build questions from. Check the spelling and the city. Nothing was scored.`
+      );
+      return { ok: false };
+    }
+    research = found;
+  } else {
+    try {
+      research = await researchWebsite(target.website);
+      if (isThinResearch(research)) {
+        // Readable, but it says almost nothing — a splash page or a JS-only shell. Classifying
+        // from this produces 20 generic questions that measure nothing.
+        console.warn(`[run-audit-pipeline] ${label}: page text too thin, adding search research`);
+        const enriched = await researchViaSearch(target, null, research);
+        if (enriched) research = enriched;
+      }
+    } catch (e) {
+      const block = e instanceof SiteFetchError ? e.block : null;
+      const fallback = await researchViaSearch(target, block);
+      if (!fallback) {
+        await params.onError?.(
+          `${(e as Error).message} Third-party sources could not identify the business either, ` +
+            `so there was nothing to build questions from. Nothing was scored.`
+        );
+        return { ok: false };
+      }
+      console.warn(
+        `[run-audit-pipeline] ${label}: site unreadable (${block?.reason ?? "unknown"}), running on search research`
+      );
+      research = fallback;
+    }
   }
 
   let classification;
   try {
-    classification = await classifyBusiness(research, { city: params.city, competitors: params.competitors });
+    classification = await classifyBusiness(research, {
+      city: params.city,
+      competitors: params.competitors,
+      businessName: declaredName,
+    });
   } catch (e) {
-    await params.onError?.(`Classification failed for ${params.website}: ${(e as Error).message}`);
+    await params.onError?.(`Classification failed for ${label}: ${(e as Error).message}`);
     return { ok: false };
   }
 
   // A city is only ever required for local businesses — a national/online/B2B
   // business (is_local:false) proceeds with no city, no fallback question.
   if (classification.is_local && classification.city_confidence === "low" && !params.allowLowConfidenceCity) {
-    await params.onNeedsCity?.(params.website, classification.city_detected);
+    // Unreachable in name mode: a city is required at the door and classifyBusiness pins it
+    // to "high", so this only ever fires for a website run that came back unsure.
+    await params.onNeedsCity?.(params.website ?? label, classification.city_detected);
     return { ok: false };
   }
 
-  const channel = await getOrCreateAuditChannel();
+  // A client baseline is delivered to the client's ops thread; everything else goes to the
+  // audit channel. Resolved once, here, so the insert below and the post further down cannot
+  // disagree about where this run lives.
+  const destination = params.deliveryThread
+    ? { id: params.deliveryThread.channelId, threadTs: params.deliveryThread.threadTs }
+    : { id: (await getOrCreateAuditChannel()).id, threadTs: null as string | null };
   const slug = await generateSlug();
 
   // The "one thing working against you" hook for cold email 1, computed from the homepage
   // markup we already have. Best-effort: a regex surprise here must never sink an audit.
-  let siteSignals: ReturnType<typeof detectSiteSignals> = [];
-  try {
-    siteSignals = detectSiteSignals({
-      html: research.homepageHtml,
-      website: research.website,
-      schemaHints: research.schemaHints,
-      currentYear: new Date().getFullYear(),
-    });
-  } catch (e) {
-    console.error("[run-audit-pipeline] site-signal scan failed:", (e as Error).message);
+  // ‼️ null and [] are NOT interchangeable here. [] means "we read the site and it is clean",
+  // which is one of the two things that licenses the "something on your own site" tease in cold
+  // email 1. On a run where nobody read the page there is no site to have an opinion about, so
+  // it stays null and that tease stays unsayable. Same tri-state contract as robots_check.
+  let siteSignals: ReturnType<typeof detectSiteSignals> | null = null;
+  if (research.source !== "search" && research.source !== "declared") {
+    siteSignals = [];
+    try {
+      siteSignals = detectSiteSignals({
+        html: research.homepageHtml,
+        // Non-null inside this branch: source is neither "search" nor "declared", so a page
+        // was actually fetched and researchWebsite echoed its URL back.
+        website: research.website as string,
+        schemaHints: research.schemaHints,
+        currentYear: new Date().getFullYear(),
+      });
+    } catch (e) {
+      console.error("[run-audit-pipeline] site-signal scan failed:", (e as Error).message);
+    }
   }
 
   // Does robots.txt lock the AI crawlers out? Tri-state on purpose (see robots-check.ts):
   // null = never ran, so nothing downstream may claim anything about their crawler access.
+  // ‼️ Stays null with no website. There is no robots.txt to fetch, and null is exactly the
+  // right answer: "nothing is known about their crawler access", which is what forbids any
+  // downstream claim about it. Reading it as [] would say "we checked and they are wide
+  // open" about a site that does not exist.
   let robotsCheck: RobotsCheck = null;
-  try {
-    robotsCheck = await checkRobots(research.website);
-  } catch (e) {
-    console.error("[run-audit-pipeline] robots check failed:", (e as Error).message);
+  if (research.website) {
+    try {
+      robotsCheck = await checkRobots(research.website);
+    } catch (e) {
+      console.error("[run-audit-pipeline] robots check failed:", (e as Error).message);
+    }
   }
 
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from("audit_reports")
     .insert({
       slug,
-      website: params.website,
+      website: params.website ?? null,
       client_name: classification.business_name,
       city: classification.city_detected,
       business_type: classification.business_type,
@@ -166,9 +295,13 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       requester_phone: params.requesterPhone ?? null,
       contact_id: params.contactId ?? null,
       lead_source: params.leadSource ?? null,
-      slack_channel_id: channel.id,
+      slack_channel_id: destination.id,
+      slack_thread_ts: destination.threadTs,
+      client_id: params.clientId ?? null,
       site_signals: siteSignals,
       robots_check: robotsCheck,
+      crawl_block: research.blocked,
+      research_source: research.source,
     })
     .select("*")
     .single();
@@ -189,11 +322,20 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
   }
 
   const { text: dropText } = formatPromptDrop(report);
-  const posted = await slack.postMessage(channel.id, dropText);
-  const threadTs = (posted as { ts?: string }).ts;
 
-  if (threadTs) {
-    await supabaseAdmin.from("audit_reports").update({ slack_thread_ts: threadTs }).eq("id", report.id);
+  if (destination.threadTs) {
+    // ‼️ The prompt drop is a REPLY here, and slack_thread_ts is deliberately NOT touched. A
+    // reply's own ts is not a thread key: writing it back would make finishReport post the
+    // scorecard as a reply to a reply, which Slack flattens into the parent thread but which
+    // also detaches it from clientForThread()'s ops_thread_ts lookup, so any screenshot filed
+    // under it would stop resolving to a client. The parent stays the thread.
+    await slack.postThreadReply(destination.id, destination.threadTs, dropText);
+  } else {
+    const posted = await slack.postMessage(destination.id, dropText);
+    const threadTs = (posted as { ts?: string }).ts;
+    if (threadTs) {
+      await supabaseAdmin.from("audit_reports").update({ slack_thread_ts: threadTs }).eq("id", report.id);
+    }
   }
 
   // Kick off batch processing. Internal route self-chains through the remaining

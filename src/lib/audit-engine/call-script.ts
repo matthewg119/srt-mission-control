@@ -34,6 +34,7 @@ import { computeWeightedScore, type ReportView } from "./report-view";
 import { readLedger } from "./seed-ledger";
 import type { AuditReportRow } from "./types";
 import { SRT_COMPANY } from "@/config/rep-profile";
+import { displayName } from "./display-name";
 
 /**
  * The two identity strings the script is allowed to say out loud.
@@ -389,7 +390,7 @@ export async function buildCallFacts(report: AuditReportRow, view: ReportView): 
 
   return {
     prospect: report.prospect_name ?? report.loom_state?.greetName ?? report.requester_name ?? null,
-    company: report.client_name ?? report.business_type ?? report.website,
+    company: displayName(report),
     businessType: report.business_type,
     city: report.city,
     buyerPersona: report.buyer_persona,

@@ -8,6 +8,7 @@
 import { jsPDF } from "jspdf";
 import type { AuditReportRow } from "./types";
 import type { ReportView, PromptRowView, WeightedScore } from "./report-view";
+import { displayName } from "./display-name";
 
 const MIDNIGHT: [number, number, number] = [11, 20, 38];
 const OCEAN: [number, number, number] = [27, 101, 167];
@@ -128,7 +129,7 @@ function ensureSpace(state: PageState, needed: number, reportUrl: string): void 
 export function generateScorecardPDF(report: AuditReportRow, view: ReportView, weighted: WeightedScore): Buffer {
   const doc = new jsPDF();
   const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/r/${report.slug}`;
-  const title = report.client_name || report.business_type || report.website;
+  const title = displayName(report);
   const state: PageState = { doc, y: 0, page: 0, title };
 
   newPage(state, reportUrl);

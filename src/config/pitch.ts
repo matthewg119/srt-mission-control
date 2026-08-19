@@ -4,6 +4,8 @@
 // Everything here is a policy decision someone might reasonably want to change without reading
 // email-assistant.ts. Anything that is a *mechanism* stays in its own module.
 
+import type { CrawlBlock } from "@/lib/audit-engine/types";
+
 // ── Belief selection ────────────────────────────────────────────────────────
 // B4 ("different game, different winners") is the right opener when the prospect is proud of
 // their Google presence: acknowledging that strength first is what stops the email reading as
@@ -278,3 +280,63 @@ export const BRIEF_BLOCKED_DOMAINS = [
   "homeadvisor.com",
   "yelp.com",
 ];
+
+/**
+ * ‼️ WHETHER A BLOCKED CRAWL MAY BE MENTIONED TO A PROSPECT AT ALL.
+ *
+ * This is a code gate, not a prompt instruction, for the same reason the price lever is
+ * (call-coach-price-gate.ts): a model handed a hedged sentence about a block will upgrade it
+ * into a finding, because a finding is more useful to it. Absent beats forbidden — when this
+ * returns null the drafter is never given the words.
+ *
+ * Two live cases are why the gate is this narrow:
+ *   nailsplaceyulee.com  a real bot challenge. Worth raising, carefully.
+ *   renatawellspa.com    a healthy Elementor site our own 6s timeout gave up on. Pitching that
+ *                        one "your site blocks AI crawlers" would have been disproved in ten
+ *                        seconds, on the first line, by the prospect.
+ *
+ * So: only reason "blocked" counts (a timeout or a network error is OUR failure), and only when
+ * the engines did not cite their domain during the run. A citation means their crawler got
+ * through and the block was ours alone.
+ *
+ * `engines_cited_site: null` means the run has not finished, so nothing is known yet — and
+ * "not known yet" must read the same as "not allowed", never as "no objection found".
+ */
+export function crawlBlockAngle(block: CrawlBlock | null): string | null {
+  if (!block) return null;
+  if (block.reason !== "blocked") return null;
+  if (block.engines_cited_site !== false) return null;
+  return CRAWL_BLOCK_LINE;
+}
+
+/** The wording, fixed. Same precedent as PERMISSION_CLOSE and NOT_SELLING_LINE: every time a
+ *  model was merely ASKED to hedge this, it wrote "your site is invisible to AI" instead.
+ *  What we observed is a request being refused. What that implies is a question, not a fact. */
+export const CRAWL_BLOCK_LINE =
+  "your site turned away an automated request that had no javascript, and across this whole scan " +
+  "the engines never once cited your own domain as a source";
+
+/**
+ * ‼️ THE NO-WEBSITE ANGLE. Sibling of crawlBlockAngle above, and the distinction between them
+ * is the entire reason `research_source` has a fourth value.
+ *
+ * "search" means a site exists and our fetcher could not read it, which is a hedged claim about
+ * their crawler setup. "declared" means there is no site at all. Telling a business with no
+ * website that its website is turning crawlers away is the kind of error a prospect spots
+ * instantly, and it takes the rest of the audit down with it.
+ *
+ * Unlike the crawl block, this one needs no evidence gate. It is not an inference from a failed
+ * request, it is the premise of the run: Matthew looked at their Google listing, saw no site,
+ * and typed the name. There is nothing to be wrong about.
+ */
+export function noWebsiteAngle(researchSource: string | null): string | null {
+  return researchSource === "declared" ? NO_WEBSITE_LINE : null;
+}
+
+/** Fixed for the same reason CRAWL_BLOCK_LINE is. Asked to phrase this itself, a model reaches
+ *  for "you are invisible to AI", which is both unfalsifiable and untrue: they are not invisible,
+ *  they are described entirely by other people. That difference is the pitch. */
+export const NO_WEBSITE_LINE =
+  "you do not have a site of your own, so when someone asks an engine for a business like yours " +
+  "there is nothing of yours for it to cite. It can only repeat what a directory, a review site " +
+  "or a competitor's page says about you, and none of those are written by you";

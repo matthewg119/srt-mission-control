@@ -30,6 +30,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { ingestLead, enrichLead } from "@/lib/lead-intake";
+import { slack } from "@/lib/slack-bot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -222,7 +223,7 @@ export async function POST(req: NextRequest) {
 
   // Awaited, not backgrounded: the whole point is that the lead is in Slack and
   // Zoho before the audit starts, so a pipeline failure can never swallow it.
-  const { contactId } = await ingestLead({
+  const { contactId, threadTs } = await ingestLead({
     firstName,
     lastName,
     email,
@@ -262,7 +263,17 @@ export async function POST(req: NextRequest) {
       contactId: contactId ?? undefined,
       leadSource: source,
       allowLowConfidenceCity: true,
-      onError: async (message) => console.error("[audit/public-intake] pipeline error:", message),
+      // Say it in the thread, not just to the log. This lead was told "the report lands in
+      // this thread in a few minutes"; swallowing the failure into console.error left that
+      // promise hanging forever with nobody aware it had broken.
+      onError: async (message) => {
+        console.error("[audit/public-intake] pipeline error:", message);
+        const channel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+        if (!channel || !threadTs) return;
+        await slack
+          .postThreadReply(channel, threadTs, `:warning: The audit for ${website} did not run. ${message}`)
+          .catch((e) => console.error("[audit/public-intake] failure notice failed:", (e as Error).message));
+      },
     })
   );
 

@@ -21,7 +21,7 @@ import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
 import { BATCH_SIZE } from "@/lib/audit-engine/types";
 import type { AuditPrompt } from "@/lib/audit-engine/classify";
 import { runBatch } from "@/lib/audit-engine/run-batch";
-import { buildReportView, computeWeightedScore, type ReportView, type WeightedScore } from "@/lib/audit-engine/report-view";
+import { buildReportView, citedOwnDomain, computeWeightedScore, type ReportView, type WeightedScore } from "@/lib/audit-engine/report-view";
 import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
@@ -37,14 +37,10 @@ import {
   buildPitchHtml,
   sendAuditPitch,
 } from "@/lib/audit-engine/lead-pitch";
+import { displayName, rerunCommand } from "./display-name";
 
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
-}
-
-/** The company this report is about, resolved the same way everywhere it is displayed. */
-function displayName(report: AuditReportRow): string {
-  return report.client_name || report.business_type || report.website;
 }
 
 /**
@@ -157,7 +153,7 @@ export async function finishReport(row: AuditReportRow): Promise<void> {
       row,
       `The scan could not be completed: ${missing.length} of ${total} questions returned no data` +
         `${cause ? ` (${cause})` : ""}. No scorecard was produced, because scoring an unanswered ` +
-        `question as "you did not appear" would invent a finding. Fix the cause, then re-run with /audit ${row.website}.`
+        `question as "you did not appear" would invent a finding. Fix the cause, then re-run with ${rerunCommand(row)}.`
     );
     return;
   }
@@ -165,9 +161,24 @@ export async function finishReport(row: AuditReportRow): Promise<void> {
   const view = buildReportView(row, runs, aliases);
   const weighted = computeWeightedScore(view);
 
+  // Settle the one open question about a blocked crawl, using data the run already collected.
+  // If the engines cited their domain, their crawlers get through and OUR fetch failure says
+  // nothing about them — which is exactly the claim we must never make by accident.
+  // row.website is null only on a declared run, which never sets crawl_block in the first
+  // place (there is no site to be blocked by), so this branch cannot be reached without one.
+  const crawlBlock =
+    row.crawl_block && row.website
+      ? { ...row.crawl_block, engines_cited_site: citedOwnDomain(runs, row.website) }
+      : row.crawl_block;
+
   const { data: updated } = await supabaseAdmin
     .from("audit_reports")
-    .update({ status: "done", score: weighted.score, updated_at: new Date().toISOString() })
+    .update({
+      status: "done",
+      score: weighted.score,
+      ...(crawlBlock ? { crawl_block: crawlBlock } : {}),
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", row.id)
     .select("*")
     .single();

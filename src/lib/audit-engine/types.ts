@@ -5,6 +5,9 @@
 import type { AuditBlock, AuditPrompt, LikelyCompetitor } from "./classify";
 // Type-only, and robots-check.ts imports nothing, so this cannot create a cycle.
 import type { RobotsFinding } from "./robots-check";
+// Type-only import of the fetcher's failure enum: one vocabulary for "why could we not read
+// this page", shared by the thing that observes it and the row that stores it.
+import type { FetchFailReason } from "@/lib/medspa-owner-scrape";
 
 export type AuditReportStatus = "classifying" | "awaiting_city" | "running" | "done" | "failed";
 /** The engines a NEW run may use. Perplexity was dropped on 2026-08-05: its key had been
@@ -22,11 +25,35 @@ export type AuditRunStatus = "pending" | "ok" | "no_data";
  *  is the prospect talking. See thread-assistant.ts. */
 export type OutreachStage = "awaiting_intake" | "drafted" | "revealed";
 
+/** Where the research that produced the 20 questions came from. See AuditReportRow.research_source.
+ *
+ *  ‼️ "search" and "declared" are NOT interchangeable. "search" means a site exists and we could
+ *  not read it, which is a fact about their crawler setup. "declared" means there is no site at
+ *  all, because Matthew ran `/audit "Business Name" | City, ST` against a business that has only
+ *  a Google Business Profile. Telling a business with no website that its website is blocking
+ *  crawlers is the exact failure this split prevents. */
+export type ResearchSource = "site" | "search" | "site+search" | "declared";
+
+/** What the fetcher observed. Persisted verbatim so a later reader can tell "they blocked us"
+ *  from "we gave up after 20 seconds" — the distinction the old single null threw away. */
+export interface CrawlBlock {
+  reason: FetchFailReason;
+  status: number | null;
+  detail: string;
+  checked_at: string;
+  /** null until the run finishes. See the doc on AuditReportRow.crawl_block. */
+  engines_cited_site: boolean | null;
+}
+
 export interface AuditReportRow {
   id: string;
   slug: string;
   client_name: string | null;
-  website: string;
+  /** NULL on a name-mode run: the business has no site. buildAliases() then has no bare-domain
+   *  token, so client_name carries the whole mention match, and the
+   *  `client_name || business_type || website` display chain loses its last rung. Read it
+   *  through displayName() rather than rebuilding that chain. */
+  website: string | null;
   city: string | null;
   business_type: string | null;
   vertical_slug: string | null;
@@ -82,6 +109,21 @@ export interface AuditReportRow {
    *  check never ran and NO claim may be made, [] = ran and clean, non-empty = findings.
    *  Shape mirrors RobotsFinding in robots-check.ts. */
   robots_check: RobotsFinding[] | null;
+  /** What our own fetcher observed when it tried to read the homepage. Tri-state, and the
+   *  states are NOT interchangeable:
+   *    null            the page was read normally — there is nothing to say
+   *    reason "blocked"  a challenge page or a 403/429/503 — the only state that is evidence
+   *    reason timeout/network/http_error/not_html  OUR failure, never the prospect's
+   *  `engines_cited_site` is filled in by finishReport from audit_runs.citations: true means
+   *  the engines themselves cited this domain, so their crawlers get through and the block is
+   *  ours alone. See crawlBlockAngle() in config/pitch.ts — nothing may be said to a prospect
+   *  about a block unless reason is "blocked" AND engines_cited_site is false. */
+  crawl_block: CrawlBlock | null;
+  /** Where the 20 questions were derived from. "site" = we read their pages. "search" = the
+   *  page could not be read and the profile came from third-party sources. "site+search" = the
+   *  page was readable but too thin to classify, so search filled the gap. Anything that
+   *  claims to describe THEIR SITE must check this first. */
+  research_source: ResearchSource | null;
   /** Beliefs installed in this thread + the options last offered. Shape: SeedLedger in
    *  seed-ledger.ts. Null on any report written before seeding existed. */
   seed_ledger: { installed: Array<{ belief: string; stage: string; line: string; at: string }>; offered: Array<{ belief: string; label: string; line: string }> } | null;

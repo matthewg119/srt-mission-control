@@ -16,16 +16,23 @@ function bareDomain(domainOrUrl: string): string {
   }
 }
 
-/** Build every alias form worth matching against a raw engine response. */
-export function buildAliases(businessName: string, website: string): string[] {
+/**
+ * Build every alias form worth matching against a raw engine response.
+ *
+ * ‼️ Both arguments are nullable, and the website genuinely is null on a name-mode run. The
+ * bare-domain token simply drops out then, which means the BUSINESS NAME CARRIES THE WHOLE
+ * MATCH and therefore the whole score. That is why classifyBusiness pins the name Matthew
+ * typed instead of letting the model paraphrase it.
+ */
+export function buildAliases(businessName?: string | null, website?: string | null): string[] {
   const aliases = new Set<string>();
-  const trimmedName = businessName.trim();
+  const trimmedName = (businessName ?? "").trim();
   if (trimmedName) {
     aliases.add(trimmedName);
     const stripped = stripSuffixes(trimmedName);
     if (stripped) aliases.add(stripped);
   }
-  const domainToken = bareDomain(website);
+  const domainToken = website ? bareDomain(website) : "";
   if (domainToken) aliases.add(domainToken);
 
   return [...aliases].filter((a) => a.length >= 2);
