@@ -33,6 +33,7 @@ import {
   runMiniVisibilityCheck,
   draftNoWebsitePitch,
   formatNoWebsitePitchCard,
+  createPitchDraft,
 } from "@/lib/audit-engine/no-website-pitch";
 import { getOrCreateAuditChannel } from "@/lib/audit-engine/audit-channel";
 
@@ -292,9 +293,15 @@ async function startNoWebsitePitch(contactId: string, actor: string) {
           return;
         }
 
-        const draft = await draftNoWebsitePitch(check);
+        const draft = await draftNoWebsitePitch(check, businessName, contact.first_name);
+        // Signed with the same Outlook block every other SRT email uses, and left as a DRAFT.
+        // Nothing on this lane sends: microsoft.sendDraft is not imported here and must not be.
+        const made = await createPitchDraft(draft, contact.email);
         const channel = (await getOrCreateAuditChannel()).id;
-        const post = await slack.postMessage(channel, formatNoWebsitePitchCard(businessName, check, draft));
+        const post = await slack.postMessage(
+          channel,
+          formatNoWebsitePitchCard(businessName, check, draft, made?.webLink)
+        );
 
         await addNote({
           contactId,

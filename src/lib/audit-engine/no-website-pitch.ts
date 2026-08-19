@@ -30,15 +30,17 @@ import {
   VOICE_RULES,
   STYLE_RULES,
   COMPLIANCE_RULES,
-  SUBJECT_LINE_INSTRUCTION,
   ensureSignoff,
   ensurePermissionClose,
   PERMISSION_CLOSE,
   noDashes,
   enforceLinkPolicy,
+  stripAgencyLine,
   type GuardedDraft,
 } from "./email-assistant";
 import { polishBody } from "./format-guard";
+import { auditSignatureHtml, buildPitchHtml } from "./lead-pitch";
+import { microsoft } from "@/lib/microsoft";
 import { draftWithLint, retryInstruction } from "./draft-linter";
 import { NO_WEBSITE_LINE, NAME_COMPETITORS_IN_COLD_EMAIL } from "@/config/pitch";
 
@@ -270,6 +272,46 @@ export function miniCheckContext(check: MiniCheck): string {
 }
 
 /**
+ * Put the pitch into Matthew's Outlook drafts, signed the way every other SRT email is.
+ *
+ * ‼️ THE COMPOSITION IS COPIED FROM ensureOutlookDraft() IN thread-assistant.ts AND MUST STAY
+ * IDENTICAL: stripAgencyLine on the body, auditSignatureHtml() for the block, buildPitchHtml to
+ * marry them. That is what makes this email render exactly like the audit-lane one rather than
+ * approximately like it.
+ *
+ * Two pieces of that are easy to get wrong on their own:
+ *   - The signature is ATTACHED here, not added by Outlook. A draft created through Graph is
+ *     never composed in the client, so nothing auto-inserts a sign-off; without this the draft
+ *     opens with the body's bare "Matthew Garcia" and no block under it.
+ *   - auditSignatureHtml() reads the "AI Ops" block out of Outlook BY NAME, so the real
+ *     signature lives where Matthew can edit it without a deploy. EMAIL_SIGNATURE_HTML is only
+ *     the fallback for a disconnected mailbox, and it is not the same block.
+ * stripAgencyLine then takes the plain-text agency line off the body, because the block already
+ * names the agency and the two would print it twice.
+ *
+ * Returns null rather than throwing: a draft that could not be created is worth a line on the
+ * Slack card, not a lost pitch. The card carries the full text either way.
+ */
+export async function createPitchDraft(
+  draft: NoWebsiteDraft,
+  to: string | null
+): Promise<{ webLink: string } | null> {
+  if (!draft.body || draft.rejectedFindings.length > 0) return null;
+  try {
+    const html = buildPitchHtml(stripAgencyLine(draft.body), await auditSignatureHtml());
+    const made = await microsoft.createDraft({
+      to: to ?? undefined,
+      subject: draft.subject,
+      body: html,
+    });
+    return { webLink: made.webLink };
+  } catch (e) {
+    console.error("[no-website-pitch] Outlook draft failed:", (e as Error).message);
+    return null;
+  }
+}
+
+/**
  * The Slack card.
  *
  * ‼️ It prints the QUESTIONS AND THE VERDICTS above the draft, not just the draft. The email
@@ -280,7 +322,8 @@ export function miniCheckContext(check: MiniCheck): string {
 export function formatNoWebsitePitchCard(
   businessName: string,
   check: MiniCheck,
-  draft: NoWebsiteDraft
+  draft: NoWebsiteDraft,
+  draftLink?: string | null
 ): string {
   const lines: string[] = [
     `📭 No-website pitch for *${check.identity.tradingName ?? businessName}*${check.city ? ` · ${check.city}` : ""}`,
@@ -326,6 +369,22 @@ const PERSONA = [
   "This prospect has no website at all. That is the premise of the email, not a discovery.",
   "They have never heard of you and did not ask for this.",
 ].join("\n");
+
+/**
+ * The subject is a CONSTANT SHAPE, not something the model writes.
+ *
+ * `Duran Construction + ChatGPT`. Same precedent as PERMISSION_CLOSE and the call script's
+ * NOT_SELLING_LINE: a model merely ASKED for this shape produces a different subject every run
+ * ("AI search and Michoacana 3mendos Tacos in Charlotte", "who came up instead"), and the point
+ * of this one is that it is the same two words every time, so the thread is recognisable in a
+ * mailbox at a glance and reads as a note rather than a campaign.
+ *
+ * The business name comes from RESEARCH first, because the trading name sources actually use is
+ * the one the owner recognises; what Matthew typed into the CRM is the fallback.
+ */
+export function pitchSubject(businessName: string): string {
+  return `${businessName.trim()} + ChatGPT`;
+}
 
 function parseSubjectAndBody(text: string): { subject: string; body: string } {
   const m = /^\s*subject:\s*(.+?)\s*\n([\s\S]*)$/i.exec(text.trim());
@@ -373,9 +432,14 @@ export interface NoWebsiteDraft extends GuardedDraft {
 
 export async function draftNoWebsitePitch(
   check: MiniCheck,
+  fallbackName: string,
+  /** The human's first name, for the greeting. Null greets nobody rather than guessing. */
+  recipientFirstName?: string | null,
   instructions?: string | null
 ): Promise<NoWebsiteDraft> {
   const angle = pickAngle(check);
+  // Research's trading name first: it is the one the owner's own sources use.
+  const subject = pitchSubject(check.identity.tradingName ?? fallbackName);
 
   const gated = await draftWithLint(
     async (_attempt, previous) => {
@@ -391,7 +455,18 @@ export async function draftNoWebsitePitch(
           PARAGRAPH_RULES,
           VOICE_RULES,
           STYLE_RULES,
-          SUBJECT_LINE_INSTRUCTION,
+          // ‼️ SUBJECT_LINE_INSTRUCTION is deliberately NOT here. The subject is fixed by
+          // pitchSubject() in code, and a model given both an instruction to write one and a
+          // constant that overwrites it spends tokens on a line nobody reads. Told to write no
+          // subject at all, it also stops opening the body with a restatement of one.
+          "Do NOT write a subject line. A subject is added for you; start with the greeting.",
+          // ‼️ The greeting is a NAME AND A COMMA, nothing else, and it is stated here because
+          // the model reaches for "Hi," or, worse, greets the BUSINESS ("Hi Michoacana 3mendos,")
+          // when no person is named. A cold email addressed to a company reads as a mail merge on
+          // the first line, which is the line that decides whether the rest is read.
+          recipientFirstName
+            ? `GREETING: the first line is exactly "${recipientFirstName}," and nothing else. No "Hi", no "Hello", no "Dear".`
+            : "GREETING: there is no name for this contact, so write NO greeting at all. Open on the first sentence. Never greet the business by its name.",
           COMPLIANCE_RULES,
         ].join("\n"),
         user: [
@@ -431,7 +506,7 @@ export async function draftNoWebsitePitch(
   if (!chosen) {
     return {
       angle: angle.id,
-      subject: "",
+      subject,
       body: "",
       removedLinks: [],
       formatNote: null,
@@ -439,15 +514,14 @@ export async function draftNoWebsitePitch(
     };
   }
 
-  const subject = enforceLinkPolicy(noDashes(chosen.subject), { mode: "none" });
   const body = enforceLinkPolicy(noDashes(chosen.body), { mode: "none" });
   const polished = await polishBody(stripEchoedClose(body.text), { allowEmphasis: false });
 
   return {
     angle: angle.id,
-    subject: subject.text,
+    subject,
     body: ensureSignoff(ensurePermissionClose(polished.body)),
-    removedLinks: [...subject.removed, ...body.removed],
+    removedLinks: body.removed,
     formatNote: polished.note,
     rejectedFindings: gated.draft ? [] : gated.findings.map((f) => `${f.rule}: ${f.detail}`),
   };

@@ -63,11 +63,11 @@ const NO_ENGINES: MiniCheck = {
 const ENGINE_CLAIM_RE =
   /\b(i asked|i ran|i checked|i searched|came up|came back|i put .* into|chatgpt (said|gave|named|returned))\b/i;
 
-async function one(name: string, check: MiniCheck, mustNotClaimEngines: boolean): Promise<boolean> {
+async function one(name: string, check: MiniCheck, mustNotClaimEngines: boolean, first: string | null): Promise<boolean> {
   console.log(`\n${"=".repeat(70)}\n${name}\n${"=".repeat(70)}`);
   console.log(`angle picked: ${pickAngle(check).id}`);
 
-  const draft = await draftNoWebsitePitch(check);
+  const draft = await draftNoWebsitePitch(check, "Michoacana 3mendos Tacos LLC", first);
   console.log(`\nSubject: ${draft.subject}\n`);
   console.log(draft.body);
 
@@ -84,9 +84,16 @@ async function one(name: string, check: MiniCheck, mustNotClaimEngines: boolean)
   // override, so a hardcoded "SRT Agency" here fails on a correctly signed email.
   if (!draft.body.includes(OUTREACH_SIGNATURE.agency)) problems.push("missing the sign-off");
   if (/\b(AEO|GEO|SERPs?|LLMs?)\b/.test(all)) problems.push("contains banned jargon");
+  // The subject is a fixed shape set in code, never model-written: "<business> + ChatGPT".
+  if (!/ \+ ChatGPT$/.test(draft.subject)) problems.push(`subject is not "<business> + ChatGPT": ${draft.subject}`);
   if (mustNotClaimEngines && ENGINE_CLAIM_RE.test(all)) {
     problems.push("CLAIMS AN ENGINE WAS ASKED, but no engine call returned data");
   }
+
+  const firstLine = draft.body.split("\n")[0].trim();
+  if (first && firstLine !== `${first},`) problems.push(`first line should be "${first}," but is "${firstLine}"`);
+  if (!first && /^(hi|hello|dear)/i.test(firstLine)) problems.push(`greeted with no name to use: "${firstLine}"`);
+  if (!first && firstLine.toLowerCase().includes("michoacana")) problems.push(`greeted the BUSINESS: "${firstLine}"`);
 
   const wordCount = draft.body.split(/\s+/).filter(Boolean).length;
   console.log(`\n[${wordCount} words including the close and sign-off]`);
@@ -100,8 +107,10 @@ async function one(name: string, check: MiniCheck, mustNotClaimEngines: boolean)
 }
 
 async function main(): Promise<void> {
-  const a = await one("WITH engine results (should name a competitor)", WITH_ENGINES, false);
-  const b = await one("NO engine results (must NOT claim we asked anything)", NO_ENGINES, true);
+  // Named contact and anonymous contact: the second must greet NOBODY rather than greeting
+  // the business, which is what it did before the greeting rule existed.
+  const a = await one("WITH engine results, named contact (should open 'Guadalupe,')", WITH_ENGINES, false, "Guadalupe");
+  const b = await one("NO engine results, NO contact name (must not greet the business)", NO_ENGINES, true, null);
   console.log(`\n${a && b ? "✅ both cases pass" : "❌ FAILURES above"}`);
   process.exit(a && b ? 0 : 1);
 }
