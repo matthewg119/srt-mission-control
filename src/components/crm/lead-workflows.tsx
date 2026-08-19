@@ -21,6 +21,10 @@ interface WorkflowDef {
   hint: string;
   /** True when this button needs a finished audit to do anything. */
   needsAudit: boolean;
+  /** True when this button only makes sense for a lead with NO website. Every angle it can
+   *  write rests on nothing describing them being written by them, which stops being true the
+   *  moment a site exists. */
+  needsNoWebsite?: boolean;
 }
 
 const WORKFLOWS: WorkflowDef[] = [
@@ -54,6 +58,15 @@ const WORKFLOWS: WorkflowDef[] = [
     hint: "Pick the customer, the picture, then the script",
     needsAudit: true,
   },
+  {
+    // Sits last, under Loom, because it is the one button here that does NOT belong to the audit
+    // ladder above it. It is the alternative to that whole ladder for a prospect who has no site.
+    action: "nowebsite",
+    label: "No website",
+    hint: "Asks 3 buyer questions, then drafts the pitch. No audit needed",
+    needsAudit: false,
+    needsNoWebsite: true,
+  },
 ];
 
 type Result = { ok: true; label: string; message: string; url?: string } | { ok: false; message: string };
@@ -61,12 +74,16 @@ type Result = { ok: true; label: string; message: string; url?: string } | { ok:
 export function LeadWorkflows({
   contactId,
   hasWebsite,
+  hasBusinessName = true,
   hasAudit,
   auditRunning,
   threadUrl,
 }: {
   contactId: string;
   hasWebsite: boolean;
+  /** Defaults true so an older caller that does not pass it keeps its current behaviour; the
+   *  route re-checks anyway and answers 400 with the same reason. */
+  hasBusinessName?: boolean;
   hasAudit: boolean;
   auditRunning: boolean;
   threadUrl: string | null;
@@ -93,7 +110,9 @@ export function LeadWorkflows({
         message:
           w.action === "audit"
             ? "Running. The scorecard lands in Slack in about 5 minutes, and the score comes back here."
-            : "Running in the audit thread.",
+            : w.action === "nowebsite"
+              ? "Researching. The draft lands in #ai-visibility-audits in about 90 seconds, and on this timeline."
+              : "Running in the audit thread.",
         url: json.threadUrl ?? threadUrl ?? undefined,
       });
       // Picks up the "started" note the route just wrote, and the in-flight state
@@ -107,6 +126,13 @@ export function LeadWorkflows({
   }
 
   function disabledReason(w: WorkflowDef): string | null {
+    if (w.needsNoWebsite) {
+      // The mirror image of the audit button's rule, and it has to be stated as its own branch:
+      // this is the only control here that a website DISABLES rather than enables.
+      if (hasWebsite) return "This lead has a website, run the audit instead";
+      if (!hasBusinessName) return "Add a business name above first";
+      return null;
+    }
     if (w.action === "audit") {
       if (!hasWebsite) return "Add a website above first";
       if (auditRunning) return "An audit is already running";

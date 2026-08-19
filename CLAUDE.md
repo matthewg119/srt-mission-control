@@ -523,6 +523,64 @@ have to be buying questions. Someone who wants to be found by future employees i
 pointed at a different question. Promising to run their job ads is not, and `offerBlock()` hands the
 model `OFFER_TIERS` as a closed list so "can you also do X" has a definite answer.
 
+### The "No website" button (`no-website-pitch.ts`, 2026-08-19)
+
+A business with a Google profile and nothing else is the best AEO lead SRT has, and pitching one
+used to mean running the whole audit at it. This is the cheap version of the same conversation:
+**three buyer questions and one permission email, about ninety seconds.** Right rail of the lead
+page, under Loom, `action: "nowebsite"` on the existing workflow route. Run the real audit after
+they say yes.
+
+**Enabled by the ABSENCE of a website**, which makes it the only control in that panel a website
+disables rather than enables. Every angle it can write rests on nothing describing this business
+having been written by them, and that premise is false the moment a site exists. The route
+re-checks and 400s, so the disabled state is not the guard.
+
+> ‼️ **IT IS NOT A SECOND EMAIL PIPELINE.** `prePitchRules`, `PARAGRAPH_RULES`, `VOICE_RULES`,
+> `STYLE_RULES`, `COMPLIANCE_RULES`, then `noDashes` + `enforceLinkPolicy` + `polishBody` +
+> `ensurePermissionClose` + `ensureSignoff`, with `draftWithLint` gating the whole thing. All
+> IMPORTED, none restated. The workflow route's own header says why: a button that assembles its
+> own prompt bypasses the linter and the no-fabrication rules silently, and the failure looks like
+> slightly worse copy rather than like a bug.
+
+> ‼️ **THREE ANGLES, PICKED BY THE EVIDENCE, and the gate is honesty not preference.** `substitute`
+> (the engine named others, you were not among them) and `buying-question` assert that we ASKED an
+> engine something, so `pickAngle` offers them only when an engine call actually returned data.
+> When none did, it falls through to `written-by-others`, which rests solely on research. Same rule
+> `run-prompts.ts` enforces with `status:"no_data"` and the call script enforces with "offer to
+> look, never claim to have looked". `miniCheckContext` states the absence out loud in the prompt
+> rather than staying silent about it, because absent beats forbidden.
+>
+> An absence angle is also skipped when the business actually DID appear in every answer. Writing
+> "you were not in it" to someone who was is the one error the prospect corrects on the first line.
+
+**The three questions are template-generated, not model-written.** `classify.ts` writes 20 because
+an audit measures a whole buying journey; this measures one thing, and a template cannot invent a
+question about a service they do not offer. It also makes two prospects in the same trade
+genuinely comparable.
+
+**`NAME_COMPETITORS_IN_COLD_EMAIL`** (`config/pitch.ts`) decides whether the competitor-naming
+angles are offered at all. It is a different question from the standing rule that we never name a
+competitor who FAILED the prospect: reporting who an engine returned is a fact about the engine
+that the prospect can reproduce in thirty seconds, not a judgement about the competitor. Set it
+false and those angles are simply never chosen; nothing else changes.
+
+**`stripEchoedClose` exists because of a measured failure.** `prePitchRules()` tells the model not
+to write the close by QUOTING both lines at it, and a live draft came back having reproduced them
+verbatim in quotation marks mid-body; `ensurePermissionClose` then appended the real close
+underneath, so the email said it twice and carried two question marks, which is itself a
+`missing-close` linter failure. `CLOSE_ATTEMPT_RE` does not catch it because it anchors on the
+first word and a line opening with a quote mark never matches. Rather than loosen a regex the
+whole cold lane depends on, this strips only the exact echo.
+
+**The Slack card prints the questions and the verdicts above the draft**, same reason the prompt
+drop prints all 20: the email states one finding as fact, and the only way to see whether that
+fact is right is to see what it came from. A refused draft is posted too, labelled as rejected,
+never silently swallowed.
+
+Probes: `scripts/_probe-no-website-pitch.ts` (synthetic checks, both the engines-answered and the
+engines-silent case) and `scripts/_probe-own-domain.ts` (19 real URLs).
+
 ## /scan — the self-serve public funnel (2026-08-05)
 `srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
 agent steps run, trade an email for the report. It is a FRONT END over the audit engine — no

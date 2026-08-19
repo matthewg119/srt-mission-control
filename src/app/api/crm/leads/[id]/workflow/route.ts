@@ -29,6 +29,12 @@ import { addNote } from "@/lib/crm";
 import { slack, slackThreadLink } from "@/lib/slack-bot";
 import { runAuditPipeline, RUN_IN_FLIGHT_MINUTES } from "@/lib/audit-engine/run-audit-pipeline";
 import { handleAuditThreadReply } from "@/lib/audit-engine/thread-assistant";
+import {
+  runMiniVisibilityCheck,
+  draftNoWebsitePitch,
+  formatNoWebsitePitchCard,
+} from "@/lib/audit-engine/no-website-pitch";
+import { getOrCreateAuditChannel } from "@/lib/audit-engine/audit-channel";
 
 /** The four thread commands reachable from a button, and what to call them. */
 const THREAD_ACTIONS = {
@@ -86,6 +92,7 @@ export async function POST(
   const action = String(body.action ?? "").trim();
 
   if (action === "audit") return startAudit(contactId, actor);
+  if (action === "nowebsite") return startNoWebsitePitch(contactId, actor);
   if (isThreadAction(action)) return runThreadCommand(contactId, action, actor);
 
   return NextResponse.json(
@@ -112,11 +119,19 @@ async function startAudit(contactId: string, actor: string) {
 
   const website = contact.website?.trim();
   if (!website) {
-    // Name-mode audits (a business with a Google profile and no site at all) live on
-    // the client-hubs branch, not here. Until that merges a website is required, and
-    // saying so beats a run that fails four minutes in.
+    // Name-mode audits landed on main with the no-website work, so runAuditPipeline COULD take
+    // this lead by businessName now. This button deliberately still does not.
+    //
+    // A full audit is a classification call plus 40 engine calls plus five minutes, and pointing
+    // it at a business nobody has identified yet spends all of that before anyone knows whether
+    // the prospect is worth it. The No website button is the cheap version of the same question:
+    // three questions, one email, ninety seconds. Run the real audit after they say yes.
     return NextResponse.json(
-      { error: "Add a website to this lead first — the audit crawls it.", field: "website" },
+      {
+        error:
+          "This lead has no website, so there is nothing to crawl. Use the No website button, which researches them and drafts the pitch.",
+        field: "website",
+      },
       { status: 400 }
     );
   }
@@ -201,6 +216,113 @@ async function startAudit(contactId: string, actor: string) {
   // for exactly this reason.
   return NextResponse.json(
     { ok: true, running: true, message: "Audit started. Watch it in #ai-visibility-audits." },
+    { status: 202 }
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// No website: mini visibility check, then one permission email
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The cheap pitch for a business with a Google profile and nothing else.
+ *
+ * Not a smaller audit and not a replacement for one. The audit is 20 questions, 40 engine calls
+ * and five minutes, aimed at a prospect who is worth that; this is three questions and one email,
+ * aimed at deciding whether they are. Run the real audit afterwards once they say yes.
+ *
+ * ‼️ It refuses when the lead HAS a website, and that is not tidiness. Every angle it can write
+ * rests on the premise that nothing describing this business was written by them, and that
+ * premise is false the moment a site exists. Told about a site it cannot see, the drafter would
+ * write the same email anyway.
+ */
+async function startNoWebsitePitch(contactId: string, actor: string) {
+  const { data } = await supabaseAdmin
+    .from("contacts")
+    .select("id, website, business_name, first_name, last_name, email, biz_city, biz_state")
+    .eq("id", contactId)
+    .maybeSingle();
+
+  const contact = data as ContactRow | null;
+  if (!contact) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  if (contact.website?.trim()) {
+    return NextResponse.json(
+      {
+        error:
+          "This lead has a website, so the no-website pitch would be false. Run the visibility audit instead.",
+        field: "website",
+      },
+      { status: 400 }
+    );
+  }
+
+  const businessName = contact.business_name?.trim();
+  if (!businessName) {
+    return NextResponse.json(
+      { error: "Add a business name to this lead first — there is nothing to research without one.", field: "business_name" },
+      { status: 400 }
+    );
+  }
+
+  await addNote({
+    contactId,
+    title: "No-website pitch started",
+    content: `Researching ${businessName} and asking three buyer questions. The draft lands in #ai-visibility-audits.`,
+    origin: "mission_control",
+    actor,
+  }).catch(() => {});
+
+  waitUntil(
+    (async () => {
+      try {
+        const city = [contact.biz_city, contact.biz_state].filter(Boolean).join(", ") || null;
+        const check = await runMiniVisibilityCheck(businessName, city);
+
+        if (!check) {
+          // The same refusal researchViaClaude makes, surfaced rather than swallowed. A pitch
+          // about a business we could not find is a pitch about a business that may not exist.
+          await addNote({
+            contactId,
+            title: "No-website pitch failed",
+            content: `Could not identify "${businessName}" from any third-party source, so there was nothing to write from. Check the spelling, or add a city.`,
+            origin: "mission_control",
+            actor,
+          }).catch(() => {});
+          return;
+        }
+
+        const draft = await draftNoWebsitePitch(check);
+        const channel = (await getOrCreateAuditChannel()).id;
+        const post = await slack.postMessage(channel, formatNoWebsitePitchCard(businessName, check, draft));
+
+        await addNote({
+          contactId,
+          title: draft.rejectedFindings.length ? "No-website pitch REJECTED by the linter" : "No-website pitch drafted",
+          content: draft.rejectedFindings.length
+            ? `The draft failed the linter and was not approved: ${draft.rejectedFindings.join("; ")}. It is posted in #ai-visibility-audits labelled as rejected.`
+            : `Subject: ${draft.subject}\n\n${draft.body}`,
+          origin: "mission_control",
+          actor,
+        }).catch(() => {});
+
+        if (!post?.ts) console.warn("[crm/workflow] no-website pitch posted without a ts");
+      } catch (e) {
+        const message = (e as Error)?.message ?? String(e);
+        console.error("[crm/workflow] no-website pitch threw:", message);
+        await addNote({
+          contactId,
+          title: "No-website pitch failed",
+          content: message,
+          origin: "mission_control",
+          actor,
+        }).catch(() => {});
+      }
+    })()
+  );
+
+  return NextResponse.json(
+    { ok: true, running: true, message: "Researching. The draft lands in #ai-visibility-audits in about 90 seconds." },
     { status: 202 }
   );
 }

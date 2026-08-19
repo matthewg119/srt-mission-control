@@ -283,6 +283,7 @@ export default async function LeadDetailPage({
           <LeadWorkflows
             contactId={id}
             hasWebsite={!!(lead.website as string | null)}
+            hasBusinessName={!!(lead.business_name as string | null)?.trim()}
             hasAudit={!!audit}
             auditRunning={auditRunning}
             threadUrl={auditThreadUrl}

@@ -336,6 +336,23 @@ export function noWebsiteAngle(researchSource: string | null): string | null {
 /** Fixed for the same reason CRAWL_BLOCK_LINE is. Asked to phrase this itself, a model reaches
  *  for "you are invisible to AI", which is both unfalsifiable and untrue: they are not invisible,
  *  they are described entirely by other people. That difference is the pitch. */
+/**
+ * May a cold email name a business the ENGINE returned instead of the prospect?
+ *
+ * ‼️ This is a different question from the standing rule that we never name a competitor who
+ * FAILED the prospect, and the distinction is the whole reason it is allowed. Saying "the engine
+ * came back with three names and yours was not one of them, one of them was X" is a fact about
+ * what an engine answered, which the prospect can reproduce himself in thirty seconds. Saying "X
+ * let you down" is a judgement about X that we have no standing to make and no way to support.
+ *
+ * It is a constant rather than a prompt line because it decides whether a whole ANGLE is offered
+ * (see pickAngle in no-website-pitch.ts), and because flipping it must be one edit rather than a
+ * hunt through prompt text. Set to false and the competitor-naming angles are simply never
+ * chosen; the drafter falls through to the ones that rest on research alone. Nothing else in the
+ * pipeline needs to change.
+ */
+export const NAME_COMPETITORS_IN_COLD_EMAIL = true;
+
 export const NO_WEBSITE_LINE =
   "you do not have a site of your own, so when someone asks an engine for a business like yours " +
   "there is nothing of yours for it to cite. It can only repeat what a directory, a review site " +
