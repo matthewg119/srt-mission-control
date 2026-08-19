@@ -1142,4 +1142,35 @@ export const microsoft = {
     // which would look like a failure and invite a duplicate retry.
     await graphRequest(`${base}/messages/${messageId}/send`, { method: "POST", rawResponse: true });
   },
+
+  /**
+   * Delete a message, but ONLY while it is still an unsent draft.
+   *
+   * The isDraft check is not a nicety, it is the whole point of this function. A message id
+   * SURVIVES being sent: the message moves to Sent Items and keeps the same id. So a stored id
+   * that once pointed at a draft can, minutes later, point at an email a prospect has already
+   * received, and an unguarded DELETE would silently destroy the only copy of it. Callers hold
+   * exactly that kind of stale id (audit_reports.outlook_draft_id, replaced on every redraft),
+   * so the guard lives here rather than in each of them.
+   *
+   * Never throws. A draft that is already gone is a normal outcome, not a failure, and the
+   * callers are all "clean up the old one before making the new one" — the new draft matters
+   * and the cleanup does not.
+   */
+  async deleteDraft(messageId: string, mailbox?: string): Promise<"deleted" | "not-a-draft" | "gone"> {
+    const base = mailbox ? `/users/${encodeURIComponent(mailbox)}` : "/me";
+    try {
+      const msg = await graphRequest(`${base}/messages/${messageId}?$select=isDraft`);
+      if (msg.isDraft !== true) return "not-a-draft";
+    } catch {
+      // A 404 here means it was deleted in Outlook by hand. Nothing to clean up.
+      return "gone";
+    }
+    try {
+      await graphRequest(`${base}/messages/${messageId}`, { method: "DELETE", rawResponse: true });
+      return "deleted";
+    } catch {
+      return "gone";
+    }
+  },
 };

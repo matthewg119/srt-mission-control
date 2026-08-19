@@ -214,7 +214,7 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
 
   const { data } = await supabaseAdmin
     .from("audit_reports")
-    .select("id, slack_channel_id, slack_thread_ts, intake_answers")
+    .select("id, slack_channel_id, slack_thread_ts, intake_answers, outlook_draft_url")
     .eq("contact_id", contactId)
     .eq("status", "done")
     .not("slack_thread_ts", "is", null)
@@ -227,6 +227,7 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
     slack_channel_id: string | null;
     slack_thread_ts: string | null;
     intake_answers: string | null;
+    outlook_draft_url: string | null;
   } | null;
 
   if (!report?.slack_channel_id || !report.slack_thread_ts) {
@@ -244,6 +245,10 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
   const text = await commandText(action, command, report.intake_answers, contactId);
   const threadUrl = slackThreadLink(channel, threadTs);
 
+  // Read before the command runs, so the note below can tell a draft this run made from
+  // one left over from a previous one. See the comparison in the .then().
+  const draftUrlBefore = report.outlook_draft_url ?? null;
+
   // Said out loud in the thread, so a card appearing on its own is explained. Safe to
   // post: the events route drops anything carrying a bot_id before it reaches the
   // router, so this cannot come back around as a command.
@@ -254,10 +259,33 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
   waitUntil(
     handleAuditThreadReply({ channel, threadTs, text })
       .then(async () => {
+        // Every card that posts one finished email now drafts it straight into Outlook, so
+        // the answer to "I pressed Draft email, where is it" should be a link to the draft
+        // and not only a link to Slack. handleAuditThreadReply returns a bare boolean and
+        // should stay that way, so the url is read back off the row it just wrote.
+        //
+        // Compared against the value from BEFORE the run rather than just read after it.
+        // Two of these buttons (avatars, loom) produce no email at all, and an unchanged
+        // url is a draft some earlier run made: linking to it here would tell him his
+        // avatars are sitting in Outlook. Only a url that MOVED belongs on this note.
+        //
+        // The link is to the draft THIS run made. Redrafting in the thread replaces it,
+        // which leaves this note pointing at a message that no longer exists; the thread
+        // always carries the current one. A timeline entry records what happened when it
+        // happened, so that is the right trade.
+        const { data: after } = await supabaseAdmin
+          .from("audit_reports")
+          .select("outlook_draft_url")
+          .eq("id", report.id)
+          .maybeSingle();
+        const draftUrl = (after as { outlook_draft_url: string | null } | null)?.outlook_draft_url ?? null;
+        const madeADraft = Boolean(draftUrl) && draftUrl !== draftUrlBefore;
         await addNote({
           contactId,
           title: `${label} posted in Slack`,
-          content: `Run from the lead page. ${threadUrl}`,
+          content: madeADraft
+            ? `Run from the lead page. The email is in your Outlook drafts: ${draftUrl}\n${threadUrl}`
+            : `Run from the lead page. ${threadUrl}`,
           origin: "mission_control",
           actor,
           // logActivity is unique on (source, external_id), so a double click leaves

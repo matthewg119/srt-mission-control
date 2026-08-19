@@ -95,7 +95,7 @@ function escapeHtml(s: string): string {
  * see once, so the full list ships with each card and this constant is the only copy of it.
  */
 export const THREAD_COMMANDS = [
-  "*1* Outlook draft  ·  *seed 1-3* install a pre-sell line  ·  *nudge 2-5* next touch  ·  *reveal* they said yes",
+  "*1* re-make the Outlook draft  ·  *seed 1-3* install a pre-sell line  ·  *nudge 2-5* next touch  ·  *reveal* they said yes",
   "*loom* pick the customer, then the picture, then get the script  ·  *script* just the script again",
   "*brief* niche research  ·  *avatars* 3 worst / 3 best  ·  *image* dream-lead prompt straight up",
   "*paste the Loom transcript* = the hand-over email  ·  *paste your call notes* = the post-call email  ·  *questions* redo intake",
@@ -263,7 +263,7 @@ async function draftEmailOne(
     `:envelope: *Email 1* · pre-pitch, one finding, one ask, no price${captured.length > 0 ? `\n_${captured.join(" · ")}_` : ""}${missing}`,
     draft,
     THREAD_COMMANDS,
-    { removedLinks, formatNote, nameWarning },
+    { removedLinks, formatNote, nameWarning, lintRejected: !gated.draft },
     await draftPreSellOptions(report, view, {
       exclude: installedBeliefs(readLedger(report)),
       // Puts B4 first when their Google profile is strong or they bragged about it at intake.
@@ -297,11 +297,27 @@ interface DraftGuards {
   removedLinks?: string[];
   formatNote?: string | null;
   nameWarning?: string | null;
+  /** True when the draft linter REFUSED this copy and it is being shown anyway so he can see
+   *  what went wrong. Such a draft is posted to Slack but deliberately kept out of Outlook: a
+   *  rejected email sitting in Drafts is one keystroke from a prospect, and the whole reason
+   *  the card still prints it is that it is not good enough to send. */
+  lintRejected?: boolean;
 }
 
 /**
- * Post ONE finished draft. Stored as a single-element pending_drafts so the existing "1"
- * picker and Outlook path work unchanged, and so a later revision has something to edit.
+ * Post ONE finished draft, and put it in Outlook on the way.
+ *
+ * Every command that produces a single finished email comes through here (email 1, a revision,
+ * `nudge N`, `reveal`, the delivery email, the post-call email), so this is the one place that
+ * has to know an email is ready. It drafts into the mailbox itself rather than waiting to be
+ * asked: replying `1` to move copy he had already approved into Outlook was a step that never
+ * once had a different answer, and skipping it left the only copy of the email as Slack text to
+ * be selected and pasted.
+ *
+ * The Outlook draft is made BEFORE the card posts, so the link rides on the same message the
+ * copy does instead of arriving underneath it a moment later. It is also the reason a Graph
+ * failure cannot take the copy down with it: the catch degrades the footer to a warning and the
+ * card posts regardless, because the words are the expensive part and Outlook is not.
  *
  * Guard output goes ABOVE the draft, not below: a stripped link can leave an awkward
  * half-sentence, and that has to be read before the copy is, not after.
@@ -319,6 +335,16 @@ async function postSingleDraft(
   await supabaseAdmin.from("audit_reports").update({ pending_drafts: [draft] }).eq("id", report.id);
   // Remember which three lines this card offered, so a later "seed 2" knows what 2 meant.
   if (preSell.length > 0) await saveOffered(report.id, readLedger(report), preSell);
+
+  let outlook = "";
+  if (!guards.lintRejected) {
+    try {
+      outlook = `\n${outlookDraftLine(await ensureOutlookDraft(report, draft), draft.label)}`;
+    } catch (e) {
+      outlook = `\n:warning: Couldn't create the Outlook draft: ${(e as Error).message}. Reply *1* to try again.`;
+    }
+  }
+
   const warnings = [
     guards.nameWarning ?? null,
     linkWarning(guards.removedLinks ?? []),
@@ -331,7 +357,7 @@ async function postSingleDraft(
     threadTs,
     // The footer is NOT italicized here any more: it is now a multi-line command menu, and
     // Slack's mrkdwn does not carry _italics_ across a newline.
-    `${header}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n${formatPreSell(preSell)}${footer}`
+    `${header}${outlook}\n${warnings ? `\n${warnings}\n` : ""}\nSubject: ${draft.subject}\n\n${draft.body}\n\n${formatPreSell(preSell)}${footer}`
   );
 }
 
@@ -362,7 +388,78 @@ async function scorecardAttachment(report: AuditReportRow): Promise<{ name: stri
   };
 }
 
-/** Turn the chosen stored option into an Outlook draft and confirm with the open-in-Outlook link. */
+/** What landed in the mailbox, in the words the thread uses to confirm it. */
+interface OutlookDraftResult {
+  webLink: string;
+  /** The To address, or undefined when there is none on file yet and Outlook will show it empty. */
+  to?: string;
+  /** True when this went in as a reply on the prospect's own thread rather than a new message. */
+  threaded: boolean;
+  attached: boolean;
+}
+
+/**
+ * Put ONE email into Matthew's Outlook drafts, replacing whatever this thread put there last.
+ *
+ * The single implementation of "email -> Outlook". Both entry points come through here: the
+ * automatic one in postSingleDraft() and the manual `1` / `send it` picker. What he opens in
+ * Outlook therefore cannot come out differently depending on which one made it.
+ *
+ * Nothing here sends.
+ */
+async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): Promise<OutlookDraftResult> {
+  // prospect_email (the cold prospect, captured at intake) before requester_email (the
+  // person who requested a public free audit). A cold /audit run only ever has the former,
+  // and before it existed those drafts opened with an empty To.
+  const to = report.prospect_email ?? report.requester_email ?? undefined;
+  // Outlook renders Matthew's signature block under the body, so the plain-text agency line
+  // would print the agency twice. He deletes it by hand every time; do it here instead.
+  const outlookBody = stripAgencyLine(chosen.body);
+  const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(outlookBody)}</div>`;
+
+  // The scorecard is regenerated here rather than stored on the row: it is derived from the
+  // runs, so a fresh render can never disagree with the report the email links to.
+  const attachments = chosen.attachScorecard ? [await scorecardAttachment(report)] : undefined;
+
+  // Clear out the draft this thread made last time, BEFORE making the new one. A thread gets
+  // redrafted three or four times on the way to a good email, and without this each pass leaves
+  // another near-identical message in Drafts and the right one stops being obvious.
+  //
+  // deleteDraft re-checks isDraft against Graph and refuses to touch anything that has been
+  // sent, which is the case that matters: a sent message KEEPS the same id, so this stored id
+  // can point at an email the prospect already has. Failure is ignored on purpose. The new
+  // draft is the point; a stale one left behind is untidy, not broken.
+  if (report.outlook_draft_id) {
+    await microsoft.deleteDraft(report.outlook_draft_id).catch(() => "gone" as const);
+  }
+
+  const draft = chosen.replyToMessageId
+    ? await microsoft.createReplyDraft({ messageId: chosen.replyToMessageId, html: htmlBody, to, attachments })
+    : await microsoft.createDraft({ to, subject: chosen.subject, body: htmlBody, attachments });
+
+  await supabaseAdmin
+    .from("audit_reports")
+    .update({ outlook_draft_id: draft.id, outlook_draft_url: draft.webLink })
+    .eq("id", report.id);
+
+  return { webLink: draft.webLink, to, threaded: Boolean(chosen.replyToMessageId), attached: Boolean(attachments) };
+}
+
+/** The one line the thread prints once an email is sitting in Outlook. */
+function outlookDraftLine(result: OutlookDraftResult, label: string, forOption?: string): string {
+  const noRecipient = result.to ? "" : "\nNo recipient on file, so add the To address in Outlook before sending.";
+  const threaded = result.threaded ? ", as a reply on the original thread" : "";
+  const attached = result.attached ? ", scorecard attached" : "";
+  return `:envelope_with_arrow: *In your Outlook drafts*${forOption ?? ""} (${label})${result.to ? ` to ${result.to}` : ""}${threaded}${attached}. <${result.webLink}|Open in Outlook>${noRecipient}`;
+}
+
+/**
+ * Re-create the Outlook draft from a stored option.
+ *
+ * Every single-email card now drafts into Outlook by itself, so this is no longer how an email
+ * GETS to the mailbox. It is how you get a clean copy back after editing one in Outlook and
+ * wishing you hadn't, and it is still the picker for the 3-option menus postOptions() posts.
+ */
 async function createOutlookDraftFromPick(report: AuditReportRow, channel: string, threadTs: string, pick: number): Promise<void> {
   const drafts = report.pending_drafts ?? [];
   const chosen = drafts[pick - 1];
@@ -375,30 +472,11 @@ async function createOutlookDraftFromPick(report: AuditReportRow, channel: strin
     return;
   }
   try {
-    // prospect_email (the cold prospect, captured at intake) before requester_email (the
-    // person who requested a public free audit). A cold /audit run only ever has the former,
-    // and before it existed those drafts opened with an empty To.
-    const to = report.prospect_email ?? report.requester_email ?? undefined;
-    // Outlook renders Matthew's signature block under the body, so the plain-text agency line
-    // would print the agency twice. He deletes it by hand every time; do it here instead.
-    const outlookBody = stripAgencyLine(chosen.body);
-    const htmlBody = `<div style="white-space:pre-wrap;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(outlookBody)}</div>`;
-
-    // The scorecard is regenerated here rather than stored on the row: it is derived from the
-    // runs, so a fresh render can never disagree with the report the email links to.
-    const attachments = chosen.attachScorecard ? [await scorecardAttachment(report)] : undefined;
-
-    const draft = chosen.replyToMessageId
-      ? await microsoft.createReplyDraft({ messageId: chosen.replyToMessageId, html: htmlBody, to, attachments })
-      : await microsoft.createDraft({ to, subject: chosen.subject, body: htmlBody, attachments });
-
-    const noRecipient = to ? "" : "\nNo recipient on file, so add the To address in Outlook before sending.";
-    const threaded = chosen.replyToMessageId ? ", as a reply on the original thread" : "";
-    const attached = attachments ? ", scorecard attached" : "";
+    const result = await ensureOutlookDraft(report, chosen);
     await slack.postThreadReply(
       channel,
       threadTs,
-      `:envelope_with_arrow: Outlook draft created${drafts.length > 1 ? ` for option ${pick}` : ""} (${chosen.label})${to ? ` to ${to}` : ""}${threaded}${attached}. <${draft.webLink}|Open in Outlook>${noRecipient}`
+      outlookDraftLine(result, chosen.label, drafts.length > 1 ? ` for option ${pick}` : undefined)
     );
   } catch (e) {
     await slack.postThreadReply(channel, threadTs, `:warning: Couldn't create the Outlook draft: ${(e as Error).message}`).catch(() => {});
@@ -807,6 +885,10 @@ export async function handleAuditThreadReply(args: {
   // number is the command, so while one is pending it wins over the email picker below. The
   // state is cleared to "done" once the image is chosen, and digits go straight back to meaning
   // the Outlook draft. Same precedent as drop-studio.ts, where a digit is read against job.stage.
+  //
+  // Every single-email card drafts into Outlook by itself now, so a digit here re-makes that
+  // draft rather than being the only way to get one. It still matters: it is the undo for an
+  // edit made in Outlook, and it is the picker for the 3-option menus.
   const loomPending = report.loom_state?.stage === "avatar" || report.loom_state?.stage === "image";
 
   // "1" / "2" / "3" / "send it" → create the Outlook draft from what's queued.
@@ -1453,7 +1535,7 @@ export async function reviseQueuedDraft(
     `:pencil2: *${revised.label}* · revised:`,
     revised,
     THREAD_COMMANDS,
-    { removedLinks, formatNote, nameWarning },
+    { removedLinks, formatNote, nameWarning, lintRejected: !gated.draft },
     await draftPreSellOptions(report, view, {
       exclude: installedBeliefs(readLedger(report)),
       // Puts B4 first when their Google profile is strong or they bragged about it at intake.
