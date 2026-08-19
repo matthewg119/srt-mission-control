@@ -16,7 +16,21 @@
 // Pure data with no server imports cannot cause that. delivery-checklist.ts re-exports both
 // names, so every existing import keeps working.
 
-import { DAY_ZERO_STEP_KEY } from "@/lib/clients/day-zero";
+/**
+ * The Day 0 wall's step key.
+ *
+ * ‼️ DEFINED HERE, IMPORTED BY day-zero.ts — NOT THE OTHER WAY ROUND, AND NOT BY ACCIDENT.
+ *
+ * It used to live in day-zero.ts and be imported from there. That made this pure-data config
+ * module depend on a module that imports supabaseAdmin AND @/lib/slack-bot, so the dashboard's
+ * client bundle shipped the Slack bot to the browser purely to learn one string. It did not
+ * crash (@/lib/db is guarded on `typeof window`), it was just dead weight on every page load.
+ *
+ * The direction has to be config -> day-zero. The reverse is what CLAUDE.md forbids: day-zero
+ * must never import the checklist, because delivery-checklist calls stampDay0() and the cycle
+ * leaves one module half-initialised.
+ */
+export const DAY_ZERO_STEP_KEY = "day_zero_archive";
 
 export interface DeliveryStep {
   key: string;

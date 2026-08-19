@@ -694,6 +694,36 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      // A deep-research dump pasted into a client's ops thread. Explicit prefix only: see
+      // research-intake.ts for why sniffing is not acceptable here. This is the second half of
+      // delivery step 9 — the brief went out, this is the answer coming back.
+      const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+      if (
+        onboardingChannel &&
+        channel === onboardingChannel &&
+        parentThreadTs &&
+        userText.trim().length > 0
+      ) {
+        const { isResearchPaste } = await import("@/lib/clients/research-intake");
+        if (isResearchPaste(userText)) {
+          const client = await clientForThread(channel, parentThreadTs);
+          if (client) {
+            const { ingestResearch, formatIntakeReply } = await import("@/lib/clients/research-intake");
+            const { extractPhrases, mergePhrases } = await import("@/lib/clients/harvest");
+
+            const result = await ingestResearch({ clientId: client.id, text: userText });
+            const top = result.ok
+              ? mergePhrases(extractPhrases(userText, "deep_research")).slice(0, 6)
+              : [];
+
+            await slack
+              .postThreadReply(channel, parentThreadTs, formatIntakeReply(result, top))
+              .catch(() => {});
+          }
+          return NextResponse.json({ ok: true });
+        }
+      }
+
       // Matthew typed in #personal-texts or #lead-texts thread → queue outbound reply
       const personalTextsChannel = process.env.SLACK_PERSONAL_TEXTS_CHANNEL;
       if (personalTextsChannel && channel === personalTextsChannel && parentThreadTs && parentThreadTs !== event.ts && userText.trim().length > 0) {

@@ -38,6 +38,13 @@ import {
 import { buildDeepResearchBrief } from "../src/lib/clients/artifacts/deep-research-brief";
 import { AUTO_RUNNERS, unimplementedAutoSteps, IMPLEMENTED_THIS_SESSION } from "../src/lib/clients/artifacts/registry";
 import { DELIVERY_STEPS } from "../src/lib/clients/delivery-checklist";
+import { formatSweepCard } from "../src/lib/clients/presence-sweep";
+import { formatShortlistCard } from "../src/lib/clients/competitors";
+import {
+  isResearchPaste,
+  stripPrefix,
+  unwrapSlackMarkup,
+} from "../src/lib/clients/research-intake";
 
 let failures = 0;
 let checks = 0;
@@ -510,6 +517,78 @@ eq(
 for (const key of ["presence_pdf", "findings_doc", "review_card_pdf", "call_sheet"]) {
   ok(`${key} no longer renders _auto_ falsely`, !stillUnimplemented.includes(key));
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The sweep card — one platform vocabulary, real search strings
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// step-engine.ts used to carry its own copy of the platform names and print the SAME generic
+// query against all eighteen. Runner v3 section 3: never "check the listing", always the exact
+// string. These assert the card a person actually reads is built from the config list.
+
+const sweepCard = formatSweepCard(
+  { name: "Acme Med Spa", city: "Greensboro", state: "NC" },
+  canonicalFixture
+);
+
+ok("the card names every platform", ALL_PLATFORMS.every((p) => sweepCard.includes(p.label)));
+ok("core six is separated from extended", /CORE SIX/i.test(sweepCard) && /EXTENDED/i.test(sweepCard));
+ok("it carries a real composed search string", sweepCard.includes("Acme Med Spa Greensboro NC"));
+ok("it carries per-platform links", sweepCard.includes("yelp.com") && sweepCard.includes("realself.com"));
+ok("it says the empty result IS the evidence", /empty search result/i.test(sweepCard));
+// ‼️ The honesty rule, restated on the card the human reads.
+ok("it warns that a skip prints as not checked", /not checked/i.test(sweepCard));
+ok("it is honest that nothing is automated", /0 of 18|no presence provider is keyed/i.test(sweepCard));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The shortlist card — it must not describe a board that does not exist
+// ─────────────────────────────────────────────────────────────────────────────
+
+const shortlist = formatShortlistCard(
+  "Acme Med Spa",
+  [
+    {
+      id: "1", name: "Bright Skin Clinic", normalizedName: "bright skin clinic",
+      website: "https://bright.example", address: null, source: "baseline_named",
+      timesNamed: 11, engines: ["openai"], sampleQuestions: ["Who does the best lip filler in Greensboro?"],
+      selected: false,
+    },
+    {
+      id: "2", name: "Elm Street Aesthetics", normalizedName: "elm street aesthetics",
+      website: null, address: null, source: "client_intake",
+      timesNamed: 0, engines: [], sampleQuestions: [], selected: false,
+    },
+  ],
+  20
+);
+
+ok("the shortlist ranks by how many named them", shortlist.includes("named in 11 of 20"));
+// ‼️ A competitor the client guessed that NO engine named is a finding, not a blank row.
+ok("a client guess nobody named is called out", /NOT named by any engine/i.test(shortlist));
+ok("it says pick exactly three", /exactly 3/i.test(shortlist));
+ok("it explains the exclusions", /consensus lock|aggregator/i.test(shortlist));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Research paste-back — explicit trigger, Slack markup stripped
+// ─────────────────────────────────────────────────────────────────────────────
+
+ok("the prefix triggers it", isResearchPaste("research: here is the dump"));
+ok("case does not matter", isResearchPaste("RESEARCH:  x"));
+ok("leading space is fine", isResearchPaste("  research: x"));
+// ‼️ Sniffing is not acceptable. Ordinary thread chatter must never be filed as market evidence.
+ok("ordinary chatter does not trigger it", !isResearchPaste("I did some research on this"));
+ok("a question does not trigger it", !isResearchPaste("did the research come back yet?"));
+eq("the prefix is stripped", stripPrefix("research:  the body"), "the body");
+
+eq(
+  "slack link syntax is unwrapped",
+  unwrapSlackMarkup("see <https://realself.com|realself.com> for this"),
+  "see realself.com for this"
+);
+eq("bare links are unwrapped", unwrapSlackMarkup("<https://a.example>"), "https://a.example");
+eq("bold markers are stripped", unwrapSlackMarkup("*is botox safe* really"), "is botox safe really");
+eq("entities are decoded", unwrapSlackMarkup("cost &gt; value &amp; time"), "cost > value & time");
 
 // ─────────────────────────────────────────────────────────────────────────────
 

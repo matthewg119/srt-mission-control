@@ -22,7 +22,11 @@ import { slack } from "@/lib/slack-bot";
  * back the two would form a cycle and one of them would see a half-initialised module at
  * load time. One direction only: delivery-checklist depends on day-zero.
  */
-export const DAY_ZERO_STEP_KEY = "day_zero_archive";
+// Defined in @/config/delivery-steps and re-exported here, so every existing import of
+// DAY_ZERO_STEP_KEY from this module keeps working. See that file for why the direction is
+// config -> day-zero and not the reverse.
+import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
+export { DAY_ZERO_STEP_KEY };
 
 /**
  * Last-resort wording only. The real label lives on the DELIVERY_STEPS row and callers

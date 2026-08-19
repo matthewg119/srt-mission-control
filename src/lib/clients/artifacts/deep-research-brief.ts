@@ -222,10 +222,19 @@ export async function generateDeepResearchBrief(clientId: string): Promise<AutoR
 /**
  * Cited hosts and the businesses named instead, off this client's most recent run.
  *
- * ‼️ audit_reports.client_id is deliberately NOT used. It arrives with
- * docs/2026-08-19-artifact-plumbing.sql, which has not been applied, and PostgREST fails
- * the WHOLE query on one unknown column rather than ignoring it, so selecting it early
- * would break this for every client instead of degrading to an empty seed list.
+ * ‼️ MATCHED ON client_id FIRST, AND THE ORDER MATTERS MORE THAN IT LOOKS.
+ *
+ * An earlier revision of this file avoided `audit_reports.client_id` on the grounds that
+ * docs/2026-08-19-artifact-plumbing.sql had not been applied and PostgREST fails the whole
+ * query on one unknown column. That migration IS applied — verified against production with
+ * scripts/_probe-schema.ts — so the workaround is now the risk rather than the protection.
+ *
+ * contact_id and domain are FALLBACKS, not equivalents. Both can match a `prospect_audit`: the
+ * one-engine prospecting run the audit bot fires at a lead, which A2 D-P14 says may appear in
+ * findings only as "the audit you already saw" and never as a baseline. Seeding a research brief
+ * from one is not a scorecard contamination, but it does mean the brief's "sources the engines
+ * actually cited" would describe a different run than the one this client's numbers come from.
+ * client_id is the only link that says "this run was fired FOR this client".
  */
 async function measuredContext(
   clientId: string,
@@ -234,17 +243,13 @@ async function measuredContext(
 ): Promise<{ citedDomains: string[]; namedInstead: string[] }> {
   const empty = { citedDomains: [], namedInstead: [] };
 
-  let q = supabaseAdmin
-    .from("audit_reports")
-    .select("id")
-    .order("created_at", { ascending: false })
-    .limit(1);
+  const base = () =>
+    supabaseAdmin.from("audit_reports").select("id").order("created_at", { ascending: false }).limit(1);
 
-  if (contactId) q = q.eq("contact_id", contactId);
-  else if (domain) q = q.ilike("website", `%${domain}%`);
-  else return empty;
+  let { data: report } = await base().eq("client_id", clientId).maybeSingle();
 
-  const { data: report } = await q.maybeSingle();
+  if (!report && contactId) ({ data: report } = await base().eq("contact_id", contactId).maybeSingle());
+  if (!report && domain) ({ data: report } = await base().ilike("website", `%${domain}%`).maybeSingle());
   if (!report) return empty;
 
   const { data: runs } = await supabaseAdmin

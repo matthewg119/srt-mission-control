@@ -17,13 +17,20 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepByKey, type DeliveryStep } from "@/lib/clients/delivery-checklist";
+import { PLATFORM_COUNT } from "@/config/presence-platforms";
 
-/** Platforms with no usable search API. §6's manual tier, core six first. */
-const CORE_SIX = ["Google", "Apple Maps", "Bing", "Yelp", "RealSelf", "Facebook"];
-const EXTENDED = [
-  "Yellow Pages", "BBB", "Nextdoor", "Manta", "Healthgrades", "NPI Registry",
-  "MapQuest", "Superpages", "Hotfrog", "Citysearch", "Foursquare", "local chamber",
-];
+// ‼️ THE PLATFORM LIST LIVES IN @/config/presence-platforms AND NOWHERE ELSE.
+//
+// This file used to carry its own copy — two plain string arrays, `CORE_SIX` and `EXTENDED`.
+// They agreed with the config list by coincidence and nothing made them keep agreeing, which is
+// the setup for the worst kind of drift: the sweep would be RECORDED against eighteen platform
+// keys from the config and READ OUT to a person from a different list, and the mismatch would
+// surface as a nap_discrepancies row nobody could account for.
+//
+// Worse, the local copy was only names. It could not compose "search: Acme Med Spa Greensboro NC"
+// per platform, so every one of the eighteen lines carried the same generic query — the precise
+// thing Runner v3 §3 says not to do ("Never 'check the listing.' Always 'Search Google for: ...'").
+// formatSweepCard() in presence-sweep.ts already builds the real thing and was dead code.
 
 interface ClientFacts {
   id: string;
@@ -41,31 +48,54 @@ interface ClientFacts {
  * Returns null for a step that needs no extra explanation — the label is the instruction and
  * padding it with boilerplate teaches people to stop reading these posts.
  */
-function instructionsFor(step: DeliveryStep, c: ClientFacts): string[] | null {
+async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<string[] | null> {
   const where = [c.city, c.state].filter(Boolean).join(" ");
   const q = `${c.name} ${where}`.trim();
 
   switch (step.key) {
-    case "presence_sweep_manual":
-      return [
-        "For each: screenshot showing name, address and phone. If there is no listing,",
-        "screenshot the empty search result — that IS the evidence for \"missing\".",
-        "",
-        "*Core six* — these are the ones we fix in week one:",
-        ...CORE_SIX.map((p, i) => `  ${i + 1}. ${p} — search: \`${q}\``),
-        "",
-        "*Extended* — context only, not week-one cleanup:",
-        ...EXTENDED.map((p, i) => `  ${CORE_SIX.length + i + 1}. ${p} — search: \`${q}\``),
-        "",
-        "Reply in this thread with the screenshots, then hit Done.",
-      ];
+    case "presence_sweep_manual": {
+      // formatSweepCard composes the per-platform search string, the open link and the tier
+      // note from @/config/presence-platforms — the one list. Falls back to the label alone if
+      // the canonical record is incomplete, because a card with a half-built search string in
+      // it is worse than a card that says nothing.
+      const { canonicalFor, formatSweepCard } = await import("./presence-sweep");
+      const canonical = await canonicalFor(c.id);
+      if (!canonical) return null;
+      return formatSweepCard(
+        { name: c.name, city: c.city ?? "", state: c.state ?? "" },
+        canonical
+      ).split("\n");
+    }
 
-    case "competitor_shortlist":
-      return [
-        "Ten candidates are on the board, ranked by how many of the twenty questions named",
-        "them and across which engines. Google each one yourself before picking — the URL is",
-        "on the card. Pick exactly three. Nothing after this moves until you do.",
-      ];
+    case "competitor_shortlist": {
+      // ‼️ This card used to SAY "ten candidates are on the board" while nothing had ever put
+      // one there: buildShortlist() existed and had no caller, so competitor_candidates was
+      // always empty and findings §3 was permanently blank. It now prints the real list, and
+      // when the list is empty it says so instead of describing a board that does not exist.
+      const { buildShortlist, loadCandidates, formatShortlistCard } = await import("./competitors");
+
+      // Built HERE rather than by a separate auto step, because this card is posted exactly when
+      // its blocker `baseline_scan` clears — which is the first moment audit_runs.recommended
+      // has anything in it. Building anywhere earlier would tally an empty run.
+      //
+      // Idempotent: buildShortlist upserts on (client_id, normalized_name) and never writes
+      // `selected`, so re-posting the card refreshes the counts without discarding a choice
+      // somebody already made.
+      const built = await buildShortlist(c.id);
+      if (!built.ok) {
+        console.error(`[step-engine] shortlist build failed for ${c.id}: ${built.error}`);
+      }
+
+      const candidates = await loadCandidates(c.id);
+      if (!candidates.length) {
+        return [
+          "No candidates have been built yet. That happens automatically once the baseline",
+          "scan finishes — if the scan is done and this is still empty, the run named nobody,",
+          "which is itself worth saying on the call.",
+        ];
+      }
+      return formatShortlistCard(c.name, candidates, 20).split("\n");
+    }
 
     case "avatar_confirmed":
       return [
@@ -114,7 +144,7 @@ function instructionsFor(step: DeliveryStep, c: ClientFacts): string[] | null {
 
 /** How many files this step expects in its thread before [Done] stops complaining. */
 function expectedUploads(step: DeliveryStep): number {
-  if (step.key === "presence_sweep_manual") return CORE_SIX.length + EXTENDED.length;
+  if (step.key === "presence_sweep_manual") return PLATFORM_COUNT;
   return 0;
 }
 
@@ -208,7 +238,7 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
   if (!facts || !client?.ops_thread_ts) return;
   if (row?.status === "complete" || row?.status === "skipped") return;
 
-  const body = instructionsFor(step, facts) ?? [];
+  const body = (await instructionsFor(step, facts)) ?? [];
   const kit = blocks(step, facts, body);
   const fallback = `${facts.name} · ${step.label}`;
 
