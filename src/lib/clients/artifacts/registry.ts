@@ -104,6 +104,52 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
 };
 
 /**
+ * Auto steps that something OTHER than AUTO_RUNNERS completes.
+ *
+ * These carry `auto: true` and have no entry in AUTO_RUNNERS, but they are not stalled — the
+ * route that actually performs the work ticks them:
+ *
+ *   intake_received    /api/onboarding/save, once the intake is complete
+ *   baseline_scan      startBaselineScan, once runAuditPipeline returns
+ *   day_zero_archive   the Day 0 wall. `gate: true`, stamped by setDeliveryStep
+ *
+ * Listed explicitly because the alternative is inferring it, and the inference would be
+ * "no runner means stalled", which is wrong for exactly these three.
+ */
+export const ROUTE_COMPLETED = new Set(["intake_received", "baseline_scan", "day_zero_archive"]);
+
+/**
+ * Auto steps that CANNOT complete: nothing runs them and no route ticks them.
+ *
+ * ‼️ THIS IS WHY IT EXISTS, AND IT IS NOT BOOKKEEPING.
+ *
+ * `runReadyAutoSteps` will not start a step while a blocker is incomplete. A blocker that can
+ * never complete is therefore not a blocker, it is a DEADLOCK — and two of the four artifacts
+ * were in one:
+ *
+ *   findings_doc  blockedBy [presence_pdf, review_audit]
+ *                 review_audit is auto, unimplemented, never ticks
+ *   call_sheet    blockedBy [findings_doc, custom_question_set, page_candidates, hub_preview]
+ *                 two of those are auto and unimplemented
+ *
+ * So the findings report and the call sheet — the whole point of the exercise — could never
+ * have generated, on any client, ever. Nothing would have errored; they would simply have sat
+ * at `pending` while the checklist showed them as work the system was going to do.
+ *
+ * That also puts the hard gate at odds with the doctrine this repo states twice: blockedBy
+ * "FLAGS out-of-order work" and day_zero_archive is the single exception that really refuses.
+ * Waiving unreachable blockers restores that, and narrowly: a blocker a HUMAN can satisfy still
+ * blocks, because that one is a real wait rather than a dead end.
+ */
+export function unreachableAutoSteps(): Set<string> {
+  return new Set(
+    DELIVERY_STEPS.filter(
+      (s) => s.auto === true && !AUTO_RUNNERS[s.key] && !ROUTE_COMPLETED.has(s.key)
+    ).map((s) => s.key)
+  );
+}
+
+/**
  * Auto steps with no runner behind them.
  *
  * Not a formality. These are the steps that still render `_auto_` in Slack while nothing

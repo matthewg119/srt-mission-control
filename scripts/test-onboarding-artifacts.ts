@@ -36,7 +36,13 @@ import {
   textFromHtml,
 } from "../src/lib/clients/harvest";
 import { buildDeepResearchBrief } from "../src/lib/clients/artifacts/deep-research-brief";
-import { AUTO_RUNNERS, unimplementedAutoSteps, IMPLEMENTED_THIS_SESSION } from "../src/lib/clients/artifacts/registry";
+import {
+  AUTO_RUNNERS,
+  unimplementedAutoSteps,
+  unreachableAutoSteps,
+  ROUTE_COMPLETED,
+  IMPLEMENTED_THIS_SESSION,
+} from "../src/lib/clients/artifacts/registry";
 import { DELIVERY_STEPS } from "../src/lib/clients/delivery-checklist";
 import { formatSweepCard } from "../src/lib/clients/presence-sweep";
 import { formatShortlistCard } from "../src/lib/clients/competitors";
@@ -589,6 +595,66 @@ eq(
 eq("bare links are unwrapped", unwrapSlackMarkup("<https://a.example>"), "https://a.example");
 eq("bold markers are stripped", unwrapSlackMarkup("*is botox safe* really"), "is botox safe really");
 eq("entities are decoded", unwrapSlackMarkup("cost &gt; value &amp; time"), "cost > value & time");
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// No artifact may be deadlocked behind a step that can never complete
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ‼️ THE REGRESSION THIS PINS ACTUALLY HAPPENED, AND IT WAS SILENT.
+//
+// findings_doc is blockedBy [presence_pdf, review_audit] and call_sheet by
+// [findings_doc, custom_question_set, page_candidates, hub_preview]. review_audit,
+// custom_question_set and page_candidates are all declared `auto` with no implementation, so
+// they never tick — and runReadyAutoSteps would not start a step with an incomplete blocker.
+// The findings report and the call sheet could not have generated for any client, ever, and
+// nothing would have errored: the rows would just have sat at `pending` under a checklist
+// showing them as work the system was going to do.
+//
+// This asserts every implemented artifact is reachable through blockers that CAN complete —
+// a runner, a route, or a human. Adding a blockedBy entry pointing at an unbuilt auto step
+// fails here instead of in production three weeks later.
+
+const unreachable = unreachableAutoSteps();
+
+// Sanity: the set is the unbuilt auto steps, and none of the three route-ticked ones.
+for (const key of ROUTE_COMPLETED) {
+  ok(`${key} is not treated as unreachable`, !unreachable.has(key));
+}
+ok("review_audit is correctly seen as unreachable", unreachable.has("review_audit"));
+ok("day_zero_archive is never waived", !unreachable.has("day_zero_archive"));
+
+for (const key of IMPLEMENTED_THIS_SESSION) {
+  const step = DELIVERY_STEPS.find((s) => s.key === key)!;
+  // A blocker is satisfiable when something can actually complete it: a runner, a route, or a
+  // person. Anything else is a dead end.
+  const deadEnds = (step.blockedBy ?? []).filter((k) => unreachable.has(k));
+  const satisfiable = (step.blockedBy ?? []).filter((k) => {
+    const b = DELIVERY_STEPS.find((s) => s.key === k);
+    return Boolean(AUTO_RUNNERS[k]) || ROUTE_COMPLETED.has(k) || (b && b.mode !== "auto");
+  });
+  eq(
+    `${key}: every blocker is satisfiable or waived`,
+    satisfiable.length + deadEnds.length,
+    (step.blockedBy ?? []).length
+  );
+}
+
+// The two that were actually deadlocked, named so a regression reads plainly.
+ok("findings_doc had a dead end and it is waived", unreachable.has("review_audit"));
+ok(
+  "call_sheet had dead ends and they are waived",
+  unreachable.has("custom_question_set") && unreachable.has("page_candidates")
+);
+
+// And the unimplemented list still matches the unreachable set plus the route-ticked ones,
+// so the two functions cannot drift apart.
+eq(
+  "unimplemented = unreachable + route-completed",
+  unimplementedAutoSteps().slice().sort(),
+  [...unreachable, ...[...ROUTE_COMPLETED].filter((k) => !AUTO_RUNNERS[k] && DELIVERY_STEPS.find((s) => s.key === k)?.auto)]
+    .sort()
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 

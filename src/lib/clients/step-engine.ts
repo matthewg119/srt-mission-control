@@ -367,7 +367,11 @@ export async function postReadySteps(clientId: string): Promise<void> {
  * cited-source harvest is finished, the deep-research brief is not until somebody runs it.
  */
 export async function runReadyAutoSteps(clientId: string): Promise<void> {
-  const { AUTO_RUNNERS } = await import("./artifacts/registry");
+  const { AUTO_RUNNERS, unreachableAutoSteps } = await import("./artifacts/registry");
+
+  // Blockers that can never complete are dead ends, not waits. See unreachableAutoSteps() for
+  // what this was hiding: findings_doc and call_sheet could not generate for any client.
+  const unreachable = unreachableAutoSteps();
 
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
@@ -388,7 +392,17 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
     // 'pending', 'blocked' and 'ready' are all startable. 'running', 'awaiting_me', 'complete',
     // 'skipped' and 'error' are not: the first is in flight, the rest have had their turn.
     if (!status || !["pending", "blocked", "ready"].includes(status)) continue;
-    if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
+    const waiting = (step.blockedBy ?? []).filter((k) => !done.has(k) && !unreachable.has(k));
+    if (waiting.length) continue;
+
+    const waived = (step.blockedBy ?? []).filter((k) => !done.has(k) && unreachable.has(k));
+    if (waived.length) {
+      console.warn(
+        `[step-engine] running ${step.key} with unreachable blockers waived: ${waived.join(", ")}. ` +
+          `Those steps are declared auto and have no implementation, so waiting on them would be a deadlock. ` +
+          `The artifact states what is missing rather than pretending it is complete.`
+      );
+    }
 
     // The claim. `.in("status", ...)` makes this conditional: the loser of a race updates zero
     // rows and gets no data back, so exactly one caller runs the generator.
