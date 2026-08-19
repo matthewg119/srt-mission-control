@@ -11,16 +11,41 @@ function reportUrl(slug: string): string {
   return `${base}/r/${slug}`;
 }
 
-export function formatPromptDrop(report: AuditReportRow): { text: string } {
+export interface PromptDropContext {
+  /**
+   * The city was worked out by research rather than typed by Matthew.
+   *
+   * ‼️ Print it when true. A resolved city is a decision the system made on his behalf about
+   * WHICH BUSINESS this run is about, and every one of the 20 questions carries it. Making that
+   * decision silently is the failure mode that made a city mandatory in the first place; saying
+   * it out loud, next to the questions it shaped, is what replaced that requirement.
+   */
+  cityResolvedByResearch?: boolean;
+  /** A site found during research for a business we were told had none, and then read. */
+  discoveredWebsite?: string | null;
+}
+
+export function formatPromptDrop(
+  report: AuditReportRow,
+  ctx: PromptDropContext = {}
+): { text: string } {
   // report.city is only ever null here for a confirmed non-local business (the
   // low-confidence-and-local case returns before a report row is even created)
   // — so omit the segment entirely rather than implying detection failed.
   const header = report.city
     ? `🎯 ${displayName(report)} · ${report.city}`
     : `🎯 ${displayName(report)}`;
+  const notes: string[] = [];
+  if (ctx.cityResolvedByResearch && report.city) {
+    notes.push(`📍 City resolved from research, not given: *${report.city}*. Re-run with \`| City, ST\` if that is wrong.`);
+  }
+  if (ctx.discoveredWebsite) {
+    notes.push(`🌐 Found a site after all and audited it: ${ctx.discoveredWebsite}`);
+  }
   const promptLines = report.prompts.map((p) => p.prompt).join("\n");
   const text = [
     header,
+    ...notes,
     ...crawlBanner(report),
     "Prompts (copy/paste for the live demo):",
     promptLines,
@@ -74,11 +99,48 @@ export function crawlBanner(report: AuditReportRow): string[] {
   return lines;
 }
 
-export function formatAwaitingCityMessage(website: string, bestGuess: string | null): string {
+/**
+ * Ask which city this is.
+ *
+ * Two shapes, because there are two different questions. A WEBSITE run that came back unsure is
+ * "we could not tell where you are" — one best guess, retype the command. A NAME run with
+ * `alternates` is a genuinely different situation: research found this trading name in more than
+ * one metro, so the answer is a pick between real candidates rather than a guess to confirm.
+ *
+ * ‼️ Print the candidates. This message is the entire reason a bare `/audit Business Name` is
+ * safe to allow: it is where the ambiguity that the parser no longer refuses becomes visible.
+ * Collapsing it back to "best guess: X" would hide exactly the fact that makes it worth asking.
+ */
+export function formatAwaitingCityMessage(
+  subject: string,
+  bestGuess: string | null,
+  alternates?: Array<{ city: string; state: string; note: string }>
+): string {
+  const rerun = (city: string) => `\`/audit ${subject} | ${city}\``;
+
+  if (alternates && alternates.length > 0) {
+    const seen = new Set<string>();
+    const options = alternates
+      .map((a) => [a.city, a.state].filter(Boolean).join(", "))
+      .filter((c) => c && !seen.has(c.toLowerCase()) && seen.add(c.toLowerCase()));
+
+    return [
+      `🤔 More than one business trades as *${subject}*, so I stopped rather than score the wrong one.`,
+      "",
+      ...alternates.slice(0, options.length).map((a, i) => {
+        const city = [a.city, a.state].filter(Boolean).join(", ");
+        return `${i + 1}. ${city}${a.note ? ` — ${a.note}` : ""}`;
+      }),
+      "",
+      "Re-run with the one you meant:",
+      ...options.map((c) => rerun(c)),
+    ].join("\n");
+  }
+
   return [
-    `🤔 Couldn't confidently detect the city for ${website}${bestGuess ? ` (best guess: ${bestGuess})` : ""}.`,
+    `🤔 Couldn't confidently detect the city for ${subject}${bestGuess ? ` (best guess: ${bestGuess})` : ""}.`,
     `A local audit without a geo-modifier isn't useful — reply with:`,
-    `\`/audit ${website} | City, ST\``,
+    rerun(bestGuess ?? "City, ST"),
   ].join("\n");
 }
 

@@ -8,22 +8,24 @@
 // GRAMMAR
 //   /audit leadwebsite.com                                  website
 //   /audit leadwebsite.com | Chicago, IL | comp1, comp2      website, city, competitors
-//   /audit Hernandez Complete Auto Repair | Chicago, IL      name (city REQUIRED)
+//   /audit Hernandez Complete Auto Repair                    name, city researched
+//   /audit Hernandez Complete Auto Repair | Chicago, IL      name, city pinned
 //   /audit "Smith & Co. Plumbing" | Chicago, IL              quotes force name mode
 //
 // A dot in segment 1 is what makes it a domain. Everything else is a name.
 
 export type ParsedCommand =
   | { kind: "website"; website: string; city?: string; competitors?: string[] }
-  | { kind: "name"; name: string; city: string; competitors?: string[] }
+  | { kind: "name"; name: string; city?: string; competitors?: string[] }
   | { kind: "error"; message: string };
 
 export const AUDIT_USAGE = [
   "Usage:",
   "• `/audit https://website.com` — city and competitors are optional, the system researches those itself.",
-  "• `/audit Business Name | City, ST` — for a business with no website. The city is required here.",
+  "• `/audit Business Name` — for a business with no website. The city is researched too; you are asked if the name turns out to be ambiguous.",
+  "• `/audit Business Name | City, ST` — pin the city yourself when you already know it.",
   "",
-  'Wrap the name in quotes if it contains a dot: `/audit "Smith & Co. Plumbing" | Chicago, IL`.',
+  'Wrap the name in quotes if it contains a dot: `/audit "Smith & Co. Plumbing"`.',
   "Competitors are always the last segment: `| competitor1, competitor2`.",
 ].join("\n");
 
@@ -57,30 +59,31 @@ export function parseCommandText(text: string): ParsedCommand {
   const { value: target, wasQuoted } = unquote(first);
   if (!target) return { kind: "error", message: AUDIT_USAGE };
 
-  // A dot is what makes something a domain. Anything without one is a name, which also means a
-  // mistyped domain ("hernandezauto", the .com dropped) lands in name mode — hence the error
-  // below names both possibilities rather than only complaining about a missing city.
+  // A dot is what makes something a domain. Anything without one is a name — which also means a
+  // mistyped domain ("hernandezauto", the .com dropped) lands in name mode. That used to be
+  // caught by the missing-city error below; now that a bare name is legal, the research step is
+  // what catches it, by failing to find any such business.
   const looksLikeDomain = !wasQuoted && target.includes(".");
   if (looksLikeDomain) return { kind: "website", website: target, city, competitors };
 
-  if (!city) {
-    return {
-      kind: "error",
-      message: [
-        `\`${target}\` has no dot in it, so I read it as a business name rather than a website.`,
-        "",
-        "Auditing by name needs a city, because a trading name on its own is not unique:",
-        `\`/audit ${target} | City, ST\``,
-        "",
-        "If you meant a website, include the domain ending (`.com`, `.net`, and so on).",
-      ].join("\n"),
-    };
-  }
-
+  // ‼️ A missing city is no longer an error here.
+  //
+  // It was, and the reasoning was sound: a trading name on its own is not unique, so a run with
+  // no city scores whichever Hernandez Auto Repair search happened to surface. But refusing at
+  // the door put the whole job on Matthew — he had to know the city before he could ask about
+  // the business, for the one segment of prospects who by definition have the least published
+  // about them.
+  //
+  // The guarantee moved instead of being dropped. claude-research.ts treats finding the city as
+  // part of the task and must report every candidate metro in `alternates`; run-audit-pipeline
+  // then ASKS when the answer is ambiguous and refuses to score until it is settled. What is
+  // still forbidden is the thing this check was really protecting against — a run that quietly
+  // picks a city and never says so.
   return { kind: "name", name: target, city, competitors };
 }
 
 /** How the target reads back in the ack and in log lines. */
 export function describeCommand(parsed: Exclude<ParsedCommand, { kind: "error" }>): string {
-  return parsed.kind === "name" ? `${parsed.name} (${parsed.city})` : parsed.website;
+  if (parsed.kind === "website") return parsed.website;
+  return parsed.city ? `${parsed.name} (${parsed.city})` : parsed.name;
 }

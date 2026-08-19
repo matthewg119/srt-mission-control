@@ -82,15 +82,20 @@ export async function POST(req: NextRequest) {
       city: parsed.city,
       competitors: parsed.competitors,
       requestedBy: userId,
-      onNeedsCity: (site, bestGuess) => respondToSlack(responseUrl, formatAwaitingCityMessage(site, bestGuess)),
+      onNeedsCity: (subject, bestGuess, alternates) =>
+        respondToSlack(responseUrl, formatAwaitingCityMessage(subject, bestGuess, alternates)),
       onError: (message) => respondToSlack(responseUrl, `⚠️ ${message}`),
     })
   );
 
-  return NextResponse.json({
-    response_type: "ephemeral",
-    text: isName
+  // Say which of the three things is about to happen. A name with no city takes noticeably
+  // longer than the others (it researches the business AND works out where it is before any of
+  // the 20 engine calls start), and an ack that did not distinguish them read as a hang.
+  const ack = !isName
+    ? `🔍 Researching ${label}...`
+    : parsed.city
       ? `🔍 Researching ${label} from third-party sources (no website)...`
-      : `🔍 Researching ${label}...`,
-  });
+      : `🔍 Researching ${label} — no city given, so I'll find where they are first...`;
+
+  return NextResponse.json({ response_type: "ephemeral", text: ack });
 }
