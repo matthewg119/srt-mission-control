@@ -3,11 +3,40 @@
 // business type AND its city with high confidence, without ever asking the user.
 // Reuses the existing UA-spoofed fetcher instead of adding a scraping dependency.
 
-import { fetchText, textFromHtml } from "@/lib/medspa-owner-scrape";
+import { fetchPage, fetchText, textFromHtml } from "@/lib/medspa-owner-scrape";
+import type { CrawlBlock, ResearchSource } from "./types";
 
 const INNER_PATH_HINTS = ["about", "contact", "locations", "services", "location"];
 const MAX_PAGES = 3; // homepage + up to 2 more
 const TEXT_BUDGET_CHARS = 16000; // ~4K tokens
+
+/** One audit is one page fetch we actually care about, not one of a 500-site batch, so it gets
+ *  a real budget. The 6s default was the direct cause of a healthy Elementor site being
+ *  reported to Matthew as "may be down or blocking automated requests". */
+const HOMEPAGE_TIMEOUT_MS = 20000;
+const HOMEPAGE_RETRIES = 1;
+
+/** Below this much visible text we cannot honestly say what the business does, so the 20
+ *  questions would be generic. A JS-rendered shell whose server HTML is nav-only lands here. */
+const THIN_TEXT_CHARS = 600;
+
+/** Carries the observed cause so the pipeline can decide between "fall back to search" and
+ *  "there is nothing here to audit" — the old bare Error made every failure look the same. */
+export class SiteFetchError extends Error {
+  readonly block: CrawlBlock;
+  constructor(block: CrawlBlock, message: string) {
+    super(message);
+    this.name = "SiteFetchError";
+    this.block = block;
+  }
+}
+
+/** True when the pages were readable but say too little to classify the business from.
+ *  Mechanical on purpose: a judgment call here would be a second thing to argue with. */
+export function isThinResearch(research: SiteResearch): boolean {
+  if (research.bodyText.trim().length >= THIN_TEXT_CHARS) return false;
+  return research.headings.length === 0 && research.schemaHints.length === 0;
+}
 
 export interface ResearchedPage {
   url: string;
@@ -27,6 +56,11 @@ export interface SiteResearch {
    *  extraction throws away (copyright year, viewport meta, tel: links) without
    *  re-fetching the page. Not given to the classifier — that reads bodyText. */
   homepageHtml: string;
+  /** Where this research came from. "site" is the only value that permits a claim about
+   *  their pages — see AuditReportRow.research_source. */
+  source: ResearchSource;
+  /** What the fetcher observed, when it could not read the page. Null on a clean fetch. */
+  blocked: CrawlBlock | null;
 }
 
 function normalizeUrl(input: string): string {
@@ -97,10 +131,20 @@ export async function researchWebsite(websiteInput: string): Promise<SiteResearc
   const website = normalizeUrl(websiteInput);
   const origin = new URL(website).origin;
 
-  const homepageHtml = await fetchText(website);
-  if (!homepageHtml) {
-    throw new Error(`Could not fetch ${website} — site may be down or blocking automated requests.`);
+  const res = await fetchPage(website, { timeoutMs: HOMEPAGE_TIMEOUT_MS, retries: HOMEPAGE_RETRIES });
+  if (!res.ok) {
+    // Say what actually happened. "Blocked" is a fact about THEM; every other reason is a fact
+    // about US, and the two used to print the same sentence.
+    const block: CrawlBlock = {
+      reason: res.reason,
+      status: res.status,
+      detail: res.detail,
+      checked_at: new Date().toISOString(),
+      engines_cited_site: null,
+    };
+    throw new SiteFetchError(block, `Could not read ${website} — ${describeFailure(res.reason, res.detail)}.`);
   }
+  const homepageHtml = res.html;
 
   const title = extractTag(homepageHtml, /<title[^>]*>([\s\S]*?)<\/title>/i);
   const metaDescription = extractTag(
@@ -127,5 +171,33 @@ export async function researchWebsite(websiteInput: string): Promise<SiteResearc
   const combined = pages.map((p) => p.text).join("\n\n");
   const bodyText = combined.slice(0, TEXT_BUDGET_CHARS);
 
-  return { website, title, metaDescription, siteName, headings, pages, bodyText, schemaHints, homepageHtml };
+  return {
+    website,
+    title,
+    metaDescription,
+    siteName,
+    headings,
+    pages,
+    bodyText,
+    schemaHints,
+    homepageHtml,
+    source: "site",
+    blocked: null,
+  };
+}
+
+/** Plain English for the Slack line, one sentence, no hedging in either direction. */
+export function describeFailure(reason: CrawlBlock["reason"], detail: string): string {
+  switch (reason) {
+    case "blocked":
+      return `the site refused an automated request (${detail})`;
+    case "timeout":
+      return `the site did not respond in time (${detail}), which is our limit, not their fault`;
+    case "network":
+      return `we could not reach the host at all (${detail})`;
+    case "not_html":
+      return `the URL did not return a web page (${detail})`;
+    default:
+      return `the site returned an error (${detail})`;
+  }
 }

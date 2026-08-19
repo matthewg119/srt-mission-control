@@ -200,6 +200,36 @@ export function buildReportView(report: AuditReportRow, runs: AuditRunRow[], cli
  * organic = prompt never named the business (the earned signal, 90% weight).
  * branded = prompt already named the business (proves little, 10% weight).
  */
+/**
+ * Did the engines themselves cite this business's own domain anywhere in the run?
+ *
+ * This is the only evidence we have about whether AI crawlers can actually reach a site, and
+ * it costs nothing because the citations are already stored on every audit_runs row. It matters
+ * when OUR fetcher was blocked: a citation proves their crawler got through, which means the
+ * block is ours alone and there is nothing to tell the prospect about it.
+ *
+ * The absence of a citation proves nothing on its own — plenty of visible businesses are cited
+ * only through directories. It is "consistent with", never "therefore". See crawlBlockAngle().
+ */
+export function citedOwnDomain(runs: AuditRunRow[], website: string): boolean {
+  let host: string;
+  try {
+    host = new URL(website.startsWith("http") ? website : `https://${website}`).hostname.replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  if (!host) return false;
+  return runs.some((r) =>
+    (r.citations ?? []).some((url) => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, "") === host;
+      } catch {
+        return false;
+      }
+    })
+  );
+}
+
 export function computeWeightedScore(view: ReportView): WeightedScore {
   const organic = view.prompts.filter((p) => !p.isBranded);
   const branded = view.prompts.filter((p) => p.isBranded);

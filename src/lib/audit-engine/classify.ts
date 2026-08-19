@@ -4,6 +4,7 @@
 
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
 import type { SiteResearch } from "./site-research";
+import type { ResearchSource } from "./types";
 
 export type AuditBlock = "SERVICIO" | "COMPARATIVO" | "INFO" | "MARCA";
 
@@ -78,13 +79,39 @@ function isAuditClassification(v: unknown): v is AuditClassification {
   return true;
 }
 
-function buildSystemPrompt(): string {
+/** What the research text IS, in the model's words. On a search run it is looking at Yelp and
+ *  Google listings, not at the business's own pages, and telling it otherwise produces a
+ *  confident description of markup nobody read. */
+function sourceFraming(source: ResearchSource): { intro: string; nameHint: string } {
+  if (source === "site") {
+    return {
+      intro: "You are given raw text and structured hints scraped from a business's own website.",
+      nameHint: "read it off the site's title/logo/footer, never invent one",
+    };
+  }
+  const shared =
+    "The business's own website could not be read, so this profile was assembled from THIRD-PARTY sources (Google Business Profile, Yelp, Facebook, directories, review sites). Treat it as reporting ABOUT the business, not as the business's own words, and never describe or make claims about their website itself.";
+  if (source === "search") {
+    return {
+      intro: `You are given a research profile of a business. ${shared}`,
+      nameHint: "read it off the directory and review listings, never invent one",
+    };
+  }
+  return {
+    intro:
+      "You are given raw text scraped from a business's own website, which was too thin to classify from on its own, followed by a third-party research profile under a '--- Third-party research ---' heading. Use both; the site text is the business's own words, the research below it is other people reporting about them. Do not make claims about their website beyond what the site text itself shows.",
+    nameHint: "read it off the site text or the listings, never invent one",
+  };
+}
+
+function buildSystemPrompt(source: ResearchSource): string {
+  const { intro, nameHint } = sourceFraming(source);
   return [
     "You are the classification brain for SRT Agency's AI-search-visibility audit tool.",
-    "You are given raw text and structured hints scraped from a business's own website.",
+    intro,
     "Your job, in one response:",
     "",
-    "1. Identify business_name (the actual proper-noun brand name this business trades under, e.g. 'Arpovo Health', 'Joe's Pizza' — read it off the site's title/logo/footer, never invent one) and business_type in plain buyer language (e.g. 'TRT clinic', 'online medical supply store', 'HVAC contractor') — business_type is a category description, never a marketing label.",
+    `1. Identify business_name (the actual proper-noun brand name this business trades under, e.g. 'Arpovo Health', 'Joe's Pizza' — ${nameHint}) and business_type in plain buyer language (e.g. 'TRT clinic', 'online medical supply store', 'HVAC contractor') — business_type is a category description, never a marketing label.`,
     "2. Determine is_local FIRST: is this a business a buyer walks into or that only serves one metro area (clinic, contractor, restaurant), or is it national/online/B2B/ships-anywhere ",
     "   (e-commerce store, SaaS, a distributor, a manufacturer)? Many real businesses are NOT local — set is_local to false for those, and do not try to force a city onto them.",
     "3. Only if is_local is true: determine city_detected — the city/region the business actually serves customers from — with city_confidence 'high' only if you have a clear signal ",
@@ -117,7 +144,9 @@ function buildUserPrompt(research: SiteResearch, overrides?: ClassifyOverrides):
       ? `schema.org LocalBusiness/Organization data found:\n${JSON.stringify(research.schemaHints).slice(0, 2000)}`
       : "No schema.org LocalBusiness/Organization data found on the pages fetched.",
     "",
-    "Visible page text (homepage + up to 2 inner pages):",
+    research.source === "search"
+      ? "Third-party research profile (the site itself could not be read):"
+      : "Visible page text (homepage + up to 2 inner pages):",
     research.bodyText,
   ];
 
@@ -140,7 +169,7 @@ export async function classifyBusiness(
 ): Promise<AuditClassification> {
   const { data } = await callClaudeJSON<AuditClassification>({
     model: model(),
-    system: buildSystemPrompt(),
+    system: buildSystemPrompt(research.source),
     user: buildUserPrompt(research, overrides),
     schemaHint: SCHEMA_HINT,
     maxTokens: 4000,

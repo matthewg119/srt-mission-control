@@ -6,7 +6,8 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { researchWebsite } from "./site-research";
+import { isThinResearch, researchWebsite, SiteFetchError, type SiteResearch } from "./site-research";
+import { researchViaSearch } from "./search-research";
 import { classifyBusiness } from "./classify";
 import { generateSlug } from "./slug";
 import { getOrCreateAuditChannel } from "./audit-channel";
@@ -87,12 +88,33 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
     return { ok: true, reportId: duplicateOf };
   }
 
-  let research;
+  // The crawl feeds the QUESTIONS, never the answers — the score comes entirely from
+  // audit_runs. So a page we cannot read is not a reason to skip 20 engine calls; it is a
+  // reason to find out who this business is some other way. What we must NOT do is guess.
+  let research: SiteResearch;
   try {
     research = await researchWebsite(params.website);
+    if (isThinResearch(research)) {
+      // Readable, but it says almost nothing — a splash page or a JS-only shell. Classifying
+      // from this produces 20 generic questions that measure nothing.
+      console.warn(`[run-audit-pipeline] ${params.website}: page text too thin, adding search research`);
+      const enriched = await researchViaSearch(params.website, null, research);
+      if (enriched) research = enriched;
+    }
   } catch (e) {
-    await params.onError?.(`Couldn't fetch ${params.website}: ${(e as Error).message}`);
-    return { ok: false };
+    const block = e instanceof SiteFetchError ? e.block : null;
+    const fallback = await researchViaSearch(params.website, block);
+    if (!fallback) {
+      await params.onError?.(
+        `${(e as Error).message} Third-party sources could not identify the business either, ` +
+          `so there was nothing to build questions from. Nothing was scored.`
+      );
+      return { ok: false };
+    }
+    console.warn(
+      `[run-audit-pipeline] ${params.website}: site unreadable (${block?.reason ?? "unknown"}), running on search research`
+    );
+    research = fallback;
   }
 
   let classification;
@@ -115,16 +137,23 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
 
   // The "one thing working against you" hook for cold email 1, computed from the homepage
   // markup we already have. Best-effort: a regex surprise here must never sink an audit.
-  let siteSignals: ReturnType<typeof detectSiteSignals> = [];
-  try {
-    siteSignals = detectSiteSignals({
-      html: research.homepageHtml,
-      website: research.website,
-      schemaHints: research.schemaHints,
-      currentYear: new Date().getFullYear(),
-    });
-  } catch (e) {
-    console.error("[run-audit-pipeline] site-signal scan failed:", (e as Error).message);
+  // ‼️ null and [] are NOT interchangeable here. [] means "we read the site and it is clean",
+  // which is one of the two things that licenses the "something on your own site" tease in cold
+  // email 1. On a run where nobody read the page there is no site to have an opinion about, so
+  // it stays null and that tease stays unsayable. Same tri-state contract as robots_check.
+  let siteSignals: ReturnType<typeof detectSiteSignals> | null = null;
+  if (research.source !== "search") {
+    siteSignals = [];
+    try {
+      siteSignals = detectSiteSignals({
+        html: research.homepageHtml,
+        website: research.website,
+        schemaHints: research.schemaHints,
+        currentYear: new Date().getFullYear(),
+      });
+    } catch (e) {
+      console.error("[run-audit-pipeline] site-signal scan failed:", (e as Error).message);
+    }
   }
 
   // Does robots.txt lock the AI crawlers out? Tri-state on purpose (see robots-check.ts):
@@ -158,6 +187,8 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       slack_channel_id: channel.id,
       site_signals: siteSignals,
       robots_check: robotsCheck,
+      crawl_block: research.blocked,
+      research_source: research.source,
     })
     .select("*")
     .single();
