@@ -53,7 +53,15 @@ interface Candidate {
  * material we cannot yet use is how the rhythm loses its credibility in week one. It is
  * the same dependency delivery step 32 already declares.
  */
-async function eligibleClients(): Promise<Candidate[]> {
+/**
+ * ‼️ EXPORTED, BECAUSE TWO RHYTHM JOBS MUST NOT DISAGREE ABOUT WHO IS LIVE.
+ *
+ * The weekly report (delivery step 32) rides the same digest cron and answers the same
+ * question: which clients are far enough along to be in the rhythm. Two copies of this query
+ * is how one job starts sending a client their weekly report while the other has decided they
+ * are not ready for a content nudge.
+ */
+export async function clientsInRhythm(): Promise<Candidate[]> {
   const { data: steps, error } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("client_id")
@@ -79,6 +87,8 @@ async function eligibleClients(): Promise<Candidate[]> {
     name: (c.dba_name as string) || (c.legal_name as string) || "Client",
   }));
 }
+
+const eligibleClients = clientsInRhythm;
 
 /**
  * Questions this client is absent from and has not answered yet.

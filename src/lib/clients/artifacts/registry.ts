@@ -101,6 +101,40 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     const { generateCallSheet } = await import("./call-sheet");
     return generateCallSheet(clientId);
   },
+
+  // ── The five added when the `auto` tag was made true across the board ──────
+
+  review_audit: async (clientId) => {
+    // auto_then_manual: this seeds the capture rows and posts the card, and a person types the
+    // numbers. No review provider is keyed, so there is no automated path to a review count and
+    // ticking this outright would mark a measurement complete that measured nothing.
+    const { runReviewAudit } = await import("../review-audit");
+    const r = await runReviewAudit(clientId);
+    return { ok: r.ok, error: r.error, note: r.note };
+  },
+
+  custom_question_set: async (clientId) => {
+    const { generateCustomQuestionSet } = await import("./custom-question-set");
+    return generateCustomQuestionSet(clientId);
+  },
+
+  page_candidates: async (clientId) => {
+    const { generatePageCandidates } = await import("./page-candidates");
+    return generatePageCandidates(clientId);
+  },
+
+  citation_cleanup_list: async (clientId) => {
+    const { generateCitationCleanupList } = await import("./citation-cleanup");
+    return generateCitationCleanupList(clientId);
+  },
+
+  review_tool_preview: async (clientId) => {
+    // Produces no bytes. It verifies that the preview is genuinely themed and posts the URL,
+    // and refuses when the theme is unconfirmed — which is the only way "themed to match" can
+    // be false. See review-preview.ts.
+    const { verifyReviewToolPreview } = await import("../review-preview");
+    return verifyReviewToolPreview(clientId);
+  },
 };
 
 /**
@@ -116,7 +150,22 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
  * Listed explicitly because the alternative is inferring it, and the inference would be
  * "no runner means stalled", which is wrong for exactly these three.
  */
-export const ROUTE_COMPLETED = new Set(["intake_received", "baseline_scan", "day_zero_archive"]);
+export const ROUTE_COMPLETED = new Set([
+  "intake_received",
+  "baseline_scan",
+  "day_zero_archive",
+  // Added when the seven unreachable auto steps were closed out. Both of these are PREDICATES
+  // about ongoing behaviour rather than documents, which is why neither is in AUTO_RUNNERS:
+  //
+  //   time_log_entries  /api/clients/[id]/time-log, on the first entry saved
+  //   weekly_report     runWeeklyReports, on the first report that actually posts
+  //
+  // A runner for either would be called once, find the thing had not happened yet, and park
+  // in terminal `error` — a checklist reporting a failure for work that was merely in the
+  // future. There is a nudge behind each, riding the daily digest.
+  "time_log_entries",
+  "weekly_report",
+]);
 
 /**
  * Auto steps that CANNOT complete: nothing runs them and no route ticks them.
@@ -156,10 +205,18 @@ export function unreachableAutoSteps(): Set<string> {
  * implements them, and the honest thing is to know which they are rather than assume the map is
  * complete. Called by the test suite and worth calling from a health check.
  *
- * Known and accepted today: intake_received and baseline_scan are ticked by the routes that
- * genuinely perform them, review_audit / custom_question_set / page_candidates /
- * citation_cleanup_list / review_tool_preview / time_log_entries / weekly_report are not built
- * yet, and day_zero_archive is a gate rather than a generator.
+ * Known and accepted today, and all four are in ROUTE_COMPLETED rather than missing:
+ * intake_received and baseline_scan are ticked by the routes that genuinely perform them, and
+ * time_log_entries and weekly_report are predicates about ongoing behaviour rather than
+ * documents. day_zero_archive is a gate rather than a generator and carries no `auto`.
+ *
+ * The list this used to name — review_audit, custom_question_set, page_candidates,
+ * citation_cleanup_list, review_tool_preview — are all implemented now, which is what took
+ * unreachableAutoSteps() to empty and released the findings/call-sheet deadlock.
+ *
+ * ‼️ A NON-EMPTY DIFFERENCE BETWEEN THIS AND ROUTE_COMPLETED IS THE REGRESSION TO CATCH.
+ * An auto step in neither is a step whose `_auto_` tag is a lie, which is the whole reason
+ * this file exists.
  */
 export function unimplementedAutoSteps(): string[] {
   return DELIVERY_STEPS.filter((s) => s.auto && !AUTO_RUNNERS[s.key]).map((s) => s.key);

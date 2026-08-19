@@ -36,6 +36,19 @@ export interface PresencePlatform {
   url: string;
   /** Why this platform is worth a human's five minutes, for the card. */
   note?: string;
+  /**
+   * What it takes to actually CHANGE a listing here, and roughly how long one fix runs.
+   *
+   * Both live on the platform rather than on a client row because they are facts about the
+   * platform: fixing a Google listing needs GBP manager access whoever the client is. The
+   * citation cleanup list prints them so the work can be sequenced against what access we
+   * have, instead of discovering halfway down the list that four of the fixes are blocked
+   * on a login nobody has asked for yet.
+   *
+   * Optional, and an absent value prints as "unknown" rather than as a guess.
+   */
+  access?: string;
+  minutes?: number;
 }
 
 const nameCity = (a: { name: string; city: string }) => `${a.name} ${a.city}`;
@@ -50,6 +63,8 @@ export const CORE_SIX: PresencePlatform[] = [
     api: false,
     search: nameCityState,
     url: "https://www.google.com/maps",
+    access: "GBP manager access on the client's Google Business Profile",
+    minutes: 20,
     note: "Look for a SECOND listing at an old address. Duplicates are the finding that matters most here.",
   },
   {
@@ -59,10 +74,12 @@ export const CORE_SIX: PresencePlatform[] = [
     api: false,
     search: nameCity,
     url: "https://maps.apple.com",
+    access: "Apple Business Connect account, claimed with the business phone",
+    minutes: 25,
     note: "No search API and Apple Business Connect is claim-only. Manual, always.",
   },
-  { key: "bing", label: "Bing Places", tier: "core_six", api: false, search: nameCityState, url: "https://www.bing.com/maps" },
-  { key: "yelp", label: "Yelp", tier: "core_six", api: false, search: nameCityState, url: "https://www.yelp.com" },
+  { key: "bing", label: "Bing Places", tier: "core_six", api: false, search: nameCityState, url: "https://www.bing.com/maps", access: "Bing Places account, claimed by post or phone", minutes: 20 },
+  { key: "yelp", label: "Yelp", tier: "core_six", api: false, search: nameCityState, url: "https://www.yelp.com", access: "Yelp for Business login", minutes: 15 },
   {
     key: "realself",
     label: "RealSelf",
@@ -70,18 +87,20 @@ export const CORE_SIX: PresencePlatform[] = [
     api: false,
     search: nameCityState,
     url: "https://www.realself.com",
+    access: "RealSelf provider account, or their support desk",
+    minutes: 30,
     note: "Med spa specific. Often the only place a procedure-level review exists.",
   },
-  { key: "facebook", label: "Facebook Page", tier: "core_six", api: false, search: nameCity, url: "https://www.facebook.com" },
+  { key: "facebook", label: "Facebook Page", tier: "core_six", api: false, search: nameCity, url: "https://www.facebook.com", access: "Facebook Page admin", minutes: 15 },
 ];
 
 export const EXTENDED: PresencePlatform[] = [
-  { key: "foursquare", label: "Foursquare", tier: "extended", api: false, search: nameCityState, url: "https://foursquare.com" },
-  { key: "yellowpages", label: "Yellow Pages", tier: "extended", api: false, search: nameCityState, url: "https://www.yellowpages.com" },
-  { key: "bbb", label: "BBB", tier: "extended", api: false, search: nameCityState, url: "https://www.bbb.org" },
-  { key: "nextdoor", label: "Nextdoor", tier: "extended", api: false, search: nameCity, url: "https://nextdoor.com" },
-  { key: "manta", label: "Manta", tier: "extended", api: false, search: nameCityState, url: "https://www.manta.com" },
-  { key: "healthgrades", label: "Healthgrades", tier: "extended", api: false, search: nameCityState, url: "https://www.healthgrades.com" },
+  { key: "foursquare", label: "Foursquare", tier: "extended", api: false, search: nameCityState, url: "https://foursquare.com", access: "Foursquare for Business claim", minutes: 20 },
+  { key: "yellowpages", label: "Yellow Pages", tier: "extended", api: false, search: nameCityState, url: "https://www.yellowpages.com", access: "YP account, or the free listing correction form", minutes: 15 },
+  { key: "bbb", label: "BBB", tier: "extended", api: false, search: nameCityState, url: "https://www.bbb.org", access: "BBB business login, or a written correction request", minutes: 25 },
+  { key: "nextdoor", label: "Nextdoor", tier: "extended", api: false, search: nameCity, url: "https://nextdoor.com", access: "Nextdoor Business Page admin", minutes: 15 },
+  { key: "manta", label: "Manta", tier: "extended", api: false, search: nameCityState, url: "https://www.manta.com", access: "Manta claim, email verification", minutes: 15 },
+  { key: "healthgrades", label: "Healthgrades", tier: "extended", api: false, search: nameCityState, url: "https://www.healthgrades.com", access: "Healthgrades provider claim, licence verification", minutes: 30 },
   {
     key: "npi",
     label: "NPI Registry",
@@ -89,13 +108,15 @@ export const EXTENDED: PresencePlatform[] = [
     api: false,
     search: nameCityState,
     url: "https://npiregistry.cms.hhs.gov",
+    access: "NPPES login. Changes here are a records update, not a listing edit",
+    minutes: 30,
     note: "Only relevant where a licensed provider is named. Skip cleanly if the clinic has no NPI.",
   },
-  { key: "chamber", label: "Local chamber of commerce", tier: "extended", api: false, search: nameCity, url: "https://www.google.com/search" },
-  { key: "mapquest", label: "MapQuest", tier: "extended", api: false, search: nameCityState, url: "https://www.mapquest.com" },
-  { key: "superpages", label: "Superpages", tier: "extended", api: false, search: nameCityState, url: "https://www.superpages.com" },
-  { key: "hotfrog", label: "Hotfrog", tier: "extended", api: false, search: nameCityState, url: "https://www.hotfrog.com" },
-  { key: "citysearch", label: "Citysearch", tier: "extended", api: false, search: nameCityState, url: "https://www.citysearch.com" },
+  { key: "chamber", label: "Local chamber of commerce", tier: "extended", api: false, search: nameCity, url: "https://www.google.com/search", access: "Whoever at the chamber maintains the directory. Usually an email", minutes: 20 },
+  { key: "mapquest", label: "MapQuest", tier: "extended", api: false, search: nameCityState, url: "https://www.mapquest.com", access: "MapQuest is fed by its data partners, so this is a correction request", minutes: 15 },
+  { key: "superpages", label: "Superpages", tier: "extended", api: false, search: nameCityState, url: "https://www.superpages.com", access: "Superpages claim, shares an account with YP", minutes: 15 },
+  { key: "hotfrog", label: "Hotfrog", tier: "extended", api: false, search: nameCityState, url: "https://www.hotfrog.com", access: "Hotfrog free claim, email verification", minutes: 10 },
+  { key: "citysearch", label: "Citysearch", tier: "extended", api: false, search: nameCityState, url: "https://www.citysearch.com", access: "Citysearch correction form", minutes: 15 },
 ];
 
 export const ALL_PLATFORMS: PresencePlatform[] = [...CORE_SIX, ...EXTENDED];

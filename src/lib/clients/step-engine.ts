@@ -97,6 +97,33 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
       return formatShortlistCard(c.name, candidates, 20).split("\n");
     }
 
+    case "review_audit": {
+      // ‼️ Seeded HERE as well as in the runner, and that is not belt-and-braces.
+      // This step is auto_then_manual, so BOTH postReadySteps and runReadyAutoSteps can reach
+      // it — postReadySteps skips only `mode === "auto"`. Whichever gets there first has to
+      // find rows to describe. seedReviewAudit upserts with ignoreDuplicates and never writes
+      // a number, so running it twice refreshes nothing a human typed. Same precedent as
+      // competitor_shortlist calling buildShortlist from inside this switch.
+      const { seedReviewAudit, loadReviewAudit, formatReviewAuditCard } = await import("./review-audit");
+      const { selectedCompetitors } = await import("./competitors");
+
+      const seeded = await seedReviewAudit(c.id);
+      if (!seeded.ok) {
+        console.error(`[step-engine] review audit seed failed for ${c.id}: ${seeded.error}`);
+      }
+
+      const rows = await loadReviewAudit(c.id);
+      const competitors = await selectedCompetitors(c.id);
+
+      return formatReviewAuditCard({
+        clientName: c.name,
+        city: c.city ?? "",
+        state: c.state ?? "",
+        competitors: competitors.map((x) => ({ name: x.name })),
+        rows,
+      }).split("\n");
+    }
+
     case "avatar_confirmed":
       return [
         "The proposal is on the board. Audit avatars are CANDIDATES only, and only when the",

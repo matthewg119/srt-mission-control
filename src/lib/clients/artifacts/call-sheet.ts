@@ -15,7 +15,12 @@
 // said on the call has to be reconstructed from memory afterwards.
 
 import { supabaseAdmin } from "@/lib/db";
-import { materializeAll, MATERIALIZATION_FALLBACKS } from "../question-sets";
+import {
+  materializeAll,
+  MATERIALIZATION_FALLBACKS,
+  substitutionsFor,
+  type Substitutions,
+} from "../question-sets";
 import { canonicalFor, loadSweep, effectiveStatus } from "../presence-sweep";
 import { canonicalAddress } from "../nap-compare";
 import { selectedCompetitors } from "../competitors";
@@ -55,7 +60,7 @@ interface CallSheetData {
   cnameTarget: string;
   searchConsoleTxt: string | null;
   universal: string[];
-  substitutions: Record<string, string>;
+  substitutions: Substitutions;
   competitors: Awaited<ReturnType<typeof selectedCompetitors>>;
   sweep: Awaited<ReturnType<typeof loadSweep>>;
   bookingSoftware: string | null;
@@ -378,17 +383,20 @@ export async function generateCallSheet(
   const domain = client.domain as string;
   const label = subdomainLabel((client.subdomain as string) ?? "learn", domain);
 
-  const services = (client.services ?? {}) as Record<string, unknown>;
-  const ideal = (client.ideal_patient ?? {}) as Record<string, string>;
-
   // ‼️ The substitutions are FROZEN VALUES, printed so a wrong one can be corrected on the call.
   // materializeAll is already built and tested; this never re-implements it.
-  const substitutions = {
-    city: (client.city as string) ?? "",
-    state: (client.state as string) ?? "",
-    treatmentPrimary: ideal.highest_margin ?? String(services.primary_service ?? "") ?? "",
-    clientName: ((client.dba_name || client.legal_name) as string) ?? "",
-    competitorIntake1: String(services.competitors ?? "").split(/[\n,;]/)[0]?.trim() ?? "",
+  //
+  // Read through substitutionsFor() rather than assembled here. The custom question set and
+  // the page candidates fill the SAME placeholders from the SAME fields, and a second copy of
+  // this mapping is how the call sheet ends up reading a question out loud that differs from
+  // the one actually being tracked. The call sheet is the document whose entire job is to be
+  // correct while the client checks it.
+  const substitutions = (await substitutionsFor(clientId)) ?? {
+    city: "",
+    state: "",
+    treatmentPrimary: "",
+    clientName: "",
+    competitorIntake1: "",
     concern: MATERIALIZATION_FALLBACKS.concern,
     devicePrimary: MATERIALIZATION_FALLBACKS.devicePrimary,
   };

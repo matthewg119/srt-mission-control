@@ -68,7 +68,13 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
   { key: "presence_sweep_manual", phase: "Measure", label: "Presence sweep: manual tier, screenshots in the thread", mode: "manual", blockedBy: ["nap_sweep"] },
   { key: "presence_pdf", phase: "Measure", label: "Presence and consistency PDF report", auto: true, mode: "auto", blockedBy: ["presence_sweep_manual"] },
   { key: "competitor_shortlist", phase: "Measure", label: "Competitor shortlist of 10, I pick 3", mode: "manual", blockedBy: ["baseline_scan"] },
-  { key: "review_audit", phase: "Measure", label: "Review audit: them plus the three I picked", auto: true, mode: "auto", blockedBy: ["competitor_shortlist"] },
+  // ‼️ auto_then_manual, NOT auto, and presence-platforms.ts is the reason.
+  // `api: false` on all eighteen platforms: Google Places, Bing, Foursquare and Yelp Fusion were
+  // each checked and none is keyed here. There is no automated path to a review count, so the
+  // runner seeds the rows and composes the searches and a PERSON reads the listings. Ticking
+  // this as plain `auto` would mark a measurement complete that measured nothing, and findings
+  // section 3 goes to the client.
+  { key: "review_audit", phase: "Measure", label: "Review audit: them plus the three I picked", auto: true, mode: "auto_then_manual", blockedBy: ["competitor_shortlist"] },
   // Two halves, and only one of them runs itself. The cited-source harvest is automatic:
   // audit_runs.citations already holds every URL every engine cited, so there is a real corpus
   // and no key needed. The deep-research brief is generated automatically too, but somebody
@@ -81,7 +87,11 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
   // ── PREPARE — before the call, none of it touches their properties ────────
   { key: "avatar_confirmed", phase: "Prepare", label: "Avatar proposed, I confirm one", mode: "manual", blockedBy: ["avatar_harvest"] },
   { key: "custom_question_set", phase: "Prepare", label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
-  { key: "page_candidates", phase: "Prepare", label: "Page candidates scored, 100 for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
+  // ‼️ The label no longer promises a hundred. `prompt_library` does not exist -- the corpus is
+  // question_bank plus this client's own twenty -- so 100 is the CEILING the artifact prints
+  // against, not a number it can deliver. The KEY is unchanged, because renaming a key orphans
+  // every row already carrying it; labels are free.
+  { key: "page_candidates", phase: "Prepare", label: "Page candidates scored and ranked for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
   { key: "citation_cleanup_list", phase: "Prepare", label: "Citation cleanup list built and ranked", auto: true, mode: "auto", blockedBy: ["presence_pdf"] },
   { key: "hub_preview", phase: "Prepare", label: "Hub built, themed, preview live, theme confirmed by me", mode: "auto_then_manual", blockedBy: ["intake_received"] },
   { key: "review_tool_preview", phase: "Prepare", label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },

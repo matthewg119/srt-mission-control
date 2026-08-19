@@ -15,6 +15,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { runFollowupDigest } from "@/lib/followup-operator/digest";
 import { runClientReportReminders } from "@/lib/clients/report-reminders";
 import { runContentDigest } from "@/lib/clients/content-digest";
+import { runWeeklyReports } from "@/lib/clients/weekly-report";
+import { runTimeLogNudges } from "@/lib/clients/time-log-nudge";
 import { stepDigest } from "@/lib/clients/step-engine";
 import { slack } from "@/lib/slack-bot";
 
@@ -68,12 +70,37 @@ ${text}`);
       return { posted: [], skipped: [] };
     });
 
+    // Two more passengers, same reasoning and the same isolation as the two above.
+    //
+    // The weekly report only does anything on one weekday and returns immediately on the
+    // other six. Delivery step 32 is "weekly report firing", and firing is a rhythm rather
+    // than a document, so there is no runner for it -- the first successful post is what
+    // ticks the step. See weekly-report.ts.
+    const weekly = dry
+      ? { posted: 0, skipped: 0 }
+      : await runWeeklyReports().catch((e) => {
+          console.error("[followup-digest] weekly reports failed:", (e as Error).message);
+          return { posted: 0, skipped: 0 };
+        });
+
+    // Step 31 is ticked by the time-log route itself. This is only the nudge for a client
+    // past day 0 who has no entries at all, which is the state that quietly loses the whole
+    // time record for a pilot.
+    const timeLog = dry
+      ? { nudged: 0 }
+      : await runTimeLogNudges().catch((e) => {
+          console.error("[followup-digest] time log nudges failed:", (e as Error).message);
+          return { nudged: 0 };
+        });
+
     return NextResponse.json({
       ok: true,
       dry,
       ...result,
       clientReports: { checked: reports.checked, reminded: reports.reminded.length },
       contentDigest: { posted: content.posted.length, skipped: content.skipped },
+      weeklyReports: weekly,
+      timeLogNudges: timeLog,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

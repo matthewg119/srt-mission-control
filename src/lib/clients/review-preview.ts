@@ -1,0 +1,141 @@
+// The review tool preview — delivery step 16, Runner v3 5f/5g.
+//
+// ‼️ THIS STEP GENERATES NOTHING, AND THAT IS THE FINDING.
+//
+// The themed review tool preview already exists and already works. It is rendered by
+// src/app/dashboard/clients/[id]/preview/[[...slug]]/page.tsx at ?kind=reviews, inside a
+// .hub-root carrying themeStyle(client.theme), and that page's own header documents the
+// discard guarantee it inherits from middleware. There was never a document to build here.
+//
+// So this runner is a VERIFIER, and its entire value is REFUSING TO TICK when the things the
+// step claims are not true. "Review tool preview live, themed to match" is two assertions. The
+// first is structural and always true once a client exists. The second is not: activeTheme()
+// returns null until a human confirms, and an unconfirmed theme renders as the SRT default —
+// at which point "themed to match" is a sentence on a checklist describing a page that is not
+// themed at all.
+//
+// ‼️ ZERO MODEL CALLS. NOT FOR THE THREAD NOTE, NOT FOR ANYTHING.
+// src/lib/hub/review-assemble.ts imports nothing, on purpose: FTC 16 CFR Part 465 regulates a
+// tool that GENERATES review content its user did not write. This file sits one step away from
+// that path and carries the same rule, because the reflex in this codebase is to add a Claude
+// call to anything that produces prose. There is no prose here to produce.
+//
+// ‼️ IT WRITES output_ref DIRECTLY RATHER THAN GOING THROUGH deliverArtifact.
+// That is the one place this file departs from the house pattern in artifacts/. deliverArtifact
+// requires a Buffer, and there are no bytes: what this step produces is a URL somebody opens on
+// a call. The pointer still lands in the same column every other step's output lands in.
+
+import { supabaseAdmin } from "@/lib/db";
+import { readTheme, activeTheme } from "@/lib/hub/theme";
+import { hostsFor } from "@/lib/hub/vercel-domains";
+import { notifyThread } from "./delivery-checklist";
+import type { AutoResult } from "./artifacts/registry";
+
+/**
+ * 5g, verbatim, as constants.
+ *
+ * Both are rules about what happens on the call itself, so they belong in the message that
+ * announces the preview rather than in a document nobody opens mid-conversation. Constants
+ * rather than inline strings for the same reason PERMISSION_CLOSE is one: a rule that gets
+ * reworded each time it is printed stops being a rule.
+ */
+export const PREVIEW_DEMO_RULE =
+  "Demo text typed live on the call is fine. NEVER ship pre-filled sample patient answers.";
+
+export const PREVIEW_DISCARD_RULE =
+  "Any submission from the preview host is DISCARDED. The submit route takes the client identity " +
+  "only from x-hub-host, and middleware strips that header on internal hosts, so a preview " +
+  "submission has no client to write against and is refused.";
+
+function appUrl(): string {
+  return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+}
+
+export function reviewPreviewUrl(clientId: string): string {
+  return `${appUrl()}/dashboard/clients/${clientId}/preview?kind=reviews`;
+}
+
+export async function verifyReviewToolPreview(clientId: string): Promise<AutoResult> {
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("id, legal_name, dba_name, theme, subdomain, domain")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (!client) return { ok: false, error: "Client not found." };
+
+  // ── The check that can actually fail ──────────────────────────────────────
+  //
+  // activeTheme() returns null until confirmedAt is set, which is exactly what the manual
+  // half of hub_preview confirms. Ticking this step against a null theme would put "themed
+  // to match" on the checklist for a page rendering in SRT's own colours.
+  const theme = activeTheme(readTheme(client.theme));
+  if (!theme) {
+    return {
+      ok: false,
+      error:
+        "The theme has not been confirmed, so the review tool would render in SRT's default " +
+        "colours rather than the client's. Confirm the theme on the client board (that is the " +
+        "manual half of the hub preview step) and this runs itself.",
+    };
+  }
+
+  // ── The check that only warns ─────────────────────────────────────────────
+  //
+  // The preview COMPOSES its hostname from the client record rather than resolving it from
+  // client_hosts, which is why it works before any domain is attached. So a missing reviews
+  // row does not stop the preview and must not fail this step. It does matter to a sibling:
+  // review-card.ts prints a QR pointing at the derived reviews host, and that QR goes on
+  // printed cards. Worth saying once, here, while somebody is looking.
+  const reviewsHost = hostsFor({
+    subdomain: (client.subdomain as string | null) ?? null,
+    domain: (client.domain as string | null) ?? null,
+  }).find((h) => h.kind === "reviews");
+
+  let hostWarning = "";
+  if (reviewsHost) {
+    const { data: hostRow } = await supabaseAdmin
+      .from("client_hosts")
+      .select("id")
+      .eq("client_id", clientId)
+      .eq("kind", "reviews")
+      .maybeSingle();
+
+    if (!hostRow) {
+      hostWarning =
+        `\n:warning: No \`client_hosts\` row for \`${reviewsHost.host}\` yet. The preview does ` +
+        `not need one, but the QR code on the printed review cards points at that hostname, so ` +
+        `attach the domain before the cards go to print.`;
+    }
+  }
+
+  const url = reviewPreviewUrl(clientId);
+  const name = (client.dba_name || client.legal_name || "this client") as string;
+
+  // The durable pointer. output_ref is free text by design — the step-engine migration calls
+  // it "a PDF, a report id, a URL" — so a URL is a first-class value here, not a workaround.
+  await supabaseAdmin
+    .from("client_delivery_steps")
+    .update({ output_ref: url, updated_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .eq("step_key", "review_tool_preview");
+
+  await notifyThread(
+    clientId,
+    [
+      `*Review tool preview — ${name}*`,
+      `Themed and live: ${url}`,
+      "",
+      `• ${PREVIEW_DEMO_RULE}`,
+      `• ${PREVIEW_DISCARD_RULE}`,
+      hostWarning,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  ).catch(() => {});
+
+  return {
+    ok: true,
+    note: `Review tool preview verified and themed. ${url}`,
+  };
+}

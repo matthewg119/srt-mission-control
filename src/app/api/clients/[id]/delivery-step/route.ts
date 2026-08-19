@@ -11,6 +11,15 @@ import { waiveDay0 } from "@/lib/clients/day-zero";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
+// ‼️ THE CASCADE RUNS INSIDE THIS REQUEST, AND IT IS THE DEEPEST ONE IN THE APP.
+// setDeliveryStep awaits postReadySteps + runReadyAutoSteps deliberately (a fire-and-forget
+// generator vanishes when Vercel freezes the function), and completing one step can now chain
+// several: ticking avatar_confirmed runs custom_question_set, then page_candidates, then --
+// once the other gates clear -- findings_doc and call_sheet, and findings_doc fetches up to
+// five screenshots over the network while it renders. The platform default would kill that
+// midway and leave a step claimed as `running` with nothing produced.
+export const maxDuration = 300;
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

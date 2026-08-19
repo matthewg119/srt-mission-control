@@ -19,6 +19,11 @@ import { markDraftSent } from "@/lib/clients/client-drafts";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// The [Done] / [Skip] buttons go through setDeliveryStep, which runs the generator cascade.
+// waitUntil keeps Slack's 3-second ack honest, but the deferred work is still bounded by this
+// number -- so without it the artifacts get killed after the response, silently.
+export const maxDuration = 300;
+
 const SLACK_API = "https://slack.com/api";
 
 export async function POST(req: NextRequest) {

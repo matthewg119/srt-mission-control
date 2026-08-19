@@ -67,9 +67,37 @@ export const MATERIALIZATION_FALLBACKS = {
  * better makes it a different question with its own baseline.
  */
 export function materialize(question: string, i: number, s: Substitutions): string {
-  const where = `${s.city}, ${s.state}`;
+  // The replace chain lives in applySubstitutions so the custom set and the page candidates
+  // share it. What stays here is the part that is specific to the universal twenty: three of
+  // them carry no location in their text, so materialization prefixes one.
+  let out = applySubstitutions(question, s);
 
-  let out = question
+  if (NEEDS_LOCATION_PREFIX.has(i + 1)) {
+    out = `I'm in ${s.city}, ${s.state}. ${out}`;
+  }
+
+  return out;
+}
+
+export function materializeAll(s: Substitutions): string[] {
+  return UNIVERSAL_V1_MED_SPA.map((q, i) => materialize(q, i, s));
+}
+
+/**
+ * The bracket substitutions, without the universal-20 numbering.
+ *
+ * `materialize()` takes an index because three of the twenty need a location PREFIX, which is
+ * a fact about those specific questions. A harvested phrase has no index and no such rule, so
+ * it gets the replace chain and nothing else.
+ *
+ * Split out of materialize() rather than duplicated: the custom question set and the page
+ * candidates both substitute market phrasings, and a second copy of this chain is how a
+ * candidate ends up saying "near me" on a page while the tracked question says "near
+ * Greensboro, NC".
+ */
+export function applySubstitutions(text: string, s: Substitutions): string {
+  const where = `${s.city}, ${s.state}`;
+  return text
     // Longest patterns first, or "[treatment]" would eat the inside of the compound ones.
     .replace(/\[Botox \/ filler \/ laser\]/g, s.treatmentPrimary)
     .replace(/\[Botox \/ filler \/ etc\.\]/g, s.treatmentPrimary)
@@ -80,16 +108,38 @@ export function materialize(question: string, i: number, s: Substitutions): stri
     .replace(/\[treatment\]/g, s.treatmentPrimary)
     .replace(/\[city\]/g, where)
     .replace(/near me/g, `near ${where}`);
-
-  if (NEEDS_LOCATION_PREFIX.has(i + 1)) {
-    out = `I'm in ${where}. ${out}`;
-  }
-
-  return out;
 }
 
-export function materializeAll(s: Substitutions): string[] {
-  return UNIVERSAL_V1_MED_SPA.map((q, i) => materialize(q, i, s));
+/**
+ * One client's substitution values, read from the record.
+ *
+ * ‼️ ONE MAPPING, THREE CONSUMERS. This was inline in call-sheet.ts, and the custom question
+ * set and the page candidates both needed the same values. Three copies of "which field is
+ * treatmentPrimary" is how the call sheet ends up printing a substituted question that differs
+ * from the one actually being tracked — and the call sheet's whole job is to be the thing read
+ * out loud while the client corrects it.
+ */
+export async function substitutionsFor(clientId: string): Promise<Substitutions | null> {
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("city, state, services, ideal_patient, dba_name, legal_name")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (!client) return null;
+
+  const services = (client.services ?? {}) as Record<string, unknown>;
+  const ideal = (client.ideal_patient ?? {}) as Record<string, string>;
+
+  return {
+    city: (client.city as string) ?? "",
+    state: (client.state as string) ?? "",
+    treatmentPrimary: ideal.highest_margin ?? String(services.primary_service ?? "") ?? "",
+    clientName: ((client.dba_name || client.legal_name) as string) ?? "",
+    competitorIntake1: String(services.competitors ?? "").split(/[\n,;]/)[0]?.trim() ?? "",
+    concern: MATERIALIZATION_FALLBACKS.concern,
+    devicePrimary: MATERIALIZATION_FALLBACKS.devicePrimary,
+  };
 }
 
 /**

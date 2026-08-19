@@ -500,24 +500,39 @@ eq(
 );
 
 const stillUnimplemented = unimplementedAutoSteps();
+// Every auto step with no runner is now completed by a ROUTE instead. Nothing is merely missing.
+//
+// The five that used to be on this list — review_audit, custom_question_set, page_candidates,
+// citation_cleanup_list, review_tool_preview — have real runners as of 2026-08-22, which is what
+// took unreachableAutoSteps() to empty. The four that remain are here because a runner would be
+// the WRONG shape for them, not because nobody got to them:
 const expectedUnimplemented = [
   "intake_received", // ticked by the intake route itself
   "baseline_scan", // ticked by startBaselineScan when the pipeline returns
-  "review_audit",
-  "custom_question_set",
-  "page_candidates",
-  "citation_cleanup_list",
-  "review_tool_preview",
+  // Predicates about ongoing behaviour, not documents. A runner is called once and parks a
+  // failure in `error`, so one here would report a permanent failure for work that had simply
+  // not happened yet.
+  "time_log_entries", // ticked by /api/clients/[id]/time-log on the first entry
+  "weekly_report", // ticked by runWeeklyReports on the first report that posts
   // day_zero_archive is NOT here: it carries `gate: true` rather than `auto: true`, so it never
   // claimed to run itself in the first place. That distinction is the point of this assertion.
-  "time_log_entries",
-  "weekly_report",
 ];
 eq(
   "the remaining auto steps are exactly the known ones",
   stillUnimplemented.slice().sort(),
   expectedUnimplemented.slice().sort()
 );
+
+// ‼️ THE INVARIANT THIS FILE EXISTS TO PROTECT.
+// An auto step with no runner AND no route is a step whose `_auto_` tag in Slack is a lie, and
+// its blockers become dead ends rather than waits. Two of the four artifacts were behind exactly
+// that and could never have generated for any client.
+eq("no auto step is unreachable", [...unreachableAutoSteps()].sort(), []);
+
+// Every unimplemented auto step must be accounted for by a route, with nothing left over.
+for (const key of stillUnimplemented) {
+  ok(`${key} is completed by a route rather than merely missing`, ROUTE_COMPLETED.has(key));
+}
 
 // The four artifacts this session was commissioned to build, by checklist row number.
 for (const key of ["presence_pdf", "findings_doc", "review_card_pdf", "call_sheet"]) {
@@ -621,7 +636,6 @@ const unreachable = unreachableAutoSteps();
 for (const key of ROUTE_COMPLETED) {
   ok(`${key} is not treated as unreachable`, !unreachable.has(key));
 }
-ok("review_audit is correctly seen as unreachable", unreachable.has("review_audit"));
 ok("day_zero_archive is never waived", !unreachable.has("day_zero_archive"));
 
 for (const key of IMPLEMENTED_THIS_SESSION) {
@@ -640,11 +654,29 @@ for (const key of IMPLEMENTED_THIS_SESSION) {
   );
 }
 
-// The two that were actually deadlocked, named so a regression reads plainly.
-ok("findings_doc had a dead end and it is waived", unreachable.has("review_audit"));
-ok(
-  "call_sheet had dead ends and they are waived",
-  unreachable.has("custom_question_set") && unreachable.has("page_candidates")
+// ‼️ THE TWO THAT WERE ACTUALLY DEADLOCKED, NAMED SO A REGRESSION READS PLAINLY.
+//
+// These used to assert that the dead ends were WAIVED, which was the holding fix: waiving let
+// the generators run past blockers that could never complete. As of 2026-08-22 the blockers are
+// real, so the assertion inverts — every one of them is now satisfiable for a reason we can name.
+//
+// review_audit is `auto_then_manual`: no review provider is keyed, so its runner seeds the grid
+// and a person reads the listings. That IS satisfiable; it just is not automatic.
+for (const [step, blockers] of [
+  ["findings_doc", ["presence_pdf", "review_audit"]],
+  ["call_sheet", ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"]],
+] as const) {
+  for (const b of blockers) {
+    ok(`${step}: blocker ${b} can actually complete`, !unreachable.has(b));
+  }
+}
+
+// review_audit specifically: it must NOT be plain `auto`. Ticking it automatically would mark a
+// measurement complete that measured nothing, and it lands in a client-facing PDF.
+eq(
+  "review_audit waits for a person",
+  DELIVERY_STEPS.find((s) => s.key === "review_audit")?.mode,
+  "auto_then_manual"
 );
 
 // And the unimplemented list still matches the unreachable set plus the route-ticked ones,

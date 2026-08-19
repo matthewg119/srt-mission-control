@@ -29,6 +29,7 @@ import { canonicalFor, loadSweep, effectiveStatus, countByStatus } from "../pres
 import { platformByKey } from "@/config/presence-platforms";
 import type { Canonical } from "../nap-compare";
 import { selectedCompetitors, tallyRecommended, type CandidateRow } from "../competitors";
+import { loadReviewAudit, isRecorded, reviewPlatformLabel, type ReviewAuditRow } from "../review-audit";
 import type { SiteIntel } from "../site-intel";
 import { signedDocUrl } from "../onboarding-docs";
 import {
@@ -40,6 +41,7 @@ import {
   bulletList,
   keyValueTable,
   image,
+  ensureSpace,
   fidelityFooter,
   MUTED,
   AMBER,
@@ -274,7 +276,10 @@ function sectionTwo(
 // 3 · The review gap
 // ─────────────────────────────────────────────────────────────────────────────
 
-function sectionThree(state: PageState, args: { clientName: string; competitors: CandidateRow[] }) {
+function sectionThree(
+  state: PageState,
+  args: { clientName: string; competitors: CandidateRow[]; reviewRows: ReviewAuditRow[] }
+) {
   sectionHeading(state, "The review gap", { number: 3 });
 
   if (!args.competitors.length) {
@@ -302,11 +307,87 @@ function sectionThree(state: PageState, args: { clientName: string; competitors:
     { labelWidth: 80 }
   );
 
-  paragraph(
-    state,
-    "Review counts, averages, recency and owner response rates for each of these are collected at step 4b and printed here once that runs.",
-    { color: MUTED, size: 9 }
+  reviewTable(state, args.clientName, args.reviewRows);
+}
+
+/**
+ * The review numbers, or an honest account of why they are not here.
+ *
+ * ‼️ AN UNRECORDED ROW PRINTS "not recorded", NEVER 0 AND NEVER A BLANK CELL.
+ * `review_audit_rows.review_count` is null until a person types a number, and this is the
+ * document where that distinction has to survive: a client reading "0" next to their own name
+ * on Google concludes something very specific and very wrong. Same rule the presence PDF
+ * enforces one section up, for the same reason.
+ */
+function reviewTable(state: PageState, clientName: string, rows: ReviewAuditRow[]) {
+  if (!rows.length) {
+    paragraph(
+      state,
+      "The review audit has not been seeded yet, so there are no numbers to print here. It is a manual read: no review provider is keyed, so somebody reads each listing and records what it says.",
+      { color: AMBER, size: 9 }
+    );
+    return;
+  }
+
+  const recorded = rows.filter(isRecorded);
+  if (!recorded.length) {
+    paragraph(
+      state,
+      `All ${rows.length} rows are still outstanding. Nothing below claims these businesses have no reviews. It claims nobody has read them yet.`,
+      { color: AMBER, bold: true, size: 9.5 }
+    );
+    return;
+  }
+
+  if (recorded.length < rows.length) {
+    paragraph(
+      state,
+      `${rows.length - recorded.length} of ${rows.length} rows have not been read yet and are shown as "not recorded". That is not a finding that the listing is empty.`,
+      { color: AMBER, size: 9.5 }
+    );
+  }
+
+  // Grouped by subject so the client's line sits above the three it is being compared with,
+  // which is the comparison this section exists to make.
+  const bySubject = new Map<string, ReviewAuditRow[]>();
+  for (const r of rows) {
+    const list = bySubject.get(r.subjectName) ?? [];
+    list.push(r);
+    bySubject.set(r.subjectName, list);
+  }
+
+  // The client first, whoever they sort as.
+  const ordered = [...bySubject.entries()].sort((a, b) =>
+    a[0] === clientName ? -1 : b[0] === clientName ? 1 : a[0].localeCompare(b[0])
   );
+
+  for (const [subject, list] of ordered) {
+    ensureSpace(state, 22);
+    paragraph(state, subject === clientName ? `${subject} (you)` : subject, { bold: true, size: 10 });
+    keyValueTable(
+      state,
+      list.map((r) => ({
+        label: reviewPlatformLabel(r.platform),
+        value: !isRecorded(r)
+          ? "not recorded"
+          : [
+              `${r.reviewCount} reviews`,
+              r.averageRating !== null ? `${r.averageRating} avg` : null,
+              r.mostRecentReviewAt ? `most recent ${r.mostRecentReviewAt.slice(0, 10)}` : null,
+              r.ownerResponseRate !== null ? `${Math.round(r.ownerResponseRate * 100)}% answered` : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+        tone: !isRecorded(r) ? ("normal" as const) : subject === clientName ? ("normal" as const) : ("warn" as const),
+      })),
+      { labelWidth: 60, size: 8.5 }
+    );
+
+    const themes = list.flatMap((r) => r.negativeThemes).filter(Boolean);
+    if (themes.length) {
+      bulletList(state, [...new Set(themes)].slice(0, 6), { size: 8.5 });
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -491,6 +572,7 @@ export async function generateFindings(
 
   const rows = await loadSweep(clientId);
   const competitors = await selectedCompetitors(clientId);
+  const reviewRows = await loadReviewAudit(clientId);
 
   // Screenshots filed against the baseline step are section 1's evidence.
   const { data: shots } = await supabaseAdmin
@@ -550,7 +632,7 @@ export async function generateFindings(
     presenceDocUrl: presenceDoc ? `${appBase}/api/clients/${clientId}/docs/${presenceDoc.id}` : null,
   });
 
-  sectionThree(state, { clientName, competitors });
+  sectionThree(state, { clientName, competitors, reviewRows });
 
   sectionFour(state, {
     intel: (client.site_intel as SiteIntel | null) ?? null,
