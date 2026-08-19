@@ -14,6 +14,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatPhoneUS } from "@/lib/clients/normalize";
+import { normalizeTarget, normalizeErrorMessage } from "@/lib/scan/normalize";
 import { LEAD_FIELD_GROUPS, type LeadFieldDef } from "@/config/lead-fields";
 
 /** Matches the page's old fmt(): empty reads as a dash, numbers get separators. */
@@ -25,6 +26,9 @@ function display(value: string | null, kind: LeadFieldDef["kind"]): string {
   }
   if (kind === "phone") return formatPhoneUS(value) || value;
   if (kind === "date") return value.slice(0, 10);
+  // The panel column is 300px. https:// and a trailing slash are the two parts
+  // of a URL that carry no information and eat a third of the width.
+  if (kind === "url") return value.replace(/^https?:\/\//i, "").replace(/\/$/, "");
   return value;
 }
 
@@ -76,6 +80,18 @@ function toPatchValue(raw: string, kind: LeadFieldDef["kind"]): Parsed {
   if (kind === "date") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return { error: "Use YYYY-MM-DD" };
     return { value: trimmed };
+  }
+
+  if (kind === "url") {
+    // The same normalizer /scan puts in front of a stranger's paste. Reused
+    // rather than rewritten because it already answers the question this field
+    // exists to answer: is this something researchWebsite() can be pointed at.
+    // It is forgiving on the front (bare domain, deep link, mixed case) and
+    // strict on the back (https, public host, real TLD), and it returns the
+    // ORIGIN, which is where the audit's crawl has to start anyway.
+    const norm = normalizeTarget(trimmed);
+    if (!norm.ok) return { error: normalizeErrorMessage(norm.error) };
+    return { value: norm.target.website };
   }
 
   return { value: trimmed };
@@ -202,17 +218,34 @@ function FieldRow({
               {shown || "—"}
             </span>
           ) : (
-            <button
-              type="button"
-              onClick={start}
-              title="Click to edit"
-              className={
-                "block w-full truncate rounded px-1.5 py-0.5 text-right hover:bg-[rgba(255,255,255,0.06)] " +
-                (shown ? "text-[rgba(255,255,255,0.75)]" : "text-[rgba(255,255,255,0.28)]")
-              }
-            >
-              {saving ? "Saving…" : shown || "+ add"}
-            </button>
+            // The click-to-edit button stays the whole row for every kind. A url
+            // gets one extra affordance beside it rather than instead of it:
+            // making the value itself a link would leave no way to correct a
+            // typo except deleting the field.
+            <div className="flex items-center justify-end gap-1">
+              <button
+                type="button"
+                onClick={start}
+                title="Click to edit"
+                className={
+                  "min-w-0 flex-1 truncate rounded px-1.5 py-0.5 text-right hover:bg-[rgba(255,255,255,0.06)] " +
+                  (shown ? "text-[rgba(255,255,255,0.75)]" : "text-[rgba(255,255,255,0.28)]")
+                }
+              >
+                {saving ? "Saving…" : shown || "+ add"}
+              </button>
+              {field.kind === "url" && current && (
+                <a
+                  href={current}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title="Open in a new tab"
+                  className="shrink-0 rounded px-1 py-0.5 text-[rgba(255,255,255,0.35)] hover:bg-[rgba(255,255,255,0.06)] hover:text-[#00C9A7]"
+                >
+                  &#8599;
+                </a>
+              )}
+            </div>
           )}
         </dd>
       </div>

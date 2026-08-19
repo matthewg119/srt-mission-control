@@ -4,7 +4,7 @@
 // Order of operations matters. The sweep runs BEFORE the board is computed, so
 // an email Matthew sent at 11pm last night is already on it this morning.
 
-import { slack, SlackBlock } from "@/lib/slack-bot";
+import { slack, slackThreadLink, type SlackBlock } from "@/lib/slack-bot";
 import { runSentMailSweep, type SweepResult } from "./sent-sweep";
 import {
   listDueProspects,
@@ -21,10 +21,9 @@ export function followupChannel(): string {
   return process.env.SLACK_FOLLOWUPS_CHANNEL || "";
 }
 
-/** Slack has no permalink helper in slack-bot.ts, so build the archive URL. */
-export function threadLink(channel: string, ts: string): string {
-  return `https://slack.com/archives/${channel}/p${ts.replace(".", "")}`;
-}
+/** Moved to slack-bot.ts, where the second caller could find it. Re-exported so
+ *  this module's existing name keeps working. */
+export const threadLink = slackThreadLink;
 
 function displayName(p: OutreachProspectRow): string {
   return p.name?.trim() || p.company?.trim() || p.email;

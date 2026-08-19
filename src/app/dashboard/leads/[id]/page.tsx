@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
+import { slackThreadLink } from "@/lib/slack-bot";
+import { RUN_IN_FLIGHT_MINUTES } from "@/lib/audit-engine/run-audit-pipeline";
 import { STAGE_PIPELINES, cadenceFor } from "@/config/stage-display";
 import { formatRelativeTime } from "@/lib/utils";
 import {
@@ -13,6 +15,7 @@ import { LeadFieldPanels } from "@/components/crm/lead-field-panels";
 import { CommsSync } from "@/components/crm/comms-sync";
 import { LeadStatusPicker } from "@/components/crm/status-picker";
 import { HuntNav } from "@/components/crm/hunt-nav";
+import { LeadWorkflows } from "@/components/crm/lead-workflows";
 import { pickLeadPanelValues } from "@/config/lead-fields";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +57,7 @@ export default async function LeadDetailPage({
 }) {
   const { id } = await params;
 
-  const [leadRes, tasksRes, activityRes, fieldRes, auditRes] = await Promise.all([
+  const [leadRes, tasksRes, activityRes, fieldRes, auditRes, runningRes] = await Promise.all([
     supabaseAdmin.from("contacts").select("*").eq("id", id).maybeSingle(),
     supabaseAdmin
       .from("lead_tasks")
@@ -80,9 +83,23 @@ export default async function LeadDetailPage({
     // appear here: a cold /audit from Slack has no contact_id and no lead to attach to.
     supabaseAdmin
       .from("audit_reports")
-      .select("id, slug, score, city, business_type, vertical_slug, competitors, created_at")
+      .select(
+        "id, slug, score, city, business_type, vertical_slug, competitors, created_at, slack_channel_id, slack_thread_ts"
+      )
       .eq("contact_id", id)
       .eq("status", "done")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // Whether a run is in flight, asked SEPARATELY from the query above rather than by
+    // dropping its status filter. Folding them would let a run that failed this morning
+    // hide a perfectly good report from last week, which is the card that says why to
+    // call this lead at all.
+    supabaseAdmin
+      .from("audit_reports")
+      .select("id, created_at")
+      .eq("contact_id", id)
+      .in("status", ["classifying", "running"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -95,6 +112,17 @@ export default async function LeadDetailPage({
   const activities = (activityRes.data ?? []) as unknown as TimelineActivity[];
   const fieldChanges = (fieldRes.data ?? []) as unknown as TimelineFieldChange[];
   const audit = auditRes.data as Record<string, unknown> | null;
+  // Anything older than the window is a run that died without ever reaching `done`, and
+  // the watchdog only sweeps once a day. Treating it as live would leave the audit
+  // button disabled until tomorrow morning. Same constant the route refuses on.
+  const running = runningRes.data as { created_at: string } | null;
+  const auditRunning =
+    !!running &&
+    Date.now() - new Date(running.created_at).getTime() < RUN_IN_FLIGHT_MINUTES * 60_000;
+  const auditThreadUrl =
+    audit && typeof audit.slack_channel_id === "string" && typeof audit.slack_thread_ts === "string"
+      ? slackThreadLink(audit.slack_channel_id, audit.slack_thread_ts)
+      : null;
 
   const status = (lead.application_stage as string | null) ?? null;
   const displayName =
@@ -251,6 +279,14 @@ export default async function LeadDetailPage({
               </ul>
             )}
           </div>
+
+          <LeadWorkflows
+            contactId={id}
+            hasWebsite={!!(lead.website as string | null)}
+            hasAudit={!!audit}
+            auditRunning={auditRunning}
+            threadUrl={auditThreadUrl}
+          />
 
           <Link
             href={`/dashboard/assistant?q=${encodeURIComponent(`Tell me about ${displayName}`)}`}

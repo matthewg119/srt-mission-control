@@ -59,6 +59,17 @@ export interface RunAuditPipelineResult {
   reportId?: string;
 }
 
+/**
+ * How long after it started a run may still plausibly be alive.
+ *
+ * A full run is 4 to 6 minutes; past this it died without reaching `done` and the
+ * watchdog is the only thing that will notice, once a day. Shared so the button that
+ * refuses to start a second run and the page that greys it out cannot disagree — two
+ * literals is exactly how a lead ends up with its audit button stuck off until
+ * tomorrow morning.
+ */
+export const RUN_IN_FLIGHT_MINUTES = 15;
+
 /** Minutes within which a repeat request for the same website+email is treated
  *  as a double submit rather than a genuine re-audit. A full run is 20 engine
  *  calls plus classification, so a stray second beacon is expensive. */

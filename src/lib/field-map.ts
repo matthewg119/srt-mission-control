@@ -27,6 +27,7 @@ export const CONTACT_FIELD_MAP: FieldEntry[] = [
 
   // Business
   { supabase: "business_name", label: "Business" },
+  { supabase: "website", label: "Website" },
   { supabase: "legal_name", label: "Legal Name" },
   { supabase: "dba", label: "DBA" },
   { supabase: "industry", label: "Industry" },

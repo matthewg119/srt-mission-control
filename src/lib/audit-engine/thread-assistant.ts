@@ -229,7 +229,12 @@ async function draftEmailOne(
     await supabaseAdmin
       .from("audit_reports")
       .update({
-        intake_answers: answers || null,
+        // `answers || report.intake_answers` and not just `answers`: a bare `draft`
+        // arrives here with nothing, and writing null would DELETE answers given on a
+        // previous pass. They outrank the generic guidance in every later drafter and
+        // in the live call brief, so losing them is expensive and silent. Redrafting
+        // with no new instruction means "same answers, try again", not "forget them".
+        intake_answers: answers || report.intake_answers || null,
         outreach_stage: "drafted",
         // Only overwrite with something real, so a second pass that omits the email
         // doesn't wipe the address captured on the first.

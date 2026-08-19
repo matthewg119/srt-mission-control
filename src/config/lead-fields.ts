@@ -8,6 +8,11 @@
 // DATE_COLUMNS note in src/lib/field-map.ts. A text input wired straight to a
 // PATCH would therefore lose the other five edits in the same save, silently.
 //
+// `url` is the same idea pointed at a different consumer. website is not merely
+// displayed: runAuditPipeline() hands it to researchWebsite() verbatim, so
+// "acme dot com" typed here becomes a fetch that fails minutes into a run that
+// already spent a classification call. It is normalized and rejected at the input.
+//
 // `readonly` is the other half of that: created_at is displayed here but is not
 // in CONTACT_EDITABLE_COLUMNS, so sending it earns a 400. The list below is the
 // only place that knows which is which.
@@ -18,6 +23,7 @@ export type LeadFieldKind =
   | "date"
   | "phone"
   | "email"
+  | "url"
   | "readonly";
 
 export interface LeadFieldDef {
@@ -48,6 +54,7 @@ export const LEAD_FIELD_GROUPS: LeadFieldGroup[] = [
     title: "Business",
     fields: [
       { key: "business_name", label: "Business", kind: "text" },
+      { key: "website", label: "Website", kind: "url" },
       { key: "legal_name", label: "Legal name", kind: "text" },
       { key: "dba", label: "DBA", kind: "text" },
       { key: "industry", label: "Industry", kind: "text" },

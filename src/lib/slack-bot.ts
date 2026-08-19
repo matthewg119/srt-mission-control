@@ -68,6 +68,18 @@ async function slackFetch(method: string, body: Record<string, unknown>): Promis
   return json;
 }
 
+/**
+ * Permalink to a message or thread, built rather than fetched.
+ *
+ * chat.getPermalink is a real API call and this needs to work from inside
+ * waitUntil and from a CRM note write, neither of which should be blocked on a
+ * Slack round trip that can only fail. The archive URL is stable and has never
+ * needed the token.
+ */
+export function slackThreadLink(channel: string, ts: string): string {
+  return `https://slack.com/archives/${channel}/p${ts.replace(".", "")}`;
+}
+
 export const slack = {
         /** Send a message to a channel or DM */
         async postMessage(channel: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
