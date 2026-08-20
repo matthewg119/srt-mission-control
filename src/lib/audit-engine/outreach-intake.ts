@@ -37,6 +37,7 @@ import { polishBody } from "./format-guard";
 import type { AuditReportRow } from "./types";
 import type { ReportView } from "./report-view";
 import { displayName } from "./display-name";
+import { submissionsMailbox } from "./lead-pitch";
 
 const MODEL = "claude-sonnet-4-6" as const;
 
@@ -467,6 +468,10 @@ export async function draftFromIntake(
   return {
     draft: {
       label: "Email 1 · permission",
+      // The only email that goes into the shared submissions box as well. Email 1 is the one
+      // that opens a conversation, so it is the one worth having in a mailbox someone other
+      // than Matthew can see; the nudges and the reveal are one-to-one follow-ups.
+      mirrorMailboxes: [submissionsMailbox()],
       subject: subject.text.trim(),
       body: signedBody,
     },

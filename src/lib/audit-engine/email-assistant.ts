@@ -814,6 +814,17 @@ export interface EmailOption {
   replyToMessageId?: string;
   /** Regenerate and attach the scorecard PDF when the Outlook draft is created. */
   attachScorecard?: boolean;
+  /**
+   * Extra mailboxes this email is drafted into alongside Matthew's own, e.g. the shared
+   * submissions box. Set on email 1 and nowhere else: the nudges, the reveal and the post-call
+   * email are one-to-one follow-ups and a second copy of them in a shared mailbox is clutter.
+   *
+   * It rides on the EMAIL rather than on the command that produced it, so replying `1` days
+   * later re-makes the same set of drafts without anything having to remember which verb was
+   * originally typed. Mutually exclusive with replyToMessageId: a reply draft is anchored to a
+   * message that exists in one mailbox only.
+   */
+  mirrorMailboxes?: string[];
 }
 
 // Belt-and-suspenders dash strip (the model is already told, but this guarantees it). Turns

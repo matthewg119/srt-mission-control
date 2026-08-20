@@ -39,7 +39,13 @@ import {
   type GuardedDraft,
 } from "./email-assistant";
 import { polishBody } from "./format-guard";
-import { auditSignatureHtml, buildPitchHtml } from "./lead-pitch";
+import {
+  auditSignatureHtml,
+  buildPitchHtml,
+  placeOutreachDraft,
+  submissionsMailbox,
+  type PlacedDraft,
+} from "./lead-pitch";
 import { microsoft } from "@/lib/microsoft";
 import { draftWithLint, retryInstruction } from "./draft-linter";
 import { NO_WEBSITE_LINE, NAME_COMPETITORS_IN_COLD_EMAIL } from "@/config/pitch";
@@ -283,31 +289,34 @@ export function miniCheckContext(check: MiniCheck): string {
  *   - The signature is ATTACHED here, not added by Outlook. A draft created through Graph is
  *     never composed in the client, so nothing auto-inserts a sign-off; without this the draft
  *     opens with the body's bare "Matthew Garcia" and no block under it.
- *   - auditSignatureHtml() reads the "AI Ops" block out of Outlook BY NAME, so the real
- *     signature lives where Matthew can edit it without a deploy. EMAIL_SIGNATURE_HTML is only
- *     the fallback for a disconnected mailbox, and it is not the same block.
+ *   - auditSignatureHtml() supplies the plain pitch block. It is NOT the branded one with the
+ *     logo and the CTA button; see the note on that function for why the Outlook lookup it used
+ *     to do never worked.
  * stripSignoff then takes the whole plain-text sign-off off the body, name included, because
  * the block carries the name too and the draft would otherwise print it twice.
  *
- * Returns null rather than throwing: a draft that could not be created is worth a line on the
+ * Like email 1 in the audit thread, this lands in the shared submissions box as well as in
+ * Matthew's own. It is a first-contact email, which is the kind worth having somewhere other
+ * than one person's mailbox.
+ *
+ * Returns [] rather than throwing: a draft that could not be created is worth a line on the
  * Slack card, not a lost pitch. The card carries the full text either way.
  */
-export async function createPitchDraft(
-  draft: NoWebsiteDraft,
-  to: string | null
-): Promise<{ webLink: string } | null> {
-  if (!draft.body || draft.rejectedFindings.length > 0) return null;
+export async function createPitchDraft(draft: NoWebsiteDraft, to: string | null): Promise<PlacedDraft[]> {
+  if (!draft.body || draft.rejectedFindings.length > 0) return [];
   try {
     const html = buildPitchHtml(stripSignoff(draft.body), await auditSignatureHtml());
-    const made = await microsoft.createDraft({
+    const { placed, failed } = await placeOutreachDraft({
       to: to ?? undefined,
       subject: draft.subject,
-      body: html,
+      html,
+      mailboxes: [undefined, submissionsMailbox()],
     });
-    return { webLink: made.webLink };
+    for (const f of failed) console.warn(`[no-website-pitch] no copy in ${f.mailbox}: ${f.error}`);
+    return placed;
   } catch (e) {
     console.error("[no-website-pitch] Outlook draft failed:", (e as Error).message);
-    return null;
+    return [];
   }
 }
 
@@ -323,7 +332,7 @@ export function formatNoWebsitePitchCard(
   businessName: string,
   check: MiniCheck,
   draft: NoWebsiteDraft,
-  draftLink?: string | null
+  drafts: PlacedDraft[] = []
 ): string {
   const lines: string[] = [
     `📭 No-website pitch for *${check.identity.tradingName ?? businessName}*${check.city ? ` · ${check.city}` : ""}`,
@@ -357,6 +366,17 @@ export function formatNoWebsitePitchCard(
   if (draft.formatNote) lines.push("", `📝 ${draft.formatNote}`);
 
   lines.push("", `*Subject:* ${draft.subject}`, "", draft.body);
+
+  // The links were being ACCEPTED and never printed: this function took a draftLink parameter
+  // and no line in it ever read one, so the card said nothing about the draft that had just been
+  // made and the only way to find it was to go looking in Outlook. Named per mailbox, because
+  // two links both reading "Open in Outlook" point at two different inboxes.
+  if (drafts.length > 0) {
+    lines.push(
+      "",
+      `✉️ In your Outlook drafts: ${drafts.map((d) => `<${d.url}|Open in ${d.mailbox ?? "your inbox"}>`).join(" · ")}`
+    );
+  }
   return lines.join("\n");
 }
 

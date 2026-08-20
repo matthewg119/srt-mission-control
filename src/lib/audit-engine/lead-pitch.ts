@@ -18,6 +18,7 @@ import { slack, SlackBlock } from "@/lib/slack-bot";
 import { microsoft } from "@/lib/microsoft";
 import { PITCH_SIGNATURE_HTML } from "@/config/email-signature";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
+import { DEFAULTS } from "@/config/defaults";
 
 export const AUTOSEND_MINUTES = Math.max(1, Number(process.env.AUDIT_AUTOSEND_MINUTES) || 5);
 
@@ -116,6 +117,95 @@ export function buildPitchHtml(body: string, signatureHtml: string): string {
     .map((block) => `<p style="margin:0 0 12px 0;">${escape(block).replace(/\n/g, "<br>")}</p>`)
     .join("");
   return `<div style="font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${paragraphs}</div>${signatureHtml}`;
+}
+
+/** The shared mailbox an outreach draft is copied into alongside Matthew's own. */
+export function submissionsMailbox(): string {
+  return process.env.SUBMISSIONS_MAILBOX || DEFAULTS.submissionsFromAddress;
+}
+
+/** One draft that exists in one mailbox. `mailbox: null` is the connected account (/me). */
+export interface PlacedDraft {
+  mailbox: string | null;
+  id: string;
+  url: string;
+}
+
+export interface PlaceDraftResult {
+  placed: PlacedDraft[];
+  /** Mailboxes that refused the write. Never includes the primary, which throws instead. */
+  failed: Array<{ mailbox: string; error: string }>;
+}
+
+/**
+ * Put one email into one or more Outlook drafts folders, replacing whatever was there before.
+ *
+ * The single implementation of "this email, into these mailboxes" — the audit thread and the
+ * no-website pitch both come through here, so a draft cannot be composed one way from one lane
+ * and another way from the other.
+ *
+ * `mailboxes` is ordered and `undefined` means /me. THE FIRST ENTRY IS THE PRIMARY and is the
+ * only one allowed to fail loudly: it is the draft Matthew is going to send. A secondary mailbox
+ * is a convenience copy, and its most likely failure is the delegated token lacking write rights
+ * on a shared mailbox — a real possibility, since nothing in this codebase wrote to a mailbox
+ * other than /me before. Losing the whole card over a missing copy would be the wrong trade, so
+ * secondaries are collected into `failed` for the caller to print.
+ *
+ * `previous` is deleted first, matched per mailbox. microsoft.deleteDraft() re-checks isDraft
+ * against Graph and refuses to touch anything already sent, so a stale id that now points at a
+ * sent email cannot destroy it. Delete failures are ignored: the new draft is the point.
+ *
+ * A reply draft (replyToMessageId) can only ever exist in ONE mailbox. Graph anchors createReply
+ * on a message id that lives in a specific mailbox, and that message is not in the shared one.
+ * Passing both is a caller bug, not a runtime condition, so it throws.
+ */
+export async function placeOutreachDraft(params: {
+  to?: string;
+  subject: string;
+  html: string;
+  attachments?: Array<{ name: string; contentType: string; contentBytes: string }>;
+  /** Ordered; `undefined` = /me. First entry is the primary. */
+  mailboxes: Array<string | undefined>;
+  replyToMessageId?: string;
+  previous?: PlacedDraft[];
+}): Promise<PlaceDraftResult> {
+  const mailboxes = params.mailboxes.length > 0 ? params.mailboxes : [undefined];
+  if (params.replyToMessageId && mailboxes.length > 1) {
+    throw new Error("A reply draft cannot be placed in more than one mailbox");
+  }
+
+  const placed: PlacedDraft[] = [];
+  const failed: Array<{ mailbox: string; error: string }> = [];
+
+  for (const [i, mailbox] of mailboxes.entries()) {
+    const key = mailbox ?? null;
+    const stale = params.previous?.find((p) => p.mailbox === key);
+    if (stale) await microsoft.deleteDraft(stale.id, mailbox).catch(() => "gone" as const);
+
+    try {
+      const made = params.replyToMessageId
+        ? await microsoft.createReplyDraft({
+            messageId: params.replyToMessageId,
+            html: params.html,
+            mailbox,
+            to: params.to,
+            attachments: params.attachments,
+          })
+        : await microsoft.createDraft({
+            mailbox,
+            to: params.to,
+            subject: params.subject,
+            body: params.html,
+            attachments: params.attachments,
+          });
+      placed.push({ mailbox: key, id: made.id, url: made.webLink });
+    } catch (e) {
+      if (i === 0) throw e;
+      failed.push({ mailbox: mailbox as string, error: (e as Error).message });
+    }
+  }
+
+  return { placed, failed };
 }
 
 export interface PitchCardArgs {

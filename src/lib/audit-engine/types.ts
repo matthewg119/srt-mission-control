@@ -87,17 +87,19 @@ export interface AuditReportRow {
     body: string;
     replyToMessageId?: string;
     attachScorecard?: boolean;
+    mirrorMailboxes?: string[];
   }> | null;
-  /** The Outlook draft that was auto-created for the newest single-email card in this thread
-   *  (docs/2026-08-19-outlook-draft-auto.sql). Every card that posts ONE finished email now
-   *  puts it straight in Drafts, so the id is here to DELETE the superseded one on a redraft
-   *  rather than leaving a pile of near-identical drafts behind. It is a Graph message id and
-   *  it survives being sent, so it must only ever be passed to microsoft.deleteDraft(), which
-   *  re-checks isDraft before touching anything. */
-  outlook_draft_id: string | null;
-  /** webLink for that draft, stored so the CRM lead timeline can link into Outlook without a
-   *  second Graph round trip (the workflow route reads it back off this row). */
-  outlook_draft_url: string | null;
+  /** The Outlook drafts auto-created for the newest single-email card in this thread
+   *  (docs/2026-08-20-outlook-drafts-multi.sql). Every card that posts ONE finished email puts
+   *  it straight in Drafts, and email 1 goes into the shared submissions box as well, so this
+   *  is a LIST: `mailbox: null` is the connected account and is always first.
+   *
+   *  The ids are here to DELETE the superseded drafts on a redraft rather than leave a pile of
+   *  near-identical ones behind. They are Graph message ids and they survive being sent, so they
+   *  must only ever be passed to microsoft.deleteDraft(), which re-checks isDraft before
+   *  touching anything. The url is stored so the CRM lead timeline can link into Outlook without
+   *  a second Graph round trip. */
+  outlook_drafts: Array<{ mailbox: string | null; id: string; url: string }> | null;
   // ── Cold-outreach state (docs/2026-07-29-audit-outreach-intake.sql) ──
   // Where this thread is in the pre-pitch -> reveal flow. Null on public
   // form-fill leads, which skip the intake entirely.

@@ -300,7 +300,7 @@ async function startNoWebsitePitch(contactId: string, actor: string) {
         const channel = (await getOrCreateAuditChannel()).id;
         const post = await slack.postMessage(
           channel,
-          formatNoWebsitePitchCard(businessName, check, draft, made?.webLink)
+          formatNoWebsitePitchCard(businessName, check, draft, made)
         );
 
         await addNote({
@@ -343,7 +343,7 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
 
   const { data } = await supabaseAdmin
     .from("audit_reports")
-    .select("id, slack_channel_id, slack_thread_ts, intake_answers, outlook_draft_url")
+    .select("id, slack_channel_id, slack_thread_ts, intake_answers, outlook_drafts")
     .eq("contact_id", contactId)
     .eq("status", "done")
     .not("slack_thread_ts", "is", null)
@@ -356,7 +356,7 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
     slack_channel_id: string | null;
     slack_thread_ts: string | null;
     intake_answers: string | null;
-    outlook_draft_url: string | null;
+    outlook_drafts: Array<{ mailbox: string | null; id: string; url: string }> | null;
   } | null;
 
   if (!report?.slack_channel_id || !report.slack_thread_ts) {
@@ -376,7 +376,7 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
 
   // Read before the command runs, so the note below can tell a draft this run made from
   // one left over from a previous one. See the comparison in the .then().
-  const draftUrlBefore = report.outlook_draft_url ?? null;
+  const draftUrlBefore = report.outlook_drafts?.[0]?.url ?? null;
 
   // Said out loud in the thread, so a card appearing on its own is explained. Safe to
   // post: the events route drops anything carrying a bot_id before it reaches the
@@ -404,10 +404,15 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
         // happened, so that is the right trade.
         const { data: after } = await supabaseAdmin
           .from("audit_reports")
-          .select("outlook_draft_url")
+          .select("outlook_drafts")
           .eq("id", report.id)
           .maybeSingle();
-        const draftUrl = (after as { outlook_draft_url: string | null } | null)?.outlook_draft_url ?? null;
+        // Entry 0 is the connected account, which is the draft he is actually going to send.
+        // Email 1 lands in the shared submissions box as well, but a lead timeline is Matthew's
+        // record of his own outreach, and a second link to the same email would only make him
+        // decide which one to open.
+        const draftUrl =
+          (after as { outlook_drafts: Array<{ url: string }> | null } | null)?.outlook_drafts?.[0]?.url ?? null;
         const madeADraft = Boolean(draftUrl) && draftUrl !== draftUrlBefore;
         await addNote({
           contactId,

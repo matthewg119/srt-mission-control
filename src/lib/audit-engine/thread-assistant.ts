@@ -28,10 +28,9 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { microsoft } from "@/lib/microsoft";
 import { buildReportView, type ReportView } from "./report-view";
 import { buildAliases } from "./mention-match";
-import { auditSignatureHtml, buildPitchHtml } from "./lead-pitch";
+import { auditSignatureHtml, buildPitchHtml, placeOutreachDraft, type PlacedDraft } from "./lead-pitch";
 import {
   draftEmailOptions,
   draftPermissionEmail,
@@ -381,9 +380,12 @@ async function scorecardAttachment(report: AuditReportRow): Promise<{ name: stri
   };
 }
 
-/** What landed in the mailbox, in the words the thread uses to confirm it. */
+/** What landed in the mailboxes, in the words the thread uses to confirm it. */
 interface OutlookDraftResult {
-  webLink: string;
+  /** One entry per mailbox the draft was created in. The connected account is always first. */
+  placed: PlacedDraft[];
+  /** Secondary mailboxes that refused the write. The primary throws instead of landing here. */
+  failed: Array<{ mailbox: string; error: string }>;
   /** The To address, or undefined when there is none on file yet and Outlook will show it empty. */
   to?: string;
   /** True when this went in as a reply on the prospect's own thread rather than a new message. */
@@ -408,12 +410,12 @@ async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): 
   // The signature block is ATTACHED here, it is not something Outlook adds. A draft created
   // through Graph is not composed in the client, so nothing auto-inserts a sign-off, and the
   // drafts this path made were arriving with the body's bare "Matthew Garcia" and no block
-  // under it. auditSignatureHtml() reads the "AI Ops" block out of Outlook by name, so it can
-  // still be edited there without a deploy, and falls back to the repo copy if Microsoft is
-  // disconnected. Since that block already carries the NAME as well as the agency,
-  // stripSignoff() takes both plain-text lines off the body: stripAgencyLine left the name
-  // behind and every draft printed "Matthew Garcia" twice, once from the body and once from
-  // the block underneath it.
+  // under it. auditSignatureHtml() supplies the plain pitch block, NOT the branded one with the
+  // logo and the CTA button; see the note on that function for why the Outlook lookup it used to
+  // do never once returned anything. Since that block already carries the NAME as well as the
+  // agency, stripSignoff() takes both plain-text lines off the body: stripAgencyLine left the
+  // name behind and every draft printed "Matthew Garcia" twice, once from the body and once
+  // from the block underneath it.
   //
   // buildPitchHtml is shared with the public free-audit pitch on purpose: one builder means the
   // email cannot render one way from the thread and another way from finishReport.
@@ -423,36 +425,50 @@ async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): 
   // runs, so a fresh render can never disagree with the report the email links to.
   const attachments = chosen.attachScorecard ? [await scorecardAttachment(report)] : undefined;
 
-  // Clear out the draft this thread made last time, BEFORE making the new one. A thread gets
-  // redrafted three or four times on the way to a good email, and without this each pass leaves
-  // another near-identical message in Drafts and the right one stops being obvious.
-  //
-  // deleteDraft re-checks isDraft against Graph and refuses to touch anything that has been
-  // sent, which is the case that matters: a sent message KEEPS the same id, so this stored id
-  // can point at an email the prospect already has. Failure is ignored on purpose. The new
-  // draft is the point; a stale one left behind is untidy, not broken.
-  if (report.outlook_draft_id) {
-    await microsoft.deleteDraft(report.outlook_draft_id).catch(() => "gone" as const);
-  }
+  // /me first, then whatever extra mailboxes the EMAIL asks for — today that is email 1 and the
+  // shared submissions box. A reply draft is anchored on a message that exists in one mailbox
+  // only, so it is never mirrored; nothing that sets mirrorMailboxes is a reply, so this reads
+  // as "skip", not as a conflict.
+  const mailboxes: Array<string | undefined> = chosen.replyToMessageId
+    ? [undefined]
+    : [undefined, ...(chosen.mirrorMailboxes ?? [])];
 
-  const draft = chosen.replyToMessageId
-    ? await microsoft.createReplyDraft({ messageId: chosen.replyToMessageId, html: htmlBody, to, attachments })
-    : await microsoft.createDraft({ to, subject: chosen.subject, body: htmlBody, attachments });
+  // placeOutreachDraft deletes the drafts this thread made last time before making the new ones.
+  // A thread gets redrafted three or four times on the way to a good email, and without that
+  // each pass leaves another near-identical message in Drafts and the right one stops being
+  // obvious. It refuses to delete anything Graph no longer reports as isDraft, so a stored id
+  // that now points at an email the prospect already has cannot destroy it.
+  const { placed, failed } = await placeOutreachDraft({
+    to,
+    subject: chosen.subject,
+    html: htmlBody,
+    attachments,
+    mailboxes,
+    replyToMessageId: chosen.replyToMessageId,
+    previous: report.outlook_drafts ?? undefined,
+  });
 
-  await supabaseAdmin
-    .from("audit_reports")
-    .update({ outlook_draft_id: draft.id, outlook_draft_url: draft.webLink })
-    .eq("id", report.id);
+  await supabaseAdmin.from("audit_reports").update({ outlook_drafts: placed }).eq("id", report.id);
 
-  return { webLink: draft.webLink, to, threaded: Boolean(chosen.replyToMessageId), attached: Boolean(attachments) };
+  return { placed, failed, to, threaded: Boolean(chosen.replyToMessageId), attached: Boolean(attachments) };
 }
 
-/** The one line the thread prints once an email is sitting in Outlook. */
+/** What the thread prints once an email is sitting in Outlook: one link per mailbox. */
 function outlookDraftLine(result: OutlookDraftResult, label: string, forOption?: string): string {
   const noRecipient = result.to ? "" : "\nNo recipient on file, so add the To address in Outlook before sending.";
   const threaded = result.threaded ? ", as a reply on the original thread" : "";
   const attached = result.attached ? ", scorecard attached" : "";
-  return `:envelope_with_arrow: *In your Outlook drafts*${forOption ?? ""} (${label})${result.to ? ` to ${result.to}` : ""}${threaded}${attached}. <${result.webLink}|Open in Outlook>${noRecipient}`;
+  // The mailbox is NAMED on every link once there is more than one, because "Open in Outlook"
+  // twice in a row is two identical-looking links to two different mailboxes.
+  const links = result.placed
+    .map((p) => `<${p.url}|Open in ${p.mailbox ?? "your inbox"}>`)
+    .join(" · ");
+  // Said out loud rather than swallowed: a copy that did not get made is the kind of thing that
+  // is only noticed weeks later, when someone goes looking in the shared box for it.
+  const missed = result.failed
+    .map((f) => `\n:warning: No copy in ${f.mailbox}: ${f.error}`)
+    .join("");
+  return `:envelope_with_arrow: *In your Outlook drafts*${forOption ?? ""} (${label})${result.to ? ` to ${result.to}` : ""}${threaded}${attached}. ${links}${noRecipient}${missed}`;
 }
 
 /**
