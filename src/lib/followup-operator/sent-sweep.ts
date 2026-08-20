@@ -31,7 +31,7 @@ export interface SweepResult {
 }
 
 /** Our own domain plus anything Matthew adds. A pitch is never sent to us. */
-function excludedDomains(): string[] {
+export function excludedDomains(): string[] {
   const extra = (process.env.OUTREACH_EXCLUDE_DOMAINS ?? "")
     .split(",")
     .map((d) => d.trim().toLowerCase())
@@ -39,7 +39,7 @@ function excludedDomains(): string[] {
   return ["srtagency.com", ...extra];
 }
 
-function isExcluded(email: string, domains: string[]): boolean {
+export function isExcluded(email: string, domains: string[]): boolean {
   const at = email.lastIndexOf("@");
   if (at < 0) return true;
   const domain = email.slice(at + 1);

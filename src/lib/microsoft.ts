@@ -323,13 +323,15 @@ export const microsoft = {
    */
   async *listMessages(opts: {
     mailbox?: string;
-    folder?: string;
+    /** Named folder, or `null` for EVERY folder (/messages). Reply detection needs null:
+     *  a reply that got filed or filtered is the one we least want to miss. */
+    folder?: string | null;
     filter?: string;
     top?: number;
     select?: string[];
   }): AsyncIterable<GraphMessage> {
     const mailboxPath = opts.mailbox ? `/users/${encodeURIComponent(opts.mailbox)}` : "/me";
-    const folder = opts.folder ?? "inbox";
+    const folder = opts.folder === undefined ? "inbox" : opts.folder;
     const top = opts.top ?? 100;
     const select = (opts.select ?? [
       "id",
@@ -350,7 +352,10 @@ export const microsoft = {
     params.set("$select", select);
     if (opts.filter) params.set("$filter", opts.filter);
 
-    let endpoint: string | null = `${mailboxPath}/mailFolders/${folder}/messages?${params.toString()}`;
+    let endpoint: string | null =
+      folder === null
+        ? `${mailboxPath}/messages?${params.toString()}`
+        : `${mailboxPath}/mailFolders/${folder}/messages?${params.toString()}`;
     const appAuth = USE_APP_AUTH && !!opts.mailbox;
 
     while (endpoint) {

@@ -6,6 +6,7 @@
 
 import { slack, slackThreadLink, type SlackBlock } from "@/lib/slack-bot";
 import { runSentMailSweep, type SweepResult } from "./sent-sweep";
+import type { ReplySweepResult } from "./reply-sweep";
 import {
   listDueProspects,
   listWaitingProspects,
@@ -101,6 +102,7 @@ export interface DigestResult {
   unrecognized: number;
   deferred: number;
   sweep: SweepResult;
+  replySweep: ReplySweepResult | null;
   posted: boolean;
   skipped?: string;
 }
@@ -126,6 +128,16 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
 
   const sweep = await runSentMailSweep();
 
+  // Replies BEFORE the board is built, so a prospect who answered last night is not still
+  // sitting in EMAIL DUE this morning. Isolated: a Graph failure here must not cost the digest,
+  // which is the one thing that reliably gets read.
+  const { runReplyMailSweep } = await import("./reply-sweep");
+  const replySweep = await runReplyMailSweep().catch((e) => {
+    console.error("[followup] reply sweep failed:", (e as Error).message);
+    return null;
+  });
+  if (replySweep?.replies) console.log(`[followup] reply sweep: ${replySweep.replies} replies`);
+
   const result: DigestResult = {
     hot: 0,
     calls: 0,
@@ -134,6 +146,7 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
     unrecognized: 0,
     deferred: 0,
     sweep,
+    replySweep,
     posted: false,
   };
 
