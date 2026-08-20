@@ -54,6 +54,59 @@ export function snapTo9amET(at: Date): Date {
   return guess;
 }
 
+/**
+ * The Eastern wall clock at an instant: what a person in New York would read off a clock.
+ *
+ * Asks Intl for the calendar reading rather than doing offset arithmetic, so DST is handled by
+ * the runtime's tz database instead of by us. This is what the UTC crons check themselves
+ * against: Vercel schedules in UTC, 7:30am ET is 11:30 UTC under EDT and 12:30 UTC under EST,
+ * so the job fires at BOTH and only the firing that reads 7:30 here is allowed to act.
+ */
+export function etWallClock(at: Date): { y: number; m: number; d: number; hour: number; minute: number; weekday: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ET,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(at);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const num = (t: string) => Number(get(t) || "0");
+  const days: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  // "24" is how en-CA/hour12:false renders midnight. Left as 24 it would fail every hour check.
+  const hour = num("hour") % 24;
+  return { y: num("year"), m: num("month"), d: num("day"), hour, minute: num("minute"), weekday: days[get("weekday")] ?? 0 };
+}
+
+/** The Eastern calendar date as "YYYY-MM-DD". The key for once-per-day guards. */
+export function etDateKey(at: Date): string {
+  const { y, m, d } = etDateParts(at);
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/** Monday to Friday on the Eastern calendar. */
+export function isETBusinessDay(at: Date): boolean {
+  const { weekday } = etWallClock(at);
+  return weekday >= 1 && weekday <= 5;
+}
+
+/**
+ * The previous BUSINESS day in Eastern time, as a [start, end) instant pair.
+ * Monday looks back to Friday; Tuesday through Friday look back one day.
+ * No holiday calendar on purpose: a table of holidays is exactly the kind of thing that quietly
+ * stops being maintained, and the cost of a nudge on the day after Thanksgiving is one email.
+ */
+export function previousBusinessDayET(at: Date): { start: Date; end: Date } {
+  const { weekday } = etWallClock(at);
+  const back = weekday === 1 ? 3 : weekday === 0 ? 2 : 1;
+  const end = startOfETDay(at);
+  const start = startOfETDay(new Date(end.getTime() - (back - 1) * DAY_MS - 1000));
+  return { start, end: new Date(start.getTime() + DAY_MS) };
+}
+
 /** Start of the current Eastern calendar day, as an instant. */
 export function startOfETDay(at: Date): Date {
   const { y, m, d } = etDateParts(at);

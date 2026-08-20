@@ -55,6 +55,18 @@
     {
       "path": "/api/cron/medspa-credit-reminder",
       "schedule": "20 16 * * *"
+    },
+    {
+      "path": "/api/cron/nudge-send",
+      "schedule": "30 11,12 * * 1-5"
+    },
+    {
+      "path": "/api/cron/outreach-sender",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/outreach-pacing",
+      "schedule": "0 16,17,19,20,22,23 * * *"
     }
   ]
 }
