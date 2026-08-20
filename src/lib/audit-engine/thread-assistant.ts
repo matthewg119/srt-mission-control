@@ -31,6 +31,8 @@ import { slack } from "@/lib/slack-bot";
 import { buildReportView, type ReportView } from "./report-view";
 import { buildAliases } from "./mention-match";
 import { auditSignatureHtml, buildPitchHtml, placeOutreachDraft, type PlacedDraft } from "./lead-pitch";
+import { chooseOutreachMailbox, mailboxLine } from "@/lib/followup-operator/mailboxes";
+import { toGraphMailbox } from "@/config/outreach-mailboxes";
 import {
   draftEmailOptions,
   draftPermissionEmail,
@@ -391,6 +393,9 @@ interface OutlookDraftResult {
   /** True when this went in as a reply on the prospect's own thread rather than a new message. */
   threaded: boolean;
   attached: boolean;
+  /** Which mailbox it went in, and what headroom is left. Undefined for a reply draft, which
+   *  is anchored to its thread's mailbox rather than chosen by rotation. */
+  mailboxNote?: string;
 }
 
 /**
@@ -425,13 +430,28 @@ async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): 
   // runs, so a fresh render can never disagree with the report the email links to.
   const attachments = chosen.attachScorecard ? [await scorecardAttachment(report)] : undefined;
 
-  // /me first, then whatever extra mailboxes the EMAIL asks for — today that is email 1 and the
-  // shared submissions box. A reply draft is anchored on a message that exists in one mailbox
-  // only, so it is never mirrored; nothing that sets mirrorMailboxes is a reply, so this reads
-  // as "skip", not as a conflict.
+  // ONE draft, in the first mailbox that still has send headroom today. This used to place two,
+  // in /me and the shared submissions box, which spread no volume and left two copies to clean up.
+  //
+  // A REPLY draft is exempt from rotation: Graph anchors createReply on a message id that lives
+  // in exactly one mailbox, so the reply has to be drafted where its anchor is. It still spends
+  // budget when it SENDS, because the budget counts sends.
+  const { chosen: pickedMailbox, headroom } = await chooseOutreachMailbox();
+  if (!chosen.replyToMessageId && !pickedMailbox) {
+    // Every mailbox is at its cap. Place nothing and say so: quietly drafting into a full
+    // mailbox would make the cap a decoration.
+    return {
+      placed: [],
+      failed: [],
+      to,
+      threaded: false,
+      attached: Boolean(attachments),
+      mailboxNote: mailboxLine(null, headroom),
+    };
+  }
   const mailboxes: Array<string | undefined> = chosen.replyToMessageId
     ? [undefined]
-    : [undefined, ...(chosen.mirrorMailboxes ?? [])];
+    : [toGraphMailbox(pickedMailbox!.address)];
 
   // placeOutreachDraft deletes the drafts this thread made last time before making the new ones.
   // A thread gets redrafted three or four times on the way to a good email, and without that
@@ -450,7 +470,14 @@ async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): 
 
   await supabaseAdmin.from("audit_reports").update({ outlook_drafts: placed }).eq("id", report.id);
 
-  return { placed, failed, to, threaded: Boolean(chosen.replyToMessageId), attached: Boolean(attachments) };
+  return {
+    placed,
+    failed,
+    to,
+    threaded: Boolean(chosen.replyToMessageId),
+    attached: Boolean(attachments),
+    mailboxNote: mailboxLine(chosen.replyToMessageId ? null : pickedMailbox, headroom),
+  };
 }
 
 /** What the thread prints once an email is sitting in Outlook: one link per mailbox. */
@@ -460,15 +487,24 @@ function outlookDraftLine(result: OutlookDraftResult, label: string, forOption?:
   const attached = result.attached ? ", scorecard attached" : "";
   // The mailbox is NAMED on every link once there is more than one, because "Open in Outlook"
   // twice in a row is two identical-looking links to two different mailboxes.
+  // Every mailbox full means no draft exists, so there is no link to print and the reason has
+  // to be the whole line. Silence would read as "it is in Outlook somewhere".
+  if (!result.placed.length) {
+    return `:no_entry: *No Outlook draft*${forOption ?? ""} (${label}). ${result.mailboxNote ?? "Draft could not be created."}`;
+  }
   const links = result.placed
     .map((p) => `<${p.url}|Open in ${p.mailbox ?? "your inbox"}>`)
     .join(" · ");
   // Said out loud rather than swallowed: a copy that did not get made is the kind of thing that
   // is only noticed weeks later, when someone goes looking in the shared box for it.
+  // Which mailbox it went in and what is left in each. With rotation, "your Outlook drafts"
+  // no longer says where to look.
+  const where = result.mailboxNote ? `
+${result.mailboxNote}` : "";
   const missed = result.failed
     .map((f) => `\n:warning: No copy in ${f.mailbox}: ${f.error}`)
     .join("");
-  return `:envelope_with_arrow: *In your Outlook drafts*${forOption ?? ""} (${label})${result.to ? ` to ${result.to}` : ""}${threaded}${attached}. ${links}${noRecipient}${missed}`;
+  return `:envelope_with_arrow: *In your Outlook drafts*${forOption ?? ""} (${label})${result.to ? ` to ${result.to}` : ""}${threaded}${attached}. ${links}${noRecipient}${where}${missed}`;
 }
 
 /**

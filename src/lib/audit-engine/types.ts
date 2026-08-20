@@ -87,7 +87,6 @@ export interface AuditReportRow {
     body: string;
     replyToMessageId?: string;
     attachScorecard?: boolean;
-    mirrorMailboxes?: string[];
   }> | null;
   /** The Outlook drafts auto-created for the newest single-email card in this thread
    *  (docs/2026-08-20-outlook-drafts-multi.sql). Every card that posts ONE finished email puts

@@ -43,9 +43,10 @@ import {
   auditSignatureHtml,
   buildPitchHtml,
   placeOutreachDraft,
-  submissionsMailbox,
   type PlacedDraft,
 } from "./lead-pitch";
+import { chooseOutreachMailbox, mailboxLine } from "@/lib/followup-operator/mailboxes";
+import { toGraphMailbox } from "@/config/outreach-mailboxes";
 import { microsoft } from "@/lib/microsoft";
 import { draftWithLint, retryInstruction } from "./draft-linter";
 import { NO_WEBSITE_LINE, NAME_COMPETITORS_IN_COLD_EMAIL } from "@/config/pitch";
@@ -295,28 +296,36 @@ export function miniCheckContext(check: MiniCheck): string {
  * stripSignoff then takes the whole plain-text sign-off off the body, name included, because
  * the block carries the name too and the draft would otherwise print it twice.
  *
- * Like email 1 in the audit thread, this lands in the shared submissions box as well as in
- * Matthew's own. It is a first-contact email, which is the kind worth having somewhere other
- * than one person's mailbox.
+ * Like email 1 in the audit thread, this goes into whichever mailbox still has send headroom
+ * today rather than into a fixed one. It used to be drafted into both mailboxes at once, which
+ * spread no volume and left two copies to clean up.
  *
  * Returns [] rather than throwing: a draft that could not be created is worth a line on the
  * Slack card, not a lost pitch. The card carries the full text either way.
  */
-export async function createPitchDraft(draft: NoWebsiteDraft, to: string | null): Promise<PlacedDraft[]> {
-  if (!draft.body || draft.rejectedFindings.length > 0) return [];
+export async function createPitchDraft(
+  draft: NoWebsiteDraft,
+  to: string | null
+): Promise<{ placed: PlacedDraft[]; mailboxNote: string }> {
+  if (!draft.body || draft.rejectedFindings.length > 0) return { placed: [], mailboxNote: "" };
   try {
+    const { chosen, headroom } = await chooseOutreachMailbox();
+    // Every mailbox at its cap: place nothing and report why. The card still carries the full
+    // text, so the pitch is not lost, it just does not become a draft today.
+    if (!chosen) return { placed: [], mailboxNote: mailboxLine(null, headroom) };
+
     const html = buildPitchHtml(stripSignoff(draft.body), await auditSignatureHtml());
     const { placed, failed } = await placeOutreachDraft({
       to: to ?? undefined,
       subject: draft.subject,
       html,
-      mailboxes: [undefined, submissionsMailbox()],
+      mailboxes: [toGraphMailbox(chosen.address)],
     });
     for (const f of failed) console.warn(`[no-website-pitch] no copy in ${f.mailbox}: ${f.error}`);
-    return placed;
+    return { placed, mailboxNote: mailboxLine(chosen, headroom) };
   } catch (e) {
     console.error("[no-website-pitch] Outlook draft failed:", (e as Error).message);
-    return [];
+    return { placed: [], mailboxNote: "" };
   }
 }
 
@@ -332,7 +341,8 @@ export function formatNoWebsitePitchCard(
   businessName: string,
   check: MiniCheck,
   draft: NoWebsiteDraft,
-  drafts: PlacedDraft[] = []
+  drafts: PlacedDraft[] = [],
+  mailboxNote = ""
 ): string {
   const lines: string[] = [
     `📭 No-website pitch for *${check.identity.tradingName ?? businessName}*${check.city ? ` · ${check.city}` : ""}`,
@@ -376,6 +386,12 @@ export function formatNoWebsitePitchCard(
       "",
       `✉️ In your Outlook drafts: ${drafts.map((d) => `<${d.url}|Open in ${d.mailbox ?? "your inbox"}>`).join(" · ")}`
     );
+    // With rotation the draft is in one of several mailboxes, so the card has to say which.
+    if (mailboxNote) lines.push(mailboxNote);
+  } else if (mailboxNote) {
+    // No draft, and the reason is worth printing: a mailbox at its cap is not a failure, and
+    // the pitch text is on the card either way.
+    lines.push("", mailboxNote);
   }
   return lines.join("\n");
 }

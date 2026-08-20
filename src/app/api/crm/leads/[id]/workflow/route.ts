@@ -300,7 +300,7 @@ async function startNoWebsitePitch(contactId: string, actor: string) {
         const channel = (await getOrCreateAuditChannel()).id;
         const post = await slack.postMessage(
           channel,
-          formatNoWebsitePitchCard(businessName, check, draft, made)
+          formatNoWebsitePitchCard(businessName, check, draft, made.placed, made.mailboxNote)
         );
 
         await addNote({
@@ -407,18 +407,22 @@ async function runThreadCommand(contactId: string, action: ThreadAction, actor: 
           .select("outlook_drafts")
           .eq("id", report.id)
           .maybeSingle();
-        // Entry 0 is the connected account, which is the draft he is actually going to send.
-        // Email 1 lands in the shared submissions box as well, but a lead timeline is Matthew's
-        // record of his own outreach, and a second link to the same email would only make him
-        // decide which one to open.
-        const draftUrl =
-          (after as { outlook_drafts: Array<{ url: string }> | null } | null)?.outlook_drafts?.[0]?.url ?? null;
+        // Rotation places ONE draft, so entry 0 is the draft, and its mailbox is whichever one had
+        // headroom today rather than always the connected account. Emails used to be mirrored into
+        // the shared submissions box as well; that is gone, and so is the second link.
+        const placedDraft =
+          (after as { outlook_drafts: Array<{ url: string; mailbox: string | null }> | null } | null)
+            ?.outlook_drafts?.[0] ?? null;
+        const draftUrl = placedDraft?.url ?? null;
+        // Naming the mailbox is the point: "your Outlook drafts" no longer says where to look
+        // once there is more than one mailbox in play.
+        const draftWhere = placedDraft?.mailbox ?? "your inbox";
         const madeADraft = Boolean(draftUrl) && draftUrl !== draftUrlBefore;
         await addNote({
           contactId,
           title: `${label} posted in Slack`,
           content: madeADraft
-            ? `Run from the lead page. The email is in your Outlook drafts: ${draftUrl}\n${threadUrl}`
+            ? `Run from the lead page. The email is in ${draftWhere} drafts: ${draftUrl}\n${threadUrl}`
             : `Run from the lead page. ${threadUrl}`,
           origin: "mission_control",
           actor,
