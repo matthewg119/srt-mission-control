@@ -521,6 +521,38 @@ export function stripAgencyLine(body: string): string {
 }
 
 /**
+ * Take the WHOLE plain-text sign-off off the body: the name as well as the agency.
+ *
+ * ‼️ Use this, not stripAgencyLine, whenever an HTML signature block is about to be appended.
+ * The block already carries the name, and stripAgencyLine leaves it behind, so the draft prints
+ *
+ *     Want me to send it over?
+ *     Matthew Garcia            <- the body's leftover
+ *     Thanks,
+ *     Matthew Garcia            <- the block
+ *     Search Retrieval Tactics
+ *
+ * which is what every Outlook draft off this lane actually looked like. stripAgencyLine stays and
+ * still has a caller: it is right when the body's own sign-off is the ONLY one, and only the
+ * agency line would be duplicated by what follows.
+ *
+ * ensureSignoff writes those two lines for the Slack card and the plain-text copy, which is why
+ * they exist at all — they are correct there and wrong the moment HTML is involved.
+ */
+export function stripSignoff(body: string): string {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const name = esc(OUTREACH_SIGNATURE.name);
+  const agency = esc(OUTREACH_SIGNATURE.agency);
+  // Anchored to the very end and to whole lines, so a prospect named in the body, or an agency
+  // discussed in it, is never touched. Trailing whitespace is trimmed first so the anchor holds.
+  return body
+    .trimEnd()
+    .replace(new RegExp(`\\n+[ \\t]*${name}[ \\t]*\\n+[ \\t]*${agency}[ \\t]*$`, "i"), "")
+    .replace(new RegExp(`\\n+[ \\t]*${name}[ \\t]*$`, "i"), "")
+    .trimEnd();
+}
+
+/**
  * How the sentences themselves sound. Extracted from the reference email below, plus the four
  * cuts made by hand to the last draft that shipped (2026-08-03). Each of those cuts was the
  * same instinct: the model adds scaffolding around the finding, and the finding is the email.

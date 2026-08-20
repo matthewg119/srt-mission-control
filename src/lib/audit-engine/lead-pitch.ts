@@ -16,7 +16,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { microsoft } from "@/lib/microsoft";
-import { EMAIL_SIGNATURE_HTML } from "@/config/email-signature";
+import { PITCH_SIGNATURE_HTML } from "@/config/email-signature";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
 
 export const AUTOSEND_MINUTES = Math.max(1, Number(process.env.AUDIT_AUTOSEND_MINUTES) || 5);
@@ -65,19 +65,33 @@ export function autoSendArmedForAnything(): boolean {
 /**
  * The signature that goes on every audit pitch.
  *
- * Read from Outlook by display name so Matthew can edit it in Outlook without a
- * deploy, exactly how submit-to-lenders.ts resolves the "Submission" signature.
- * Falls back to the repo constant when Microsoft is disconnected, because a
- * pitch with no sign-off is worse than one with a slightly stale one.
+ * ‼️ THE OUTLOOK LOOKUP IS DEAD AND THE CONSTANT IS NOW THE REAL ANSWER, NOT THE FALLBACK.
+ *
+ * This was written to read the block out of Outlook by display name so Matthew could edit the
+ * signature without a deploy. Microsoft has since removed the endpoint it depended on: a live
+ * call to `GET /beta/me/mailboxSettings/signatures` answers
+ *
+ *     400  BadRequest  "Resource not found for the segment 'signatures'."
+ *
+ * getSignatureByName() swallows that and returns null, so this has ALWAYS taken the fallback
+ * branch in production and nothing said so out loud except one console.warn per draft. Every
+ * pitch for months was signed from code while the comment here claimed otherwise. Verify with
+ * `bunx tsx --env-file=.env.local scripts/_probe-signature.ts` rather than by reading this.
+ *
+ * The lookup is KEPT rather than deleted, for two reasons: it costs one request against a lane
+ * that is already several seconds of model work, and if Microsoft ever ships the endpoint on /v1.0
+ * this starts working again with no code change. What changed is the fallback. It used to be
+ * EMAIL_SIGNATURE_HTML, which is the heavy branded block, and that is why cold pitches were going
+ * out with a "Get your free AI audit" BUTTON under an email whose entire rule is one ask and no
+ * links. PITCH_SIGNATURE_HTML is the plain block, and it is what a cold pitch should look like.
  */
 export async function auditSignatureHtml(): Promise<string> {
-  // "AI Ops" is the block's name in Outlook's signature list; its rendered content reads
-  // "Matthew Garcia / AI Visibility - SRT". Naming it after the content would not find it.
+  // "AI Ops" is the block's name in Outlook's signature list. Kept so the day the endpoint comes
+  // back, the name it looks for is still the right one.
   const name = process.env.AUDIT_SIGNATURE_NAME || "AI Ops";
   const fromOutlook = await microsoft.getSignatureByName(name).catch(() => null);
   if (fromOutlook) return fromOutlook;
-  console.warn(`[lead-pitch] Outlook signature "${name}" not found, using the repo fallback`);
-  return EMAIL_SIGNATURE_HTML;
+  return PITCH_SIGNATURE_HTML;
 }
 
 /**

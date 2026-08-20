@@ -35,7 +35,7 @@ import {
   PERMISSION_CLOSE,
   noDashes,
   enforceLinkPolicy,
-  stripAgencyLine,
+  stripSignoff,
   type GuardedDraft,
 } from "./email-assistant";
 import { polishBody } from "./format-guard";
@@ -275,7 +275,7 @@ export function miniCheckContext(check: MiniCheck): string {
  * Put the pitch into Matthew's Outlook drafts, signed the way every other SRT email is.
  *
  * ‼️ THE COMPOSITION IS COPIED FROM ensureOutlookDraft() IN thread-assistant.ts AND MUST STAY
- * IDENTICAL: stripAgencyLine on the body, auditSignatureHtml() for the block, buildPitchHtml to
+ * IDENTICAL: stripSignoff on the body, auditSignatureHtml() for the block, buildPitchHtml to
  * marry them. That is what makes this email render exactly like the audit-lane one rather than
  * approximately like it.
  *
@@ -286,8 +286,8 @@ export function miniCheckContext(check: MiniCheck): string {
  *   - auditSignatureHtml() reads the "AI Ops" block out of Outlook BY NAME, so the real
  *     signature lives where Matthew can edit it without a deploy. EMAIL_SIGNATURE_HTML is only
  *     the fallback for a disconnected mailbox, and it is not the same block.
- * stripAgencyLine then takes the plain-text agency line off the body, because the block already
- * names the agency and the two would print it twice.
+ * stripSignoff then takes the whole plain-text sign-off off the body, name included, because
+ * the block carries the name too and the draft would otherwise print it twice.
  *
  * Returns null rather than throwing: a draft that could not be created is worth a line on the
  * Slack card, not a lost pitch. The card carries the full text either way.
@@ -298,7 +298,7 @@ export async function createPitchDraft(
 ): Promise<{ webLink: string } | null> {
   if (!draft.body || draft.rejectedFindings.length > 0) return null;
   try {
-    const html = buildPitchHtml(stripAgencyLine(draft.body), await auditSignatureHtml());
+    const html = buildPitchHtml(stripSignoff(draft.body), await auditSignatureHtml());
     const made = await microsoft.createDraft({
       to: to ?? undefined,
       subject: draft.subject,

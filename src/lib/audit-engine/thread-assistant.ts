@@ -38,7 +38,7 @@ import {
   draftPreSellOptions,
   draftRevealMessage,
   linkWarning,
-  stripAgencyLine,
+  stripSignoff,
   BELIEF_SEQUENCE,
   PERMISSION_CLOSE,
   PERMISSION_SEQUENCE,
@@ -410,12 +410,14 @@ async function ensureOutlookDraft(report: AuditReportRow, chosen: EmailOption): 
   // drafts this path made were arriving with the body's bare "Matthew Garcia" and no block
   // under it. auditSignatureHtml() reads the "AI Ops" block out of Outlook by name, so it can
   // still be edited there without a deploy, and falls back to the repo copy if Microsoft is
-  // disconnected. Since that block already names the agency, stripAgencyLine() takes the
-  // plain-text agency line off the body so it is not printed twice.
+  // disconnected. Since that block already carries the NAME as well as the agency,
+  // stripSignoff() takes both plain-text lines off the body: stripAgencyLine left the name
+  // behind and every draft printed "Matthew Garcia" twice, once from the body and once from
+  // the block underneath it.
   //
   // buildPitchHtml is shared with the public free-audit pitch on purpose: one builder means the
   // email cannot render one way from the thread and another way from finishReport.
-  const htmlBody = buildPitchHtml(stripAgencyLine(chosen.body), await auditSignatureHtml());
+  const htmlBody = buildPitchHtml(stripSignoff(chosen.body), await auditSignatureHtml());
 
   // The scorecard is regenerated here rather than stored on the row: it is derived from the
   // runs, so a fresh render can never disagree with the report the email links to.

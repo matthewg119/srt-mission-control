@@ -60,6 +60,39 @@ export const EMAIL_SIGNATURE_HTML = `
 `.trim();
 
 /**
+ * The signature on COLD PITCH email: the audit lane and the No website lane.
+ *
+ * ‼️ THIS IS NOT EMAIL_SIGNATURE_HTML AND MUST NOT BE REPLACED BY IT. That block carries a green
+ * "Get your free AI audit" CTA button and a confidentiality notice, and it was what these lanes
+ * actually shipped for months (see auditSignatureHtml). Two things are wrong with it here:
+ *
+ *   1. THE CTA IS A LINK. Permission-stage email 1 carries no links at all, which enforceLinkPolicy
+ *      makes structural for the BODY — and then the signature was appended afterwards and put one
+ *      back, under the ask, pointing at a second offer. The single-ask rule survived the drafter
+ *      and died in the footer.
+ *   2. A stranger's first email from a person should look like a person wrote it. A logo, a button
+ *      and a confidentiality notice read as a campaign, which is the one thing email 1 is trying
+ *      not to be.
+ *
+ * So this is the plain block: a sign-off, a name, the company, the role, a phone and the site.
+ * Nothing to click except the two things anyone would want to click.
+ *
+ * The name lives HERE and not in the body. ensureSignoff writes "Matthew Garcia / Search Retrieval
+ * Tactics" into the body as plain text for the Slack card, and stripSignoff() takes both lines back
+ * off before this is attached, or the draft prints the name twice.
+ */
+export const PITCH_SIGNATURE_HTML = `
+<div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:#1f2937; line-height:1.5;">
+  <div>Thanks,</div>
+  <div>Matthew Garcia</div>
+  <div style="font-weight:700;">Search Retrieval Tactics</div>
+  <div>AI Visibility Specialist</div>
+  <div><a href="tel:+13368332303" style="color:#1f2937; text-decoration:none;">336-833-2303</a></div>
+  <div><a href="https://www.srtagency.com" style="color:#2563eb;">https://www.srtagency.com</a></div>
+</div>
+`.trim();
+
+/**
  * Wraps a plain-text or HTML message body with the email signature.
  * Converts plain text to HTML paragraphs if needed.
  */
