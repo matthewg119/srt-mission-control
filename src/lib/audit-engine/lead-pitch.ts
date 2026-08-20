@@ -327,6 +327,13 @@ export async function sendAuditPitch(
 
   if (!claimed) return { outcome: "already_sent" };
 
+  // Read the durable ids BEFORE the send. internetMessageId is stamped at draft creation and
+  // survives into Sent Items, so it is what lets tomorrow's sweep recognise this email as one
+  // already logged instead of recording a second touch for the same send.
+  const keys = await microsoft
+    .getMessageKeys(data.draft_message_id as string)
+    .catch(() => ({ internetMessageId: null, conversationId: null }));
+
   try {
     await microsoft.sendDraft(data.draft_message_id as string);
   } catch (e) {
@@ -344,13 +351,20 @@ export async function sendAuditPitch(
     metadata: { report_id: reportId, actor },
   });
 
-  await enrollSentPitch(reportId);
+  await enrollSentPitch(reportId, {
+    graphMessageId: data.draft_message_id as string,
+    internetMessageId: keys.internetMessageId,
+    conversationId: keys.conversationId,
+  });
   return { outcome: "sent" };
 }
 
 /** Hand the recipient to the Follow-Up Operator so the ladder starts from a
  *  real send rather than waiting for tomorrow's Sent Items sweep. */
-async function enrollSentPitch(reportId: string): Promise<void> {
+async function enrollSentPitch(
+  reportId: string,
+  keys?: { graphMessageId: string | null; internetMessageId: string | null; conversationId: string | null }
+): Promise<void> {
   try {
     const { data: report } = await supabaseAdmin
       .from("audit_reports")
@@ -376,20 +390,35 @@ async function enrollSentPitch(reportId: string): Promise<void> {
     if (!prospect) return;
 
     const now = new Date();
-    await logTouch({
+    const { connectedMailbox } = await import("@/config/outreach-mailboxes");
+
+    // Carries the message ids on purpose. Without them this touch has a NULL message_key, which
+    // never conflicts with anything, so the Sent Items sweep would log the SAME email again
+    // tomorrow and advance the ladder a second time.
+    const logged = await logTouch({
       prospect_id: prospect.id,
       direction: "outbound",
       channel: "email",
       step: 1,
       outcome: "sent",
+      graph_message_id: keys?.graphMessageId ?? null,
+      internet_message_id: keys?.internetMessageId ?? null,
+      conversation_id: keys?.conversationId ?? null,
+      mailbox: connectedMailbox(),
+      occurred_at: now.toISOString(),
       metadata: { source: "lead_pitch" },
     });
+    if (logged.status === "error") {
+      console.error("[lead-pitch] send-time touch failed:", logged.message);
+    }
 
     const due = nextTouchAt(1, now);
     await updateProspect(prospect.id, {
       first_sent_at: prospect.first_sent_at ?? now.toISOString(),
       last_touch_at: now.toISOString(),
       step: Math.max(prospect.step, 1),
+      conversation_id: prospect.conversation_id ?? keys?.conversationId ?? null,
+      last_message_id: keys?.graphMessageId ?? prospect.last_message_id ?? null,
       next_touch_at: due ? due.toISOString() : null,
     });
   } catch (e) {

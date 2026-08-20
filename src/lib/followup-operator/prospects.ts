@@ -140,17 +140,45 @@ export interface LogTouchInput {
   body?: string | null;
   outcome?: string | null;
   graph_message_id?: string | null;
+  /** RFC5322 Message-ID. Prefer this over graph_message_id: Exchange stamps it at DRAFT
+   *  creation and it survives both the send and the move between mailboxes, whereas a
+   *  Graph id is scoped to ONE mailbox and differs between matthew@ and submissions@. */
+  internet_message_id?: string | null;
+  /** The mailbox this left from or arrived in. NULL means the connected account. */
+  mailbox?: string | null;
   conversation_id?: string | null;
   occurred_at?: string;
   metadata?: Record<string, unknown>;
 }
 
 /**
- * Append one touch. Returns false when this exact Graph message was already
- * recorded, which is the sweep's signal to leave the clock alone: the unique
- * partial index on graph_message_id turns a re-read window into a no-op.
+ * Why this is not a boolean.
+ *
+ * It used to be, and `false` meant BOTH "already logged" and "the write failed". The upsert
+ * was aimed at a PARTIAL unique index, which PostgREST cannot emit a predicate for, so every
+ * call failed with SQLSTATE 42P10, was swallowed, and returned false. The sweep read false as
+ * "already seen" and skipped its ladder advance. The table stayed empty for three weeks while
+ * the cron reported success every morning.
+ *
+ * A caller that cannot tell a no-op from a failure will eventually be lied to. So: three states,
+ * and `error` is the sweep's signal to throw rather than continue.
  */
-export async function logTouch(input: LogTouchInput): Promise<boolean> {
+export type TouchResult =
+  | { status: "inserted"; id: string }
+  | { status: "duplicate" }
+  | { status: "error"; message: string };
+
+/**
+ * Append one touch.
+ *
+ * Idempotent on (message_key, prospect_id), where message_key is the generated
+ * coalesce(internet_message_id, graph_message_id). Per PROSPECT, not per message, because one
+ * email addressed to two people at the same business is two prospects and two calls carrying
+ * one message id: a single-column key would advance one ladder and silently drop the other.
+ *
+ * The index is deliberately NOT partial. See docs/2026-08-20-outreach-touch-key.sql.
+ */
+export async function logTouch(input: LogTouchInput): Promise<TouchResult> {
   const body = input.body ? input.body.slice(0, 8000) : null;
   const { data, error } = await supabaseAdmin
     .from("outreach_touches")
@@ -164,20 +192,29 @@ export async function logTouch(input: LogTouchInput): Promise<boolean> {
         body,
         outcome: input.outcome ?? null,
         graph_message_id: input.graph_message_id ?? null,
+        internet_message_id: input.internet_message_id ?? null,
+        mailbox: input.mailbox ? input.mailbox.toLowerCase() : null,
         conversation_id: input.conversation_id ?? null,
         occurred_at: input.occurred_at ?? new Date().toISOString(),
         metadata: input.metadata ?? {},
       },
-      { onConflict: "graph_message_id", ignoreDuplicates: true }
+      { onConflict: "message_key,prospect_id", ignoreDuplicates: true }
     )
     .select("id");
 
   if (error) {
-    console.error("[followup] logTouch:", error.message);
-    return false;
+    // Loud on purpose. A swallowed write here is what made the whole subsystem look healthy
+    // while it recorded nothing, so this both logs and tells the caller the truth.
+    console.error("[followup] logTouch FAILED:", error.message, {
+      prospect_id: input.prospect_id,
+      message_key: input.internet_message_id ?? input.graph_message_id ?? null,
+    });
+    return { status: "error", message: error.message };
   }
-  // ignoreDuplicates returns zero rows when the message was already logged.
-  return (data ?? []).length > 0;
+
+  // ignoreDuplicates returns zero rows when this message was already logged for this prospect.
+  const row = (data ?? [])[0] as { id: string } | undefined;
+  return row ? { status: "inserted", id: row.id } : { status: "duplicate" };
 }
 
 export async function listTouches(prospectId: string, limit = 40): Promise<OutreachTouchRow[]> {

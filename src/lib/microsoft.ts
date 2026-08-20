@@ -383,6 +383,30 @@ export const microsoft = {
   },
 
   /**
+   * The two ids that identify a message durably, read BEFORE it is sent.
+   *
+   * `internetMessageId` is the RFC5322 Message-ID. Exchange stamps it at DRAFT CREATION, and the
+   * Sent Items copy carries the same value, so it survives the send. It is also the only id that
+   * survives the MAILBOX: a Graph `id` is scoped to one mailbox, so the same email has different
+   * ids in matthew@ and submissions@ and the same internetMessageId in both. That is what makes
+   * it the idempotency key for outreach_touches.
+   *
+   * Read this before calling sendDraft: the send-time touch needs the keys, and the sweep needs
+   * to recognise the same email tomorrow rather than logging it twice.
+   */
+  async getMessageKeys(
+    messageId: string,
+    mailbox?: string
+  ): Promise<{ internetMessageId: string | null; conversationId: string | null }> {
+    const base = mailbox ? `/users/${encodeURIComponent(mailbox)}` : "/me";
+    const r = await graphRequest(`${base}/messages/${messageId}?$select=internetMessageId,conversationId`);
+    return {
+      internetMessageId: (r.internetMessageId as string | undefined) ?? null,
+      conversationId: (r.conversationId as string | undefined) ?? null,
+    };
+  },
+
+  /**
    * All messages across the mailbox (incl. Sent Items) that involve `address`.
    * Uses Graph $search, which scans from/to/cc across all folders. $search can't be
    * combined with $orderby, so callers sort the returned list themselves. Drafts filtered out.

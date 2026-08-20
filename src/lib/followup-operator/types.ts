@@ -92,6 +92,13 @@ export interface OutreachTouchRow {
   body: string | null;
   outcome: string | null;
   graph_message_id: string | null;
+  /** RFC5322 Message-ID. Stable across the send AND across mailboxes, unlike
+   *  graph_message_id, which Graph scopes to one mailbox. */
+  internet_message_id: string | null;
+  /** Generated: coalesce(internet_message_id, graph_message_id). Never written by a client. */
+  message_key: string | null;
+  /** The mailbox this left from or arrived in. NULL means the connected account. */
+  mailbox: string | null;
   conversation_id: string | null;
   occurred_at: string;
   created_at: string;

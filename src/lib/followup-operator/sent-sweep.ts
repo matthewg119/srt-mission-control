@@ -12,6 +12,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { microsoft, type GraphMessage } from "@/lib/microsoft";
 import { logTouch, upsertProspect, updateProspect, getProspectByEmail, getProspectByConversation, normalizeEmail } from "./prospects";
 import { nextTouchAt, snapTo9amET, totalSteps } from "./cadence";
+import { connectedMailbox } from "@/config/outreach-mailboxes";
 import type { OutreachProspectRow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -158,10 +159,30 @@ async function recordOutbound(p: OutreachProspectRow, msg: GraphMessage, sentAt:
  * Idempotent by Graph message id: the window deliberately overlaps the previous
  * run, and a message already in outreach_touches leaves the clock untouched.
  */
-export async function runSentMailSweep(opts?: { sinceISO?: string; max?: number }): Promise<SweepResult> {
+export async function runSentMailSweep(opts?: {
+  sinceISO?: string;
+  max?: number;
+  /**
+   * Buffer the whole window and process it OLDEST FIRST.
+   *
+   * listMessages hardcodes $orderby=receivedDateTime desc, and recordOutbound() sets
+   * first_sent_at on the FIRST sighting of a prospect and derives the whole ladder from it.
+   * So a wide newest-first replay anchors every prospect on their most recent email and walks
+   * the steps backwards. Harmless for the daily 24h window, wrong for a 60-day backfill.
+   */
+  replay?: boolean;
+  /** Backfills pass false: the watermark is correctly parked at today and must not rewind. */
+  writeWatermark?: boolean;
+}): Promise<SweepResult> {
   const now = new Date();
   const max = opts?.max ?? DEFAULT_MAX;
   const domains = excludedDomains();
+  // This sweep still reads /me only. Every touch it writes therefore left from the connected
+  // account, and naming it now means the daily budget can attribute these rows correctly the
+  // moment rotation ships. When outbound starts leaving from submissions@ this must become a
+  // loop over outreachMailboxes(): mail sent from a shared mailbox lands in THAT mailbox's Sent
+  // Items and /me never sees it, so the ladder would stall for half the pipeline.
+  const mailbox = connectedMailbox();
 
   const state = await readSweepState();
   const windowStart =
@@ -182,7 +203,7 @@ export async function runSentMailSweep(opts?: { sinceISO?: string; max?: number 
   };
 
   try {
-    for await (const msg of microsoft.listMessages({
+    const pageSource = microsoft.listMessages({
       folder: "sentitems",
       filter: `receivedDateTime ge ${windowStart}`,
       top: 50,
@@ -196,8 +217,31 @@ export async function runSentMailSweep(opts?: { sinceISO?: string; max?: number 
         "sentDateTime",
         "bodyPreview",
         "isDraft",
+        // The real idempotency key. Stable across the send and across mailboxes, unlike `id`,
+        // which Graph scopes to one mailbox.
+        "internetMessageId",
       ],
-    })) {
+    });
+
+    // Oldest-first when replaying, so first_sent_at lands on the real first email. The daily
+    // path keeps the streaming iterator: a 24h window cannot contain two touches for one
+    // prospect out of order in a way that matters, and buffering it would be pure cost.
+    const messages: AsyncIterable<GraphMessage> | GraphMessage[] = opts?.replay
+      ? await (async () => {
+          const buf: GraphMessage[] = [];
+          for await (const m of pageSource) {
+            buf.push(m);
+            if (buf.length >= max) break;
+          }
+          const at = (m: GraphMessage) =>
+            (m as GraphMessage & { sentDateTime?: string }).sentDateTime ?? m.receivedDateTime ?? "";
+          buf.sort((a, b) => at(a).localeCompare(at(b)));
+          console.log(`[followup] replay: ${buf.length} messages, oldest first`);
+          return buf;
+        })()
+      : pageSource;
+
+    for await (const msg of messages) {
       result.scanned++;
       if (result.scanned > max) break;
       if (msg.isDraft) continue;
@@ -217,7 +261,7 @@ export async function runSentMailSweep(opts?: { sinceISO?: string; max?: number 
         if (resolved.created) result.created++;
 
         // The idempotency gate. A repeat sighting logs nothing and moves nothing.
-        const isNew = await logTouch({
+        const logged = await logTouch({
           prospect_id: resolved.prospect.id,
           direction: "outbound",
           channel: "email",
@@ -226,12 +270,22 @@ export async function runSentMailSweep(opts?: { sinceISO?: string; max?: number 
           body: msg.bodyPreview ?? null,
           outcome: "sent",
           graph_message_id: msg.id,
+          internet_message_id:
+            (msg as GraphMessage & { internetMessageId?: string }).internetMessageId ?? null,
+          mailbox,
           conversation_id: msg.conversationId ?? null,
           occurred_at: sentAt.toISOString(),
           metadata: { source: "sent_sweep" },
         });
 
-        if (!isNew) {
+        // A failed write is NOT a duplicate, and conflating the two is what kept this table
+        // empty for three weeks while the cron went green every morning. Throw, so the catch
+        // below leaves the watermark alone and the next run re-reads the same window.
+        if (logged.status === "error") {
+          throw new Error(`logTouch failed for ${address}: ${logged.message}`);
+        }
+
+        if (logged.status === "duplicate") {
           result.skippedDuplicate++;
           continue;
         }
@@ -241,7 +295,7 @@ export async function runSentMailSweep(opts?: { sinceISO?: string; max?: number 
       }
     }
 
-    await writeSweepState(now);
+    if (opts?.writeWatermark !== false) await writeSweepState(now);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[followup] sent sweep failed:", message);
