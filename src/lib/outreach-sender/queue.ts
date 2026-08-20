@@ -201,10 +201,22 @@ export async function drainSendQueue(opts?: { dry?: boolean }): Promise<DrainRes
       .eq("id", row.prospect_id)
       .maybeSingle();
 
-    if (!p || p.last_reply_at || p.paused || p.state === "CLOSED") {
+    // Any inbound at all since this was queued, not only one that set last_reply_at. The reply
+    // sweep runs immediately before this drain, so a reply that arrived at 08:04 while the queue
+    // was draining is already recorded by the time we look. Checking the touch log as well as the
+    // denormalized column means a failure in applyReply cannot cost us a send to someone who
+    // answered.
+    const { count: inbound } = await supabaseAdmin
+      .from("outreach_touches")
+      .select("id", { count: "exact", head: true })
+      .eq("prospect_id", row.prospect_id)
+      .eq("direction", "inbound");
+
+    if (!p || p.last_reply_at || inbound || p.paused || p.state === "CLOSED") {
+      const why = p?.last_reply_at || inbound ? "replied" : "paused or closed";
       await supabaseAdmin
         .from("outreach_send_queue")
-        .update({ status: "canceled", error: p?.last_reply_at ? "replied" : "paused or closed", updated_at: new Date().toISOString() })
+        .update({ status: "canceled", error: why, updated_at: new Date().toISOString() })
         .eq("id", row.id);
       result.canceled++;
       continue;

@@ -19,6 +19,9 @@ export interface NudgeCandidate {
 
 export interface NudgeSelection {
   candidates: NudgeCandidate[];
+  /** Excluded because a real conversation is under way. Named, not counted: these are the ones
+   *  Matthew wants to handle himself, so he should be able to see who they were. */
+  skippedWarm: Array<{ email: string; reason: string }>;
   /** Sent on the right day but with no usable anchor. Reported, never silently dropped: this is
    *  the signature of a send that predates the touch-log fix. */
   skippedNoAnchor: Array<{ email: string; reason: string }>;
@@ -52,9 +55,52 @@ export async function selectNudgeCandidates(now = new Date()): Promise<NudgeSele
   const rows = (data ?? []) as unknown as OutreachProspectRow[];
   const candidates: NudgeCandidate[] = [];
   const skippedNoAnchor: NudgeSelection["skippedNoAnchor"] = [];
+  const skippedWarm: NudgeSelection["skippedWarm"] = [];
   let skippedAlreadyNudged = 0;
 
   for (const p of rows) {
+    // ── COLD ONLY. Anything with a conversation in it is Matthew's to handle. ──────────
+    // The row-level filters above already require SENT_NO_REPLY, step 1 and no last_reply_at.
+    // These catch warmth that never produced an EMAIL reply: a phone call, or an audit thread
+    // that has moved past the permission ask.
+    if ((p.call_attempts ?? 0) > 0 || p.last_call_at) {
+      skippedWarm.push({ email: p.email, reason: "he has called them" });
+      continue;
+    }
+
+    // ANY inbound at all, not just one that set last_reply_at. An out-of-office does not set it
+    // by design, but the belt to that braces is cheap and this is the one mistake that actually
+    // costs something: emailing a person who is already mid-conversation.
+    const { count: inboundCount } = await supabaseAdmin
+      .from("outreach_touches")
+      .select("id", { count: "exact", head: true })
+      .eq("prospect_id", p.id)
+      .eq("direction", "inbound");
+    if (inboundCount) {
+      skippedWarm.push({ email: p.email, reason: `${inboundCount} inbound message(s) on file` });
+      continue;
+    }
+
+    // The audit thread's own view. `revealed` means the price and the report have gone over,
+    // and a Loom or a redesign means real work was done for them: none of that is a cold lead
+    // who has simply not answered yet.
+    if (p.audit_report_id) {
+      const { data: report } = await supabaseAdmin
+        .from("audit_reports")
+        .select("outreach_stage, loom_url, redesign_url")
+        .eq("id", p.audit_report_id)
+        .maybeSingle();
+      const stage = (report?.outreach_stage as string | null) ?? null;
+      if (stage && stage !== "drafted" && stage !== "awaiting_intake") {
+        skippedWarm.push({ email: p.email, reason: `audit thread is at "${stage}"` });
+        continue;
+      }
+      if (report?.loom_url || report?.redesign_url) {
+        skippedWarm.push({ email: p.email, reason: report.loom_url ? "a Loom was recorded" : "a redesign was built" });
+        continue;
+      }
+    }
+
     // Every outbound email touch for this prospect, oldest first. One query per candidate is
     // fine: this list is tens of rows, once a day.
     const { data: touches } = await supabaseAdmin
@@ -105,6 +151,7 @@ export async function selectNudgeCandidates(now = new Date()): Promise<NudgeSele
 
   return {
     candidates,
+    skippedWarm,
     skippedNoAnchor,
     skippedAlreadyNudged,
     windowStart: start.toISOString(),

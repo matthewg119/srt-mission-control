@@ -12,7 +12,7 @@ import { etDateKey, startOfETDay } from "@/lib/followup-operator/cadence";
 import { mailboxHeadroom, headroomGauge } from "@/lib/followup-operator/mailboxes";
 import { followupChannel } from "@/lib/followup-operator/digest";
 import { selectNudgeCandidates, type NudgeCandidate } from "./select";
-import { buildNudgeHtml, nudgeBodyPreview } from "./body";
+import { buildNudgeHtml, buildNudgeBody, greetingName } from "./body";
 import { enqueueSend, senderEnabled, nudgeDailyCap } from "./queue";
 
 export interface NudgeRunResult {
@@ -20,9 +20,10 @@ export interface NudgeRunResult {
   skippedDuplicate: number;
   skippedCapped: number;
   skippedNoAnchor: Array<{ email: string; reason: string }>;
+  skippedWarm: Array<{ email: string; reason: string }>;
   skippedAlreadyNudged: number;
   overflow: Array<{ email: string; mailbox: string }>;
-  candidates: Array<{ email: string; mailbox: string; anchorMessageId: string; sendAfter: string | null }>;
+  candidates: Array<{ email: string; name: string | null; mailbox: string; anchorMessageId: string; sendAfter: string | null }>;
   dry: boolean;
   aborted?: string;
 }
@@ -50,6 +51,7 @@ export async function runNudgeSend(opts?: { dry?: boolean; force?: boolean }): P
     skippedDuplicate: 0,
     skippedCapped: 0,
     skippedNoAnchor: [],
+    skippedWarm: [],
     skippedAlreadyNudged: 0,
     overflow: [],
     candidates: [],
@@ -80,6 +82,7 @@ export async function runNudgeSend(opts?: { dry?: boolean; force?: boolean }): P
 
   const selection = await selectNudgeCandidates(now);
   result.skippedNoAnchor = selection.skippedNoAnchor;
+  result.skippedWarm = selection.skippedWarm;
   result.skippedAlreadyNudged = selection.skippedAlreadyNudged;
 
   if (channel && !dry) {
@@ -92,7 +95,6 @@ export async function runNudgeSend(opts?: { dry?: boolean; force?: boolean }): P
   }
 
   const cap = nudgeDailyCap();
-  const html = await buildNudgeHtml();
   let queuedSoFar = 0;
 
   for (const c of selection.candidates as NudgeCandidate[]) {
@@ -103,9 +105,13 @@ export async function runNudgeSend(opts?: { dry?: boolean; force?: boolean }): P
       continue;
     }
 
+    // The greeting is per recipient, so the body is built inside the loop, not hoisted.
+    const greeting = greetingName(c.prospect.name);
+
     if (dry) {
       result.candidates.push({
         email: c.prospect.email,
+        name: greeting,
         mailbox: c.mailbox,
         anchorMessageId: c.anchorMessageId,
         sendAfter: null,
@@ -113,6 +119,8 @@ export async function runNudgeSend(opts?: { dry?: boolean; force?: boolean }): P
       queuedSoFar++;
       continue;
     }
+
+    const html = await buildNudgeHtml(c.prospect.name);
 
     const outcome = await enqueueSend(
       {
@@ -140,6 +148,7 @@ export async function runNudgeSend(opts?: { dry?: boolean; force?: boolean }): P
       .from("outreach_send_queue").select("send_after").eq("id", outcome.id).maybeSingle();
     result.candidates.push({
       email: c.prospect.email,
+      name: greeting,
       mailbox: c.mailbox,
       anchorMessageId: c.anchorMessageId,
       sendAfter: (row?.send_after as string | null) ?? null,
@@ -180,18 +189,31 @@ export function formatNudgeDryRun(r: NudgeRunResult, windowLabel: string): strin
   lines.push(`Daily cap (shared across mailboxes): ${nudgeDailyCap()}`);
   lines.push(`Kill switch OUTREACH_SENDER_ENABLED: ${senderEnabled() ? "ARMED" : "not set, so nothing can send"}`);
   lines.push("");
-  lines.push("BODY, exactly as it will render:");
+  const sample = r.candidates[0];
+  lines.push("BODY, exactly as it will render. The greeting is PER RECIPIENT:");
   lines.push("-".repeat(78));
-  for (const l of nudgeBodyPreview().split("\n")) lines.push(`  ${l}`);
+  for (const l of buildNudgeBody(sample?.name ?? null).split(/\r?\n/)) lines.push(`  ${l}`);
+  lines.push("  ");
+  lines.push("  [signature block supplies: Thanks, / Matthew Garcia / Search Retrieval Tactics / ...]");
   lines.push("-".repeat(78));
+  // A missing name is not an error and not a "Hi there". The house rule is a name and a comma
+  // or no greeting at all, so these open on the first line, and that is worth seeing up front.
+  const noName = r.candidates.filter((c) => !c.name);
+  if (noName.length) {
+    lines.push(`${noName.length} have no usable first name and open with NO greeting: ${noName.map((c) => c.email).join(", ")}`);
+  }
   lines.push("");
   lines.push(`QUEUE (${r.candidates.length}):`);
   if (!r.candidates.length) lines.push("  (nobody is due)");
   for (const c of r.candidates) {
-    lines.push(`  ${c.email.padEnd(40)} from ${c.mailbox.padEnd(26)} thread ${c.anchorMessageId.slice(0, 24)}...`);
-    lines.push(`  ${" ".repeat(40)} send ${c.sendAfter ?? "on the next 5-minute tick, jittered 5-8 min apart"}`);
+    lines.push(`  ${(c.name ?? "(no name)").padEnd(11)} ${c.email.padEnd(40)} from ${c.mailbox}`);
+    lines.push(`  ${" ".repeat(11)} ${" ".repeat(40)} thread ${c.anchorMessageId.slice(0, 22)}... send ${c.sendAfter ?? "next tick, 5-8 min apart"}`);
   }
   lines.push("");
+  if (r.skippedWarm.length) {
+    lines.push(`NOT NUDGED, a conversation is already going, yours to handle (${r.skippedWarm.length}):`);
+    for (const w of r.skippedWarm) lines.push(`  ${w.email.padEnd(40)} ${w.reason}`);
+  }
   if (r.skippedAlreadyNudged) lines.push(`Skipped, already nudged: ${r.skippedAlreadyNudged}`);
   if (r.skippedNoAnchor.length) {
     lines.push(`Skipped, no usable thread anchor (${r.skippedNoAnchor.length}):`);
