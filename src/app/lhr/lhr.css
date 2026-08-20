@@ -1,0 +1,279 @@
+/*
+ * /LHR — layout only.
+ *
+ * Every colour, radius and easing here comes from .scan-root in ../scan/scan.css,
+ * which the layout applies alongside .lhr-root. Do NOT redeclare a token in this file:
+ * one design system, one place it is defined.
+ *
+ * The .vsl-* player styles are NOT here either. They live in
+ * src/components/gated-vsl.css beside the component that emits them, and the layout
+ * imports that file too.
+ *
+ * The reference page is a stark, centered, single-column bridge page, so this is
+ * narrower and more centered than funnel.css: the whole page is one column of text
+ * ending in one button, and nothing competes with the button.
+ */
+
+.lhr-root {
+  --lhr-maxw: 44rem;
+}
+
+.lhr-main {
+  max-width: var(--lhr-maxw);
+  margin: 0 auto;
+  padding: 2rem 1.25rem 5rem;
+  text-align: center;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+/* The funnel has no exit. This is a div, never a link, and there is no nav. */
+.lhr-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 2.5rem;
+}
+
+.lhr-brand-mark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 1.05rem;
+}
+
+.lhr-brand-mark i {
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: #1b65a7;
+}
+.lhr-brand-mark i:nth-child(1) { height: 60%; }
+.lhr-brand-mark i:nth-child(2) { height: 80%; }
+.lhr-brand-mark i:nth-child(3) { height: 100%; background: var(--accent-brand); }
+
+.lhr-eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-brand);
+  background: var(--accent-brand-dim);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+/*
+ * The display headline. Italic and tight, which is what carries the reference page's
+ * urgency; the accented clause is the promise itself.
+ */
+.lhr-h1 {
+  font-size: clamp(1.7rem, 5.6vw, 2.7rem);
+  line-height: 1.14;
+  font-weight: 700;
+  font-style: italic;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.25rem;
+  color: var(--card-foreground);
+  text-wrap: balance;
+}
+
+.lhr-h1 em {
+  font-style: italic;
+  color: var(--accent-brand);
+}
+
+.lhr-sub {
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+  margin: 0 auto 2.25rem;
+  max-width: 34rem;
+  text-wrap: pretty;
+}
+
+.lhr-sub strong {
+  color: var(--foreground);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+.lhr-btn {
+  width: 100%;
+  padding: 1rem 1.25rem;
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #04252b;
+  background: var(--accent-brand);
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  transition: filter 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.lhr-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.lhr-btn:disabled { opacity: 0.6; cursor: default; }
+
+/*
+ * The hero button is the only thing on the first screen after the copy, so it gets the
+ * glow the reference page puts on it. Capped in width so it does not stretch to the
+ * full text column on desktop and stop reading as a button.
+ */
+.lhr-btn-hero {
+  max-width: 26rem;
+  margin: 0 auto;
+  display: block;
+  box-shadow: 0 0 0 1px var(--accent-brand-dim), 0 8px 30px rgba(0, 201, 167, 0.28);
+}
+
+/* The post-video CTA is an anchor, so it needs the block/centering a button gets free. */
+.lhr-btn-link {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+
+/* ── Cards, forms ───────────────────────────────────────────────────────── */
+
+.lhr-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 1.5rem;
+  text-align: left;
+  margin: 0 auto;
+  max-width: 30rem;
+}
+
+.lhr-card h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.5rem;
+  color: var(--card-foreground);
+}
+
+.lhr-card p {
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.lhr-field {
+  margin-bottom: 1rem;
+}
+
+.lhr-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 0.35rem;
+  color: var(--foreground);
+}
+
+.lhr-input {
+  width: 100%;
+  padding: 0.8rem 0.9rem;
+  font: inherit;
+  font-size: 1rem; /* 16px minimum, or iOS zooms the page on focus */
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  outline: none;
+  transition: border-color 0.15s var(--ease);
+}
+
+.lhr-input:focus {
+  border-color: var(--accent-brand);
+}
+
+.lhr-input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* Visually hidden, but not display:none, because some bots skip hidden inputs. */
+.lhr-hp {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.lhr-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.lhr-consent input {
+  flex: none;
+  margin-top: 0.15rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent-brand);
+}
+
+.lhr-error {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--destructive);
+}
+
+.lhr-reassure {
+  margin: 0.9rem 0 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+
+.lhr-footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.lhr-footer p {
+  margin: 0 0 0.4rem;
+}
+
+.lhr-footer a {
+  color: var(--muted-foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.lhr-footer a:hover {
+  color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lhr-root *,
+  .lhr-root *::before,
+  .lhr-root *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

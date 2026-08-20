@@ -22,6 +22,9 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { PIXEL_ID } from "@/config/medspa-funnel";
 import "../scan/scan.css";
+// <GatedVSL/> emits unprefixed .vsl-* classes, so its styles live beside the
+// component and are imported by every route that renders it, not just this one.
+import "@/components/gated-vsl.css";
 import "./funnel.css";
 
 export const metadata: Metadata = {

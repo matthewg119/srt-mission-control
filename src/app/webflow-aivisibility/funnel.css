@@ -80,129 +80,13 @@
   max-width: 38rem;
 }
 
-/* ── Video ──────────────────────────────────────────────────────────────── */
-
-.vsl {
-  margin: 0 0 2rem;
-}
-
-.vsl-frame {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.vsl-video {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-}
-
-.vsl-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  border: 0;
-  cursor: pointer;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  font: inherit;
-}
-
-.vsl-overlay-icon {
-  display: grid;
-  place-items: center;
-  width: 4rem;
-  height: 4rem;
-  border-radius: 50%;
-  background: var(--accent-brand);
-  color: #04252b;
-  font-size: 1.5rem;
-  padding-left: 4px;
-}
-
-.vsl-overlay-label {
-  font-size: 0.95rem;
-  font-weight: 600;
-}
-
-.vsl-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.65rem 0.25rem 0;
-}
-
-.vsl-btn {
-  flex: none;
-  width: 2.1rem;
-  height: 2.1rem;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--secondary);
-  color: var(--foreground);
-  cursor: pointer;
-  font-size: 0.85rem;
-  line-height: 1;
-}
-
 /*
- * Presentation only. There is no input and no pointer target here, because a
- * draggable track is a seek bar and a seek bar defeats the gate.
+ * ── Video: see src/components/gated-vsl.css
+ *
+ * The .vsl-* rules used to live here. <GatedVSL/> emits unprefixed class names, so
+ * keeping them in one route stylesheet meant the next funnel to use the player got
+ * an unstyled video. The layout imports that file alongside this one.
  */
-.vsl-track {
-  flex: 1;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--secondary);
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.vsl-track-fill {
-  height: 100%;
-  background: var(--accent-brand);
-  transition: width 0.25s linear;
-}
-
-.vsl-placeholder {
-  aspect-ratio: 16 / 9;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  text-align: center;
-  padding: 1.5rem;
-  margin: 0 0 2rem;
-  border: 1px dashed var(--input);
-  border-radius: var(--radius);
-  background: var(--card);
-}
-
-.vsl-placeholder-title {
-  font-weight: 600;
-  color: var(--card-foreground);
-}
-
-.vsl-placeholder-body {
-  margin: 0;
-  max-width: 28rem;
-  font-size: 0.9rem;
-  line-height: 1.55;
-  color: var(--muted-foreground);
-}
 
 /* ── Stats ──────────────────────────────────────────────────────────────── */
 
