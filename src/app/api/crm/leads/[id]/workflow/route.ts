@@ -32,10 +32,9 @@ import { handleAuditThreadReply } from "@/lib/audit-engine/thread-assistant";
 import {
   runMiniVisibilityCheck,
   draftNoWebsitePitch,
-  formatNoWebsitePitchCard,
+  formatNoWebsitePitchNote,
   createPitchDraft,
 } from "@/lib/audit-engine/no-website-pitch";
-import { getOrCreateAuditChannel } from "@/lib/audit-engine/audit-channel";
 
 /** The four thread commands reachable from a button, and what to call them. */
 const THREAD_ACTIONS = {
@@ -236,6 +235,12 @@ async function startAudit(contactId: string, actor: string) {
  * rests on the premise that nothing describing this business was written by them, and that
  * premise is false the moment a site exists. Told about a site it cannot see, the drafter would
  * write the same email anyway.
+ *
+ * ‼️ THE OUTPUT GOES TO OUTLOOK AND TO THIS LEAD'S TIMELINE, AND NOWHERE ELSE. It used to post a
+ * card into #ai-visibility-audits, which is the audit lane's channel — and this lead has no audit
+ * and can never have one, because an audit needs a site to crawl. So the note said "the draft
+ * lands in #ai-visibility-audits" while the CRM showed only a subject and a body, and the draft
+ * that was already being placed in Outlook was never linked from the page the button is on.
  */
 async function startNoWebsitePitch(contactId: string, actor: string) {
   const { data } = await supabaseAdmin
@@ -269,7 +274,7 @@ async function startNoWebsitePitch(contactId: string, actor: string) {
   await addNote({
     contactId,
     title: "No-website pitch started",
-    content: `Researching ${businessName} and asking three buyer questions. The draft lands in #ai-visibility-audits.`,
+    content: `Researching ${businessName} and asking three buyer questions. The draft goes straight into your Outlook drafts, and the link lands on this timeline in about 90 seconds.`,
     origin: "mission_control",
     actor,
   }).catch(() => {});
@@ -278,42 +283,46 @@ async function startNoWebsitePitch(contactId: string, actor: string) {
     (async () => {
       try {
         const city = [contact.biz_city, contact.biz_state].filter(Boolean).join(", ") || null;
-        const check = await runMiniVisibilityCheck(businessName, city);
+        const outcome = await runMiniVisibilityCheck(businessName, city);
 
-        if (!check) {
-          // The same refusal researchViaClaude makes, surfaced rather than swallowed. A pitch
-          // about a business we could not find is a pitch about a business that may not exist.
+        // ‼️ ONLY A FAILED RESEARCH CALL STOPS THIS, and the distinction is the whole fix. The
+        // three misses that mean "nothing public describes this business" come back as a real
+        // check with identity: null, because that is not an error, it is the finding — and it is
+        // the strongest one this lane can carry. See ResearchMiss in claude-research.ts.
+        if (!outcome.ok) {
           await addNote({
             contactId,
             title: "No-website pitch failed",
-            content: `Could not identify "${businessName}" from any third-party source, so there was nothing to write from. Check the spelling, or add a city.`,
+            content: `${outcome.detail} Nothing was drafted, and this says nothing about the prospect. Press No website again.`,
             origin: "mission_control",
             actor,
           }).catch(() => {});
           return;
         }
 
+        const check = outcome.check;
         const draft = await draftNoWebsitePitch(check, businessName, contact.first_name);
         // Signed with the same Outlook block every other SRT email uses, and left as a DRAFT.
         // Nothing on this lane sends: microsoft.sendDraft is not imported here and must not be.
+        //
+        // ‼️ THE MAILBOX IS PICKED BY THE ROTATION, INSIDE createPitchDraft. This route must
+        // never read OUTREACH_MAILBOX or submissionsMailbox() itself — chooseOutreachMailbox()
+        // is the only thing that decides, and a second selection here is how wrap-card.ts ended
+        // up outside the rotation. When every mailbox is at its cap it places nothing and says
+        // so in mailboxNote, which the note below prints in every state.
         const made = await createPitchDraft(draft, contact.email);
-        const channel = (await getOrCreateAuditChannel()).id;
-        const post = await slack.postMessage(
-          channel,
-          formatNoWebsitePitchCard(businessName, check, draft, made.placed, made.mailboxNote)
-        );
 
         await addNote({
           contactId,
-          title: draft.rejectedFindings.length ? "No-website pitch REJECTED by the linter" : "No-website pitch drafted",
-          content: draft.rejectedFindings.length
-            ? `The draft failed the linter and was not approved: ${draft.rejectedFindings.join("; ")}. It is posted in #ai-visibility-audits labelled as rejected.`
-            : `Subject: ${draft.subject}\n\n${draft.body}`,
+          title: draft.rejectedFindings.length
+            ? "No-website pitch REJECTED by the linter"
+            : made.placed.length
+              ? "No-website pitch drafted"
+              : "No-website pitch written, but no draft was placed",
+          content: formatNoWebsitePitchNote(businessName, check, draft, made.placed, made.mailboxNote),
           origin: "mission_control",
           actor,
         }).catch(() => {});
-
-        if (!post?.ts) console.warn("[crm/workflow] no-website pitch posted without a ts");
       } catch (e) {
         const message = (e as Error)?.message ?? String(e);
         console.error("[crm/workflow] no-website pitch threw:", message);
@@ -329,7 +338,7 @@ async function startNoWebsitePitch(contactId: string, actor: string) {
   );
 
   return NextResponse.json(
-    { ok: true, running: true, message: "Researching. The draft lands in #ai-visibility-audits in about 90 seconds." },
+    { ok: true, running: true, message: "Researching. The draft lands in your Outlook drafts in about 90 seconds, and on this timeline." },
     { status: 202 }
   );
 }

@@ -5,8 +5,10 @@
 // Every button is one POST to /api/crm/leads/[id]/workflow, which hands the job to
 // the audit engine and answers 202 straight away. Nothing here polls and nothing here
 // waits: an audit is four to six minutes and the follow-on commands are twenty to
-// ninety seconds, all of it happening in #ai-visibility-audits. This component's job
-// is to fire it and then say, honestly, where to go and look.
+// ninety seconds. This component's job is to fire it and then say, honestly, where to
+// go and look — and that is no longer one place. The audit ladder works in
+// #ai-visibility-audits; No website has no audit and therefore no thread, so it drafts
+// into Outlook and reports back on this lead's timeline.
 //
 // Disabled states are reasons, not decoration. Every one of the four follow-ons reads
 // a finished report and refuses without one, so greying them out with the reason
@@ -63,7 +65,7 @@ const WORKFLOWS: WorkflowDef[] = [
     // ladder above it. It is the alternative to that whole ladder for a prospect who has no site.
     action: "nowebsite",
     label: "No website",
-    hint: "Asks 3 buyer questions, then drafts the pitch. No audit needed",
+    hint: "Asks 3 buyer questions, then drafts the pitch into Outlook. No audit needed",
     needsAudit: false,
     needsNoWebsite: true,
   },
@@ -111,7 +113,7 @@ export function LeadWorkflows({
           w.action === "audit"
             ? "Running. The scorecard lands in Slack in about 5 minutes, and the score comes back here."
             : w.action === "nowebsite"
-              ? "Researching. The draft lands in #ai-visibility-audits in about 90 seconds, and on this timeline."
+              ? "Researching. The draft lands in your Outlook drafts in about 90 seconds, and the link comes back on this timeline."
               : "Running in the audit thread.",
         url: json.threadUrl ?? threadUrl ?? undefined,
       });

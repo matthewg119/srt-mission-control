@@ -357,3 +357,22 @@ export const NO_WEBSITE_LINE =
   "you do not have a site of your own, so when someone asks an engine for a business like yours " +
   "there is nothing of yours for it to cite. It can only repeat what a directory, a review site " +
   "or a competitor's page says about you, and none of those are written by you";
+
+/**
+ * ‼️ THE NOTHING-TO-FIND LINE. Third sibling of CRAWL_BLOCK_LINE and NO_WEBSITE_LINE, and a
+ * constant for the reason stated above both of them: asked to phrase this itself, a model writes
+ * "you are invisible to AI", which is unfalsifiable, reads as a scare line, and is not what was
+ * observed.
+ *
+ * What WAS observed is narrow and reproducible: a web search could not assemble a description of
+ * this business out of anything public. That is all this line may say.
+ *
+ * ‼️ IT MUST NOT CLAIM THERE IS NO GOOGLE LISTING, no directory entry and no reviews. The premise
+ * of this whole lane is a business with a Google profile and no site, so "you have no listing" is
+ * a sentence the prospect disproves from his own phone in ten seconds — fatal for a pitch whose
+ * entire basis is "you can verify this yourself". Same discipline as CRAWL_BLOCK_LINE, which
+ * reports a refused request rather than concluding a site is invisible.
+ */
+export const NOTHING_TO_FIND_LINE =
+  "I went looking for you the way an engine does, and I could not put together a description of " +
+  "what you do out of anything public. Nothing to read means nothing to cite";

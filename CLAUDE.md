@@ -523,13 +523,26 @@ have to be buying questions. Someone who wants to be found by future employees i
 pointed at a different question. Promising to run their job ads is not, and `offerBlock()` hands the
 model `OFFER_TIERS` as a closed list so "can you also do X" has a definite answer.
 
-### The "No website" button (`no-website-pitch.ts`, 2026-08-19)
+### The "No website" button (`no-website-pitch.ts`, 2026-08-19; Outlook lane 2026-08-20)
 
 A business with a Google profile and nothing else is the best AEO lead SRT has, and pitching one
 used to mean running the whole audit at it. This is the cheap version of the same conversation:
 **three buyer questions and one permission email, about ninety seconds.** Right rail of the lead
 page, under Loom, `action: "nowebsite"` on the existing workflow route. Run the real audit after
 they say yes.
+
+> ‼️ **IT DRAFTS INTO OUTLOOK AND REPORTS ON THE LEAD TIMELINE. IT DOES NOT POST TO SLACK**, and
+> `formatNoWebsitePitchCard` is DELETED rather than kept beside `formatNoWebsitePitchNote`.
+> #ai-visibility-audits is the AUDIT lane's channel, and this lead has no audit and can never have
+> one — an audit needs a site to crawl. So the timeline said "the draft lands in
+> #ai-visibility-audits" while the CRM showed nothing but a subject and a body, and the Outlook
+> draft the lane was already placing was never linked from the page the button is on.
+>
+> The note prints, in this order: **the mailbox line first, in every state**, then the draft link
+> per mailbox, then the questions and verdicts, then the angle, then the subject and body. The
+> mailbox line leads because `No draft created: every mailbox is at its daily cap … Tomorrow.` is
+> the single most important thing this note can say, and it used to be said only on a card nobody
+> opened.
 
 **Enabled by the ABSENCE of a website**, which makes it the only control in that panel a website
 disables rather than enables. Every angle it can write rests on nothing describing this business
@@ -543,7 +556,7 @@ re-checks and 400s, so the disabled state is not the guard.
 > own prompt bypasses the linter and the no-fabrication rules silently, and the failure looks like
 > slightly worse copy rather than like a bug.
 
-> ‼️ **THREE ANGLES, PICKED BY THE EVIDENCE, and the gate is honesty not preference.** `substitute`
+> ‼️ **FOUR ANGLES, PICKED BY THE EVIDENCE, and the gate is honesty not preference.** `substitute`
 > (the engine named others, you were not among them) and `buying-question` assert that we ASKED an
 > engine something, so `pickAngle` offers them only when an engine call actually returned data.
 > When none did, it falls through to `written-by-others`, which rests solely on research. Same rule
@@ -553,6 +566,37 @@ re-checks and 400s, so the disabled state is not the guard.
 >
 > An absence angle is also skipped when the business actually DID appear in every answer. Writing
 > "you were not in it" to someone who was is the one error the prospect corrects on the first line.
+
+> ‼️ **A RESEARCH MISS IS THE FOURTH ANGLE, NOT A FAILURE** (2026-08-20). `researchViaClaude` used
+> to collapse four outcomes into a bare `null` and the button gave up on all four, which is how
+> JBR CRANE SERVICES produced two timeline notes and no email. `ResearchMiss` splits them, and the
+> split is about **who the failure is about**:
+>
+> | miss | means | the button |
+> |---|---|---|
+> | `call_failed` | the request threw or timed out | fails, note says try again |
+> | `unidentified` / `thin_profile` / `no_sources` | nothing public describes this business | drafts `nothing-to-find` |
+>
+> The second row is not an error, it is **the finding**, and the strongest one this lane carries.
+> The old refusal — a pitch about a business we could not find is a pitch about a business that
+> might not exist — is right for the AUDIT, where the whole report is built out of the profile. It
+> is wrong here: the prospect is already a lead with a name, a phone and an email on the row, so
+> their existence is not in question. What is in question is whether anything public describes
+> them, and the answer came back no.
+>
+> `MiniCheck.identity` is therefore `BusinessIdentity | null` and `researched` is its flag.
+> `pickAngle` gates in **BOTH** directions: `needsUnresearched` is skipped when research
+> succeeded, and the three research-backed angles are skipped when it did not. One direction alone
+> either invents the thing the email is built on or throws away everything research found.
+>
+> ‼️ **`NOTHING_TO_FIND_LINE` is a constant and the copy is deliberately narrow.** It may say a
+> search could not assemble a description. It may **NOT** say they have no Google listing, no
+> reviews, no directory entry, or that they are invisible — the premise of this whole lane is a
+> business **with** a Google profile, so that is a sentence the prospect disproves from his own
+> phone in ten seconds, on a pitch whose entire basis is "you can verify this yourself". Same
+> discipline as `CRAWL_BLOCK_LINE`, which reports a refused request rather than concluding a site
+> is invisible. `miniCheckContext`'s unresearched branch is thin for the same reason: name, city,
+> and the fact that nothing came back. Nothing else is in the prompt to reach for.
 
 **The three questions are template-generated, not model-written.** `classify.ts` writes 20 because
 an audit measures a whole buying journey; this measures one thing, and a template cannot invent a
@@ -578,8 +622,9 @@ drop prints all 20: the email states one finding as fact, and the only way to se
 fact is right is to see what it came from. A refused draft is posted too, labelled as rejected,
 never silently swallowed.
 
-Probes: `scripts/_probe-no-website-pitch.ts` (synthetic checks, both the engines-answered and the
-engines-silent case) and `scripts/_probe-own-domain.ts` (19 real URLs).
+Probes: `scripts/_probe-no-website-pitch.ts` (synthetic checks: engines-answered, engines-silent,
+and research-missed, plus the reverse gate that `nothing-to-find` is never picked for a researched
+check) and `scripts/_probe-own-domain.ts` (19 real URLs).
 
 ## /scan — the self-serve public funnel (2026-08-05)
 `srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
@@ -776,6 +821,32 @@ links to the other; neither fights the other's schema.
   previous run and a re-seen message leaves the clock alone. It filters on `receivedDateTime`,
   not `sentDateTime`, because `listMessages` hardcodes `$orderby=receivedDateTime desc` and
   Graph rejects a filter and sort on two different date properties.
+
+  > ‼️ **BOTH SWEEPS LOOP `outreachMailboxes()`, NOT `/me`** (2026-08-20), and that is what
+  > makes the rotation's daily caps real rather than decorative. Mail sent from `submissions@`
+  > lands in **that** mailbox's Sent Items and `/me` never sees it, so its `used` count stayed
+  > at 0 forever, so it was never `full`, so once `matthew@` hit its cap **every** pitch drafted
+  > from `submissions@` from then on, uncapped. A one-way door, not a rotation, and the exact
+  > deliverability risk the caps exist to prevent. `reply-sweep.ts` has the same loop for the
+  > other half of it: a prospect pitched from `submissions@` **replies into `submissions@`**,
+  > so reading `/me` alone kept nudging people who had already answered and addresses that had
+  > already bounced.
+  >
+  > Each touch is attributed to the mailbox it was actually found in, which is what
+  > `mailboxHeadroom()` groups by. Dedup is unchanged: `message_key` is `internetMessageId`,
+  > stable across mailboxes, so a message visible in two writes one row.
+  >
+  > **ONE watermark for the whole run, stamped after every mailbox.** `last_sent_scan_at` /
+  > `last_reply_scan_at` are single columns on a single row; stamping per mailbox would let the
+  > second mailbox's window start after the first had already consumed it. The per-message cap is
+  > counted **per mailbox** (`scannedHere`) for the mirror reason: a shared cumulative counter
+  > lets a busy first mailbox starve the second of its whole window, which is silent data loss
+  > dressed up as a limit.
+  >
+  > Needs `Mail.Read.Shared` on the delegated token for every non-connected mailbox. A permission
+  > failure throws, which leaves the watermark alone and re-reads the window next run — never
+  > swallowed into "0 new messages", the exact shape of the three-week silent failure
+  > `docs/2026-08-20-outreach-touch-key.sql` documents.
 - `src/lib/followup-operator/cadence.ts` — turns `PERMISSION_SEQUENCE[].day` from a prompt
   label into real scheduling. `stepOffsets()` derives `[0,1,2,4,7]` from the sequence itself, so
   editing the ladder in `email-assistant.ts` reschedules the operator with it. Due dates anchor

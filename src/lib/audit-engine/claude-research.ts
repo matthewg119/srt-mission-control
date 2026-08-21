@@ -212,6 +212,24 @@ export interface BusinessIdentity {
   sources: string[];
 }
 
+/**
+ * WHY an identification came back empty. Four outcomes that used to be one bare `null`.
+ *
+ * ‼️ THE SPLIT IS BETWEEN "call_failed" AND EVERYTHING ELSE, and it is a statement about who the
+ * failure is about. A request that threw or timed out says nothing whatsoever about the prospect;
+ * the other three say the same thing three ways, that nothing public describes this business. The
+ * no-website pitch is allowed to build an email on the second group and must never build one on
+ * the first. Same doctrine as run-prompts.ts's status:"no_data": an infrastructure failure is not
+ * a finding about anybody.
+ */
+export type ResearchMiss = "call_failed" | "unidentified" | "thin_profile" | "no_sources";
+
+/** researchViaClaude's answer with the reason kept. `result` and `miss` are exclusive. */
+export interface ClaudeResearchDetailed {
+  result: ClaudeResearchResult | null;
+  miss: ResearchMiss | null;
+}
+
 export interface ClaudeResearchResult {
   /** The SiteResearch the rest of the pipeline consumes, shaped exactly as the OpenAI path's. */
   research: SiteResearch;
@@ -459,14 +477,15 @@ export function describeResearchTarget(target: ResearchTarget): string {
  * research is appended under its own heading, so real first-party text is never thrown away in
  * favour of a directory listing.
  *
- * Returns null when the business cannot be identified — the caller then tries the OpenAI backup
- * and, failing that, fails the audit with a real reason.
+ * `result: null` when the business cannot be identified — the caller then tries the OpenAI backup
+ * and, failing that, fails the audit with a real reason. `miss` names WHICH of the four failures
+ * it was; see ResearchMiss for why that distinction is load-bearing.
  */
-export async function researchViaClaude(
+export async function researchViaClaudeDetailed(
   target: ResearchTarget,
   block: CrawlBlock | null,
   existing?: SiteResearch
-): Promise<ClaudeResearchResult | null> {
+): Promise<ClaudeResearchDetailed> {
   const label = describeResearchTarget(target);
 
   let raw: RawIdentity;
@@ -503,12 +522,12 @@ export async function researchViaClaude(
     raw = data;
   } catch (e) {
     console.error(`[claude-research] ${label}: call failed — ${(e as Error).message}`);
-    return null;
+    return { result: null, miss: "call_failed" };
   }
 
   if (!raw.found) {
     console.error(`[claude-research] ${label}: no identifiable business (found=false)`);
-    return null;
+    return { result: null, miss: "unidentified" };
   }
 
   const identity: BusinessIdentity = {
@@ -531,7 +550,7 @@ export async function researchViaClaude(
     console.error(
       `[claude-research] ${label}: profile too thin (${profile.length} chars) to classify from`
     );
-    return null;
+    return { result: null, miss: "thin_profile" };
   }
 
   // ‼️ A profile with no source is the model answering from memory, which is precisely the
@@ -539,7 +558,7 @@ export async function researchViaClaude(
   // hallucination, and it is indistinguishable from a real answer once it reaches classify.ts.
   if (identity.sources.length === 0) {
     console.error(`[claude-research] ${label}: answer cited no sources`);
-    return null;
+    return { result: null, miss: "no_sources" };
   }
 
   const sources = identity.sources.join(", ");
@@ -559,39 +578,60 @@ export async function researchViaClaude(
 
   if (existing) {
     return {
-      identity,
-      research: {
-        ...existing,
-        source: "site+search",
-        blocked: block,
-        bodyText: [existing.bodyText.trim(), "", "--- Third-party research ---", "", searchText]
-          .join("\n")
-          .slice(0, 16000),
-        pages: [...existing.pages, ...identity.sources.map((url) => ({ url, text: "" }))],
+      miss: null,
+      result: {
+        identity,
+        research: {
+          ...existing,
+          source: "site+search",
+          blocked: block,
+          bodyText: [existing.bodyText.trim(), "", "--- Third-party research ---", "", searchText]
+            .join("\n")
+            .slice(0, 16000),
+          pages: [...existing.pages, ...identity.sources.map((url) => ({ url, text: "" }))],
+        },
       },
     };
   }
 
   return {
-    identity,
-    research: {
-      // Null on the name form, and that is the honest value: there is no site, so nothing
-      // downstream may fetch robots.txt for it or print it as a fallback display name.
-      website: target.kind === "website" ? target.website : null,
-      // Deliberately null, not guessed: these are facts about MARKUP we never saw. site-signals
-      // is skipped entirely on this path for the same reason.
-      title: null,
-      metaDescription: null,
-      siteName: null,
-      headings: [],
-      pages: identity.sources.map((url) => ({ url, text: "" })),
-      bodyText: searchText.slice(0, 16000),
-      schemaHints: [],
-      homepageHtml: "",
-      // "search" = a site exists and we could not read it. "declared" = there is no site.
-      // Only the first is a fact about their crawler setup. See ResearchSource in types.ts.
-      source: target.kind === "website" ? "search" : "declared",
-      blocked: block,
+    miss: null,
+    result: {
+      identity,
+      research: {
+        // Null on the name form, and that is the honest value: there is no site, so nothing
+        // downstream may fetch robots.txt for it or print it as a fallback display name.
+        website: target.kind === "website" ? target.website : null,
+        // Deliberately null, not guessed: these are facts about MARKUP we never saw. site-signals
+        // is skipped entirely on this path for the same reason.
+        title: null,
+        metaDescription: null,
+        siteName: null,
+        headings: [],
+        pages: identity.sources.map((url) => ({ url, text: "" })),
+        bodyText: searchText.slice(0, 16000),
+        schemaHints: [],
+        homepageHtml: "",
+        // "search" = a site exists and we could not read it. "declared" = there is no site.
+        // Only the first is a fact about their crawler setup. See ResearchSource in types.ts.
+        source: target.kind === "website" ? "search" : "declared",
+        blocked: block,
+      },
     },
   };
+}
+
+/**
+ * The audit lane's entry point, unchanged in shape.
+ *
+ * Kept as a wrapper rather than updating twelve call sites: run-audit-pipeline, search-research
+ * and the thin-page path all want "did it work or not" and have nothing to do with WHY. Only the
+ * no-website pitch reads the reason, so only it calls the detailed form.
+ */
+export async function researchViaClaude(
+  target: ResearchTarget,
+  block: CrawlBlock | null,
+  existing?: SiteResearch
+): Promise<ClaudeResearchResult | null> {
+  return (await researchViaClaudeDetailed(target, block, existing)).result;
 }
