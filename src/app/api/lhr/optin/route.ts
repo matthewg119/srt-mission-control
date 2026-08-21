@@ -20,12 +20,16 @@
 // not add a path that skips them.
 
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { supabaseAdmin } from "@/lib/db";
 import { ingestLead } from "@/lib/lead-intake";
+import { sendEvent } from "@/lib/meta-capi";
+import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { hashIp, clientIpFrom } from "@/lib/scan/session";
 import { validateOptin, clean, fieldErrorMessage } from "@/lib/medspa/validate";
 import { ownsQualifyingClinic } from "@/lib/lhr/qualify";
 import { LHR_OPTIN_EVENT, LHR_SOURCE } from "@/lib/lhr/log";
+import { PIXEL_ID } from "@/config/lhr-funnel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +38,49 @@ export const dynamic = "force-dynamic";
 // per-IP ledger counts from a snapshot seconds old, which is the whole gate.
 export const fetchCache = "force-no-store";
 export const maxDuration = 60;
+
+/**
+ * What Meta records as the page the Lead happened on.
+ *
+ * The PUBLIC url, not the mission-control one. The request arrives here through the
+ * srtagency.com rewrite, so req.url says mission.srtagency.com and reporting a URL the
+ * ad never pointed at makes the event harder to match. Hardcoded for the same reason
+ * LHR_BASE is: nothing at runtime knows this app is served under another domain.
+ */
+const LHR_EVENT_SOURCE_URL = "https://srtagency.com/LHR";
+
+/**
+ * Does the Conversions API point at the SAME pixel this page's browser tag fires into?
+ *
+ * ‼️ THIS GUARD EXISTS BECAUSE THEY CURRENTLY DO NOT, AND SENDING ANYWAY IS WORSE THAN
+ * NOT SENDING.
+ *
+ * The funnel's browser tag uses PIXEL_ID (2571789533326438), the pixel the ad set
+ * optimizes on. `META_PIXEL_ID`, which meta-capi.ts posts to, is a DIFFERENT pixel
+ * (2319215808600729) that predates this funnel. Firing the server Lead regardless would
+ * do two silently wrong things at once: file the conversion in a dataset the ad set
+ * never reads, so it cannot learn from it, and break the eventId dedup, because two
+ * pixels are two separate ledgers and the shared id means nothing across them.
+ *
+ * A skip is loud rather than silent for the same reason a CAPI failure is logged: a
+ * missing conversion is invisible in Ads Manager and looks exactly like an ad set that
+ * is not converting.
+ *
+ * This is self-resolving. Point META_PIXEL_ID at the funnel's pixel with a token
+ * authorised for it and the server Lead starts flowing with no code change. Until then
+ * the browser Lead is the only one, which is the behaviour this page already had.
+ */
+function capiTargetsFunnelPixel(): boolean {
+  const serverPixel = (process.env.META_PIXEL_ID || "").trim();
+  if (!serverPixel) return false;
+  if (serverPixel === PIXEL_ID) return true;
+  console.warn(
+    `[lhr/optin] CAPI Lead SKIPPED: META_PIXEL_ID (${serverPixel}) is not the pixel ` +
+      `this funnel's browser tag fires into (${PIXEL_ID}). Sending would file the ` +
+      `conversion against the wrong dataset and defeat eventId deduplication.`
+  );
+  return false;
+}
 
 /** Opt-ins per IP per day. Generous: this costs us nothing but a row. */
 const RATE_LIMIT = Number(process.env.LHR_OPTIN_RATE_LIMIT || 10);
@@ -118,7 +165,13 @@ export async function POST(req: NextRequest) {
   //    Vercel appends the real IP, so index 0 is attacker-controlled and the cap would
   //    be bypassed by rotating it. hashIp never stores a raw address, because this is a
   //    rate-limit ledger, not a visitor log.
-  const ipHash = hashIp(clientIpFrom(req));
+  // The raw IP is kept in a local only, never stored. hashIp is what goes in the ledger
+  // row, because that column is a rate-limit ledger and not a visitor log. Meta's CAPI
+  // wants the real address for match quality, which is a send, not a write.
+  const clientIp = clientIpFrom(req);
+  const clientUserAgent = req.headers.get("user-agent") || undefined;
+
+  const ipHash = hashIp(clientIp);
   if ((await countRecentForIp(ipHash)) >= RATE_LIMIT) {
     return NextResponse.json(
       { ok: false, message: "Too many sign ups from this connection today." },
@@ -136,6 +189,10 @@ export async function POST(req: NextRequest) {
   const utmSource = clean(payload.utmSource, 80) || null;
   const utmMedium = clean(payload.utmMedium, 80) || null;
   const utmCampaign = clean(payload.utmCampaign, 120) || null;
+  // The browser's dedup key for the same Lead. Never generated here as a fallback: an
+  // id the browser does not also have deduplicates against nothing, so a missing one
+  // would silently turn one conversion into two rather than failing visibly.
+  const eventId = clean(payload.eventId, 80) || null;
 
   let contactId: string | null = null;
   try {
@@ -182,6 +239,7 @@ export async function POST(req: NextRequest) {
       contact_id: contactId,
       ip_hash: ipHash,
       source: LHR_SOURCE,
+      event_id: eventId,
       fbclid,
       fbc,
       fbp,
@@ -193,6 +251,49 @@ export async function POST(req: NextRequest) {
 
   if (insertError) {
     console.error("[lhr/optin] system_logs insert failed:", insertError.message);
+  }
+
+  // ── Meta Lead, server side ──────────────────────────────────────────────────
+  //
+  // The browser fires this same Lead, and this is the half that is actually reliable:
+  // the client fires it and then immediately navigates to /lhr/training, which can
+  // cancel the request, and an ad blocker stops it outright. Both carry `eventId`, so
+  // Meta dedupes and the conversion is counted once whichever one lands.
+  //
+  // ‼️ THE ATTRIBUTION GATE IS THE HOUSE RULE AND IT STAYS. A conversion event fires
+  // only when the visitor came from a real ad click, meaning `_fbc` or `fbclid` is
+  // present. `_fbp` alone does NOT count: the pixel sets it on every visitor including
+  // direct traffic, so counting it would report organic visitors as ad conversions and
+  // inflate Ads Manager. This is why a Lead does not appear when testing the page by
+  // hand, and that is correct behaviour rather than something to loosen.
+  //
+  // waitUntil, so a slow Graph call does not sit between the visitor and their video.
+  if (hasMetaAttributionServer({ fbc, fbclid }) && capiTargetsFunnelPixel()) {
+    waitUntil(
+      sendEvent({
+        eventName: "Lead",
+        ...(eventId ? { eventId } : {}),
+        eventSourceUrl: LHR_EVENT_SOURCE_URL,
+        actionSource: "website",
+        userData: {
+          email: result.email,
+          phone: result.phone,
+          firstName: result.firstName,
+          lastName: result.lastName || undefined,
+          fbc: fbc || undefined,
+          fbp: fbp || undefined,
+          clientIpAddress: clientIp !== "unknown" ? clientIp : undefined,
+          clientUserAgent,
+          externalId: contactId || undefined,
+        },
+      })
+        .then((r) => {
+          // Logged either way. A CAPI failure is invisible in Ads Manager, so a silent
+          // catch here would look exactly like an ad set that simply is not converting.
+          if (!r.success) console.error("[lhr/optin] CAPI Lead failed:", r.error);
+        })
+        .catch((e) => console.error("[lhr/optin] CAPI Lead threw:", (e as Error).message))
+    );
   }
 
   return NextResponse.json({ ok: true });

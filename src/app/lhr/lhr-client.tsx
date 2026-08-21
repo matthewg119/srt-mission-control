@@ -19,6 +19,25 @@ import { fieldErrorMessage, validateOptin, type FieldError } from "@/lib/medspa/
 import { formatPhoneUS } from "@/lib/clients/normalize";
 import { readAttribution, track } from "@/lib/medspa/pixel";
 
+/**
+ * A deduplication id, shared with the Lead the route sends through the Conversions API.
+ *
+ * randomUUID is unavailable on non-https origins other than localhost and on a few older
+ * mobile browsers, and this is a paid-traffic page reached from an in-app browser more
+ * often than not, so the fallback is not theoretical. It only has to be unique per
+ * submission, never unguessable.
+ */
+function newEventId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    /* fall through to the manual id */
+  }
+  return `lhr-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export function LhrClient() {
   const [open, setOpen] = useState(false);
 
@@ -93,6 +112,11 @@ export function LhrClient() {
 
     const attr = readAttribution();
 
+    // One id, shared by the browser Lead below and the CAPI Lead the route sends, so
+    // Meta counts ONE conversion instead of two. Generated here rather than server side
+    // because both halves have to agree on it and only one of them can be first.
+    const eventId = newEventId();
+
     try {
       const res = await fetch("/api/lhr/optin", {
         method: "POST",
@@ -103,6 +127,7 @@ export function LhrClient() {
           email,
           phone,
           consent,
+          eventId,
           company_url_hp: honeypot,
           renderedAt: renderedAt.current,
           ...attr,
@@ -118,7 +143,15 @@ export function LhrClient() {
       }
 
       // Fires only for ad-attributed visitors, which is what the ad set optimizes on.
-      track("Lead");
+      //
+      // ‼️ THIS FIRE IS THE UNRELIABLE HALF, ON PURPOSE. The navigation below can cancel
+      // an in-flight pixel request, and an ad blocker leaves fbq undefined entirely. The
+      // route has already sent the same Lead through the Conversions API by the time this
+      // runs, carrying this exact eventId, so Meta dedupes them and the conversion is
+      // recorded whether or not this one survives. Do not "fix" the race with a delay:
+      // the server event is what makes it durable, and a timer here would just make every
+      // visitor wait for something that is already handled.
+      track("Lead", eventId);
       // Full navigation, never a next/link: a 30x during an RSC prefetch under the
       // srtagency.com rewrite blanks the page. Relative, so it lands on whichever host
       // they are already on rather than bouncing through the apex 307. Busy stays true

@@ -64,13 +64,25 @@ export function hasMetaAttribution(a: Attribution = readAttribution()): boolean 
  */
 const fired = new Set<string>();
 
-export function track(event: string): void {
+/**
+ * @param eventId Optional DEDUPLICATION key, shared with a server-side CAPI event.
+ *
+ * When the same event is sent from both the browser and the Conversions API, Meta
+ * counts it TWICE unless both carry the same id. Passing one is what makes a server
+ * event a backstop rather than a doubling: whichever arrives first wins and the other
+ * is discarded. Omit it for browser-only events, which is every existing caller.
+ */
+export function track(event: string, eventId?: string): void {
   if (fired.has(event)) return;
   fired.add(event);
   if (!hasMetaAttribution()) return;
   try {
     if (typeof window !== "undefined" && typeof window.fbq === "function") {
-      window.fbq("track", event);
+      // The 4th argument is Meta's options object. Passing `{}` for customData is
+      // required to reach it positionally, and stays consistent with the house rule
+      // that these are standard events with no custom parameters.
+      if (eventId) window.fbq("track", event, {}, { eventID: eventId });
+      else window.fbq("track", event);
     }
   } catch {
     /* blocked, offline, or no pixel. Never a reason to break the page. */
