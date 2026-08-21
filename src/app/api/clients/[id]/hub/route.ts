@@ -78,6 +78,24 @@ export async function POST(
       const { draftPage } = await import("@/lib/hub/draft-page");
       const result = await draftPage(clientId, String(body.question ?? ""));
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
+
+      // The preview goes to Slack even though nothing was saved, and the file says so. The
+      // point of this file is the screen share on the call, and the moment you want it is
+      // the moment you have something to look at, not one Save later.
+      const { postPagePreview } = await import("@/lib/hub/page-preview");
+      const { pageSlug } = await import("@/lib/hub/pages");
+      await postPagePreview(
+        clientId,
+        {
+          slug: pageSlug(result.page.title),
+          title: result.page.title,
+          question: String(body.question ?? ""),
+          answerMd: result.page.answerMd,
+          publishedAt: null,
+        },
+        { saved: false }
+      ).catch(() => {});
+
       return NextResponse.json({ ok: true, draft: result.page });
     }
 
@@ -95,6 +113,32 @@ export async function POST(
       });
 
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
+
+      // ‼️ READ BACK FROM THE ROW, not from the request body. savePage normalises the slug
+      // and trims the fields, so previewing the request would show a page at an address that
+      // does not exist. This file gets opened in front of a client; the URL on it has to be
+      // the real one.
+      const { data: saved } = await supabaseAdmin
+        .from("client_pages")
+        .select("slug, title, question, answer_md, published_at")
+        .eq("id", result.id)
+        .maybeSingle();
+
+      if (saved) {
+        const { postPagePreview } = await import("@/lib/hub/page-preview");
+        await postPagePreview(
+          clientId,
+          {
+            slug: saved.slug as string,
+            title: saved.title as string,
+            question: saved.question as string,
+            answerMd: saved.answer_md as string,
+            publishedAt: (saved.published_at as string | null) ?? null,
+          },
+          { saved: true }
+        ).catch(() => {});
+      }
+
       return NextResponse.json({ ok: true, id: result.id, pages: await listAllForBoard(clientId) });
     }
 
