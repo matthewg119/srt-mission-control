@@ -96,6 +96,26 @@ export async function auditSignatureHtml(): Promise<string> {
 }
 
 /**
+ * `**x**` -> `<strong>x</strong>`, and nothing else.
+ *
+ * ‼️ RUNS AFTER escape(), NEVER BEFORE, and that order is the safety property rather than a style
+ * preference. By the time this sees the text, every real `<`, `>` and `&` is already an entity, so
+ * the only thing left that can become a tag is the tag this function writes itself. Escaping does
+ * not touch `*`, so the markers survive it intact and there is nothing a prospect's own copy could
+ * smuggle through.
+ *
+ * Bold reaches here from exactly one lane. Every pre-pitch drafter calls polishBody with
+ * allowEmphasis:false, which strips emphasis long before this point, so their HTML is unchanged
+ * byte for byte. The hook lane passes allowEmphasis:true on purpose, for HOOK_PRETEXT_LINE.
+ *
+ * Single-line only (no `s` flag, `\n` excluded from the class): an unclosed `**` then cannot
+ * swallow the rest of the email into one bold run.
+ */
+function bold(escaped: string): string {
+  return escaped.replace(/\*\*(?=\S)([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+}
+
+/**
  * Plain-text body + signature, as the HTML Outlook will store.
  *
  * Real <p> and <br> tags, NOT white-space:pre-wrap. Outlook's compose editor rewrites the HTML
@@ -114,7 +134,7 @@ export function buildPitchHtml(body: string, signatureHtml: string): string {
     .split(/\n\s*\n/)
     .map((block) => block.trim())
     .filter(Boolean)
-    .map((block) => `<p style="margin:0 0 12px 0;">${escape(block).replace(/\n/g, "<br>")}</p>`)
+    .map((block) => `<p style="margin:0 0 12px 0;">${bold(escape(block)).replace(/\n/g, "<br>")}</p>`)
     .join("");
   return `<div style="font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">${paragraphs}</div>${signatureHtml}`;
 }

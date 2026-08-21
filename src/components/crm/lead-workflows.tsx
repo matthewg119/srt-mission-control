@@ -27,6 +27,8 @@ interface WorkflowDef {
    *  write rests on nothing describing them being written by them, which stops being true the
    *  moment a site exists. */
   needsNoWebsite?: boolean;
+  /** True when this button needs a site to read AND somebody to write to. */
+  needsWebsiteAndEmail?: boolean;
 }
 
 const WORKFLOWS: WorkflowDef[] = [
@@ -61,6 +63,17 @@ const WORKFLOWS: WorkflowDef[] = [
     needsAudit: true,
   },
   {
+    // Sits below the audit ladder because it comes BEFORE it in time. This is the first touch:
+    // four buyer questions instead of twenty, no report and no PDF, so an audit is only spent on
+    // a prospect who has already replied. Everything above it needs a finished audit; this needs
+    // nothing but a site to read and somebody to send it to.
+    action: "hook",
+    label: "Email hook",
+    hint: "Asks 4 buyer questions, drafts the first email. No audit needed",
+    needsAudit: false,
+    needsWebsiteAndEmail: true,
+  },
+  {
     // Sits last, under Loom, because it is the one button here that does NOT belong to the audit
     // ladder above it. It is the alternative to that whole ladder for a prospect who has no site.
     action: "nowebsite",
@@ -77,6 +90,7 @@ export function LeadWorkflows({
   contactId,
   hasWebsite,
   hasBusinessName = true,
+  hasEmail = true,
   hasAudit,
   auditRunning,
   threadUrl,
@@ -86,6 +100,8 @@ export function LeadWorkflows({
   /** Defaults true so an older caller that does not pass it keeps its current behaviour; the
    *  route re-checks anyway and answers 400 with the same reason. */
   hasBusinessName?: boolean;
+  /** Same defaulting rule as hasBusinessName, and the same backstop. */
+  hasEmail?: boolean;
   hasAudit: boolean;
   auditRunning: boolean;
   threadUrl: string | null;
@@ -114,7 +130,9 @@ export function LeadWorkflows({
             ? "Running. The scorecard lands in Slack in about 5 minutes, and the score comes back here."
             : w.action === "nowebsite"
               ? "Researching. The draft lands in your Outlook drafts in about 90 seconds, and the link comes back on this timeline."
-              : "Running in the audit thread.",
+              : w.action === "hook"
+                ? "Scanning. The draft lands in Slack and your Outlook drafts in about 90 seconds, and the link comes back on this timeline."
+                : "Running in the audit thread.",
         url: json.threadUrl ?? threadUrl ?? undefined,
       });
       // Picks up the "started" note the route just wrote, and the in-flight state
@@ -128,6 +146,14 @@ export function LeadWorkflows({
   }
 
   function disabledReason(w: WorkflowDef): string | null {
+    if (w.needsWebsiteAndEmail) {
+      // Both, and for different reasons: the website is what gets read and scanned, the email
+      // address is who the draft is addressed to. The route re-checks both and answers 400 with
+      // the same wording, so this is that answer one round trip sooner.
+      if (!hasWebsite) return "Add a website above first";
+      if (!hasEmail) return "Add an email address above first";
+      return null;
+    }
     if (w.needsNoWebsite) {
       // The mirror image of the audit button's rule, and it has to be stated as its own branch:
       // this is the only control here that a website DISABLES rather than enables.

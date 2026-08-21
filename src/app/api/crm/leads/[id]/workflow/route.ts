@@ -17,6 +17,12 @@ export const maxDuration = 300;
 // bypass every one of them, silently, and the failure would look like slightly worse
 // copy rather than like a bug.
 //
+// Two buttons are doorways to lanes rather than to thread commands: `nowebsite` ->
+// no-website-pitch.ts, and `hook` -> hook-pitch.ts. Neither has an audit to reply into,
+// so neither could be a thread command. The rule above still binds them: both assemble
+// their prompt out of the SHARED blocks in email-assistant.ts and both run through
+// draftWithLint, so the linter and the guards apply exactly as they do in the thread.
+//
 // Nothing streams back to the browser. Slack is where the work is watched; the CRM
 // gets a note saying it started, and the finished report writes its own timeline entry
 // through writeAuditToLead().
@@ -35,6 +41,17 @@ import {
   formatNoWebsitePitchNote,
   createPitchDraft,
 } from "@/lib/audit-engine/no-website-pitch";
+import {
+  runHookCheck,
+  draftHookPitch,
+  formatHookCard,
+  formatHookNote,
+  HOOK_PROMPT_COUNT,
+} from "@/lib/audit-engine/hook-pitch";
+import { getOrCreateAuditChannel } from "@/lib/audit-engine/audit-channel";
+
+/** How long one Email hook run blocks another on the same lead. */
+const HOOK_CLAIM_MINUTES = 5;
 
 /** The four thread commands reachable from a button, and what to call them. */
 const THREAD_ACTIONS = {
@@ -92,6 +109,7 @@ export async function POST(
   const action = String(body.action ?? "").trim();
 
   if (action === "audit") return startAudit(contactId, actor);
+  if (action === "hook") return startEmailHook(contactId, actor);
   if (action === "nowebsite") return startNoWebsitePitch(contactId, actor);
   if (isThreadAction(action)) return runThreadCommand(contactId, action, actor);
 
@@ -242,6 +260,176 @@ async function startAudit(contactId: string, actor: string) {
  * lands in #ai-visibility-audits" while the CRM showed only a subject and a body, and the draft
  * that was already being placed in Outlook was never linked from the page the button is on.
  */
+// ─────────────────────────────────────────────────────────────────────
+// The Email hook — the first touch, BEFORE an audit is spent
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Draft the pre-audit door knock for a lead who has a website and an email address.
+ *
+ * ‼️ THIS IS THE ONE BUTTON THAT EXISTS TO *NOT* RUN THE AUDIT. Every other route to a prospect
+ * with a site costs a full 20-prompt run, a PDF and a thread, and most of those emails are never
+ * opened — so the audit was spent on somebody who was never going to reply. This asks four buyer
+ * questions instead of twenty and drafts one email off what came back. The audit is for the
+ * people who answer it.
+ *
+ * It is still a REAL scan. Every number and every rival name in that email came from an engine
+ * call made seconds earlier; see the header of hook-pitch.ts for why nothing cheaper was
+ * acceptable. This route stays a doorway, exactly like the rest of this file: the whole pipeline
+ * lives in hook-pitch.ts behind draftWithLint, so the linter, format-guard and the link policy
+ * all still apply.
+ *
+ * Output goes to Slack, to Outlook, and to this lead's timeline. Slack because Matthew asked for
+ * it to behave like Draft email, which is where he reads drafts — but as its OWN top-level
+ * message, not a thread reply: there is no audit and therefore no audit thread to reply into.
+ */
+async function startEmailHook(contactId: string, actor: string) {
+  const { data } = await supabaseAdmin
+    .from("contacts")
+    .select("id, website, business_name, first_name, last_name, email, biz_city, biz_state")
+    .eq("id", contactId)
+    .maybeSingle();
+
+  const contact = data as ContactRow | null;
+  if (!contact) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  const website = contact.website?.trim();
+  if (!website) {
+    return NextResponse.json(
+      { error: "The hook is written from their site, so this lead needs a website first.", field: "website" },
+      { status: 400 }
+    );
+  }
+
+  const email = contact.email?.trim();
+  if (!email) {
+    return NextResponse.json(
+      { error: "Add an email address to this lead first — there is nobody to draft this to.", field: "email" },
+      { status: 400 }
+    );
+  }
+
+  // ‼️ EMPTY, NOT THE WEBSITE, when the lead has no business name. This string is handed to
+  // classifyBusiness as `businessName`, which PINS the name in code and only allows a fuller
+  // trading name that contains it (see the override doc in classify.ts). Passing a URL there
+  // would pin the business's name to a URL and every alias, mention match and email greeting
+  // downstream would be built from it. Empty lets the classifier read the real name off the
+  // pages we just crawled, which is the one place it is reliably written down.
+  const businessName = contact.business_name?.trim() ?? "";
+
+  // Claim guard. A hook is a crawl, a classify, four engine calls and two more model calls, and
+  // a double-click must not spend it twice. There is no audit_reports row to claim against on
+  // this lane, so the timeline is the lock: the "started" note below is written before any work
+  // begins, and this refuses while one is still recent. Same intent as the in-flight check in
+  // startAudit().
+  const since = new Date(Date.now() - HOOK_CLAIM_MINUTES * 60_000).toISOString();
+  const { data: inFlight } = await supabaseAdmin
+    .from("lead_activities")
+    .select("id")
+    .eq("contact_id", contactId)
+    .eq("subject", "Email hook started")
+    .gte("occurred_at", since)
+    .limit(1)
+    .maybeSingle();
+
+  if (inFlight) {
+    return NextResponse.json(
+      { error: `An Email hook is already running for this lead. Give it ${HOOK_CLAIM_MINUTES} minutes.` },
+      { status: 409 }
+    );
+  }
+
+  await addNote({
+    contactId,
+    title: "Email hook started",
+    content:
+      `Reading ${website} and putting ${HOOK_PROMPT_COUNT} buyer questions to ChatGPT. The draft ` +
+      `lands in #ai-visibility-audits and in your Outlook drafts, and the link comes back on this ` +
+      `timeline in about 90 seconds.`,
+    origin: "mission_control",
+    actor,
+  }).catch(() => {});
+
+  waitUntil(
+    (async () => {
+      try {
+        const city = [contact.biz_city, contact.biz_state].filter(Boolean).join(", ") || null;
+        const outcome = await runHookCheck(website, businessName, city);
+
+        // ‼️ ONLY OUR OWN FAILURES LAND HERE. A prospect who came back in none of the four is a
+        // finding, and the strongest one this lane has. A crawl that could not run or four calls
+        // that all came back empty say something about our side and nothing about them, and the
+        // note has to say so out loud or it reads as a verdict on the prospect.
+        if (!outcome.ok) {
+          await addNote({
+            contactId,
+            title: "Email hook failed",
+            content: `${outcome.detail} Nothing was drafted, and this says nothing about the prospect. Press Email hook again.`,
+            origin: "mission_control",
+            actor,
+          }).catch(() => {});
+          return;
+        }
+
+        const check = outcome.check;
+        const draft = await draftHookPitch(check, contact.first_name);
+
+        // The mailbox is picked by the rotation INSIDE createPitchDraft, never here. Returns []
+        // and a reason rather than throwing when every mailbox is at its cap, and the note prints
+        // that reason in every state.
+        const made = await createPitchDraft(draft, email);
+
+        let slackUrl: string | null = null;
+        try {
+          const channel = await getOrCreateAuditChannel();
+          const posted = await slack.postMessage(
+            channel.id,
+            formatHookCard(check, draft, made.placed, made.mailboxNote)
+          );
+          const ts = typeof posted.ts === "string" ? posted.ts : null;
+          if (ts) slackUrl = slackThreadLink(channel.id, ts);
+        } catch (e) {
+          // Slack is where it is read, but the draft is already in Outlook and the note below
+          // carries the full text. Losing the card must not lose the pitch.
+          console.error("[crm/workflow] hook card failed to post:", (e as Error).message);
+        }
+
+        await addNote({
+          contactId,
+          title: draft.rejectedFindings.length
+            ? "Email hook REJECTED by the linter"
+            : made.placed.length
+              ? "Email hook drafted"
+              : "Email hook written, but no draft was placed",
+          content: formatHookNote(check, draft, made.placed, made.mailboxNote, slackUrl),
+          origin: "mission_control",
+          actor,
+        }).catch(() => {});
+      } catch (e) {
+        const message = (e as Error)?.message ?? String(e);
+        console.error("[crm/workflow] email hook threw:", message);
+        await addNote({
+          contactId,
+          title: "Email hook failed",
+          content: message,
+          origin: "mission_control",
+          actor,
+        }).catch(() => {});
+      }
+    })()
+  );
+
+  return NextResponse.json(
+    {
+      ok: true,
+      running: true,
+      message:
+        "Scanning. The draft lands in Slack and your Outlook drafts in about 90 seconds, and the link comes back here.",
+    },
+    { status: 202 }
+  );
+}
+
 async function startNoWebsitePitch(contactId: string, actor: string) {
   const { data } = await supabaseAdmin
     .from("contacts")

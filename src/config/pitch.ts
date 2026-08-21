@@ -376,3 +376,49 @@ export const NO_WEBSITE_LINE =
 export const NOTHING_TO_FIND_LINE =
   "I went looking for you the way an engine does, and I could not put together a description of " +
   "what you do out of anything public. Nothing to read means nothing to cite";
+
+/**
+ * ‼️ THE PRETEXT LINE. Why we were running that search in the first place.
+ *
+ * Fourth sibling of CRAWL_BLOCK_LINE / NO_WEBSITE_LINE / NOTHING_TO_FIND_LINE, and a constant for
+ * the same reason all three are: asked to phrase this itself, a model turns "I was already looking
+ * at this category for somebody else" into a claim about a named client, a case study, or a result
+ * we never promised. None of that is ours to say.
+ *
+ * ‼️ IT IS THE ONE SENTENCE IN THE HOOK EMAIL THE PROSPECT CANNOT VERIFY, which is exactly why it
+ * is pinned here rather than generated. Everything else in that email is a number or a name the
+ * reader can reproduce in thirty seconds; this is context for how they came to our attention, and
+ * it must stay that narrow. It may NOT name the other client, name their industry, imply a result,
+ * or suggest we are working the prospect's competitor.
+ *
+ * The bold is deliberate and is Matthew's call: it marks the aside as an aside, so the sentence
+ * reads as the reason for the search rather than as a claim about the prospect. It survives
+ * polishBody only because the hook lane passes allowEmphasis: true, and reaches Outlook only
+ * because buildPitchHtml renders ** as <strong>.
+ */
+export const HOOK_PRETEXT_LINE =
+  "The search was one you were not the subject of. Mark that aside in the email exactly like " +
+  'this, with the asterisks, on the same line as the quoted search: **(for another client)**. ' +
+  "Do NOT say who the other client is, what they do, or anything about how they are doing. Do " +
+  "NOT suggest you are working with one of this prospect's competitors.";
+
+/**
+ * ‼️ THE HOOK'S FRACTION LINE. The one number the hook email prints, in fixed wording.
+ *
+ * Same rule as PERMISSION_CLOSE and NO_WEBSITE_LINE, and it is here for the same reason: asked to
+ * phrase this itself, a model rewrites it every take. Across a week of sending that means the
+ * finding lands differently for every prospect, and there is no way to tell whether a line that
+ * did not get a reply was the wrong line or just the wrong day. One wording, so the hook is
+ * actually measurable.
+ *
+ * ‼️ IT IS A FRACTION AND IT STAYS A FRACTION. Never a percentage. The scan is a handful of
+ * questions, and "less than 25%" implies a sample far bigger than four. The fraction is also the
+ * stronger line: it is the number the prospect can reproduce himself in a minute, which is the
+ * whole reason the email earns a reply.
+ *
+ * `measured` is the count of questions that actually came back, NEVER HOOK_PROMPT_COUNT. A call
+ * that returned nothing proves nothing and must not sit in the denominator.
+ */
+export function hookFractionLine(appeared: number, measured: number): string {
+  return `You came back in ${appeared} of the ${measured} searches I ran`;
+}

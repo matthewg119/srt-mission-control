@@ -1118,7 +1118,7 @@ export async function draftObjectionReply(report: AuditReportRow, view: ReportVi
 // ── Stage 1: PERMISSION ──────────────────────────────────────────────────────
 
 /** The shared identity + mechanism preamble every permission-stage email opens from. */
-const PERMISSION_PERSONA = [
+export const PERMISSION_PERSONA = [
   "You write the cold pre-outreach for SRT Agency LLC ('Search Retrieval Tactics'), an AI-search-visibility agency. Matthew personally ran an audit on THIS business before writing, and it shows: every line is specific to them.",
   "Background for YOU, not material to recite: AI engines (ChatGPT, Perplexity, Google AI) do not answer from memory. They search, retrieve a handful of pages, and name 3 to 5 businesses. A business that is not in what gets retrieved is invisible to that buyer no matter how good its work or prices are.",
   "Do NOT explain that mechanism to the reader. A stranger did not sign up for a seminar, and an unsolicited explanation of how AI search works is the fastest way to read as a template. You may only get concrete: name what you found, or name what you built them. Specifics earn the reply, theory does not.",

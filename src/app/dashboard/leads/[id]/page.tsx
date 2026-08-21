@@ -285,6 +285,7 @@ export default async function LeadDetailPage({
             contactId={id}
             hasWebsite={!!(lead.website as string | null)}
             hasBusinessName={!!(lead.business_name as string | null)?.trim()}
+            hasEmail={!!(lead.email as string | null)?.trim()}
             hasAudit={!!audit}
             auditRunning={auditRunning}
             threadUrl={auditThreadUrl}

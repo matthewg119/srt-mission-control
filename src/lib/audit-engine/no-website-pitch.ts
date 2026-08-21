@@ -561,7 +561,7 @@ export function pitchSubject(businessName: string): string {
   return `${businessName.trim()} + ChatGPT`;
 }
 
-function parseSubjectAndBody(text: string): { subject: string; body: string } {
+export function parseSubjectAndBody(text: string): { subject: string; body: string } {
   const m = /^\s*subject:\s*(.+?)\s*\n([\s\S]*)$/i.exec(text.trim());
   if (m) return { subject: m[1].trim(), body: m[2].trim() };
   return { subject: "", body: text.trim() };
@@ -580,7 +580,7 @@ function parseSubjectAndBody(text: string): { subject: string; body: string } {
  * than loosen a regex the whole cold lane depends on, this strips only the exact echo, with or
  * without surrounding quotes, and leaves everything else to the shared guard.
  */
-function stripEchoedClose(body: string): string {
+export function stripEchoedClose(body: string): string {
   const escaped = PERMISSION_CLOSE.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const echo = new RegExp(`^\\s*["'“”']*\\s*(?:${escaped.join("|")})\\s*["'“”']*\\s*$`, "i");
   return body
