@@ -43,6 +43,9 @@ export async function POST(req: NextRequest) {
     const fit = clean(body.fit, 10);
     const consentTs = clean(body.consentTs, 40);
     const source = clean(body.source, 40) || "aivisibility";
+    // Which priced tier they clicked on /pricing. Empty for every other
+    // caller, so nothing below changes shape for the funnels that predate it.
+    const tier = clean(body.tier, 40);
 
     if (!email && !phone) {
       return NextResponse.json({ error: "email or phone required" }, { status: 400 });
@@ -65,8 +68,10 @@ export async function POST(req: NextRequest) {
       noteTitle: "AI Visibility Index",
       headline:
         `New Index lead: ${leadName} · ${clinic || "?"} · ${city || "?"} · ${website || "?"}` +
-        ` · budget ${budget || "?"} · fit ${fit || "?"} · phone ${phone || "?"}`,
+        ` · budget ${budget || "?"} · fit ${fit || "?"} · phone ${phone || "?"}` +
+        (tier ? ` · tier ${tier}` : ""),
       detailLines: [
+        tier ? `Tier clicked: ${tier}` : "",
         website ? `Website: ${website}` : "",
         city ? `City: ${city}` : "",
         services.length ? `Services: ${services.join(", ")}` : "",

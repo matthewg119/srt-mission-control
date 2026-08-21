@@ -382,9 +382,22 @@ export const DONE_COPY = {
   heading: guard("done heading", "That is everything. Thank you."),
   body: guard(
     "done body",
-    "We will read this properly and come back to you on the same email thread."
+    "We will read this properly before we speak. Pick a time below and we will walk you through what it says."
   ),
+  bookingHeading: guard("done booking heading", "Pick a time that works"),
 };
+
+/**
+ * The booking calendar on the last screen.
+ *
+ * Same reasoning as CALENDLY_URL in lhr-funnel.ts: the default is a real link rather
+ * than null, because every Calendly env var in this repo has always been unset and a
+ * quiz that ends on a thank-you screen is a qualified prospect handed back to their
+ * inbox. The env var still overrides it.
+ */
+export const CALENDLY_URL =
+  process.env.NEXT_PUBLIC_ONBOARDINGFREE_CALENDLY_URL ||
+  "https://calendly.com/matthewg19/democall";
 
 export const ACCESS_COPY = {
   heading: guard("access heading", "Where things live"),

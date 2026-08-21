@@ -202,8 +202,16 @@ export const TRAINING_VSL = {
 /**
  * Calendly inline embed. Unset renders TRAINING.noCalendar, never a broken iframe.
  * Same tri-state treatment as CALENDLY_URL in medspa-funnel.ts.
+ *
+ * The default is a real link rather than null, and that is a deliberate change from
+ * the tri-state everything else in this file uses. Every Calendly env var in this repo
+ * has always been unset, so the tri-state's honest fallback ("Booking opens shortly")
+ * was the only thing this page had ever rendered: a funnel that captures a phone number
+ * and then declines to let them book. The env var still wins where a different calendar
+ * is wanted, so nothing is lost by having a working default underneath it.
  */
-export const CALENDLY_URL = process.env.NEXT_PUBLIC_LHR_CALENDLY_URL || null;
+export const CALENDLY_URL =
+  process.env.NEXT_PUBLIC_LHR_CALENDLY_URL || "https://calendly.com/matthewg19/democall";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Footer

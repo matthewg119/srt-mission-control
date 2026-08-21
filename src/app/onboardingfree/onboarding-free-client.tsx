@@ -22,9 +22,11 @@
 // to protect.
 
 import { useMemo, useRef, useState } from "react";
+import Script from "next/script";
 import {
   ACCESS_COPY,
   ACCESS_FIELDS,
+  CALENDLY_URL,
   DONE_COPY,
   IDENTITY_FIELDS,
   INTRO_COPY,
@@ -260,11 +262,33 @@ export function OnboardingFreeFunnel() {
   }
 
   // --- done --------------------------------------------------------------
+  //
+  // Both endings land here: the "I will send these later" skip on the submitted screen
+  // and a completed access screen. One insertion covers both, which is why the calendar
+  // goes here and not on either of them.
+  //
+  // The answers are already durable in system_logs and the Slack card has already
+  // posted by the time anyone sees this, so nothing about the booking gates the
+  // submission. It is the next step, never a second submit.
   if (stage === "done") {
     return (
       <div className={`${CARD} text-center`}>
         <h1 className="mb-4 text-2xl font-bold">{DONE_COPY.heading}</h1>
         <p className="text-white/70">{DONE_COPY.body}</p>
+
+        <h2 className="mb-2 mt-10 text-lg font-bold">{DONE_COPY.bookingHeading}</h2>
+        {/* Inline embed, same shape as /lhr/training. The explicit height is not
+            cosmetic: the widget is an iframe with no intrinsic size, so without one
+            it collapses to nothing and the screen looks like it simply ended. */}
+        <div
+          className="calendly-inline-widget mx-auto min-h-[820px] w-full sm:min-h-[700px]"
+          data-url={CALENDLY_URL}
+        />
+        <Script
+          id="calendly-widget"
+          src="https://assets.calendly.com/assets/external/widget.js"
+          strategy="afterInteractive"
+        />
       </div>
     );
   }
