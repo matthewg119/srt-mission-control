@@ -51,6 +51,10 @@ export function HubForm({
   prompts,
   day0ArchivedAt,
   day0Source,
+  vercelConfigured,
+  dnsVerified,
+  dnsTotal,
+  themeConfirmedAt,
 }: {
   clientId: string;
   domain: string | null;
@@ -61,6 +65,21 @@ export function HubForm({
   /** NULL means the Day 0 wall is shut and Publish will be refused. */
   day0ArchivedAt: string | null;
   day0Source: string | null;
+  /**
+   * Is HUB_VERCEL_TOKEN / PROJECT_ID / TEAM_ID actually configured on this deployment?
+   *
+   * %s A DISTINCT STATE FROM "not attached", and conflating them cost a whole pilot.
+   * With no token, registerClientHosts() returns a warning and attaches nothing, so every
+   * hostname renders "not attached to Vercel" %s which reads as "nobody has pressed the button
+   * yet" when it actually means "the button cannot work". Two identical-looking rows, two
+   * completely different things to do about it.
+   */
+  vercelConfigured: boolean;
+  /** How many of the three DNS records the resolver has actually seen. */
+  dnsVerified: number;
+  dnsTotal: number;
+  /** Set once a person pressed Confirm on the Theme panel. */
+  themeConfirmedAt: string | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -68,6 +87,8 @@ export function HubForm({
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState({ ...BLANK });
   const [open, setOpen] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
 
   // The waive form only appears after a publish has actually been refused. Offering it
   // up front would make it a button beside Publish, which is the same as not having a
@@ -111,6 +132,45 @@ export function HubForm({
     }
   }
 
+  /**
+   * Fill the form from a first draft.
+   *
+   * ‼️ DELIBERATELY NOT post(). That helper sets the shared notice, refreshes the router and
+   * returns a boolean, all of which are about a write that happened. Nothing is written here:
+   * the draft lands in local state and the person still presses Save.
+   */
+  async function draftIt() {
+    if (!draft.question.trim()) return;
+    setDrafting(true);
+    setDraftError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/hub`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "page_draft", question: draft.question }),
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        draft?: { title: string; answerMd: string; metaDescription: string };
+      };
+      if (!json.ok || !json.draft) {
+        setDraftError(json.error ?? "That did not draft.");
+      } else {
+        setDraft((d) => ({
+          ...d,
+          title: json.draft!.title,
+          answerMd: json.draft!.answerMd,
+          metaDescription: json.draft!.metaDescription,
+        }));
+      }
+    } catch (e) {
+      setDraftError((e as Error).message);
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   async function waive() {
     setBusy("waive");
     setError(null);
@@ -138,8 +198,71 @@ export function HubForm({
 
   const byKind = new Map(hosts.map((h) => [h.kind, h]));
 
+  // ‼️ FIVE THINGS HAVE TO BE TRUE AND THEY FAIL IN A FIXED ORDER, so the panel names the
+  // FIRST unmet one rather than showing five independent ticks. On the pilot the hub was
+  // "built" with none of these true, and the only signal was review_tool_preview refusing two
+  // steps later for a reason that sounded like it belonged to the review tool.
+  const attachedCount = hosts.filter((h) => h.attached).length;
+  const steps: Array<{ label: string; ok: boolean; fix: string }> = [
+    {
+      label: "Domain on file",
+      ok: Boolean(domain),
+      fix: "Intake step 1 sets it. Without a domain there is no hostname to build.",
+    },
+    {
+      label: "Vercel configured",
+      ok: vercelConfigured,
+      fix: "HUB_VERCEL_TOKEN, HUB_VERCEL_PROJECT_ID or HUB_VERCEL_TEAM_ID is missing on this deployment. Nothing can attach until it is set. Set it with the REST API, not `vercel env add`.",
+    },
+    {
+      label: "Hostnames attached",
+      ok: attachedCount > 0 && attachedCount >= (wanted.length || 2),
+      fix: "Press Attach below. It also writes the real CNAME target into the DNS panel, replacing the generic default.",
+    },
+    {
+      label: `DNS resolving (${dnsVerified}/${dnsTotal})`,
+      ok: dnsTotal > 0 && dnsVerified >= dnsTotal,
+      fix: "The client adds the three records in their registrar. Read them off the DNS panel above. Propagation runs up to an hour, so re-check rather than assuming it is wrong.",
+    },
+    {
+      label: "Theme confirmed",
+      ok: Boolean(themeConfirmedAt),
+      fix: "Identity and theme panel, extract or set the colours, then Confirm. Until then the hub and the review tool render in SRT's colours on the client's own domain.",
+    },
+  ];
+  const blocking = steps.find((x) => !x.ok) ?? null;
+
   return (
     <div className="space-y-5">
+      {/* — Where this client actually is, in one strip — */}
+      <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {steps.map((x) => (
+            <span
+              key={x.label}
+              className={
+                "inline-flex items-center gap-1.5 text-xs " +
+                (x.ok ? "text-[#00C9A7]" : x === blocking ? "text-[#F5A623]" : "text-[rgba(255,255,255,0.3)]")
+              }
+            >
+              <span aria-hidden>{x.ok ? "●" : x === blocking ? "◉" : "○"}</span>
+              {x.label}
+            </span>
+          ))}
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-[rgba(255,255,255,0.5)]">
+          {blocking ? (
+            <>
+              <span className="text-[#F5A623]">Next: {blocking.label}.</span> {blocking.fix}
+            </>
+          ) : (
+            <span className="text-[#00C9A7]">
+              Everything this hub needs is in place. Pages published here are live on the
+              client&apos;s own domain.
+            </span>
+          )}
+        </p>
+      </div>
       {!domain && (
         <p className="text-sm text-[rgba(255,255,255,0.5)]">
           No domain on this client yet. Intake step 1 sets it, and the hostnames come from it.
@@ -164,7 +287,9 @@ export function HubForm({
                 </div>
                 <div className="text-right text-xs">
                   {!state?.attached ? (
-                    <span className="text-[rgba(255,255,255,0.35)]">not attached to Vercel</span>
+                    <span className="text-[rgba(255,255,255,0.35)]">
+                      {vercelConfigured ? "not attached to Vercel" : "cannot attach: Vercel not configured"}
+                    </span>
                   ) : state.misconfigured ? (
                     // The SAME gap the DNS panel models between `added` and `verified`.
                     // Said in words rather than as a new status.
@@ -181,7 +306,7 @@ export function HubForm({
           <button
             type="button"
             onClick={() => post({ action: "register" }, "register")}
-            disabled={busy !== null}
+            disabled={busy !== null || !vercelConfigured}
             className="rounded border border-white/15 px-3 py-1.5 text-sm hover:border-white/40 disabled:opacity-40"
           >
             {busy === "register" ? "Attaching…" : "Attach hostnames and read the real CNAME target"}
@@ -390,14 +515,33 @@ export function HubForm({
               className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 font-mono text-xs"
             />
             {/*
-              Said out loud on the surface where somebody would otherwise expect a button.
-              Nothing generates this text: a page goes out on the client's own domain under
-              their name, and an unreviewed paragraph about a business we do not run is not
-              a thing to publish on their behalf.
+              ‼️ THE NOTE HERE USED TO SAY "Nothing here drafts it for you", AND ITS REASON WAS
+              RIGHT ABOUT THE WRONG CONTROL. A page goes out on the client's own domain under
+              their name, so an unreviewed paragraph must never reach the public. That is
+              enforced by Publish being a separate deliberate press behind the Day-0 wall —
+              not by refusing to produce a first draft. Writing every page from an empty box is
+              not a delivery pipeline, and publishing answers to the questions a client is
+              absent from is the entire product.
+
+              What this button does NOT do: save, publish, or write anything to the database.
+              It fills this textarea and stops.
             */}
-            <p className="mt-1 text-xs text-[rgba(255,255,255,0.4)]">
-              Written by a person. Nothing here drafts it for you.
-            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={drafting || !draft.question.trim()}
+                onClick={draftIt}
+                className="rounded border border-white/15 px-2 py-1 text-xs text-white/70 hover:border-white/40 hover:text-white disabled:opacity-40"
+              >
+                {drafting ? "Drafting…" : "Draft it"}
+              </button>
+              <span className="text-xs text-[rgba(255,255,255,0.4)]">
+                {draft.question.trim()
+                  ? "Grounded in their own site. Read every line before you save it."
+                  : "Pick a question first."}
+              </span>
+            </div>
+            {draftError && <p className="mt-1 text-xs text-[#FF6B6B]">{draftError}</p>}
           </div>
 
           <button

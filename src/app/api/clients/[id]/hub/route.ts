@@ -67,6 +67,20 @@ export async function POST(
     }
 
     // ── Write or update a page ────────────────────────────────────────────────
+    // ── Draft a page for a person to edit ──────────────────────────────
+    //
+    // ‼️ IT RETURNS THE DRAFT, IT DOES NOT SAVE IT AND IT CANNOT PUBLISH IT.
+    // The text lands in the form for editing and the person still presses Save, then
+    // Publish, and Publish is still behind the Day-0 wall. Saving straight from here would
+    // put copy nobody read into client_pages, and one careless Publish later that is live
+    // on the client's own domain under their name.
+    case "page_draft": {
+      const { draftPage } = await import("@/lib/hub/draft-page");
+      const result = await draftPage(clientId, String(body.question ?? ""));
+      if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
+      return NextResponse.json({ ok: true, draft: result.page });
+    }
+
     case "page_save": {
       const result = await savePage({
         clientId,

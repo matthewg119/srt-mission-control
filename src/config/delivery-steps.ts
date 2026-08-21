@@ -93,7 +93,10 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
   // every row already carrying it; labels are free.
   { key: "page_candidates", phase: "Prepare", label: "Page candidates scored and ranked for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
   { key: "citation_cleanup_list", phase: "Prepare", label: "Citation cleanup list built and ranked", auto: true, mode: "auto", blockedBy: ["presence_pdf"] },
-  { key: "hub_preview", phase: "Prepare", label: "Hub built, themed, preview live, theme confirmed by me", mode: "auto_then_manual", blockedBy: ["intake_received"] },
+  // `auto: true` as of the hub runner: the system really does attach both hostnames to Vercel
+  // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
+  // auto_then_manual and why [Done] refuses until somebody has confirmed it.
+  { key: "hub_preview", phase: "Prepare", label: "Hub built, themed, preview live, theme confirmed by me", auto: true, mode: "auto_then_manual", blockedBy: ["intake_received"] },
   { key: "review_tool_preview", phase: "Prepare", label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   { key: "review_card_pdf", phase: "Prepare", label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   { key: "call_sheet", phase: "Prepare", label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },
@@ -110,12 +113,18 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
   // ‼️ THE ONE STEP THAT BLOCKS RATHER THAN FLAGS. See src/lib/clients/day-zero.ts and
   // docs/2026-08-18-day-zero-wall.sql. Completing it stamps clients.day_0_archived_at and
   // opens the publish path; unticking it clears the stamp again.
-  { key: DAY_ZERO_STEP_KEY, phase: "Day 0", label: "Day-0 scan archived, before any change lands", gate: true, mode: "auto", blockedBy: ["call_held"] },
+  // ‼️ `mode: "manual"`, AND IT USED TO BE `"auto"` WITH NOTHING BEHIND IT.
+  // postReadySteps skips every `mode === "auto"` step on the first line of its loop, and
+  // runReadyAutoSteps only runs a step with an AUTO_RUNNERS entry. This has neither, so the
+  // ONE step in the whole checklist that hard-blocks publishing never posted a card, never
+  // ran, and was tickable only from a checkbox on the dashboard that nobody is looking at
+  // during a call. It is a thing a person asserts, so it is manual and it says so.
+  { key: DAY_ZERO_STEP_KEY, phase: "Day 0", label: "Day-0 scan archived, before any change lands", gate: true, mode: "manual", blockedBy: ["call_held"] },
 
   // ── BUILD — unblocked by Day 0, not before ────────────────────────────────
   { key: "gbp_buildout", phase: "Build", label: "Google Business Profile buildout: categories, services, photos, Q&A seeded", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "access_granted"] },
   { key: "citation_cleanup", phase: "Build", label: "Citation cleanup executed from the list", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "citation_cleanup_list"] },
-  { key: "subdomain_live", phase: "Build", label: "Subdomain live and verified in Search Console", mode: "auto_then_manual", blockedBy: ["dns_records"] },
+  { key: "subdomain_live", phase: "Build", label: "Subdomain live and verified in Search Console", auto: true, mode: "auto_then_manual", blockedBy: ["dns_records"] },
   { key: "first_page", phase: "Build", label: "First pages published, measured track first", mode: "auto_then_manual", blockedBy: [DAY_ZERO_STEP_KEY, "subdomain_live"] },
   { key: "cards_printed", phase: "Build", label: "Cards printed and handed to the clinic", mode: "manual", blockedBy: ["review_card_pdf"] },
   { key: "review_request_configured", phase: "Build", label: "Automated request configured in their booking system, or card_only recorded", mode: "manual", blockedBy: ["call_held"] },

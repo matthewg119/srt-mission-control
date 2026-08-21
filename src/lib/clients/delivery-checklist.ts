@@ -376,7 +376,7 @@ export async function setDeliveryStep(args: {
   const resolved = complete || skipped;
   const now = new Date().toISOString();
 
-  const { error } = await supabaseAdmin
+  const { data: written, error } = await supabaseAdmin
     .from("client_delivery_steps")
     .update({
       status: complete ? "complete" : skipped ? "skipped" : "pending",
@@ -390,9 +390,19 @@ export async function setDeliveryStep(args: {
       updated_at: now,
     })
     .eq("client_id", args.clientId)
-    .eq("step_key", args.stepKey);
+    .eq("step_key", args.stepKey)
+    .select("id");
 
   if (error) return { ok: false, error: error.message };
+
+  // ‼️ AN UPDATE THAT MATCHED NOTHING IS NOT AN ERROR, AND IT USED TO READ AS SUCCESS.
+  // A client whose delivery rows were never seeded, or a step key renamed out from under a
+  // row, affects zero rows and returns no error — so this answered { ok: true } and the Slack
+  // handler rewrote the card as done over a row that does not exist. `.select()` is what makes
+  // the difference visible; without it PostgREST has nothing to count.
+  if (!written?.length) {
+    return { ok: false, error: `no ${args.stepKey} row exists for this client, so nothing was written` };
+  }
 
   // The Day-0 stamp rides on the tick so the two cannot drift. It is the one side effect
   // here that is allowed to fail loudly: everything below this deliberately swallows

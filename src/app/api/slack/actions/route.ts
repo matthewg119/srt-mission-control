@@ -1106,32 +1106,33 @@ async function deliveryStepAction(args: {
       const { setDeliveryStep, stepByKey } = await import("@/lib/clients/delivery-checklist");
       // No postReadySteps here any more: setDeliveryStep runs the whole cascade for both
       // outcomes now, and calling it again from this side would double-post the next card.
-      const { uploadsFor, expectedFor } = await import("@/lib/clients/step-engine");
+      const { stepPrecondition } = await import("@/lib/clients/step-engine");
       const step = stepByKey(stepKey);
       if (!step) return;
 
       // ── Done ────────────────────────────────────────────────────────────
       if (args.actionId === "step_done") {
-        const expected = expectedFor(stepKey);
-        if (expected > 0) {
-          const have = await uploadsFor(clientId, stepKey);
-          if (have < expected) {
-            // Stays open, on purpose. This is the one place the engine argues back.
-            await slack
-              .postEphemeral(
-                args.channel,
-                args.userId,
-                `Not yet — ${have} of ${expected} screenshots are filed against this step. ` +
-                  `Reply in the thread with the rest, then hit Done. If some genuinely have ` +
-                  `no listing, the screenshot of the empty search result is the evidence.`,
-                args.messageTs
-              )
-              .catch(() => {});
-            return;
-          }
+        // Stays open, on purpose. This is the one place the engine argues back, and the list
+        // of what it argues about lives in step-engine rather than here so the board and any
+        // future caller get the same refusals. See stepPrecondition().
+        const gate = await stepPrecondition(clientId, stepKey);
+        if (!gate.ok) {
+          await tellActor(args, clientId, gate.message ?? "Not yet.");
+          return;
         }
 
-        await setDeliveryStep({ clientId, stepKey, transition: "complete", actor });
+        const done = await setDeliveryStep({ clientId, stepKey, transition: "complete", actor });
+
+        // ‼️ THE CARD IS NOT REWRITTEN WHEN THE WRITE FAILED, and it used to be.
+        // setDeliveryStep has always returned { ok:false, error } on a failed row write or a
+        // failed Day-0 stamp, and this line discarded it and ticked the card green regardless.
+        // That is the inverse of "Done does nothing" and it is the worse of the two: a step
+        // that SAYS it is complete, over a row that never changed.
+        if (!done.ok) {
+          await stepFailureNotice(args, clientId, step.label, done.error ?? "the row could not be written");
+          return;
+        }
+
         await resolveStepCard(args.channel, clientId, stepKey, `:white_check_mark: *${step.label}* — done by ${actor}.`);
         return;
       }
@@ -1145,13 +1146,18 @@ async function deliveryStepAction(args: {
       // while the generators behind them were never asked to run. Skipping the manual
       // presence sweep left the presence PDF, and everything downstream of it, parked.
       if (args.actionId === "step_skip") {
-        await setDeliveryStep({
+        const skip = await setDeliveryStep({
           clientId,
           stepKey,
           transition: "skipped",
           skippedReason: `Marked not applicable by ${actor}`,
           actor,
         });
+
+        if (!skip.ok) {
+          await stepFailureNotice(args, clientId, step.label, skip.error ?? "the row could not be written");
+          return;
+        }
 
         await resolveStepCard(
           args.channel,
@@ -1165,7 +1171,7 @@ async function deliveryStepAction(args: {
       }
 
       // ── I hit a problem ─────────────────────────────────────────────────
-      await supabaseAdmin
+      const { data: flagged, error: flagError } = await supabaseAdmin
         .from("client_delivery_steps")
         .update({
           status: "error",
@@ -1173,7 +1179,20 @@ async function deliveryStepAction(args: {
           updated_at: new Date().toISOString(),
         })
         .eq("client_id", clientId)
-        .eq("step_key", stepKey);
+        .eq("step_key", stepKey)
+        .select("id");
+
+      // Same zero-rows-is-not-an-error trap as setDeliveryStep. Flagging a problem against a
+      // step that has no row is the one moment where being told so matters most.
+      if (flagError || !flagged?.length) {
+        await stepFailureNotice(
+          args,
+          clientId,
+          step.label,
+          flagError?.message ?? "there is no row for this step on this client"
+        );
+        return;
+      }
 
       await resolveStepCard(
         args.channel,
@@ -1182,10 +1201,73 @@ async function deliveryStepAction(args: {
         `:warning: *${step.label}* — ${actor} hit a problem. Say what happened in this thread. ` +
           `It is now in the #alerts-infra digest and it will not advance on its own.`
       );
-    })()
+    })().catch(async (e) => {
+      // ‼️ THIS IIFE HAD NO CATCH, unlike every neighbouring handler in this file.
+      // Anything that threw inside it — a missing table, a Supabase timeout, a dynamic import
+      // failing on a cold module graph — killed the rest of the function silently, INCLUDING
+      // resolveStepCard. The card kept its three buttons, Slack said nothing, and the only
+      // trace was a Vercel log nobody was watching. That is the shape of "I hit Done and
+      // nothing happens".
+      const reason = (e as Error).message;
+      console.error(`[slack/actions] ${args.actionId} on ${stepKey} failed:`, reason);
+      const { stepByKey: byKey } = await import("@/lib/clients/delivery-checklist");
+      await stepFailureNotice(args, clientId, byKey(stepKey)?.label ?? stepKey, reason).catch(() => {});
+    })
   );
 
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * Did that Slack call actually work?
+ *
+ * ‼️ slackFetch NEVER THROWS. Slack answers HTTP 200 for everything and puts real failures in
+ * `ok: false`, so every `.catch(() => {})` around a Slack call in this handler was catching
+ * nothing whatsoever: a `message_not_found`, a `cant_update_message`, a bot that is not in the
+ * channel, or a missing scope all resolved as success and the caller carried on as though the
+ * message had landed. Check the body, never the promise.
+ */
+function slackOk(res: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(res && res.ok === true);
+}
+
+/**
+ * Say something to the person who pressed the button, wherever it can be said.
+ *
+ * Ephemeral first, because a refusal is about their click and does not belong in the log
+ * everybody reads. The ops thread is the fallback rather than the default for the opposite
+ * reason: saying it too loudly beats saying nothing, and saying nothing is what happened.
+ */
+async function tellActor(
+  args: { channel: string; messageTs: string; userId: string },
+  clientId: string,
+  text: string
+): Promise<void> {
+  const res = await slack
+    .postEphemeral(args.channel, args.userId, text, args.messageTs)
+    .catch(() => null);
+  if (slackOk(res)) return;
+
+  const { notifyThread } = await import("@/lib/clients/delivery-checklist");
+  await notifyThread(clientId, text).catch(() =>
+    console.error("[slack/actions] could not reach the actor or the ops thread:", text)
+  );
+}
+
+/** A button that did not do what it said. Names the step, the reason, and what is still true. */
+async function stepFailureNotice(
+  args: { channel: string; messageTs: string; userId: string },
+  clientId: string,
+  stepLabel: string,
+  reason: string
+): Promise<void> {
+  await tellActor(
+    args,
+    clientId,
+    `:warning: *${stepLabel}* did not go through: ${reason}\n` +
+      `The step is unchanged and the buttons are still live, so nothing is half-done. ` +
+      `Try it again, and if it repeats say so in this thread.`
+  );
 }
 
 /**
@@ -1208,11 +1290,20 @@ async function resolveStepCard(
     .maybeSingle();
 
   const ts = (data?.slack_message_ts as string | null) ?? null;
-  if (!ts) return;
 
-  await slack
-    .updateMessage(channel, ts, text, [
-      { type: "section", text: { type: "mrkdwn", text } },
-    ])
-    .catch(() => {});
+  // ‼️ BOTH FAILURE PATHS NOW FALL BACK TO A THREAD REPLY, and that is the point of this
+  // function. A null ts used to `return` outright, and a failed chat.update was swallowed by a
+  // `.catch(() => {})` that never fired — see slackOk above. Between them a step could be
+  // genuinely complete while its card kept all three buttons and nothing anywhere said so.
+  if (ts) {
+    const res = await slack
+      .updateMessage(channel, ts, text, [{ type: "section", text: { type: "mrkdwn", text } }])
+      .catch(() => null);
+    if (slackOk(res)) return;
+  }
+
+  const { notifyThread } = await import("@/lib/clients/delivery-checklist");
+  await notifyThread(clientId, text).catch((e) =>
+    console.error("[slack/actions] could not resolve the card or reach the ops thread:", (e as Error).message)
+  );
 }

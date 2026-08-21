@@ -21,10 +21,11 @@ import { DraftsForm, type DraftRow } from "./drafts-form";
 import { DnsForm, type DnsRowView } from "./dns-form";
 import { HubForm, type HubHostView, type HubPageView, type AuditPromptView } from "./hub-form";
 import { ThemeForm, type ThemeView } from "./theme-form";
+import { BaselineForm } from "./baseline-form";
 import { readTheme } from "@/lib/hub/theme";
 import { listOnboardingDocs } from "@/lib/clients/onboarding-docs";
 import { stepByKey } from "@/lib/clients/delivery-checklist";
-import { hostsFor } from "@/lib/hub/vercel-domains";
+import { hostsFor, vercelConfig } from "@/lib/hub/vercel-domains";
 
 /**
  * Tokens a human types on the board. Everything else on a draft is derived from the
@@ -165,11 +166,40 @@ export default async function ClientDetailPage({
             .select("id, prompts")
             .ilike("website", auditFilter.value)
       )
-        .eq("status", "complete")
+        // ‼️ "done", NOT "complete". audit_reports.status is
+        // classifying | awaiting_city | running | done | failed, and finishReport writes
+        // "done" — so this filter matched NOTHING, for every client, since the board was
+        // built. The symptom was not an error: the hub page's question picker simply had no
+        // questions in it and looked like a client whose audit had not run.
+        .eq("status", "done")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
     : { data: null };
+
+  // The newest BASELINE, which is a different row from the one above: that one is whatever
+  // audit this client's contact has ever had, this one is the run fired FOR them by
+  // startBaselineScan. `measured` is what says the photograph is real, and it is read rather
+  // than inferred from the step being ticked, because the step being ticked is exactly the
+  // thing that turned out not to mean anything.
+  const { data: baselineRow } = await supabaseAdmin
+    .from("audit_reports")
+    .select("id, created_at")
+    .eq("client_id", id)
+    .eq("status", "done")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const baselineMeasured = baselineRow
+    ? ((
+        await supabaseAdmin
+          .from("audit_runs")
+          .select("id", { count: "exact", head: true })
+          .eq("report_id", baselineRow.id as string)
+          .eq("status", "ok")
+      ).count ?? 0)
+    : null;
 
   const stageStatus = new Map(
     (steps ?? []).map((s) => [s.stage as string, s.status as string])
@@ -397,6 +427,18 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <DeliveryChecklistForm clientId={id} completed={completedSteps} />
+
+        <div className="mt-5 border-t border-[rgba(255,255,255,0.07)] pt-4">
+          <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+            Photograph I
+          </p>
+          <BaselineForm
+            clientId={id}
+            website={(client.website as string | null) ?? null}
+            measured={baselineMeasured}
+            scannedAt={(baselineRow?.created_at as string | null) ?? null}
+          />
+        </div>
       </div>
 
       {/* ── DNS ── */}
@@ -446,6 +488,10 @@ export default async function ClientDetailPage({
           domain={clientDomain}
           wanted={hubWanted}
           hosts={hubHosts}
+          vercelConfigured={vercelConfig() !== null}
+          dnsVerified={dnsRows.filter((r) => r.status === "verified").length}
+          dnsTotal={DNS_RECORDS.length}
+          themeConfirmedAt={readTheme(client.theme).confirmedAt ?? null}
           pages={hubPages}
           prompts={auditPrompts}
           day0ArchivedAt={(client.day_0_archived_at as string | null) ?? null}

@@ -309,8 +309,10 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   );
 
   // ── Subdomain: learn.{domain} unless it already resolves, then guide. ──
-  // Skipped when there is no domain yet: it gets decided after intake step 1, and a DNS
-  // lookup of "learn.null" is not a check worth running.
+  // Skipped when there is no domain yet, because a DNS lookup of "learn.null" is not a check
+  // worth running. It is then decided by registerHubAndSeedDns, which runs as the hub_preview
+  // step and cannot proceed without a domain anyway. This comment used to claim intake step 1
+  // decided it; nothing did, and every /start client carried a null subdomain into the hub.
   if (domain) {
     await chooseSubdomain(clientId, domain).catch((e) =>
       warn(`subdomain check failed: ${(e as Error).message}`)
@@ -457,7 +459,18 @@ async function checkMarket(clientId: string, input: StartPilotInput): Promise<vo
   ).catch(() => {});
 }
 
-async function chooseSubdomain(clientId: string, domain: string): Promise<void> {
+/**
+ * learn.{domain} unless it already resolves, in which case guide.{domain}.
+ *
+ * ‼️ EXPORTED, because startPilot is not the only moment this can be decided and for a large
+ * share of clients it is not even a possible one. /start provisions from a Stripe thank-you
+ * page with an email and nothing else, so `domain` is null, so the call below is skipped and
+ * `clients.subdomain` stays NULL forever. `subdomainLabel()` then falls back to the literal
+ * "learn" — which is a guess, not a check, and it is wrong precisely when it matters: on a
+ * domain where learn. is already taken. registerHubAndSeedDns calls this before it attaches
+ * anything, which is the moment the domain is certain to be known.
+ */
+export async function chooseSubdomain(clientId: string, domain: string): Promise<void> {
   let convention: "learn" | "guide" = "learn";
 
   try {

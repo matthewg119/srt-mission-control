@@ -128,6 +128,23 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return generateCitationCleanupList(clientId);
   },
 
+  // ‼️ THE STEP THAT WAS DOING NOTHING AT ALL, AND THE ONE THAT PRODUCES THE CNAMEs.
+  // registerClientHosts() is the only code here that attaches a domain to Vercel and reads the
+  // REAL per-domain target back; its only callers were a board button and a CLI script. So on
+  // the first pilot the step was ticked by hand, nothing was attached, and reviews.{domain}
+  // answered NXDOMAIN. See hub-setup.ts for the full account.
+  hub_preview: async (clientId) => {
+    const { registerHubAndSeedDns } = await import("../hub-setup");
+    return registerHubAndSeedDns(clientId);
+  },
+
+  // Reports how many of the three records resolve. It never asserts one is WRONG —
+  // checkRecord deliberately never stores not_found, because propagation takes an hour.
+  subdomain_live: async (clientId) => {
+    const { checkHubResolving } = await import("../hub-setup");
+    return checkHubResolving(clientId);
+  },
+
   review_tool_preview: async (clientId) => {
     // Produces no bytes. It verifies that the preview is genuinely themed and posts the URL,
     // and refuses when the theme is unconfirmed — which is the only way "themed to match" can
@@ -144,8 +161,12 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
  * route that actually performs the work ticks them:
  *
  *   intake_received    /api/onboarding/save, once the intake is complete
- *   baseline_scan      startBaselineScan, once runAuditPipeline returns
- *   day_zero_archive   the Day 0 wall. `gate: true`, stamped by setDeliveryStep
+ *   baseline_scan      startBaselineScan, once runAuditPipeline returns AND the run actually
+ *                      measured something. A pipeline that completed with twenty no_data rows
+ *                      leaves this outstanding on purpose; see baseline-scan.ts.
+ *   day_zero_archive   the Day 0 wall. `gate: true`, stamped by setDeliveryStep. It is
+ *                      `mode: "manual"` now and posts a card like any other manual step — it
+ *                      was "auto" with no runner, which meant no card and no execution at all.
  *
  * Listed explicitly because the alternative is inferring it, and the inference would be
  * "no runner means stalled", which is wrong for exactly these three.

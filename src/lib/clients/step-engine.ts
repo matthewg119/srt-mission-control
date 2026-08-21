@@ -18,6 +18,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepByKey, type DeliveryStep } from "@/lib/clients/delivery-checklist";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
+import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
 
 // ‼️ THE PLATFORM LIST LIVES IN @/config/presence-platforms AND NOWHERE ELSE.
 //
@@ -144,11 +145,85 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
         "THE CALL: it is a fixed seven-day wait and it is usually the long pole.",
       ];
 
-    case "dns_records":
+    case "hub_preview": {
+      // ‼️ THIS CARD USED TO BE A LABEL AND THREE BUTTONS. There was no case here at all, so
+      // the one step that produces the hostnames and the CNAME values said nothing about
+      // either, and the only way to learn the theme was still outstanding was to tick it and
+      // watch the NEXT step refuse.
+      const { formatDnsRecords, themeConfirmed } = await import("./hub-setup");
+      const { loadDnsRows } = await import("./dns-records");
+      const { hostsFor } = await import("@/lib/hub/vercel-domains");
+
+      const { data: row } = await supabaseAdmin
+        .from("clients")
+        .select("domain, subdomain")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const domain = (row?.domain as string | null) ?? null;
+      if (!domain) return ["No domain on file, so there is no hub to build."];
+
+      const hosts = hostsFor({ subdomain: (row?.subdomain as string | null) ?? null, domain });
+      const themed = await themeConfirmed(c.id);
+
       return [
-        "*Three records: two CNAMEs and one TXT.* Say it that way — \"CNAME and TXT\" reads as",
-        "two, and that is where the count drifted before. The exact values are on the DNS panel.",
-        "Never ask for registrar credentials. They drive.",
+        "The hostnames are attached to Vercel already. What is left is the THEME.",
+        "",
+        ...hosts.map((h) => `  • \`${h.host}\` (${h.kind})`),
+        "",
+        ...formatDnsRecords(await loadDnsRows(c.id), domain),
+        "",
+        themed
+          ? ":white_check_mark: Theme confirmed. [Done] will go through."
+          : ":warning: *[Done] will refuse until the theme is confirmed.* Client board, Theme " +
+            "panel, extract or set the colours, then Confirm. Unthemed, the hub and the review " +
+            "tool render in SRT's colours on the client's own domain.",
+      ];
+    }
+
+    case "dns_records": {
+      // ‼️ IT PRINTS THE ACTUAL RECORDS NOW. It used to say "the exact values are on the DNS
+      // panel", which means the person on the call has to leave the thread, find the board and
+      // read three values off a different screen while the client waits in their registrar.
+      const { formatDnsRecords } = await import("./hub-setup");
+      const { loadDnsRows } = await import("./dns-records");
+
+      const { data: row } = await supabaseAdmin
+        .from("clients")
+        .select("domain")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const domain = (row?.domain as string | null) ?? null;
+      if (!domain) return ["No domain on file, so there are no records to add."];
+
+      return [
+        ...formatDnsRecords(await loadDnsRows(c.id), domain),
+        "",
+        "Never ask for registrar credentials. They drive, you read the values out.",
+      ];
+    }
+
+    case "first_page":
+      return [
+        "Pages are written and published from the Hub panel on the client board.",
+        "Pick one of the twenty questions the audit actually ran, draft the answer, edit it,",
+        "then Publish.",
+        "",
+        ":lock: *Publishing refuses while Day 0 is unarchived.* That is the one hard wall in",
+        "this checklist and it is deliberate: once a page is live, the baseline the day 30, 60",
+        "and 90 numbers are measured against cannot be recovered.",
+      ];
+
+    case DAY_ZERO_STEP_KEY:
+      return [
+        "*The one step that blocks rather than flags.* Nothing may be published until it is",
+        "ticked, and ticking it stamps `clients.day_0_archived_at`.",
+        "",
+        "It means: the before picture is captured and stored, so the day 30, 60 and 90 reports",
+        "have something honest to be measured against. Tick it only once that is true — the",
+        "column records `manual_step`, which is an ASSERTION that the archive happened, not",
+        "evidence of it, and no artifact may call that a photograph.",
       ];
 
     case "cards_printed":
@@ -338,6 +413,65 @@ export function expectedFor(stepKey: string): number {
   return step ? expectedUploads(step) : 0;
 }
 
+export interface Precondition {
+  ok: boolean;
+  /** Said to the person who pressed the button. Only present when ok is false. */
+  message?: string;
+}
+
+/**
+ * May [Done] go through on this step yet?
+ *
+ * ‼️ THIS GENERALISES A CHECK THAT USED TO BE ONE HARDCODED `if` IN THE SLACK HANDLER.
+ * §3 gives the doctrine for the upload case: "[Done] on an upload task validates the expected
+ * file count landed in the thread; if not, it names what's missing and stays open." The
+ * principle is not about files, it is about a step whose completion is CHECKABLE — and when
+ * it is checkable, a checklist that takes somebody's word for it is a checklist that lies.
+ *
+ * `hub_preview` is the case that proved it. It was ticked on the pilot with the theme
+ * unconfirmed, so `review_tool_preview` refused on the very next line with "the theme has not
+ * been confirmed" — a message that reads as a failure of the review tool rather than as the
+ * unfinished half of the step just marked done. The refusal belongs on the button that was
+ * wrong, at the moment it was pressed.
+ *
+ * Everything not named here returns ok. Most steps are somebody's word by nature and that is
+ * correct: the engine flags, it does not police.
+ */
+export async function stepPrecondition(clientId: string, stepKey: string): Promise<Precondition> {
+  const step = stepByKey(stepKey);
+  if (!step) return { ok: true };
+
+  const expected = expectedUploads(step);
+  if (expected > 0) {
+    const have = await uploadsFor(clientId, stepKey);
+    if (have < expected) {
+      return {
+        ok: false,
+        message:
+          `Not yet — ${have} of ${expected} screenshots are filed against this step. ` +
+          `Reply in the thread with the rest, then hit Done. If some genuinely have no ` +
+          `listing, the screenshot of the empty search result is the evidence.`,
+      };
+    }
+  }
+
+  if (stepKey === "hub_preview") {
+    const { themeConfirmed } = await import("./hub-setup");
+    if (!(await themeConfirmed(clientId))) {
+      return {
+        ok: false,
+        message:
+          "Not yet — the theme has not been confirmed, and this step's label says \"themed\". " +
+          "Open the client board, Theme panel, extract or set the colours, then press Confirm. " +
+          "Until you do, the hub and the review tool render in SRT's colours on the client's " +
+          "own domain, and review_tool_preview will refuse for the same reason.",
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
 /**
  * Post whichever manual steps are now startable and have never been posted.
  *
@@ -459,6 +593,14 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
 
       const { notifyThread } = await import("./delivery-checklist");
       await notifyThread(clientId, `:warning: *${step.label}* failed: ${result.error ?? "unknown"}`).catch(() => {});
+
+      // ‼️ A FAILED RUNNER'S NOTE IS POSTED TOO, and it used to be thrown away. `note` is the
+      // runner's own account of what it found, and on the failure paths that is precisely
+      // where the diagnosis lives: registerHubAndSeedDns builds a full readout of which host
+      // attached, which did not and why, and then returns ok:false when neither did. Printing
+      // one line of `error` and discarding the readout leaves the thread saying a step failed
+      // with no way to tell whether the cause is a missing token or a domain someone else owns.
+      if (result.note) await notifyThread(clientId, result.note).catch(() => {});
       continue;
     }
 

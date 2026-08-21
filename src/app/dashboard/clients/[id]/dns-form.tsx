@@ -14,6 +14,41 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+/**
+ * Copy one value to the clipboard.
+ *
+ * ‼️ THE HOST AND THE VALUE ARE THE TWO STRINGS A HUMAN RETYPES WRONG, and this panel is read
+ * out loud on a call while the client types into a registrar. `guide` retyped as `guide.` or
+ * `4fddd1b501fe6565.vercel-dns-017.com` retyped with a transposed digit both produce a record
+ * that never resolves and no error anywhere — the panel simply sits at `added` forever, which
+ * dns-records.ts already names as the gap where a build silently stalls.
+ *
+ * Deliberately silent on failure beyond the label: an insecure context or a denied permission
+ * means the text is still on screen to read, so a red error would be noise.
+ */
+function CopyButton({ text, what }: { text: string; what: string }) {
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+
+  return (
+    <button
+      type="button"
+      title={`Copy the ${what}`}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setState("done");
+        } catch {
+          setState("failed");
+        }
+        setTimeout(() => setState("idle"), 1500);
+      }}
+      className="shrink-0 rounded border border-[rgba(255,255,255,0.12)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[rgba(255,255,255,0.45)] transition hover:border-[rgba(255,255,255,0.3)] hover:text-white"
+    >
+      {state === "done" ? "copied" : state === "failed" ? "select it" : "copy"}
+    </button>
+  );
+}
+
 export interface DnsRowView {
   key: string;
   label: string;
@@ -158,9 +193,10 @@ export function DnsForm({
               </div>
               <div className="flex gap-2">
                 <dt className="w-14 shrink-0 text-[rgba(255,255,255,0.35)]">Host</dt>
-                <dd>
+                <dd className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="font-mono text-white/80">{r.host}</span>
-                  <span className="ml-2 text-[10px] text-[rgba(255,255,255,0.3)]">
+                  <CopyButton text={r.host} what="host" />
+                  <span className="text-[10px] text-[rgba(255,255,255,0.3)]">
                     just this, not {r.fqdn}
                   </span>
                 </dd>
@@ -192,7 +228,10 @@ export function DnsForm({
                       </button>
                     </div>
                   ) : (
-                    <span className="break-all font-mono text-white/80">{r.value}</span>
+                    <span className="flex min-w-0 items-start gap-2">
+                      <span className="break-all font-mono text-white/80">{r.value}</span>
+                      <CopyButton text={r.value} what="value" />
+                    </span>
                   )}
                 </dd>
               </div>
