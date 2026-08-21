@@ -156,7 +156,10 @@ async function one(
   }
 
   const firstLine = draft.body.split("\n")[0].trim();
-  if (first && firstLine !== `${first},`) problems.push(`first line should be "${first}," but is "${firstLine}"`);
+  // The greeting is appended by ensureGreeting(), so it is a CONSTANT shape now, not whatever
+  // the model felt like. Hey + first name + comma, exactly, on every email that has a name.
+  if (first && firstLine !== `Hey ${first},`)
+    problems.push(`first line should be "Hey ${first}," but is "${firstLine}"`);
   // ‼️ THIS TESTED FOR A MENTION AND THE RULE IS ABOUT A GREETING. includes("michoacana")
   // failed a perfectly good draft that opened "I was looking at what AI search engines can pull
   // up for Michoacana 3mendos Tacos in Charlotte" - a first sentence, not a salutation, and

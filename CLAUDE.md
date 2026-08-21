@@ -598,6 +598,39 @@ re-checks and 400s, so the disabled state is not the guard.
 > is invisible. `miniCheckContext`'s unresearched branch is thin for the same reason: name, city,
 > and the fact that nothing came back. Nothing else is in the prompt to reach for.
 
+> ‼️ **THIS LANE HAD NO REFERENCE EMAIL UNTIL 2026-08-20, AND THAT WAS THE BUG.** The audit lane
+> gets `permissionExample()`; `draftNoWebsitePitch` was handed rules and no shape, so the shape was
+> whatever the model felt like that run. Rules constrain what an email may CLAIM. Only an example
+> constrains how it READS.
+>
+> It cannot borrow the audit lane's two examples either, and that is not taste: both are built on
+> *"I ran X through the AI engines ... you came back in 10 of 20"*, which is a 20-prompt audit.
+> This lane runs three questions and sometimes none, so the nearest reference available to it
+> described work it had not done.
+>
+> `NO_WEBSITE_EXAMPLE` (`email-assistant.ts`) is a real sent email. **Five beats, one sentence
+> each:** the question asked in the buyer's words with the category and city in it, the result
+> flat and without adjectives, why that question matters, one line on why the engine had nothing
+> of theirs, then it STOPS.
+>
+> **The count is stated as a number** because the word cap does not constrain it: a live draft came
+> back at 118 words inside a 120-word budget and still ran to five paragraphs, the fifth being a
+> second way of saying the fourth. One finding, four body beats.
+>
+> ‼️ **Beat 1 must be true for the angle in play.** Three angles really did put a buyer question to
+> an engine and may say so. `nothing-to-find` did not, and keeps the rhythm with an honest first
+> beat. The example teaches SHAPE; `miniCheckContext` decides what may go in it.
+
+> ‼️ **THE GREETING IS APPENDED IN CODE** (`ensureGreeting`), same precedent as `PERMISSION_CLOSE`
+> and for the same measured reason. The prompt told the model the first line was to be exactly
+> `{name},` with no "Hi", no "Hello", no "Dear" — and a live draft opened **"Hey Ale,"** anyway.
+> That one reads better, which is the point: a shape wanted on every email is not something to ask
+> for once per run and hope for. Asked, it varies; appended, it does not. It is `Hey {first},`.
+>
+> Whatever the model wrote is stripped first, in either shape, so the email cannot greet twice — a
+> paragraph counts as a greeting only when it is short AND ends the way one does. **No first name
+> means NO greeting**, never "Hey there," and never the business name.
+
 **The three questions are template-generated, not model-written.** `classify.ts` writes 20 because
 an audit measures a whole buying journey; this measures one thing, and a template cannot invent a
 question about a service they do not offer. It also makes two prospects in the same trade

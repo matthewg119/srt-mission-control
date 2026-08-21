@@ -32,6 +32,7 @@ import {
   COMPLIANCE_RULES,
   ensureSignoff,
   ensurePermissionClose,
+  noWebsiteExample,
   PERMISSION_CLOSE,
   noDashes,
   enforceLinkPolicy,
@@ -589,6 +590,40 @@ function stripEchoedClose(body: string): string {
     .trim();
 }
 
+/** A salutation line, however the model chose to open. Short by definition: a greeting is a few
+ *  words, so the length cap is what stops a real opening sentence being eaten as one. */
+const SALUTATION_RE = /^(hi|hello|hey|dear|good (?:morning|afternoon|evening))\b[^\n]{0,40}$/i;
+/** `Rafael,` — a bare name and a comma, which is what the model wrote before this was in code. */
+const BARE_NAME_GREETING_RE = /^[^\n]{1,40},$/;
+
+/**
+ * Put the greeting on in CODE.
+ *
+ * ‼️ SAME PRECEDENT AS PERMISSION_CLOSE, AND FOR THE SAME MEASURED REASON. The prompt told the
+ * model the first line was to be exactly "`{name},`" with no "Hi", no "Hello", no "Dear" — and a
+ * live draft to New Generation Services opened "Hey Ale," anyway. That one reads better, which is
+ * the point: a shape wanted on every single email is not something to ask for once per run and
+ * hope for. Asked, it varies. Appended, it does not.
+ *
+ * Whatever the model wrote is stripped first, in either shape, so the email cannot end up greeting
+ * twice. A paragraph is only treated as a greeting when it is short AND ends the way one does; an
+ * opening sentence is neither.
+ *
+ * No first name means NO greeting rather than a guess. "Hey there," is a mail merge on the one
+ * line that decides whether the rest is read, and greeting the BUSINESS is worse.
+ */
+export function ensureGreeting(body: string, firstName?: string | null): string {
+  const paras = body.split(/\n{2,}/);
+  const first = paras[0]?.trim() ?? "";
+  const looksLikeGreeting =
+    SALUTATION_RE.test(first) || (BARE_NAME_GREETING_RE.test(first) && first.split(/\s+/).length <= 4);
+  if (looksLikeGreeting) paras.shift();
+
+  const rest = paras.join("\n\n").trim();
+  const name = firstName?.trim();
+  return name ? `Hey ${name},\n\n${rest}` : rest;
+}
+
 /**
  * The no-website permission email.
  *
@@ -626,6 +661,9 @@ export async function draftNoWebsitePitch(
           // No redesign is ever in play on this lane, so the link policy is `none` and the rules
           // are built for the linkless shape.
           prePitchRules(null),
+          // ‼️ THE SHAPE, not just the rules. Without a reference email this lane's drafts
+          // reworded themselves every run; see the header on NO_WEBSITE_EXAMPLE.
+          noWebsiteExample(),
           PARAGRAPH_RULES,
           VOICE_RULES,
           STYLE_RULES,
@@ -634,13 +672,11 @@ export async function draftNoWebsitePitch(
           // constant that overwrites it spends tokens on a line nobody reads. Told to write no
           // subject at all, it also stops opening the body with a restatement of one.
           "Do NOT write a subject line. A subject is added for you; start with the greeting.",
-          // ‼️ The greeting is a NAME AND A COMMA, nothing else, and it is stated here because
-          // the model reaches for "Hi," or, worse, greets the BUSINESS ("Hi Michoacana 3mendos,")
-          // when no person is named. A cold email addressed to a company reads as a mail merge on
-          // the first line, which is the line that decides whether the rest is read.
-          recipientFirstName
-            ? `GREETING: the first line is exactly "${recipientFirstName}," and nothing else. No "Hi", no "Hello", no "Dear".`
-            : "GREETING: there is no name for this contact, so write NO greeting at all. Open on the first sentence. Never greet the business by its name.",
+          // ‼️ The greeting is APPENDED IN CODE by ensureGreeting() and is no longer the model's
+          // to write. Told to write one, it wrote a different one every run; told to write none,
+          // it also stops opening the body with a restatement of it. Same move as the subject.
+          "GREETING: do NOT write one. A greeting is added for you. Start on your first finding " +
+            "sentence. Never greet the business by its name.",
           COMPLIANCE_RULES,
         ].join("\n"),
         user: [
@@ -694,7 +730,8 @@ export async function draftNoWebsitePitch(
   return {
     angle: angle.id,
     subject,
-    body: ensureSignoff(ensurePermissionClose(polished.body)),
+    // Greeting first so the close and the sign-off are appended below it, not above it.
+    body: ensureSignoff(ensurePermissionClose(ensureGreeting(polished.body, recipientFirstName))),
     removedLinks: body.removed,
     formatNote: polished.note,
     rejectedFindings: gated.draft ? [] : gated.findings.map((f) => `${f.rule}: ${f.detail}`),

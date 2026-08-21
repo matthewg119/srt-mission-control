@@ -628,6 +628,66 @@ There is also one thing on your own site working against you there, and it is th
 [STOP HERE. The close and the sign-off are appended automatically.]`;
 
 /**
+ * The reference email for the NO-WEBSITE lane. A real one that was sent, reproduced exactly.
+ *
+ * ‼️ THIS LANE HAD NO REFERENCE EMAIL AT ALL until 2026-08-20, and that was the bug. The audit
+ * lane gets permissionExample(); draftNoWebsitePitch was handed rules and no shape, so the shape
+ * was whatever the model felt like that run — one draft opened "I was looking at what AI search
+ * engines can actually pull up for", the next "I went looking for a description of". Rules
+ * constrain what an email may CLAIM. Only an example constrains how it READS.
+ *
+ * It cannot borrow the audit lane's examples either, and that is not a style preference: both of
+ * them are built on "I ran X through the AI engines ... you came back in 10 of 20", which is a
+ * 20-prompt audit. This lane runs THREE questions and sometimes none, so the nearest reference
+ * available to it was describing work it had not done.
+ *
+ * FIVE BEATS, one sentence each:
+ *   1. the question asked, in the buyer's words, with the category and the city in it
+ *   2. the result, flat, no adjectives
+ *   3. why that question matters — who asks it and what they are about to do
+ *   4. the mechanism, ONE line: no site, so nothing of theirs to pull from
+ *   5. it STOPS. The close and the sign-off are appended in code.
+ *
+ * The greeting is not in the example because it is not the model's to write: ensureGreeting() in
+ * no-website-pitch.ts prepends it, same precedent as PERMISSION_CLOSE.
+ *
+ * ‼️ BEAT 1 MUST BE TRUE FOR THE ANGLE IN PLAY. Three of the four angles really did put a buyer
+ * question to an engine and may say so. `nothing-to-find` did not, and it keeps the same rhythm
+ * with an honest first beat: it went looking the way an engine does and found nothing readable.
+ * The example teaches shape. miniCheckContext decides what may go in it.
+ */
+export const NO_WEBSITE_EXAMPLE = `I asked an AI engine who to hire for property maintenance and home improvement in Clarksville, TN.
+
+New Generation Services was not in the answer.
+
+That question comes from someone who has already decided to spend money and just needs a name.
+
+You have no website, so the engine had nothing of yours to pull from when it answered.
+
+[STOP HERE. The close and the sign-off are appended automatically.]`;
+
+/** The framed few-shot, mirroring permissionExample() so both lanes teach the same way. */
+export function noWebsiteExample(): string {
+  return [
+    "REFERENCE EMAIL. This is a real one that was sent. Match its rhythm, its one-sentence",
+    "paragraphs, its plain words and its restraint. Do NOT reuse its wording, its business, its",
+    "trade or its city, and do NOT copy its first sentence unless it is true for this prospect:",
+    "---",
+    NO_WEBSITE_EXAMPLE,
+    "---",
+    "Note the shape: what you did, what came back, why that question matters, then one line on why",
+    "the engine had nothing of theirs. Note where it stops. Note that it has no greeting, because",
+    "one is added for you.",
+    // ‼️ THE COUNT IS STATED AS A NUMBER because the word cap does not constrain it. A live
+    // draft came back at 118 words inside a 120-word budget and still ran to five paragraphs,
+    // the fifth being a second way of saying the fourth. One finding, four beats; a fifth
+    // paragraph is either a restatement or a second finding, and both are the same mistake.
+    "FOUR body paragraphs, one sentence each. Not five. If you have written a fifth, one of them",
+    "is saying something an earlier one already said, and it comes out.",
+  ].join("\n");
+}
+
+/**
  * The few-shot block, matched to whether a redesign exists for this prospect.
  *
  * The "note where it stops" line ships on BOTH branches. It used to be no-redesign only, back when
