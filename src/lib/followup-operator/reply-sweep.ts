@@ -12,6 +12,12 @@
 //     the filter and the sort agree.
 //   - Junk is swept separately and deduped by id. /me/messages is documented as all-folders,
 //     but a reply in Junk is exactly the case worth being paranoid about.
+//   - EVERY mailbox in outreachMailboxes() is read, not just /me. Reading /me alone was correct
+//     only while everything went out from the connected account; the moment the rotation started
+//     drafting from submissions@, a reply to one of those pitches landed somewhere nothing looked
+//     and the ladder went on nudging a prospect who had already answered. The all-folders read
+//     includes each mailbox's own Sent Items, which is harmless: isExcluded() drops anything from
+//     our own domain, so our outbound is never read back as a reply.
 
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft, type GraphMessage } from "@/lib/microsoft";
@@ -19,7 +25,7 @@ import { logTouch, updateProspect, getProspectByEmail, getProspectByConversation
 import { applyReply } from "./cadence";
 import { excludedDomains, isExcluded } from "./sent-sweep";
 import { classifyReply, isAutomated, isBounce } from "./classify-reply";
-import { connectedMailbox } from "@/config/outreach-mailboxes";
+import { outreachMailboxes, toGraphMailbox } from "@/config/outreach-mailboxes";
 import type { OutreachProspectRow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -126,97 +132,108 @@ export async function runReplyMailSweep(opts?: {
 
   try {
     const byDomain = await domainIndex();
-    const mailbox = connectedMailbox();
+    const mailboxes = outreachMailboxes();
 
-    for await (const msg of inboundMessages(windowStart, undefined)) {
-      result.scanned++;
-      if (result.scanned > max) break;
-      if (msg.isDraft) continue;
+    // ‼️ EVERY MAILBOX IN THE ROTATION, not just /me. A prospect pitched from submissions@
+    // replies INTO submissions@, so reading /me alone meant the ladder kept nudging people who
+    // had already answered — and, worse, kept nudging addresses that had already bounced. Same
+    // single-watermark rule as the sent sweep: stamp once, after every mailbox.
+    for (const box of mailboxes) {
+      const mailbox = box.address;
+      // Per mailbox, not cumulative: a busy first mailbox must not starve the second of its
+      // whole window. Same reasoning as the sent sweep's scannedHere.
+      let scannedHere = 0;
+      for await (const msg of inboundMessages(windowStart, toGraphMailbox(box.address))) {
+        result.scanned++;
+        scannedHere++;
+        if (scannedHere > max) break;
+        if (msg.isDraft) continue;
 
-      const from = (msg.from?.emailAddress?.address ?? "").trim().toLowerCase();
-      // Our own Sent Items live in the all-folders view too. This is what keeps the sweep
-      // from reading Matthew's own outbound as a reply to himself.
-      if (!from || isExcluded(from, domains)) continue;
+        const from = (msg.from?.emailAddress?.address ?? "").trim().toLowerCase();
+        // Our own Sent Items live in the all-folders view too. This is what keeps the sweep
+        // from reading Matthew's own outbound as a reply to himself.
+        if (!from || isExcluded(from, domains)) continue;
 
-      // Match in descending order of trust, mirroring reply-anchor.ts.
-      let prospect: OutreachProspectRow | null = null;
-      let matchedBy = "conversation";
-      if (msg.conversationId) prospect = await getProspectByConversation(msg.conversationId);
-      if (!prospect) {
-        prospect = await getProspectByEmail(normalizeEmail(from));
-        if (prospect) matchedBy = "address";
-      }
-      if (!prospect) {
-        const at = from.lastIndexOf("@");
-        const cand = at >= 0 ? byDomain.get(from.slice(at + 1)) : undefined;
-        if (cand) {
-          prospect = cand;
-          matchedBy = "domain";
+        // Match in descending order of trust, mirroring reply-anchor.ts.
+        let prospect: OutreachProspectRow | null = null;
+        let matchedBy = "conversation";
+        if (msg.conversationId) prospect = await getProspectByConversation(msg.conversationId);
+        if (!prospect) {
+          prospect = await getProspectByEmail(normalizeEmail(from));
+          if (prospect) matchedBy = "address";
         }
-      }
-      if (!prospect) {
-        result.unmatched++;
-        continue;
-      }
+        if (!prospect) {
+          const at = from.lastIndexOf("@");
+          const cand = at >= 0 ? byDomain.get(from.slice(at + 1)) : undefined;
+          if (cand) {
+            prospect = cand;
+            matchedBy = "domain";
+          }
+        }
+        if (!prospect) {
+          result.unmatched++;
+          continue;
+        }
 
-      // Never attach mail older than the first thing we sent them. An existing thread with
-      // the same person is not a reply to a pitch.
-      const receivedAt = new Date(msg.receivedDateTime ?? now.toISOString());
-      if (prospect.first_sent_at && receivedAt < new Date(prospect.first_sent_at)) continue;
+        // Never attach mail older than the first thing we sent them. An existing thread with
+        // the same person is not a reply to a pitch.
+        const receivedAt = new Date(msg.receivedDateTime ?? now.toISOString());
+        if (prospect.first_sent_at && receivedAt < new Date(prospect.first_sent_at)) continue;
 
-      const automated = isAutomated(from, msg.subject ?? null);
-      const bounced = automated && isBounce(from, msg.subject ?? null);
+        const automated = isAutomated(from, msg.subject ?? null);
+        const bounced = automated && isBounce(from, msg.subject ?? null);
 
-      const logged = await logTouch({
-        prospect_id: prospect.id,
-        direction: "inbound",
-        channel: "email",
-        subject: msg.subject ?? null,
-        body: msg.bodyPreview ?? null,
-        outcome: bounced ? "bounced" : automated ? "auto_reply" : "replied",
-        graph_message_id: msg.id,
-        internet_message_id: msg.internetMessageId ?? null,
-        mailbox,
-        conversation_id: msg.conversationId ?? null,
-        occurred_at: receivedAt.toISOString(),
-        // counts_as_touch:false keeps an inbound out of the one-channel-per-day rule, which
-        // is about what WE sent. matched_by is recorded so a wrong domain match is visible
-        // in the row rather than inferred weeks later.
-        metadata: { source: "reply_sweep", matched_by: matchedBy, counts_as_touch: false },
-      });
-
-      if (logged.status === "error") {
-        throw new Error(`logTouch failed for reply from ${from}: ${logged.message}`);
-      }
-      if (logged.status === "duplicate") {
-        result.skippedDuplicate++;
-        continue;
-      }
-
-      if (bounced) {
-        result.bounced++;
-        // A dead address is closed, not nudged. This is the single cheapest protection for
-        // domain reputation, and it matters more as send volume goes up.
-        await updateProspect(prospect.id, {
-          paused: true, state: "CLOSED", closed_reason: "bounced", next_touch_at: null,
+        const logged = await logTouch({
+          prospect_id: prospect.id,
+          direction: "inbound",
+          channel: "email",
+          subject: msg.subject ?? null,
+          body: msg.bodyPreview ?? null,
+          outcome: bounced ? "bounced" : automated ? "auto_reply" : "replied",
+          graph_message_id: msg.id,
+          internet_message_id: msg.internetMessageId ?? null,
+          mailbox,
+          conversation_id: msg.conversationId ?? null,
+          occurred_at: receivedAt.toISOString(),
+          // counts_as_touch:false keeps an inbound out of the one-channel-per-day rule, which
+          // is about what WE sent. matched_by is recorded so a wrong domain match is visible
+          // in the row rather than inferred weeks later.
+          metadata: { source: "reply_sweep", matched_by: matchedBy, counts_as_touch: false },
         });
-        continue;
-      }
 
-      if (automated) {
-        // Deliberately does NOT set last_reply_at. An out-of-office is not an answer, and
-        // treating it as one would silently stop the ladder for someone who never read it.
-        result.automated++;
-        continue;
-      }
+        if (logged.status === "error") {
+          throw new Error(`logTouch failed for reply from ${from}: ${logged.message}`);
+        }
+        if (logged.status === "duplicate") {
+          result.skippedDuplicate++;
+          continue;
+        }
 
-      result.replies++;
-      const patch = applyReply(prospect, classifyReply(msg.subject ?? null, msg.bodyPreview ?? null), receivedAt);
-      await updateProspect(prospect.id, {
-        ...patch,
-        conversation_id: prospect.conversation_id ?? msg.conversationId ?? null,
-        thread_subject: prospect.thread_subject ?? msg.subject ?? null,
-      });
+        if (bounced) {
+          result.bounced++;
+          // A dead address is closed, not nudged. This is the single cheapest protection for
+          // domain reputation, and it matters more as send volume goes up.
+          await updateProspect(prospect.id, {
+            paused: true, state: "CLOSED", closed_reason: "bounced", next_touch_at: null,
+          });
+          continue;
+        }
+
+        if (automated) {
+          // Deliberately does NOT set last_reply_at. An out-of-office is not an answer, and
+          // treating it as one would silently stop the ladder for someone who never read it.
+          result.automated++;
+          continue;
+        }
+
+        result.replies++;
+        const patch = applyReply(prospect, classifyReply(msg.subject ?? null, msg.bodyPreview ?? null), receivedAt);
+        await updateProspect(prospect.id, {
+          ...patch,
+          conversation_id: prospect.conversation_id ?? msg.conversationId ?? null,
+          thread_subject: prospect.thread_subject ?? msg.subject ?? null,
+        });
+      }
     }
 
     if (opts?.writeWatermark !== false) await writeState(now);

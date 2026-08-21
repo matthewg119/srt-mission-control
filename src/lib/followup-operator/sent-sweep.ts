@@ -7,12 +7,20 @@
 // rejects a $filter on one date property combined with an $orderby on another
 // ("InefficientFilter"). So the window filters on receivedDateTime, which Graph
 // populates on sent mail too, and sentDateTime is only read for display.
+//
+// ‼️ IT SWEEPS EVERY MAILBOX IN outreachMailboxes(), NOT JUST /me, and that is what makes the
+// rotation's daily caps real rather than decorative. Mail sent from submissions@ lands in
+// submissions@'s Sent Items and /me never sees it. Reading /me alone meant that mailbox's `used`
+// count stayed at 0 forever, so it was never `full`, so once matthew@ hit its cap EVERY pitch
+// drafted from submissions@ from then on, uncapped. A one-way door, not a rotation, and the exact
+// deliverability risk the caps exist to prevent. Each touch is attributed to the mailbox it was
+// actually found in, which is what mailboxHeadroom() groups by.
 
 import { supabaseAdmin } from "@/lib/db";
 import { microsoft, type GraphMessage } from "@/lib/microsoft";
 import { logTouch, upsertProspect, updateProspect, getProspectByEmail, getProspectByConversation, normalizeEmail } from "./prospects";
 import { nextTouchAt, snapTo9amET, totalSteps } from "./cadence";
-import { connectedMailbox } from "@/config/outreach-mailboxes";
+import { outreachMailboxes, toGraphMailbox, type OutreachMailbox } from "@/config/outreach-mailboxes";
 import type { OutreachProspectRow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -153,6 +161,83 @@ async function recordOutbound(p: OutreachProspectRow, msg: GraphMessage, sentAt:
   await updateProspect(p.id, patch);
 }
 
+/** One sent message, and which mailbox it was found in. */
+interface SentSighting {
+  msg: GraphMessage;
+  mailbox: string;
+}
+
+/**
+ * Every sent message across every mailbox in the rotation, in the order they should be processed.
+ *
+ * ‼️ REPLAY SORTS ACROSS ALL MAILBOXES, NOT WITHIN EACH ONE, and that is the whole reason this is
+ * a function rather than a nested loop. recordOutbound() sets first_sent_at on the FIRST sighting
+ * of a prospect and derives the entire ladder from it, so a backfill that finished matthew@ before
+ * starting submissions@ would anchor a prospect first emailed from submissions@ in January on
+ * whatever matthew@ sent them in June, and walk their steps backwards. Sorting per mailbox looks
+ * correct and reintroduces exactly the bug the replay flag exists to prevent.
+ *
+ * BOTH paths buffer, and only the SORT is conditional. The daily path used to stream, which was
+ * worth it when there was one mailbox and one iterator; with several read one after another the
+ * saving is gone and the shapes would have to differ for no benefit. The buffer is bounded by
+ * `max` PER MAILBOX, so it is a few hundred message summaries at worst.
+ *
+ * Unsorted is the right daily order, not an oversight: a 24h window cannot hold two touches for
+ * one prospect out of order in a way that matters.
+ *
+ * ‼️ THE CAP IS PER MAILBOX. A single cumulative counter lets a busy first mailbox starve the
+ * second of its whole window, which is silent data loss dressed up as a limit.
+ */
+async function sentMessages(
+  mailboxes: OutreachMailbox[],
+  windowStart: string,
+  max: number,
+  replay?: boolean
+): Promise<SentSighting[]> {
+  const all: SentSighting[] = [];
+
+  for (const box of mailboxes) {
+    let taken = 0;
+    const pageSource = microsoft.listMessages({
+      // undefined for the connected account, which Graph reaches as /me. Everything else needs
+      // /users/{address} plus Mail.Read.Shared, which the delegated token holds. Verify with
+      // scripts/_probe-mailbox-read.ts rather than by assuming.
+      mailbox: toGraphMailbox(box.address),
+      folder: "sentitems",
+      filter: `receivedDateTime ge ${windowStart}`,
+      top: 50,
+      select: [
+        "id",
+        "conversationId",
+        "subject",
+        "toRecipients",
+        "ccRecipients",
+        "receivedDateTime",
+        "sentDateTime",
+        "bodyPreview",
+        "isDraft",
+        // The real idempotency key. Stable across the send and across mailboxes, unlike `id`,
+        // which Graph scopes to one mailbox.
+        "internetMessageId",
+      ],
+    });
+
+    for await (const msg of pageSource) {
+      all.push({ msg, mailbox: box.address });
+      if (++taken >= max) break;
+    }
+  }
+
+  if (replay) {
+    const at = (s: SentSighting) =>
+      (s.msg as GraphMessage & { sentDateTime?: string }).sentDateTime ?? s.msg.receivedDateTime ?? "";
+    all.sort((a, b) => at(a).localeCompare(at(b)));
+    console.log(`[followup] replay: ${all.length} messages across ${mailboxes.length} mailbox(es), oldest first`);
+  }
+
+  return all;
+}
+
 /**
  * Sweep Sent Items and enroll or advance every prospect Matthew emailed.
  *
@@ -163,12 +248,15 @@ export async function runSentMailSweep(opts?: {
   sinceISO?: string;
   max?: number;
   /**
-   * Buffer the whole window and process it OLDEST FIRST.
+   * Process the whole window OLDEST FIRST, across every mailbox at once.
    *
    * listMessages hardcodes $orderby=receivedDateTime desc, and recordOutbound() sets
    * first_sent_at on the FIRST sighting of a prospect and derives the whole ladder from it.
    * So a wide newest-first replay anchors every prospect on their most recent email and walks
    * the steps backwards. Harmless for the daily 24h window, wrong for a 60-day backfill.
+   *
+   * "Across every mailbox at once" is load-bearing now that there is more than one: see
+   * sentMessages(), which sorts the combined list rather than each mailbox's.
    */
   replay?: boolean;
   /** Backfills pass false: the watermark is correctly parked at today and must not rewind. */
@@ -177,12 +265,11 @@ export async function runSentMailSweep(opts?: {
   const now = new Date();
   const max = opts?.max ?? DEFAULT_MAX;
   const domains = excludedDomains();
-  // This sweep still reads /me only. Every touch it writes therefore left from the connected
-  // account, and naming it now means the daily budget can attribute these rows correctly the
-  // moment rotation ships. When outbound starts leaving from submissions@ this must become a
-  // loop over outreachMailboxes(): mail sent from a shared mailbox lands in THAT mailbox's Sent
-  // Items and /me never sees it, so the ladder would stall for half the pipeline.
-  const mailbox = connectedMailbox();
+  // ORDERED, and the order is outreachMailboxes()'s. Deduplication is on message_key
+  // (internetMessageId), which is stable across mailboxes, so a message visible in two of them
+  // writes one row attributed to whichever comes first here. Deterministic, and the same answer
+  // every run.
+  const mailboxes = outreachMailboxes();
 
   const state = await readSweepState();
   const windowStart =
@@ -203,47 +290,11 @@ export async function runSentMailSweep(opts?: {
   };
 
   try {
-    const pageSource = microsoft.listMessages({
-      folder: "sentitems",
-      filter: `receivedDateTime ge ${windowStart}`,
-      top: 50,
-      select: [
-        "id",
-        "conversationId",
-        "subject",
-        "toRecipients",
-        "ccRecipients",
-        "receivedDateTime",
-        "sentDateTime",
-        "bodyPreview",
-        "isDraft",
-        // The real idempotency key. Stable across the send and across mailboxes, unlike `id`,
-        // which Graph scopes to one mailbox.
-        "internetMessageId",
-      ],
-    });
-
-    // Oldest-first when replaying, so first_sent_at lands on the real first email. The daily
-    // path keeps the streaming iterator: a 24h window cannot contain two touches for one
-    // prospect out of order in a way that matters, and buffering it would be pure cost.
-    const messages: AsyncIterable<GraphMessage> | GraphMessage[] = opts?.replay
-      ? await (async () => {
-          const buf: GraphMessage[] = [];
-          for await (const m of pageSource) {
-            buf.push(m);
-            if (buf.length >= max) break;
-          }
-          const at = (m: GraphMessage) =>
-            (m as GraphMessage & { sentDateTime?: string }).sentDateTime ?? m.receivedDateTime ?? "";
-          buf.sort((a, b) => at(a).localeCompare(at(b)));
-          console.log(`[followup] replay: ${buf.length} messages, oldest first`);
-          return buf;
-        })()
-      : pageSource;
-
-    for await (const msg of messages) {
+    // ‼️ ONE WATERMARK FOR THE WHOLE RUN, written once below after every mailbox is swept.
+    // last_sent_scan_at is a single column on a single row; stamping it per mailbox would let
+    // the second mailbox window start after the first one had already consumed it.
+    for (const { msg, mailbox } of await sentMessages(mailboxes, windowStart, max, opts?.replay)) {
       result.scanned++;
-      if (result.scanned > max) break;
       if (msg.isDraft) continue;
 
       const sentAt = new Date(
