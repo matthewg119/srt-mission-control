@@ -476,7 +476,17 @@ export async function setDeliveryStep(args: {
   // ‼️ A SKIP CASCADES TOO. postReadySteps and runReadyAutoSteps both read a skipped row as
   // done, so a skip releases whatever that step was blocking. Gating this on `complete` is
   // what left the [Skip] button looking like it had hung the checklist.
-  if (resolved) {
+  //
+  // ‼️ A REOPEN CASCADES TOO, AND IT DID NOT UNTIL NOW.
+  // `resolved` is complete-or-skipped, so unticking a step wrote `pending` and stopped there.
+  // For an auto step that made the checkbox a dead end: the ONLY way to make a runner run
+  // again was to transition some OTHER step and hope this one got picked up in the sweep.
+  // Unticking an auto step is the plainest possible way to say "do that again", and every
+  // runner in AUTO_RUNNERS is idempotent by construction — the sweeps upsert, the generators
+  // overwrite their own artifact, and registerClientHosts treats an already-attached domain
+  // as success. postReadySteps cannot double-post either: it skips any step that already has
+  // a slack_message_ts.
+  {
     const { postReadySteps, runReadyAutoSteps } = await import("@/lib/clients/step-engine");
     await postReadySteps(args.clientId).catch((e) =>
       console.error("[delivery-checklist] posting ready steps failed:", (e as Error).message)
