@@ -77,7 +77,11 @@ function offerBlock(): string {
     "WHAT SRT ACTUALLY SELLS. This is the complete list. Nothing outside it exists:",
     ...OFFER_TIERS.map((t) => `- ${t.name}: ${t.includes.join("; ")}`),
     "",
-    "If the notes ask for something not on that list (running ads, hiring, staffing, social media management, building them a website), you may NOT offer it, hint at it, or say we can help with it.",
+    // ‼️ "RUNNING ADS" CAME OFF THIS LIST ON 2026-08-21 AND ONLY HALFWAY OFF. The ChatGPT Ads
+    // tier is real and sellable; Google, Meta and a general ad retainer are not, and the gap
+    // between those two sentences is where a prospect gets told yes to the wrong thing.
+    "CHATGPT ADS specifically ARE something we sell, on the Complete + ChatGPT Ads tier. Ads on ANY OTHER platform (Google, Meta, Facebook, Instagram, TikTok) are not, and a general 'run our advertising' retainer is not.",
+    "If the notes ask for something not on the list above (ads anywhere other than ChatGPT, hiring, staffing, social media management, building them a website), you may NOT offer it, hint at it, or say we can help with it.",
     "What you MAY do, and it is usually the strongest thing in the email, is REPOSITION the work above toward what they said they want. The questions we make a business findable for do not have to be buying questions. If someone wants to be found by future employees rather than by customers, that is the same work pointed at a different question, and saying so is honest. Promising to run their job ads is not.",
   ].join("\n");
 }

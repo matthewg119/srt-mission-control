@@ -953,16 +953,56 @@ The script the wizard writes is now v2. Structural, not cosmetic:
 > recommend his competitors, and Matthew's wife booking a laser appointment off a review ChatGPT
 > surfaced at a barbecue. A model asked to "tell a client story for this niche" does not decline for
 > lack of one, it invents a client, on camera, in a pitch whose whole basis is "you can verify this
-> yourself". Same no-fabrication rule as `run-prompts.ts`, applied to speech. `LOOM_PILLARS`,
-> `LOOM_COMMITMENTS` and `urgencyBeat()` live in `loom-script.ts`; the urgency beat is one function
-> called twice so the two readings cannot drift into being different thoughts.
+> yourself". Same no-fabrication rule as `run-prompts.ts`, applied to speech. `loomPromises()` and
+> `urgencyBeat()` live in `loom-script.ts`; the urgency beat is one function called twice so the
+> two readings cannot drift into being different thoughts.
 
-> ‼️ **The ROI line is spoken-only, on purpose** (Matthew's call). "Just one extra client a month
-> will very likely make back the investment" is a `DELIVERY_BANNED_PROMISES` hit and downstream
-> behaviour is already correct: `spokenPromises()` catches it in the transcript, FLAGS it in Slack,
-> and the delivery email declines to repeat it. The video cannot unsay it, the email can decline to
-> put it in writing. Do not "fix" the drafters to match the script, and do not copy the sentence
-> into one.
+#### Template v3 (2026-08-21) — guarantee-anchored, ChatGPT Ads lead
+
+The evidence half of v2 is untouched. What changed is everything after the live demo.
+
+| | v2 | v3 |
+|---|---|---|
+| the middle | 3 PILLARS, then 3 COMMITMENTS | **3 PROMISES**, each running Outcome, Trap, Work, Return |
+| the ads | did not exist | **Promise 2**, and the only place the guarantee lives |
+| the guarantee | none, banned everywhere | **`GUARANTEE_LINE`, on one tier**, gated by `guaranteeFor()` |
+| price | 2 tiers | **4 paid tiers**, recommendation first, `ANNUAL_LINE` at the end |
+| the ROI line | spoken-only banned-promise exception | **deleted** |
+| length | 4 min | ~6 min |
+
+v2 explained a problem (Findable) and then, ninety seconds later, gave the fix for it in a separate
+COMMITMENTS block. v3 merges them so the fix lands while the problem is still in the room.
+
+> ‼️ **PROMISE 2 AND THE GUARANTEE ARE ONE DECISION, AND IT IS THE TIER.** On `loom core` or
+> `loom complete` the ads promise is not softened or reworded, it is **not rendered**, and neither
+> is the BIG PROMISE beat. Selling a paid layer the invoice does not include is the same mistake as
+> promising a 30 day return with no mechanism behind it. `_probe-loom-v3.ts` asserts that the
+> strings "guarantee", "double your investment" and "999" appear NOWHERE in a non-ads render.
+
+> ‼️ **THE BAN LIST WAS NEVER CATCHING THE CLAIM THIS OFFER RESTS ON.** `DELIVERY_BANNED_PROMISES`
+> matched "double your revenue" and not "double your investment", so the exact guarantee sentence
+> matched no pattern at all and passed on every tier. Found by the probe. The pattern is now in the
+> list, banned by DEFAULT, and `spokenPromises(text, { allowedTier })` masks the **literal**
+> approved constants before running the list. Exact-match masking is the design: a paraphrase
+> ("we guarantee you'll make your money back") is still in the remainder and still fails. Never
+> replace it with a lookaround in the config, which would license every paraphrase too.
+
+> ‼️ **The promises are spoken as "Number 1/2/3", not "Promise 1/2/3", and the number is applied at
+> RENDER time.** The word "promise" is a `DELIVERY_BANNED_PROMISES` match: v2 said it once, so a
+> transcript flag meant something, and titling all three "Promise N" would put five expected hits
+> in every transcript until nobody read the flag block. Render-time numbering is because Promise 2
+> is dropped on a lower tier, and a baked-in number would have the script say "Number 1 ... Number
+> 3" right after announcing two things.
+
+> **The v2 ROI line is GONE.** "Just one extra client a month will very likely make back the
+> investment" was a deliberate spoken-only banned-promise exception. It was a vaguer version of what
+> the guarantee now says properly, with a number, a window, one tier and a stated remedy. Do not put
+> it back beside the guarantee.
+
+`loom_state.tier` (jsonb, **no migration**) carries the decision to the PRE-FLIGHT card, the script,
+`call-script.ts` and `delivery-email.ts`, so the closing call quotes the tier the prospect watched.
+A hand-quoted `loom $499` sets tier to null and drops the guarantee: it belongs to a named tier, not
+to a figure.
 
 **`PAYMENT_LINK` is tri-state and both callers handle it.** `SRT_PAYMENT_URL` unset is a real state,
 not a config error to paper over: the script prints a `!!` correction instead of the close, PRE-FLIGHT
@@ -1218,16 +1258,25 @@ the stored column and the disagreement is PRINTED, never silently corrected. Cac
 It never calls `ensurePermissionClose`. Its few-shot is a real sent email, **withheld unless the
 link policy is `any`** because it quotes prices.
 
-### Pricing is TWO TIERS (2026-08-11)
+### Pricing is FOUR TIERS (2026-08-11, extended 2026-08-21)
 
-Core `$349/mo` and Complete `$499/mo`, both always available, differing in scope. `OFFER_TIERS` and
+Core `$349/mo`, Complete `$499/mo`, **Complete + ChatGPT Ads `$999/mo`** and **Enterprise from
+`$4,999/mo`** (priced by location count; 10 = $4,999). All month to month. `OFFER_TIERS` and
 `OFFER_EXIT_LINE` in `src/config/pitch.ts` are the single source. The old "$499 with a $349 lever
 you have to earn" model is gone, and with it `priceLeverUnlocked`.
 
+`RECOMMENDED_TIER` is the ads tier, and `priceForTier()` is the only way to turn a tier name into a
+figure. Adding rungs did NOT reintroduce a lever: "can you do better" is still answered by stepping
+DOWN, which is a smaller scope for a smaller number.
+
+> ‼️ **STEPPING DOWN OFF THE ADS TIER DROPS THE GUARANTEE, AND THAT MUST BE SAID OUT LOUD** rather
+> than discovered on the invoice. The guarantee is not a bonus attached to a price, it is what the
+> paid layer pays for, so there is nothing to deliver it on a tier without ads. Both the closing
+> script and the Call Coach price block state this.
+
 What survived from the gate: **withholding on a follow-up call** (no figure is in the request at
-all, because a number in a helpful model's context is one it will reach for), and the ban on
-deriving a third number from the two. "Can you do better" is answered by Complete -> Core, which is
-a smaller scope for a smaller number, not a discount.
+all, because a number in a helpful model's context is one it will reach for — the guarantee is
+withheld there too, and it matters more), and the ban on deriving another number by arithmetic.
 
 `priceBlock(callType)` now takes the call type, not an unlock boolean.
 

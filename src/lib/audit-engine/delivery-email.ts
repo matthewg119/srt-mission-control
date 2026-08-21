@@ -33,6 +33,8 @@ import {
   LOOM_TEXT_NUMBER,
   ONBOARDING_WINDOW,
   PAYMENT_LINK,
+  guaranteeFor,
+  priceForTier,
 } from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import { ensureSignoff, noDashes } from "./email-assistant";
@@ -124,6 +126,12 @@ function reportUrl(slug: string): string {
  * The figures, and only the figures. Handed to the model as the sole source of numbers.
  */
 function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name: string; count: number } | null): string {
+  // The tier the RECORDING quoted, not the default. This email is the written half of a video the
+  // reader has already watched, so a price or a guarantee that differs from what was said on
+  // camera is the one mismatch it cannot survive.
+  const tier = report.loom_state?.price ? null : report.loom_state?.tier ?? null;
+  const guarantee = guaranteeFor(tier);
+  const price = report.loom_state?.price ?? priceForTier(tier) ?? LOOM_PRICE_LABEL;
   const blocks = view.blockStats
     .map((b) => `${BLOCK_LABEL[b.block] ?? b.block}: ${b.mentioned} of ${b.total}`)
     .join(" · ");
@@ -140,7 +148,12 @@ function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name:
       ? `Top competitor in the questions they are MISSING from: ${topAbsent.name}, in ${topAbsent.count} of those questions`
       : "No competitor was named often enough in the missing questions to quote",
     `Report link: ${reportUrl(report.slug)}`,
-    `Price: ${LOOM_PRICE_LABEL}`,
+    `Price: ${price}${tier ? ` (${tier})` : ""}`,
+    // Quoted so the model reproduces the approved wording rather than its own summary of it.
+    // spokenPromises() only exempts the exact string, so a paraphrase is rejected downstream.
+    guarantee
+      ? `The guarantee, and you may state it ONLY in these exact words: "${guarantee}". It is on this tier alone. It is not a refund and not a trial.`
+      : `There is NO guarantee on this tier. Never imply one, and never write risk-free, money-back or refund.`,
     PAYMENT_LINK
       ? `Payment link, this is the next step: ${PAYMENT_LINK}`
       : `Payment link: NONE CONFIGURED. Write [LINK DE PAGO] where the link belongs.`,
@@ -184,7 +197,8 @@ export async function draftDeliveryEmail(
   const facts = factsBlock(report, view, topAbsent);
 
   // Rule 4, against the RECORDING. A hit here is information, not a blocker: it already happened.
-  const promises = spokenPromises(transcript);
+  const deliveryTier = report.loom_state?.price ? null : report.loom_state?.tier ?? null;
+  const promises = spokenPromises(transcript, { allowedTier: deliveryTier });
   for (const p of promises) {
     flags.push(`El video ${p.detail}${p.at ? ` en ${p.at}` : ""}: "${p.phrase}". No lo repetí en el correo.`);
   }
@@ -266,7 +280,7 @@ export async function draftDeliveryEmail(
         typeof o.scoreStamp === "string" &&
         typeof o.priceStamp === "string" &&
         wordCount(o.body) <= DELIVERY_MAX_WORDS &&
-        spokenPromises(o.body).length === 0
+        spokenPromises(o.body, { allowedTier: deliveryTier }).length === 0
       );
     },
     describeInvalid: (p) => {
@@ -278,7 +292,7 @@ export async function draftDeliveryEmail(
       if (typeof o.body === "string") {
         const n = wordCount(o.body);
         if (n > DELIVERY_MAX_WORDS) problems.push(`the body is ${n} words, the limit is ${DELIVERY_MAX_WORDS}`);
-        const inDraft = spokenPromises(o.body);
+        const inDraft = spokenPromises(o.body, { allowedTier: deliveryTier });
         if (inDraft.length) {
           problems.push(`the body ${inDraft[0].detail} ("${inDraft[0].phrase}"), which this audit cannot promise. Remove it, do not soften it`);
         }

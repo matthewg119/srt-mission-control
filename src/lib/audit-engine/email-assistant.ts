@@ -39,8 +39,10 @@ import {
   crawlBlockAngle,
   noWebsiteAngle,
   OFFER_EXIT_LINE,
+  PRICE_ADS,
   PRICE_COMPLETE,
   PRICE_CORE,
+  RECOMMENDED_TIER,
   VIDEO_LENGTH_LABEL,
 } from "@/config/pitch";
 import { polishBody } from "./format-guard";
@@ -1219,8 +1221,14 @@ export async function draftPermissionEmail(
  * and went on quoting it for five days after the offer became two tiers on 2026-08-11, so every
  * bare `reveal` handed a prospect a price that does not exist and never did under the current
  * offer. A price literal anywhere outside config/pitch.ts is the bug, not the value it holds.
+ *
+ * ‼️ THE LADDER, NEVER THE GUARANTEE. The reveal is a written message generated before any tier
+ * has been chosen and before a recording exists, so there is nothing to attach a performance
+ * commitment to. The guarantee is made ON CAMERA, once, against a tier Matthew picked on purpose
+ * with `loom`, and `spokenPromises()` only exempts it for that tier. A guarantee that first
+ * appears in a model-written email is the exact shape DELIVERY_BANNED_PROMISES exists to stop.
  */
-const DEFAULT_REVEAL_TERMS = `${PRICE_CORE} for Core or ${PRICE_COMPLETE} for Complete, month to month, and ${OFFER_EXIT_LINE.charAt(0).toLowerCase()}${OFFER_EXIT_LINE.slice(1, -1)}`;
+const DEFAULT_REVEAL_TERMS = `${PRICE_ADS} for ${RECOMMENDED_TIER}, ${PRICE_COMPLETE} for Complete or ${PRICE_CORE} for Core, month to month, and ${OFFER_EXIT_LINE.charAt(0).toLowerCase()}${OFFER_EXIT_LINE.slice(1, -1)}`;
 
 /**
  * The message that fires when they say yes. This is the ONLY place in the cold lane where

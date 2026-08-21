@@ -181,6 +181,18 @@ export interface AuditReportRow {
     price?: string;
     window?: string;
     /**
+     * Which tier this recording sells, from `loom core` / `loom complete` / `loom noads`.
+     *
+     * ‼️ THIS IS WHAT DECIDES WHETHER THE GUARANTEE IS SPOKEN. It is a name out of OFFER_TIERS,
+     * never free text, and `guaranteeFor()` returns the words for exactly one of those names.
+     *
+     * Stored for the same reason `price` is, and it matters more: `call-script.ts` reads it so the
+     * closing call quotes the tier the prospect actually watched. A video that guaranteed a return
+     * and a call that has never heard of a guarantee is not a small inconsistency, it is the
+     * prospect discovering that the offer moves.
+     */
+    tier?: string;
+    /**
      * The name read on camera, from `loom Fran`. Overrides prospect_name.
      *
      * Stored so a later bare `script` rebuild greets the same person. A cold /audit run has no

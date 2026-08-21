@@ -42,19 +42,23 @@ export const VIDEO_LENGTH_LABEL = "4 min";
  * invoice is the one mistake that cannot be walked back. Override per recording with `loom $499`.
  */
 /**
- * The offer is TWO TIERS, both always available, both month to month (confirmed 2026-08-11).
+ * The offer is FOUR PAID TIERS plus the free audit, all month to month (rebuilt 2026-08-21).
  *
- * It is not one price with a discount hiding behind it. "Can you do better" is answered by moving
- * Complete down to Core, which is a smaller scope for a smaller number, not by cutting a price.
- * That distinction is the whole reason there is no lever any more: a tier you can name on the
- * first ask does not need to be withheld, and a scope change is honest where a discount is a
- * confession that the first number was soft.
+ * It was two tiers until the guarantee-anchored VSL rebuild. It is still not one price with a
+ * discount hiding behind it: "can you do better" is answered by moving DOWN a tier, which is a
+ * smaller scope for a smaller number, not by cutting a price. That distinction is the whole reason
+ * there is no lever any more, and adding tiers above Complete does not reintroduce one.
  *
- * ‼️ These two figures are the ONLY price figures that exist anywhere. Neither may be turned into
- * a third one by arithmetic, and no percentage, "half", or per-day breakdown may be derived.
+ * ‼️ These figures are the ONLY price figures that exist anywhere. None may be turned into another
+ * one by arithmetic, and no percentage, "half", or per-day breakdown may be derived. The single
+ * exception is `ANNUAL_LINE`, which states the annual discount in fixed words and is never applied
+ * to a number out loud.
  */
 export const PRICE_CORE = "$349 / month";
 export const PRICE_COMPLETE = "$499 / month";
+export const PRICE_ADS = "$999 / month";
+/** Enterprise is priced BY LOCATION COUNT. This is where it starts, never what it costs. */
+export const PRICE_ENTERPRISE_FROM = "$4,999 / month";
 
 export const OFFER_TIERS = [
   {
@@ -77,7 +81,38 @@ export const OFFER_TIERS = [
       "Tracking which competitors the AI names instead of you",
     ],
   },
+  {
+    name: "Complete + ChatGPT Ads",
+    price: PRICE_ADS,
+    includes: [
+      "Everything in Complete",
+      "ChatGPT Ads built and run for you: the creative, the prompt patterns your buyers type, and the budget managed end to end",
+      "A weekly performance report on what the ad spend returned",
+      "The 30 day guarantee, which exists on this tier and no other",
+    ],
+  },
+  {
+    name: "Enterprise",
+    price: PRICE_ENTERPRISE_FROM,
+    includes: [
+      "Everything in Complete, run per location",
+      "Multi-location entity reconciliation, so the engines stop merging your locations into one",
+      "A named contact",
+      "Priced by how many locations you run. 10 locations is $4,999; fewer locations is less",
+    ],
+  },
 ] as const;
+
+/** The tier the pitch recommends by default. Read by the Loom wizard and the closing script. */
+export const RECOMMENDED_TIER = "Complete + ChatGPT Ads";
+
+/** Every tier name, for validating a `loom core` style override against a closed list. */
+export type OfferTierName = (typeof OFFER_TIERS)[number]["name"];
+
+/** The price for a tier name, or null for a name that is not one of ours. */
+export function priceForTier(tier: string | null): string | null {
+  return OFFER_TIERS.find((t) => t.name === tier)?.price ?? null;
+}
 
 /**
  * The free first build, which is what Matthew now leads with (2026-08-17).
@@ -126,12 +161,93 @@ export const TIER_CONTRAST = {
     detail:
       "Your website, plus outreach to the forums, plus we write the reviews for your customers for the engine to quote.",
   },
-  both: "Both include the monthly report with your progress.",
+  "Complete + ChatGPT Ads": {
+    line: "Complete plus ChatGPT Ads puts you in front of buyers this week instead of next quarter.",
+    detail:
+      "Everything in Complete, plus we build the ads, target the prompts your buyers are typing, and manage the budget.",
+  },
+  Enterprise: {
+    line: "Enterprise is Complete run per location.",
+    detail:
+      "Plus the multi-location work that stops the engines merging your locations, and a named contact. Priced by how many locations you run.",
+  },
+  both: "Every tier includes the monthly report with your progress.",
 } as const;
 
-/** Both tiers, as one line, for a script or a brief that needs the price in a sentence. */
-export const LOOM_PRICE_LABEL = `${PRICE_CORE} (Core) or ${PRICE_COMPLETE} (Complete)`;
+/** The recommended tier, as one line, for a script or a brief that needs the price in a sentence. */
+export const LOOM_PRICE_LABEL = `${PRICE_ADS} (${RECOMMENDED_TIER}), ${PRICE_COMPLETE} (Complete) or ${PRICE_CORE} (Core)`;
+
+/**
+ * How long the ORGANIC work takes to compound.
+ *
+ * ‼️ Its job changed with the v3 script (2026-08-21) and the string did not. It used to be the
+ * patience disclaimer under the price. It is now the ARGUMENT FOR THE ADS: organic takes this
+ * long, your competitors are all waiting for that curve, which is the entire reason the paid layer
+ * exists and the entire reason a 30 day guarantee is possible at all. Do not shorten it to make
+ * the offer sound faster — the number is what makes Promise 2 make sense.
+ */
 export const LOOM_START_WINDOW = "60 to 90 days";
+
+// ── The guarantee ───────────────────────────────────────────────────────────
+/**
+ * ‼️ THE GUARANTEE EXISTS ON EXACTLY ONE TIER, AND THE GATE BELOW IS HOW THAT IS ENFORCED.
+ *
+ * Organic visibility takes LOOM_START_WINDOW to compound. No honest agency can guarantee 30 day
+ * results without paid traffic, so the guarantee rides on the tier that has the paid traffic in
+ * it and on no other. Saying it over a $349 pitch is a promise that cannot be kept, made to
+ * somebody who is not buying the thing that would keep it.
+ *
+ * The wording is a CONSTANT, same precedent as PERMISSION_CLOSE, NOT_SELLING_LINE and
+ * CRAWL_BLOCK_LINE. A model merely ASKED to "mention the guarantee" rewrites it every take, and a
+ * guarantee that is worded differently in the video, the email and the call is three different
+ * commitments the prospect can hold us to.
+ */
+export const GUARANTEE_TIER = "Complete + ChatGPT Ads";
+
+/** Said once, in full, when the promise is first made. */
+export const GUARANTEE_LINE =
+  "we will double your investment using ChatGPT Ads within 30 days, or you do not pay";
+
+/** Said once more at the end of Promise 2, where the ads are what deliver it. */
+export const GUARANTEE_RESTATE = "double your investment inside 30 days, or you do not pay";
+
+/** What doubling means, in the buyer's own arithmetic, so it cannot be read as a refund policy. */
+export const GUARANTEE_MATH =
+  "For every dollar you put in with us, you get at least two back in new business inside your first month. If we do not hit that, you owe us nothing.";
+
+/**
+ * ‼️ THE GATE. A FUNCTION, NOT A PROMPT RULE.
+ *
+ * Same doctrine as crawlBlockAngle() below and call-coach-price-gate.ts: **absent beats
+ * forbidden.** This codebase has learned that lesson three separate times — the COLD_STEM that
+ * leaked into close-stage intros 1 run in 3, the $349 lever that leaked on the first price
+ * objection in 2 of 3 live runs, and marketFactsFor's health stat shipping to a control panel
+ * shop. In every case the fix was the same: stop handing the model the words.
+ *
+ * A caller that gets null here never receives the guarantee text at all, so there is nothing for
+ * a helpful model to reach for when a prospect on the $349 tier asks "what if it doesn't work".
+ */
+export function guaranteeFor(tier: string | null | undefined): string | null {
+  return tier === GUARANTEE_TIER ? GUARANTEE_LINE : null;
+}
+
+/** The ads window analogy, fixed. Doc §7 lists it as load-bearing copy. */
+export const ADS_WINDOW_LINE =
+  "same low CPMs, same untapped audience, same window that won't stay open";
+
+/** The Promise 3 payoff, fixed. */
+export const DEFAULT_ANSWER_LINE =
+  "90 days from now, you are not wondering whether this worked. You are the default.";
+
+/**
+ * The annual terms.
+ *
+ * ‼️ This is the ONE place a percentage may be stated, and it is stated in words rather than
+ * applied to a figure. "20% off $999" invites the listener to check the arithmetic on camera, and
+ * the derived number would then be a fifth price that exists nowhere in OFFER_TIERS.
+ */
+export const ANNUAL_LINE =
+  "Annual saves you 20%. And right now, annual on the $999 tier includes the ChatGPT Ads setup done for you, free.";
 
 /**
  * Where they pay, or null.
@@ -157,6 +273,12 @@ export const LOOM_TEXT_NUMBER = "336-833-2303";
  * number of customers, so a figure said on camera would be invented, and the same honesty rule
  * that stops dream-lead.ts presenting the image as a real lead applies to a sentence read aloud
  * over it. Set this to a string only if the claim is one worth owning.
+ *
+ * ‼️ THE GUARANTEE DID NOT CHANGE THIS AND MUST NOT BE USED TO ARGUE FOR CHANGING IT. The
+ * guarantee is a claim about MONEY, on one tier, with a stated remedy if it is missed: it is
+ * falsifiable, and if it is wrong the prospect pays nothing. A client COUNT is a forecast this
+ * pipeline has no way to make and no way to settle. They are different kinds of sentence and only
+ * one of them has a gate.
  */
 export const LOOM_CLIENT_COUNT_CLAIM: string | null = null;
 
@@ -188,6 +310,19 @@ export const DELIVERY_REQUIRED_LINES = [
  *
  * Deliberately broad. A false positive costs one glance at a flag; a false negative puts a promise
  * we cannot keep in writing.
+ *
+ * ‼️ THE GUARANTEE IS EXEMPTED BY EXACT MATCH, NEVER BY LOOSENING A PATTERN HERE (2026-08-21).
+ * Every pattern below stays exactly as written, because the cold lanes — permission emails, the
+ * `call` follow-up script, the no-website pitch — carry no guarantee and must keep rejecting all
+ * of this. `spokenPromises(text, { allowedTier })` in delivery-guards.ts strips the literal
+ * GUARANTEE_LINE / GUARANTEE_RESTATE / GUARANTEE_MATH from the text FIRST, on the one tier that
+ * carries them, and then runs these patterns over what is left.
+ *
+ * That ordering is the whole design. A lookahead or a `(?<!...)` carve-out added below would
+ * license every paraphrase of the guarantee too — "we guarantee you'll make your money back",
+ * "this pays for itself in a month" — and those are exactly the sentences that turn a specific,
+ * settleable commitment into an unfalsifiable one. Stripped-then-checked means the approved
+ * wording passes and a rewrite of it still fails.
  */
 export const DELIVERY_BANNED_PROMISES: Array<{ pattern: RegExp; detail: string }> = [
   { pattern: /\b(?:more|extra|additional|new)\s+(?:customers?|clients?|patients?|jobs?|leads?|calls?|bookings?|business)\b/i, detail: "promises more customers, jobs, leads or calls" },
@@ -196,6 +331,19 @@ export const DELIVERY_BANNED_PROMISES: Array<{ pattern: RegExp; detail: string }
   { pattern: /\b(?:guarantee|guaranteed|promise)\b/i, detail: "uses the word guarantee or promise" },
   { pattern: /\b(?:you'?ll|you will|this will)\s+(?:get|win|land|close|make)\b/i, detail: "predicts what they will get, win or close" },
   { pattern: /\b(?:ROI|return on investment|pays? for itself)\b/i, detail: "claims a return on investment" },
+  // ‼️ ADDED 2026-08-21 WITH THE GUARANTEE, AND IT IS WHAT MAKES THE MASK MEAN ANYTHING.
+  //
+  // The old list caught "double your revenue" but not "double your investment", so the exact
+  // sentence this whole offer now hangs on matched NO pattern at all. It was passing everywhere,
+  // on every tier, guarantee or no guarantee, which meant the mask in spokenPromises() was
+  // exempting something that was never being caught.
+  //
+  // Banned by default here; exempted by exact-match masking on the one tier that can deliver it.
+  // That round trip is the entire mechanism, and this line is the half that was missing.
+  {
+    pattern: /\b(?:double|triple|2x|3x)\s+(?:your|their)\s+(?:investment|money|spend|budget)\b/i,
+    detail: "promises a multiple of their money back",
+  },
   { pattern: /\b(?:more|extra)\s+(?:revenue|money|sales|income)\b/i, detail: "promises more revenue or money" },
 ];
 

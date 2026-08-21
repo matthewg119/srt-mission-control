@@ -21,7 +21,7 @@
 // the trampa in the script.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
-import { PAYMENT_LINK } from "@/config/pitch";
+import { GUARANTEE_RESTATE, PAYMENT_LINK, guaranteeFor, priceForTier } from "@/config/pitch";
 import { buildAliases } from "./mention-match";
 import { robotsVerdict, searchBotFindings, type RobotsVerdict } from "./robots-check";
 import type { AuditReportRow, AuditRunRow } from "./types";
@@ -313,7 +313,7 @@ export async function computeBeatSheetFacts(
  * The script itself is a separate artifact (loom-script.ts) and is uploaded as a file, because a
  * page of prose read off a Slack message scrolls while you are talking.
  */
-export function renderPreflight(view: ReportView, f: BeatSheetFacts): string {
+export function renderPreflight(view: ReportView, f: BeatSheetFacts, tier?: string | null): string {
   const promptList = view.prompts.map((p) => p.prompt).join("\n\n");
 
   const shortPrompt = (p: PromptPick | null): string => {
@@ -334,8 +334,24 @@ export function renderPreflight(view: ReportView, f: BeatSheetFacts): string {
 
   const brandedCount = view.prompts.filter((p) => p.isBranded).length;
 
+  // ‼️ THE TIER GOES ON THE CHECKLIST BECAUSE IT IS THE ONE THING HERE THAT CANNOT BE FIXED AFTER
+  // THE FACT. Every other item costs a re-record at worst. A guarantee said on camera to a
+  // business we cannot run ads for is a commitment that outlives the video, and the person about
+  // to read it out is the only one who knows whether we can actually deliver it.
+  const guaranteeItems = guaranteeFor(tier)
+    ? [
+        `[ ] Selling ${tier}, ${priceForTier(tier ?? null) ?? "price not set"}`,
+        `[ ] :rotating_light: THIS RECORDING PROMISES: ${GUARANTEE_RESTATE}`,
+        `[ ] Say it ONLY if we can actually run ChatGPT Ads for this business`,
+      ]
+    : [
+        `[ ] Selling ${tier ?? "a price quoted by hand"}${priceForTier(tier ?? null) ? `, ${priceForTier(tier ?? null)}` : ""}`,
+        `[ ] NO ADS AND NO GUARANTEE on this one. Do not say either`,
+      ];
+
   const preflight = [
     `*PRE-FLIGHT* · the things that cost you the call if you get them wrong`,
+    ...guaranteeItems,
     `[ ] Temporary chat visible on screen`,
     f.trampa
       ? `[ ] DO NOT OPEN WITH: ${shortPrompt(f.trampa)}`

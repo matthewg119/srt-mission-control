@@ -122,8 +122,23 @@ const OUT_OF_SCOPE_PATTERNS: RegExp[] = [
   /\b(?:build|rebuild|redo)\s+(?:them\s+)?(?:a\s+)?(?:new\s+)?(?:website|site)\b/i,
 ];
 
+/**
+ * ‼️ CHATGPT ADS ARE IN SCOPE NOW, AND EVERY OTHER KIND OF ADS IS STILL OUT (2026-08-21).
+ *
+ * The ChatGPT Ads tier means "can you run ads for me" finally has a yes attached to it, but only
+ * for one platform. Google Ads, Meta Ads and a general ad-agency retainer are exactly as out of
+ * scope as they were yesterday, and the failure mode is worse than before: a prospect who hears
+ * "yes we run ads" and means Facebook has been sold something that does not exist.
+ *
+ * So the pattern list stays and the LINE decides. A line that names ChatGPT, OpenAI or GPT
+ * alongside the ad word is the tier we sell and is not flagged; anything else still is.
+ */
+const CHATGPT_ADS_RE = /\b(?:chat\s?gpt|open\s?ai|gpt)\b/i;
+
 export function outOfScopeAsks(notes: string): NoteHit[] {
-  return hitsFor(notes, OUT_OF_SCOPE_PATTERNS, "phrase");
+  return hitsFor(notes, OUT_OF_SCOPE_PATTERNS, "phrase").filter(
+    (h) => !(CHATGPT_ADS_RE.test(h.line) && /\bads?\b|\banuncios?\b|\badvertising\b/i.test(h.phrase))
+  );
 }
 
 // ── Is this actually call notes? ────────────────────────────────────────────

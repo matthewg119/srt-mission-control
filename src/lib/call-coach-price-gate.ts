@@ -50,12 +50,14 @@ export function priceBlock(callType: CoachCallType): string {
 
   const shared = `- THE FREE FIRST BUILD IS THE ASK ON THIS CALL, not a tier. ${FREE_FIRST_BUILD} The tiers above are the conversation AFTER they have seen it, and saying that out loud is what keeps the free part credible. Never attach an expiry or a slot count to it.
 - ${OFFER_EXIT_LINE} This is a FACT about the arrangement, not a guarantee. Never turn it into "no risk", "money back", or a promise about results.
-- Never do arithmetic on the two figures. No "half", no percentages, no per-day or per-week breakdown, no annual total. These two numbers are the only price figures that exist and neither may be turned into a third one.
+- Never do arithmetic on these figures. No "half", no percentages, no per-day or per-week breakdown, no annual total. They are the only price figures that exist and none may be turned into another one.
+- ‼️ THE GUARANTEE, IF THERE IS ONE, IS IN THE CALL BRIEF AND NOWHERE ELSE. It exists on ONE tier and is a performance commitment, not a refund and not a trial. If the brief quotes it, say it in those exact words. If the brief does not quote one, or there is no brief, then there is no guarantee on this call and you may not imply one to close somebody. Never attach it to a lower tier to make that tier easier to sell: the guarantee is what the paid layer pays for, so a tier without the ads cannot carry it.
 - ‼️ Never invent a figure, not even hypothetically, not even to make a point. "If it were $99 a month, would you be a yes" is inventing a price: it cannot be walked back, and the owner now has a number in their head that will never be honored. Isolate on the OBSTACLE instead: "if cost weren't the issue, would you be a yes, and is there anything else".
-- If they ask for a lower number the answer is a SMALLER SCOPE, never a smaller number. Complete down to Core is a real answer. There is no discount below Core. Do not invent one, do not hint one might exist, do not ask what number would work.`;
+- If they ask for a lower number the answer is a SMALLER SCOPE, never a smaller number. Stepping down the ladder is a real answer. There is no discount below Core. Do not invent one, do not hint one might exist, do not ask what number would work.
+- Say out loud that stepping down off the ChatGPT Ads tier means losing the guarantee with it, because there are no ads left to deliver it. That is honest, and it is usually the strongest reason to stay.`;
 
   if (callType === "cold") {
-    return `PRICE — both tiers, month to month:
+    return `PRICE — the tiers, all month to month:
 ${tiers}
 
 - ‼️ The PAIN GATE outranks this. On a cold call you do not quote a price, offer the report, or describe the packages until the owner has said out loud that something is wrong. Until then these figures are for answering a direct "how much", nothing else.
@@ -63,9 +65,9 @@ ${tiers}
 ${shared}`;
   }
 
-  return `PRICE — both tiers, month to month. The pitch already happened, so these are on the table:
+  return `PRICE — the tiers, all month to month. The pitch already happened, so these are on the table:
 ${tiers}
 
-- Lead with the one that fits what they told you they want, then name the other. Do not present them as cheap and expensive; they are narrower and wider.
+- Lead with the one that fits what they told you they want, then name the neighbours. Do not present them as cheap and expensive; they are narrower and wider.
 ${shared}`;
 }

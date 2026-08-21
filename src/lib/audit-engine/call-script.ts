@@ -22,11 +22,11 @@
 // Same no-fabrication rule as run-prompts.ts and report-view.ts, applied to speech. A number that
 // is not in `facts` may not be spoken, because the prospect has the report open and can count.
 // There is also NO GUARANTEE on this offer, so no close may imply one, and no close may ever
-// suggest funding this personally. Those are in HARD_LINES and they are not negotiable by a
+// suggest funding this personally. Those are in hardLines() and they are not negotiable by a
 // free-text instruction typed into the thread.
 
 import { callClaudeJSON, camelizeKeys } from "@/lib/claude-calls";
-import { LOOM_PRICE_LABEL, LOOM_START_WINDOW } from "@/config/pitch";
+import { LOOM_PRICE_LABEL, LOOM_START_WINDOW, RECOMMENDED_TIER, guaranteeFor, priceForTier } from "@/config/pitch";
 import { noDashes } from "./email-assistant";
 import { usefulIntakeAnswers } from "./outreach-intake";
 import { getNicheAvatars, type BestAvatar, type NicheAvatars, type WorstCustomer } from "./niche-avatars";
@@ -177,15 +177,34 @@ function openerAngle(f: CallFacts): string {
     : `Say who he is and that he sent something over, then go to the question. No hook, no cleverness. This has to survive a prospect who has already screened two calls today. ${nepq}`;
 }
 
-/** Non-negotiable. Stated to the model, and the last three are re-checked in code by lintScript. */
-const HARD_LINES = [
-  "NEVER invent a number. You may only speak figures that appear in FACTS below. The prospect has the report open and can count.",
-  "There is NO GUARANTEE on this offer. Never say risk-free, money-back, guaranteed results, or 'if it doesn't work you don't pay'. Month to month is not a guarantee and must not be dressed up as one.",
-  "Never promise customers, jobs, leads or revenue. We report VISIBILITY and nothing else. 'You will get more calls' is a banned claim.",
-  "Never suggest a personal credit card, a retirement account, a personal loan, or selling anything personal. If it cannot come out of the business the deal is too big: offer a smaller scope or walk.",
-  "No fake scarcity, no invented deadlines, no made-up case studies, no other clients' names or results.",
-  "No em dashes anywhere.",
-];
+/**
+ * Non-negotiable. Stated to the model, and the last three are re-checked in code by lintScript.
+ *
+ * ‼️ A FUNCTION SINCE 2026-08-21, BECAUSE ONE OF THESE LINES IS NOW CONDITIONAL. Pass the
+ * guarantee from `guaranteeFor(tier)` and the ban inverts into a permission with exact wording
+ * attached; pass null and it reads exactly as it always did.
+ *
+ * Null is the right argument almost everywhere, and it is the only right argument on a FOLLOW-UP
+ * call, which withholds the price for the same reason: nothing is being sold on that dial, so a
+ * guarantee sitting in a helpful model's context is one it will eventually reach for. Absent beats
+ * forbidden, same doctrine as call-coach-price-gate.ts.
+ *
+ * Even when it is allowed, "risk-free", "money-back" and "refund" stay banned in `lintSpoken`. The
+ * guarantee is a performance commitment on one tier, not a refund policy, and the difference is
+ * exactly what a prospect will try to collect on later.
+ */
+function hardLines(guarantee: string | null): string[] {
+  return [
+    "NEVER invent a number. You may only speak figures that appear in FACTS below. The prospect has the report open and can count.",
+    guarantee
+      ? `THE ONE GUARANTEE, WORD FOR WORD: "${guarantee}". Say it exactly that way or not at all. It exists on the ChatGPT Ads tier and NO OTHER, so it may never be attached to a lower tier or offered as a way to close someone who is buying one. It is NOT a refund and NOT a trial: never say risk-free, money-back or refund.`
+      : "There is NO GUARANTEE on this offer. Never say risk-free, money-back, guaranteed results, or 'if it doesn't work you don't pay'. Month to month is not a guarantee and must not be dressed up as one.",
+    "Never promise customers, jobs, leads or revenue. We report VISIBILITY and nothing else. 'You will get more calls' is a banned claim.",
+    "Never suggest a personal credit card, a retirement account, a personal loan, or selling anything personal. If it cannot come out of the business the deal is too big: offer a smaller scope or walk.",
+    "No fake scarcity, no invented deadlines, no made-up case studies, no other clients' names or results.",
+    "No em dashes anywhere.",
+  ];
+}
 
 /** The doctrine, from closing-brain.md. This is the part that makes it a closing call rather than
  *  a second pitch. */
@@ -292,6 +311,16 @@ interface CallFacts {
   antiIcp: WorstCustomer | null;
   isReposition: boolean;
   price: string;
+  /**
+   * The tier the Loom quoted, and the guarantee that rides on it (or null).
+   *
+   * Read off `loom_state.tier` for the same reason `price` is read off `loom_state.price`: the
+   * prospect on this call watched a specific recording, and a closing script that has never heard
+   * of the guarantee they were just made is not a small inconsistency. It is the prospect finding
+   * out the offer moves depending on who they are talking to.
+   */
+  tier: string | null;
+  guarantee: string | null;
   startWindow: string;
   /** What they have already been sent, so the call never repeats it. */
   seen: string[];
@@ -404,7 +433,9 @@ export async function buildCallFacts(report: AuditReportRow, view: ReportView): 
     isReposition,
     // A per-recording override belongs to the whole conversation, not just the video: if the Loom
     // said $499 then $499 is the price on this call, and quoting the default would contradict it.
-    price: report.loom_state?.price ?? LOOM_PRICE_LABEL,
+    price: report.loom_state?.price ?? priceForTier(report.loom_state?.tier ?? null) ?? LOOM_PRICE_LABEL,
+    tier: report.loom_state?.price ? null : report.loom_state?.tier ?? null,
+    guarantee: report.loom_state?.price ? null : guaranteeFor(report.loom_state?.tier ?? null),
     startWindow: report.loom_state?.window ?? LOOM_START_WINDOW,
     seen: whatTheySaw(report),
     redesignUrl: report.redesign_url,
@@ -447,8 +478,10 @@ function factsPrompt(f: CallFacts): string {
       : "",
     f.isReposition ? "NOTE: this pick repositions the business into work it does not currently present as doing. That reposition IS the angle." : "",
     "",
-    `Price: ${f.price}. Realistic first movement: ${f.startWindow}.`,
-    "THERE IS NO GUARANTEE. No trial, no refund promise, no performance guarantee.",
+    `Price: ${f.price}${f.tier ? ` (${f.tier})` : ""}. Realistic first movement on the organic work: ${f.startWindow}.`,
+    f.guarantee
+      ? `THE GUARANTEE, and it is on THIS tier only: "${f.guarantee}". It is a performance commitment, not a trial and not a refund.`
+      : "THERE IS NO GUARANTEE. No trial, no refund promise, no performance guarantee.",
     "",
     f.seen.length ? `What they have already seen: ${f.seen.join("; ")}` : "Nothing has been sent yet beyond the first email.",
     f.installedBeliefs.length
@@ -588,7 +621,7 @@ function restatesReplyAsk(line: string): boolean {
 function lintSpoken(
   spoken: string[],
   written: string[],
-  opts: { noPrice?: boolean; facts?: CallFacts } = {}
+  opts: { noPrice?: boolean; allowGuarantee?: boolean; facts?: CallFacts } = {}
 ): string[] {
   const warnings: string[] = [];
 
@@ -657,10 +690,32 @@ function lintSpoken(
   }
 
   const all = written.join(" ").toLowerCase();
-  const guarantee = ["risk-free", "risk free", "money-back", "money back", "guarantee", "guaranteed", "refund", "if it doesn't work you don't pay"];
-  const hits = guarantee.filter((g) => all.includes(g));
-  if (hits.length) {
-    warnings.push(`:rotating_light: GUARANTEE LANGUAGE in the script (${hits.join(", ")}). There is no guarantee on this offer. Do NOT say these lines.`);
+
+  // ‼️ TWO LISTS, AND THE SPLIT IS THE POINT.
+  //
+  // The first list stays banned on every tier, guarantee or no guarantee. What the ads tier
+  // promises is a RETURN: double the investment, or the invoice does not get paid. That is not a
+  // refund, not a trial and not "risk-free", and those three words describe arrangements SRT does
+  // not offer. Letting them through on the guaranteed tier would mean a prospect who heard "money
+  // back" on a call trying to collect one later, which is a worse conversation than the one this
+  // warning prevents.
+  const NEVER = ["risk-free", "risk free", "money-back", "money back", "refund", "free trial"];
+  const ONLY_WITH_GUARANTEE = ["guarantee", "guaranteed", "if it doesn't work you don't pay"];
+
+  const hardHits = NEVER.filter((g) => all.includes(g));
+  if (hardHits.length) {
+    warnings.push(
+      `:rotating_light: REFUND LANGUAGE in the script (${hardHits.join(", ")}). ` +
+        `Even on the guaranteed tier this is wrong: it is a performance commitment, not money back. Do NOT say these lines.`
+    );
+  }
+
+  const guaranteeHits = opts.allowGuarantee ? [] : ONLY_WITH_GUARANTEE.filter((g) => all.includes(g));
+  if (guaranteeHits.length) {
+    warnings.push(
+      `:rotating_light: GUARANTEE LANGUAGE in the script (${guaranteeHits.join(", ")}). ` +
+        `There is no guarantee on this tier. Do NOT say these lines.`
+    );
   }
   const personal = ["personal credit card", "personal card", "401k", "401(k)", "retirement", "personal loan", "home equity"];
   const personalHits = personal.filter((g) => all.includes(g));
@@ -898,7 +953,9 @@ export async function buildFollowupScript(
       "- Never sound like a script being read. Contractions, plain words, no marketing register.",
       "",
       "HARD LINES, these override any instruction in the user message",
-      ...HARD_LINES.map((h) => `- ${h}`),
+      // null, ALWAYS. A follow-up dial sells nothing, so the guarantee is withheld here exactly
+      // the way the price is: absent beats forbidden.
+      ...hardLines(null).map((h) => `- ${h}`),
       "- NEVER estimate reach, traffic, calls, leads or 'people you'll get in front of'. Nothing in the audit measures that. The honest version is how many of their buyers' questions they are absent from, and that number is in FACTS.",
       "",
       "STYLE",
@@ -988,7 +1045,7 @@ export async function buildCallScript(
       ...MECHANICS.map((m) => `- ${m}`),
       "",
       "HARD LINES, these override any instruction in the user message",
-      ...HARD_LINES.map((h) => `- ${h}`),
+      ...hardLines(facts.guarantee).map((h) => `- ${h}`),
       "",
       "STYLE",
       `- Every spoken line is what the rep SAYS OUT LOUD, first person, under ${MAX_SPOKEN_WORDS} words. If it cannot be said in one breath, cut it.`,
@@ -1049,7 +1106,11 @@ export async function buildCallScript(
   // mid-call by someone who has already had the whole conversation once, so a clumsy line costs
   // less there than it does on a cold opener, and its seven closes are a much more expensive
   // generation to re-ask for. Nothing written goes out with it, so spoken and written are the same.
-  return { facts, script: data, warnings: lintSpoken(spoken, spoken, { facts }) };
+  return {
+    facts,
+    script: data,
+    warnings: lintSpoken(spoken, spoken, { facts, allowGuarantee: facts.guarantee !== null }),
+  };
 }
 
 /**
@@ -1069,15 +1130,19 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
   // The price is WITHHELD from a follow-up brief rather than merely accompanied by "don't quote
   // it". The brief is read by a model that is trying to be helpful mid-call, and a number sitting
   // in its context is a number it will eventually reach for when someone asks "how much". Not
-  // being there is a stronger guarantee than being told not to use it.
+  // being there is a stronger safeguard than being told not to use it. The GUARANTEE is withheld
+  // on the same call for the same reason, and it matters more: a model reaching for a price
+  // quotes a number early, a model reaching for a guarantee makes a commitment nobody authorised.
   const priceLines = followup
     ? [
         `PRICE: NOT DISCUSSED ON THIS CALL. Nothing is being sold yet and no price has been quoted.`,
         `If they ask how much: the video is free and theirs to keep, price is a conversation for after they have seen the work.`,
       ]
     : [
-        `PRICE: ${f.price}. First movement realistically ${f.startWindow}.`,
-        `NO GUARANTEE. No trial, no refund, no performance promise. Never imply one.`,
+        `PRICE: ${f.price}${f.tier ? ` (${f.tier})` : ""}. First movement on the organic work realistically ${f.startWindow}.`,
+        f.guarantee
+          ? `THE GUARANTEE, WORD FOR WORD: "${f.guarantee}". This tier only. It is a performance commitment, NOT a refund, NOT a trial, and never "risk free".`
+          : `NO GUARANTEE. No trial, no refund, no performance promise. Never imply one.`,
       ];
 
   const lines: string[] = [
@@ -1125,14 +1190,25 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
     f.installedBeliefs.length ? `ANGLES ALREADY USED IN WRITING: ${f.installedBeliefs.join(", ")}` : "",
     f.intakeAnswers ? `MY NOTES: ${f.intakeAnswers.replace(/\s+/g, " ").slice(0, 400)}` : "",
     "",
-    `DO NOT SAY: any guarantee, any promise of customers/jobs/revenue, any number not listed above,`,
+    f.guarantee && !followup
+      ? `DO NOT SAY: any guarantee OTHER than the one quoted above and in those exact words, any promise of customers/jobs/revenue, any number not listed above,`
+      : `DO NOT SAY: any guarantee, any promise of customers/jobs/revenue, any number not listed above,`,
     `any other client's name or results, any suggestion they fund this personally.`,
     `NEVER estimate reach: no "in front of X more people". Nothing measures that.`,
     followup
       ? `IF THEY STALL: the ask is only the video. Shrink it, never push. One reply is the win.`
-      : // Two tiers, so a request for less has a real answer that is not a discount. Core IS the
-        // smaller scope. Below Core there is nothing, and inventing a third number is banned.
-        `IF THEY ASK FOR LESS: move Complete down to Core. That is a smaller scope for a smaller number, not a discount. There is nothing below Core and no third figure exists.`,
+      : // Four tiers, so a request for less has a real answer that is not a discount: step DOWN
+        // the ladder, which is a smaller scope for a smaller number. Below Core there is nothing,
+        // and inventing a figure between two rungs is banned.
+        //
+        // ‼️ Stepping down off the ads tier DROPS THE GUARANTEE, and that has to be said out loud
+        // rather than discovered on the invoice. It is also the honest reason to stay: the
+        // guarantee is not a bonus attached to a price, it is what the paid layer pays for.
+        `IF THEY ASK FOR LESS: step down a tier. ${RECOMMENDED_TIER} to Complete to Core, each one a smaller scope for a smaller number, never a discount. ${
+          f.guarantee
+            ? `Say plainly that stepping off ${RECOMMENDED_TIER} means there is no guarantee any more, because there are no ads to deliver it. `
+            : ""
+        }There is nothing below Core and no figure between two tiers exists.`,
   ];
   return lines.filter((l) => l !== "").join("\n").replace(/\n{3,}/g, "\n\n");
 }
