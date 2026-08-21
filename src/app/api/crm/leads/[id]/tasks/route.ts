@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { parseBusinessDate } from "@/lib/business-time";
 import { supabaseAdmin } from "@/lib/db";
 import { createTask } from "@/lib/crm";
 
@@ -53,8 +54,11 @@ export async function POST(
   const raw = String(body.due_at ?? body.due_date ?? "").trim();
   if (!raw) return NextResponse.json({ error: "due_at is required" }, { status: 400 });
 
-  const dueAt = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T09:00:00` : raw);
-  if (Number.isNaN(dueAt.getTime())) {
+  // parseBusinessDate, not `new Date(`${raw}T09:00:00`)`: the latter is 09:00 in
+  // the SERVER's zone, i.e. 5am ET on Vercel, so tasks made here landed hours
+  // earlier than the ones the call-log route creates.
+  const dueAt = parseBusinessDate(raw);
+  if (!dueAt) {
     return NextResponse.json({ error: "due_at is not a valid date" }, { status: 400 });
   }
 

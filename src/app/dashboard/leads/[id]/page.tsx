@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
+import { formatDueDate } from "@/lib/task-feed";
 import { slackThreadLink } from "@/lib/slack-bot";
 import { RUN_IN_FLIGHT_MINUTES } from "@/lib/audit-engine/run-audit-pipeline";
 import { STAGE_PIPELINES, cadenceFor } from "@/config/stage-display";
@@ -272,7 +273,7 @@ export default async function LeadDetailPage({
                   <li key={t.id} className="text-[11px]">
                     <span className="text-white">{t.title}</span>
                     <span className="ml-1.5 text-[rgba(255,255,255,0.35)]">
-                      {t.due_at ? t.due_at.slice(0, 10) : "no date"}
+                      {formatDueDate(t.due_at)}
                     </span>
                   </li>
                 ))}

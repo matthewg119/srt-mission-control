@@ -8,7 +8,7 @@ export default function TasksPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Tasks</h1>
         <p className="text-sm text-[rgba(255,255,255,0.5)] mt-1">
-          AI-generated and manual tasks — prioritized by BrainHeart
+          Lead follow-ups and BrainHeart ops tasks, soonest first
         </p>
       </div>
       <TasksBoard />

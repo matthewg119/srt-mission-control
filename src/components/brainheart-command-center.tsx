@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { Brain, Activity, CheckSquare, Clock, TrendingUp, Zap } from "lucide-react";
 import { ChatInterface } from "@/components/chat-interface";
 import Link from "next/link";
+import { bucketTasks, formatDueDate, fromOpsTask, type FeedTask } from "@/lib/task-feed";
 
 interface ActivityEntry {
   event_type: string;
@@ -17,14 +18,6 @@ interface PulseData {
   summary: string;
   metrics: Record<string, number>;
   created_at: string;
-}
-
-interface TaskSummary {
-  id: string;
-  title: string;
-  priority: string;
-  type: string;
-  status: string;
 }
 
 interface BrainHeartCommandCenterProps {
@@ -51,7 +44,7 @@ function formatRelative(dateStr: string): string {
 
 export function BrainHeartCommandCenter({ userName, recentActivity }: BrainHeartCommandCenterProps) {
   const [pulse, setPulse] = useState<PulseData | null>(null);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [tasks, setTasks] = useState<FeedTask[]>([]);
   const [activeTab, setActiveTab] = useState<"chat" | "overview">("overview");
 
   useEffect(() => {
@@ -61,11 +54,25 @@ export function BrainHeartCommandCenter({ userName, recentActivity }: BrainHeart
       .then((d) => { if (d.pulse) setPulse(d.pulse); })
       .catch(() => {});
 
-    // Fetch pending tasks
-    fetch("/api/tasks?status=pending&limit=8")
-      .then((r) => r.json())
-      .then((d) => { if (d.tasks) setTasks(d.tasks); })
-      .catch(() => {});
+    // Open work from BOTH tables, merged the same way /dashboard/tasks merges
+    // them, so this widget's count cannot disagree with the page it links to.
+    (async () => {
+      const [ops, follow] = await Promise.allSettled([
+        fetch("/api/tasks?status=open&limit=25"),
+        fetch("/api/crm/tasks?status=open&limit=50"),
+      ]);
+      const merged: FeedTask[] = [];
+      if (ops.status === "fulfilled" && ops.value.ok) {
+        const d = await ops.value.json();
+        for (const r of d.tasks ?? []) merged.push(fromOpsTask(r));
+      }
+      if (follow.status === "fulfilled" && follow.value.ok) {
+        const d = await follow.value.json();
+        for (const t of d.tasks ?? []) merged.push(t as FeedTask);
+      }
+      // Soonest first, so the eight shown are the eight most urgent.
+      setTasks(bucketTasks(merged).flatMap((b) => b.tasks).slice(0, 8));
+    })().catch(() => {});
   }, []);
 
   return (
@@ -159,7 +166,7 @@ export function BrainHeartCommandCenter({ userName, recentActivity }: BrainHeart
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <CheckSquare size={14} className="text-[rgba(255,255,255,0.4)]" />
-                <h2 className="text-sm font-semibold text-white">Pending Tasks</h2>
+                <h2 className="text-sm font-semibold text-white">Open Tasks</h2>
               </div>
               <Link href="/dashboard/tasks" className="text-xs text-[#00C9A7] hover:underline">
                 View all
@@ -168,13 +175,13 @@ export function BrainHeartCommandCenter({ userName, recentActivity }: BrainHeart
 
             {tasks.length === 0 ? (
               <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg p-4 text-center">
-                <p className="text-xs text-[rgba(255,255,255,0.3)]">No pending tasks</p>
+                <p className="text-xs text-[rgba(255,255,255,0.3)]">No open tasks</p>
               </div>
             ) : (
               <div className="space-y-1">
                 {tasks.map((task) => (
                   <div
-                    key={task.id}
+                    key={`${task.origin}:${task.id}`}
                     className="flex items-center gap-3 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg px-4 py-2.5"
                   >
                     <div
@@ -182,8 +189,16 @@ export function BrainHeartCommandCenter({ userName, recentActivity }: BrainHeart
                       style={{ backgroundColor: PRIORITY_COLORS[task.priority] }}
                     />
                     <span className="text-sm text-white flex-1 truncate">{task.title}</span>
-                    <span className="text-[10px] text-[rgba(255,255,255,0.25)]">
-                      {task.type.replace(/_/g, " ")}
+                    {task.lead && (
+                      <Link
+                        href={`/dashboard/leads/${task.lead.id}`}
+                        className="text-[11px] text-[#00C9A7] hover:underline truncate max-w-[140px]"
+                      >
+                        {task.lead.name}
+                      </Link>
+                    )}
+                    <span className="text-[10px] text-[rgba(255,255,255,0.25)] whitespace-nowrap">
+                      {formatDueDate(task.dueAt)}
                     </span>
                   </div>
                 ))}

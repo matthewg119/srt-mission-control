@@ -63,11 +63,12 @@ async function gatherSystemState(): Promise<SystemState> {
       .lt("last_activity_at", threeDaysAgo)
       .limit(25),
 
-    // Pending tasks
+    // Open tasks. NOT "pending" — the tasks.status CHECK only allows
+    // open|in_progress|completed|cancelled, so that filter always counted 0.
     supabaseAdmin
       .from("tasks")
       .select("id", { count: "exact" })
-      .eq("status", "pending"),
+      .eq("status", "open"),
 
     // Recent system logs
     supabaseAdmin
@@ -230,12 +231,13 @@ export async function runBrainHeartPulse(
   // 4. Create tasks from analysis (skip duplicates)
   let tasksCreated = 0;
   for (const task of analysis.tasks) {
-    // Check for duplicate (same title, still pending)
+    // Check for duplicate (same title, still open). This matched nothing while
+    // it asked for "pending", so every pulse re-created the same tasks.
     const { data: existing } = await supabaseAdmin
       .from("tasks")
       .select("id")
       .eq("title", task.title)
-      .eq("status", "pending")
+      .eq("status", "open")
       .limit(1);
 
     if (existing && existing.length > 0) continue;
