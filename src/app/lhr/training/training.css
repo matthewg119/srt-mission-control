@@ -167,16 +167,45 @@ body:has(.lhrw-root) {
 }
 
 /*
- * Calendly injects an iframe into this div. The min-height keeps the page from
- * collapsing and then jumping once the widget loads, which is what makes a
- * scroll-to-calendar button land in the wrong place.
+ * Calendly injects an iframe into this div and gives that iframe height:100%.
+ *
+ * ‼️ IT MUST BE AN EXPLICIT `height`, NEVER `min-height`, AND THAT IS THE WHOLE BUG.
+ *
+ * A percentage height resolves against the parent's COMPUTED height. With only
+ * min-height set, the computed height is `auto`, so the iframe's 100% has nothing to
+ * resolve against: the frame collapses, Calendly's booking page scrolls inside a box a
+ * fraction of its real size, and what renders is the avatar, the Powered by ribbon, and
+ * a field of white. It looks like a loading failure and it is a CSS mistake.
+ *
+ * The heights are also why this needs a breakpoint. Calendly lays the calendar and the
+ * time-slot column side by side on desktop and STACKS them under about 680px, which is
+ * roughly half again as tall. One height for both viewports either clips the mobile
+ * layout or leaves a large dead gap on desktop.
+ *
+ * No `overflow: hidden` either. It bought a rounded corner on the iframe and cost the
+ * ability to see anything Calendly rendered past the container edge, which is exactly
+ * what happens whenever the height guess is slightly short.
  */
 .lhrw-calendly {
   min-width: 320px;
-  min-height: 700px;
+  height: 700px;
   border: 1px solid var(--lhrw-border);
   border-radius: var(--lhrw-radius);
-  overflow: hidden;
+}
+
+/* Calendly stacks its two columns here, so the same content needs more room. */
+@media (max-width: 680px) {
+  .lhrw-calendly {
+    height: 1100px;
+  }
+}
+
+/* The injected iframe. Stated rather than assumed, so the frame fills the box above. */
+.lhrw-calendly iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
 }
 
 /* Rendered instead of the embed when no Calendly URL is configured. */
