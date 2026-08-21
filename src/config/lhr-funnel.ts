@@ -72,33 +72,66 @@ export const HERO = {
 // The opt-in card
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The opt-in modal
+//
+// It is a MODAL rather than a card in the flow, matching the reference funnel: the
+// hero button opens it over the page. That is a conversion decision, not a styling
+// one, so the copy lives here with everything else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The qualifier options, EXPORTED AS CONSTANTS because the client renders them and
+ * the route matches on them.
+ *
+ * Same rule as config/onboarding-free.ts: a label reworded here and compared as a
+ * string literal there is a gate that silently stops firing. Anything that is not
+ * OWNS_YES is treated as not qualified.
+ */
+export const OWNS_YES = "Yes";
+export const OWNS_NO = "No (leave this page)";
+
 export const OPTIN = {
-  headline: guard("lhr.optin.headline", "Where should we send it?"),
-  body: guard(
-    "lhr.optin.body",
-    "Enter your details and the training starts on this page. No download, nothing to install."
-  ),
+  headline: guard("lhr.optin.headline", "Where should we send your free training?"),
 
   fields: {
-    name: guard("lhr.field.name", "Your name"),
-    namePlaceholder: guard("lhr.field.namePlaceholder", "First and last name"),
+    owns: guard("lhr.field.owns", "Do you own a Med Spa or Laser Hair Removal Clinic"),
+    ownsPlaceholder: guard("lhr.field.ownsPlaceholder", "Choose one"),
+    name: guard("lhr.field.name", "Full Name"),
+    namePlaceholder: guard("lhr.field.namePlaceholder", "Enter your full name"),
     email: guard("lhr.field.email", "Email"),
-    emailPlaceholder: guard("lhr.field.emailPlaceholder", "you@yourclinic.com"),
-    phone: guard("lhr.field.phone", "Mobile"),
-    phonePlaceholder: guard("lhr.field.phonePlaceholder", "(336) 555 0142"),
+    emailPlaceholder: guard("lhr.field.emailPlaceholder", "your@email.com"),
+    phone: guard("lhr.field.phone", "Phone"),
+    phonePlaceholder: guard("lhr.field.phonePlaceholder", "(555) 000-0000"),
   },
+
+  ownsOptions: [OWNS_YES, OWNS_NO] as const,
+
+  /**
+   * Shown when they pick the No option. The submit button is removed rather than
+   * disabled, so there is nothing to press and nothing is posted.
+   *
+   * It stays polite and does not insult them. The reference page's option label says
+   * "leave this page" and this is that instruction, worded like a person.
+   */
+  disqualified: guard(
+    "lhr.optin.disqualified",
+    "This training is built specifically for clinic owners, so it will not be much use to you. Thanks for stopping by."
+  ),
 
   consent: guard(
     "lhr.optin.consent",
     "You can call or text me about my clinic. Message and data rates may apply."
   ),
 
-  submit: guard("lhr.optin.submit", "START THE TRAINING"),
+  submit: guard("lhr.optin.submit", "Send Me The Video!"),
   submitBusy: guard("lhr.optin.submitBusy", "One moment"),
 
   reassure: guard("lhr.optin.reassure", "No card. No obligation. Unsubscribe any time."),
 
-  /** Shown when the server is unreachable, never when a field is wrong. */
+  close: guard("lhr.optin.close", "Close"),
+
+  ownsError: guard("lhr.optin.ownsError", "Pick one so we know this is for you."),
   networkError: guard(
     "lhr.optin.networkError",
     "We could not reach the server. Check your connection and try again."
@@ -107,64 +140,70 @@ export const OPTIN = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The video
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const VSL = {
-  url: process.env.NEXT_PUBLIC_LHR_VSL_URL || null,
-  poster: process.env.NEXT_PUBLIC_LHR_VSL_POSTER || null,
-  /**
-   * Seconds of REAL playback before the next step appears. GatedVSL drives this off
-   * currentTime, never a wall-clock timer, so a paused or backgrounded tab does not
-   * reveal it early. The page promises a 5 minute video, so the reveal sits just
-   * inside that.
-   */
-  ctaRevealSeconds: 270,
-  allowScrub: false,
-  resumeMode: "smart" as const,
-};
-
-export const VIDEO = {
-  unmuteLabel: guard("lhr.video.unmute", "Tap to turn the sound on"),
-  playLabel: guard("lhr.video.play", "Tap to play"),
-  placeholderTitle: guard("lhr.video.placeholderTitle", "The training goes here"),
-  placeholderBody: guard(
-    "lhr.video.placeholderBody",
-    "This video has not been recorded yet. Everything else on the page works, so the funnel can be tested end to end in the meantime."
-  ),
-} as const;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// What happens after the video
+// Where a qualified opt-in goes next
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * ‼️ `href` IS TRI-STATE ON PURPOSE. Same doctrine as PAYMENT_LINK and site_signals.
+ * RELATIVE ON PURPOSE, and not built from LHR_BASE.
  *
- * The post-video destination has not been decided (a booking link? a phone number?).
- * Null renders the reveal as TEXT ONLY rather than a button pointing nowhere, because
- * a promised link that does not exist is discovered by the prospect right after the
- * video, when nothing can be done about it. Setting NEXT_PUBLIC_LHR_NEXT_STEP_URL
- * turns the button on; no other change is needed.
+ * LHR_BASE is the apex (srtagency.com), and the apex currently 307s to www, so an
+ * absolute redirect would put a redirect hop between the form and the video for every
+ * visitor. A same-origin relative path lands directly on whichever host they were
+ * already on: mission.srtagency.com in dev and on the origin, www.srtagency.com in
+ * production, both of which the /lhr/:path* rewrite covers.
+ *
+ * It is a full navigation via window.location, never a next/link. The house rule
+ * exists because a 30x in the middle of an RSC prefetch under the rewrite blanks the
+ * page.
  */
-export const NEXT_STEP = {
-  href: process.env.NEXT_PUBLIC_LHR_NEXT_STEP_URL || null,
+export const TRAINING_PATH = "/lhr/training";
 
-  headline: guard("lhr.next.headline", "That is the system."),
+// ─────────────────────────────────────────────────────────────────────────────
+// The training page: white, video, then a calendar
+// ─────────────────────────────────────────────────────────────────────────────
 
-  /** Rendered when href is set. */
-  body: guard(
-    "lhr.next.body",
-    "Book a time and we will walk through what this looks like for your clinic, your city and your treatment mix."
+export const TRAINING = {
+  /** The green banner across the top, the reference page's shape. */
+  banner: guard(
+    "lhr.training.banner",
+    "We'll Install Our Complete Patient Getting System That We're Using To Add 20-40+ New Patients Each Month"
   ),
-  label: guard("lhr.next.label", "BOOK MY WALKTHROUGH"),
 
-  /** Rendered when href is null. Says what will actually happen, and nothing more. */
-  bodyNoLink: guard(
-    "lhr.next.bodyNoLink",
-    "We have your details. Someone from our team will reach out shortly to walk through what this looks like for your clinic."
+  cta: guard("lhr.training.cta", "Book My Demo Below"),
+
+  calendarHeading: guard("lhr.training.calendarHeading", "Pick a time that works"),
+
+  /** Rendered when no Calendly URL is configured. Never a broken iframe. */
+  noCalendar: guard(
+    "lhr.training.noCalendar",
+    "Booking opens shortly. We have your details and will reach out to schedule."
+  ),
+
+  videoPlaceholderTitle: guard("lhr.training.videoPlaceholderTitle", "The training goes here"),
+  videoPlaceholderBody: guard(
+    "lhr.training.videoPlaceholderBody",
+    "This video has not been recorded yet. The rest of the page works, so the funnel can be tested end to end in the meantime."
   ),
 } as const;
+
+/**
+ * The VSL shown on the training page.
+ *
+ * NOT gated. GatedVSL exists for the med spa funnel, where the offer sits behind a
+ * watch-time threshold; here the booking calendar is visible the whole time by design,
+ * so a seek clamp would only annoy someone who already gave us their number. Unset
+ * renders a placeholder rather than an empty black box.
+ */
+export const TRAINING_VSL = {
+  url: process.env.NEXT_PUBLIC_LHR_VSL_URL || null,
+  poster: process.env.NEXT_PUBLIC_LHR_VSL_POSTER || null,
+};
+
+/**
+ * Calendly inline embed. Unset renders TRAINING.noCalendar, never a broken iframe.
+ * Same tri-state treatment as CALENDLY_URL in medspa-funnel.ts.
+ */
+export const CALENDLY_URL = process.env.NEXT_PUBLIC_LHR_CALENDLY_URL || null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Footer
@@ -200,3 +239,6 @@ export const FOOTER = {
   smsUrl: "https://srtagency.com/sms-terms",
   smsLabel: guard("lhr.footer.sms", "SMS Terms"),
 } as const;
+
+/** The wordmark. No logo mark on the training page, Matthew's call: text only. */
+export const BRAND = guard("lhr.brand", "SRT Agency");

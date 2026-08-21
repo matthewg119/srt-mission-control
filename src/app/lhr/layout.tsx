@@ -17,13 +17,24 @@
 //
 // It is un-chromed for a structural reason: the sidebar lives in dashboard/layout.tsx.
 //
-// Applies BOTH .scan-root (the token block, from scan.css) and .lhr-root. lhr.css
-// therefore declares layout only and never re-declares a token. Two traps scan.css
-// already solves and this inherits for free:
-//   - the root layout hard-sets font-family INLINE on <body>, which beats any class,
-//     so .scan-root re-declares it;
+// ‼️ THE THEME CLASS IS ON EACH PAGE, NOT ON THIS LAYOUT, and that is deliberate.
+//
+// The landing page is dark (.scan-root + .lhr-root) and /lhr/training is WHITE
+// (.lhrw-root). A layout that applied .scan-root would force its dark token block onto
+// every descendant, so the white page would inherit a black background and light text
+// and have to fight its own parent for every colour.
+//
+// What DOES stay here is what both pages share and neither should duplicate: the pixel,
+// which must fire exactly once per page load, and the Geist font variables, which are
+// plain CSS custom properties that inherit down to whichever theme class the page picks.
+//
+// Two traps scan.css solves for the dark page, which is why the class must land on an
+// element and not merely be imported:
+//   - the root layout hard-sets font-family INLINE on <body>, which beats any class, so
+//     .scan-root re-declares it;
 //   - globals.css paints body #0B1426, which shows through on overscroll, so
-//     `body:has(.scan-root)` repaints it.
+//     `body:has(.scan-root)` repaints it. The white page has the same problem and
+//     `body:has(.lhrw-root)` in training.css is the same fix.
 
 import type { Metadata } from "next";
 import Script from "next/script";
@@ -31,9 +42,6 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { PIXEL_ID } from "@/config/lhr-funnel";
 import "../scan/scan.css";
-// <GatedVSL/> emits unprefixed .vsl-* classes, so its styles live beside the component
-// and every route that renders it imports them.
-import "@/components/gated-vsl.css";
 import "./lhr.css";
 
 export const metadata: Metadata = {
@@ -47,7 +55,7 @@ export const metadata: Metadata = {
 
 export default function LhrFunnelLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className={`scan-root lhr-root ${GeistSans.variable} ${GeistMono.variable}`}>
+    <div className={`${GeistSans.variable} ${GeistMono.variable}`}>
       {/*
         The base pixel, byte-identical to every other srtagency funnel. It fires
         PageView unconditionally ON PURPOSE: PageView is the pixel's baseline and is

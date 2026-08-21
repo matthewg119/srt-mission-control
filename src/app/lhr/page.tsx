@@ -14,7 +14,7 @@
 
 import type { Metadata } from "next";
 import { LhrClient } from "./lhr-client";
-import { FOOTER, HERO, LHR_BASE } from "@/config/lhr-funnel";
+import { BRAND, FOOTER, HERO, LHR_BASE } from "@/config/lhr-funnel";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -32,51 +32,64 @@ export const metadata: Metadata = {
 
 export default function LhrPage() {
   return (
-    <main className="lhr-main">
-      {/* A div, never a link. This funnel has no way out. */}
-      <div className="lhr-brand">
-        <span className="lhr-brand-mark" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-        <span>SRT Agency</span>
-      </div>
-
-      <span className="lhr-eyebrow">{HERO.eyebrow}</span>
-
-      <h1 className="lhr-h1">
-        {HERO.headlineLead} <em>{HERO.headlineAccent}</em> {HERO.headlineRest}
-      </h1>
-
-      <p className="lhr-sub">
-        {HERO.subheadLead} <strong>{HERO.subheadEmphasis}</strong>
-      </p>
-
-      <LhrClient />
-
-      <footer className="lhr-footer">
-        <p>{FOOTER.entity}</p>
-        <p>{FOOTER.compliance}</p>
+    // The dark theme is applied HERE rather than in the layout, because /lhr/training
+    // is white and would otherwise inherit this token block from a shared parent.
+    <div className="scan-root lhr-root">
+      <main className="lhr-main">
         {/*
-          Absolute URLs, and the only anchors on the page. The legal pages live in the
-          srt-agwb repo on srtagency.com, so a relative href would resolve against
-          whichever host is actually serving this and 404 on the mission-control one.
+          Logo on its own line, centred, with the eyebrow centred underneath it.
+          Both are block-level for that reason: as inline elements they sat side by side
+          on desktop and only stacked once the viewport got narrow enough to wrap them,
+          so the mobile layout was accidentally the correct one.
+
+          The logo is a div, never a link. This funnel has no way out.
         */}
-        <p>
-          <a href={FOOTER.privacyUrl} target="_blank" rel="noopener noreferrer">
-            {FOOTER.privacyLabel}
-          </a>
-          {" · "}
-          <a href={FOOTER.termsUrl} target="_blank" rel="noopener noreferrer">
-            {FOOTER.termsLabel}
-          </a>
-          {" · "}
-          <a href={FOOTER.smsUrl} target="_blank" rel="noopener noreferrer">
-            {FOOTER.smsLabel}
-          </a>
+        <div className="lhr-brand">
+          <span className="lhr-brand-mark" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>{BRAND}</span>
+        </div>
+
+        <div className="lhr-eyebrow-row">
+          <span className="lhr-eyebrow">{HERO.eyebrow}</span>
+        </div>
+
+        <h1 className="lhr-h1">
+          {HERO.headlineLead} <em>{HERO.headlineAccent}</em> {HERO.headlineRest}
+        </h1>
+
+        <p className="lhr-sub">
+          {HERO.subheadLead} <strong>{HERO.subheadEmphasis}</strong>
         </p>
-      </footer>
-    </main>
+
+        <LhrClient />
+
+        <footer className="lhr-footer">
+          <p>{FOOTER.entity}</p>
+          <p>{FOOTER.compliance}</p>
+          {/*
+            Absolute URLs, and the only anchors on the page. The legal pages live in the
+            srt-agwb repo on srtagency.com, so a relative href would resolve against
+            whichever host is actually serving this and 404 on the mission-control one.
+          */}
+          <p>
+            <a href={FOOTER.privacyUrl} target="_blank" rel="noopener noreferrer">
+              {FOOTER.privacyLabel}
+            </a>
+            {" · "}
+            <a href={FOOTER.termsUrl} target="_blank" rel="noopener noreferrer">
+              {FOOTER.termsLabel}
+            </a>
+            {" · "}
+            <a href={FOOTER.smsUrl} target="_blank" rel="noopener noreferrer">
+              {FOOTER.smsLabel}
+            </a>
+          </p>
+        </footer>
+      </main>
+    </div>
   );
 }

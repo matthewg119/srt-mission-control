@@ -1,0 +1,224 @@
+/*
+ * /lhr/training — the WHITE page. Video, then a calendar.
+ *
+ * ‼️ THIS FILE DOES NOT USE .scan-root AND MUST NOT.
+ *
+ * Every other funnel surface in this app inherits the dark token block from
+ * app/scan/scan.css. This page is deliberately light, so it declares its own small
+ * palette under .lhrw-root rather than trying to override forty inherited tokens. That
+ * is why /lhr/layout.tsx applies no theme class: the two pages under it disagree about
+ * what colour the world is.
+ *
+ * The token names are namespaced --lhrw-* so that if a future edit ever nests this
+ * inside a .scan-root, the two sets cannot collide and quietly repaint each other.
+ */
+
+.lhrw-root {
+  --lhrw-bg: #ffffff;
+  --lhrw-fg: #1a1a1a;
+  --lhrw-muted: #5b6472;
+  --lhrw-border: #e3e7ec;
+  --lhrw-band: #0f9d76;
+  --lhrw-band-fg: #ffffff;
+  --lhrw-cta: #12b886;
+  --lhrw-cta-fg: #04252b;
+  --lhrw-radius: 0.5rem;
+
+  min-height: 100vh;
+  background: var(--lhrw-bg);
+  color: var(--lhrw-fg);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lhrw-root *,
+.lhrw-root *::before,
+.lhrw-root *::after {
+  box-sizing: border-box;
+}
+
+/*
+ * globals.css paints body #0B1426 (Mission Control midnight), which shows through on
+ * overscroll and anywhere past the end of the content. Same repaint scan.css does for
+ * the dark pages, pointed the other way.
+ */
+body:has(.lhrw-root) {
+  background: #ffffff;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+/*
+ * Wordmark only, no logo mark. Matthew's call: the three-bar mark belongs to the dark
+ * pages, and on white it read as clutter above the banner.
+ *
+ * Still a div, never a link. The funnel has no exit on this page either: the only thing
+ * to do here is watch and book.
+ */
+.lhrw-brand {
+  text-align: center;
+  padding: 1.5rem 1.25rem 1.25rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--lhrw-fg);
+}
+
+/* ── The banner ─────────────────────────────────────────────────────────── */
+
+.lhrw-band {
+  background: var(--lhrw-band);
+  color: var(--lhrw-band-fg);
+  padding: 1.1rem 1.25rem;
+  text-align: center;
+}
+
+.lhrw-band h1 {
+  margin: 0 auto;
+  max-width: 52rem;
+  font-size: clamp(1.05rem, 2.4vw, 1.5rem);
+  line-height: 1.32;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+/* ── Main column ────────────────────────────────────────────────────────── */
+
+.lhrw-main {
+  max-width: 54rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  text-align: center;
+}
+
+/* ── Video ──────────────────────────────────────────────────────────────── */
+
+/*
+ * NOT the gated player. The booking calendar is visible on this page the whole time by
+ * design, so there is no offer sitting behind a watch-time threshold and therefore
+ * nothing for a seek clamp to protect. Ordinary controls, because someone who already
+ * handed over their phone number should be able to scrub.
+ */
+.lhrw-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  background: #000;
+  border: 1px solid var(--lhrw-border);
+  border-radius: var(--lhrw-radius);
+}
+
+.lhrw-video-placeholder {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  border: 1px dashed var(--lhrw-border);
+  border-radius: var(--lhrw-radius);
+  background: #f7f9fb;
+}
+
+.lhrw-video-placeholder-title {
+  font-weight: 700;
+  color: var(--lhrw-fg);
+}
+
+.lhrw-video-placeholder-body {
+  margin: 0;
+  max-width: 30rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--lhrw-muted);
+}
+
+/* ── CTA ────────────────────────────────────────────────────────────────── */
+
+.lhrw-cta {
+  display: inline-block;
+  margin: 1.75rem auto 0;
+  padding: 0.9rem 2.25rem;
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--lhrw-cta-fg);
+  background: var(--lhrw-cta);
+  border: 0;
+  border-radius: var(--lhrw-radius);
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.lhrw-cta:hover { filter: brightness(1.05); }
+
+/* ── Calendar ───────────────────────────────────────────────────────────── */
+
+.lhrw-calendar {
+  margin-top: 2.5rem;
+  scroll-margin-top: 1rem;
+}
+
+.lhrw-calendar h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 1rem;
+}
+
+/*
+ * Calendly injects an iframe into this div. The min-height keeps the page from
+ * collapsing and then jumping once the widget loads, which is what makes a
+ * scroll-to-calendar button land in the wrong place.
+ */
+.lhrw-calendly {
+  min-width: 320px;
+  min-height: 700px;
+  border: 1px solid var(--lhrw-border);
+  border-radius: var(--lhrw-radius);
+  overflow: hidden;
+}
+
+/* Rendered instead of the embed when no Calendly URL is configured. */
+.lhrw-nocal {
+  padding: 2rem 1.25rem;
+  border: 1px dashed var(--lhrw-border);
+  border-radius: var(--lhrw-radius);
+  background: #f7f9fb;
+  color: var(--lhrw-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+
+.lhrw-footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--lhrw-border);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--lhrw-muted);
+  text-align: center;
+}
+
+.lhrw-footer p {
+  margin: 0 0 0.4rem;
+}
+
+.lhrw-footer a {
+  color: var(--lhrw-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.lhrw-footer a:hover { color: var(--lhrw-fg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .lhrw-root *,
+  .lhrw-root *::before,
+  .lhrw-root *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

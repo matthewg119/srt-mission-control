@@ -24,6 +24,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { ingestLead } from "@/lib/lead-intake";
 import { hashIp, clientIpFrom } from "@/lib/scan/session";
 import { validateOptin, clean, fieldErrorMessage } from "@/lib/medspa/validate";
+import { ownsQualifyingClinic } from "@/lib/lhr/qualify";
 import { LHR_OPTIN_EVENT, LHR_SOURCE } from "@/lib/lhr/log";
 
 export const runtime = "nodejs";
@@ -72,7 +73,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // 3. Re-validate server side with the SAME functions the form used. The client check
+  // 3. The qualifier, re-checked here with the same function the modal used.
+  //
+  //    The modal removes its own submit button for a No, which is a courtesy to a real
+  //    person and not a gate: this endpoint is public and unauthenticated, and a
+  //    qualified opt-in is what causes ingestLead to dial someone via Speed-to-Lead.
+  //    ownsQualifyingClinic defaults to NOT qualified for anything unrecognised, so a
+  //    hand-crafted payload with the field missing is refused rather than accepted.
+  //
+  //    A plain 400 rather than the silent 200 the honeypot gets. This is not a bot, it
+  //    is a person who answered honestly, and the browser never posts it in the first
+  //    place, so reaching here means something is genuinely wrong with the request.
+  const owns = clean(payload.owns, 60);
+  if (!ownsQualifyingClinic(owns)) {
+    return NextResponse.json(
+      { ok: false, message: "This training is for clinic owners." },
+      { status: 400 }
+    );
+  }
+
+  // 4. Re-validate server side with the SAME functions the form used. The client check
   //    is a courtesy; this one is the rule. normalizePhone inside validateOptin is the
   //    STRICT validator, and that is load-bearing: ingestLead fires Speed-to-Lead at
   //    whatever phone it is handed and this endpoint is public and unauthenticated.
@@ -94,7 +114,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4. Per-IP ledger. clientIpFrom deliberately does NOT trust x-forwarded-for[0]:
+  // 5. Per-IP ledger. clientIpFrom deliberately does NOT trust x-forwarded-for[0]:
   //    Vercel appends the real IP, so index 0 is attacker-controlled and the cap would
   //    be bypassed by rotating it. hashIp never stores a raw address, because this is a
   //    rate-limit ledger, not a visitor log.
@@ -134,6 +154,7 @@ export async function POST(req: NextRequest) {
       detailLines: [
         `Email: ${result.email}`,
         `Phone: ${result.phone}`,
+        `Owns a clinic: ${owns}`,
         `Consent to call and text: yes (${consentTs})`,
         `Source: ${LHR_SOURCE}`,
       ],
@@ -156,6 +177,7 @@ export async function POST(req: NextRequest) {
       name: result.name,
       email: result.email,
       phone: result.phone,
+      owns: owns,
       consent_at: consentTs,
       contact_id: contactId,
       ip_hash: ipHash,

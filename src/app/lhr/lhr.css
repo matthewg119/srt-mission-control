@@ -27,14 +27,23 @@
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 
-/* The funnel has no exit. This is a div, never a link, and there is no nav. */
+/*
+ * The funnel has no exit. This is a div, never a link, and there is no nav.
+ *
+ * ‼️ FLEX, NOT INLINE-FLEX, and the eyebrow below sits in its own row for the same
+ * reason. As inline elements the logo and the eyebrow pill flowed onto ONE line on
+ * desktop and only stacked once the viewport was narrow enough to wrap them, so mobile
+ * looked right by accident and desktop did not. Stacking is now structural rather than
+ * a consequence of the available width.
+ */
 .lhr-brand {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   font-weight: 600;
   letter-spacing: 0.01em;
-  margin-bottom: 2.5rem;
+  margin-bottom: 1rem;
 }
 
 .lhr-brand-mark {
@@ -54,6 +63,17 @@
 .lhr-brand-mark i:nth-child(2) { height: 80%; }
 .lhr-brand-mark i:nth-child(3) { height: 100%; background: var(--accent-brand); }
 
+/*
+ * Its own row, so the pill is centred under the logo rather than beside it. The pill
+ * itself stays inline-block so the rounded background hugs the text instead of
+ * stretching the full column width.
+ */
+.lhr-eyebrow-row {
+  display: block;
+  text-align: center;
+  margin-bottom: 1.75rem;
+}
+
 .lhr-eyebrow {
   display: inline-block;
   font-size: 0.78rem;
@@ -64,7 +84,6 @@
   background: var(--accent-brand-dim);
   border-radius: 999px;
   padding: 0.4rem 0.9rem;
-  margin-bottom: 1.25rem;
 }
 
 /*
@@ -135,39 +154,97 @@
   box-shadow: 0 0 0 1px var(--accent-brand-dim), 0 8px 30px rgba(0, 201, 167, 0.28);
 }
 
-/* The post-video CTA is an anchor, so it needs the block/centering a button gets free. */
-.lhr-btn-link {
-  display: block;
-  text-align: center;
-  text-decoration: none;
-}
-
 /* ── Cards, forms ───────────────────────────────────────────────────────── */
 
-.lhr-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  padding: 1.5rem;
-  text-align: left;
-  margin: 0 auto;
+/*
+ * The opt-in is a MODAL now, not a card in the page flow. The reference funnel opens it
+ * over the page on the hero button, which keeps the promise on screen behind the form.
+ *
+ * It is LIGHT while the page behind it is dark, deliberately: it reads as a distinct
+ * surface rather than more page, and it matches the training page it leads to. That is
+ * why the values below are literals instead of tokens. Every token in scope here comes
+ * from .scan-root and is a DARK value, so using them would fight the intent, and adding
+ * light variants to scan.css would change a design system four other routes share.
+ */
+
+.lhr-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1.25rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.66);
+  backdrop-filter: blur(2px);
+}
+
+.lhr-modal {
+  position: relative;
+  width: 100%;
   max-width: 30rem;
+  margin: auto;
+  padding: 1.75rem 1.5rem 1.5rem;
+  text-align: left;
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: 0.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
 }
 
-.lhr-card h2 {
-  font-size: 1.3rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin: 0 0 0.5rem;
-  color: var(--card-foreground);
-}
-
-.lhr-card p {
+.lhr-modal-title {
   margin: 0 0 1.25rem;
-  font-size: 0.95rem;
-  line-height: 1.55;
-  color: var(--muted-foreground);
+  padding-right: 1.5rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+  color: #111111;
 }
+
+.lhr-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.7rem;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7280;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lhr-modal-close:hover {
+  background: #f1f3f5;
+  color: #111111;
+}
+
+/* Shown in place of the fields once they say they do not own a clinic. */
+.lhr-dq {
+  margin: 0;
+  padding: 1rem;
+  border-radius: 0.375rem;
+  background: #f7f9fb;
+  color: #5b6472;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/*
+ * ── Form fields. ALL OF THESE LIVE INSIDE THE WHITE MODAL, NOT ON THE DARK PAGE.
+ *
+ * They used to read var(--foreground) / var(--background) from .scan-root, which was
+ * correct while the form was a dark card in the page flow. It is a light modal now, so
+ * those tokens would paint near-white text on a white surface: a form that is invisible
+ * until you select the text. Literals for the same reason the modal shell uses them,
+ * every token in scope here is a dark value.
+ */
 
 .lhr-field {
   margin-bottom: 1rem;
@@ -176,30 +253,52 @@
 .lhr-label {
   display: block;
   font-size: 0.85rem;
-  font-weight: 500;
+  font-weight: 600;
   margin-bottom: 0.35rem;
-  color: var(--foreground);
+  color: #1a1a1a;
 }
 
 .lhr-input {
   width: 100%;
-  padding: 0.8rem 0.9rem;
+  padding: 0.75rem 0.85rem;
   font: inherit;
   font-size: 1rem; /* 16px minimum, or iOS zooms the page on focus */
-  color: var(--foreground);
-  background: var(--background);
-  border: 1px solid var(--input);
-  border-radius: calc(var(--radius) - 2px);
+  color: #1a1a1a;
+  background: #ffffff;
+  border: 1px solid #cbd2da;
+  border-radius: 0.375rem;
   outline: none;
-  transition: border-color 0.15s var(--ease);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.lhr-input::placeholder {
+  color: #9aa4b0;
 }
 
 .lhr-input:focus {
-  border-color: var(--accent-brand);
+  border-color: #2f6fed;
+  box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.15);
 }
 
 .lhr-input[aria-invalid="true"] {
-  border-color: var(--destructive);
+  border-color: #d92d20;
+}
+
+/*
+ * A native <select>, deliberately. The reference screenshot shows a custom dropdown, but
+ * a hand-rolled listbox has to reimplement keyboard navigation, typeahead and the mobile
+ * wheel picker, and this is the FIRST field a paid visitor touches: the native control
+ * is the one that already works everywhere. appearance:none only removes the OS arrow so
+ * the caret below can sit consistently.
+ */
+.lhr-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%235b6472' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
+  padding-right: 2.25rem;
+  cursor: pointer;
 }
 
 /* Visually hidden, but not display:none, because some bots skip hidden inputs. */
@@ -216,9 +315,9 @@
   align-items: flex-start;
   gap: 0.6rem;
   margin: 0 0 1.25rem;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   line-height: 1.5;
-  color: var(--muted-foreground);
+  color: #5b6472;
   cursor: pointer;
 }
 
@@ -227,20 +326,30 @@
   margin-top: 0.15rem;
   width: 1.05rem;
   height: 1.05rem;
-  accent-color: var(--accent-brand);
+  accent-color: #12b886;
 }
 
 .lhr-error {
   margin: 0.4rem 0 0;
   font-size: 0.85rem;
-  color: var(--destructive);
+  color: #d92d20;
 }
 
 .lhr-reassure {
   margin: 0.9rem 0 0;
   text-align: center;
-  font-size: 0.8rem;
-  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  color: #5b6472;
+}
+
+/*
+ * The modal's submit. Overrides .lhr-btn's dark-page palette, since inside the modal the
+ * reef green on white is the contrast that reads as the action.
+ */
+.lhr-btn-modal {
+  background: #12b886;
+  color: #04252b;
+  box-shadow: none;
 }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */
