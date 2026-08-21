@@ -12,6 +12,45 @@ export const dynamic = "force-dynamic";
 // Filters ride on searchParams so the whole page stays a server component and
 // every view is a shareable URL.
 
+// One page of the book. The old cap was a bare .limit(200) with a separate
+// `rows.length === 200` check to decide whether to print "(capped)" — two magic
+// numbers that would disagree the moment either moved.
+const PAGE_SIZE = 100;
+
+type LeadSearchParams = {
+  status?: string;
+  q?: string;
+  unscheduled?: string;
+  page?: string;
+};
+
+// Every link on this page has to carry the filters the others set, or the page
+// number silently resets a search and the chips silently drop it. One helper so
+// there is exactly one answer to "what does this link keep".
+//
+// `page` is always stripped: changing a filter means the old offset describes a
+// different result set. Prev/Next build their hrefs separately for that reason.
+function hrefWith(sp: LeadSearchParams, patch: Record<string, string | null>): string {
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries({ ...sp, ...patch })) {
+    if (v) next.set(k, v);
+  }
+  next.delete("page");
+  const qs = next.toString();
+  return `/dashboard/leads${qs ? `?${qs}` : ""}`;
+}
+
+function pageHref(sp: LeadSearchParams, page: number): string {
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (v) next.set(k, v);
+  }
+  if (page > 1) next.set("page", String(page));
+  else next.delete("page");
+  const qs = next.toString();
+  return `/dashboard/leads${qs ? `?${qs}` : ""}`;
+}
+
 interface LeadRow {
   id: string;
   first_name: string | null;
@@ -28,6 +67,13 @@ interface LeadRow {
   open_task_count: number | null;
 }
 
+// Same button styling the Search button already uses, dimmed at the ends of the
+// book so the control reads as present-but-spent rather than disappearing.
+const pagerBtn =
+  "rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-white";
+const pagerBtnOff =
+  "rounded-lg border border-[rgba(255,255,255,0.05)] px-3 py-1.5 text-xs text-[rgba(255,255,255,0.2)]";
+
 function name(r: LeadRow): string {
   const n = [r.first_name, r.last_name].filter(Boolean).join(" ").trim();
   return n || r.business_name || r.email || "Unknown";
@@ -36,9 +82,11 @@ function name(r: LeadRow): string {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string; unscheduled?: string }>;
+  searchParams: Promise<LeadSearchParams>;
 }) {
   const sp = await searchParams;
+  const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
+  const offset = (page - 1) * PAGE_SIZE;
 
   // A lead on the Take Off List is parked at working_state 'closed', which is
   // the predicate every live-lead query in the app already uses — so it drops
@@ -50,7 +98,10 @@ export default async function LeadsPage({
   let query = supabaseAdmin
     .from("contacts")
     .select(
-      "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, last_activity_at, next_action_at, next_action_reason, open_task_count"
+      "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, last_activity_at, next_action_at, next_action_reason, open_task_count",
+      // The page can't say "of 8,312" without asking. An exact count is a full
+      // count scan, but the table is ~8k rows and /api/contacts already pays it.
+      { count: "exact" }
     )
     .order("last_activity_at", { ascending: false, nullsFirst: false })
     // Secondary key so the order is TOTAL. Roughly 7,400 of 8,300 contacts have never
@@ -58,30 +109,43 @@ export default async function LeadsPage({
     // returns those in arbitrary order that can differ between two identical requests,
     // which makes "the list I was just looking at" a meaningless phrase.
     .order("id", { ascending: true })
-    .limit(200);
+    .range(offset, offset + PAGE_SIZE - 1);
 
   if (!showingTerminal) query = query.neq("working_state", "closed");
   if (sp.status) query = query.eq("application_stage", sp.status);
   if (sp.unscheduled === "1") query = query.eq("open_task_count", 0);
   if (sp.q) {
-    const like = `%${sp.q}%`;
-    query = query.or(
-      `business_name.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like}`
-    );
+    // The term is interpolated into a PostgREST .or() filter expression, where
+    // a comma separates conditions, a dot separates column.operator.value and a
+    // paren closes the group. Any of the three from a user corrupts the filter.
+    const safe = sp.q.replace(/[,.()"\\]/g, " ").trim();
+    if (safe) {
+      const like = `%${safe}%`;
+      query = query.or(
+        `business_name.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like}`
+      );
+    }
   }
 
-  const { data } = await query;
+  const { data, count } = await query;
   const rows = (data ?? []) as unknown as LeadRow[];
+  const total = count ?? 0;
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   // The hunt queue: this list, in this order, as it stands right now.
+  //
+  // With paging that is THIS PAGE's ids, which is what the arrows should walk —
+  // but the label has to say which page, or hunt-nav's "3 of 100" counter is
+  // describing a different hundred than the one the label names.
   const queueIds = rows.map((r) => r.id);
-  const queueLabel = sp.q
+  const queueBase = sp.q
     ? `Search: ${sp.q}`
     : sp.status
       ? `Leads: ${sp.status}`
       : sp.unscheduled === "1"
         ? "Leads with no follow-up"
         : "All leads";
+  const queueLabel = page > 1 ? `${queueBase} (p${page})` : queueBase;
 
   return (
     <div>
@@ -89,9 +153,12 @@ export default async function LeadsPage({
         <div>
           <h1 className="text-xl font-medium text-white">Leads</h1>
           <p className="mt-1 text-xs text-[rgba(255,255,255,0.4)]">
-            {rows.length} shown{rows.length === 200 ? " (capped)" : ""}
+            {total === 0
+              ? "No leads match"
+              : `Showing ${offset + 1}-${offset + rows.length} of ${total.toLocaleString()}`}
           </p>
         </div>
+        {/* A new search starts at page 1, so `page` is deliberately not carried. */}
         <form className="flex items-center gap-2">
           <input
             name="q"
@@ -100,46 +167,54 @@ export default async function LeadsPage({
             className="rounded-lg border border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.3)] px-3 py-1.5 text-xs text-white placeholder:text-[rgba(255,255,255,0.25)]"
           />
           {sp.status && <input type="hidden" name="status" value={sp.status} />}
+          {sp.unscheduled === "1" && <input type="hidden" name="unscheduled" value="1" />}
           <button className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-white">
             Search
           </button>
         </form>
       </div>
 
-      <div className="mb-5 flex flex-wrap gap-1.5">
-        <Link
-          href="/dashboard/leads"
-          className={`rounded-lg border px-2.5 py-1 text-[11px] ${
-            !sp.status && sp.unscheduled !== "1"
-              ? "border-white/40 text-white"
-              : "border-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.45)]"
-          }`}
-        >
-          All
-        </Link>
-        <Link
-          href="/dashboard/leads?unscheduled=1"
-          className={`rounded-lg border px-2.5 py-1 text-[11px] ${
-            sp.unscheduled === "1"
-              ? "border-[#9C27B0] text-[#9C27B0]"
-              : "border-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.45)]"
-          }`}
-        >
-          No follow-up scheduled
-        </Link>
-        {ALL_STAGES.map((s) => (
+      <div className="mb-5">
+        <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.35)]">
+          Show only
+        </p>
+        {/* One exclusive choice: `status` and `unscheduled` are different columns,
+            so each chip clears the other. Everything else on the URL survives. */}
+        <div className="flex flex-wrap gap-1.5">
           <Link
-            key={s.name}
-            href={`/dashboard/leads?status=${encodeURIComponent(s.name)}`}
-            className="rounded-lg border px-2.5 py-1 text-[11px]"
-            style={{
-              borderColor: sp.status === s.name ? s.color : "rgba(255,255,255,0.08)",
-              color: sp.status === s.name ? s.color : "rgba(255,255,255,0.45)",
-            }}
+            href={hrefWith(sp, { status: null, unscheduled: null })}
+            className={`rounded-lg border px-2.5 py-1 text-[11px] ${
+              !sp.status && sp.unscheduled !== "1"
+                ? "border-white/40 text-white"
+                : "border-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.45)]"
+            }`}
           >
-            {s.name}
+            All
           </Link>
-        ))}
+          <Link
+            href={hrefWith(sp, { unscheduled: "1", status: null })}
+            className={`rounded-lg border px-2.5 py-1 text-[11px] ${
+              sp.unscheduled === "1"
+                ? "border-[#9C27B0] text-[#9C27B0]"
+                : "border-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.45)]"
+            }`}
+          >
+            No follow-up scheduled
+          </Link>
+          {ALL_STAGES.map((s) => (
+            <Link
+              key={s.name}
+              href={hrefWith(sp, { status: s.name, unscheduled: null })}
+              className="rounded-lg border px-2.5 py-1 text-[11px]"
+              style={{
+                borderColor: sp.status === s.name ? s.color : "rgba(255,255,255,0.08)",
+                color: sp.status === s.name ? s.color : "rgba(255,255,255,0.45)",
+              }}
+            >
+              {s.name}
+            </Link>
+          ))}
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.07)]">
@@ -217,6 +292,28 @@ export default async function LeadsPage({
           </p>
         )}
       </div>
+
+      {total > PAGE_SIZE && (
+        <div className="mt-4 flex items-center justify-between gap-3">
+          {page > 1 ? (
+            <Link href={pageHref(sp, page - 1)} className={pagerBtn}>
+              ← Prev
+            </Link>
+          ) : (
+            <span className={pagerBtnOff}>← Prev</span>
+          )}
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            Page {page} of {lastPage.toLocaleString()}
+          </span>
+          {page < lastPage ? (
+            <Link href={pageHref(sp, page + 1)} className={pagerBtn}>
+              Next →
+            </Link>
+          ) : (
+            <span className={pagerBtnOff}>Next →</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

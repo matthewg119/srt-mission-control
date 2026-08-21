@@ -102,7 +102,7 @@ export const CRM_TOOLS = [
   {
     name: "search_leads_db",
     description:
-      "Search and filter leads across the whole CRM. Use for 'show me all Pre-Approved leads', 'who came from Meta Ads', 'which leads haven't been touched in 2 weeks', 'leads asking for over $100k'.",
+      "Search and filter leads across the whole CRM. Use for 'show me all Pre-Approved leads', 'who came from Meta Ads', 'which leads haven't been touched in 2 weeks', 'leads asking for over $100k'. To continue a list you already showed the user (\"give me 50 more\"), repeat the SAME filters and set offset to how many you have shown so far — do NOT switch to query_database for this.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -118,7 +118,20 @@ export const CRM_TOOLS = [
           type: "boolean",
           description: "true = only leads with a follow-up scheduled, false = only leads without one.",
         },
-        limit: { type: "number", description: "Default 25, max 100." },
+        has_email: {
+          type: "boolean",
+          description: "true = only leads with an email address on file.",
+        },
+        has_business_name: {
+          type: "boolean",
+          description: "true = only leads with a business name on file.",
+        },
+        limit: { type: "number", description: "Default 25, max 200." },
+        offset: {
+          type: "number",
+          description:
+            "Skip this many matching leads before returning. Use with the same filters to page through a long list. Default 0.",
+        },
       },
       required: [] as string[],
     },
@@ -245,7 +258,7 @@ export const CRM_TOOLS = [
   {
     name: "describe_schema",
     description:
-      "List the tables and columns available to query_database. ALWAYS call this before writing a query for the first time in a conversation — guessing column names produces broken SQL.",
+      "List the tables and columns available to query_database. Call it ONCE per conversation before your first query — guessing column names produces broken SQL. If the schema is already somewhere in this conversation, do not call it again; read it from there. Pass `table` whenever you know which table you need: without it this returns the entire catalog.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -433,8 +446,12 @@ export async function executeCrmTool(
     }
 
     case "search_leads_db": {
-      const limit = Math.min(n(input.limit) ?? 25, 100);
-      let q = supabaseAdmin.from("contacts").select(CONTACT_SUMMARY_COLS).limit(limit);
+      const limit = Math.min(n(input.limit) ?? 25, 200);
+      const offset = Math.max(0, n(input.offset) ?? 0);
+      let q = supabaseAdmin
+        .from("contacts")
+        .select(CONTACT_SUMMARY_COLS, { count: "exact" })
+        .range(offset, offset + limit - 1);
 
       const text = s(input.query);
       if (text) {
@@ -458,13 +475,35 @@ export async function executeCrmTool(
       if (typeof input.has_open_task === "boolean") {
         q = input.has_open_task ? q.gt("open_task_count", 0) : q.eq("open_task_count", 0);
       }
+      if (input.has_email === true) q = q.not("email", "is", null).neq("email", "");
+      if (input.has_business_name === true) {
+        q = q.not("business_name", "is", null).neq("business_name", "");
+      }
 
-      const { data, error } = await q.order("last_activity_at", {
-        ascending: false,
-        nullsFirst: false,
-      });
+      const {
+        data,
+        error,
+        count: matched,
+      } = await q
+        .order("last_activity_at", { ascending: false, nullsFirst: false })
+        // Secondary key so the order is TOTAL, which is what makes `offset`
+        // mean anything. Most of the book shares a NULL last_activity_at, and
+        // without a tiebreaker Postgres is free to return those in a different
+        // arbitrary order per request — so page 2 would overlap page 1 and
+        // silently drop leads that fell between them.
+        .order("id", { ascending: true });
+
       if (error) return fail(error.message);
-      return result({ tool: "search_leads_db", count: data?.length ?? 0, leads: data ?? [] });
+      const rows = data ?? [];
+      return result({
+        tool: "search_leads_db",
+        count: rows.length,
+        offset,
+        totalMatching: matched ?? null,
+        hasMore: matched != null ? offset + rows.length < matched : rows.length === limit,
+        nextOffset: offset + rows.length,
+        leads: rows,
+      });
     }
 
     case "get_lead_stats": {
@@ -788,8 +827,17 @@ async function queryDatabase(
     );
 
   if (error) {
+    // A timeout is not a naming problem, and telling the model to go re-read
+    // the schema sends it round the same expensive loop that produced the
+    // timeout. The read-only role is pinned at statement_timeout = 5s.
+    const msg = error.message ?? "";
+    if (/statement timeout|57014|canceling statement/i.test(msg)) {
+      return fail(
+        `Query timed out after 5s: ${msg}. The schema is fine — the query is too slow. Narrow it: add or tighten the WHERE clause, drop any ORDER BY on an unindexed column, or use a smaller LIMIT. Do NOT call describe_schema for this.`
+      );
+    }
     return fail(
-      `Query failed: ${error.message}. Call describe_schema to check table and column names. Remember: only crm_read.* views are reachable.`
+      `Query failed: ${msg}. Call describe_schema to check table and column names. Remember: only crm_read.* views are reachable.`
     );
   }
 

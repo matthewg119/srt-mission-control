@@ -1,10 +1,64 @@
 import { supabaseAdmin } from "./db";
 import { AI_TOOLS, executeTool, type ToolExecutionResult } from "./ai-tools";
+// One source of truth for the stage list. The prompt used to hardcode five and
+// insist there were no others, while the tool schemas advertised all seven off
+// this same config — so the model was told Untouched and Take Off List did not
+// exist and then handed tools that accepted them.
+import { ALL_STAGES } from "@/config/stage-display";
 
 export interface ToolResult {
   tool: string;
   data: unknown;
   input: Record<string, unknown>;
+}
+
+/**
+ * The raw Anthropic content blocks a single assistant turn produced: its
+ * `tool_use` calls and the `tool_result` blocks we fed back.
+ *
+ * These used to live only inside the loop's local array and were dropped on
+ * return, so a follow-up question arrived with the schema, the SQL and the rows
+ * all gone — and the model had to rediscover every one of them before it could
+ * answer, which is what exhausted the iteration budget. Persisting them is what
+ * makes "give me 50 more" cheaper than the question before it instead of
+ * dearer.
+ */
+export type TurnBlocks = AnthropicMessage[];
+
+/**
+ * A tool_result carrying 200 rows of JSON is a large thing to replay on every
+ * subsequent turn, and the model needs the QUERY it ran far more than it needs
+ * every row back. Past this many characters the payload is summarised.
+ */
+const MAX_STORED_TOOL_RESULT = 8000;
+const KEPT_ROWS = 10;
+
+/**
+ * Shrink a tool_result for storage. Keeps whatever scalar fields the tool
+ * returned (sql, purpose, rowCount, truncated…) and trims only the row array,
+ * marking the elision so the model knows the list is partial rather than
+ * believing it saw everything.
+ */
+export function summariseToolResult(content: string): string {
+  if (content.length <= MAX_STORED_TOOL_RESULT) return content;
+
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    for (const key of ["rows", "leads", "results", "data", "items"]) {
+      const value = parsed[key];
+      if (Array.isArray(value) && value.length > KEPT_ROWS) {
+        return JSON.stringify({
+          ...parsed,
+          [key]: value.slice(0, KEPT_ROWS),
+          _elided: `Showing ${KEPT_ROWS} of ${value.length} rows. The full set was returned to the user earlier in this conversation; re-run the query with an offset rather than assuming these are all of them.`,
+        });
+      }
+    }
+  } catch {
+    // Not JSON, or not a shape we recognise — fall through to a blunt trim.
+  }
+
+  return `${content.slice(0, MAX_STORED_TOOL_RESULT)}\n…[truncated for storage]`;
 }
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -50,8 +104,10 @@ SRT DOES NOT DO BUSINESS FUNDING. We used to broker merchant cash advances and l
 
 TEAM: Matthew (CEO/Founder), Benjamin (Sales)
 
-PIPELINE (contacts.application_stage — these five, nothing else):
-No contact → Working → Email Pitch → Negotiating / Follow-up → Closed
+PIPELINE (contacts.application_stage — these ${ALL_STAGES.length}, nothing else):
+${ALL_STAGES.map((s) => s.name).join(" → ")}
+
+LEAD SOURCE: contacts.source is free text carrying where the lead came from. Live values include "DB 1.0" (the bulk import, the bulk of the book), "Meta Ads", "Newsletter Signup", "Website - Contact Form", "facebook_lead", "scan" and "Manual". Match it case-insensitively — the casing is not consistent.
 
 YOUR CAPABILITIES (use your tools!):
 1. WORK THE CALL BOARD: who to call, why, and what was said last — use get_worklist
@@ -170,11 +226,21 @@ export interface ToolLoopOptions {
 }
 
 export async function runConversationWithTools(
-  messages: Array<{ role: "user" | "assistant"; content: string }>,
+  messages: Array<{
+    role: "user" | "assistant";
+    content: string;
+    /** Blocks this assistant turn produced on a previous request — see TurnBlocks. */
+    toolBlocks?: TurnBlocks | null;
+  }>,
   systemPrompt: string,
   lastMessageImages?: ImageBlock[],
   opts: ToolLoopOptions = {}
-): Promise<{ response: string; actions: string[]; toolResults: ToolResult[] }> {
+): Promise<{
+  response: string;
+  actions: string[];
+  toolResults: ToolResult[];
+  turnBlocks: TurnBlocks;
+}> {
   if (!isAIConfigured()) {
     throw new Error("AI_NOT_CONFIGURED");
   }
@@ -184,26 +250,49 @@ export async function runConversationWithTools(
   const model = opts.model ?? "claude-sonnet-4-6";
   const maxTokens = opts.maxTokens ?? 4096;
 
-  const conversationMessages: AnthropicMessage[] = messages.map((m, i) => {
+  const conversationMessages: AnthropicMessage[] = [];
+
+  messages.forEach((m, i) => {
     // Last user message: prepend images if provided
     if (lastMessageImages && lastMessageImages.length > 0 && i === messages.length - 1 && m.role === "user") {
-      return {
+      conversationMessages.push({
         role: m.role,
         content: [
           ...lastMessageImages,
           { type: "text", text: m.content },
         ],
-      };
+      });
+      return;
     }
-    return { role: m.role, content: m.content };
+
+    // Replay the tool calls this assistant turn made, in the order the API
+    // requires: the assistant message carrying the tool_use blocks, then the
+    // user message carrying their tool_result blocks. The stored blocks already
+    // include the assistant's own text, so the plain-text row is skipped in
+    // favour of them rather than added alongside — sending both would repeat
+    // the answer and orphan the tool_use ids.
+    if (m.role === "assistant" && m.toolBlocks && m.toolBlocks.length > 0) {
+      conversationMessages.push(...m.toolBlocks);
+      if (m.content) conversationMessages.push({ role: "assistant", content: m.content });
+      return;
+    }
+
+    conversationMessages.push({ role: m.role, content: m.content });
   });
 
   const actions: string[] = [];
   const uiToolResults: ToolResult[] = []; // structured results for UI card rendering
+  const turnBlocks: TurnBlocks = []; // this turn's tool traffic, for the next turn to replay
   let maxIterations = opts.maxIterations ?? 5;
 
   while (maxIterations > 0) {
     maxIterations--;
+
+    // On the last permitted round-trip, take the tools away so the model has to
+    // answer from what it already has. Without this the budget can be spent
+    // entirely on tool calls and the user gets an error instead of the work
+    // those calls actually did.
+    const finalRound = maxIterations === 0;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -217,6 +306,7 @@ export async function runConversationWithTools(
         max_tokens: maxTokens,
         system: systemPrompt,
         tools,
+        ...(finalRound ? { tool_choice: { type: "none" } } : {}),
         messages: conversationMessages,
       }),
     });
@@ -233,17 +323,19 @@ export async function runConversationWithTools(
         .filter((c) => c.type === "text")
         .map((c) => c.text)
         .join("");
-      return { response: textContent, actions, toolResults: uiToolResults };
+      return { response: textContent, actions, toolResults: uiToolResults, turnBlocks };
     }
 
     if (data.stop_reason === "tool_use") {
-      conversationMessages.push({
+      const assistantTurn: AnthropicMessage = {
         role: "assistant",
         content: data.content.map((c) => {
           if (c.type === "text") return { type: "text" as const, text: c.text };
           return { type: "tool_use" as const, id: c.id!, name: c.name!, input: c.input! };
         }),
-      });
+      };
+      conversationMessages.push(assistantTurn);
+      turnBlocks.push(assistantTurn);
 
       const claudeToolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string }> = [];
 
@@ -270,13 +362,27 @@ export async function runConversationWithTools(
       }
 
       conversationMessages.push({ role: "user", content: claudeToolResults });
+
+      // The stored copy is summarised; the live one above is not. The model
+      // gets every row on the turn that asked for them, and a trimmed version
+      // on every turn after.
+      turnBlocks.push({
+        role: "user",
+        content: claudeToolResults.map((r) => ({
+          ...r,
+          content: summariseToolResult(r.content),
+        })),
+      });
     }
   }
 
+  // Reachable only if the final round still came back as tool_use, which
+  // tool_choice: "none" forbids. Kept as a backstop rather than a promise.
   return {
     response: "I hit the maximum number of tool calls. Please try a simpler request.",
     actions,
     toolResults: uiToolResults,
+    turnBlocks,
   };
 }
 

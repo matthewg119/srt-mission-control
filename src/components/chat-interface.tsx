@@ -38,6 +38,14 @@ interface Message {
   content: string;
   actions?: string[];
   toolResults?: ToolResult[];
+  /**
+   * The raw Anthropic tool_use / tool_result blocks this turn produced. Display
+   * code ignores it; it exists so the next request can hand the model back the
+   * work it already did instead of making it start over. `actions` and
+   * `toolResults` above are for the UI and are NOT a substitute — they carry no
+   * tool_use ids, so they cannot be replayed to the API.
+   */
+  toolBlocks?: unknown[] | null;
 }
 
 interface Conversation {
@@ -240,7 +248,16 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
       const res = await fetch(`${apiEndpoint}?action=history&conversationId=${conversationId}`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(data.messages || []);
+        // The column is snake_case on the row and camelCase on the wire.
+        setMessages(
+          (data.messages || []).map(
+            (m: { role: string; content: string; tool_blocks?: unknown[] | null }) => ({
+              role: m.role,
+              content: m.content,
+              toolBlocks: m.tool_blocks ?? undefined,
+            })
+          )
+        );
         setActiveConversation(conversationId);
       }
     } catch {
@@ -296,6 +313,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
           content: data.response,
           actions: data.actions?.length > 0 ? data.actions : undefined,
           toolResults: data.toolResults?.length > 0 ? data.toolResults : undefined,
+          toolBlocks: data.turnBlocks?.length > 0 ? data.turnBlocks : undefined,
         },
       ]);
 

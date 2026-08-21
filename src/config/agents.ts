@@ -68,7 +68,7 @@ YOUR EXPERTISE:
 - Debugging and root-cause analysis
 
 KEY ARCHITECTURE:
-- AI runs via runConversationWithTools() in src/lib/ai.ts (up to 5 tool iterations)
+- AI runs via runConversationWithTools() in src/lib/ai.ts (5 round-trips by default, 10 on /api/chat; the last one has tools withheld so it must answer)
 - Tools defined in src/lib/ai-tools.ts (executeTool returns { content, structuredData })
 - Microsoft Graph client in src/lib/microsoft.ts
 - Chat API at /api/chat, Telegram at /api/telegram/webhook
