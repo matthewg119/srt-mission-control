@@ -21,7 +21,7 @@
 
 import type { Metadata } from "next";
 import { BookButton, Calendly } from "./training-client";
-import { BRAND, FOOTER, LHR_BASE, TRAINING, TRAINING_VSL } from "@/config/lhr-funnel";
+import { BRAND, FOOTER, LHR_BASE, TRAINING, TRAINING_VSL, youtubeId } from "@/config/lhr-funnel";
 import "./training.css";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +37,8 @@ export const metadata: Metadata = {
 };
 
 export default function LhrTrainingPage() {
+  const ytId = youtubeId(TRAINING_VSL.url);
+
   return (
     <div className="lhrw-root">
       {/* Wordmark only, no logo mark, and a div rather than a link. */}
@@ -48,12 +50,41 @@ export default function LhrTrainingPage() {
 
       <main className="lhrw-main">
         {/*
-          An ordinary <video>, not <GatedVSL/>. See training.css for why: the calendar is
-          visible the whole time, so there is no offer behind a watch-time threshold.
-          A null URL renders a placeholder rather than an empty black box, so the page
-          can be shipped and tested before the video is recorded.
+          Not <GatedVSL/>. See training.css for why: the calendar is visible the whole
+          time, so there is no offer behind a watch-time threshold. A null URL renders a
+          placeholder rather than an empty black box, so the page can be shipped and
+          tested before the video is recorded.
+
+          Three branches, because a <video> element cannot play a YouTube page and
+          pointing its src at one produces a black box with a broken-media control.
+          youtubeId() decides which: an embed for a YouTube link, the original element
+          for a self-hosted file, the placeholder for nothing at all.
+
+          The recording is a portrait phone video padded into a 1920x1080 canvas, so it
+          arrives already letterboxed and the 16/9 box in training.css is the right frame
+          for it. That is why nothing here or in the CSS reaches for an aspect ratio.
+
+          youtube-nocookie.com, not youtube.com: no tracking cookie is set until someone
+          actually presses play, which is the right default on a page that just collected
+          a phone number. rel=0 keeps the end screen on this channel, and playsinline
+          stops iOS from throwing the video into fullscreen and losing the calendar
+          underneath it.
+
+          modestbranding is deliberately absent. YouTube retired it, so passing it looks
+          like the title overlay is being suppressed when it is not. The video's YouTube
+          title is what shows across the top of this frame, and the only place to change
+          that is YouTube Studio.
         */}
-        {TRAINING_VSL.url ? (
+        {ytId ? (
+          <iframe
+            className="lhrw-video"
+            src={`https://www.youtube-nocookie.com/embed/${ytId}?rel=0&playsinline=1`}
+            title={TRAINING.videoTitle}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerPolicy="strict-origin-when-cross-origin"
+            allowFullScreen
+          />
+        ) : TRAINING_VSL.url ? (
           <video
             className="lhrw-video"
             src={TRAINING_VSL.url}

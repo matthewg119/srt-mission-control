@@ -179,6 +179,9 @@ export const TRAINING = {
     "Booking opens shortly. We have your details and will reach out to schedule."
   ),
 
+  // The accessible name of the embed. An iframe with no title is announced as
+  // "iframe", which on this page is the only thing worth watching.
+  videoTitle: guard("lhr.training.videoTitle", "Your training"),
   videoPlaceholderTitle: guard("lhr.training.videoPlaceholderTitle", "The training goes here"),
   videoPlaceholderBody: guard(
     "lhr.training.videoPlaceholderBody",
@@ -195,9 +198,34 @@ export const TRAINING = {
  * renders a placeholder rather than an empty black box.
  */
 export const TRAINING_VSL = {
-  url: process.env.NEXT_PUBLIC_LHR_VSL_URL || null,
+  url: process.env.NEXT_PUBLIC_LHR_VSL_URL || "https://youtu.be/vR6pVDfOZEc",
   poster: process.env.NEXT_PUBLIC_LHR_VSL_POSTER || null,
 };
+
+/**
+ * A YouTube video id, or null for anything that is not a YouTube URL.
+ *
+ * The default above is a real link rather than null, the same deliberate departure from
+ * the tri-state that CALENDLY_URL makes below and for the same reason:
+ * NEXT_PUBLIC_LHR_VSL_URL has never been set on any environment, so the honest fallback
+ * ("The training goes here") was the only thing this page had ever rendered. The env var
+ * still wins wherever a different cut is wanted, so nothing is lost by having a working
+ * default underneath it.
+ *
+ * The classification has to exist because a <video> element cannot play a YouTube page:
+ * an id gets an iframe embed, anything else stays a self-hosted file. `poster` therefore
+ * applies to the self-hosted branch only; YouTube draws its own thumbnail.
+ *
+ * The 11-character charset check is not cosmetic. It is the thing that stops an
+ * arbitrary string from an env var being interpolated into a frame src.
+ */
+export function youtubeId(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(
+    /(?:youtube\.com\/(?:watch\?(?:\S*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/
+  );
+  return m ? m[1] : null;
+}
 
 /**
  * Calendly inline embed. Unset renders TRAINING.noCalendar, never a broken iframe.
