@@ -60,7 +60,58 @@ export interface DnsRowView {
   status: string;
   observed: string | null;
   lastCheckedAt: string | null;
+  /** Vercel disagreeing with a value somebody already committed to. Rendered as a warning. */
+  note: string | null;
   external: boolean;
+}
+
+/**
+ * The hostname writeCnameTarget says Vercel wants, pulled back out of the note it wrote.
+ *
+ * Reading it off prose is not lovely. The alternative is a `recommended_value` column, and
+ * that is a migration plus a second thing to keep in step with the note for a string this
+ * panel is the only consumer of. The note's shape is fixed in one place — see
+ * writeCnameTarget in src/lib/hub/vercel-domains.ts — and if it ever stops matching, the
+ * button disappears and the note still says what to type.
+ */
+function recommendedFrom(note: string | null): string | null {
+  if (!note) return null;
+  const m = /Vercel now recommends ([a-z0-9.-]+)/i.exec(note);
+  return m ? m[1].replace(/[.;]$/, "") : null;
+}
+
+/**
+ * The disagreement, and the one-click way out of it.
+ *
+ * Its own component so `recommendedFrom` is called ONCE and narrowed: called twice inline,
+ * TypeScript cannot know the second call returns the same non-null string as the first.
+ */
+function DnsNote({
+  row,
+  busy,
+  send,
+}: {
+  row: DnsRowView;
+  busy: string | null;
+  send: (action: string, extra: Record<string, unknown>, key: string) => void;
+}) {
+  const recommended = recommendedFrom(row.note);
+
+  return (
+    <div className="mt-2 rounded border border-[rgba(245,166,35,0.3)] bg-[rgba(245,166,35,0.07)] px-2 py-1.5">
+      <p className="text-[11px] leading-relaxed text-[#F5A623]">{row.note}</p>
+      {recommended && (
+        <button
+          type="button"
+          disabled={busy === `value:${row.key}`}
+          onClick={() => send("value", { recordKey: row.key, value: recommended }, `value:${row.key}`)}
+          className="mt-1.5 rounded border border-[rgba(245,166,35,0.4)] px-2 py-0.5 text-[10px] text-[#F5A623] hover:border-[#F5A623] disabled:opacity-40"
+        >
+          Use {recommended}
+        </button>
+      )}
+    </div>
+  );
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -204,38 +255,47 @@ export function DnsForm({
               <div className="flex gap-2">
                 <dt className="w-14 shrink-0 text-[rgba(255,255,255,0.35)]">Value</dt>
                 <dd className="min-w-0 flex-1">
-                  {r.external || !r.value ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      <input
-                        className="min-w-0 flex-1 rounded-md border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.03)] px-2 py-1 font-mono text-[10px] text-white placeholder:text-[rgba(255,255,255,0.25)]"
-                        placeholder={
-                          r.type === "TXT"
-                            ? "paste the google-site-verification= string"
-                            : "the CNAME target"
-                        }
-                        defaultValue={r.value ?? ""}
-                        onChange={(e) => setValues((p) => ({ ...p, [r.key]: e.target.value }))}
-                      />
-                      <button
-                        type="button"
-                        disabled={busy === `value:${r.key}`}
-                        onClick={() =>
-                          send("value", { recordKey: r.key, value: values[r.key] ?? r.value ?? "" }, `value:${r.key}`)
-                        }
-                        className="rounded-md border border-[rgba(255,255,255,0.15)] px-2 py-1 text-[10px] text-white/70 hover:border-[rgba(255,255,255,0.3)] hover:text-white disabled:opacity-40"
-                      >
-                        Save
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="flex min-w-0 items-start gap-2">
-                      <span className="break-all font-mono text-white/80">{r.value}</span>
-                      <CopyButton text={r.value} what="value" />
-                    </span>
-                  )}
+                  {/*
+                    ‼️ EDITABLE EVEN ONCE IT IS SET, and it used to become a read-only span the
+                    moment a value existed. Read-only assumes the stored value is right, which
+                    is exactly wrong in the case this panel exists for: a row marked "they
+                    added it" freezes its value, so when Vercel later recommends a different
+                    target writeCnameTarget refuses to overwrite a human's word and leaves a
+                    note instead. That refusal is correct. What was not correct is that it left
+                    a visibly wrong value with nothing on the page able to change it.
+
+                    Copy sits beside the input rather than replacing it, because the two jobs
+                    are different: you copy it to read it down a phone, you edit it when the
+                    thing it points at moved.
+                  */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      className="min-w-0 flex-1 rounded-md border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.03)] px-2 py-1 font-mono text-[10px] text-white placeholder:text-[rgba(255,255,255,0.25)]"
+                      placeholder={
+                        r.type === "TXT"
+                          ? "paste the google-site-verification= string"
+                          : "the CNAME target"
+                      }
+                      defaultValue={r.value ?? ""}
+                      onChange={(e) => setValues((p) => ({ ...p, [r.key]: e.target.value }))}
+                    />
+                    {r.value && <CopyButton text={r.value} what="value" />}
+                    <button
+                      type="button"
+                      disabled={busy === `value:${r.key}`}
+                      onClick={() =>
+                        send("value", { recordKey: r.key, value: values[r.key] ?? r.value ?? "" }, `value:${r.key}`)
+                      }
+                      className="rounded-md border border-[rgba(255,255,255,0.15)] px-2 py-1 text-[10px] text-white/70 hover:border-[rgba(255,255,255,0.3)] hover:text-white disabled:opacity-40"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </dd>
               </div>
             </dl>
+
+            {r.note && <DnsNote row={r} busy={busy} send={send} />}
 
             {r.observed && r.status === "mismatch" && (
               <p className="mt-1.5 break-all text-[10px] text-red-300">

@@ -128,7 +128,7 @@ export default async function ClientDetailPage({
         .eq("client_id", id),
       supabaseAdmin
         .from("client_dns_records")
-        .select("record_key, record_type, host, value, status, observed, last_checked_at, verified_at")
+        .select("record_key, record_type, host, value, status, observed, last_checked_at, verified_at, note")
         .eq("client_id", id),
       supabaseAdmin
         .from("client_hosts")
@@ -307,6 +307,11 @@ export default async function ClientDetailPage({
         status: (row.status as string) ?? "pending",
         observed: (row.observed as string) ?? null,
         lastCheckedAt: (row.last_checked_at as string) ?? null,
+        // The column has existed since the panel was built and was never rendered. It is the
+        // ONLY place writeCnameTarget can report that Vercel wants a different value than the
+        // one a human already committed to, so not rendering it meant the system detected the
+        // disagreement, wrote it down, and told nobody.
+        note: (row.note as string) ?? null,
         external: Boolean(def.valueIsExternal),
       },
     ];
