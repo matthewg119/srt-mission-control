@@ -48,6 +48,13 @@ import {
   formatHookNote,
   HOOK_PROMPT_COUNT,
 } from "@/lib/audit-engine/hook-pitch";
+import {
+  buildBookingScript,
+  bookingFactsFrom,
+  formatBookingNote,
+  type PriorContact,
+} from "@/lib/audit-engine/booking-script";
+import { readMailboxThread } from "@/lib/audit-engine/thread-truth";
 import { getOrCreateAuditChannel } from "@/lib/audit-engine/audit-channel";
 
 /** How long one Email hook run blocks another on the same lead. */
@@ -110,6 +117,7 @@ export async function POST(
 
   if (action === "audit") return startAudit(contactId, actor);
   if (action === "hook") return startEmailHook(contactId, actor);
+  if (action === "followup") return startBookingCall(contactId, actor);
   if (action === "nowebsite") return startNoWebsitePitch(contactId, actor);
   if (isThreadAction(action)) return runThreadCommand(contactId, action, actor);
 
@@ -425,6 +433,139 @@ async function startEmailHook(contactId: string, actor: string) {
       running: true,
       message:
         "Scanning. The draft lands in Slack and your Outlook drafts in about 90 seconds, and the link comes back here.",
+    },
+    { status: 202 }
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The booking call script
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The phone script for a lead who got the Email hook and went quiet.
+ *
+ * ‼️ IT LANDS ON THE TIMELINE, NOT IN SLACK, and that is deliberate. Every other button here
+ * produces something Matthew REVIEWS and then sends, so Slack is the right surface: a card, a
+ * draft, an approval. This produces something he READS OFF THE PHONE WHILE DIALING, and the page
+ * he is on when he decides to dial is this lead's page. The no-website lane made the same call for
+ * the same reason and its comment says so: a note nobody opens is a note that did not happen.
+ *
+ * It needs no audit. The Email hook exists so a report is not spent before somebody replies, so a
+ * call gated on one could never be made to the leads this is for. What it does instead is take the
+ * report's numbers when there is one and say out loud that there are none when there is not.
+ */
+async function startBookingCall(contactId: string, actor: string) {
+  const { data } = await supabaseAdmin
+    .from("contacts")
+    .select("id, website, business_name, first_name, last_name, email, biz_city, biz_state")
+    .eq("id", contactId)
+    .maybeSingle();
+
+  const contact = data as ContactRow | null;
+  if (!contact) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  const company = contact.business_name?.trim();
+  if (!company) {
+    return NextResponse.json(
+      { error: "The script is built around the business, so this lead needs a business name first.", field: "business_name" },
+      { status: 400 }
+    );
+  }
+
+  await addNote({
+    contactId,
+    title: "Follow-up call script started",
+    content:
+      "Checking what has actually gone out to this lead, then writing the booking script. It lands " +
+      "on this timeline in about 30 seconds.",
+    origin: "mission_control",
+    actor,
+  }).catch(() => {});
+
+  waitUntil(
+    (async () => {
+      try {
+        const email = contact.email?.trim() || null;
+
+        // ── What may this call claim? Decided here, never by the model. ──
+        //
+        // The order is the point. NOTHING SENT wins over a finished report, because the question
+        // this answers is what the PROSPECT has seen, not what we happen to have produced. A
+        // report sitting in our database that was never emailed is not something they can be
+        // reminded of, and "my team emailed over a report" to someone who never got one is the
+        // error they catch in the first ten seconds.
+        const { data: reportRow } = await supabaseAdmin
+          .from("audit_reports")
+          .select("id, slug, score, prompts")
+          .eq("contact_id", contactId)
+          .eq("status", "done")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        // Non-fatal by construction: readMailboxThread swallows a Graph outage and returns an
+        // empty read with a reason. An outage must not silently downgrade this to nothing_sent,
+        // so an unreadable mailbox is treated as unknown and the honest floor is taken.
+        const truth = await readMailboxThread(email).catch(() => null);
+        const somethingWentOut = (truth?.sent.length ?? 0) > 0;
+
+        const prior: PriorContact = !somethingWentOut
+          ? "nothing_sent"
+          : reportRow
+            ? "report_sent"
+            : "hook_sent";
+
+        // Figures only from a scored report, and only ones already computed. Nothing is derived
+        // here: a booking call needs no numbers, and the fifteen minutes is where they get shown.
+        const numbers: string[] = [];
+        if (reportRow?.score !== null && reportRow?.score !== undefined) {
+          numbers.push(`AI visibility score: ${reportRow.score} out of 100`);
+        }
+        if (Array.isArray(reportRow?.prompts) && reportRow.prompts.length) {
+          numbers.push(`${reportRow.prompts.length} buyer questions were measured for this business`);
+        }
+
+        const facts = bookingFactsFrom({
+          prospect: contact.first_name,
+          company,
+          // classify.ts is not run on this lane, so the trade is whatever the CRM knows. Null is
+          // handled and says so in the prompt rather than being guessed at.
+          trade: null,
+          city: [contact.biz_city, contact.biz_state].filter(Boolean).join(", ") || null,
+          prior,
+          numbers,
+          reportUrl: reportRow?.slug ? `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/r/${reportRow.slug}` : null,
+        });
+
+        const { script, warnings } = await buildBookingScript(facts);
+
+        await addNote({
+          contactId,
+          title: warnings.length ? "Follow-up call script (check the warnings)" : "Follow-up call script",
+          content: formatBookingNote(facts, script, warnings),
+          origin: "mission_control",
+          actor,
+        }).catch(() => {});
+      } catch (e) {
+        const message = (e as Error)?.message ?? String(e);
+        console.error("[crm/workflow] booking call script threw:", message);
+        await addNote({
+          contactId,
+          title: "Follow-up call script failed",
+          content: `${message} Nothing was written. Press Follow-up call again.`,
+          origin: "mission_control",
+          actor,
+        }).catch(() => {});
+      }
+    })()
+  );
+
+  return NextResponse.json(
+    {
+      ok: true,
+      running: true,
+      message: "Writing the script. It lands on this timeline in about 30 seconds.",
     },
     { status: 202 }
   );

@@ -44,8 +44,8 @@ import { displayName } from "./display-name";
  * `FROM_DOMAIN` is derived from the mailbox the outreach actually leaves from, because section 4
  * of every follow-up card tells the prospect where to go looking for that email.
  */
-const AGENCY_NAME = process.env.OUTREACH_SIGNATURE_AGENCY || SRT_COMPANY.tagline;
-const FROM_DOMAIN =
+export const AGENCY_NAME = process.env.OUTREACH_SIGNATURE_AGENCY || SRT_COMPANY.tagline;
+export const FROM_DOMAIN =
   (process.env.OUTREACH_MAILBOX || "matthew@srtagency.com").split("@")[1]?.trim() || "srtagency.com";
 
 /**
@@ -89,7 +89,7 @@ const CLOSE_COUNT = 7;
 const PUSHBACK_COUNT = 5;
 
 /** The permission-stage stalls, fixed for the same reason OBJECTIONS is. */
-const PUSHBACKS = [
+export const PUSHBACKS = [
   { key: "notinterested", label: "Not interested", angle: "Do not sell. This is a free video about their own business. Ask one honest question that costs them nothing to answer." },
   { key: "sendemail", label: "Just send me an email", angle: "He already did, that is what the call is about. Turn it into the reply move: pull it up now, reply, and it goes out immediately." },
   { key: "whoisthis", label: "Who is this / what is this about", angle: "Straight answer in one line, no pitch. Name the business, name what was run, name what came back." },
@@ -105,7 +105,7 @@ const PUSHBACKS = [
  * ":warning: 12 line(s) run past 25 words" printed above it, which is a card telling him it is
  * broken while he dials off it anyway. See followupSpeechProblems. The closing card still warns only.
  */
-const MAX_SPOKEN_WORDS = 25;
+export const MAX_SPOKEN_WORDS = 25;
 
 /**
  * The three points are held tighter than everything else, because they are the only lines said to
@@ -193,7 +193,7 @@ function openerAngle(f: CallFacts): string {
  * guarantee is a performance commitment on one tier, not a refund policy, and the difference is
  * exactly what a prospect will try to collect on later.
  */
-function hardLines(guarantee: string | null): string[] {
+export function hardLines(guarantee: string | null): string[] {
   return [
     "NEVER invent a number. You may only speak figures that appear in FACTS below. The prospect has the report open and can count.",
     guarantee
@@ -583,7 +583,7 @@ function sentencesIn(line: string): string[] {
 }
 
 /** A bracketed stage direction is read, not said, so none of the speech rules apply to it. */
-function isDirection(line: string): boolean {
+export function isDirection(line: string): boolean {
   return line.trim().startsWith("[");
 }
 
@@ -618,10 +618,25 @@ function restatesReplyAsk(line: string): boolean {
  * content guards apply to both: a price or a reach claim is no more acceptable written down, and a
  * sent email outlives an improvised sentence.
  */
-function lintSpoken(
+/**
+ * The only part of CallFacts the identity checks below actually read.
+ *
+ * ‼️ NARROWED FROM CallFacts ON PURPOSE (2026-08-22). Those two checks — an invented sender domain
+ * and the rep introducing himself as a company we are not — are the two most damaging things a
+ * script can contain, and they were reachable only by a caller holding a full CallFacts, which
+ * means a caller holding a finished AUDIT. The booking lane has no audit and needed them most,
+ * since a prospect it calls may never have been sent anything at all. Every existing caller passes
+ * a CallFacts and satisfies this structurally, so nothing else changes.
+ */
+export type SpokenIdentity = Pick<
+  CallFacts,
+  "fromDomain" | "reportUrl" | "redesignUrl" | "loomUrl" | "company" | "agencyName"
+>;
+
+export function lintSpoken(
   spoken: string[],
   written: string[],
-  opts: { noPrice?: boolean; allowGuarantee?: boolean; facts?: CallFacts } = {}
+  opts: { noPrice?: boolean; allowGuarantee?: boolean; facts?: SpokenIdentity } = {}
 ): string[] {
   const warnings: string[] = [];
 
@@ -1214,7 +1229,7 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
 }
 
 /** Bullet a list, passing bracketed stage directions through as italics so speech reads as speech. */
-function bullets(lines: string[]): string {
+export function bullets(lines: string[]): string {
   return lines
     .map((l) => {
       const t = noDashes(l.trim());

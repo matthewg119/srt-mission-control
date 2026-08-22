@@ -668,6 +668,77 @@ You have no website, so the engine had nothing of yours to pull from when it ans
 
 [STOP HERE. The close and the sign-off are appended automatically.]`;
 
+/**
+ * The reference email for the HOOK lane, written by Matthew by hand (2026-08-22).
+ *
+ * ‼️ THE HOOK LANE WAS BEING FED permissionExample(), WHICH IS A 20-PROMPT AUDIT EMAIL. Exactly
+ * the bug NO_WEBSITE_EXAMPLE exists to fix, one lane over and unnoticed for longer. That reference
+ * is built on "I ran X through the AI engines ... you came back in 10 of 20", while the hook's own
+ * SCOPE block in draftHookPitch forbids calling anything an audit or a report and the lane runs
+ * four questions. So the shape it was told to imitate described work it had not done, and the
+ * rules then told it not to say the thing the shape was saying.
+ *
+ * EIGHT BEATS, one sentence each:
+ *   1. the pretext: these questions were being run for another client in the area
+ *   2. what is being finished, and for whose search, ending on a colon
+ *   3. the buyer question itself, in quotes, on its own line
+ *   4. the result, flat, no adjectives  (hookResultLine, fixed wording)
+ *   5. the one rival that took the slot
+ *   6. those conversations are happening right now
+ *   7. the positioning line, ending on a comma  (hookPositioningLine, fixed wording)
+ *   8. the site tease, then it STOPS
+ *
+ * ‼️ BEAT 7 SITS BEFORE BEAT 8, and that is Matthew's ordering, chosen over the alternative where
+ * the positioning line runs straight into the appended close. Do not "fix" it.
+ *
+ * ‼️ BEATS 5 AND 8 ARE CONDITIONAL. The rival line needs a rival an engine actually named, and the
+ * site tease needs teaseIsLicensed() to be true. hookCheckContext decides; this teaches shape only.
+ * An email missing either is not a broken email, it is a shorter one.
+ *
+ * The greeting is not in the example because it is not the model's to write: ensureGreeting()
+ * prepends it, same precedent as PERMISSION_CLOSE.
+ */
+export const HOOK_EXAMPLE = `I was running some questions in ChatGPT for another client in the area.
+
+Finishing a report on what comes back when a homeowner in Bakersfield searches for:
+
+"licensed electrician for a panel upgrade or EV charger install"
+
+You came back in 25% of those searches.
+
+Electrical ASAP came back in most of them.
+
+Those conversations are happening right now.
+
+If you want to be the business AI recommends for panel upgrades and EV charger installs in Bakersfield,
+
+There is also one thing on your own site working against you there, and it is the part most electrical contractors never catch on their own.
+
+[STOP HERE. The close and the sign-off are appended automatically.]`;
+
+/** The framed few-shot for the hook lane, mirroring noWebsiteExample() so all three teach alike. */
+export function hookExample(): string {
+  return [
+    "REFERENCE EMAIL. This is the exact shape wanted. Match its rhythm, its one-sentence",
+    "paragraphs, its plain words and its restraint. Do NOT reuse its wording, its business, its",
+    "trade or its city:",
+    "---",
+    HOOK_EXAMPLE,
+    "---",
+    "Note the order: the pretext first, then what you were finishing and for whose search, then",
+    "the question itself in quotes on its own line, then the number, then the one rival, then that",
+    "these conversations are happening now, then the positioning line, then the site tease.",
+    "Note that the positioning line ends on a comma and comes BEFORE the site tease. Both are",
+    "deliberate.",
+    "Note where it stops, and note that it has no greeting, because one is added for you.",
+    // Stated as a number for the reason noWebsiteExample states it: a word cap does not constrain
+    // paragraph count, and the failure is always a last paragraph restating an earlier one.
+    "The rival line and the site tease are the only two beats that may be dropped, and only when",
+    "the facts below say there is no rival to name or nothing on the site to tease. Never add a",
+    "beat that is not in the shape above.",
+  ].join("\n");
+}
+
 /** The framed few-shot, mirroring permissionExample() so both lanes teach the same way. */
 export function noWebsiteExample(): string {
   return [

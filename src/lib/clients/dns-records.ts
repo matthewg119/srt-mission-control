@@ -188,6 +188,68 @@ export interface CheckResult {
    */
   status: DnsStatus | "not_found";
   observed: string | null;
+  /**
+   * A value the RESOLVER taught us that nobody had typed in. Only ever set on the
+   * external-TXT path, and recheckDnsRecords writes it only onto a row whose value is
+   * still null. See checkExternalTxt for why that path exists at all.
+   */
+  learnedValue?: string | null;
+}
+
+/**
+ * Search Console's own TXT, in the one shape we are willing to recognise without being told.
+ * Narrow on purpose: this is a prefix match against a namespace Google owns, not a guess at
+ * what a verification record looks like in general.
+ */
+const GOOGLE_VERIFY_PREFIX = "google-site-verification=";
+
+/**
+ * The verification-shaped answers only, so a card is not filled with the client's SPF and
+ * DKIM strings. Shared by both TXT paths so the two cannot drift apart.
+ */
+function verificationDigest(found: string[]): string | null {
+  return found.filter((f) => /verification|verify|=/.test(f)).slice(0, 4).join(" | ") || null;
+}
+
+/**
+ * ‼️ THE TXT ROW OFTEN HAS NO EXPECTED VALUE, AND THAT IS THE NORMAL CASE, NOT A GAP.
+ *
+ * When the registrar is a Google partner (GoDaddy is), Search Console verifies through
+ * "Domain name provider" and writes the TXT record ITSELF. Nobody ever sees the string, so
+ * nobody ever pastes it into our panel, so `value` stays null. Before this, checkRecord
+ * returned `pending` at its first line without issuing a query at all, and the row sat there
+ * forever while verification had in fact succeeded weeks earlier. Nothing was visibly wrong,
+ * which is what made it expensive: the Hub status strip simply never reached 3 of 3.
+ *
+ * So with nothing to compare against, the SHAPE is the evidence. A live
+ * google-site-verification= record on the domain means Google verified it, which is the fact
+ * the row was always trying to state.
+ *
+ * ‼️ AN ABSENT VERIFICATION RECORD IS `pending`, NEVER `mismatch`. Nothing was ever claimed for
+ * this row, so there is nothing for the world to disagree with. Same doctrine as the not_found
+ * rule one function down: say nothing rather than say something wrong.
+ *
+ * This is deliberately NOT extended to CNAMEs. There is no such thing as a correct-SHAPED
+ * CNAME, only the specific per-domain target Vercel issued, so a CNAME with no stored target
+ * stays pending and keeps its exact compare.
+ */
+async function checkExternalTxt(name: string): Promise<CheckResult> {
+  try {
+    const found = (await dns.resolveTxt(name)).map((chunks) => chunks.join(""));
+    const hit = found
+      .map((f) => f.trim())
+      .find((f) => f.toLowerCase().startsWith(GOOGLE_VERIFY_PREFIX));
+
+    return {
+      status: hit ? "verified" : "pending",
+      observed: verificationDigest(found),
+      // Recorded so the next pass has something to compare against, and so the panel shows
+      // what was actually seen rather than an empty Value box on a green row.
+      learnedValue: hit ?? null,
+    };
+  } catch {
+    return { status: "not_found", observed: null };
+  }
 }
 
 /** Does this record actually resolve to what we asked for? */
@@ -196,7 +258,12 @@ export async function checkRecord(
   name: string,
   expected: string | null
 ): Promise<CheckResult> {
-  if (!expected) return { status: "pending", observed: null };
+  // No expected value. For a TXT that is the Search Console case above and there is real work
+  // to do; for a CNAME there is nothing to check against and never will be.
+  if (!expected) {
+    if (def.type === "TXT") return checkExternalTxt(name);
+    return { status: "pending", observed: null };
+  }
 
   try {
     if (def.type === "CNAME") {
@@ -216,9 +283,7 @@ export async function checkRecord(
     const hit = found.some((f) => f.trim() === expected.trim());
     return {
       status: hit ? "verified" : "mismatch",
-      // Only the verification-shaped records, so a card is not filled with the client's
-      // SPF and DKIM strings.
-      observed: found.filter((f) => /verification|verify|=/.test(f)).slice(0, 4).join(" | ") || null,
+      observed: verificationDigest(found),
     };
   } catch {
     // Every resolver failure lands here as not_found. ENOTFOUND, ENODATA and a timeout
@@ -354,6 +419,13 @@ export async function recheckDnsRecords(
       patch.status = result.status;
       patch.verified_at = result.status === "verified" ? now : null;
     }
+
+    // Record a value the resolver taught us, and ONLY onto a row nobody has typed into.
+    // Guarding on !row.value keeps a human-entered value authoritative: this may fill an
+    // empty box, never correct a full one. Once written, the next pass takes the ordinary
+    // exact-compare branch above and still verifies, because the stored string is literally
+    // the one the resolver returned. The two paths agree by construction.
+    if (result.learnedValue && !row.value) patch.value = result.learnedValue;
 
     await supabaseAdmin
       .from("client_dns_records")

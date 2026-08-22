@@ -137,7 +137,12 @@ SLACK_FOLLOWUPS_CHANNEL=   # #followups_channel id. Home of the Follow-Up Operat
 OUTREACH_MAILBOX=          # matthew@srtagency.com. The mailbox whose Sent Items are swept.
 OUTREACH_EXCLUDE_DOMAINS=  # Optional comma list. srtagency.com is always excluded.
 MAPS_PULL_ENABLED=         # Unset = Google Maps prospecting stays PAUSED. "1" resumes it.
-AUDIT_SIGNATURE_NAME=      # Outlook signature BLOCK name for audit pitches. Default "AI Ops"
+AUDIT_SIGNATURE_NAME=      # DEAD IN PRACTICE. Microsoft removed GET /beta/me/mailboxSettings/
+                           # signatures ("Resource not found for the segment 'signatures'"), so
+                           # getSignatureByName() always returns null and auditSignatureHtml() has
+                           # ALWAYS taken the fallback. The real signature is
+                           # PITCH_SIGNATURE_HTML in src/config/email-signature.ts — edit it THERE,
+                           # in code, not in Outlook. Outlook signature BLOCK name. Default "AI Ops"
                            # (its rendered content reads "Matthew Garcia / AI Visibility - SRT",
                            # so naming it after the content would not find it).
 OUTREACH_SIGNATURE_NAME=   # Who cold outreach is SIGNED by, two plain lines. Default "Matthew
@@ -658,6 +663,84 @@ never silently swallowed.
 Probes: `scripts/_probe-no-website-pitch.ts` (synthetic checks: engines-answered, engines-silent,
 and research-missed, plus the reverse gate that `nothing-to-find` is never picked for a researched
 check) and `scripts/_probe-own-domain.ts` (19 real URLs).
+
+### The "Email hook" button (`hook-pitch.ts`) — copy rewritten 2026-08-22
+Four buyer questions and one permission email, sent BEFORE any audit is spent. Matthew rewrote the
+copy by hand; `HOOK_EXAMPLE` in `email-assistant.ts` is that email and it is the reference now.
+
+> ‼️ **THE HOOK LANE WAS BEING FED `permissionExample()`, A 20-PROMPT AUDIT EMAIL.** Exactly the
+> bug `NO_WEBSITE_EXAMPLE` was created to fix, one lane over and unnoticed for longer. That
+> reference is built on "you came back in 10 of 20", while this lane runs four questions and its
+> own SCOPE block forbids calling anything an audit — so the shape it imitated described work it
+> had not done, and the rules then told it not to say what the shape was saying. Eight beats now,
+> one sentence each, and the rival line and site tease are the only two that may drop out.
+
+- **The result line is a PERCENTAGE, and that reversed a deliberate rule.** `hookFractionLine` was
+  renamed `hookResultLine` with the change, because a function called `fraction` returning a
+  percentage is the exact drift these comments exist to stop. The old comment argued a fraction is
+  reproducible and a percentage hides how small the sample is; that is still true and it is the
+  cost. **Matthew's call, made with it stated. Do not flip it back without asking him.** The two
+  ends are worded, never computed: "0%" reads as a rounding artifact, "100%" as a typo.
+- **`hookPositioningLine` ends on a comma** and sits BEFORE the site tease. The comma hands off
+  into `PERMISSION_CLOSE`, so the give answers the condition. It is prompt-pinned and
+  code-VERIFIED (`positioningWarningFor`), **not** code-appended like the close: it sits before a
+  conditional model-written paragraph, and splicing mid-body is what this repo refuses on the
+  grounds that a bad splice is worse than a flagged one. It drops the state from the city, only
+  here, because "in Bakersfield, CA," puts two commas in four words on a line that is read aloud.
+- **`HOOK_PRETEXT_LINE` carries no asterisks any more.** It used to order `**(for another
+  client)**` bolded onto the quoted search line, contradicting `PARAGRAPH_RULES` ("no asterisks,
+  no markdown of any kind") in the same system prompt and forcing this to be the only pre-pitch
+  lane passing `allowEmphasis: true`. It is now the plain opening sentence and the flag is back to
+  `false`.
+- **A rule and its exception in one breath is heard as the rule.** "Report" written as a carve-out
+  buried in the SCOPE prohibition produced "Finishing up what comes back" and dropped the clause
+  explaining why anyone ran the questions. Stated as its own permission line, the beat came back
+  right. The report belongs to the OTHER client; none was ever built for this prospect.
+- **`HookCheck.buyerPersona` was added because its absence was visible in the copy.**
+  `classify.ts` always produced it and this lane never carried it, so beat 2 had nobody to name
+  and every draft said "when someone in San Diego searches for". An owner pictures a homeowner and
+  cannot picture someone.
+- **Greeting:** `ensureGreeting` took an optional `fallback`, and the hook lane is the only caller
+  passing one (`"Hello,"`). It opens on a pretext rather than on the finding, and a pretext with
+  nothing above it reads as a fragment. Every other lane keeps the no-first-name-means-no-greeting
+  rule untouched. `"Hello,"` is not `"Hey there,"`: it claims no familiarity and merges nothing.
+
+### The "Follow-up call" button (`booking-script.ts`, 2026-08-22)
+The third phone script, and genuinely a third one. `buildFollowupScript` earns "yes, send it over";
+`buildCallScript` closes someone who watched the video; this one **books fifteen minutes and gets
+an email address**, and that is the whole outcome. `BOOKING_EXAMPLE` is Matthew's own call,
+transcribed.
+
+> ‼️ **IT IS A SEPARATE FILE BECAUSE `CallFacts` IS AUDIT-SHAPED AND THIS LANE HAS NO AUDIT.**
+> Score, absentPrompts, competitors, icp, price, tier and guarantee all come off a finished
+> `audit_reports` row. This call follows the Email hook, which exists precisely so a report is NOT
+> spent before somebody replies, so gating it on one would make the button unreachable on the
+> leads it is for. It takes the numbers when they exist and says out loud that there are none when
+> they do not (`zohoOnlyNumbers()` precedent: absent beats forbidden).
+
+> ‼️ **`PriorContact` IS DECIDED IN CODE AND NOTHING ELSE MAY DECIDE IT.** Matthew's script says
+> "my team emailed over a report with the whole 9 yards". True on exactly one of three states,
+> the strongest line in the call, and it reads well enough that a model reaches for it every time.
+> **`nothing_sent` wins over a finished report**, because the question is what the PROSPECT has
+> seen: a report in our database that was never emailed cannot be recalled to them.
+>
+> | state | the `why` beat may say |
+> |---|---|
+> | `report_sent` | an audit was run AND mail went to this address. "my team emailed over a report" |
+> | `hook_sent` | mail went out, no report exists. "ran some questions and emailed what came back" |
+> | `nothing_sent` | nothing was sent. Everything is an OFFER, nothing is a follow-up |
+
+- `SpokenIdentity` was split out of `CallFacts` so `lintSpoken`'s two most valuable checks — an
+  invented sender domain and the rep naming a company we are not, the live Grey Seal failure —
+  are reachable without an audit. Every existing caller satisfies it structurally.
+- **`describeInvalid` has to cover its whole validator.** It described only the shape and returned
+  "shape looked right" whenever the 25-word cap was what failed, so the correction retry got a
+  rejection with no reason and answered "I cannot fix the error without knowing what the rejection
+  reason was" — not JSON, so the parse threw, on every run. It now quotes the offending lines.
+- Output lands on the **lead timeline, not Slack**: every other button here makes something to
+  review and send, this makes something read off the phone while dialing, and the lead page is
+  where that decision is made. Same call `formatNoWebsitePitchNote` made.
+- Probe: `scripts/_probe-booking-script.ts` (the three states, the city trim, identity populated).
 
 ## /scan — the self-serve public funnel (2026-08-05)
 `srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
@@ -1970,6 +2053,33 @@ worse than a record idle for a fortnight.
 > `ignoreDuplicates` would otherwise preserve a wrong host forever and a verification is a
 > statement about one specific name.
 - TXT answers are joined before comparing: >255-char verification strings arrive chunked.
+
+> ‼️ **THE TXT ROW USUALLY HAS NO EXPECTED VALUE, AND THAT IS NORMAL, NOT A GAP** (2026-08-22).
+> When the registrar is a Google partner (GoDaddy is), Search Console verifies through "Domain
+> name provider" and **writes the TXT record itself**. Nobody ever sees the string, so nobody
+> pastes it into the panel, so `value` stays null — and `checkRecord` used to return `pending` at
+> its first line without issuing a query at all. The row sat there forever while verification had
+> succeeded weeks earlier, `allVerified()` could never be true, and the Hub strip never reached
+> 3 of 3. Nothing looked broken, which is what made it expensive.
+>
+> With nothing to compare against, the SHAPE is the evidence: a live `google-site-verification=`
+> answer means Google verified it. `checkExternalTxt` reports it `verified` and returns
+> `learnedValue`, which `recheckDnsRecords` writes **only onto a row whose `value` is still null**,
+> so a human-entered value stays authoritative. Once learned, the next pass takes the ordinary
+> exact-compare branch and still verifies, because the stored string is the one the resolver
+> returned — the two paths agree by construction.
+>
+> **An absent verification record is `pending`, never `mismatch`.** Nothing was ever claimed for
+> that row, so there is nothing to disagree with. Same doctrine as the not_found rule.
+>
+> **NOT extended to CNAMEs, and that is the regression to guard.** There is no correct *shape* for
+> a CNAME, only the specific per-domain target Vercel issued, so a "looks like a CNAME" check
+> would tick green on a record pointing at somebody else's project. Case 5 of
+> `scripts/_probe-dns-txt.ts` exists for exactly that and must not be deleted.
+>
+> The probe's live half falls back to 8.8.8.8: under a sandbox `dns.getServers()` reads
+> `127.0.0.1` and every query is ECONNREFUSED, which is correctly reported as `not_found` and
+> correctly not stored, and also proves nothing. Vercel's lambdas resolve normally.
 - `resolveDnsProvider()` reads the nameservers to name the registrar, because "who is your
   domain with" is a question many owners genuinely cannot answer. Unknown NS returns
   `provider: null` with the nameservers still populated — a real answer, not a guess.

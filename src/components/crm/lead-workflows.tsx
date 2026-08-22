@@ -74,6 +74,16 @@ const WORKFLOWS: WorkflowDef[] = [
     needsWebsiteAndEmail: true,
   },
   {
+    // Directly under Email hook because it is what happens next: the hook goes out, nobody
+    // replies, and this is the call. Needs no audit and no website for the same reason the hook
+    // needs no audit — the whole point of that lane is that a report is not spent before somebody
+    // replies, so a call that required one could never be made to the leads it is for.
+    action: "followup",
+    label: "Follow-up call",
+    hint: "The booking script: 15 minutes and their email. No audit needed",
+    needsAudit: false,
+  },
+  {
     // Sits last, under Loom, because it is the one button here that does NOT belong to the audit
     // ladder above it. It is the alternative to that whole ladder for a prospect who has no site.
     action: "nowebsite",
@@ -132,7 +142,9 @@ export function LeadWorkflows({
               ? "Researching. The draft lands in your Outlook drafts in about 90 seconds, and the link comes back on this timeline."
               : w.action === "hook"
                 ? "Scanning. The draft lands in Slack and your Outlook drafts in about 90 seconds, and the link comes back on this timeline."
-                : "Running in the audit thread.",
+                : w.action === "followup"
+                  ? "Writing the script. It lands on this timeline in about 30 seconds, ready to read off the phone."
+                  : "Running in the audit thread.",
         url: json.threadUrl ?? threadUrl ?? undefined,
       });
       // Picks up the "started" note the route just wrote, and the in-flight state
@@ -166,6 +178,15 @@ export function LeadWorkflows({
       if (auditRunning) return "An audit is already running";
       return null;
     }
+    if (w.action === "followup") {
+      // A booking script is built around the company and what they do, so the name is the one
+      // thing it cannot be written without. It takes the audit when one exists and stays honest
+      // when it does not, which is why nothing else is required here.
+      return hasBusinessName ? null : "Add a business name above first";
+    }
+    // Everything left belongs to the audit ladder. Stated as the flag rather than as the default
+    // so a future button declaring needsAudit:false is not silently gated on one anyway.
+    if (!w.needsAudit) return null;
     return hasAudit ? null : "Needs a finished audit";
   }
 

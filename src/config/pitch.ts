@@ -539,19 +539,52 @@ export const NOTHING_TO_FIND_LINE =
  * it must stay that narrow. It may NOT name the other client, name their industry, imply a result,
  * or suggest we are working the prospect's competitor.
  *
- * The bold is deliberate and is Matthew's call: it marks the aside as an aside, so the sentence
- * reads as the reason for the search rather than as a claim about the prospect. It survives
- * polishBody only because the hook lane passes allowEmphasis: true, and reaches Outlook only
- * because buildPitchHtml renders ** as <strong>.
+ * ‼️ IT IS THE OPENING SENTENCE AND IT CARRIES NO ASTERISKS (2026-08-22). It used to order
+ * `**(for another client)**` bolded onto the end of the quoted search line, which put it in direct
+ * contradiction with PARAGRAPH_RULES ("no asterisks, no markdown of any kind") in the same system
+ * prompt, and forced the hook lane to be the only pre-pitch lane calling polishBody with
+ * allowEmphasis: true. Matthew rewrote it by hand as the plain first line, which is where a reason
+ * for calling belongs anyway: the reader learns why this landed in their inbox before they are
+ * asked to care about the finding.
  */
 export const HOOK_PRETEXT_LINE =
-  "The search was one you were not the subject of. Mark that aside in the email exactly like " +
-  'this, with the asterisks, on the same line as the quoted search: **(for another client)**. ' +
-  "Do NOT say who the other client is, what they do, or anything about how they are doing. Do " +
-  "NOT suggest you are working with one of this prospect's competitors.";
+  "OPEN WITH THE PRETEXT, as the first sentence of the email and on its own line: the questions " +
+  "were being run for another client in the area, and this prospect was not the subject of them. " +
+  "Plain text, no asterisks, no bold, no parentheses. Do NOT say who the other client is, what " +
+  "they do, or anything about how they are doing. Do NOT suggest you are working with one of this " +
+  "prospect's competitors.";
 
 /**
- * ‼️ THE HOOK'S FRACTION LINE. The one number the hook email prints, in fixed wording.
+ * ‼️ THE POSITIONING LINE. What we would actually do for them, in one clause.
+ *
+ * Fifth sibling of NO_WEBSITE_LINE / NOTHING_TO_FIND_LINE / HOOK_PRETEXT_LINE, pinned for the same
+ * reason: it is the one line in the email that describes the SERVICE, and a model asked to phrase
+ * that itself reaches for a guarantee, a mechanism lecture, or a second CTA. This says what we do
+ * and stops.
+ *
+ * ‼️ IT ENDS ON A COMMA ON PURPOSE. It is a conditional clause that hands off into the appended
+ * close ("If you want to be the business AI recommends for X in Y," / "I recorded a 4 min video
+ * with the breakdown"), so the give arrives as the answer to the condition. A full stop here turns
+ * it into a standalone claim and the close back into a cold ask.
+ *
+ * Position is BEFORE the site-signal paragraph. It is prompt-pinned and code-VERIFIED rather than
+ * code-appended, unlike PERMISSION_CLOSE: it sits before a conditional, model-written paragraph, so
+ * appending it would mean splicing mid-body, and this codebase refuses that on the grounds that a
+ * bad splice is worse than a flagged one. See positioningWarningFor in hook-pitch.ts.
+ */
+export function hookPositioningLine(service: string, city: string | null): string {
+  // ‼️ THE STATE IS DROPPED HERE AND ONLY HERE. classify.ts stores "Bakersfield, CA", which is
+  // right everywhere else and wrong in this one sentence: the clause already ends on a comma, so
+  // the state produces "in Bakersfield, CA," and the reader meets two commas in four words. A
+  // local business being told where it is does not need the state, and Matthew's reference email
+  // does not carry one. Split on the first comma rather than matching a state list, so a city
+  // written any other way passes through untouched.
+  const where = city?.split(",")[0]?.trim();
+  return `If you want to be the business AI recommends for ${service}${where ? ` in ${where}` : ""},`;
+}
+
+/**
+ * ‼️ THE HOOK'S RESULT LINE. The one number the hook email prints, in fixed wording.
  *
  * Same rule as PERMISSION_CLOSE and NO_WEBSITE_LINE, and it is here for the same reason: asked to
  * phrase this itself, a model rewrites it every take. Across a week of sending that means the
@@ -559,14 +592,24 @@ export const HOOK_PRETEXT_LINE =
  * did not get a reply was the wrong line or just the wrong day. One wording, so the hook is
  * actually measurable.
  *
- * ‼️ IT IS A FRACTION AND IT STAYS A FRACTION. Never a percentage. The scan is a handful of
- * questions, and "less than 25%" implies a sample far bigger than four. The fraction is also the
- * stronger line: it is the number the prospect can reproduce himself in a minute, which is the
- * whole reason the email earns a reply.
+ * ‼️ IT IS A PERCENTAGE AS OF 2026-08-22, AND THAT REVERSED A DELIBERATE RULE. This function used
+ * to be hookFractionLine and its comment argued, at length, that a fraction must never become a
+ * percentage: four questions is a small sample, "less than 25%" implies a far bigger one, and a
+ * fraction is the number a prospect can reproduce himself in a minute. That reasoning is still
+ * true and it is the cost of this change. Matthew's call, made with it stated. Do not flip it back
+ * without asking him.
+ *
+ * It was RENAMED with the change rather than left as hookFractionLine, because a function called
+ * `fraction` that returns a percentage is exactly the drift these comments exist to prevent.
  *
  * `measured` is the count of questions that actually came back, NEVER HOOK_PROMPT_COUNT. A call
  * that returned nothing proves nothing and must not sit in the denominator.
+ *
+ * The two ends are worded, not computed: "0%" reads as a rounding artifact and "100%" as a typo,
+ * and neither is the sentence a person would write.
  */
-export function hookFractionLine(appeared: number, measured: number): string {
-  return `You came back in ${appeared} of the ${measured} searches I ran`;
+export function hookResultLine(appeared: number, measured: number): string {
+  if (measured <= 0 || appeared <= 0) return "You did not come back in a single one of those searches";
+  if (appeared >= measured) return "You came back in every one of those searches";
+  return `You came back in ${Math.round((appeared / measured) * 100)}% of those searches`;
 }

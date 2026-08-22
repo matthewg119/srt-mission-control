@@ -32,6 +32,35 @@ const PAGE = 1000;
 const CONTACT_COLS =
   "email, phone, mobile_phone, first_name, last_name, biz_city, biz_state, biz_zip";
 
+/**
+ * ‼️ NOT CONFIGURED IS "OFF", NOT "FAILED", AND THE DIFFERENCE IS THE WHOLE FIX (2026-08-22).
+ *
+ * This posted `CRM Exclusion Sync FAILED: META_AUDIENCE_ID not set` into #hot-leads every single
+ * morning for weeks. The audience was never created, so the feature has never once run, so there
+ * was nothing failing: a daily alarm for an integration nobody switched on is noise, and noise in
+ * the channel where real leads land is worse than useless because it trains the eye to skip it.
+ *
+ * It also did the work BEFORE finding out. `pushUsersToAudience` is what throws, so every run
+ * pulled the entire contacts table, hashed every row and built the payload first, then discarded
+ * all of it. The check moves to the top.
+ *
+ * ‼️ THE SPLIT MATTERS AND IT IS NOT "SILENCE THE CRON". The file header is right that a QUIET
+ * break re-exposes existing leads to acquisition ads. So:
+ *   - never configured  -> skip, log to system_logs, say nothing in Slack. Nothing is being
+ *                          protected, because nothing was ever set up.
+ *   - configured and failing -> still throws, still alarms, exactly as loudly as before.
+ * The moment the three vars are set, every previous behaviour returns.
+ *
+ * To turn it on: create a Meta System User with `ads_management` -> META_ADS_TOKEN, accept the
+ * Custom Audience Terms, hit /api/admin/create-exclusion-audience once, paste the id into
+ * META_AUDIENCE_ID, redeploy.
+ */
+function missingMetaConfig(): string[] {
+  return (["META_ADS_TOKEN", "META_AD_ACCOUNT_ID", "META_AUDIENCE_ID"] as const).filter(
+    (k) => !process.env[k]?.trim()
+  );
+}
+
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true;
@@ -45,6 +74,17 @@ async function handle(req: NextRequest) {
   }
 
   const start = Date.now();
+
+  // Before any work, and before any alarm. See missingMetaConfig above.
+  const missing = missingMetaConfig();
+  if (missing.length) {
+    await supabaseAdmin.from("system_logs").insert({
+      event_type: "cron_crm_exclusion_sync_skipped",
+      description: `Meta exclusion sync is not configured, skipped. Missing: ${missing.join(", ")}`,
+      metadata: { missing },
+    });
+    return NextResponse.json({ ok: true, skipped: "not_configured", missing });
+  }
 
   try {
     // 1. Pull the full CRM, paged. `truncated` is kept in the payload for

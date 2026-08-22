@@ -611,8 +611,18 @@ const BARE_NAME_GREETING_RE = /^[^\n]{1,40},$/;
  *
  * No first name means NO greeting rather than a guess. "Hey there," is a mail merge on the one
  * line that decides whether the rest is read, and greeting the BUSINESS is worse.
+ *
+ * ‼️ `fallback` OPTS ONE LANE OUT OF THAT LAST RULE, and it is opt-in for a reason. The hook lane
+ * passes "Hello," (Matthew's call, 2026-08-22) because a bare finding with no greeting at all reads
+ * as a fragment when it opens on a pretext sentence rather than on the finding itself. "Hello," is
+ * not "Hey there,": it claims no familiarity and merges nothing, which is what made "Hey there,"
+ * unusable. Every other lane passes nothing and keeps the no-greeting rule above, unchanged.
  */
-export function ensureGreeting(body: string, firstName?: string | null): string {
+export function ensureGreeting(
+  body: string,
+  firstName?: string | null,
+  fallback?: string
+): string {
   const paras = body.split(/\n{2,}/);
   const first = paras[0]?.trim() ?? "";
   const looksLikeGreeting =
@@ -621,7 +631,8 @@ export function ensureGreeting(body: string, firstName?: string | null): string 
 
   const rest = paras.join("\n\n").trim();
   const name = firstName?.trim();
-  return name ? `Hey ${name},\n\n${rest}` : rest;
+  if (name) return `Hey ${name},\n\n${rest}`;
+  return fallback ? `${fallback}\n\n${rest}` : rest;
 }
 
 /**

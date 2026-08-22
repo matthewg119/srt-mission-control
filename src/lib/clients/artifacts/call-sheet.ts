@@ -374,11 +374,14 @@ export async function generateCallSheet(
 
   const { data: dnsRows } = await supabaseAdmin
     .from("client_dns_records")
-    .select("host, type, value")
+    // record_type, not type. The column has always been record_type, so both finds below were
+    // reading undefined and the call sheet printed no DNS at all, silently, on the one document
+    // whose entire job is to be correct while the client checks it.
+    .select("host, record_type, value")
     .eq("client_id", clientId);
 
-  const cname = (dnsRows ?? []).find((r) => r.type === "CNAME");
-  const txt = (dnsRows ?? []).find((r) => r.type === "TXT");
+  const cname = (dnsRows ?? []).find((r) => r.record_type === "CNAME");
+  const txt = (dnsRows ?? []).find((r) => r.record_type === "TXT");
 
   const domain = client.domain as string;
   const label = subdomainLabel((client.subdomain as string) ?? "learn", domain);

@@ -45,7 +45,7 @@ import {
   STYLE_RULES,
   COMPLIANCE_RULES,
   prePitchRules,
-  permissionExample,
+  hookExample,
   noDashes,
   enforceLinkPolicy,
   ensurePermissionClose,
@@ -63,7 +63,8 @@ import {
 import {
   HOOK_PRETEXT_LINE,
   NAME_COMPETITORS_IN_COLD_EMAIL,
-  hookFractionLine,
+  hookResultLine,
+  hookPositioningLine,
 } from "@/config/pitch";
 
 /**
@@ -95,6 +96,16 @@ export interface HookCheck {
   businessName: string;
   /** What they sell, in buyer words. Drives nothing on its own; quoted to the drafter. */
   trade: string;
+  /**
+   * Who actually buys from them, in one line, from classify.ts.
+   *
+   * ‼️ ADDED 2026-08-22 BECAUSE ITS ABSENCE WAS VISIBLE IN THE COPY. classify.ts has always
+   * produced this and the hook lane simply never carried it, so the second beat had nobody to name
+   * and every draft came back "when someone in San Diego searches for". Matthew's reference writes
+   * "when a homeowner in Bakersfield searches for", and the difference is the whole beat: an owner
+   * pictures a homeowner and cannot picture someone.
+   */
+  buyerPersona: string | null;
   city: string | null;
   website: string;
   results: HookPromptResult[];
@@ -274,6 +285,7 @@ export async function runHookCheck(
     check: {
       businessName,
       trade: classification.business_type,
+      buyerPersona: classification.buyer_persona?.trim() || null,
       city: resolvedCity,
       website: research.website ?? website,
       results,
@@ -317,9 +329,13 @@ const HOOK_ANGLES: HookAngle[] = [
     needsCleanSweep: false,
     finding:
       "The finding is that you put a real buying question to the engine, it answered with a list " +
-      "of businesses, and this prospect was not on it. Quote the question you asked, in quotes, " +
-      "on its own line. State the fraction you were given and nothing else numeric. Then name the " +
-      "ONE rival that kept coming back, and say how often it came back in the same terms you were " +
+      "of businesses, and this prospect was not on it. Beat 2 says what you were finishing and " +
+      "whose search it was about, ending on a colon: name the BUYER as a person, in their own " +
+      "words, using \"Who buys from them\" below and the city, never the word someone. If the " +
+      "pretext above says a report was being finished for the other client, beat 2 may say so in " +
+      "the reference email's words. Quote the question you asked, in quotes, on its own " +
+      "line. State the result line you were given and nothing else numeric. Then name the ONE " +
+      "rival that kept coming back, and say how often it came back in the same terms you were " +
       "given. Do not editorialise about that rival, do not say it is better, and do not suggest " +
       "it let anyone down: you are reporting what an engine returned, which they can reproduce.",
   },
@@ -330,8 +346,11 @@ const HOOK_ANGLES: HookAngle[] = [
     needsCleanSweep: false,
     finding:
       "The finding is that somebody asking who to hire has already decided to buy, and the engine " +
-      "answered that question without this business in it. Quote the question you asked, in " +
-      "quotes, on its own line, then state the fraction. Do NOT list the names that did come back.",
+      "answered that question without this business in it. Beat 2 says what you were finishing " +
+      "and whose search it was about, ending on a colon: name the BUYER as a person, in their own " +
+      "words, using \"Who buys from them\" below and the city, never the word someone. Quote the " +
+      "question you asked, in quotes, on its own " +
+      "line, then state the result line. Do NOT list the names that did come back.",
   },
   {
     id: "site-signal",
@@ -403,6 +422,7 @@ export function hookCheckContext(check: HookCheck): string {
   const lines: string[] = [
     `Business: ${check.businessName}`,
     `What they do: ${check.trade}`,
+    `Who buys from them: ${check.buyerPersona ?? "unknown, so write the second beat without naming a buyer type rather than inventing one"}`,
     `City: ${check.city ?? "unknown"}`,
     `Their website: ${check.website}`,
     "",
@@ -423,10 +443,16 @@ export function hookCheckContext(check: HookCheck): string {
   lines.push(
     "",
     "‼️ THIS SENTENCE IS FIXED. Reproduce it VERBATIM, word for word, as its own paragraph. Do " +
-      "not reword it, do not customise it to this business, do not convert it to a percentage, " +
-      "do not round it, do not add an adjective, and do not add a second number anywhere in the " +
-      "email. You may add a full stop at the end and nothing else:",
-    fractionPhrase(check)
+      "not reword it, do not customise it to this business, do not convert it back to a fraction " +
+      "or a count, do not round it, do not add an adjective, and do not add a second number " +
+      "anywhere in the email. You may add a full stop at the end and nothing else:",
+    resultPhrase(check),
+    "",
+    "‼️ THIS SENTENCE IS ALSO FIXED, same rules, and it goes IMMEDIATELY BEFORE the paragraph " +
+      "about the thing on their own site. If there is no such paragraph in this email, it goes " +
+      "last instead. It ends on a COMMA, not a full stop, because the close appended after it " +
+      "finishes the thought. Do not end it with a period and do not turn it into a question:",
+    positioningPhrase(check)
   );
 
   if (check.topRival && NAME_COMPETITORS_IN_COLD_EMAIL) {
@@ -478,10 +504,21 @@ export function hookCheckContext(check: HookCheck): string {
  * The one number this email prints, in the one wording it is allowed to print it in.
  *
  * Delegates to config/pitch.ts: the wording is a constant so it does not drift take to take, and
- * so changing it is one edit rather than a hunt through prompt text. See hookFractionLine.
+ * so changing it is one edit rather than a hunt through prompt text. See hookResultLine.
  */
-export function fractionPhrase(check: HookCheck): string {
-  return hookFractionLine(check.appearedCount, check.measuredCount);
+export function resultPhrase(check: HookCheck): string {
+  return hookResultLine(check.appearedCount, check.measuredCount);
+}
+
+/**
+ * The service-and-city clause, in the one wording it is allowed to print it in.
+ *
+ * `trade` is what classify.ts decided this business does, in the buyer's words, so the line names
+ * the work rather than the category. City is optional and the clause reads correctly without it,
+ * which matters: an unknown city must never become the string "unknown" in front of a prospect.
+ */
+export function positioningPhrase(check: HookCheck): string {
+  return hookPositioningLine(check.trade, check.city);
 }
 
 /**
@@ -496,17 +533,44 @@ export function fractionPhrase(check: HookCheck): string {
  *
  * Punctuation-tolerant: the drafter ends the sentence with a period the constant does not carry.
  */
-function fractionWarningFor(body: string, check: HookCheck): string | null {
-  const want = fractionPhrase(check);
-  const normalize = (s: string) => s.replace(/\s+/g, " ").replace(/[.,]/g, "").toLowerCase();
-  if (normalize(body).includes(normalize(want))) return null;
-  return `The fixed line was reworded. It must read exactly: "${want}". Check the draft before sending.`;
+function resultWarningFor(body: string, check: HookCheck): string | null {
+  return fixedLineWarning(body, resultPhrase(check), "result");
 }
 
+/**
+ * Same check for the positioning line, and it is a warning for exactly the same reason.
+ *
+ * ‼️ IT IS NOT APPENDED IN CODE, unlike PERMISSION_CLOSE, and the difference is position rather
+ * than importance. The close goes at the END, so appending it is safe. This line goes before a
+ * paragraph that may or may not exist and that the model wrote, so putting it there in code means
+ * finding a sentence by shape and splicing around it — the move resultWarningFor's comment
+ * already refuses on the grounds that a bad splice is worse than a flagged one.
+ */
+function positioningWarningFor(body: string, check: HookCheck): string | null {
+  return fixedLineWarning(body, positioningPhrase(check), "positioning");
+}
+
+/** Punctuation-tolerant: the drafter varies the terminal mark the constants do not carry. */
+function fixedLineWarning(body: string, want: string, label: string): string | null {
+  const normalize = (s: string) => s.replace(/\s+/g, " ").replace(/[.,]/g, "").toLowerCase();
+  if (normalize(body).includes(normalize(want))) return null;
+  return `The fixed ${label} line was reworded. It must read exactly: "${want}". Check the draft before sending.`;
+}
+
+/**
+ * How often the named rival came back, in words.
+ *
+ * "most of them" was added 2026-08-22 to match Matthew's reference email. It fires only on a
+ * strict majority that is not a clean sweep, so it can never be an overstatement: 3 of 4 really is
+ * most of them, and 4 of 4 still says "every one". Losing the exact count is the same trade the
+ * result line now makes by printing a percentage, and it is only made once the email has already
+ * made it — a precise rival count beside a rounded result line reads as the more suspicious pair.
+ */
 function rivalPhrase(check: HookCheck): string {
   const n = check.topRival?.count ?? 0;
   if (n >= check.measuredCount) return "every one of them";
   if (n === 1) return "one of them";
+  if (n * 2 > check.measuredCount) return "most of them";
   return `${n} of them`;
 }
 
@@ -519,8 +583,9 @@ export interface HookDraft extends GuardedDraft {
   /** Set when the linter refused every attempt. The body is then the last REJECTED attempt and
    *  the caller must label it as such, never post it as approved. */
   rejectedFindings: string[];
-  /** Set when the model paraphrased the fixed fraction line instead of reproducing it. */
-  fractionWarning: string | null;
+  /** Set when the model paraphrased one of the two fixed lines instead of reproducing it. */
+  resultWarning: string | null;
+  positioningWarning: string | null;
 }
 
 /**
@@ -552,13 +617,22 @@ export async function draftHookPitch(
           "SCOPE, and it is narrower than the line above implies: what was actually run is " +
             `${check.results.length} buyer questions put to ChatGPT with web search on, plus a ` +
             "read of their website. You may say you ran their business through the AI engines " +
-            "and that you looked at what came back. You may NOT call it an audit, a report, a " +
-            "full analysis, or a score, because none of those were produced.",
+            "and that you looked at what came back. You may NOT call it an audit, a full " +
+            "analysis, or a score of THEIRS, because none of those were produced.",
+          // ‼️ STATED AS A PERMISSION, NOT AS A CARVE-OUT IN A PROHIBITION. Written as an
+          // exception buried in the SCOPE sentence above, the model read the whole paragraph as
+          // "do not say report" and wrote "Finishing up what comes back", dropping the one clause
+          // that explains why anyone was running these questions at all. A rule and its exception
+          // in one breath is heard as the rule.
+          "THE WORD REPORT IS FINE IN BEAT 2 AND THE REFERENCE EMAIL USES IT. The report being " +
+            "finished is the OTHER client's, and this prospect came up inside it while it was " +
+            "being written. Write that beat the way the reference does. What you may never say is " +
+            "that a report was built, run, scored or sent for THIS prospect, because none was.",
           "This is the very first touch. Its only job is to earn a yes to sending the video.",
           `THE ONE FINDING: ${angle.finding}`,
           HOOK_PRETEXT_LINE,
           prePitchRules(null),
-          permissionExample(null),
+          hookExample(),
           PARAGRAPH_RULES,
           VOICE_RULES,
           STYLE_RULES,
@@ -604,16 +678,22 @@ export async function draftHookPitch(
       removedLinks: [],
       formatNote: null,
       rejectedFindings: gated.findings.map((f) => `${f.rule}: ${f.detail}`),
-      fractionWarning: null,
+      resultWarning: null,
+      positioningWarning: null,
     };
   }
 
   const body = enforceLinkPolicy(noDashes(chosen.body), { mode: "none" });
-  // allowEmphasis:true is the one deviation from every other pre-pitch lane, and it is required:
-  // stripEmphasis would otherwise delete the bold HOOK_PRETEXT_LINE asks for. Not new machinery,
-  // the reveal stage already uses this flag for its price line.
-  const polished = await polishBody(stripEchoedClose(body.text), { allowEmphasis: true });
-  const finalBody = ensureSignoff(ensurePermissionClose(ensureGreeting(polished.body, recipientFirstName)));
+  // allowEmphasis:false, back in line with every other pre-pitch lane as of 2026-08-22. It was
+  // true only to preserve the bold HOOK_PRETEXT_LINE asked for; the pretext is now the plain
+  // opening sentence, so the flag has nothing left to protect and PARAGRAPH_RULES ("no asterisks,
+  // no markdown of any kind") is no longer contradicted inside its own system prompt.
+  const polished = await polishBody(stripEchoedClose(body.text), { allowEmphasis: false });
+  // "Hello," rather than no greeting when there is no first name: this lane opens on the pretext
+  // rather than on the finding, and a pretext sentence with nothing above it reads as a fragment.
+  const finalBody = ensureSignoff(
+    ensurePermissionClose(ensureGreeting(polished.body, recipientFirstName, "Hello,"))
+  );
 
   return {
     angle: angle.id,
@@ -622,7 +702,11 @@ export async function draftHookPitch(
     removedLinks: body.removed,
     formatNote: polished.note,
     rejectedFindings: gated.draft ? [] : gated.findings.map((f) => `${f.rule}: ${f.detail}`),
-    fractionWarning: fractionWarningFor(finalBody, check),
+    resultWarning: resultWarningFor(finalBody, check),
+    // Only checked when the line was actually asked for. positioningPhrase is unconditional
+    // today, so this is symmetry rather than a live branch, but it keeps the two warnings
+    // reading the same way if the line ever becomes conditional the way the tease is.
+    positioningWarning: positioningWarningFor(finalBody, check),
   };
 }
 
@@ -690,7 +774,8 @@ export function formatHookCard(
     lines.push("", "*The linter refused this draft. Shown below as rejected, do not send it:*");
     for (const f of draft.rejectedFindings) lines.push(`• ${f}`);
   }
-  if (draft.fractionWarning) lines.push("", `:warning: ${draft.fractionWarning}`);
+  if (draft.resultWarning) lines.push("", `:warning: ${draft.resultWarning}`);
+  if (draft.positioningWarning) lines.push("", `:warning: ${draft.positioningWarning}`);
   if (draft.removedLinks.length) lines.push("", `Links stripped: ${draft.removedLinks.join(", ")}`);
   if (draft.formatNote) lines.push(draft.formatNote);
 
@@ -730,7 +815,8 @@ export function formatHookNote(
     lines.push("", "THE LINTER REFUSED THIS DRAFT. Do not send it as written:");
     for (const f of draft.rejectedFindings) lines.push(`- ${f}`);
   }
-  if (draft.fractionWarning) lines.push("", draft.fractionWarning);
+  if (draft.resultWarning) lines.push("", draft.resultWarning);
+  if (draft.positioningWarning) lines.push("", draft.positioningWarning);
   if (draft.removedLinks.length) lines.push("", `Links stripped: ${draft.removedLinks.join(", ")}`);
   if (draft.formatNote) lines.push(draft.formatNote);
 

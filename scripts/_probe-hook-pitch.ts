@@ -1,4 +1,5 @@
-// Probe for the Email hook lane's PURE logic — angle selection, the fraction, and the bold path.
+// Probe for the Email hook lane's PURE logic — angle selection, the two fixed lines, and the
+// bold-safety path in buildPitchHtml.
 //
 // These are the parts that decide what a stranger is told about their own business, and all of
 // them are pure, so they are checkable without spending an engine call. The model-facing half
@@ -8,13 +9,14 @@
 
 import {
   pickHookAngle,
-  fractionPhrase,
+  resultPhrase,
+  positioningPhrase,
   hookCheckContext,
   toSlackBold,
   type HookCheck,
 } from "../src/lib/audit-engine/hook-pitch";
 import { buildPitchHtml } from "../src/lib/audit-engine/lead-pitch";
-import { hookFractionLine } from "../src/config/pitch";
+import { hookResultLine, hookPositioningLine } from "../src/config/pitch";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -28,6 +30,7 @@ function base(over: Partial<HookCheck> = {}): HookCheck {
   return {
     businessName: "Velasquez Gutierrez Electrical",
     trade: "electrical contractor",
+    buyerPersona: "a homeowner who needs a panel upgrade or an EV charger installed",
     city: "Bakersfield, CA",
     website: "https://example.com",
     results: [],
@@ -98,7 +101,7 @@ check(
   "rival-substitute"
 );
 
-// ── 2. The fraction: the no_data rule ────────────────────────────────────────
+// ── 2. The result line: the no_data rule ─────────────────────────────────────
 // Four questions asked, ONE got no answer. The denominator must be 3, not 4 — counting the dead
 // call as a miss is exactly the defect that once published a fabricated 0/100.
 
@@ -109,12 +112,26 @@ const withDead = base({
   topRival: { name: "Electrical ASAP", count: 1 },
 });
 
-check("fraction excludes the unanswered call", fractionPhrase(withDead), "You came back in 1 of the 3 searches I ran");
-check("fraction wording comes from the constant", fractionPhrase(withDead), hookFractionLine(1, 3));
+// 1 of 3 measured, NOT 1 of 4. The percentage is over the calls that actually answered.
+check("result excludes the unanswered call", resultPhrase(withDead), "You came back in 33% of those searches");
+check("result wording comes from the constant", resultPhrase(withDead), hookResultLine(1, 3));
+
+// ‼️ The two ends are WORDED, not computed. "0%" reads as a rounding artifact on the one line the
+// whole email rests on, and it is also the most common real outcome for this lane.
+check("nobody home is words, not 0%", hookResultLine(0, 4), "You did not come back in a single one of those searches");
+check("clean sweep is words, not 100%", hookResultLine(4, 4), "You came back in every one of those searches");
+check("no measured calls cannot divide by zero", hookResultLine(0, 0), "You did not come back in a single one of those searches");
+
+// The positioning line: service and city, ending on a COMMA so the appended close finishes it.
+check("positioning names the trade and the city", positioningPhrase(withDead), "If you want to be the business AI recommends for electrical contractor in Bakersfield,");
+check("positioning ends on a comma", positioningPhrase(withDead).endsWith(","), true);
+check("positioning survives an unknown city", hookPositioningLine("roof repair", null), "If you want to be the business AI recommends for roof repair,");
 
 const ctx = hookCheckContext(withDead);
-check("context hands over the finished phrase", ctx.includes("You came back in 1 of the 3 searches I ran"), true);
-check("context forbids a percentage", ctx.includes("do not convert it to a percentage"), true);
+check("context hands over the finished phrase", ctx.includes("You came back in 33% of those searches"), true);
+check("context forbids going back to a fraction", ctx.includes("do not convert it back to a fraction"), true);
+check("context pins the positioning line too", ctx.includes(positioningPhrase(withDead)), true);
+check("context places it before the site paragraph", ctx.includes("IMMEDIATELY BEFORE the paragraph"), true);
 check("context forbids customising the line", ctx.includes("do not customise it to this business"), true);
 check("context marks the dead call as proving nothing", ctx.includes("NO ANSWER came back"), true);
 check("context names the one permitted rival", ctx.includes("The one rival you may name: Electrical ASAP"), true);
