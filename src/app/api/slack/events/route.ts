@@ -72,6 +72,8 @@ import {
   handleHookStudioReaction,
   handleHookStudioFileDrop,
 } from "@/lib/reel/hook-studio";
+import { startWebinarDeck } from "@/lib/deck/webinar-lane";
+import { isWebinarTrigger } from "@/lib/deck/extract";
 import {
   chatTrigger,
   handleBrainheartChatStart,
@@ -508,6 +510,31 @@ export async function POST(request: NextRequest) {
             })().catch((e) => console.error("[slack/events] agent message error:", (e as Error).message))
           );
         }
+        return NextResponse.json({ ok: true });
+      }
+
+      // #content-full `webinar` — paste a webinar/VSL script (or attach it as .pdf/.docx/.txt)
+      // and get back a Hormozi-style teleprompter deck.pptx + slide-plan.md in the thread.
+      //
+      // Checked BEFORE every other #content-full branch, and it is the only one of them that
+      // accepts files: the top-level grammar below is gated on `attachedFiles.length === 0`, so
+      // a script attached as a document would otherwise fall through to the media handlers and
+      // be read as content to render a reel from. Slack also turns a long paste into a .txt
+      // snippet on its own, which makes "webinar" + attachment the COMMON case, not the edge one.
+      if (
+        isContentFullChannel &&
+        (!parentThreadTs || parentThreadTs === event.ts) &&
+        isWebinarTrigger(userText)
+      ) {
+        const messageTs = event.ts as string;
+        waitUntil(
+          startWebinarDeck({
+            channel,
+            threadTs: messageTs,
+            text: userText,
+            files: attachedFiles,
+          }).catch((e) => console.error("[slack/events] webinar deck error:", (e as Error).message))
+        );
         return NextResponse.json({ ok: true });
       }
 

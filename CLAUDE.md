@@ -1708,6 +1708,113 @@ ladder starts from a real send instead of waiting for tomorrow's sweep.
 - `microsoft.sendDraft` passes `rawResponse: true`: `/send` returns 202 with an EMPTY body, and
   parsing that as JSON would throw after a successful send and invite a duplicate retry.
 
+## `webinar` — the deck builder in #content-full (2026-08-22)
+`src/lib/deck/*`, `src/app/api/content/webinar-deck/route.ts`. Post `webinar` in #content-full
+with a webinar / VSL script pasted under it, or attached as a .pdf / .docx / .txt, and the thread
+returns `deck.pptx` + `slide-plan.md`: white slides, Arial Black, purple on the payoff words, a
+gray image zone where a visual goes, and speaker notes carrying VISUAL / PROMPT / SEARCH. He
+uploads the pptx to Canva and records himself reading it. **No new table, no migration.**
+
+Ported from `Desktop/Code/vsl-deck-builder` (a Claude Code project of Matthew's: python-pptx +
+a parity script). The creative half is a Claude call; the mechanical half is code and makes no
+creative decisions.
+
+> ‼️ **RULE 1: THE SCRIPT IS SACRED, AND `parity.ts` IS WHAT MAKES THAT TRUE.** Every word
+> reaches a slide word for word, in order. `runParity` diffs the two token streams with a Myers
+> diff and NAMES THE SLIDE where drift starts — a bare word count only says *that* something
+> moved, which across 90 slides is useless. The diff is then fed back to the model verbatim as
+> the correction; a bare "try again" returns the same answer. Parity runs **per batch against
+> that batch's own passage**, not once at the end, or every call is already spent by the time a
+> drift is found and the diff spans four batches.
+
+> ‼️ **THE FLOOR IS `mechanicalChunk`, AND IT IS WHY THIS CANNOT SILENTLY REWRITE HIS COPY.**
+> A batch that will not come back verbatim after one diff-corrected retry is chunked by sentence
+> boundary instead: no purple, no visual, but it only ever inserts slide breaks into the original
+> string, so it cannot lose a word. A plain deck of the real script beats a pretty deck that
+> dropped a sentence, and the Slack receipt says how many passages took that path.
+
+**ALL-CAPS header lines are idea boundaries, never slides.** `HOOK / PROMISE + GUARANTEE`,
+`THE THREE PROMISES`, `CLOSE` are how a webinar script is organized on the page, not words anyone
+says. `splitSections` lifts them out, batches never straddle one, and each becomes the `section`
+label in the speaker notes and the slide plan. They are stripped from the parity comparison too,
+so a header can never be counted as a missing word.
+
+> ‼️ **A BRACKET IS ONLY A DELIVERY CUE WHEN IT READS LIKE ONE.** `[pause]` goes to the notes;
+> `[city]` and `[treatment]` stay ON the slide. Stripping every bracket put a blank gap in the
+> middle of a sentence being read to camera (`lip filler in  "`, slide 7 of the med spa deck).
+> A placeholder is spoken with the real word substituted, and a teleprompter is exactly where the
+> presenter needs to SEE the bracket. Brackets go through the same `STAGE_WORDS` test parentheses
+> already used, and whatever is dropped is reported in the receipt, never silently swallowed.
+
+### The two pptxgenjs traps
+python-pptx does not run on Vercel, so `render.ts` is a port onto `pptxgenjs`. Two of its
+behaviours dictate the shape of `writeRuns`, and both were found by reading the dist bundle:
+
+> ‼️ **IT EMITS AN `<a:pPr>` PER RUN, AND `CT_TextParagraph` ALLOWS ONE, FIRST.** `genXmlTextBody`
+> calls `genXmlParagraphProperties` for every run and appends whatever comes back; its bullet
+> branch ends in `else if (!textObj.options.bullet)`, which fires for a plain run with no options
+> at all. A three-run paragraph gets three `<a:pPr>` and PowerPoint answers with the "found a
+> problem with content" repair prompt. Multi-run paragraphs are not optional here — they are how
+> a purple word sits inside a black sentence — so paragraph props ride the FIRST run only, none
+> are set at shape level (each run inherits them from the shape before that check), and
+> `stripStrayParaProps` removes the survivors from the zipped XML. The probe asserts one `pPr`
+> per `<a:p>`; that check is what stops the next edit to `writeRuns` from bringing it back.
+
+> ‼️ **`13.333` INCHES IS NOT 16:9.** pptxgenjs multiplies inches by 914400, so the usual value
+> lands 235 EMU short of the canonical `12192000 x 6858000` and produces a non-standard size that
+> importers letterbox. `SLIDE_W = 13.3333333` rounds to it exactly.
+
+**Text is sized off character count, never autofit.** Neither library can measure text and
+PowerPoint's shrink-to-fit only runs when PowerPoint itself opens the file, which Canva's importer
+does not do. `SIZE_LADDER` is the one constant to edit for "tighter slides" / "bigger slides".
+
+### The Claude call
+> ‼️ **`MAX_TOKENS` MUST STAY UNDER `MAX_RETRY_TOKENS` (8000) IN `claude-calls.ts`.** That helper
+> answers `stop_reason: "max_tokens"` by retrying once at double the budget, but only
+> `if (requestedTokens < MAX_RETRY_TOKENS)`. Passing the cap itself does not "ask for the most" —
+> it silently disables the only recovery for truncation, and the cut-off response then fails as an
+> unparseable-JSON error whose message says nothing about length. Every batch of a live 1,119-word
+> script failed that way at 420 words / 8000 tokens. It is 260 words / 4000 tokens now.
+
+> ‼️ **`coerceBatch` REPAIRS THE DECORATION AND NEVER THE WORDS, and the asymmetry is the rule.**
+> Slide TEXT is Matthew's copy: drift in it is caught by parity and sent back to the model.
+> Emphasis and visuals are decoration this feature invented, so a malformed one is DROPPED rather
+> than allowed to fail a batch whose words were perfect — two of four batches were being thrown
+> away over a visual `type` the model spelled `stat_viz`. Dropping beats guessing: a visual whose
+> type could not be read is one whose intent could not be read either, and a wrong sketch prompt
+> in the speaker notes is worse than an empty one. Drops surface in the visual-density warning.
+
+`describeInvalid` walks the whole validator and names the field that actually failed — the same
+lesson `booking-script.ts` records. Its first cut returned a message about `visual.type` for every
+rejection, so the correction retry was handed a reason that did not match the defect.
+
+**Batches run four at a time.** Each is chunked and parity-checked entirely against its own
+passage, so nothing about batch 4 depends on batch 3, and results are written back BY INDEX so the
+deck stays in script order. Sequential, the med spa script took 154s; in waves it takes 28s, which
+is what keeps a 5,000-word webinar inside the route's 300s budget.
+
+### Reading the script
+> ‼️ **NO MODEL RUNS IN `extract.ts`, and that is not an optimization.** A model asked to
+> "transcribe this PDF" tidies punctuation, drops a stray line and fixes what it reads as a typo —
+> every one of those is a parity failure at best and an unnoticed rewrite of his copy at worst.
+> `unpdf` for PDFs, the existing `extractDocxText` for .docx, raw bytes for .txt.
+
+**An attachment wins over typed text.** Slack turns a long paste into a `.txt` snippet on its own,
+so `webinar` + attachment is the COMMON case, not the edge one.
+
+> ‼️ **The branch sits ABOVE every other #content-full handler in `slack/events/route.ts`**, and
+> it is the only one of them that accepts files. The top-level grammar below it is gated on
+> `attachedFiles.length === 0`, so a script attached as a document would otherwise fall through to
+> the media handlers and be read as content to render a reel from.
+
+`slack.uploadFile` RETURNS `{ok:false}`, it does not throw. Unchecked, a missing `files:write`
+scope or a channel the bot is not in produces a confident summary with no deck attached to it, so
+the result is checked and the failure named.
+
+**Measured on the med spa script** (1,121 words, 4 sections): 87 slides, 12 with visuals, parity
+pass, 0 fallbacks, 28s. Probe: `bun run scripts/_probe-webinar-deck.ts` (no API calls — it covers
+parity, section splitting, the bracket rule, the fallback and the rendered XML).
+
 ## Channels Connected
 - **Web dashboard** — mission.srtagency.com/dashboard/chat
 - **Telegram bot** — same AI, same tools, via /api/telegram/webhook
