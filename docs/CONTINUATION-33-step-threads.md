@@ -43,13 +43,13 @@ having CONFIRMED the work actually happened rather than because a button was pre
 
 Read the current implementation first. The relevant files:
 
-- `src/config/delivery-steps.ts` — `DELIVERY_STEPS`, the 33 definitions, `mode`, `auto`, `blockedBy`
-- `src/lib/clients/delivery-checklist.ts` — `renderChecklist`, `refreshDeliveryChecklist`, `setDeliveryStep`
-- `src/lib/clients/step-engine.ts` — `runReadyAutoSteps`, `postStep`, `autoCompleteStep`, the card builders
-- `src/lib/clients/artifacts/registry.ts` — `AUTO_RUNNERS`
-- `src/app/api/slack/actions/route.ts` — the `[Done]` / `[Skip]` / `[I hit a problem]` buttons
-- `src/lib/clients/client-drafts.ts` — the WhatsApp drafts and their `step_next` / `step_done` triggers
-- `clients.ops_thread_ts` and `clients.ops_checklist_ts` — the two ts values stored today
+- `src/config/delivery-steps.ts` : `DELIVERY_STEPS`, the 33 definitions, `mode`, `auto`, `blockedBy`
+- `src/lib/clients/delivery-checklist.ts` : `renderChecklist`, `refreshDeliveryChecklist`, `setDeliveryStep`
+- `src/lib/clients/step-engine.ts` : `runReadyAutoSteps`, `postStep`, `autoCompleteStep`, the card builders
+- `src/lib/clients/artifacts/registry.ts` : `AUTO_RUNNERS`
+- `src/app/api/slack/actions/route.ts` , the `[Done]` / `[Skip]` / `[I hit a problem]` buttons
+- `src/lib/clients/client-drafts.ts` , the WhatsApp drafts and their `step_next` / `step_done` triggers
+- `clients.ops_thread_ts` and `clients.ops_checklist_ts` , the two ts values stored today
 
 Questions the design has to answer. Decide them from the code, and ask Matthew only where the
 answer genuinely changes the build:
