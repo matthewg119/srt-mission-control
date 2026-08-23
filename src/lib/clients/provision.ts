@@ -164,7 +164,20 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     language: input.language ?? "en",
     market_center_lat: input.marketCenterLat ?? null,
     market_center_lng: input.marketCenterLng ?? null,
-    market_radius_mi: input.marketRadiusMi ?? null,
+    // ‼️ NOT `?? null`, AND THAT NULL BROKE EVERY SIGN-UP FOR FOUR DAYS.
+    //
+    // 2026-08-18-market-radius.sql set this column NOT NULL DEFAULT 10. A column default only
+    // applies when the column is OMITTED from the INSERT; an explicit null is a value, and it
+    // is the one value the constraint forbids. So every startPilot() call since that migration
+    // died on:
+    //
+    //   null value in column "market_radius_mi" of relation "clients" violates not-null constraint
+    //
+    // Both entry points go through here, so /start and /start-pilot were equally dead and no
+    // client could be provisioned at all. checkMarket() at the bottom of this file already
+    // resolved it the right way (`?? DEFAULT_MARKET_RADIUS_MI`); the insert simply never got
+    // the same treatment.
+    market_radius_mi: input.marketRadiusMi ?? DEFAULT_MARKET_RADIUS_MI,
     market_locked_at: isUsableCenter(input.marketCenterLat, input.marketCenterLng)
       ? now.toISOString()
       : null,
