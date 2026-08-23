@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
-import { slack } from "@/lib/slack-bot";
+import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { CATEGORY_LABELS, isSequenceCategory } from "@/config/sequence-categories";
 import { applyLeadDisposition } from "@/lib/lead-disposition";
@@ -181,6 +181,9 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
     case "step_done":
     case "step_skip":
     case "step_problem":
+    // Same handler and the same value shape. A re-check IS a Done attempt: it re-runs the
+    // confirmation and ticks the step when the evidence has since arrived.
+    case "step_recheck":
       return deliveryStepAction({
         actionId: action.action_id,
         channel,
@@ -1110,8 +1113,8 @@ async function deliveryStepAction(args: {
       const step = stepByKey(stepKey);
       if (!step) return;
 
-      // ── Done ────────────────────────────────────────────────────────────
-      if (args.actionId === "step_done") {
+      // ── Done, and Re-check, which is Done without the write ─────────────
+      if (args.actionId === "step_done" || args.actionId === "step_recheck") {
         // Stays open, on purpose. This is the one place the engine argues back, and the list
         // of what it argues about lives in step-engine rather than here so the board and any
         // future caller get the same refusals. See stepPrecondition().
@@ -1129,6 +1132,31 @@ async function deliveryStepAction(args: {
         // That is the inverse of "Done does nothing" and it is the worse of the two: a step
         // that SAYS it is complete, over a row that never changed.
         if (!done.ok) {
+          // ‼️ A REFUSED CONFIRMATION IS NOT A CRASH AND MUST NOT READ LIKE ONE.
+          //
+          // setDeliveryStep now verifies before it writes, so { ok: false } has two very
+          // different causes. A verdict means BrainHeart looked and could not confirm the
+          // work: that belongs in the step's thread as a durable record of what was checked,
+          // with a [Re-check] button and, when the fault is ours, the fix to paste into
+          // Claude Code. Anything else is a genuine write failure and keeps the old notice.
+          //
+          // There is deliberately no "mark done anyway" button here. A step that cannot be
+          // confirmed does not get ticked, and `verified_source` has no value that would let
+          // one be recorded.
+          if (done.verdict && !done.verdict.ok) {
+            const { refusalText } = await import("@/lib/clients/step-verify");
+            const { notifyStep } = await import("@/lib/clients/step-board");
+            const posted = await notifyStep(
+              clientId,
+              stepKey,
+              refusalText(step.label, done.verdict),
+              recheckBlocks(clientId, stepKey, done.verdict)
+            );
+            // Ephemeral only as a backstop: if the thread post failed, the person who pressed
+            // the button would otherwise see nothing at all happen.
+            if (!posted.ok) await tellActor(args, clientId, done.error ?? "Not confirmed.");
+            return;
+          }
           await stepFailureNotice(args, clientId, step.label, done.error ?? "the row could not be written");
           return;
         }
@@ -1216,6 +1244,39 @@ async function deliveryStepAction(args: {
   );
 
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * The refusal card's one button.
+ *
+ * ONE button, and the omission is the design. [Re-check] re-runs the same confirmation, which
+ * is the only honest way forward when the answer was "not yet": either the work has since
+ * happened or it has not. There is no second button that ticks the step anyway, because that
+ * is precisely the behaviour this whole pass exists to remove.
+ *
+ * A `broken` verdict gets no button at all. Re-checking a code fault produces the same fault,
+ * and offering the button would invite somebody to press it ten times instead of reading the
+ * fix directly underneath it.
+ */
+function recheckBlocks(
+  clientId: string,
+  stepKey: string,
+  verdict: { kind: string }
+): SlackBlock[] | undefined {
+  if (verdict.kind !== "not_yet") return undefined;
+  return [
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          action_id: "step_recheck",
+          text: { type: "plain_text", text: "Re-check" },
+          value: `${clientId}:${stepKey}`,
+        },
+      ],
+    },
+  ];
 }
 
 /**

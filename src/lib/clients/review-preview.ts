@@ -28,7 +28,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { readTheme, activeTheme } from "@/lib/hub/theme";
 import { hostsFor } from "@/lib/hub/vercel-domains";
-import { notifyThread } from "./delivery-checklist";
+import { notifyStep } from "./step-board";
 import type { AutoResult } from "./artifacts/registry";
 
 /**
@@ -120,8 +120,9 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
     .eq("client_id", clientId)
     .eq("step_key", "review_tool_preview");
 
-  await notifyThread(
+  await notifyStep(
     clientId,
+    "review_tool_preview",
     [
       `*Review tool preview — ${name}*`,
       `Themed and live: ${url}`,
@@ -132,10 +133,11 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
     ]
       .filter(Boolean)
       .join("\n")
-  ).catch(() => {});
+  );
 
-  return {
-    ok: true,
-    note: `Review tool preview verified and themed. ${url}`,
-  };
+  // ‼️ NO `note`, DELIBERATELY. runReadyAutoSteps posts a runner's note itself, so
+  // returning one here put the same fact in the thread twice, one message apart. This step
+  // writes its own card above because it has more to say than one line, and the tick that
+  // follows is written from the verifier's evidence rather than from the runner's opinion.
+  return { ok: true };
 }

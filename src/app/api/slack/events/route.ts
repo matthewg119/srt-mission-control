@@ -1606,6 +1606,9 @@ async function handleFileShared(fileId: string): Promise<void> {
         clientId: client.id,
         file,
         threadTs,
+        // Which step this is evidence for, taken from WHICH THREAD it was dropped in rather
+        // than guessed. Null when it landed under the pinned header instead of a step.
+        stepKey: client.stepKey,
       });
 
       // Errors are said out loud in the thread. A screenshot somebody believes was filed
@@ -1921,7 +1924,7 @@ async function handleGuardianReaction(args: {
       return true;
     }
     // Delegate to apply-fix endpoint (runs async, keeps event handler fast)
-    void fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "https://mission.srtagency.com"}/api/code-guardian/apply-fix`, {
+    void fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? "https://mission.srtagency.com"}/api/code-guardian/apply-fix`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

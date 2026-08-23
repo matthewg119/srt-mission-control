@@ -65,18 +65,19 @@ export async function deliverArtifact(args: {
     .eq("client_id", args.clientId)
     .eq("step_key", args.stepKey);
 
-  const { data: client } = await supabaseAdmin
-    .from("clients")
-    .select("ops_thread_ts")
-    .eq("id", args.clientId)
-    .maybeSingle();
-
+  // ‼️ INTO THE STEP'S OWN THREAD, NOT ops_thread_ts. Eight artifacts route through here
+  // (the presence PDF, the findings doc, the review card, the call sheet, the question set,
+  // the page candidates, the cleanup list, the deep-research brief) and every one of them used
+  // to land in the same thread as everything else, so a PDF was findable only by scrolling
+  // past whatever had been posted since. The anchor is created if it does not exist yet
+  // rather than falling back to the header.
+  const { anchorTsFor } = await import("@/lib/clients/step-board");
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  const threadTs = (client?.ops_thread_ts as string | null) ?? null;
+  const threadTs = channel ? await anchorTsFor(args.clientId, args.stepKey) : null;
 
   if (!channel || !threadTs) {
     console.error(
-      `[artifacts/deliver] ${args.stepKey} stored as ${stored.docId} but there is no ops thread to post it to`
+      `[artifacts/deliver] ${args.stepKey} stored as ${stored.docId} but there is no step thread to post it to`
     );
     return { ok: true, docId: stored.docId, uploaded: false };
   }
@@ -96,7 +97,15 @@ export async function deliverArtifact(args: {
   const reallyShared = upload?.ok === true && Array.isArray(sharedFiles) && sharedFiles.length > 0;
 
   if (reallyShared) {
-    await slack.postThreadReply(channel, threadTs, args.message).catch(() => {});
+    // The `.catch(() => {})` that used to be here caught nothing: slackFetch resolves with
+    // { ok: false } instead of throwing, so a refused post was completely silent.
+    const res = (await slack.postThreadReply(channel, threadTs, args.message)) as {
+      ok?: boolean;
+      error?: string;
+    };
+    if (!res?.ok) {
+      console.error(`[artifacts/deliver] ${args.stepKey} note did not post:`, res?.error ?? "unknown");
+    }
     return { ok: true, docId: stored.docId, uploaded: true };
   }
 
@@ -110,13 +119,17 @@ export async function deliverArtifact(args: {
       ? " That usually means the bot is not a member of this channel. Invite it and the next artifact arrives as a file."
       : "";
 
-  await slack
-    .postThreadReply(
-      channel,
-      threadTs,
-      `${args.message}\n\nThe file could not be attached (${why}).${hint}\nIt is filed and readable here: ${docUrl}`
-    )
-    .catch(() => {});
+  const fallback = (await slack.postThreadReply(
+    channel,
+    threadTs,
+    `${args.message}\n\nThe file could not be attached (${why}).${hint}\nIt is filed and readable here: ${docUrl}`
+  )) as { ok?: boolean; error?: string };
+  if (!fallback?.ok) {
+    console.error(
+      `[artifacts/deliver] ${args.stepKey} link fallback did not post:`,
+      fallback?.error ?? "unknown"
+    );
+  }
 
   return { ok: true, docId: stored.docId, uploaded: false };
 }

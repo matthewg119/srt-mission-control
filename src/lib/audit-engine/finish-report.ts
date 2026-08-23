@@ -370,6 +370,13 @@ function isGuideLead(report: AuditReportRow): boolean {
  * this specific report. An intake card there would ask Matthew to author a cold first-touch
  * email to a paying customer.
  *
+ * `aeo_client_onboarding` joined on 2026-08-22 and is stronger still. That source is
+ * baseline-scan.ts: a SIGNED CLIENT whose Photograph I is being taken as delivery step 2. The
+ * card was posting into their delivery thread asking for a prospect's name and email and
+ * whether a free redesign was in play, for a business that is already paying and already has a
+ * contact record. Nobody read it as a bug because a cold-outreach card looks normal in a
+ * channel full of them; it just quietly made the onboarding thread longer and wronger.
+ *
  * `audit` is deliberately NOT here even though it is arguably also inbound. That funnel has
  * been posting intake cards since July and Matthew works from them; changing it is a decision
  * about his workflow, not a bug fix, and it does not belong in a /scan change.
@@ -378,7 +385,7 @@ function isGuideLead(report: AuditReportRow): boolean {
  * callers, guideCtaHtml() and the /PDF Slack routing, so widening it would staple the free med
  * spa guide CTA onto a paid report and send its notification to the wrong channel.
  */
-const INBOUND_LEAD_SOURCES = new Set(["scan", "medspa_paid"]);
+const INBOUND_LEAD_SOURCES = new Set(["scan", "medspa_paid", "aeo_client_onboarding"]);
 
 function skipsIntakeCard(report: AuditReportRow): boolean {
   return isGuideLead(report) || INBOUND_LEAD_SOURCES.has(report.lead_source ?? "");

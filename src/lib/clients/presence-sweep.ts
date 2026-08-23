@@ -65,6 +65,29 @@ export async function canonicalFor(clientId: string): Promise<Canonical | null> 
  * re-running the step never duplicates and — more importantly — never resets a row somebody has
  * already filled in. Runner v3 section 2: "Every auto task is idempotent. Re-running writes a
  * new output_ref and supersedes; it never duplicates rows in nap_discrepancies."
+ *
+ * ‼️ NO `onConflict` TARGET, DELIBERATELY, AND PUTTING ONE BACK BREAKS THIS STEP OUTRIGHT.
+ *
+ * It used to pass `onConflict: "client_id,platform,listing_url"` and this step failed on every
+ * run since it shipped, first one included, with:
+ *
+ *   there is no unique or exclusion constraint matching the ON CONFLICT specification
+ *
+ * ON CONFLICT infers an index by matching the inference spec against the index's key
+ * EXPRESSIONS. The index above is keyed on `coalesce(listing_url, '')`, and a bare column name
+ * does not match an expression, so Postgres found no candidate and raised 42P10. Not a data
+ * collision — an inference failure, which is why it could never succeed even once. Production
+ * proved it: nap_discrepancies had zero rows.
+ *
+ * PostgREST's `on_conflict` parameter takes column NAMES only, so `coalesce(listing_url,'')`
+ * cannot be spelled there at all. Omitting it makes PostgREST emit `ON CONFLICT DO NOTHING`
+ * with no target, which needs no inference and honours EVERY unique index on the table,
+ * including the expression one. Works only because `ignoreDuplicates` is true; a merge upsert
+ * would still need a target.
+ *
+ * Do NOT "fix" this by adding a plain unique index on (client_id, platform, listing_url). These
+ * seeded rows have a null listing_url, nulls compare distinct by default, and every re-run
+ * would insert eighteen fresh duplicates — the exact thing this function promises not to do.
  */
 export async function seedPresenceSweep(clientId: string): Promise<{ ok: boolean; seeded: number; error?: string }> {
   const rows = ALL_PLATFORMS.map((p) => ({
@@ -77,10 +100,7 @@ export async function seedPresenceSweep(clientId: string): Promise<{ ok: boolean
 
   const { error } = await supabaseAdmin
     .from("nap_discrepancies")
-    .upsert(rows, {
-      onConflict: "client_id,platform,listing_url",
-      ignoreDuplicates: true,
-    });
+    .upsert(rows, { ignoreDuplicates: true });
 
   if (error) return { ok: false, seeded: 0, error: error.message };
   return { ok: true, seeded: rows.length };

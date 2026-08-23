@@ -54,10 +54,32 @@ export interface DeliveryStep {
    * day_zero_archive, which really does refuse, in code, in day-zero.ts. Everything else is
    * a judgement somebody made about their own week.
    */
-  blockedBy?: string[];
+  blockedBy?: readonly string[];
 }
 
-export const DELIVERY_STEPS: DeliveryStep[] = [
+/**
+ * ‼️ `as const satisfies` RATHER THAN A `DeliveryStep[]` ANNOTATION, AND THE REASON IS
+ * step-verify.ts.
+ *
+ * The annotation widened every `key` to `string`, so `STEP_VERIFIERS` could only be typed
+ * `Record<string, Verifier>` — which accepts a map that is missing a step, and accepts a
+ * typo'd key as if it were a new one. A step with no verifier can never be ticked, so the
+ * failure would be a delivery step that silently refuses forever, discovered on a live client.
+ *
+ * `as const` makes `StepKey` a union of the 33 literals and `Record<StepKey, Verifier>` a
+ * compile-time proof of coverage: adding a 34th step here breaks the build until somebody
+ * says what evidence confirms it. That is the whole point.
+ *
+ * `satisfies` keeps the shape checked. A plain `as const` would not have caught a typo'd
+ * `phase` or a `mode` that is not one of the three.
+ *
+ * ‼️ IT IS DECLARED PRIVATELY AND RE-EXPORTED WIDE, and that is not ceremony. `as const`
+ * narrows every element to its OWN literal shape, so a step with no `blockedBy` has no
+ * `blockedBy` property at all and `step.blockedBy` stops compiling across fifteen read sites
+ * that are perfectly correct. The literal is only needed for the key union; everything that
+ * READS a step wants the wide `DeliveryStep` shape with its optional fields intact.
+ */
+const STEP_LIST = [
   // ── MEASURE ───────────────────────────────────────────────────────────────
   { key: "intake_received", phase: "Measure", label: "Intake received, canonical NAP locked, audit attached if one exists", auto: true, mode: "auto" },
   { key: "baseline_scan", phase: "Measure", label: "Photograph I: universal_v1 across the keyed engines", auto: true, mode: "auto", blockedBy: ["intake_received"] },
@@ -132,4 +154,20 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
   { key: "time_log_entries", phase: "Build", label: "Time log has entries from day 0", auto: true, mode: "auto", blockedBy: [DAY_ZERO_STEP_KEY] },
   { key: "weekly_report", phase: "Build", label: "Weekly report firing", auto: true, mode: "auto", blockedBy: ["first_page"] },
   { key: "day_30_date", phase: "Build", label: "Day-30 report date set", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY] },
-];
+] as const satisfies readonly DeliveryStep[];
+
+export const DELIVERY_STEPS: readonly DeliveryStep[] = STEP_LIST;
+
+/**
+ * The 33 keys as a union. Consumed by step-verify.ts's exhaustive verifier map.
+ *
+ * Anything that stores a step key still stores plain text — `client_delivery_steps.step_key`
+ * has no enum and must not get one, because renaming a key orphans every row already carrying
+ * it and the config comments above say so twice. This is a compile-time shape only.
+ */
+export type StepKey = (typeof STEP_LIST)[number]["key"];
+
+/** Runtime companion to `StepKey`, for narrowing a key that arrived as text. */
+export function isStepKey(key: string): key is StepKey {
+  return STEP_LIST.some((s) => s.key === key);
+}

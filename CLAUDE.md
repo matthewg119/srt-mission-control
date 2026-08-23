@@ -1936,10 +1936,79 @@ the subdomain, mints the `/onboarding` token and emails it. Migrations:
 
 **Two step lists at different altitudes, and they are not the same thing.**
 `client_onboarding_steps` is the EIGHT client-facing pilot stages that render on the board.
-`client_delivery_steps` is the FOURTEEN operational steps SRT's own team works through,
-several of which live inside one pilot stage. `DELIVERY_STEPS` in `delivery-checklist.ts`
+`client_delivery_steps` is the THIRTY-THREE operational steps SRT's own team works through,
+several of which live inside one pilot stage. `DELIVERY_STEPS` in `src/config/delivery-steps.ts`
 owns the order; the DB stores only `step_key`, so a step can be reworded without a
-migration.
+migration. It is declared `as const satisfies` and re-exported wide, which is what gives
+`StepKey` its 33-literal union and makes the verifier map below provably exhaustive.
+
+### One message per step, and a tick that means something (2026-08-22)
+`src/lib/clients/step-board.ts` + `step-verify.ts`. Migration: `docs/2026-08-22-step-threads.sql`.
+
+> ‼️ **THE SHAPE WAS THE BUG, NOT THE INFORMATION.** The pilot run put ~18 replies under one
+> `ops_thread_ts` in ninety seconds because every emitter went through `notifyThread()`, which
+> posts there and nowhere else. Nothing on screen corresponded to one step, so no step could be
+> worked one at a time. Matthew: *"impossible to work on."*
+
+- **Each step gets its own top-level message** (`client_delivery_steps.slack_anchor_ts`), posted
+  when the step becomes reachable, in `DELIVERY_STEPS` order. Everything for that step lives in
+  ITS thread: the instruction card and its buttons, the drafts, the artifacts, the screenshots,
+  the refusals. **Edit, never re-post** — Slack orders by post time, so a delete-and-repost moves
+  a step to the bottom of the channel permanently.
+- **`notifyThread` is now only for client-level messages** (the `intro` draft, the day 30/60/90
+  reports). Anything about a step uses `notifyStep()`, which CREATES the anchor rather than
+  falling back to the header: a fallback is how the wall comes back one message at a time.
+- **The 33-line checklist is deleted.** 33 messages plus a 43-line message listing the same 33
+  steps is the wall printed twice. `headerText()` in step-board is the pinned replacement: count,
+  the one next step, a link to it. **Its three warnings came across with it** (the Measure gate,
+  out-of-order work, build-before-Day-0) because each is a statement about the steps TOGETHER
+  and the per-step marks could never carry them. `ops_checklist_ts` is KEPT and stops being
+  written, same treatment `slack_channel_id` got.
+
+> ‼️ **A CHECKMARK IS EVIDENCE, NOT A BUTTON PRESS.** `setDeliveryStep` calls `verifyStep()`
+> BEFORE the row write and writes nothing on a refusal. Two honest tiers and no third:
+>
+> | `verified_source` | mark | means |
+> |---|---|---|
+> | `system` | :white_check_mark: | the app observed real state (rows, a resolver answer, an HTTP 200) |
+> | `thread` | :ballot_box_with_check: | a human put an artifact in the step's thread and the app read it BACK |
+>
+> A thread-tier line may only describe **the artifact it found**, never the fact it stands for:
+> "confirmed by 1 photo in this thread" is true, "the cards are printed" is not something a photo
+> proves. Same distinction `day_0_source` draws between `photograph_2` and `manual_step`.
+>
+> **THERE IS NO OVERRIDE.** A step that cannot be confirmed is not ticked and is not worked
+> around. `verified_source`'s CHECK constraint has no third value, so a "mark done anyway" button
+> would need a migration and would have to read this first. A refusal splits two ways:
+> `not_yet` carries a `todo` and a `[Re-check]` button; `broken` carries a `fix` written to be
+> pasted into Claude Code, and gets no button, because re-checking a code fault reproduces it.
+>
+> `STEP_VERIFIERS` is `Record<StepKey, Verifier>`, so a 34th step breaks the build until somebody
+> says what evidence confirms it. `scripts/_probe-step-verify.ts` proves coverage in both
+> directions and that a thread-tier verdict can never render as the green check.
+
+**Three live bugs this surfaced, all fixed 2026-08-22:**
+- **`postReadySteps` ran BEFORE `runReadyAutoSteps` and starved every `auto_then_manual`
+  runner.** `postStep` parks a row at `awaiting_me` and `runReadyAutoSteps` only claims
+  pending/blocked/ready, so `registerHubAndSeedDns`, `runHarvest` and `checkHubResolving` had
+  **never executed on the normal path** — while the `hub_preview` card it had just posted said
+  "the hostnames are attached to Vercel already". The card asserted the result of the runner it
+  starved. Order reversed, plus an explicit `mode === "auto_then_manual" && status !== "ready"`
+  guard, because ordering alone does not hold when `postReadySteps` is called on its own.
+- **`uploadsFor` could never match anything.** Slack threads are one level deep, so a reply "to
+  the card" carries the thread_ts of what the CARD was replying to. Every screenshot filed with
+  `slack_thread_ts = ops_thread_ts` while this compared against `slack_message_ts`. It returned 0
+  for every client, so `presence_sweep_manual` refused forever with "0 of 18 screenshots". It
+  reads `slack_anchor_ts` now, which IS the thread. `clientForThread` resolves step anchors too,
+  and fills `delivery_step_key` from which thread the file was dropped in rather than guessing.
+- **`seedPresenceSweep` failed on every run since it shipped**, first one included:
+  `onConflict: "client_id,platform,listing_url"` against an index keyed on the EXPRESSION
+  `coalesce(listing_url,'')`. ON CONFLICT infers by matching key expressions, a bare column list
+  does not match one, so it was 42P10 at PLAN time — never a data collision. Production had 0
+  rows in `nap_discrepancies`. Fixed by dropping the `onConflict` option: PostgREST then emits
+  `ON CONFLICT DO NOTHING` with no target, which honours every unique index including that one.
+  **Do NOT add a plain `(client_id, platform, listing_url)` index instead** — seeded rows have a
+  null `listing_url`, nulls compare distinct, and every re-run would insert 18 duplicates.
 
 ### SLACK IS INTERNAL ONLY (2026-08-20) — this reversed three days after it shipped
 `client-channel.ts` is DELETED. There are no per-client Slack channels and no guest
@@ -1954,8 +2023,8 @@ invite screen bills someone as a full member.
 > `SLACK_HUB_OWNER_USER_ID` are dead — out of `.env.example`, delete from Vercel.
 
 `#onboarding-srt-aeo` (`SLACK_CLIENT_ONBOARDING_CHANNEL`), the ops thread
-(`clients.ops_thread_ts`), the checklist message (`ops_checklist_ts`) and `#alerts-infra`
-all STAY. Those were always internal and they are the point.
+(`clients.ops_thread_ts`, now the PINNED HEADER) and `#alerts-infra` all STAY. Those were always
+internal and they are the point. `ops_checklist_ts` is kept but no longer written, see below.
 
 ### Client-facing messages are DRAFTS, and nothing can send them
 `client-drafts.ts` posts a draft into the ops thread with a `wa.me` link on it; a human
@@ -2091,8 +2160,8 @@ worse than a record idle for a fortnight.
   newer projects, so correct it per record from the Vercel dashboard.
 
 ### The audit gates the call
-`renderChecklist` warns when `call_booked`/`call_held` is ticked while `baseline_scan` or
-`findings_doc` is not. The call is where the screenshots and the avatar decision come from,
+`headerText` (step-board.ts) warns when `call_booked`/`call_held` is ticked while `baseline_scan`
+or `findings_doc` is not. The call is where the screenshots and the avatar decision come from,
 so holding it first means opinions instead of evidence. **Flags, never blocks** — same
 doctrine as the market-overlap check and the Day-0 gate.
 

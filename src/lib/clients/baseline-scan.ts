@@ -8,7 +8,8 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
-import { autoCompleteStep, notifyThread, setDeliveryStep } from "@/lib/clients/delivery-checklist";
+import { autoCompleteStep, setDeliveryStep } from "@/lib/clients/delivery-checklist";
+import { anchorTsFor, notifyStep } from "@/lib/clients/step-board";
 
 export const BASELINE_STEP_KEY = "baseline_scan";
 
@@ -56,36 +57,39 @@ export async function startBaselineScan(clientId: string): Promise<void> {
     .maybeSingle();
 
   if (!client?.website) {
-    await notifyThread(clientId, "No website on file, so no baseline scan was started.").catch(() => {});
+    await notifyStep(clientId, BASELINE_STEP_KEY, "No website on file, so no baseline scan was started.");
     return;
   }
 
   const city = [client.city, client.state].filter(Boolean).join(", ") || undefined;
 
-  await notifyThread(
+  await notifyStep(
     clientId,
+    BASELINE_STEP_KEY,
     `:mag: Baseline scan started for ${client.website as string}. One engine, ChatGPT with web search.`
-  ).catch(() => {});
+  );
 
   // ‼️ WHERE THE REPORT COMES BACK. Without this the pipeline resolves #ai-visibility-audits
   // and finishReport uploads the scorecard there, so an already-onboarded client's baseline
-  // lands in the prospecting channel and reads as a new lead. The ops thread is where every
-  // other thing about this client already is.
+  // lands in the prospecting channel and reads as a new lead.
   //
-  // Both halves are required: no channel id and there is nowhere to post, no ops_thread_ts and
-  // the reply has no parent. If either is missing the run still happens and still writes its
-  // rows — it just falls back to the audit channel rather than silently posting nowhere.
+  // ‼️ IT IS THE BASELINE STEP'S OWN THREAD, NOT ops_thread_ts. The audit pipeline emits
+  // four separate messages — the twenty-prompt drop, the report, the scorecard PDF and, until
+  // 2026-08-22, a cold-outreach intake card — and pointing them at the header thread is a
+  // third of the wall on its own. They belong under step 2, which is the step that produced
+  // them, and audit_reports.slack_thread_ts then points there so every thread command on the
+  // report keeps working in the place the report actually is.
   const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  const opsThreadTs = (client.ops_thread_ts as string | null) ?? null;
+  const stepThreadTs = onboardingChannel ? await anchorTsFor(clientId, BASELINE_STEP_KEY) : null;
   const deliveryThread =
-    onboardingChannel && opsThreadTs
-      ? { channelId: onboardingChannel, threadTs: opsThreadTs }
+    onboardingChannel && stepThreadTs
+      ? { channelId: onboardingChannel, threadTs: stepThreadTs }
       : undefined;
 
   if (!deliveryThread) {
     console.error(
       `[baseline-scan] no delivery thread for client ${clientId} ` +
-        `(channel=${onboardingChannel ? "set" : "missing"}, ops_thread_ts=${opsThreadTs ? "set" : "missing"}); ` +
+        `(channel=${onboardingChannel ? "set" : "missing"}, anchor=${stepThreadTs ? "set" : "missing"}); ` +
         `the baseline scorecard will land in the audit channel`
     );
   }
@@ -101,7 +105,7 @@ export async function startBaselineScan(clientId: string): Promise<void> {
     leadSource: "aeo_client_onboarding",
     allowLowConfidenceCity: true,
     onError: async (message: string) => {
-      await notifyThread(clientId, `:warning: Baseline scan failed: ${message}`).catch(() => {});
+      await notifyStep(clientId, BASELINE_STEP_KEY, `:warning: Baseline scan failed: ${message}`);
     },
   });
 
@@ -119,14 +123,15 @@ export async function startBaselineScan(clientId: string): Promise<void> {
   const measured = reportId ? await measuredPrompts(reportId) : 0;
 
   if (measured === 0) {
-    await notifyThread(
+    await notifyStep(
       clientId,
+      BASELINE_STEP_KEY,
       `:warning: The baseline scan finished but *measured nothing* — 0 prompts returned an ` +
         `answer, so every one of them is filed as no_data. That is almost always the OpenAI ` +
         `key: no credit, or ` + "`OPENAI_API_KEY`" + ` unset. The step is left OUTSTANDING on ` +
         `purpose, because a photograph of nothing is not a baseline. Fix the key and hit ` +
         `*Re-run baseline scan* on the client board.`
-    ).catch(() => {});
+    );
     return;
   }
 

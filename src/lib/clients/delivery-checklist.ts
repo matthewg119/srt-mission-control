@@ -1,20 +1,25 @@
-// The internal delivery checklist.
+// The delivery checklist: the transitions, not the rendering.
 //
-// One message, posted into the #onboarding-srt-aeo thread when a client finishes intake,
-// edited in place as the team works through it. INTERNAL: it lives in the main workspace,
-// never in the client's channel in the hub.
+// ‼️ IT NO LONGER OWNS A MESSAGE. It used to post one 33-line message into the
+// #onboarding-srt-aeo thread and edit it in place. The board is now one top-level message per
+// step (step-board.ts) plus a pinned header, so what lives here is the state machine: verify,
+// write the row, stamp Day 0, roll the stages up, offer the drafts, cascade. Rendering moved.
+// INTERNAL either way: it lives in the main workspace, never in the client's hub.
 //
-// A TRACKER, NOT AN AUTOMATION ENGINE. Two of these steps the system genuinely performs
+// A TRACKER, NOT AN AUTOMATION ENGINE. Some of these steps the system genuinely performs
 // and ticks itself. The rest are a phone call, DNS records the client types into their
 // own registrar, photographs uploaded to a Google listing. Pretending otherwise would
 // produce a checklist that lies about what has happened, which is worse than no checklist.
+//
+// ‼️ AND A TICK IS NOW EVIDENCE, NOT AN ASSERTION. setDeliveryStep asks step-verify.ts to
+// confirm the work BEFORE it writes the row, and a step that cannot be confirmed is not
+// written at all. There is no override. See step-verify.ts for why and for the two tiers.
 //
 // Step order and wording come from SRT-AEO-Onboarding-v2-PILOT.md §7 to §10 and the SOP's
 // Phases 2 to 5, both in docs/specs/.
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { DRAFT_COPY } from "@/config/client-messages";
 import {
   askForStep,
   notifyForStep,
@@ -24,6 +29,18 @@ import {
 import { subdomainLabel } from "@/lib/clients/normalize";
 import { DAY_ZERO_STEP_KEY, stampDay0, clearDay0IfManual } from "@/lib/clients/day-zero";
 import { refreshStages } from "@/lib/clients/stage-rollup";
+import {
+  MARK_CONFIRMED,
+  MARK_SKIPPED,
+  MARK_VERIFIED,
+  markAnchor,
+  notifyStep,
+  pinHeader,
+  postStepAnchor,
+  refreshHeader,
+  refreshStepAnchor,
+} from "@/lib/clients/step-board";
+import { confirmationText, verdictDetail, verifyStep, type Verdict } from "@/lib/clients/step-verify";
 
 // The step definitions moved to @/config/delivery-steps so a client component can import
 // them without pulling this module (and node:dns, via the step engine) into the browser
@@ -33,8 +50,6 @@ export { DELIVERY_STEPS };
 // `export type { X } from "..."` re-exports WITHOUT creating a local binding, so the
 // signatures below could not see the name. Imported as well as re-exported.
 export type { DeliveryStep } from "@/config/delivery-steps";
-
-const GATE_INDEX = DELIVERY_STEPS.findIndex((s) => s.gate);
 
 export function stepByKey(key: string): DeliveryStep | undefined {
   return DELIVERY_STEPS.find((s) => s.key === key);
@@ -57,13 +72,9 @@ export async function seedDeliverySteps(clientId: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rendering
+// Reading the rows
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * One renderer, used for the first post AND every update, so the message can never drift
- * from the rows. Same doctrine as formatInitialBlocks in src/lib/lead-thread.ts.
- */
 /**
  * ‼️ RESOLVED IS NOT THE SAME AS DONE, AND BOTH READINGS ARE NEEDED HERE.
  *
@@ -85,95 +96,18 @@ export function nextStep(rows: StepRow[]): DeliveryStep | null {
   return DELIVERY_STEPS.find((s) => !isResolved(status.get(s.key))) ?? null;
 }
 
-export function renderChecklist(name: string, rows: StepRow[]): string {
-  const status = new Map(rows.map((r) => [r.step_key, r.status]));
-  const done = (key: string) => status.get(key) === "complete";
-  const skipped = (key: string) => status.get(key) === "skipped";
-
-  const lines: string[] = [`*Delivery checklist: ${name}*`, ""];
-  let phase = "";
-  let n = 0;
-
-  for (const step of DELIVERY_STEPS) {
-    n++;
-    if (step.phase !== phase) {
-      phase = step.phase;
-      lines.push(`*${phase}*`);
-    }
-    // A skipped step gets its own mark. Rendering it as a tick would claim work nobody did;
-    // rendering it as an empty dot leaves it looking outstanding and invites someone to do
-    // it again. It reads as "not checked", never as "no issues found" — the same wording
-    // rule the presence PDF enforces.
-    const box = done(step.key) ? ":white_check_mark:" : skipped(step.key) ? ":heavy_minus_sign:" : "·";
-    const auto = step.auto ? "  _auto_" : "";
-    lines.push(`${box}  ${n}. ${step.label}${auto}`);
-  }
-
-  const completed = DELIVERY_STEPS.filter((s) => done(s.key)).length;
-  const skippedCount = DELIVERY_STEPS.filter((s) => skipped(s.key)).length;
-  lines.push("");
-  lines.push(
-    `${completed} of ${DELIVERY_STEPS.length} done.` +
-      (skippedCount > 0 ? ` ${skippedCount} skipped.` : "")
-  );
-
-  // What to do next, named. The checklist knowing which step is outstanding and making
-  // someone scan the list to work it out is a small tax paid on every glance, and the
-  // draft that goes with a step is exactly the thing that gets forgotten.
-  const next = nextStep(rows);
-  if (next) {
-    const ask = askForStep(next.key);
-    lines.push(
-      ask
-        ? `Next: ${next.label}. The ${DRAFT_COPY[ask.key]?.label ?? ask.key} draft is in this thread.`
-        : `Next: ${next.label}.`
-    );
-  }
-
-  // The Day-0 gate. PILOT §9 and SOP §2.3 both require the archive to exist BEFORE
-  // anything changes on the hub, GBP or a directory, because every later scorecard is
-  // measured against it. Ticking a build step first does not undo the damage, so the
-  // checklist says so out loud rather than silently allowing it.
-  // The MEASURE gate. The call is the meeting where we tell them what the AI is saying
-  // about them and agree who we are going after, and both of those come out of the
-  // baseline. Holding it first means walking in with opinions instead of screenshots, and
-  // it means the hundred prompts get picked against a guess at their ideal customer
-  // rather than against what the engines actually returned.
-  //
-  // Flags, never blocks. Same doctrine as the market-overlap check: a call booked early
-  // is a judgement somebody made, and a checklist that refused would just get worked
-  // around. What it must not do is stay quiet.
-  const measureDone = ["baseline_scan", "findings_doc"].every(done);
-  if (!measureDone && (done("call_booked") || done("call_held"))) {
-    lines.push(
-      `:warning: The call is on the board but the baseline is not finished. Run the audit and write the findings up first, or the call is opinions instead of screenshots.`
-    );
-  }
-
-  // Out-of-order work, named. blockedBy is ADVISORY — it says so on the interface — so this
-  // is the whole of its enforcement: a line that makes the gap visible on the next glance.
-  // Capped at three, because a checklist that lists twelve complaints gets scrolled past.
-  const outOfOrder = DELIVERY_STEPS.filter(
-    (s) => done(s.key) && (s.blockedBy ?? []).some((k) => !done(k))
-  ).slice(0, 3);
-  for (const s of outOfOrder) {
-    const missing = (s.blockedBy ?? []).filter((k) => !done(k));
-    const names = missing.map((k) => stepByKey(k)?.label ?? k).join(", ");
-    lines.push(`:warning: "${s.label}" is ticked but ${names} is not.`);
-  }
-
-  if (GATE_INDEX >= 0 && !done(DELIVERY_STEPS[GATE_INDEX].key)) {
-    const jumped = DELIVERY_STEPS.slice(GATE_INDEX + 1).filter((s) => done(s.key));
-    if (jumped.length > 0) {
-      lines.push(
-        `:warning: ${jumped.length} build step${jumped.length > 1 ? "s are" : " is"} done but the Day-0 scan was never archived. ` +
-          `Day 30, 60 and 90 have nothing to measure against.`
-      );
-    }
-  }
-
-  return lines.join("\n");
-}
+/**
+ * ‼️ renderChecklist WAS DELETED HERE, AND ITS WARNINGS MOVED RATHER THAN DIED.
+ *
+ * It rendered all 33 steps into one message, which was the only summary anybody had while
+ * everything lived in a single thread. With one top-level message per step the list is the
+ * channel, and a 43-line message repeating it is the wall printed twice.
+ *
+ * Its three warnings were NOT duplicated by the per-step messages, because each of them is a
+ * statement about the steps taken TOGETHER: the Measure gate, out-of-order work, and build
+ * steps done before the Day-0 archive. Those live in headerText() in step-board.ts now. The
+ * per-step marks could never have carried them.
+ */
 
 /**
  * Rows for one client, self-healing.
@@ -262,75 +196,62 @@ function displayName(client: Record<string, unknown>): string {
 }
 
 /**
- * Post the checklist as a reply under the intake card. Idempotent: the ts is claimed with
- * a conditional UPDATE guarded on `is null`, so two concurrent completions produce one
- * checklist, not two.
+ * Open the board for a client: pin the header, then start whatever is reachable.
+ *
+ * ‼️ IT NO LONGER POSTS THE 33-LINE CHECKLIST, AND THAT IS THE POINT OF THE REBUILD.
+ *
+ * It used to post renderChecklist() as a reply and store the ts in clients.ops_checklist_ts.
+ * With one top-level message per step in the channel, a forty-three line message listing the
+ * same thirty-three steps is the wall printed a second time. What Matthew needs from a channel
+ * is a count, the ONE step to work next and a link to it, which is what the pinned header is.
+ *
+ * renderChecklist survives and the dashboard still renders it. ops_checklist_ts is KEPT and
+ * simply stops being written, the same treatment slack_channel_id got after the per-client
+ * channels were dropped: an old client really does have a checklist message, and dropping the
+ * column would orphan it.
  */
 export async function postDeliveryChecklist(clientId: string): Promise<void> {
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!channel) {
-    console.error("[delivery-checklist] SLACK_CLIENT_ONBOARDING_CHANNEL unset, checklist not posted");
+    console.error("[delivery-checklist] SLACK_CLIENT_ONBOARDING_CHANNEL unset, board not opened");
     return;
   }
 
   const client = await loadClient(clientId);
   if (!client) return;
-  if (client.ops_checklist_ts) return; // already posted
   if (!client.ops_thread_ts) {
-    console.error("[delivery-checklist] no ops_thread_ts, cannot thread the checklist");
+    console.error("[delivery-checklist] no ops_thread_ts, cannot open the board");
     return;
   }
 
-  const rows = await loadRows(clientId);
-  const text = renderChecklist(displayName(client), rows);
+  // The intake message BECOMES the header, edited in place rather than replaced, so it keeps
+  // its position at the top of the run and whatever client-level drafts hang under it.
+  await refreshHeader(clientId);
+  await pinHeader(clientId);
 
-  const res = (await slack.postThreadReply(
-    channel,
-    client.ops_thread_ts as string,
-    text
-  )) as { ok?: boolean; ts?: string };
-
-  if (!res?.ok || !res.ts) return;
-
-  await supabaseAdmin
-    .from("clients")
-    .update({ ops_checklist_ts: res.ts, updated_at: new Date().toISOString() })
-    .eq("id", clientId)
-    .is("ops_checklist_ts", null);
-
-  // And post whatever is startable right now, under the checklist. At intake that is a
-  // short list — most steps are blocked behind Photograph I — which is the intended shape:
-  // the thread fills as the work becomes real, rather than dumping 33 cards on day one.
+  // ‼️ AUTO STEPS RUN BEFORE MANUAL CARDS ARE POSTED, AND THE ORDER IS LOAD-BEARING.
+  // postStep parks a row in awaiting_me and runReadyAutoSteps will not claim a row in that
+  // state, so running these the other way round starved every auto_then_manual runner:
+  // registerHubAndSeedDns, runHarvest and checkHubResolving never executed on this path.
   const { postReadySteps, runReadyAutoSteps } = await import("@/lib/clients/step-engine");
-  await postReadySteps(clientId).catch((e) =>
-    console.error("[delivery-checklist] initial step posts failed:", (e as Error).message)
-  );
-  // The auto half. Manual steps get posted to a person; auto steps get executed. Both are
-  // needed or the `_auto_` marker in the rendered checklist is a claim nothing honours.
   await runReadyAutoSteps(clientId).catch((e) =>
     console.error("[delivery-checklist] initial auto steps failed:", (e as Error).message)
   );
+  await postReadySteps(clientId).catch((e) =>
+    console.error("[delivery-checklist] initial step posts failed:", (e as Error).message)
+  );
+  await refreshHeader(clientId);
 }
 
-/** Re-render the existing message from current rows. Never throws into a caller. */
+/**
+ * Re-render the running summary. Never throws into a caller.
+ *
+ * The name is kept because a dozen call sites say it and they all mean the same thing: bring
+ * the summary back in line with the rows. What it updates is now the pinned header rather than
+ * a 33-line message.
+ */
 export async function refreshDeliveryChecklist(clientId: string): Promise<void> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!channel) return;
-
-  const client = await loadClient(clientId);
-  if (!client?.ops_checklist_ts) return;
-
-  const rows = await loadRows(clientId);
-  try {
-    await slack.updateMessage(
-      channel,
-      client.ops_checklist_ts as string,
-      renderChecklist(displayName(client), rows)
-    );
-  } catch (e) {
-    // A Slack hiccup must not undo the row write that already happened.
-    console.error("[delivery-checklist] refresh failed:", (e as Error).message);
-  }
+  await refreshHeader(clientId);
 }
 
 /**
@@ -365,12 +286,37 @@ export async function setDeliveryStep(args: {
   /** Only read on 'skipped'. Written to the row so the artifacts can say WHY it was skipped. */
   skippedReason?: string | null;
   actor?: string | null;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; error?: string; verdict?: Verdict }> {
   const step = stepByKey(args.stepKey);
   if (!step) return { ok: false, error: "Unknown step." };
 
   const complete = args.transition === "complete";
   const skipped = args.transition === "skipped";
+
+  // ‼️ CONFIRMATION RUNS BEFORE THE ROW WRITE, AND A REFUSAL WRITES NOTHING AT ALL.
+  //
+  // This is the difference between a checkmark that records the work and one that records
+  // somebody pressing a button. Ordering it after the write would leave a row saying complete
+  // with a verdict saying it is not, and the row is what the artifacts, the stage rollup and
+  // the day 30/60/90 reminders all read.
+  //
+  // Only a tick is gated. A SKIP is a decision, not a claim about work, and there is nothing
+  // to verify about deciding a step does not apply — gating it would be asking for evidence
+  // that something did not need doing. A REOPEN is the remedy and must never be blocked.
+  let verdict: Verdict | undefined;
+  if (complete) {
+    verdict = await verifyStep(args.clientId, args.stepKey);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        verdict,
+        error:
+          verdict.kind === "broken"
+            ? `Could not confirm ${step.label}. ${verdict.found}.`
+            : `Not yet: ${verdict.found}.`,
+      };
+    }
+  }
   // Both a tick and a skip are somebody RESOLVING the step, so both stamp who and when.
   // Only 'reopened' clears them, because only that one says the work is outstanding again.
   const resolved = complete || skipped;
@@ -387,6 +333,12 @@ export async function setDeliveryStep(args: {
       skipped_reason: skipped
         ? (args.skippedReason ?? `Marked not applicable by ${args.actor ?? "Mission Control"}`)
         : null,
+      // What was checked and what it found, in the same words Slack was given. Cleared on
+      // anything that is not a confirmed tick, so a reopened step cannot keep an old proof:
+      // the CHECK constraint requires source and timestamp to be present or absent together.
+      verified_source: verdict?.ok ? verdict.kind : null,
+      verified_detail: verdict?.ok ? verdictDetail(verdict) : null,
+      verified_at: verdict?.ok ? now : null,
       updated_at: now,
     })
     .eq("client_id", args.clientId)
@@ -452,16 +404,53 @@ export async function setDeliveryStep(args: {
 
   await refreshDeliveryChecklist(args.clientId).catch(() => {});
 
-  if (complete) {
-    await notifyThread(
+  // ‼️ THE ANCHOR IS ENSURED FIRST, AND WITHOUT THIS STEP 1 NEVER GETS ITS CHECKMARK.
+  //
+  // A step can be resolved before anything has posted it. intake_received is the live case:
+  // onIntakeComplete calls autoCompleteStep on it BEFORE postDeliveryChecklist runs, so at
+  // this point in the very first transition of a client's life there is no anchor to mark.
+  // refreshStepAnchor and markAnchor both correctly return no_anchor rather than inventing
+  // one, so without this the first step would resolve invisibly and the channel would open
+  // with step 2.
+  //
+  // postStepAnchor is idempotent and returns the existing ts, so this is free on every other
+  // transition.
+  await postStepAnchor(args.clientId, args.stepKey);
+
+  // The board. Three writes, in this order, and the order is what makes the channel readable:
+  // the anchor's TEXT is rewritten from the row, the REACTION is set to match, and the pinned
+  // header is recounted. A reopen passes null and markAnchor clears whatever was there, so an
+  // un-ticked step cannot keep a checkmark that contradicts its own row.
+  await refreshStepAnchor(args.clientId, args.stepKey);
+  await markAnchor(
+    args.clientId,
+    args.stepKey,
+    complete
+      ? verdict?.ok && verdict.kind === "system"
+        ? MARK_VERIFIED
+        : MARK_CONFIRMED
+      : skipped
+        ? MARK_SKIPPED
+        : null
+  );
+  await refreshHeader(args.clientId);
+
+  // The evidence goes in the step's own thread, as a record of WHAT was checked rather than
+  // a bare tick. A line saying "verified: 20 audit_runs rows, 14 answered" is auditable three
+  // weeks later; ":white_check_mark: Photograph I" is not.
+  if (complete && verdict?.ok) {
+    await notifyStep(
       args.clientId,
-      `:white_check_mark: ${step.label}${args.actor ? `  _${args.actor}_` : ""}`
-    ).catch(() => {});
+      args.stepKey,
+      confirmationText(step.label, verdict, args.actor ?? null)
+    );
   } else if (skipped) {
-    await notifyThread(
+    await notifyStep(
       args.clientId,
-      `:heavy_minus_sign: ${step.label} — skipped${args.actor ? `  _${args.actor}_` : ""}`
-    ).catch(() => {});
+      args.stepKey,
+      `:${MARK_SKIPPED}: *${step.label}* — skipped${args.actor ? ` by ${args.actor}` : ""}. ` +
+        `It reads as not checked everywhere, never as no issues found.`
+    );
   }
 
   // Drafts follow the checklist rather than the other way round, and they never block it:
@@ -488,16 +477,25 @@ export async function setDeliveryStep(args: {
   // a slack_message_ts.
   {
     const { postReadySteps, runReadyAutoSteps } = await import("@/lib/clients/step-engine");
-    await postReadySteps(args.clientId).catch((e) =>
-      console.error("[delivery-checklist] posting ready steps failed:", (e as Error).message)
-    );
-    // ‼️ NOT awaited into the caller's critical path in spirit, but awaited here on purpose:
-    // these run inside route handlers that Vercel may freeze the moment the response returns,
-    // and a fire-and-forget generator would silently vanish mid-render. Same reasoning as the
-    // awaited kick-off in run-audit-pipeline.
+    // ‼️ AUTO FIRST, AND IT USED TO BE THE OTHER WAY ROUND. postStep parks a row at
+    // `awaiting_me`, which runReadyAutoSteps will not claim, so posting first made every
+    // auto_then_manual step's own runner unclaimable. postReadySteps now also refuses to post
+    // such a card before its runner has left the row at `ready`, so the starvation cannot come
+    // back through some other caller — but running them in the right order is what lets a
+    // finished runner post its card in the SAME pass rather than the next transition's.
+    //
+    // ‼️ Awaited on purpose, both of them: these run inside route handlers that Vercel may
+    // freeze the moment the response returns, and a fire-and-forget generator would silently
+    // vanish mid-render. Same reasoning as the awaited kick-off in run-audit-pipeline.
     await runReadyAutoSteps(args.clientId).catch((e) =>
       console.error("[delivery-checklist] running auto steps failed:", (e as Error).message)
     );
+    await postReadySteps(args.clientId).catch((e) =>
+      console.error("[delivery-checklist] posting ready steps failed:", (e as Error).message)
+    );
+    // The cascade can resolve further steps, so the count and the "next" line are recomputed
+    // once the dust settles rather than left showing the state from before the sweep.
+    await refreshHeader(args.clientId);
   }
 
   return { ok: true };
@@ -533,21 +531,34 @@ async function offerDraftsFor(
   // client got told a page was live with no link to it. The URL is DERIVED here rather
   // than typed on the board: it is a fact about the record, and the hostname is the one
   // part of it a person would get wrong.
-  if (notify) await postDraft(clientId, notify.key, await notifyVars(clientId, notify.key)).catch(() => {});
+  // Into the thread of the step that just completed: a NOTIFY is news ABOUT that step.
+  if (notify)
+    await postDraft(clientId, notify.key, await notifyVars(clientId, notify.key), stepKey).catch(
+      () => {}
+    );
 
   const rows = await loadRows(clientId);
   const next = nextStep(rows);
   if (!next) return;
 
+  // Into the thread of the step that is now NEXT, which is the step the ask is asking for.
   const ask = askForStep(next.key);
-  if (ask) await postDraft(clientId, ask.key).catch(() => {});
+  if (ask) await postDraft(clientId, ask.key, {}, next.key).catch(() => {});
 
   // The DNS step is the one that strands a non-technical owner, so the call checklist
   // goes up with the ask rather than being something to remember to go and find.
   if (next.key === "dns_records") await postDnsCallChecklist(clientId).catch(() => {});
 }
 
-/** Everything internal about this client goes here, under the intake card. */
+/**
+ * Client-level messages, under the pinned header.
+ *
+ * ‼️ NOT FOR ANYTHING ABOUT A STEP. Use notifyStep() from step-board.ts for that. This is
+ * the function that produced the wall: every card, note, tick and draft an onboarding emitted
+ * went through it and landed in one thread, so nothing on screen corresponded to one step.
+ * What is left for it is the handful of things that belong to the CLIENT and to no step: the
+ * intro draft and the day 30/60/90 reports.
+ */
 export async function notifyThread(clientId: string, text: string): Promise<void> {
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!channel) return;
@@ -558,12 +569,45 @@ export async function notifyThread(clientId: string, text: string): Promise<void
   await slack.postThreadReply(channel, client.ops_thread_ts as string, text);
 }
 
-/** Used by the system when it completes a step itself. */
+/**
+ * Used by the system when it completes a step itself.
+ *
+ * ‼️ IT GOES THROUGH THE SAME CONFIRMATION AS THE BUTTON, AND THAT IS DELIBERATE. A runner
+ * returning ok:true is the runner's own account of itself; the verifier goes and looks. A
+ * generator that "succeeded" while writing nothing gets no checkmark, which is exactly the
+ * failure that produced a hub_preview card claiming hostnames were attached to Vercel when
+ * nothing had run.
+ *
+ * ‼️ AND IT REPORTS. The return used to be `void`, so setDeliveryStep's { ok: false } was
+ * discarded entirely and a refused auto step looked identical to a completed one from here.
+ */
 export async function autoCompleteStep(
   clientId: string,
   stepKey: string,
   note?: string
-): Promise<void> {
-  await setDeliveryStep({ clientId, stepKey, transition: "complete", actor: "Mission Control" });
-  if (note) await notifyThread(clientId, note).catch(() => {});
+): Promise<{ ok: boolean; error?: string }> {
+  // The note first. It is the runner's account of what it produced and it belongs in the
+  // step's thread whether or not the confirmation then passes: on a refusal it is the
+  // context for why, and posting it after would put it below the complaint.
+  if (note) await notifyStep(clientId, stepKey, note);
+
+  const res = await setDeliveryStep({
+    clientId,
+    stepKey,
+    transition: "complete",
+    actor: "Mission Control",
+  });
+
+  if (!res.ok) {
+    const step = stepByKey(stepKey);
+    if (res.verdict && !res.verdict.ok) {
+      // Said out loud in the step's thread, with the fix when there is one. A silent refusal
+      // would leave an auto step sitting at awaiting_me with nothing explaining why.
+      const { refusalText } = await import("@/lib/clients/step-verify");
+      await notifyStep(clientId, stepKey, refusalText(step?.label ?? stepKey, res.verdict));
+    }
+    console.error(`[delivery-checklist] auto-complete refused for ${stepKey}:`, res.error);
+  }
+
+  return { ok: res.ok, error: res.error };
 }

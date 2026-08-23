@@ -337,7 +337,17 @@ async function loadClient(clientId: string): Promise<ClientRow | null> {
 export async function postDraft(
   clientId: string,
   draftKey: string,
-  vars: DraftVars = {}
+  vars: DraftVars = {},
+  /**
+   * Which step's thread this draft belongs in.
+   *
+   * ‼️ A DRAFT IS ABOUT A STEP AND BELONGS UNDER IT. The ask_dns draft is the DNS step's
+   * message to the client; reading it three screens away from the record values it is asking
+   * them to type is what made the old thread unworkable. Omitted for the drafts that belong
+   * to the CLIENT and to no step (`intro`, the day 30/60/90 reports), which stay under the
+   * pinned header.
+   */
+  stepKey?: string | null
 ): Promise<{ posted: boolean; reason?: string }> {
   const channelId = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!channelId) return { posted: false, reason: "no_channel_env" };
@@ -345,7 +355,15 @@ export async function postDraft(
   const client = await loadClient(clientId);
   if (!client) return { posted: false, reason: "no_client" };
 
-  const threadTs = (client as ClientRow & { ops_thread_ts?: string }).ops_thread_ts;
+  let threadTs = (client as ClientRow & { ops_thread_ts?: string }).ops_thread_ts;
+  if (stepKey) {
+    const { anchorTsFor } = await import("@/lib/clients/step-board");
+    const anchor = await anchorTsFor(clientId, stepKey);
+    // No fallback to the header on a step draft. Posting it there would be the old shape
+    // creeping back one message at a time, and a missing anchor is a bug worth seeing.
+    if (!anchor) return { posted: false, reason: "no_anchor" };
+    threadTs = anchor;
+  }
   if (!threadTs) return { posted: false, reason: "no_thread" };
 
   const draft = buildDraft(client, draftKey, vars);
@@ -378,7 +396,14 @@ export async function postDraft(
     .catch((e) => {
       console.error("[client-drafts] post failed:", (e as Error).message);
       return null;
-    })) as { ok?: boolean; ts?: string } | null;
+    })) as { ok?: boolean; ts?: string; error?: string } | null;
+
+  if (!res?.ok) {
+    // slackFetch returns { ok: false } rather than throwing, so the catch above never fires
+    // for an API-level refusal. The claim row is already written, which is correct: the draft
+    // exists and is on the client board. Only the Slack copy of it is missing.
+    console.error(`[client-drafts] ${draftKey} did not post:`, res?.error ?? "unknown");
+  }
 
   if (res?.ok && res.ts) {
     await supabaseAdmin
@@ -575,15 +600,19 @@ export function dnsCallChecklist(client: ClientRow): string {
 }
 
 /** Put the call checklist in the ops thread. Internal, never sent to a client. */
+/**
+ * The registrar-by-registrar phone script, in the DNS step's own thread.
+ *
+ * It is read aloud while the DNS step is open, so it belongs beside that step's record values
+ * and nowhere else.
+ */
 export async function postDnsCallChecklist(clientId: string): Promise<void> {
   const channelId = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!channelId) return;
 
   const client = await loadClient(clientId);
-  const threadTs = (client as (ClientRow & { ops_thread_ts?: string }) | null)?.ops_thread_ts;
-  if (!client || !threadTs) return;
+  if (!client) return;
 
-  await slack
-    .postThreadReply(channelId, threadTs, dnsCallChecklist(client))
-    .catch((e) => console.error("[client-drafts] dns checklist failed:", (e as Error).message));
+  const { notifyStep } = await import("@/lib/clients/step-board");
+  await notifyStep(clientId, "dns_records", dnsCallChecklist(client));
 }

@@ -15,7 +15,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { reportAnchorFor } from "./report-reminders";
-import { notifyThread } from "./delivery-checklist";
+import { notifyStep } from "./step-board";
 
 /** How long after day 0 an empty time log stops being normal and starts being a gap. */
 const QUIET_DAYS = 3;
@@ -65,13 +65,14 @@ export async function runTimeLogNudges(opts?: { now?: Date }): Promise<{ nudged:
     if (days !== QUIET_DAYS) continue;
 
     const name = (c.dba_name || c.legal_name || "this client") as string;
-    await notifyThread(
+    await notifyStep(
       clientId,
+      "time_log_entries",
       `:hourglass: *Time log is empty for ${name}* — ${days} days past ` +
         `${anchor.isArchive ? "the Day-0 archive" : "intake completion (no Day-0 archive on file, so this is measured from intake)"}. ` +
         `Nothing has been logged against this client yet, so there is currently no record of ` +
         `what the pilot cost to deliver. Log the hours already spent on the client board.`
-    ).catch(() => {});
+    );
 
     nudged += 1;
   }

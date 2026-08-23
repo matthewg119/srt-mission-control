@@ -6,7 +6,7 @@ const SLACK_API = "https://slack.com/api";
 // - SLACK_BOT_TOKEN        — bot token for all API calls (required)
 // - SLACK_CEO_CHANNEL      — channel ID for CEO alerts
 // - SLACK_UW_CHANNEL       — channel ID for underwriting alerts
-// - SLACK_SUB_CHANNEL      — channel ID for sub alerts
+// - SLACK_BRIDGE_CHANNEL   — channel ID for iMessage-bridge control + doctor reports
 // - SLACK_HOT_LEADS_CHANNEL — channel ID used in route.ts and passed as arg
 
 function getToken(): string {
@@ -288,6 +288,22 @@ export const slack = {
                   return slackFetch("reactions.add", { channel, timestamp, name });
         },
 
+        /**
+         * Remove an emoji reaction this bot added.
+         *
+         * Added for the delivery board, where un-ticking a step has to take the checkmark back
+         * off the step's message. A tick left behind after a reopen is worse than no tick: the
+         * channel would show a step as confirmed while the row says it is outstanding again,
+         * and the reaction is the thing being scanned.
+         *
+         * `no_reaction` comes back when it was never there, which is the normal outcome for a
+         * step reopened twice rather than a failure. Callers treat it as success.
+         */
+        async removeReaction(channel: string, timestamp: string, name: string): Promise<Record<string, unknown>> {
+                  if (!channel || !timestamp || !name) return { ok: false, error: "missing_args" };
+                  return slackFetch("reactions.remove", { channel, timestamp, name });
+        },
+
         /** Fetch a single message by channel + ts. Returns null if not found or error. */
         async getMessage(channel: string, ts: string): Promise<Record<string, unknown> | null> {
                   const token = getToken();
@@ -335,10 +351,10 @@ export const slack = {
         channels: {
                   get ceo() { return process.env.SLACK_CEO_CHANNEL || ""; },
                   get uw() { return process.env.SLACK_UW_CHANNEL || ""; },
-                  get sub() { return process.env.SLACK_SUB_CHANNEL || ""; },
-		  // iMessage-bridge control + doctor reports. Falls back to #srt-sub so
-		  // nothing breaks before SLACK_BRIDGE_CHANNEL is set in Vercel.
-		  get bridge() { return process.env.SLACK_BRIDGE_CHANNEL || process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM"; },
+		  // iMessage-bridge control + doctor reports. #srt-sub was the old fallback;
+		  // that channel is decommissioned, so this falls back to the CEO channel
+		  // rather than a dead one. Set SLACK_BRIDGE_CHANNEL (#textwin-manager).
+		  get bridge() { return process.env.SLACK_BRIDGE_CHANNEL || process.env.SLACK_CEO_CHANNEL || ""; },
         },
 
         /** Verify Slack request signature */

@@ -29,7 +29,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { loadHubMetrics, type HubMetrics } from "@/lib/hub/analytics";
 import { listPublished } from "@/lib/hub/pages";
 import { clientsInRhythm } from "./content-digest";
-import { notifyThread, autoCompleteStep } from "./delivery-checklist";
+import { autoCompleteStep } from "./delivery-checklist";
+import { notifyStep } from "./step-board";
 
 /** Thursday, UTC. Late enough in the week to have something to report on. */
 const REPORT_WEEKDAY = 4;
@@ -199,7 +200,7 @@ export async function runWeeklyReports(opts?: { now?: Date; force?: boolean }): 
       continue;
     }
 
-    await notifyThread(c.clientId, report.body).catch(() => {});
+    await notifyStep(c.clientId, "weekly_report", report.body);
 
     // The first one that actually posts is what makes "weekly report firing" true.
     // autoCompleteStep is a no-op on an already-complete step's cascade only in the sense that

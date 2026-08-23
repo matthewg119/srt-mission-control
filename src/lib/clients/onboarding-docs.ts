@@ -45,10 +45,41 @@ export interface CapturedDoc {
 export async function clientForThread(
   channelId: string,
   threadTs: string | null | undefined
-): Promise<{ id: string; legalName: string } | null> {
+): Promise<{ id: string; legalName: string; stepKey: string | null } | null> {
   const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!onboardingChannel || channelId !== onboardingChannel) return null;
   if (!threadTs) return null;
+
+  // ‼️ TWO KINDS OF THREAD NOW, AND MISSING THE SECOND WOULD HAVE BROKEN EVERY UPLOAD.
+  //
+  // The header thread (clients.ops_thread_ts) is what this matched when everything lived in
+  // one thread. Since the board split into one top-level message per step, evidence is
+  // dropped in the STEP's thread, whose parent is client_delivery_steps.slack_anchor_ts —
+  // so a screenshot posted where it is now asked for would have matched nothing, fallen
+  // through to the image analyser, and been filed as a content reference.
+  //
+  // Resolving via the step also fills delivery_step_key, which nothing populated before: the
+  // step is no longer a guess, it is which thread the file was dropped in.
+  const { data: step } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("client_id, step_key")
+    .eq("slack_anchor_ts", threadTs)
+    .maybeSingle();
+
+  if (step) {
+    const { data: owner } = await supabaseAdmin
+      .from("clients")
+      .select("id, legal_name")
+      .eq("id", step.client_id as string)
+      .maybeSingle();
+    if (owner) {
+      return {
+        id: owner.id as string,
+        legalName: owner.legal_name as string,
+        stepKey: step.step_key as string,
+      };
+    }
+  }
 
   const { data } = await supabaseAdmin
     .from("clients")
@@ -57,7 +88,7 @@ export async function clientForThread(
     .maybeSingle();
 
   if (!data) return null;
-  return { id: data.id as string, legalName: data.legal_name as string };
+  return { id: data.id as string, legalName: data.legal_name as string, stepKey: null };
 }
 
 /**

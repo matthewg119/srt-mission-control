@@ -19,6 +19,14 @@ import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepByKey, type DeliveryStep } from "@/lib/clients/delivery-checklist";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
 import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
+// The channel surface. Everything this module says about a step goes through these, never
+// through notifyThread: a step's output belongs in that step's thread.
+import {
+  anchorTsFor,
+  notifyStep,
+  postStepAnchor,
+  refreshStepAnchor,
+} from "@/lib/clients/step-board";
 
 // ‼️ THE PLATFORM LIST LIVES IN @/config/presence-platforms AND NOWHERE ELSE.
 //
@@ -313,7 +321,14 @@ async function loadFacts(clientId: string): Promise<ClientFacts | null> {
 }
 
 /**
- * Post one step to the client's thread and park it in awaiting_me.
+ * Post one step's instruction card and park it in awaiting_me.
+ *
+ * ‼️ THE CARD IS A REPLY IN THIS STEP'S OWN THREAD, NOT IN ops_thread_ts.
+ *
+ * It used to thread on clients.ops_thread_ts along with everything else the runner produced,
+ * which is how one onboarding put eighteen replies under a single thread in ninety seconds. The
+ * anchor (step-board.ts) is the top-level message for the step; this card is the first thing in
+ * its thread, and every draft, artifact, screenshot and refusal for the step lands under it.
  *
  * Idempotent on slack_message_ts: a step already posted is edited, never re-posted. §3's
  * "one message per tenant, updated in place" applied per step — a step that posts twice is
@@ -326,7 +341,7 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
   const step = stepByKey(stepKey);
   if (!step) return;
 
-  const [facts, { data: row }, { data: client }] = await Promise.all([
+  const [facts, { data: row }] = await Promise.all([
     loadFacts(clientId),
     supabaseAdmin
       .from("client_delivery_steps")
@@ -334,29 +349,43 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
       .eq("client_id", clientId)
       .eq("step_key", stepKey)
       .maybeSingle(),
-    supabaseAdmin.from("clients").select("ops_thread_ts").eq("id", clientId).maybeSingle(),
   ]);
 
-  if (!facts || !client?.ops_thread_ts) return;
+  if (!facts) return;
   if (row?.status === "complete" || row?.status === "skipped") return;
+
+  // The anchor is created here if it does not exist yet, so the card can never end up at the
+  // top level: anchorTsFor posts the anchor rather than falling back to ops_thread_ts.
+  const anchorTs = await anchorTsFor(clientId, stepKey);
+  if (!anchorTs) {
+    console.error(`[step-engine] no anchor for ${stepKey}, card not posted`);
+    return;
+  }
 
   const body = (await instructionsFor(step, facts)) ?? [];
   const kit = blocks(step, facts, body);
   const fallback = `${facts.name} · ${step.label}`;
 
   if (row?.slack_message_ts) {
-    await slack
-      .updateMessage(channel, row.slack_message_ts as string, fallback, kit)
-      .catch(() => {});
-  } else {
-    const res = (await slack.postThreadReply(
+    const res = (await slack.updateMessage(
       channel,
-      client.ops_thread_ts as string,
+      row.slack_message_ts as string,
       fallback,
       kit
-    )) as { ok?: boolean; ts?: string };
+    )) as { ok?: boolean; error?: string };
+    // slackFetch never throws, so the old `.catch(() => {})` here caught nothing and a failed
+    // edit was invisible. Checking the flag is the only way to see it.
+    if (!res?.ok) {
+      console.error(`[step-engine] card edit failed for ${stepKey}:`, res?.error ?? "unknown");
+    }
+  } else {
+    const res = (await slack.postThreadReply(channel, anchorTs, fallback, kit)) as {
+      ok?: boolean;
+      ts?: string;
+      error?: string;
+    };
 
-    if (res?.ts) {
+    if (res?.ok && res.ts) {
       await supabaseAdmin
         .from("client_delivery_steps")
         .update({ slack_message_ts: res.ts, updated_at: new Date().toISOString() })
@@ -365,6 +394,9 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
         // The claim: only write the ts if nothing has one, so two concurrent posts cannot
         // both win. Same shape as ops_checklist_ts.
         .is("slack_message_ts", null);
+    } else {
+      console.error(`[step-engine] card post failed for ${stepKey}:`, res?.error ?? "no ts");
+      return;
     }
   }
 
@@ -390,12 +422,23 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
 export async function uploadsFor(clientId: string, stepKey: string): Promise<number> {
   const { data: row } = await supabaseAdmin
     .from("client_delivery_steps")
-    .select("slack_message_ts")
+    .select("slack_anchor_ts")
     .eq("client_id", clientId)
     .eq("step_key", stepKey)
     .maybeSingle();
 
-  const ts = (row?.slack_message_ts as string | null) ?? null;
+  // ‼️ THE ANCHOR TS, NOT THE CARD TS, AND THE OLD VERSION COULD NEVER MATCH ANYTHING.
+  //
+  // Slack threads are one level deep. Replying "to the card" does not make the card a parent:
+  // the reply carries thread_ts of whatever the card itself was replying to. While the card was
+  // a reply in ops_thread_ts, every screenshot filed with slack_thread_ts = ops_thread_ts, and
+  // this compared it against slack_message_ts — two values that are never equal. So this
+  // returned 0 for every client, presence_sweep_manual's precondition could never be satisfied,
+  // and [Done] on it refused forever with "0 of 18 screenshots".
+  //
+  // Now the card is a reply under the step's ANCHOR, so an upload in that thread carries the
+  // anchor ts and the comparison is exact.
+  const ts = (row?.slack_anchor_ts as string | null) ?? null;
   if (!ts) return 0;
 
   const { count } = await supabaseAdmin
@@ -473,16 +516,36 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
 }
 
 /**
- * Post whichever manual steps are now startable and have never been posted.
+ * Post whichever steps are now reachable: the anchor for every one of them, and the
+ * instruction card for the ones a person has to work.
  *
- * Called after any step transition. Deliberately conservative: it posts only steps whose
- * blockers are ALL complete, so the thread fills up in the order the work actually happens
- * rather than dumping 33 cards on day one.
+ * Called after any step transition. Deliberately conservative: it reaches only steps whose
+ * blockers are ALL resolved, so the channel fills in the order the work actually happens
+ * rather than dumping 33 messages on day one. Matthew chose this over posting all 33 at
+ * intake, so the newest message in the channel is always the thing to work on next.
+ *
+ * ‼️ EVERY REACHABLE STEP GETS AN ANCHOR, INCLUDING `mode: "auto"` ONES. An auto step still
+ * produces output somebody reads (the site and DNS intelligence, the presence PDF), and that
+ * output has to have a thread of its own to land in. Without an anchor those notes would have
+ * nowhere to go but ops_thread_ts, which is the wall this whole change removes.
+ *
+ * ‼️ IT MUST RUN **AFTER** runReadyAutoSteps, AND FOR ONE RUN IT DID NOT.
+ *
+ * postStep parks a row in `awaiting_me`, and runReadyAutoSteps only claims rows in
+ * pending/blocked/ready. So when this ran first it posted the card for every `auto_then_manual`
+ * step and thereby made that step's own runner unclaimable. registerHubAndSeedDns, runHarvest
+ * and checkHubResolving never executed on the normal path — while the hub_preview card this
+ * function had just posted told Matthew "the hostnames are attached to Vercel already". The
+ * card was asserting the result of the runner it had just starved.
+ *
+ * The `auto` guard below is what keeps it fixed: an auto_then_manual step is skipped here
+ * until its runner has finished and left it at `ready`. Ordering alone would not be enough,
+ * because this is also called on its own from other paths.
  */
 export async function postReadySteps(clientId: string): Promise<void> {
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
-    .select("step_key, status, slack_message_ts")
+    .select("step_key, status, slack_message_ts, slack_anchor_ts")
     .eq("client_id", clientId);
 
   const rows = data ?? [];
@@ -492,11 +555,31 @@ export async function postReadySteps(clientId: string): Promise<void> {
   const posted = new Set(
     rows.filter((r) => r.slack_message_ts).map((r) => r.step_key as string)
   );
+  const anchored = new Set(
+    rows.filter((r) => r.slack_anchor_ts).map((r) => r.step_key as string)
+  );
+  const statusOf = new Map(rows.map((r) => [r.step_key as string, r.status as string]));
 
   for (const step of DELIVERY_STEPS) {
+    if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
+
+    // The anchor first, in DELIVERY_STEPS order, so the channel reads in step order. An
+    // already-anchored step is left alone: re-posting would move it to the bottom.
+    if (!anchored.has(step.key)) {
+      const res = await postStepAnchor(clientId, step.key);
+      if (!res.ok) {
+        console.error(`[step-engine] anchor for ${step.key} failed:`, res.error);
+        continue;
+      }
+    }
+
     if (step.mode === "auto") continue;
     if (done.has(step.key) || posted.has(step.key)) continue;
-    if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
+
+    // An auto_then_manual step's card describes what the runner produced, so posting it
+    // before the runner has run says something untrue AND blocks the runner from ever
+    // correcting it. Wait for `ready`, which is what runReadyAutoSteps leaves behind.
+    if (step.mode === "auto_then_manual" && statusOf.get(step.key) !== "ready") continue;
 
     await postStep(clientId, step.key).catch((e) =>
       console.error(`[step-engine] post ${step.key} failed:`, (e as Error).message)
@@ -591,8 +674,14 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
         .eq("client_id", clientId)
         .eq("step_key", step.key);
 
-      const { notifyThread } = await import("./delivery-checklist");
-      await notifyThread(clientId, `:warning: *${step.label}* failed: ${result.error ?? "unknown"}`).catch(() => {});
+      // Into THIS STEP'S thread, not ops_thread_ts. A failure is the single most important
+      // thing a step's thread can say, and it used to be a reply in a stream of eighteen.
+      await notifyStep(
+        clientId,
+        step.key,
+        `:warning: *${step.label}* failed: ${result.error ?? "unknown"}`
+      );
+      await refreshStepAnchor(clientId, step.key);
 
       // ‼️ A FAILED RUNNER'S NOTE IS POSTED TOO, and it used to be thrown away. `note` is the
       // runner's own account of what it found, and on the failure paths that is precisely
@@ -600,13 +689,12 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
       // attached, which did not and why, and then returns ok:false when neither did. Printing
       // one line of `error` and discarding the readout leaves the thread saying a step failed
       // with no way to tell whether the cause is a missing token or a domain someone else owns.
-      if (result.note) await notifyThread(clientId, result.note).catch(() => {});
+      if (result.note) await notifyStep(clientId, step.key, result.note);
       continue;
     }
 
     if (result.note) {
-      const { notifyThread } = await import("./delivery-checklist");
-      await notifyThread(clientId, result.note).catch(() => {});
+      await notifyStep(clientId, step.key, result.note);
     }
 
     if (step.mode === "auto_then_manual") {
@@ -616,7 +704,10 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
         .update({ status: "ready", updated_at: new Date().toISOString() })
         .eq("client_id", clientId)
         .eq("step_key", step.key);
-      await postStep(clientId, step.key).catch(() => {});
+      await postStep(clientId, step.key).catch((e) =>
+        console.error(`[step-engine] card for ${step.key} failed:`, (e as Error).message)
+      );
+      await refreshStepAnchor(clientId, step.key);
       continue;
     }
 
