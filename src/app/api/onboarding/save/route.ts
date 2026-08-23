@@ -32,6 +32,7 @@ import {
   LANGUAGE_VALUE_BY_LABEL,
 } from "@/config/client-intake";
 import { clean, normalizePhone } from "@/lib/medspa/validate";
+import { normalizeTarget } from "@/lib/scan/normalize";
 import { normalizeAddress, normalizeState } from "@/lib/clients/normalize";
 
 export const dynamic = "force-dynamic";
@@ -151,6 +152,33 @@ export async function POST(req: NextRequest) {
               ? normalizeAddress(value as string)
               : value;
     }
+
+    // ‼️ DERIVE clients.domain HERE, BECAUSE NOTHING ELSE EVER DID.
+    //
+    // startPilot() derives it from `input.website`, but /api/clients/start provisions from the
+    // Stripe thank-you page with an email and NOTHING ELSE, so `website` is null there and the
+    // derivation is skipped. Intake step 1 is where the website finally arrives, and it wrote
+    // the `website` column and stopped — leaving `domain` null forever for every self-serve
+    // client. provision.ts:327 already documents the same hole for `subdomain`: "this comment
+    // used to claim intake step 1 decided it; nothing did".
+    //
+    // The cost is not cosmetic. `domain` is what hostsFor(), seedDnsRecords() and the whole
+    // hub lane are built from, so hub_preview fails with "No domain on file" and takes
+    // review_tool_preview, review_card_pdf, dns_records, subdomain_live, first_page and
+    // review_tool_handed down with it. Eight steps of a 33-step runner were unreachable for
+    // anyone who signed up through /start. Confirmed on the live re-run of srtagency.com.
+    const typedWebsite = typeof answers.website === "string" ? answers.website.trim() : "";
+    if (typedWebsite) {
+      const normalized = normalizeTarget(typedWebsite);
+      if (normalized.ok) {
+        patch.website = normalized.target.website;
+        patch.domain = normalized.target.domain;
+      }
+      // An unreadable website is NOT fatal here, unlike in startPilot. The client is already
+      // provisioned and mid-form; refusing step 1 would strand them on a screen they cannot
+      // get past. The raw string is kept in `website` by the loop above and `domain` stays
+      // null, which is the state this branch already handled before today.
+    }
   } else if (def.bag) {
     patch[def.bag] = answers;
   }
@@ -233,6 +261,29 @@ async function onIntakeComplete(args: {
     .update({ status: "complete", completed_at: new Date().toISOString() })
     .eq("client_id", args.clientId)
     .eq("stage", "intake");
+
+  // ‼️ PICK THE SUBDOMAIN NOW, FOR THE SAME REASON `domain` IS DERIVED AT STEP 1.
+  //
+  // startPilot() calls chooseSubdomain only `if (domain)`, and a /start client has no domain
+  // at that point, so `clients.subdomain` stayed NULL forever. It is a DNS lookup of
+  // learn.{domain} to decide between the `learn` and `guide` conventions, so it cannot run
+  // until a domain exists, and this is the first moment one does.
+  //
+  // It runs BEFORE the delivery cascade below, because hub_preview attaches hostnames built
+  // from exactly these two columns. Guarded on a still-null subdomain so a re-submitted final
+  // step cannot re-run the lookup and flip a convention somebody has already read down a phone.
+  const { data: forHost } = await supabaseAdmin
+    .from("clients")
+    .select("domain, subdomain")
+    .eq("id", args.clientId)
+    .maybeSingle();
+
+  if (forHost?.domain && !forHost.subdomain) {
+    const { chooseSubdomain } = await import("@/lib/clients/provision");
+    await chooseSubdomain(args.clientId, forHost.domain as string).catch((e) =>
+      console.error("[onboarding/save] subdomain choice failed:", (e as Error).message)
+    );
+  }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
   const lines = [

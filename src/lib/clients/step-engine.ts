@@ -542,7 +542,53 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
  * until its runner has finished and left it at `ready`. Ordering alone would not be enough,
  * because this is also called on its own from other paths.
  */
+/**
+ * Give every reachable step its top-level message, in DELIVERY_STEPS order.
+ *
+ * ‼️ THIS EXISTS BECAUSE THE FIRST LIVE RUN CAME OUT IN THE WRONG ORDER: the channel read
+ * 1, 3, 4, 15, 2, 5, 19.
+ *
+ * Slack orders a channel by post time and nothing can reorder it afterwards, so the order the
+ * anchors are CREATED in is the order Matthew reads for the life of the job. Before this, they
+ * were created lazily by whoever needed one first — an auto runner posting its note, an
+ * artifact being delivered, autoCompleteStep ticking — so the sequence followed which runner
+ * happened to finish first rather than the step list.
+ *
+ * Anchoring the whole reachable set up front, in array order, in one pass, is what makes the
+ * channel scan top to bottom. It must therefore run BEFORE any runner and before any card.
+ *
+ * Idempotent: postStepAnchor claims with `.is(null)` and returns the existing ts.
+ */
+export async function ensureReachableAnchors(clientId: string): Promise<void> {
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("step_key, status, slack_anchor_ts")
+    .eq("client_id", clientId);
+
+  const rows = data ?? [];
+  const done = new Set(
+    rows.filter((r) => r.status === "complete" || r.status === "skipped").map((r) => r.step_key as string)
+  );
+  const anchored = new Set(
+    rows.filter((r) => r.slack_anchor_ts).map((r) => r.step_key as string)
+  );
+
+  for (const step of DELIVERY_STEPS) {
+    if (anchored.has(step.key)) continue;
+    // Blocked steps get no message at all. Matthew chose post-on-unblock over all 33 at
+    // intake, so the newest message in the channel is always the thing to work on next.
+    if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
+
+    const res = await postStepAnchor(clientId, step.key);
+    if (!res.ok) console.error(`[step-engine] anchor for ${step.key} failed:`, res.error);
+  }
+}
+
 export async function postReadySteps(clientId: string): Promise<void> {
+  // Anchors first and in order, always. postReadySteps is called from several places, so the
+  // ordering guarantee has to live at the top of this function rather than in the callers.
+  await ensureReachableAnchors(clientId);
+
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("step_key, status, slack_message_ts, slack_anchor_ts")
@@ -555,24 +601,10 @@ export async function postReadySteps(clientId: string): Promise<void> {
   const posted = new Set(
     rows.filter((r) => r.slack_message_ts).map((r) => r.step_key as string)
   );
-  const anchored = new Set(
-    rows.filter((r) => r.slack_anchor_ts).map((r) => r.step_key as string)
-  );
   const statusOf = new Map(rows.map((r) => [r.step_key as string, r.status as string]));
 
   for (const step of DELIVERY_STEPS) {
     if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
-
-    // The anchor first, in DELIVERY_STEPS order, so the channel reads in step order. An
-    // already-anchored step is left alone: re-posting would move it to the bottom.
-    if (!anchored.has(step.key)) {
-      const res = await postStepAnchor(clientId, step.key);
-      if (!res.ok) {
-        console.error(`[step-engine] anchor for ${step.key} failed:`, res.error);
-        continue;
-      }
-    }
-
     if (step.mode === "auto") continue;
     if (done.has(step.key) || posted.has(step.key)) continue;
 

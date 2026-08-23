@@ -233,7 +233,14 @@ export async function postDeliveryChecklist(clientId: string): Promise<void> {
   // postStep parks a row in awaiting_me and runReadyAutoSteps will not claim a row in that
   // state, so running these the other way round starved every auto_then_manual runner:
   // registerHubAndSeedDns, runHarvest and checkHubResolving never executed on this path.
-  const { postReadySteps, runReadyAutoSteps } = await import("@/lib/clients/step-engine");
+  const { ensureReachableAnchors, postReadySteps, runReadyAutoSteps } = await import(
+    "@/lib/clients/step-engine"
+  );
+  // Every reachable step gets its message, in step order, before anything runs. See
+  // ensureReachableAnchors for why the order of creation is the order Matthew reads forever.
+  await ensureReachableAnchors(clientId).catch((e) =>
+    console.error("[delivery-checklist] anchoring failed:", (e as Error).message)
+  );
   await runReadyAutoSteps(clientId).catch((e) =>
     console.error("[delivery-checklist] initial auto steps failed:", (e as Error).message)
   );
@@ -476,7 +483,16 @@ export async function setDeliveryStep(args: {
   // as success. postReadySteps cannot double-post either: it skips any step that already has
   // a slack_message_ts.
   {
-    const { postReadySteps, runReadyAutoSteps } = await import("@/lib/clients/step-engine");
+    const { ensureReachableAnchors, postReadySteps, runReadyAutoSteps } = await import(
+      "@/lib/clients/step-engine"
+    );
+    // ‼️ ANCHORS BEFORE RUNNERS. Slack orders by post time and nothing reorders it after
+    // the fact, so whichever code creates a step's message first fixes its position forever.
+    // Letting runners create them lazily is what made the first live run read 1, 3, 4, 15, 2,
+    // 5, 19. One ordered pass up front is the fix.
+    await ensureReachableAnchors(args.clientId).catch((e) =>
+      console.error("[delivery-checklist] anchoring failed:", (e as Error).message)
+    );
     // ‼️ AUTO FIRST, AND IT USED TO BE THE OTHER WAY ROUND. postStep parks a row at
     // `awaiting_me`, which runReadyAutoSteps will not claim, so posting first made every
     // auto_then_manual step's own runner unclaimable. postReadySteps now also refuses to post
