@@ -124,11 +124,24 @@ export async function POST(req: NextRequest) {
 
   // 4. Claim guard. A run is a crawl, a classify, four engine calls and a model call, and a
   //    double-click must not spend it twice. Same intent as HOOK_CLAIM_MINUTES on the CRM button.
+  //
+  // ‼️ ONLY A `running` RUN HOLDS THE CLAIM, and the missing status filter here was a live bug.
+  // A double-click arrives while the first press is still running, so `running` is the whole of
+  // what this guard needs. Matching any recent row instead meant a run that had already FAILED
+  // went on being served as if it were in flight: the panel polled the dead run and re-rendered
+  // its stored error_detail, so every press for the next five minutes replayed the first failure.
+  // It made the panel look frozen and made "They have no website" look like it did nothing, when
+  // in fact the flag was never read, because the route returned above the line that reads it.
+  //
+  // A `done` run does NOT hold the claim either. Pressing again after one finished is a deliberate
+  // second press, and it usually carries new input: a website typed into the panel, or the
+  // no-website flag. Serving the old row would silently ignore what was just typed.
   const since = new Date(Date.now() - IG_CLAIM_MINUTES * 60_000).toISOString();
   const { data: inFlight } = await supabaseAdmin
     .from("ig_dm_runs")
     .select("id, status")
     .eq("handle", handle)
+    .eq("status", "running")
     .gte("created_at", since)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -144,7 +157,7 @@ export async function POST(req: NextRequest) {
       handle,
       website,
       reused: true,
-      note: `A run for this profile started less than ${IG_CLAIM_MINUTES} minutes ago. Showing that one.`,
+      note: `A run for this profile is still going. Showing that one.`,
     });
   }
 

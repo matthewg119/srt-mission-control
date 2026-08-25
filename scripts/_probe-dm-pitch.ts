@@ -22,6 +22,7 @@ import { lintDraft } from "../src/lib/audit-engine/draft-linter";
 import { PERMISSION_CLOSE } from "../src/lib/audit-engine/email-assistant";
 import { dmRivalLine, DM_ASK_LINE, DM_CLOSE_LINE, DM_MAX_SENTENCES } from "../src/config/pitch";
 import { buildAliases, isMentioned } from "../src/lib/audit-engine/mention-match";
+import { isNeverTheirSite } from "../src/lib/audit-engine/web-hosts";
 
 /** 3 of 4 for the rival, 1 of 4 for the business: the shape Matthew asked the DM to state. */
 const RIVAL_COUNTS = { rival: 3, appeared: 1, measured: 4 };
@@ -301,9 +302,6 @@ check("nothing in, empty out, so the classifier reads the name off their pages",
 check("a stray version label is stripped", stripVariantLabel("Version 2 (pretext): Hey Han,"), "Hey Han,");
 check("a real first sentence is left alone", stripVariantLabel("Hey Han, I ran a quick check."), "Hey Han, I ran a quick check.");
 
-console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
-process.exit(failures === 0 ? 0 : 1);
-
 // ── The borrowed-domain alias ────────────────────────────────────────────────
 //
 // A live run on hairthetics_fl took the threads.com bio link as the clinic's website, so
@@ -345,3 +343,35 @@ check(
   ),
   true
 );
+
+// ── Booking platforms are not a website ──────────────────────────────────────
+//
+// leahskinmethod's only bio link is theplumproom.myaestheticrecord.com/online-booking. Unlisted,
+// that page was crawled as her site, judged thin, and the run died with "too little on it to work
+// out what they sell" on a page that was never hers.
+
+check(
+  "a booking subdomain is recognised as never the business's own site",
+  isNeverTheirSite("https://theplumproom.myaestheticrecord.com/online-booking"),
+  true
+);
+
+check(
+  "...so it contributes no alias, and the platform name cannot score as a mention",
+  buildAliases("The Plump Room", "https://theplumproom.myaestheticrecord.com/online-booking").includes(
+    "myaestheticrecord"
+  ),
+  false
+);
+
+check(
+  "...while the business name is still matched normally",
+  isMentioned(
+    "In Hallandale Beach, The Plump Room is well reviewed.",
+    buildAliases("The Plump Room", "https://theplumproom.myaestheticrecord.com/online-booking")
+  ),
+  true
+);
+
+console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
+process.exit(failures === 0 ? 0 : 1);

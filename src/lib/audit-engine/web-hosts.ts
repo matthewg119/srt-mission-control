@@ -32,6 +32,17 @@ export const NEVER_THEIR_SITE_HOSTS = new Set([
   "api.whatsapp.com", "calendly.com", "square.site", "squareup.com", "booksy.com",
   "vagaro.com", "mindbodyonline.com", "zocdoc.com", "doximity.com", "healthgrades.com",
   "opentable.com", "amazon.com", "shopify.com", "eventbrite.com", "mailchi.mp",
+  // ‼️ BOOKING AND PRACTICE-MANAGEMENT PLATFORMS. A med spa's Instagram bio link is very often a
+  // booking page and nothing else, and the page is real: it loads, it ranks, and it is what a
+  // search engine finds. It is still not theirs. Left off this list, such a link is taken as the
+  // business's own website, the crawler reads the vendor's page, and any site finding is a fact
+  // about the vendor offered as a fact about the client. It also hands buildAliases a token like
+  // "myaestheticrecord", which then matches every answer naming the platform. That is the same
+  // defect that scored a clinic 4 of 4 off the token "threads".
+  "myaestheticrecord.com", "aestheticrecord.com", "zenoti.com", "boulevard.io",
+  "getboulevard.com", "janeapp.com", "acuityscheduling.com", "setmore.com",
+  "schedulicity.com", "fresha.com", "phorest.com", "glossgenius.com",
+  "simplybook.me", "timely.com", "podium.com",
 ]);
 
 /** Hostname, lowercased, with a leading www. dropped. Null when the input will not parse. */
