@@ -38,6 +38,14 @@ export interface IngestLeadInput {
   /** Subject of the timeline note. Omit to skip the note. */
   noteTitle?: string;
   speedToLead?: boolean;
+  /** Attribution, written straight through to the matching contacts columns.
+   *  Every write below is conditional: a second touch on an existing contact
+   *  must never blank the origin a first touch recorded. There is no
+   *  utm_term column, so do not add a field for one. */
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmContent?: string;
 }
 
 export interface IngestLeadResult {
@@ -114,6 +122,10 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
   const businessName = input.businessName?.trim() || "";
   const city = input.city?.trim() || "";
   const fbLeadId = input.fbLeadId?.trim() || "";
+  const utmSource = input.utmSource?.trim() || "";
+  const utmMedium = input.utmMedium?.trim() || "";
+  const utmCampaign = input.utmCampaign?.trim() || "";
+  const utmContent = input.utmContent?.trim() || "";
   const leadName = [firstName, lastName].filter(Boolean).join(" ") || businessName || email || phone;
 
   // ── Supabase contact upsert ──
@@ -132,6 +144,10 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
           ...(email ? { email } : {}),
           ...(website ? { website } : {}),
           ...(fbLeadId ? { fb_lead_id: fbLeadId } : {}),
+          ...(utmSource ? { utm_source: utmSource } : {}),
+          ...(utmMedium ? { utm_medium: utmMedium } : {}),
+          ...(utmCampaign ? { utm_campaign: utmCampaign } : {}),
+          ...(utmContent ? { utm_content: utmContent } : {}),
           source: input.source,
           updated_at: new Date().toISOString(),
         })
@@ -148,6 +164,10 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
           business_name: businessName || null,
           website: website || null,
           fb_lead_id: fbLeadId || null,
+          utm_source: utmSource || null,
+          utm_medium: utmMedium || null,
+          utm_campaign: utmCampaign || null,
+          utm_content: utmContent || null,
           source: input.source,
         })
         .select("id")

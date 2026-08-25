@@ -47,6 +47,19 @@ export async function POST(req: NextRequest) {
     // caller, so nothing below changes shape for the funnels that predate it.
     const tier = clean(body.tier, 40);
 
+    // Opt-out for the RingOut. ingestLead gates on `!== false`, so leaving this
+    // undefined keeps every caller that predates it dialing exactly as before.
+    // /invisible sends false: it collects a phone, but RingCentral is cancelled.
+    const speedToLead = body.speedToLead === false ? false : undefined;
+
+    // Attribution. The columns exist on contacts (utm_source was added in
+    // docs/2026-08-19-contacts-drift-repair.sql); nothing was writing them on
+    // this path, so a paid funnel lost its origin the moment it landed.
+    const utmSource = clean(body.utmSource, 80);
+    const utmMedium = clean(body.utmMedium, 80);
+    const utmCampaign = clean(body.utmCampaign, 120);
+    const utmContent = clean(body.utmContent, 120);
+
     if (!email && !phone) {
       return NextResponse.json({ error: "email or phone required" }, { status: 400 });
     }
@@ -65,6 +78,11 @@ export async function POST(req: NextRequest) {
       businessName: clinic,
       city,
       source,
+      speedToLead,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmContent,
       noteTitle: "AI Visibility Index",
       headline:
         `New Index lead: ${leadName} · ${clinic || "?"} · ${city || "?"} · ${website || "?"}` +
@@ -80,6 +98,9 @@ export async function POST(req: NextRequest) {
         marketing ? `Marketing today: ${marketing}` : "",
         budget ? `Budget: ${budget} (fit: ${fit || "?"})` : "",
         consentTs ? `SMS/email consent: agreed at ${consentTs}` : "",
+        utmSource || utmCampaign
+          ? `Attribution: ${[utmSource, utmMedium, utmCampaign].filter(Boolean).join(" / ")}`
+          : "",
         `Funnel: /${source}`,
       ],
     });
