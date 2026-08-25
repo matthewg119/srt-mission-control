@@ -6,6 +6,7 @@
 // The suffix list lives in company-identity.ts, shared with the inbound-lead stack's
 // same-company check so the two can never drift apart.
 import { stripSuffixes } from "@/lib/company-identity";
+import { isBorrowedHost } from "./web-hosts";
 
 function bareDomain(domainOrUrl: string): string {
   try {
@@ -32,7 +33,18 @@ export function buildAliases(businessName?: string | null, website?: string | nu
     const stripped = stripSuffixes(trimmedName);
     if (stripped) aliases.add(stripped);
   }
-  const domainToken = website ? bareDomain(website) : "";
+  // ‼️ ONLY OFF A DOMAIN THE BUSINESS ACTUALLY OWNS.
+  //
+  // The bare-domain token is a strong alias when the URL is their site, because an engine that
+  // recommends them often writes the domain. It is a LIE when the URL is somebody else's platform.
+  // A med spa whose Instagram bio pointed at threads.com produced the alias "threads", and
+  // isMentioned is a substring test, so every answer mentioning PDO threads or a thread lift
+  // counted as an appearance and the clinic scored 4 of 4 in searches it was absent from. An
+  // inflated score is worse than a missing one: it is the number the DM and the report both state
+  // as measured fact, and the prospect is the one person who can check it.
+  //
+  // isBorrowedHost covers the aggregators too: linktr.ee would otherwise contribute "linktr".
+  const domainToken = website && !isBorrowedHost(website) ? bareDomain(website) : "";
   if (domainToken) aliases.add(domainToken);
 
   return [...aliases].filter((a) => a.length >= 2);

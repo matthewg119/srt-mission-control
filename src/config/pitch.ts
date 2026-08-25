@@ -645,18 +645,35 @@ export const DM_MAX_SENTENCES = 5;
  * sentence is a checkable claim: the prospect can reproduce it from his phone in thirty seconds,
  * which is exactly why it lands, and exactly why it can never be a guess. See pickDmAngle.
  */
+export interface DmCounts {
+  /** Answers the rival was named in. */
+  rival: number;
+  /** Answers THIS business was named in. The numerator Matthew asks for. */
+  appeared: number;
+  /** Answers that came back at all. THE DENOMINATOR, never the number asked. */
+  measured: number;
+}
+
 export function dmRivalLine(
   service: string,
   city: string | null,
   rival: string,
-  business: string
+  business: string,
+  counts: DmCounts
 ): string {
   // City is split on the first comma for the same reason hookPositioningLine does it: classify.ts
   // stores "Hallandale Beach, FL" and a person writing this sentence would not say the state.
   const where = city?.split(",")[0]?.trim();
+  // ‼️ TWO SENTENCES, NOT FOUR. The counts are folded into the finding rather than added after it
+  // because the DM budget is five sentences and the ask and the close take two of them. An
+  // earlier draft stated the rival, then the ratio, then the business, and ran to six.
+  const tail =
+    counts.appeared === 0
+      ? `${business} doesn't come back in any of them.`
+      : `${business} comes back in ${counts.appeared}.`;
   return (
     `I ran a quick check and when someone asks ChatGPT for ${service}${where ? ` in ${where}` : ""}, ` +
-    `${rival} shows up. ${business} doesn't.`
+    `${rival} shows up in ${counts.rival} of the ${counts.measured} searches I ran. ${tail}`
   );
 }
 
@@ -668,11 +685,20 @@ export function dmRivalLine(
  * invisible" to compensate: that is the unfalsifiable scare line NOTHING_TO_FIND_LINE exists to
  * prevent, and a weaker true sentence beats a stronger one we cannot support.
  */
-export function dmAbsenceLine(service: string, city: string | null, business: string): string {
+export function dmAbsenceLine(
+  service: string,
+  city: string | null,
+  business: string,
+  counts: Pick<DmCounts, "appeared" | "measured">
+): string {
   const where = city?.split(",")[0]?.trim();
+  const tail =
+    counts.appeared === 0
+      ? `${business} isn't on any of the ${counts.measured} I ran.`
+      : `${business} is on ${counts.appeared} of the ${counts.measured} I ran.`;
   return (
     `I ran a quick check and when someone asks ChatGPT for ${service}${where ? ` in ${where}` : ""}, ` +
-    `it comes back with a list of businesses and ${business} isn't on it.`
+    `it answers with a list of businesses. ${tail}`
   );
 }
 
@@ -683,11 +709,22 @@ export function dmAbsenceLine(service: string, city: string | null, business: st
  * message built on this line may read as bad news about their visibility. What is true, and what
  * this says, is that the description belongs to whoever wrote it.
  */
-export function dmPresentLine(service: string, city: string | null, business: string): string {
+export function dmPresentLine(
+  service: string,
+  city: string | null,
+  business: string,
+  counts: Pick<DmCounts, "appeared" | "measured">,
+  rival: { name: string; count: number } | null
+): string {
   const where = city?.split(",")[0]?.trim();
+  // The rival is named here too when we have one, because "you came back and so did they" is the
+  // whole point: being on the list is not the same as being the answer. It stays OPTIONAL, since
+  // this angle does not gate on a rival and must still read correctly without one.
+  const alongside = rival ? `, and so does ${rival.name}` : "";
   return (
     `I ran a quick check on what ChatGPT says when someone asks for ${service}${where ? ` in ${where}` : ""}, ` +
-    `and ${business} does come back. Every word it used to describe you was written by somebody else.`
+    `and ${business} comes back in ${counts.appeared} of the ${counts.measured} searches I ran${alongside}. ` +
+    `Every word it used to describe you was written by somebody else.`
   );
 }
 

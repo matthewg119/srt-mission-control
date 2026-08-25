@@ -11,6 +11,13 @@
 // and every alias, mention match and greeting is built on top of it. Null is recoverable, because
 // the panel simply asks Matthew. A wrong value is not, because nothing downstream knows to ask.
 
+import {
+  AGGREGATOR_HOSTS,
+  hostOf,
+  isAggregatorHost,
+  isNeverTheirSite,
+} from "@/lib/audit-engine/web-hosts";
+
 /** `@Hairthetics_FL`, a profile URL, or a bare handle -> `hairthetics_fl`. */
 export function normalizeHandle(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -165,43 +172,13 @@ const STATE_ABBR = new Set([...STATE_NAMES.values()]);
 /**
  * Hosts that are never the business's own website.
  *
- * Split into two lists because they fail differently. An AGGREGATOR is a page we can usefully open,
- * since the real site is normally one click inside it. A SOCIAL or booking host is a dead end for
- * this lane: the hook is written from pages the business controls and wrote, and a Calendly or a
- * Facebook page is neither.
+ * ‼️ THE LISTS THEMSELVES NOW LIVE IN audit-engine/web-hosts.ts, because mention-match.ts needs
+ * the same answer and did not have it. This lane used to be the only holder of the knowledge that
+ * threads.com is not a website, so buildAliases went on turning such a link into the alias
+ * "threads" and matching it against every answer that mentioned a thread lift.
  */
-const AGGREGATORS = new Set([
-  "linktr.ee", "beacons.ai", "linkin.bio", "bio.link", "msha.ke", "withkoji.com",
-  "stan.store", "shorby.com", "campsite.bio", "solo.to", "carrd.co", "flowcode.com",
-  "linkpop.com", "tap.bio", "lnk.bio", "milkshake.app", "komi.io", "beacons.page",
-]);
-
-const NEVER_THEIR_SITE = new Set([
-  "instagram.com", "facebook.com", "fb.com", "m.facebook.com", "tiktok.com", "twitter.com",
-  "x.com", "youtube.com", "youtu.be", "linkedin.com", "pinterest.com", "snapchat.com",
-  "threads.net", "yelp.com", "google.com", "goo.gl", "maps.app.goo.gl", "wa.me",
-  "api.whatsapp.com", "calendly.com", "square.site", "squareup.com", "booksy.com",
-  "vagaro.com", "mindbodyonline.com", "zocdoc.com", "doximity.com", "healthgrades.com",
-  "opentable.com", "amazon.com", "shopify.com", "eventbrite.com", "mailchi.mp",
-]);
-
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url.startsWith("http") ? url : `https://${url}`).hostname
-      .replace(/^www\./i, "")
-      .toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-function isDeadEnd(host: string): boolean {
-  return NEVER_THEIR_SITE.has(host) || [...NEVER_THEIR_SITE].some((h) => host.endsWith(`.${h}`));
-}
-
 export function isAggregator(url: string): boolean {
-  const host = hostOf(url);
-  return host ? AGGREGATORS.has(host) : false;
+  return isAggregatorHost(url);
 }
 
 /** Instagram wraps outbound bio links as l.instagram.com/?u=<encoded>. Unwrap to the real URL. */
@@ -247,14 +224,14 @@ export async function resolveBioLink(rawUrl: string | null | undefined): Promise
   const host = hostOf(url);
   if (!host) return { website: null, note: `The bio link could not be read: ${rawUrl}` };
 
-  if (isDeadEnd(host)) {
+  if (isNeverTheirSite(host)) {
     return {
       website: null,
       note: `The bio link points at ${host}, which is not a site they control. The hook is written from their own pages.`,
     };
   }
 
-  if (!AGGREGATORS.has(host)) return { website: url, note: `Using the bio link: ${host}` };
+  if (!AGGREGATOR_HOSTS.has(host)) return { website: url, note: `Using the bio link: ${host}` };
 
   const found = await firstOutboundFrom(url);
   if (!found) {
@@ -302,8 +279,8 @@ async function firstOutboundFrom(url: string): Promise<string | null> {
   for (const c of candidates) {
     const h = hostOf(c);
     if (!h || h === self) continue;
-    if (AGGREGATORS.has(h)) continue; // one hop only
-    if (isDeadEnd(h)) continue;
+    if (AGGREGATOR_HOSTS.has(h)) continue; // one hop only
+    if (isNeverTheirSite(h)) continue;
     // Asset and analytics hosts that appear in every page's markup.
     if (/(^|\.)(cdn|static|assets|fonts|cdnjs|gstatic|googleapis|googletagmanager|jsdelivr|unpkg|cloudflare|sentry|hotjar|segment)\./i.test(h)) continue;
     if (/\.(js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|map)(\?|$)/i.test(c)) continue;

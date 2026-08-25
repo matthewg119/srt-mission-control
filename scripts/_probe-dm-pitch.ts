@@ -21,6 +21,12 @@ import type { MiniCheck } from "../src/lib/audit-engine/no-website-pitch";
 import { lintDraft } from "../src/lib/audit-engine/draft-linter";
 import { PERMISSION_CLOSE } from "../src/lib/audit-engine/email-assistant";
 import { dmRivalLine, DM_ASK_LINE, DM_CLOSE_LINE, DM_MAX_SENTENCES } from "../src/config/pitch";
+import { buildAliases, isMentioned } from "../src/lib/audit-engine/mention-match";
+
+/** 3 of 4 for the rival, 1 of 4 for the business: the shape Matthew asked the DM to state. */
+const RIVAL_COUNTS = { rival: 3, appeared: 1, measured: 4 };
+/** The same run with a clean miss, which is the wording that carries an apostrophe. */
+const ZERO_COUNTS = { rival: 3, appeared: 0, measured: 4 };
 import {
   normalizeHandle,
   firstNameFrom,
@@ -137,27 +143,27 @@ const RIVAL_FACTS = hook({
 
 check(
   "the reference line reads exactly as Matthew wrote it",
-  dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics"),
-  "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up. Hairthetics doesn't."
+  dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", RIVAL_COUNTS),
+  "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics comes back in 1."
 );
 
 check(
   "the state is dropped from the city, so the sentence does not carry two commas in four words",
-  dmRivalLine("laser hair removal", "Bakersfield, CA", "X", "Y").includes("in Bakersfield,"),
+  dmRivalLine("laser hair removal", "Bakersfield, CA", "X", "Y", RIVAL_COUNTS).includes("in Bakersfield,"),
   true
 );
 
 check(
   "the brief hands the finished sentence over rather than asking for a fraction",
-  dmContext(RIVAL_FACTS, pickDmAngle(RIVAL_FACTS)).includes("Foundation Hair shows up. Hairthetics doesn't."),
+  dmContext(RIVAL_FACTS, pickDmAngle(RIVAL_FACTS)).includes("Foundation Hair shows up in 1 of the 2 searches I ran. Hairthetics comes back in 1."),
   true
 );
 
 check(
   "a body that reproduced the fixed line raises no warning",
   findingWarningFor(
-    "Hey Han,\n\nI ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up. Hairthetics doesn't.\n\n" + DM_ASK_LINE,
-    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics")
+    "Hey Han,\n\nI ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics comes back in 1.\n\n" + DM_ASK_LINE,
+    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", RIVAL_COUNTS)
   ),
   null
 );
@@ -165,8 +171,8 @@ check(
 check(
   "a curly apostrophe still counts as reproduced",
   findingWarningFor(
-    "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up. Hairthetics doesn’t.",
-    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics")
+    "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics doesn’t come back in any of them.",
+    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", ZERO_COUNTS)
   ),
   null
 );
@@ -175,7 +181,7 @@ check(
   "a REWORDED fixed line is caught",
   findingWarningFor(
     "I checked and Foundation Hair ranks above you for hair transplants.",
-    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics")
+    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", RIVAL_COUNTS)
   ) !== null,
   true
 );
@@ -184,7 +190,7 @@ check(
 
 const GOOD_DM = `Hey Han,
 
-I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up. Hairthetics doesn't.
+I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics comes back in 1.
 
 ${DM_ASK_LINE}
 
@@ -297,3 +303,45 @@ check("a real first sentence is left alone", stripVariantLabel("Hey Han, I ran a
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
+
+// ── The borrowed-domain alias ────────────────────────────────────────────────
+//
+// A live run on hairthetics_fl took the threads.com bio link as the clinic's website, so
+// buildAliases produced the token "threads" and every answer mentioning a thread lift scored as
+// an appearance. The clinic came back "present in 4 of 4" in searches it was absent from.
+
+check(
+  "a platform link contributes NO alias, so the business name carries the match alone",
+  buildAliases("Hairthetics", "https://www.threads.com/@hairthetics_fl?xmt=AQG0AE"),
+  ["Hairthetics"]
+);
+
+check(
+  "...and an answer about thread lifts is therefore no longer an appearance",
+  isMentioned(
+    "Aesthetemed Beauty & Wellness Clinic offers PDO threads and facial rejuvenation.",
+    buildAliases("Hairthetics", "https://www.threads.com/@hairthetics_fl")
+  ),
+  false
+);
+
+check(
+  "a link-in-bio host is refused the same way",
+  buildAliases("Hairthetics", "https://linktr.ee/hairthetics"),
+  ["Hairthetics"]
+);
+
+check(
+  "a REAL site still contributes its bare domain, which is the strong alias",
+  buildAliases("Hairthetics", "https://www.hairthetics.com/contact").includes("hairthetics"),
+  true
+);
+
+check(
+  "the business is still found when it genuinely is named",
+  isMentioned(
+    "In Hallandale Beach, Hairthetics is well reviewed for FUE.",
+    buildAliases("Hairthetics", "https://www.threads.com/@hairthetics_fl")
+  ),
+  true
+);

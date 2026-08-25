@@ -232,6 +232,11 @@ export async function runHookCheck(
       // status:"no_data" is "we do not know", NEVER "they were absent". Conflating the two is
       // exactly the defect that published a fabricated zero. See run-prompts.ts.
       if (r.status !== "ok" || !r.raw) return { prompt, appeared: null as boolean | null, text: "" };
+      // Same rule one step further out: with nothing to match on, a false from isMentioned is
+      // "we could not look", not "they were absent". buildAliases now declines to borrow a token
+      // off somebody else's platform, so an empty alias set is reachable in a way it was not
+      // before, and the honest answer to an unaskable question is null.
+      if (aliases.length === 0) return { prompt, appeared: null as boolean | null, text: r.raw };
       return { prompt, appeared: isMentioned(r.raw, aliases), text: r.raw };
     })
   );

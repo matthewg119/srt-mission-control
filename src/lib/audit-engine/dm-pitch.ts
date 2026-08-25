@@ -175,13 +175,18 @@ const DM_ANGLES: DmAngle[] = [
     needsCleanSweep: false,
     needsMeasured: true,
     finding: (s) =>
-      dmRivalLine(s.trade ?? "a business like theirs", s.city, s.topRival!.name, s.businessName),
+      dmRivalLine(s.trade ?? "a business like theirs", s.city, s.topRival!.name, s.businessName, {
+        rival: s.topRival!.count,
+        appeared: s.appearedCount,
+        measured: s.measuredCount,
+      }),
     instruction:
       "The finding is that a real buying question was put to ChatGPT, it answered with a list of " +
       "businesses, and this one was not on it while the named rival was. Report it and stop. Do " +
-      "NOT editorialise about the rival, do not say it is better, do not suggest it let anyone " +
-      "down, and do not say how many of the questions it came back in. You are reporting what an " +
-      "engine returned, which they can reproduce themselves.",
+      "NOT editorialise about the rival, do not say it is better, and do not suggest it let anyone " +
+      "down. The counts are already in the fixed line and are the measured ones: do not restate " +
+      "them, round them, or add a percentage. You are reporting what an engine returned, which " +
+      "they can reproduce themselves.",
   },
   {
     id: "buying-question",
@@ -189,7 +194,11 @@ const DM_ANGLES: DmAngle[] = [
     needsRival: false,
     needsCleanSweep: false,
     needsMeasured: true,
-    finding: (s) => dmAbsenceLine(s.trade ?? "a business like theirs", s.city, s.businessName),
+    finding: (s) =>
+      dmAbsenceLine(s.trade ?? "a business like theirs", s.city, s.businessName, {
+        appeared: s.appearedCount,
+        measured: s.measuredCount,
+      }),
     instruction:
       "The finding is that somebody asking who to hire has already decided to buy, and the engine " +
       "answered that question without this business in it. Do NOT name any of the businesses that " +
@@ -201,7 +210,14 @@ const DM_ANGLES: DmAngle[] = [
     needsRival: false,
     needsCleanSweep: true,
     needsMeasured: true,
-    finding: (s) => dmPresentLine(s.trade ?? "a business like theirs", s.city, s.businessName),
+    finding: (s) =>
+      dmPresentLine(
+        s.trade ?? "a business like theirs",
+        s.city,
+        s.businessName,
+        { appeared: s.appearedCount, measured: s.measuredCount },
+        NAME_COMPETITORS_IN_COLD_EMAIL ? s.topRival : null
+      ),
     instruction:
       "The finding is that they DID come back, and this message must say so plainly and without " +
       "hedging. You must NOT tell them they are invisible, missing, or losing anything, and " +
