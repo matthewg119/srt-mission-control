@@ -8,7 +8,7 @@ import { reslotCopyToStructure } from "../src/lib/reel/creative-director";
 import { zeroAdaptationCopy, shotCount } from "../src/lib/reel/drop-studio";
 
 const WORKFLOW_ID = process.env.PROBE_WORKFLOW ?? "pest_control__broll__funding_3tips_w7";
-const DROP_VERTICAL = process.env.PROBE_VERTICAL ?? "trt_clinic_ai";
+const DROP_VERTICAL = process.env.PROBE_VERTICAL ?? "medspa_owner_ai";
 
 const PASTED = `TRT Clinic Owners
 The truth about showing up in ChatGPT.

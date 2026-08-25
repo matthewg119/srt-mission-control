@@ -1,71 +1,119 @@
-# Clinic B-roll Library — the `broll_suggestions` drop
+# B-roll Library — the `broll_suggestions` drop
 
-Reference + few-shot anchor for the daily B-roll drop that runs for any vertical wired with
-`drop_mode = "broll_suggestions"` (today: `trt_clinic_ai`). The generator lives in
-`src/lib/reel/broll-suggestions.ts`; this doc is the human-readable source of the buckets,
-the napkin format, and the example prompts. The narrative is always the same: **when a man
-in his city asks AI where to get treated, the local clinic is not in the answer — national
-$99/month telehealth is.**
+Reference for the daily B-roll drop that runs for any vertical wired with
+`drop_mode = "broll_suggestions"` (today: `medspa_owner_ai`). The generator lives in `src/lib/reel/broll-suggestions.ts`; the shot vocabulary lives
+in `src/config/shot-grammar.ts`. The narrative is always the same: **when someone in her city
+asks AI where to go, this local clinic is not in the answer — the chains are.**
 
 ## Cadence
 - The `prompt-drop` cron fires 3×/day (13:30 / 16:30 / 21:30 UTC → morning / midday / evening).
-- Each drop posts **3 ideas**. Two are always cinematic (buckets *invisible* + *machine*); the
-  third is *patient* on the morning/evening slots and the **napkin explainer** on the midday slot.
-- Rotation is logged in `broll_drops` so hooks/beliefs don't repeat drop-to-drop.
+- The `reference-ask` cron fires once at 13:00 UTC, 30 min ahead of the morning drop.
+- Each drop posts **3 ideas**. Two or three are shot ideas; the midday slot swaps the third
+  for the **napkin explainer**.
+- Rotation is logged in `broll_drops` so hooks, angles, and every shot axis avoid repeating.
 
-## The three cinematic mood buckets
-Every idea ships as `{ on_screen_hook (≤8 words), image_prompt, motion_prompt }`. Image prompts
-render in the clinic style token: *photorealistic cinematic 9:16, muted desaturated grade,
-shallow depth of field, 35mm film look, soft natural / cool clinical light, restrained.* Drop
-them into Higgsfield/Seedance. `motion_prompt` = one Seedance line, camera/subject motion only,
-under 20 words, no em dashes.
+## How a prompt is built (this changed on 2026-08-25)
 
-**No people, ever.** Not a face, a body, a pair of hands, or a silhouette. The clinic avatar
-carries this as `visual_rules` + `image_negative` in `src/config/verticals.ts`, and it is
-injected into every image-prompt system prompt. Generated clinic-owner portraits read as stock
-and never get used; the empty room and the lit screen carry the point harder. If a human would
-be the subject, shoot the object or the room instead. (The napkin explainer below is the one
-exception, and only because it is footage the operator shoots himself.)
+It used to be three hardcoded mood buckets whose briefs listed the same dozen scenes, with
+`vertical.style_token` prepended verbatim to every prompt. Every drop came back as the same
+photo: an empty waiting room, muted 35mm, nobody in frame.
 
-### 1. "You're invisible" consequence
-The cost of not being in the answer. Empty, still, missed-opportunity mood.
-- *Empty waiting room* — "Cinematic wide shot of an empty modern medical clinic waiting room, rows of empty chairs, soft afternoon light through blinds, dust particles floating, no people, still and quiet, muted color grade, shallow depth of field, 35mm film look."
-- *Aging front-desk phone* — "An empty front desk at a medical practice, a silent telephone sitting on the counter, warm overhead lighting, nobody around, sense of stillness and missed opportunity, cinematic, shallow focus."
-- *Exam room, lit and unused* — "An exam room lit and ready with nobody in it, paper on the table unwrinkled, cool clinical light, wide shot holding the emptiness, moody cinematic tone, no people in the image."
-- *Reports going cold* — "Close-up of a stack of printed SEO reports on a clinical desk, slightly out of focus, a cold blue monitor glow behind them with nothing legible on screen, no people in the image."
+Now the **shot is dealt in code** and the model only writes the words:
 
-### 2. "The machine decides" abstraction
-The AI making the choice; the local clinic stays dark.
-- *AI answer streaming* — "Abstract visualization of an AI answering a question, glowing text streaming across a dark screen, clean futuristic UI, blue and white light, one clinic name illuminating brighter than the others in a list, cinematic depth, high detail."
-- *Directory of cards* — "A digital directory of medical clinics displayed as floating cards in dark space, most cards dim and grey, a single card lighting up gold and rising forward, sleek modern interface, cinematic lighting."
-- *The connection web* — "Close-up of a tangled web of thin white threads on a dark matte surface, each thread connecting small printed index cards face-down, one card in the centre face-up and blank, cool blue-grey light raking from the side, clinical and cold."
-- *One dot lit* — "Macro shot of a dense black LED dot grid receding into shadow, a single dot lit warm amber near the centre, everything else dark, cinematic and cold."
+1. `pickAngles` chooses the narrative angles that have been cold the longest (8 available).
+2. `dealShots` deals one combination per idea from six axes — subject, capture format, light,
+   grade, framing, presence — refusing anything inside that axis's recent window and never
+   repeating a value inside one drop.
+3. Claude gets the dealt shot as a fixed constraint and returns only `scene_detail` (one
+   sentence), the hook, the motion line and the voiceover line. It is told explicitly not to
+   write camera, lens, grade or mood words.
+4. `assemblePrompt` puts it together: dealt shot → scene detail → guards. The look cannot be
+   flattened back into "cinematic muted 35mm" by a helpful model.
 
-### 3. Patient-side wrapper
-The moment of intent, told through the device and the room rather than the person.
-- *Stoplight search* — "POV from inside a car stopped at a light, a phone in a windshield mount showing a search result, wet street and tail lights blurred beyond the glass, soft daylight, no people in the image."
-- *Phone on the empty chair* — "Close-up of a phone lying face-up on an empty waiting-room chair, screen lit, rows of empty chairs blurred behind it, natural window light, cinematic shallow depth of field, no people in the image."
-- *Answer outside the door* — "A glowing chat interface panel floating outside a darkened clinic storefront at night, wet pavement reflecting the light, the clinic interior dim behind the glass, no people in the image."
+That is 120 subjects × 14 capture formats × 12 lights × 10 grades × 8 framings × 7 presences.
+
+### The axes
+| Axis | Count | What it controls |
+|---|---|---|
+| `SUBJECTS` | 120 | what is in frame, split into the `owner` and `treatment` lanes |
+| `CAPTURE` | 14 | how it was shot: phone snapshot, flash, security cam, dashcam, off-screen monitor, long lens, flat lay, disposable |
+| `LIGHT` | 12 | overcast, hard noon, sodium lot, one fluorescent tube, screen-only, headlights, mixed white balance |
+| `GRADE` | 10 | uncorrected phone color, clinical white, sodium orange, green fluorescent cast. Muted 35mm is now one of ten, not the law |
+| `FRAMING` | 8 | macro through ultra-wide, overhead, low angle |
+| `PRESENCE` | 7 | nobody (weighted 3×) plus six anonymous fragments |
+
+### The two lanes
+- **`owner`** — the B2B metaphors: counters, back rooms, parking lots, paperwork, storefronts,
+  a laptop on a kitchen island at 11pm, a competitor's billboard through a car window.
+- **`treatment`** — the room itself: trays, handpieces, chairs, towels, carts, a massage from
+  above, a client reclined seen from the doorway. Used only by the `competitor` and `identity`
+  angles. **Never default to injection footage** — it reads as consumer advertising and misses
+  the owner entirely.
+
+## People (the rule that changed)
+
+The old law was **no people, ever** — not a face, a body, a pair of hands, a silhouette. It was
+meant to stop stock-looking portraits, and it worked, but it left every frame an empty,
+perfectly composed room. That is both the sadness the operator flagged and the single clearest
+tell that an image was generated.
+
+Now: **no identifiable faces, ever.** People appear as anonymous fragments the PRESENCE axis
+deals — a cropped hand, the back of a head out of focus, a motion-blurred body crossing frame,
+legs at the frame edge, a silhouette behind frosted glass, a reflection. Never a portrait,
+never eye contact, never a posed subject. Roughly a third of shots still have nobody in them.
+
+## Realism guards
+
+Every prompt closes with `shotGuards()`:
+- **REALISM_TAIL** — imperfect framing, subject off-center, something cut off by the edge, real
+  clutter and wear, sensor noise in the shadows, mixed white balance, no perfect symmetry.
+- **AI_TELL_BAN** — no dust motes in a light beam, no god rays, no teal-and-orange, no glowing
+  UI floating in dark space, no lens flares, no glossy stock polish, no cinematic haze, no
+  flawlessly tidy symmetrical room. These are named because a model produces every one of them
+  by default when asked for "cinematic".
+- **FACE_BAN** plus the avatar's own `image_negative`.
+
+## Grounding on real photos
+
+The `reference-ask` cron asks the operator each morning for 3-5 real reference photos. Anything
+dropped in that thread is filed through `saveContentExample` under `broll/owner` or
+`broll/treatment` (30 per section, oldest archived past the cap), and `loadReferenceFrames`
+feeds them straight back into the next drop's generation call as vision input. Typed
+corrections in the same thread become pending `style_rules` behind the usual checkmark.
+
+Grounding beats instructions. The grammar can describe a look; only a real photo tells the
+model what real looks like.
 
 ## The napkin explainer (film it yourself)
 The cheapest B-roll there is: phone on a tripod pointing straight **down** at a desk, all the
 viewer sees is a sheet of paper and your hands with a marker. Narrate while you draw. Ships as
-`{ on_screen_hook, sketch_script, voiceover_line }` — no Higgsfield, no actors, no clinic.
+`{ on_screen_hook, sketch_script, voiceover_line }` — no generation, no actors, no clinic.
 - Canonical example: write **"10 blue links"** in a column, cross the whole thing out with one
   stroke, draw a single box next to it and write **"1 AI answer."** The whole point lands in ~8
   seconds with a Sharpie, and the moving hand holds attention.
-- Other seeds: "45%" written big with "→ 6% a year ago" struck through beside it; a stick-figure
-  clinic with an arrow, then the arrow redrawn to a phone that says "ChatGPT"; the number
-  "1.2%" boxed alone on the page.
+
+## Voiceover
+
+Every idea ships a `voiceover_line` (12-22 words, `[pause]` where the voice should breathe).
+Reply **`vo`** in the drop thread and the bot prints the exact lines and the voice id and
+stops. Reply **`yes`** and it renders them through ElevenLabs (`eleven_multilingual_v2`) and
+uploads `broll_1_vo.mp3` … into the thread. Nothing is spent before the confirmation.
+Envs: `ELEVENLABS_API_KEY`, `BROLL_VOICE_ID`.
 
 ## Guardrails (enforced in the generator's system prompt)
 - **Promise ban:** never patients, appointments, bookings, revenue, or growth. Only claim
-  measurable, self-verifiable visibility in AI answers.
+  measurable, self-verifiable visibility in AI answers. The inquiry-count guarantee lives in
+  the offer for grounding and never in a cold hook.
 - **No jargon:** never "AEO", "GEO", or "AI SEO" in a hook — say "showing up in ChatGPT" /
-  "when a man in your city asks AI where to get treated."
+  "when someone in your city asks AI where to go."
 - **Register:** cold, dry, operator voice. No hype words, no emojis. Hooks ≤ 8 words.
-- **Approved numbers only:** 45% vs 6%; 230M health questions/week; 1.2% (vs 35.9% Google local
-  pack); ~85% off-site citations; $99 vs $169+; ~$876M raised by Ro; one clinic per market; the
-  2005 Google Maps window (42% click the local pack). No other statistics.
-- **Beliefs a hook may open:** 1–5 and 7 (see the 9-belief ladder in the `trt_clinic_ai` seed).
-  Belief 9 (urgency) is warm/retargeting only — not in cold B-roll.
+- **Approved numbers only:** the list lives on the avatar as `approved_numbers` in
+  `src/config/verticals.ts`. Every entry carries its source. Med-spa industry figures are
+  deliberately absent until one is sourced — never invent a statistic.
+- **Beliefs a hook may open:** 1–5 and 7. Belief 9 (urgency) is warm/retargeting only.
+
+## Probes
+- `bun run scripts/_probe-shot-variety.ts` — offline. Simulates 40 drops and asserts no axis
+  repeats inside its window and no two look lines are identical. The objective test.
+- `bun run scripts/_probe-clinic-prompts.ts` — live. Prints every prompt from both lanes for
+  the eyeball check and fails on identifiable-person words.

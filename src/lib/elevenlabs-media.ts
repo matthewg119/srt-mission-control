@@ -156,3 +156,35 @@ export async function sofiaVoiceConvert(audioBuffer: Buffer): Promise<Buffer> {
   console.log("[elevenlabs-media] Sofia voice conversion complete");
   return Buffer.from(await res.arrayBuffer());
 }
+
+// ---- text to speech ----------------------------------------------------------------------
+
+export const BROLL_VOICE_ID = () => process.env.BROLL_VOICE_ID ?? process.env.SOFIA_VOICE_ID ?? "";
+
+/**
+ * Render one line of voiceover to MP3 bytes. `[pause]` markers are the writing convention in
+ * the B-roll deck; the API has no pause token, so they become commas, which is what actually
+ * makes the voice breathe.
+ */
+export async function speak(text: string, voiceId?: string): Promise<Buffer> {
+  const key_ = key();
+  if (!key_) throw new Error("ELEVENLABS_API_KEY not set");
+  const voice = voiceId || BROLL_VOICE_ID();
+  if (!voice) throw new Error("no voice id set (BROLL_VOICE_ID)");
+
+  const spoken = text.replace(/\s*\[pause\]\s*/gi, ", ").replace(/\s+/g, " ").trim();
+  const res = await fetch(`${BASE}/text-to-speech/${voice}`, {
+    method: "POST",
+    headers: { "xi-api-key": key_, "Content-Type": "application/json", Accept: "audio/mpeg" },
+    body: JSON.stringify({
+      text: spoken,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: { stability: 0.55, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true },
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) {
+    throw new Error(`ElevenLabs TTS failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
+  return Buffer.from(await res.arrayBuffer());
+}

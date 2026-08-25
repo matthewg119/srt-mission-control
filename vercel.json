@@ -37,6 +37,10 @@
       "schedule": "0 8 * * *"
     },
     {
+      "path": "/api/cron/reference-ask",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/prompt-drop?slot=morning",
       "schedule": "30 13 * * *"
     },

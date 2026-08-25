@@ -84,6 +84,8 @@ import {
   handleBrainheartChatReply,
   handleBrainheartChatFileNote,
 } from "@/lib/reel/brainheart-chat";
+import { handleReferenceAskFileDrop, handleReferenceAskReply } from "@/lib/reel/reference-ask";
+import { handleBrollVoiceoverReply } from "@/lib/reel/broll-voiceover";
 import {
   startAgentSession,
   handleAgentMessage,
@@ -432,8 +434,11 @@ export async function POST(request: NextRequest) {
           waitUntil(
             (async () => {
               if (isThreadReply) {
-                // Hook-studio threads claim their own files first; drop threads fall through;
-                // chat threads get an explicit "no files here" note instead of silence.
+                // The daily reference ask claims its own thread FIRST (photos dropped there are
+                // library material, not a drop session); then hook-studio threads; drop threads
+                // fall through; chat threads get an explicit "no files here" note.
+                const filed = await handleReferenceAskFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
+                if (filed) return;
                 const hooked = await handleHookStudioFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
                 if (!hooked) {
                   const dropped = await handleDropFileDrop({ channel, threadTs: parentThreadTs!, files: attachedFiles, text: userText });
@@ -447,8 +452,13 @@ export async function POST(request: NextRequest) {
         } else if (isThreadReply && userText.trim()) {
           waitUntil(
             (async () => {
-              // Chat threads claim their replies first (format self-routing keeps the
-              // strict lanes' threads untouched), then hook studio, then drop studio.
+              // The reference ask claims its thread first (corrections there become style
+              // rules), then chat threads (format self-routing keeps the strict lanes'
+              // threads untouched), then hook studio, then drop studio.
+              const vo = await handleBrollVoiceoverReply({ channel, threadTs: parentThreadTs!, text: userText });
+              if (vo) return;
+              const filed = await handleReferenceAskReply({ channel, threadTs: parentThreadTs!, text: userText });
+              if (filed) return;
               const chatted = await handleBrainheartChatReply({ channel, threadTs: parentThreadTs!, text: userText });
               if (chatted) return;
               const hooked = await handleHookStudioReply({ channel, threadTs: parentThreadTs!, text: userText });

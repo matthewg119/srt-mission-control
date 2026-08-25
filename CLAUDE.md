@@ -132,7 +132,10 @@ IMAGE_PROVIDER=            # Image provider override; code default is openai (gp
 POV_IMAGE_PROVIDER=        # POV/workflow-path override; code default openai
 OPENAI_API_KEY=            # gpt-image-2 (ALL image generation + edits)
 OPENAI_IMAGE_QUALITY=      # Optional: low | medium | high (default high)
-HF_CREDENTIALS=            # Higgsfield key — Seedance 2.0 ANIMATION ONLY (images no longer route through it)
+HF_CREDENTIALS=            # DEAD since 2026-08-25 (Higgsfield account closed). Only MOTION_ENGINE=seedance reads it.
+MOTION_ENGINE=             # Still→MP4 engine; code default "veo" (ElevenLabs veo-3-lite). seedance/fal selectable.
+ELEVENLABS_API_KEY=        # Animation (veo-3-lite) + B-roll voiceover. Replaced Higgsfield for video.
+BROLL_VOICE_ID=            # Voice for `vo` in a B-roll drop thread; falls back to SOFIA_VOICE_ID
 SLACK_FOLLOWUPS_CHANNEL=   # #followups_channel id. Home of the Follow-Up Operator digest.
 OUTREACH_MAILBOX=          # matthew@srtagency.com. The mailbox whose Sent Items are swept.
 OUTREACH_EXCLUDE_DOMAINS=  # Optional comma list. srtagency.com is always excluded.

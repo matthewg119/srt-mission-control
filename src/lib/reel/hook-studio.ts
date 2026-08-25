@@ -71,6 +71,7 @@ import {
   type Vertical,
 } from "@/config/verticals";
 import { loadReferenceFrames } from "@/lib/reel/content-examples";
+import { dealLooks, renderLookLine, shotGuards } from "@/config/shot-grammar";
 
 const HOOK_FORMAT = "hook_studio";
 
@@ -521,7 +522,19 @@ export async function generateStoryboardOptions(args: {
 }): Promise<Array<{ title: string; prompts: string[] }>> {
   const { workflow } = args;
   const optionCount = args.optionCount ?? 3;
-  const dna = (workflow.style_dna ?? "").trim() || args.lookVertical.style_token;
+  // One dealt LOOK per OPTION, not per scene: scenes inside an option still have to read as
+  // one continuous shoot, but the options themselves must not come back as the same photo in
+  // three crops (which is exactly what one fixed `dna` string produced). When the workflow
+  // has an operator-authored style_dna we keep it and vary only framing/presence; with no
+  // authored look it is the avatar's neutral token plus the full dealt look.
+  const authoredDna = (workflow.style_dna ?? "").trim();
+  const looks = dealLooks({ count: optionCount });
+  const lookFor = (i: number): string => {
+    const look = looks[i] ?? looks[0];
+    return authoredDna
+      ? `${authoredDna.replace(/[.\s]+$/, "")}. ${look.framing.text}. ${look.presence.text}`
+      : `${args.lookVertical.style_token.replace(/[.\s]+$/, "")}. ${renderLookLine(look)}`;
+  };
   const roles = workflow.copy_structure ?? [];
   const copyByShot = args.scenes.map((scene) => {
     const lines = roles
@@ -604,13 +617,12 @@ export async function generateStoryboardOptions(args: {
   });
 
   // The rules above steer the sentence Claude writes; this tail is what the IMAGE model
-  // reads, so the avatar's negative rides along on the finished prompt too.
-  const negative = args.owner.image_negative ? `${stripEmDashes(args.owner.image_negative).replace(/[.\s]+$/, "")}. ` : "";
-  const assemble = (action: string) =>
-    `${dna.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. ${negative}No text, captions, logos, or watermarks in the image. 9:16 vertical.`;
-  return data.options.slice(0, optionCount).map((o) => ({
+  // reads, so the avatar's negative and the realism guards ride along on the finished prompt.
+  const assemble = (look: string, action: string) =>
+    `${look.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. ${shotGuards(args.owner.image_negative)}`;
+  return data.options.slice(0, optionCount).map((o, i) => ({
     title: stripEmDashes(o.title).trim(),
-    prompts: o.prompts.slice(0, args.scenes.length).map(assemble),
+    prompts: o.prompts.slice(0, args.scenes.length).map((action) => assemble(lookFor(i), action)),
   }));
 }
 

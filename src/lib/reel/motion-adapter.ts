@@ -3,8 +3,10 @@
 //   const adapter = getMotionAdapter();          // selected by MOTION_ENGINE
 //   const mp4: Buffer = await adapter.animate(imageUrl, motionPrompt, refFrames);
 //
-// MOTION_ENGINE = seedance (default) | veo | fal
-//   veo      — ElevenLabs veo-3-lite via generateVideo/pollVideo. Proven, live default.
+// MOTION_ENGINE = veo (default) | seedance | fal
+//   veo      — ElevenLabs veo-3-lite via generateVideo/pollVideo. Proven, and the default
+//              since the Higgsfield account was closed (2026-08-25): seedance now throws on
+//              every call because HF_CREDENTIALS no longer exists.
 //   seedance — Higgsfield seedance-v2.0-i2v via HF_CREDENTIALS. Native multi-shot cuts +
 //              character consistency from up to 9 reference frames. Endpoint/field shape
 //              not yet confirmed, so the whole request is kept in ONE block (SEEDANCE_REQUEST)
@@ -271,9 +273,10 @@ class FalAdapter implements MotionAdapter {
 // ---- factory ---------------------------------------------------------------------
 
 export function getMotionAdapter(): MotionAdapter {
-  // Seedance is the default per Matthew's rule (ALL animation via Seedance; veo/fal
-  // stay selectable as fallbacks via MOTION_ENGINE).
-  const engine = (process.env.MOTION_ENGINE || "seedance").toLowerCase();
+  // ElevenLabs veo is the default: the Higgsfield account is gone, so seedance has no
+  // credentials to authenticate with. seedance/fal stay selectable via MOTION_ENGINE for
+  // whenever an account exists again.
+  const engine = (process.env.MOTION_ENGINE || "veo").toLowerCase();
   switch (engine) {
     case "seedance":
       return new SeedanceAdapter();
@@ -282,7 +285,7 @@ export function getMotionAdapter(): MotionAdapter {
     case "veo":
       return new VeoAdapter();
     default:
-      console.warn(`[motion-adapter] unknown MOTION_ENGINE="${engine}", falling back to seedance`);
-      return new SeedanceAdapter();
+      console.warn(`[motion-adapter] unknown MOTION_ENGINE="${engine}", falling back to veo`);
+      return new VeoAdapter();
   }
 }

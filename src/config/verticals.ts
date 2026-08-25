@@ -94,6 +94,9 @@ export interface Vertical {
   // Appended to the FINAL assembled prompt string. The rules above steer the model writing
   // the scene; this reaches the image model itself, so it is the last guard.
   image_negative?: string;
+  // The ONLY statistics copy for this avatar may use. Every entry must be real and carry its
+  // source inline. A generator that wants a number and finds this empty uses none.
+  approved_numbers?: string[];
 
   // Drop-studio wiring (docs/2026-07-10-drop-channel-verticals.sql). These come from the
   // DB row ONLY — never from a seed — because seedFor(unknownId) returns the pest seed and
@@ -577,125 +580,119 @@ const PEST_OWNER_AI: Vertical = {
   gold_examples: [],
 };
 
-// TRT / hormone / med-spa clinic owner — the B2B avatar SRT sells AI-search visibility to.
-// Mirrors pest_owner_ai (sell owners on visibility). The daily lane runs in drop_mode
-// "broll_suggestions": 3 cinematic B-roll prompts per drop instead of the 9-image render path.
-// Kit transcribed from Avatar_Dueno_Clinica_TRT.md, TRT AEO Beliefs.docx (the 9-belief ladder),
-// Plantilla_Oferta_Corta_SRT_AI_Visibility.md, and Banco_Citas_Operador_SRT.md.
-const TRT_CLINIC_AI: Vertical = {
-  id: "trt_clinic_ai",
-  name: "TRT Clinic AI Visibility (B2B)",
+// Independent med spa owner - the B2B avatar SRT sells AI-search visibility to.
+// Replaced the TRT clinic owner outright on 2026-08-25 (BrainHeart med-spa brief). The old
+// `trt_clinic_ai` id is retired; docs/2026-08-25-medspa-rename.sql moves the DB row and every
+// vertical_id that referenced it. LEGACY_IDS below keeps an un-migrated row resolving here
+// instead of silently falling back to the pest avatar.
+// The daily lane runs in drop_mode "broll_suggestions": 3 B-roll prompts per drop instead
+// of the 9-image render path.
+const MEDSPA_OWNER_AI: Vertical = {
+  id: "medspa_owner_ai",
+  name: "Med Spa Owner AI Visibility (B2B)",
   audience: "business_owner",
   language: "en",
   status: "active",
   business_descriptor:
-    "done-for-you AI-search visibility service for local TRT / hormone-optimization / med-spa clinics",
-  wearer_role: "TRT / hormone clinic owner (escaped clinician or non-medical MSO operator)",
+    "done-for-you AI-search visibility service for independent, single-location med spas",
+  wearer_role: "med spa owner (nurse practitioner who left hospital medicine to open her own clinic)",
   avatar_doc_url: null,
   avatar_summary: [
-    "The owner of a local, cash-pay TRT / hormone-optimization clinic in the U.S. (Sun Belt / South /",
-    "Midwest metros: Tampa, Austin, Scottsdale, Nashville, Charlotte). 35-55, ~75-85% male, often a TRT",
-    "user himself (lifts, listens to Huberman/Attia/More Plates More Dates). Two archetypes:",
-    "  A) THE ESCAPED CLINICIAN - MD/DO/NP/PA who quit insured/hospital medicine to run a cash-pay clinic.",
-    "     The 'escape' story is central: \"becoming disgruntled with the impersonal and over-controlling",
-    "     physician-as-employee system.\" Values autonomy above almost everything.",
-    "  B) THE MSO OPERATOR - non-medical entrepreneur (ex-fitness, ex-sales, ex-agency) who owns the",
-    "     management-services org and contracts a medical director. Thinks in assets, multiples, exit value.",
+    "The owner of an independent, single-location, cash-pay med spa in the U.S. Sun Belt (Tampa,",
+    "Austin, Scottsdale, Nashville, Charlotte, Phoenix, South Florida, Southern California).",
+    "Overwhelmingly a nurse practitioner who left corporate or hospital medicine in the last 24-36",
+    "months to open her own clinic. Solo operator or 1-3 staff. Reads AmSpa, lurks in /r/MedSpa and",
+    "in owner Facebook groups, consumes Instagram, listens to long-form podcasts.",
     "",
-    "Economics: recurring revenue $2,200-$5,800/patient/yr, retained-patient LTV $3,500-$4,500, ~88% gross",
-    "margins (subscription-like). Anchor service TRT + peptides, GLP-1, female HRT, ED, NAD+. Real case:",
-    "$3.3M revenue / $527K EBITDA across 6 locations.",
+    "ECONOMICS: cash-pay, no insurance, high margin per treatment and almost no floor under a slow",
+    "week. Rent, the loan on the build-out, and the injectable inventory are due whether the chairs",
+    "fill or not. She left a stable paycheck for ownership and is working harder now for less.",
     "",
-    "REGISTER (critical for copy): cold anger, dry sarcasm, resignation, and specific dollar figures - NOT",
-    "B2C melodrama, never shame framing, never guru tone. He BUYS CONTROL, NOT MARKETING. Promises of more",
-    "patients/leads trip his snake-oil detector; promises of measurable, self-verifiable visibility on his",
-    "own device disarm it. He respects data with methodology (BrightLocal n=1,002; SOCi 350,000 locations;",
-    "OpenAI 230M health queries/week) and despises hype. Vocabulary of the operator: my practice, my ad",
-    "account, retainer, no-shows, medical director, cash-pay, front desk, chair time.",
+    "PAINS: (1) empty calendar days trigger existential panic - the month's rent is one bad week",
+    "away; (2) she has paid two or three marketing agencies since opening and none produced a",
+    "measurable patient, only dashboards and reports; (3) her Meta ad account is either flagged for",
+    "injectable creative or producing ghost leads and coupon hunters, so the paid channel is closed",
+    "or rigged; (4) the corporate chains - SkinSpirit, LaserAway, Ideal Image - are taking patients",
+    "in her own metro that she believes are clinically hers; (5) DIGITAL INVISIBILITY: when someone",
+    "in her city asks ChatGPT where to go, the answer names chains and directories and her clinic is",
+    "absent - and she often does not know it, because she checked on her own phone and saw herself.",
     "",
-    "Pains: (1) patient acquisition is unpredictable and referral-dependent (\"the 35-year reputation keeps",
-    "a steady flow from word of mouth\" - works, but no dial on it); (2) paid channels are closed/rigged -",
-    "Meta & Google reject testosterone ads (\"they hired someone to run Facebook ads... then everything got",
-    "flagged and the account went down\"), while VC-funded telehealth (Ro $876M, Hone $39M) dominate the",
-    "auctions he's locked out of; (3) the $99/month telehealth threat and DIGITAL INVISIBILITY - when a man",
-    "in his city asks ChatGPT \"best TRT clinic near me,\" the answer is ~10 national telehealth brands and",
-    "his clinic is absent (only 1.2% of local businesses appear in ChatGPT, SOCi 2026) - and he often does",
-    "not even know it, or falsely believes he shows up because he checked on HIS phone.",
+    "EMOTIONAL PROFILE: anxiety has spiked since opening and she has told nobody. She made a burner",
+    "account to admit it. She buys on pain and identity resonance, not features, and reads copy at a",
+    "third-grade level at 11 PM after a bad day.",
     "",
-    "Deepest fear: going invisible while believing he is visible - the 'take a look at my phone' false",
-    "security (Marcus Sheridan, 21 Hats, Feb 2026), followed by the bucket of cold water: \"You're not one",
-    "of the best - at least not in the eyes of ChatGPT when it's talking to me.\" Skeptic-because-burned, not",
-    "ignorant: his first reaction to 'AEO' is \"I can't see how AEO/GEO meaningfully differs from traditional",
-    "SEO.\" The copy must AGREE with him first (most AEO is snake oil), then differentiate on the one thing",
-    "no honest vendor can fake: measurable, neutral-account, self-verifiable AI-answer visibility.",
+    "REGISTER (critical for copy): dry, specific, never guru, never shame framing, never B2C",
+    "melodrama. She respects data with methodology and despises hype. Promises of more patients or",
+    "leads trip her snake-oil detector - she has bought that twice. Promises of measurable,",
+    "self-verifiable visibility she can check on her own device disarm it. Vocabulary of the owner:",
+    "my clinic, my ad account, my calendar, chair time, retainer, no-shows, med director, cash-pay.",
   ].join("\n"),
   beliefs: [
     {
       n: 1,
       label: "The foundation - patients ask AI, not Google (install with data, not adjectives)",
-      text: "Creo que una parte creciente y significativa de mis futuros pacientes ya no me busca en Google, le pregunta directamente a la IA, y la IA decide por ellos.",
+      text: "A growing and significant share of my future patients no longer looks me up on Google, they ask AI directly, and the AI decides for them.",
     },
     {
       n: 2,
-      label: "The personal wound - his city's answer omits him (install with the live demo)",
-      text: "Creo que cuando un hombre de mi ciudad le pregunta a ChatGPT dónde tratarse, la respuesta recomienda a los telehealth nacionales de $99/mes, y mi clínica no existe en ella.",
+      label: "The personal wound - her city's answer omits her (install with the live demo)",
+      text: "When someone in my city asks ChatGPT where to get treated, the answer names the corporate chains and my clinic is not in it.",
     },
     {
       n: 3,
-      label: "Kills false security - neutral account is the only true view",
-      text: "Creo que verlo en mi propio teléfono no prueba nada, las respuestas de IA son personalizadas, y la única vista que cuenta es la del paciente que todavía no me conoce.",
+      label: "Kills false security - a neutral account is the only true view",
+      text: "Seeing myself on my own phone proves nothing, AI answers are personalized, and the only view that counts is the one shown to a patient who does not know me yet.",
     },
     {
       n: 4,
-      label: "Absolution - not his medicine or website (~85% off-site)",
-      text: "Creo que mi invisibilidad no es culpa de mi medicina ni de mi sitio web, la IA cita fuentes de terceros donde nunca he trabajado mi presencia, así que mis años de SEO no me protegen aquí.",
+      label: "Absolution - not her medicine or her website (~85% off-site)",
+      text: "My invisibility is not my medicine's fault or my website's, the AI cites third-party sources where I have never built a presence, so my years of SEO do not protect me here.",
     },
     {
       n: 5,
-      label: "Paid channels are closed/rigged against him",
-      text: "Creo que los canales pagados están cerrados o amañados en mi contra, Meta y Google vetan mis ads mientras los telehealth con cientos de millones de capital de riesgo dominan todo lo comprable.",
+      label: "Paid channels are closed or rigged against her",
+      text: "The paid channels are closed or rigged against me, my injectable ads get flagged while the chains outspend me everywhere I am still allowed to bid.",
     },
     {
       n: 6,
       label: "Hope pivot - AI is a game of signals, not an auction",
-      text: "Creo que el canal de IA es distinto: no es una subasta que gana el que más paga, sino un juego de señales, y las señales están hoy al alcance de una clínica local como la mía.",
+      text: "The AI channel is different: it is not an auction won by the biggest budget, it is a game of signals, and those signals are within reach of a clinic my size today.",
     },
     {
       n: 7,
       label: "Most 'AEO' is snake oil - demand verifiable results (the contrarian hinge)",
-      text: "Creo que la mayoría de quienes venden 'AEO' son humo, y que la única forma legítima de comprar esto es exigir resultados que yo pueda verificar por mí mismo, sin creerle a la agencia.",
+      text: "Most people selling this are smoke, and the only legitimate way to buy it is to demand results I can verify myself without taking the agency's word for it.",
     },
     {
       n: 8,
       label: "Trust in SRT - only promises the measurable, never patients",
-      text: "Creo que SRT es diferente porque solo promete lo medible, apariciones verificadas en cuentas neutrales, y jamás pacientes ni ingresos, que es exactamente lo que prometería un estafador.",
+      text: "SRT is different because it only promises what is measurable, verified appearances from neutral accounts, and never patients or revenue, which is exactly what a scammer would promise.",
     },
     {
       n: 9,
       label: "Urgency - the window closes, one clinic per market (warm/retargeting only)",
-      text: "Creo que esta ventana se cierra: la posición en la respuesta de IA es acumulativa, solo hay lugar para una clínica por mercado, y si no la tomo yo la tomará mi competidor, y defender cuesta más que conquistar.",
+      text: "This window closes: position in the AI answer is cumulative, there is room for one clinic per market, and if I do not take it my competitor will, and defending costs more than conquering.",
     },
   ],
   offer: {
-    ump: "The Invisibility of the Moment of Intent: the high-value patient no longer compares ten clinics on Google, he asks the AI and the AI decides for him, using signals the clinic isn't emitting. ~85% of AI citations come from off-site third-party sources (arXiv; Muck Rack; Ranqo) and web-traffic-to-citation correlation is a flat r=0.02 (Brandlight), so his website and SEO barely count. In TRT the cited sources are a closed affiliate ecosystem of ~10 national $99/month telehealth brands, so local clinics aren't ranked low, they're structurally absent: only 1.2% of local businesses appear in ChatGPT vs 35.9% in Google's local pack (SOCi, 350,000 locations, 2026).",
-    ums: "The Citation Signal System: (1) baseline audit from neutral accounts documenting what ChatGPT/Perplexity/Gemini answer today for TRT in his city; (2) presence in the sources the AI actually cites, local 'best TRT clinic in [city]' listicles, medical directories with consistent NAP, a 4.3-star review floor (ChatGPT's de-facto threshold), and the Reddit/forum threads ChatGPT cites ~10x more than any other network; (3) citable content answering the 20 real questions men ask before choosing a clinic; (4) a monthly Share of AI Citations report he can verify himself, on his own device, from a neutral account, with the exact prompts included. We guarantee only measurable visibility (verified appearance), never patients or revenue.",
+    ump: "The Invisibility of the Moment of Intent: the patient no longer compares ten clinics on Google, she asks the AI and the AI decides for her, using signals the clinic is not emitting. Around 85% of AI citations come from off-site third-party sources (arXiv; Muck Rack; Ranqo) and the web-traffic-to-citation correlation is a flat r=0.02 (Brandlight), so her website and her SEO barely count. Only 1.2% of local businesses appear in ChatGPT versus 35.9% in Google's local pack (SOCi, 350,000 locations, 2026), so independent clinics are not ranked low, they are structurally absent while the corporate chains and the directories hold the answer.",
+    ums: "The Citation Signal System: (1) a baseline audit from neutral accounts documenting what ChatGPT answers today for her treatments in her city; (2) presence in the sources the AI actually cites, local best-of listicles, directories with consistent NAP, a review floor, and the forum threads the engines lean on; (3) citable content answering the real questions patients ask before choosing a clinic; (4) a monthly Share of AI Citations report she can verify herself, on her own device, from a neutral account, with the exact prompts included. We guarantee only measurable visibility (verified appearance), never patients or revenue.",
     big_idea:
-      "Right now a man in your city is asking ChatGPT where to treat low testosterone. The answer names Hone, Fountain, and TRT Nation, $99/month telehealth with hundreds of millions in venture capital. Your clinic does not exist in that answer. Meta and Google closed your ads; the VCs bought the paid channels. But the AI channel is not an auction, it is not won with budget, it is won with signals, and today only 1.2% of local businesses have them. That is the window, and it is closing.",
+      "Right now someone in your city is asking ChatGPT where to get treated. The answer names SkinSpirit, LaserAway, and Ideal Image. Your clinic does not exist in that answer. Meta flags your ads and the chains outspend you everywhere else. But the AI channel is not an auction, it is not won with budget, it is won with signals, and today only 1.2% of local businesses have them. That is the window, and it is closing.",
     belief_chains: [
       "My new patients no longer start only on Google, a growing share asks AI directly, and the AI decides for them.",
-      "In those answers today only the national $99/month telehealth brands exist; my clinic is invisible at the exact moment of decision.",
+      "In those answers today only the chains and the directories exist; my clinic is invisible at the exact moment of decision.",
       "This is not my medicine's fault or my website's: AI citations come from third-party sources where I have never built a presence.",
-      "The paid channels are closed to me (Meta/Google bans), but the AI channel is not an auction: it is won with signals, not budget.",
-      "Most who sell 'AEO' are smoke, but there is an honest way: measure real appearances in neutral accounts, never promising patients.",
+      "The paid channels are closed to me (flagged injectable ads, outspent auctions), but the AI channel is not an auction: it is won with signals, not budget.",
+      "Most who sell this are smoke, but there is an honest way: measure real appearances in neutral accounts, never promising patients.",
       "SRT is that honest way, it knows my niche (my patients, my competitors, my questions), and it takes only one clinic per market.",
       "If I do not act now, my city's position goes to my competitor, and defending costs more than conquering.",
     ],
     objections: [
       {
         objection: "This is SEO with a new name, another agency fad.",
-        evidence: "\"I can't see how AEO/GEO meaningfully differs from traditional SEO practices.\" (redditor, via CXL)",
         response:
-          "Half right, most of it is (the trade press itself calls the category snake oil). The measurable difference: SEO optimizes YOUR site; here ~85% of AI citations come from third-party sources (arXiv, Muck Rack, Ranqo) and the web-traffic-to-citation correlation is r=0.02 (Brandlight). Different game, different rules, and we show you the sources with methodology, not agency blogs.",
+          "Half right, most of it is. The measurable difference: SEO optimizes YOUR site; here around 85% of AI citations come from third-party sources (arXiv, Muck Rack, Ranqo) and the web-traffic-to-citation correlation is r=0.02 (Brandlight). Different game, different rules, and we show you the sources with methodology, not agency blogs.",
       },
       {
         objection: "I already show up in ChatGPT, I checked on my phone.",
@@ -706,43 +703,42 @@ const TRT_CLINIC_AI: Vertical = {
       {
         objection: "AI is random, you can't 'rank' in it.",
         response:
-          "Correct, and anyone promising a '#1 ranking in ChatGPT' is lying, the engines are non-deterministic. What IS measurable is frequency of appearance across N repeated neutral queries, share of citations. We don't promise determinism; we move a ~0% probability to consistent, documented presence.",
+          "Correct, and anyone promising a '#1 ranking in ChatGPT' is lying, the engines are non-deterministic. What IS measurable is frequency of appearance across N repeated neutral queries, share of citations. We don't promise determinism; we move a near-zero probability to consistent, documented presence.",
       },
       {
         objection: "Two agencies already burned me. Why are you different?",
         response:
-          "Because we invert the burden of proof: documented baseline before the second month is billed, reports with neutral-account screenshots you can replicate yourself without us, and a guarantee tied to a verifiable result (appearance in 60-90 days), not to 'impressions' or 'brand positioning.'",
+          "Because we invert the burden of proof: a documented baseline before you are billed at all, reports with neutral-account screenshots you can replicate yourself without us, and a guarantee tied to a verifiable result, not to impressions or brand positioning.",
       },
       {
         objection: "How many people actually use this to choose a clinic?",
-        evidence: "230M weekly health queries on ChatGPT (OpenAI, Jan 2026); 45% use AI for local recs vs 6% a year ago (BrightLocal, n=1,002, Feb 2026).",
-        response:
-          "AI is already the #3 local-discovery channel, above Yelp. It's not the future, it's last quarter.",
+        evidence: "45% use AI for local recommendations vs 6% a year ago (BrightLocal, n=1,002, Feb 2026).",
+        response: "AI is already a top-three local-discovery channel, above Yelp. It's not the future, it's last quarter.",
       },
       {
         objection: "What if I just wait to see if this grows?",
         response:
-          "Waiting is asymmetric: position is cumulative (the citable sources consolidate) and we sell one clinic per market. When your competitor takes it, or the niche passes ~10-15% visibility, the pitch changes from 'conquer the answer' to 'fight to displace them.' In 2005 claiming your Google Maps pin also felt optional.",
+          "Waiting is asymmetric: position is cumulative (the citable sources consolidate) and we sell one clinic per market. When your competitor takes it, the pitch changes from conquering the answer to fighting to displace them. In 2005 claiming your Google Maps pin also felt optional.",
       },
     ],
     headlines: [
       {
         angle: "Shock / live demo (best for cold email)",
-        title: "I Asked ChatGPT for the Best TRT Clinic in [City]. Your Name Didn't Come Up.",
+        title: "I Asked ChatGPT for the Best Med Spa in [City]. Your Name Didn't Come Up.",
         subtitle:
-          "Hone, Fountain, and TRT Nation did, $99/month telehealth. 45% of consumers now ask AI. I'll show you your city's screenshot, free, no strings.",
+          "SkinSpirit and LaserAway did. 45% of consumers now ask AI. I'll show you your city's screenshot, free, no strings.",
       },
       {
         angle: "Anti-system / rigged game",
-        title: "Meta Banned Your Ads. So Did Google. And ChatGPT Recommends Your Competition, Funded With $876M in Venture Capital.",
+        title: "Meta Flagged Your Injectable Ads. The Chains Outspend You Everywhere Else. And ChatGPT Recommends Them.",
         subtitle:
-          "The AI channel isn't an auction: it's won with the right signals, not the biggest budget. Only 1.2% of local businesses have them. We put you in that 1.2%, with results you verify on your own phone.",
+          "The AI channel isn't an auction: it's won with the right signals, not the biggest budget. Only 1.2% of local businesses have them.",
       },
       {
         angle: "Radical honesty (kills the 'isn't this just SEO' objection)",
-        title: "Most 'AEO' Is Snake Oil. That's Why We Only Guarantee What You Can Verify Yourself.",
+        title: "Most of This Is Snake Oil. That's Why We Only Guarantee What You Can Verify Yourself.",
         subtitle:
-          "No promised patients, no magic dashboards: real appearances in ChatGPT, Perplexity, and Gemini for 'best TRT clinic in [your city]', verified from a neutral account, in 60-90 days, or we keep working free.",
+          "No promised patients, no magic dashboards: real appearances in ChatGPT for 'best med spa in [your city]', verified from a neutral account.",
       },
       {
         angle: "Historical window",
@@ -752,25 +748,40 @@ const TRT_CLINIC_AI: Vertical = {
       },
     ],
   },
-  // Cinematic clinic look for the B-roll suggestion generator (never bright studio/promo gloss).
+  // Fallback look only. The daily B-roll lane deals its own look per shot from
+  // src/config/shot-grammar.ts; this line is what other lanes fall back to when a workflow
+  // has no style_dna. Deliberately NOT a cinematic grade - a locked grade is exactly what
+  // made every generated image look like the same photo.
   style_token:
-    "Photorealistic cinematic vertical 9:16, muted desaturated color grade, shallow depth of field, 35mm film look, soft natural or cool clinical lighting, restrained and quiet.",
+    "Photorealistic vertical 9:16, photographed rather than rendered, no cinematic grade, no stock-photo polish.",
   house_style_prompt: "",
   soul_id: undefined,
   cta_formats: ["Reply with your city", "Free AI Visibility Audit", "DM the word AUDIT"],
   gold_examples: [],
-  // Object b-roll only. Generated clinic-owner portraits read as stock and the operator will
-  // not shoot them; empty rooms and lit screens carry the "you are not in the answer" point
-  // better than a man standing at a front desk.
+  // Subject law. This used to be an absolute "no people, ever", which is what produced a
+  // back catalogue of empty, perfectly composed rooms - both sad and the clearest tell that
+  // an image was generated. Anonymous partial presence is now allowed and dealt by the
+  // PRESENCE axis; identifiable faces stay banned.
   visual_rules: [
-    "No people. No faces, no bodies, no hands, no silhouettes, no reflection of a person. If a human would be the subject, shoot the object or the room instead.",
-    "The subject is always a thing or a place: documents, printouts, index cards, screens, a phone face-down on a surface, monitors, chat interfaces, waiting rooms, hallways, exam rooms, storefronts, signage, parking lots at night, textures, fog, light.",
-    "Shot vocabulary that works: overhead flat-lay on a dark matte surface; a web of string connecting printed cards; a magnifier over printed pages; a lit clinic interior seen from a wet street at night; a neon medical cross in fog; a screen glowing in a dark room; an LED grid with one dot lit; a desk with printed reports and a phone face-down.",
-    "Absence carries the meaning: the room with nobody in it, the phone nobody is holding, the chair nobody is sitting in.",
-    "Paper and screens are welcome as props, but never ask for readable words on them: describe the lettering as out of focus, too small to read, or turned away. The headline overlay is the only text anyone should be able to read, and generated lettering comes out garbled anyway.",
+    "No identifiable faces, ever. People may appear only as anonymous fragments: a cropped hand, the back of a head, a motion-blurred body crossing frame, legs at the frame edge, a silhouette behind frosted glass, a reflection. Never a portrait, never eye contact, never a posed subject.",
+    "Real places and real objects only, with wear on them. Clutter, scuffs, fingerprints, cables, a crooked stack. A spotless room reads as a render.",
+    "Paper and screens are welcome as props, but never ask for readable words on them: describe lettering as out of focus, too small to read, or turned away. The headline overlay is the only text anyone should be able to read, and generated lettering comes out garbled anyway.",
+    "Never default to injection or treatment-chair footage. It reads as consumer advertising and misses the owner entirely. Use the treatment room only when the idea needs identity resonance or a direct their-chair-is-full contrast.",
     "Every shot must leave clear space for the timed headline overlays.",
   ],
-  image_negative: "No people, faces, hands, or human figures in the image.",
+  image_negative: "No identifiable faces. No posed or smiling subjects. No stock-photo models.",
+  // The ONLY statistics this avatar's copy may use. Platform-level and sourced; the
+  // TRT-specific figures ($99 telehealth, Ro's raise) were dropped with that avatar.
+  // Med-spa industry numbers (AmSpa, SOCi verticals) are NOT here because none has been
+  // sourced yet - add them with a citation or leave them out.
+  approved_numbers: [
+    "45% of consumers use AI for local recommendations, vs 6% a year ago (BrightLocal, n=1,002, Feb 2026)",
+    "230 million health questions a week on ChatGPT (OpenAI, Jan 2026)",
+    "only 1.2% of local businesses appear in ChatGPT, vs 35.9% in Google's local pack (SOCi, 350,000 locations, 2026)",
+    "around 85% of AI citations come from off-site third-party sources (arXiv; Muck Rack; Ranqo)",
+    "web-traffic-to-citation correlation is r=0.02 (Brandlight)",
+    "42% of searchers click the local pack (the 2005 Google Maps window)",
+  ],
   drop_mode: "broll_suggestions",
 };
 
@@ -778,11 +789,24 @@ export const SEED_VERTICALS: Record<string, Vertical> = {
   pest_control: PEST_CONTROL,
   mca: MCA,
   pest_owner_ai: PEST_OWNER_AI,
-  trt_clinic_ai: TRT_CLINIC_AI,
+  medspa_owner_ai: MEDSPA_OWNER_AI,
 };
 
+// Retired ids that must NOT fall through to the default (pest) seed. seedFor(unknownId)
+// returns pest, so a `verticals` row still carrying an old id would quietly start speaking
+// pest control in a clinic's channel. Map it instead. Safe to delete an entry once the
+// rename SQL has run everywhere.
+const LEGACY_IDS: Record<string, string> = {
+  trt_clinic_ai: "medspa_owner_ai",
+};
+
+/** The current id for a possibly-retired one. */
+export function canonicalVerticalId(id: string): string {
+  return LEGACY_IDS[id] ?? id;
+}
+
 function seedFor(id: string): Vertical {
-  return SEED_VERTICALS[id] ?? SEED_VERTICALS[DEFAULT_VERTICAL_ID];
+  return SEED_VERTICALS[canonicalVerticalId(id)] ?? SEED_VERTICALS[DEFAULT_VERTICAL_ID];
 }
 
 // ---------------------------------------------------------------------------------------
@@ -852,7 +876,7 @@ function mergeRowOverSeed(seed: Vertical, row: VerticalRow): Vertical {
     sales_letter_examples: row.sales_letter_examples ?? null,
     sales_letter_swipe: row.sales_letter_swipe ?? null,
     // drop_mode is a normal field (not sensitive wiring): a DB value wins, else the seed's
-    // (so trt_clinic_ai stays "broll_suggestions" even if a row is inserted without it).
+    // (so the med spa avatar stays "broll_suggestions" even if a row is inserted without it).
     drop_mode: pick(row.drop_mode, seed.drop_mode ?? null),
     // Scene pools and the subject contract are not DB columns yet, so they always inherit
     // the seed. Deliberately NOT pick()'d: seedFor(unknownId) returns the pest seed, and a
@@ -862,6 +886,7 @@ function mergeRowOverSeed(seed: Vertical, row: VerticalRow): Vertical {
     style_version: seed.style_version,
     visual_rules: seed.visual_rules,
     image_negative: seed.image_negative,
+    approved_numbers: seed.approved_numbers,
   };
 }
 
@@ -921,7 +946,7 @@ const dropChannelCache = new Map<string, { verticalId: string | null; expires: n
 const DROP_CHANNEL_CACHE_MS = 60_000;
 
 /** Resolve a Slack channel to its drop vertical. A verticals.slack_drop_channel_id row WINS
- *  (so a new avatar can take over a channel, e.g. trt_clinic_ai over #ai-content-pest-control);
+ *  (so a new avatar can take over a channel, e.g. medspa_owner_ai over #ai-content-pest-control);
  *  the env pest channel is only the fallback when no row claims it. Returns null when the
  *  channel is not a drop channel (or the DB is unreachable — fail open to the env mapping). */
 export async function resolveDropVertical(channelId: string): Promise<Vertical | null> {
@@ -951,7 +976,7 @@ export async function resolveDropVertical(channelId: string): Promise<Vertical |
 }
 
 /** Every wired drop channel: every verticals row with a slack_drop_channel_id, plus the env
- *  pest channel UNLESS a row already claims it (so trt_clinic_ai taking over
+ *  pest channel UNLESS a row already claims it (so medspa_owner_ai taking over
  *  #ai-content-pest-control retires the pest drop). Deduped by channel; used by the cron. */
 export async function listDropChannels(): Promise<Array<{ channelId: string; verticalId: string }>> {
   const out = new Map<string, string>();

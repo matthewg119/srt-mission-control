@@ -31,13 +31,18 @@ export interface SubjectEntry extends AxisEntry {
   lane: ShotLane;
 }
 
-export interface ShotSpec {
-  subject: SubjectEntry;
+/** The five HOW axes. A lane that brings its own subject (hook studio, storyboards) deals
+ *  one of these; the B-roll lane deals a full ShotSpec on top of it. */
+export interface LookSpec {
   capture: AxisEntry;
   light: AxisEntry;
   grade: AxisEntry;
   framing: AxisEntry;
   presence: AxisEntry;
+}
+
+export interface ShotSpec extends LookSpec {
+  subject: SubjectEntry;
 }
 
 /** Recently-used keys per axis, most-recent-first (read from `broll_drops`). */
@@ -292,9 +297,15 @@ export const AI_TELL_BAN =
 export const FACE_BAN =
   "No identifiable faces. No posed or smiling subjects. No stock-photo models.";
 
-/** The closing guards every image prompt ends with. */
+/**
+ * The closing guards every image prompt ends with. The avatar's own `image_negative` is
+ * folded in, but skipped when it just restates FACE_BAN - which is what the med-spa avatar's
+ * negative is, and repeating it verbatim only spends tokens.
+ */
 export function shotGuards(extraNegative?: string): string {
-  const extra = extraNegative ? `${extraNegative.replace(/[.\s]+$/, "")}. ` : "";
+  const trimmed = (extraNegative ?? "").trim().replace(/[.\s]+$/, "");
+  const duplicate = !trimmed || FACE_BAN.toLowerCase().includes(trimmed.toLowerCase());
+  const extra = duplicate ? "" : `${trimmed}. `;
   return `${REALISM_TAIL} ${AI_TELL_BAN} ${FACE_BAN} ${extra}No on-screen text, logos, or watermarks in the image. 9:16 vertical.`;
 }
 
@@ -304,7 +315,7 @@ export function shotGuards(extraNegative?: string): string {
  * The look sentence for one dealt shot, WITHOUT the subject. Replaces the single fixed
  * `style_token` / `style_dna` string at call sites that already carry their own action.
  */
-export function renderLookLine(spec: ShotSpec): string {
+export function renderLookLine(spec: LookSpec): string {
   return [
     `${spec.capture.text}.`,
     `${spec.framing.text}.`,
@@ -339,9 +350,9 @@ export function shotKeys(spec: ShotSpec): Record<string, string> {
 
 // ---- the dealer -------------------------------------------------------------------------
 
-// How far back each axis remembers. Subject is widest because a repeated subject is the
-// repetition a human actually notices; framing/presence are narrow because there are only
-// so many ways to point a camera.
+// How far back each axis WANTS to remember. Subject is widest because a repeated subject is
+// the repetition a human actually notices; framing/presence are narrow because there are
+// only so many ways to point a camera.
 const WINDOW: Record<keyof RecentShots, number> = {
   subject: 30,
   capture: 8,
@@ -350,6 +361,27 @@ const WINDOW: Record<keyof RecentShots, number> = {
   framing: 5,
   presence: 4,
 };
+
+// How many entries each axis actually has. `subject` counts one lane, not the whole library,
+// because a deal only ever draws from one lane at a time.
+const AXIS_SIZE: Record<keyof RecentShots, number> = {
+  subject: Math.min(subjectsFor("owner").length, subjectsFor("treatment").length),
+  capture: CAPTURE.length,
+  light: LIGHT.length,
+  grade: GRADE.length,
+  framing: FRAMING.length,
+  presence: PRESENCE.length,
+};
+
+/**
+ * The window an axis can actually honor. A 10-entry axis drawing 3 per deal cannot exclude
+ * the last 8 and still have three distinct values left, so asking for that just pushes every
+ * deal into the fallback and repeats anyway. Clamping keeps the promise honest and adjusts
+ * on its own when entries are added to an axis.
+ */
+export function effectiveWindow(axis: keyof RecentShots, dealSize: number): number {
+  return Math.max(0, Math.min(WINDOW[axis], AXIS_SIZE[axis] - dealSize - 1));
+}
 
 function weightedPick<T extends AxisEntry>(pool: T[]): T {
   const total = pool.reduce((sum, e) => sum + (e.weight ?? 1), 0);
@@ -379,6 +411,48 @@ function pickAxis<T extends AxisEntry>(
   return weightedPick(unusedHere.length ? unusedHere : entries);
 }
 
+function emptyUsed(): Record<keyof RecentShots, Set<string>> {
+  return {
+    subject: new Set(),
+    capture: new Set(),
+    light: new Set(),
+    grade: new Set(),
+    framing: new Set(),
+    presence: new Set(),
+  };
+}
+
+function dealLook(
+  recent: RecentShots,
+  used: Record<keyof RecentShots, Set<string>>,
+  dealSize: number
+): LookSpec {
+  const w = (axis: keyof RecentShots) => effectiveWindow(axis, dealSize);
+  const look: LookSpec = {
+    capture: pickAxis(CAPTURE, recent.capture, w("capture"), used.capture),
+    light: pickAxis(LIGHT, recent.light, w("light"), used.light),
+    grade: pickAxis(GRADE, recent.grade, w("grade"), used.grade),
+    framing: pickAxis(FRAMING, recent.framing, w("framing"), used.framing),
+    presence: pickAxis(PRESENCE, recent.presence, w("presence"), used.presence),
+  };
+  used.capture.add(look.capture.key);
+  used.light.add(look.light.key);
+  used.grade.add(look.grade.key);
+  used.framing.add(look.framing.key);
+  used.presence.add(look.presence.key);
+  return look;
+}
+
+/**
+ * Deal `count` distinct LOOKS for a caller that supplies its own subject (hook studio's
+ * storyboard options, the enrich path). No two looks in one deal share an axis value, which
+ * is what stops three "different" options coming back as one photo in three crops.
+ */
+export function dealLooks(opts: { count: number; recent?: RecentShots }): LookSpec[] {
+  const used = emptyUsed();
+  return Array.from({ length: opts.count }, () => dealLook(opts.recent ?? {}, used, opts.count));
+}
+
 /**
  * Deal `count` distinct shot specs for a lane. Nothing repeats inside the deal, and
  * nothing repeats against the recent history the caller read out of `broll_drops`.
@@ -391,33 +465,14 @@ export function dealShots(opts: {
   lanes?: ShotLane[];
 }): ShotSpec[] {
   const { lane: laneId, count, recent = {}, lanes } = opts;
-  const used: Record<keyof RecentShots, Set<string>> = {
-    subject: new Set(),
-    capture: new Set(),
-    light: new Set(),
-    grade: new Set(),
-    framing: new Set(),
-    presence: new Set(),
-  };
+  const used = emptyUsed();
 
   const out: ShotSpec[] = [];
   for (let i = 0; i < count; i++) {
     const pool = subjectsFor(lanes?.[i] ?? laneId);
-    const spec: ShotSpec = {
-      subject: pickAxis(pool, recent.subject, WINDOW.subject, used.subject),
-      capture: pickAxis(CAPTURE, recent.capture, WINDOW.capture, used.capture),
-      light: pickAxis(LIGHT, recent.light, WINDOW.light, used.light),
-      grade: pickAxis(GRADE, recent.grade, WINDOW.grade, used.grade),
-      framing: pickAxis(FRAMING, recent.framing, WINDOW.framing, used.framing),
-      presence: pickAxis(PRESENCE, recent.presence, WINDOW.presence, used.presence),
-    };
-    used.subject.add(spec.subject.key);
-    used.capture.add(spec.capture.key);
-    used.light.add(spec.light.key);
-    used.grade.add(spec.grade.key);
-    used.framing.add(spec.framing.key);
-    used.presence.add(spec.presence.key);
-    out.push(spec);
+    const subject = pickAxis(pool, recent.subject, effectiveWindow("subject", count), used.subject);
+    used.subject.add(subject.key);
+    out.push({ subject, ...dealLook(recent, used, count) });
   }
   return out;
 }
