@@ -22,8 +22,6 @@ import {
   CORE_SIX,
   EXTENDED,
   PLATFORM_COUNT,
-  RECOMMENDED,
-  SWEEP_GATE_COUNT,
   platformByKey,
 } from "@/config/presence-platforms";
 import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
