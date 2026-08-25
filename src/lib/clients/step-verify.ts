@@ -710,14 +710,55 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
-  access_granted: async (ctx) =>
-    artifactInThread(
+  // ‼️ THE PAYMENT GATE LIVES HERE, NOT ONLY IN stepPrecondition, AND THAT IS THE POINT.
+  //
+  // stepPrecondition is called from src/app/api/slack/actions/route.ts and NOWHERE ELSE, so a
+  // gate living only there is bypassed by the client board's checkbox, which posts straight to
+  // /api/clients/[id]/delivery-step and calls setDeliveryStep. setDeliveryStep runs verifyStep
+  // before the row write on every surface, so this is the only place a refusal actually holds.
+  // The Slack copy carries the same refusal so the button answers at the press.
+  //
+  // It is `not_yet`, never `broken`: there is real work owed (record the payment) and the step
+  // keeps its [Re-check] button. A `broken` verdict gets none, on purpose, and this is not a
+  // code fault.
+  access_granted: async (ctx) => {
+    const { paymentRecorded, isRecorded, paymentLine, ACCESS_GATE_REASON, ACCESS_GATE_TODO } =
+      await import("./payment");
+
+    const result = await paymentRecorded(ctx.clientId);
+    if (!result.ok) {
+      return broken(
+        "clients.payment_recorded_at",
+        `the read failed, so nothing could be confirmed either way: ${result.error}`,
+        "Check that docs/2026-08-25-lane-3-payment.sql has been run against this database. " +
+          "Until those four columns exist this step cannot be gated OR confirmed."
+      );
+    }
+
+    if (!isRecorded(result.payment)) {
+      return notYet(
+        "clients.payment_recorded_at",
+        "no payment has been recorded for this client",
+        `${ACCESS_GATE_REASON} ${ACCESS_GATE_TODO}`
+      );
+    }
+
+    const verdict = await artifactInThread(
       ctx,
       "access actually being granted",
       "Post a screenshot of the GBP manager invite, Search Console users and the Analytics " +
         "access into this thread. None of the three has an API we are keyed for, so the " +
         "screenshot is the only evidence available."
-    ),
+    );
+
+    // ‼️ THE PAYMENT LINE RIDES ON THE EVIDENCE, IT NEVER SUBSTITUTES FOR IT. A recorded
+    // payment says the gate is open; it says nothing about whether access was granted, and a
+    // thread-tier line may only describe the artifact it found.
+    if (verdict.ok) {
+      return { ...verdict, evidence: [...verdict.evidence, paymentLine(result.payment)] };
+    }
+    return verdict;
+  },
 
   dns_records: async (ctx) => {
     const { loadDnsRows, recheckDnsRecords, allVerified } = await import("./dns-records");

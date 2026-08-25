@@ -921,6 +921,599 @@ eq(
   );
 }
 
+
+// ---- LANE 3 ----------------------------------------------------------------
+// The call, and the close. Pure functions only: no network, no database, no model.
+
+import {
+  UNIVERSAL_V1_MED_SPA,
+  MATERIALIZATION_FALLBACKS,
+  applySubstitutions,
+  materializeSet,
+  materializeAll,
+  composeTrackedSet,
+  intakeQuestions,
+  usableCompetitorName,
+  ORIGIN_LABEL,
+  type SubProvenance,
+  type Substitutions,
+} from "../src/lib/clients/question-sets";
+import {
+  questionProblems,
+  buildAfterTheCard,
+  renderCallQuestions,
+  CLOSER_SECTIONS as CLOSER,
+  factsBlock,
+  CLOSER_SECTIONS,
+  TOTAL_QUESTIONS,
+  MAX_QUESTION_WORDS,
+  type QuestionFacts,
+} from "../src/lib/clients/artifacts/call-questions";
+import { paymentLine, paymentFrom, isRecorded as paymentIsRecorded } from "../src/lib/clients/payment";
+
+// ── 3A · the med spa twenty are the shipped PDF and nothing may move them ────
+// A2 section 4: "the tracked set must be the questions the public actually received, because
+// Beat 11 says so on camera." Four anchors rather than all twenty: enough that a reflow, a
+// re-wording or a re-ordering fails, without turning this file into a second copy of the set.
+{
+  eq("the universal set is twenty", UNIVERSAL_V1_MED_SPA.length, 20);
+  eq(
+    "question 1 is verbatim",
+    UNIVERSAL_V1_MED_SPA[0],
+    "What's the best med spa near me for [Botox / filler / laser]?"
+  );
+  eq("question 2 is verbatim", UNIVERSAL_V1_MED_SPA[1], "Who does the best lip filler in [city]?");
+  eq(
+    "question 17 still carries the concern placeholder",
+    UNIVERSAL_V1_MED_SPA[16],
+    "What med spa in [city] specializes in [specific concern — e.g., melasma, acne scars]?"
+  );
+  eq(
+    "question 19 still carries the device placeholder",
+    UNIVERSAL_V1_MED_SPA[18],
+    "Which med spa near me offers [specific device / brand — e.g., Morpheus8, CoolSculpting]?"
+  );
+}
+
+const SUBS_FULL: Substitutions = {
+  city: "Greensboro",
+  state: "NC",
+  treatmentPrimary: "lip filler",
+  clientName: "Acme Med Spa",
+  competitorIntake1: "Beta Aesthetics",
+  concern: MATERIALIZATION_FALLBACKS.concern,
+  devicePrimary: MATERIALIZATION_FALLBACKS.devicePrimary,
+};
+
+const PROV_MED_SPA: SubProvenance = {
+  city: "intake",
+  state: "intake",
+  treatmentPrimary: "intake",
+  clientName: "intake",
+  competitorIntake1: "selected_competitor",
+  concern: "fallback",
+  devicePrimary: "fallback",
+};
+
+// ── applySubstitutions still does exactly what the chain did ────────────────
+// Its signature and behaviour are relied on by page-candidates.ts and custom-question-set.ts,
+// neither of which is this lane's. The table it now reads from must not have changed the output.
+{
+  eq(
+    "the compound placeholder is filled before [treatment] can eat it",
+    applySubstitutions("What's the best med spa near me for [Botox / filler / laser]?", SUBS_FULL),
+    "What's the best med spa near Greensboro, NC for lip filler?"
+  );
+  eq(
+    "[city] becomes city, state",
+    applySubstitutions("Who does the best lip filler in [city]?", SUBS_FULL),
+    "Who does the best lip filler in Greensboro, NC?"
+  );
+  eq(
+    "the two clinics are the client and the competitor",
+    applySubstitutions("Compare [Clinic A] vs [Clinic B] in [city].", SUBS_FULL),
+    "Compare Acme Med Spa vs Beta Aesthetics in Greensboro, NC."
+  );
+  eq(
+    "materializeAll is unchanged for the med spa lane",
+    materializeAll(SUBS_FULL)[6],
+    "I'm in Greensboro, NC. How do I know if a med spa is legit / has licensed injectors?"
+  );
+}
+
+// ── med_spa keeps every question and drops nothing ──────────────────────────
+{
+  const set = materializeSet(UNIVERSAL_V1_MED_SPA, SUBS_FULL, PROV_MED_SPA, { vertical: "med_spa" });
+
+  eq("med_spa keeps all twenty", set.questions.length, 20);
+  eq("med_spa drops nothing, ever", set.dropped.length, 0);
+  eq(
+    "med_spa still prefixes the location onto question 7",
+    set.questions[6].text,
+    "I'm in Greensboro, NC. How do I know if a med spa is legit / has licensed injectors?"
+  );
+  eq(
+    "materializeSet and materializeAll agree on the med spa lane",
+    set.questions.map((q) => q.text),
+    materializeAll(SUBS_FULL)
+  );
+  ok(
+    "the fallback nouns are reported as fallbacks",
+    set.fallbacksUsed.includes("concern") && set.fallbacksUsed.includes("devicePrimary")
+  );
+  eq("question 2 is labelled as coming from intake", set.questions[1].origin, "intake");
+  eq(
+    "a question filled from a fallback is never labelled from intake",
+    set.questions[16].origin,
+    "universal"
+  );
+  eq("the labels are the two printed on the call sheet", Object.keys(ORIGIN_LABEL).sort(), [
+    "intake",
+    "universal",
+  ]);
+}
+
+// ── outside med_spa, an unfillable question is DROPPED, never guessed at ────
+// This is the whole of 3A. The live call sheet asked an AI-visibility marketing agency
+// "What med spa in Greensboro, NC specializes in melasma?" because melasma is a fallback and
+// nothing stopped it being substituted into a business that has never heard of the word.
+{
+  const agencySubs: Substitutions = {
+    ...SUBS_FULL,
+    treatmentPrimary: "AI visibility",
+    clientName: "SRT Agency LLC",
+  };
+  const agencyProv: SubProvenance = { ...PROV_MED_SPA };
+
+  const set = materializeSet(
+    [
+      "Who does the best lip filler in [city]?",
+      "What med spa in [city] specializes in [specific concern — e.g., melasma, acne scars]?",
+      "Which med spa near me offers [specific device / brand — e.g., Morpheus8, CoolSculpting]?",
+      "Which AEO agency in [city] gets clients cited in ChatGPT?",
+    ],
+    agencySubs,
+    agencyProv,
+    { vertical: "aeo-agency" }
+  );
+
+  eq("the two fallback questions are dropped", set.dropped.length, 2);
+  eq("and the rest survive", set.questions.length, 2);
+  ok(
+    "melasma never reaches an agency's question set",
+    !set.questions.some((q) => /melasma/i.test(q.text))
+  );
+  ok(
+    "and neither does Morpheus8",
+    !set.questions.some((q) => /Morpheus8/i.test(q.text))
+  );
+  ok(
+    "the drop says which value was missing",
+    set.dropped.every((d) => d.reason.includes("concern") || d.reason.includes("devicePrimary"))
+  );
+  eq(
+    "the surviving question keeps its position in the source set",
+    set.questions.map((q) => q.index),
+    [1, 4]
+  );
+}
+
+// A missing value drops a question outside med_spa too. Empty is not "fill it with nothing".
+{
+  const thin: Substitutions = { ...SUBS_FULL, treatmentPrimary: "" };
+  const prov: SubProvenance = { ...PROV_MED_SPA, treatmentPrimary: "missing" };
+  const set = materializeSet(["What is the average price for [treatment] near me?"], thin, prov, {
+    vertical: "law-firm",
+  });
+  eq("an empty intake value drops the question", set.questions.length, 0);
+  ok("and says so", set.dropped[0].reason.includes("treatmentPrimary"));
+}
+
+// ── questions 1 and 2 are the client's own, outside med_spa ────────────────
+// Matthew: "question 1 and 2 are custom (unless they grabbed it from intake form) which i dont
+// believe they did." They did not: the universal twenty were materialized for every vertical.
+{
+  const agencySubs: Substitutions = {
+    ...SUBS_FULL,
+    treatmentPrimary: "Chatgpt ads",
+    clientName: "SRT Agency LLC",
+  };
+  const audit = Array.from({ length: 20 }, (_, i) => `audit question ${i + 1}`);
+
+  const set = composeTrackedSet(audit, agencySubs, PROV_MED_SPA, { vertical: "aeo-agency" });
+
+  eq("the set is still twenty", set.questions.length, 20);
+  eq("question 1 comes from intake", set.questions[0].origin, "intake");
+  eq("question 2 comes from intake", set.questions[1].origin, "intake");
+  ok("and both carry the client's own service", set.questions.slice(0, 2).every((q) => q.text.includes("Chatgpt ads")));
+  ok("and their own city", set.questions.slice(0, 2).every((q) => q.text.includes("Greensboro, NC")));
+  eq("the audit's questions start at 3", set.questions[2].text, "audit question 1");
+  eq("and the indexes are the printed positions", set.questions.map((q) => q.index).slice(0, 4), [1, 2, 3, 4]);
+
+  // The two shapes are lifted from the frozen twenty rather than invented, which is the whole
+  // safety argument for building a question at all.
+  ok(
+    "shape 1 is the shipped question 2 with the category taken out",
+    set.questions[0].text === "Who does the best Chatgpt ads in Greensboro, NC?"
+  );
+
+  // med_spa is pinned and gets exactly the twenty, with nothing prepended.
+  const medSpa = composeTrackedSet(UNIVERSAL_V1_MED_SPA, SUBS_FULL, PROV_MED_SPA, {
+    vertical: "med_spa",
+  });
+  eq("med_spa is still exactly the shipped twenty", medSpa.questions.length, 20);
+  eq(
+    "and nothing was prepended to it",
+    medSpa.questions.map((q) => q.text),
+    materializeAll(SUBS_FULL)
+  );
+}
+
+// A fallback or a missing value builds NOTHING rather than something falsely labelled.
+{
+  eq(
+    "no intake questions without a real service",
+    intakeQuestions({ ...SUBS_FULL, treatmentPrimary: "" }, { ...PROV_MED_SPA, treatmentPrimary: "missing" }),
+    []
+  );
+  eq(
+    "no intake questions without a city",
+    intakeQuestions(SUBS_FULL, { ...PROV_MED_SPA, city: "missing" }),
+    []
+  );
+  eq("two when both are real", intakeQuestions(SUBS_FULL, PROV_MED_SPA).length, 2);
+  ok(
+    "and neither is a half-filled sentence",
+    intakeQuestions(SUBS_FULL, PROV_MED_SPA).every((q) => !/\s{2}|\sin \?/.test(q))
+  );
+}
+
+// ── the competitor guard, and it exists because the client typed "a" ────────
+{
+  eq('"a" is never put to an engine', usableCompetitorName("a"), null);
+  eq("neither is a blank", usableCompetitorName("   "), null);
+  eq("nor is a number", usableCompetitorName("12"), null);
+  eq("a real name survives", usableCompetitorName(" Beta Aesthetics "), "Beta Aesthetics");
+  eq("null in, null out", usableCompetitorName(null), null);
+}
+
+// ── 3B · the validator, and describeInvalid covering all of it ──────────────
+// booking-script.ts records what happens when describeInvalid describes only the shape: the
+// correction retry gets a rejection with no reason and answers in prose, which is not JSON, so
+// the parse throws on every run. Every branch below has to produce a sentence naming the defect.
+{
+  const good = CLOSER_SECTIONS.flatMap((s, i) =>
+    Array.from({ length: i === 0 ? 8 : 5 }, (_, n) => ({
+      section: s.key,
+      question: `Question ${n} for ${s.key}?`,
+    }))
+  );
+  eq("the fixture is the right size", good.length, TOTAL_QUESTIONS);
+  eq("a well formed set has no problems", questionProblems({ questions: good }), []);
+
+  ok(
+    "a missing questions array is named",
+    questionProblems({}).join(" ").includes("questions")
+  );
+
+  const short = { questions: good.slice(0, 30) };
+  ok(
+    "a wrong count is named with both numbers",
+    questionProblems(short).join(" ").includes("30") &&
+      questionProblems(short).join(" ").includes(String(TOTAL_QUESTIONS))
+  );
+
+  const missingSection = {
+    questions: good.map((q) => (q.section === "reinforce" ? { ...q, section: "clarify" } : q)),
+  };
+  ok(
+    "an empty section is named by key",
+    questionProblems(missingSection).join(" ").includes("reinforce")
+  );
+
+  const wordy = {
+    questions: good.map((q, i) =>
+      i === 0 ? { ...q, question: `${"word ".repeat(MAX_QUESTION_WORDS + 4)}?` } : q
+    ),
+  };
+  const wordyReason = questionProblems(wordy).join(" ");
+  ok("a long line is named as a word count", wordyReason.includes(String(MAX_QUESTION_WORDS)));
+  ok("and the offending line is quoted back", wordyReason.includes("word word"));
+
+  const promised = {
+    questions: good.map((q, i) =>
+      i === 1 ? { ...q, question: "Would more customers help you this quarter?" } : q
+    ),
+  };
+  const promisedReason = questionProblems(promised).join(" ");
+  ok("a promise of customers fails the generation", promisedReason.length > 0);
+  ok("and the offending question is quoted", promisedReason.includes("more customers"));
+
+  const guaranteed = {
+    questions: good.map((q, i) =>
+      i === 2 ? { ...q, question: "What would a guarantee need to cover for this to work?" } : q
+    ),
+  };
+  ok(
+    "so does the word guarantee",
+    questionProblems(guaranteed).join(" ").includes("guarantee")
+  );
+
+  const badSection = { questions: good.map((q, i) => (i === 3 ? { ...q, section: "close" } : q)) };
+  ok(
+    "an invented section is named",
+    questionProblems(badSection).join(" ").includes("section")
+  );
+}
+
+// ── 3B · the facts block states an absence rather than staying silent ───────
+// Absent beats forbidden: the same move the price gate and miniCheckContext make. A model that
+// is told nothing about the score supplies one.
+{
+  const bare: QuestionFacts = {
+    clientName: "SRT Agency LLC",
+    city: "Greensboro, NC",
+    vertical: "aeo-agency",
+    score: null,
+    enginesRun: [],
+    absentPrompts: [],
+    presentPrompts: [],
+    unmeasured: 0,
+    namedInstead: [],
+    confirmedCompetitors: [],
+    presence: { coreMismatch: [], coreMissing: [], coreNotChecked: [], coreMatch: 0, coreTotal: 6 },
+    reviews: { clientRecorded: [], competitorRecorded: [], outstanding: 0, total: 0 },
+    technical: {
+      registrar: null,
+      dnsProvider: null,
+      cms: null,
+      mailProvider: null,
+      resolverHealthy: true,
+      robotsBlocks: [],
+      siteSignals: [],
+    },
+  };
+
+  const block = factsBlock(bare);
+  ok("a missing score is stated as NONE", block.includes("SCORE: NONE"));
+  ok("and the model is told not to cite one", block.includes("Do not cite a score"));
+  ok("an unseeded review audit says no number exists", block.includes("No review number exists"));
+  ok("nothing named instead is stated too", block.includes("NAMED INSTEAD: NONE"));
+
+  const measured = factsBlock({
+    ...bare,
+    score: 10,
+    enginesRun: ["openai"],
+    absentPrompts: ["Who is the best AEO agency in Greensboro, NC?"],
+    namedInstead: [{ name: "Rival Co", timesNamed: 4 }],
+    presence: { ...bare.presence, coreNotChecked: ["Yelp"], coreMatch: 2 },
+  });
+  ok("a real score prints with its denominator", measured.includes("10 out of 100"));
+  ok("each rival carries its own count", measured.includes("Rival Co, named in 4"));
+  ok(
+    "not_checked is never reported as correct",
+    measured.includes("NOT CHECKED (this is not a finding that they are correct)")
+  );
+}
+
+// ── 3B · AFTER THE CARD prints what the record holds, and refuses to guess ──
+{
+  const facts: QuestionFacts = {
+    clientName: "Acme",
+    city: "Greensboro, NC",
+    vertical: "med_spa",
+    score: 40,
+    enginesRun: ["openai"],
+    absentPrompts: [],
+    presentPrompts: [],
+    unmeasured: 0,
+    namedInstead: [],
+    confirmedCompetitors: [],
+    presence: {
+      coreMismatch: ["Yelp"],
+      coreMissing: [],
+      coreNotChecked: [],
+      coreMatch: 5,
+      coreTotal: 6,
+    },
+    reviews: { clientRecorded: [], competitorRecorded: [], outstanding: 0, total: 0 },
+    technical: {
+      registrar: "GoDaddy",
+      dnsProvider: "GoDaddy",
+      cms: null,
+      mailProvider: null,
+      resolverHealthy: true,
+      robotsBlocks: [],
+      siteSignals: [],
+    },
+  };
+
+  const withValues = buildAfterTheCard({
+    facts,
+    domain: "acme.com",
+    hubHost: "learn.acme.com",
+    reviewsHost: "reviews.acme.com",
+    cnameTarget: "4fddd1b501fe6565.vercel-dns-017.com",
+    searchConsoleTxt: null,
+    bookingSoftware: "Boulevard",
+    reviewMode: "card_only",
+    reviewOwner: "Dana",
+  });
+
+  ok(
+    "the seeded CNAME target is printed, not a default",
+    withValues.technical.some((l) => l.includes("4fddd1b501fe6565.vercel-dns-017.com"))
+  );
+  ok(
+    "the real click path is read out rather than asked for",
+    withValues.technical[0].includes("GoDaddy")
+  );
+  ok(
+    "a booking system on the record is confirmed, not asked from scratch",
+    withValues.funnel.some((l) => l.includes("Boulevard"))
+  );
+  ok(
+    "the named person is read back",
+    withValues.reviews.some((l) => l.includes("Dana"))
+  );
+  ok(
+    "a mismatching listing becomes a login question",
+    withValues.presence.some((l) => l.includes("Yelp"))
+  );
+  ok(
+    "registrar credentials are never asked for",
+    withValues.technical.some((l) => l.includes("Never ask for registrar credentials"))
+  );
+
+  const bare = buildAfterTheCard({
+    facts: { ...facts, technical: { ...facts.technical, dnsProvider: null, registrar: null } },
+    domain: null,
+    hubHost: null,
+    reviewsHost: null,
+    cnameTarget: null,
+    searchConsoleTxt: null,
+    bookingSoftware: null,
+    reviewMode: null,
+    reviewOwner: null,
+  });
+
+  // ‼️ HUB_CNAME_TARGET's default is measured WRONG for this project, so an unseeded row prints
+  // a sentence saying so rather than a value somebody reads down the phone.
+  ok(
+    "an unseeded CNAME says so instead of guessing a target",
+    bare.technical.some((l) => l.includes("not seeded yet"))
+  );
+  ok(
+    "an unknown DNS provider reads the nameservers out instead of naming one",
+    bare.technical[0].includes("could not identify")
+  );
+  ok(
+    "no booking software on the record is asked rather than assumed",
+    bare.funnel.some((l) => l.includes("Nothing was recorded at intake"))
+  );
+}
+
+// ── 3B · the document renders, and the divider really separates the halves ──
+// Same shape as the presence-PDF checks above: render real bytes and read the text back out,
+// because a PDF that throws on one field is a step that silently produces nothing.
+{
+  const facts: QuestionFacts = {
+    clientName: "SRT Agency LLC",
+    city: "Greensboro, NC",
+    vertical: "aeo-agency",
+    score: 10,
+    enginesRun: ["openai"],
+    absentPrompts: ["best AEO agency for local businesses"],
+    presentPrompts: [],
+    unmeasured: 0,
+    namedInstead: [{ name: "D3 Corp", timesNamed: 4 }],
+    confirmedCompetitors: ["D3 Corp"],
+    presence: { coreMismatch: [], coreMissing: [], coreNotChecked: [], coreMatch: 6, coreTotal: 6 },
+    reviews: { clientRecorded: [], competitorRecorded: [], outstanding: 0, total: 0 },
+    technical: {
+      registrar: "GoDaddy",
+      dnsProvider: "GoDaddy",
+      cms: null,
+      mailProvider: null,
+      resolverHealthy: true,
+      robotsBlocks: [],
+      siteSignals: [],
+    },
+  };
+
+  const drafted = CLOSER.flatMap((sec, i) =>
+    Array.from({ length: i === 0 ? 8 : 5 }, (_, n) => ({
+      section: sec.key,
+      question: `A ${sec.key} question number ${n}?`,
+    }))
+  );
+
+  const pdf = renderCallQuestions({
+    clientName: facts.clientName,
+    facts,
+    questions: drafted,
+    after: buildAfterTheCard({
+      facts,
+      domain: "srtagency.com",
+      hubHost: "learn.srtagency.com",
+      reviewsHost: "reviews.srtagency.com",
+      cnameTarget: "cname.example.com",
+      searchConsoleTxt: null,
+      bookingSoftware: null,
+      reviewMode: null,
+      reviewOwner: null,
+    }),
+  });
+
+  const text = pdfText(pdf);
+  ok("the closing questions render to real bytes", pdf.length > 1000);
+  ok("every CLOSER section is on the page", CLOSER.every((sec) => text.includes(sec.title)));
+  ok("the divider is there in words", text.includes("AFTER THE CARD"));
+  ok(
+    "and it says why nothing below it is asked first",
+    text.includes("None of this is asked before the commitment")
+  );
+  ok("the document names itself internal", text.includes("internal"));
+
+  // ‼️ test-onboarding-artifacts asserts "no issues found" appears in NO rendered client
+  // PDF, in any casing, including inside a sentence disclaiming it. This one is internal, but it
+  // is rendered by the same kit and the invariant is cheaper to keep than to reason about.
+  ok("it never says no issues found", !/no issues found/i.test(text));
+}
+
+// ── 3C · it is an assertion, and the wording may never say otherwise ────────
+// Same distinction day_0_source draws between photograph_2 and manual_step. This check is a grep
+// for the same reason test-onboarding-artifacts greps a client PDF for "no issues found".
+{
+  const none = paymentFrom({});
+  ok("nothing recorded is not recorded", !paymentIsRecorded(none));
+  eq("and says so plainly", paymentLine(none), "No payment has been recorded.");
+
+  const recorded = paymentFrom({
+    payment_recorded_at: "2026-08-25T14:00:00.000Z",
+    payment_recorded_by: "Matthew Garcia",
+    payment_terms: "card on file, first invoice day 30",
+    payment_note: "wants the invoice to the LLC",
+  });
+  ok("a stamped row is recorded", paymentIsRecorded(recorded));
+
+  const line = paymentLine(recorded);
+  ok("the line attributes it to a person", line.includes("Matthew Garcia"));
+  ok("and dates it", line.includes("2026-08-25"));
+  ok("and quotes the terms", line.includes("card on file"));
+  ok("it says RECORDED BY", /payment recorded by/i.test(line));
+  ok("it never says received", !/received/i.test(line));
+
+  // The whole lane, in any casing, including inside a sentence disclaiming it.
+  //
+  // ‼️ COMMENTS ARE STRIPPED FIRST, AND THAT IS THE SAME LESSON AS THE TRANSCRIBER CHECK.
+  // Every one of these files EXPLAINS at length that it must never say "payment received" and
+  // must never reach for Stripe. A grep over the raw source fires on the explanation, so passing
+  // the test would mean deleting the reasoning, which is how the reasoning gets lost and the
+  // thing gets built anyway a year later. What is checked is the code and the strings: the words
+  // that can actually reach a screen.
+  const stripComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+
+  const lane3Sources = [
+    "src/lib/clients/payment.ts",
+    "src/app/api/clients/[id]/payment/route.ts",
+    "src/app/dashboard/clients/[id]/payment-form.tsx",
+  ].map((f) => stripComments(fs.readFileSync(path.join(__dirname, "..", f), "utf8")));
+
+  ok(
+    'no lane 3 payment surface can render the words "payment received"',
+    lane3Sources.every((src) => !/payment\s+received/i.test(src))
+  );
+  ok(
+    "and none of them reaches for a payment processor",
+    lane3Sources.every((src) => !/stripe|checkout\.session|createCharge/i.test(src))
+  );
+}
+
+// ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
+// records what happens otherwise: five checks once sat under the process.exit and never ran.
+
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} checks failed.`);
   process.exit(1);

@@ -26,6 +26,7 @@ import { CompetitorForm } from "./competitor-form";
 import { ReviewAuditForm } from "./review-audit-form";
 import { ReviewWorkflowForm, type ReviewWorkflowView } from "./review-workflow-form";
 import { PresenceSweepForm } from "./presence-sweep-form";
+import { PaymentForm, type PaymentView } from "./payment-form";
 import { loadCandidates, REQUIRED_SELECTIONS } from "@/lib/clients/competitors";
 import { loadReviewAudit, reviewPlatformLabel } from "@/lib/clients/review-audit";
 import { loadSweep } from "@/lib/clients/presence-sweep";
@@ -207,6 +208,18 @@ export default async function ClientDetailPage({
       ? (reviewWorkflowBag.destinations as string[])
       : [],
     bookingSoftware: (client.booking_software as string | null) ?? null,
+  };
+
+  // What unlocks delivery step 21. `clients.select("*")` already carries the four columns, so
+  // this is a read of the row rather than a query. It is an ASSERTION this board keeps, never
+  // evidence of a charge, and payment.ts owns the one approved wording.
+  const paymentView: PaymentView = {
+    recordedAt: (client.payment_recorded_at as string | null) ?? null,
+    recordedBy: (client.payment_recorded_by as string | null) ?? null,
+    terms: (client.payment_terms as string | null) ?? null,
+    note: (client.payment_note as string | null) ?? null,
+    accessOutstanding:
+      (delivery ?? []).find((d) => d.step_key === "access_granted")?.status !== "complete",
   };
 
   // The twenty questions this client's most recent audit actually ran, which are what a
@@ -575,6 +588,26 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />
+      </div>
+
+      {/*
+        Step 21's gate. ‼️ It records an ASSERTION, not a charge: nothing in this app talks
+        to a payment processor, so the copy is "payment recorded by X on DATE" and never
+        "payment received". Same distinction day_0_source draws between photograph_2 and
+        manual_step. The refusal itself lives in step-verify.ts's `access_granted` verifier,
+        which is what every surface goes through.
+      */}
+      <div
+        id="payment"
+        className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Payment</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {paymentView.recordedAt ? "recorded, step 21 is open" : "not recorded, step 21 is held"}
+          </span>
+        </div>
+        <PaymentForm clientId={id} view={paymentView} />
       </div>
 
       {/* ── DNS ── */}

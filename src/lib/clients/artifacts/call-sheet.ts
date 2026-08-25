@@ -16,9 +16,12 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import {
-  materializeAll,
   MATERIALIZATION_FALLBACKS,
-  substitutionsFor,
+  composeTrackedSet,
+  ORIGIN_LABEL,
+  substitutionsWithProvenance,
+  universalSetFor,
+  type MaterializedSet,
   type Substitutions,
 } from "../question-sets";
 import { canonicalFor, loadSweep, effectiveStatus } from "../presence-sweep";
@@ -59,7 +62,9 @@ interface CallSheetData {
   reviewsHost: string;
   cnameTarget: string;
   searchConsoleTxt: string | null;
-  universal: string[];
+  universal: MaterializedSet;
+  /** e.g. "universal_v1@aeo-agency", or null when nothing could be frozen. */
+  questionSetVersion: string | null;
   substitutions: Substitutions;
   competitors: Awaited<ReturnType<typeof selectedCompetitors>>;
   sweep: Awaited<ReturnType<typeof loadSweep>>;
@@ -134,8 +139,19 @@ function questions(state: PageState, d: CallSheetData) {
   });
   paragraph(
     state,
-    "These are the twenty as they will actually run, with your values substituted in. A correction here is logged, and the question it changes is marked not-like-for-like at the next measurement.",
+    "These are the tracked questions as they will actually run, with your values substituted in. A correction here is logged, and the question it changes is marked not-like-for-like at the next measurement.",
     { color: MUTED, size: 9 }
+  );
+
+  // ‼️ EACH QUESTION SAYS WHERE ITS VALUES CAME FROM, AND THE LIVE CALL SHEET IS WHY.
+  // It asked an AI-visibility marketing agency "Who does the best lip filler in Greensboro, NC?".
+  // A question built from what the client told us and one built from the universal set look
+  // identical on the page, so there was no way for the client to know which ones were even
+  // theirs to correct. The label is the whole point of reading these out loud.
+  paragraph(
+    state,
+    `${ORIGIN_LABEL.intake} means your own answers filled it, so correct those first. ${ORIGIN_LABEL.universal} means it runs the same way for every business in your category, which is what makes the comparison possible.`,
+    { color: MUTED, size: 8.5 }
   );
 
   keyValueTable(
@@ -144,9 +160,41 @@ function questions(state: PageState, d: CallSheetData) {
     { labelWidth: 55, size: 8.5 }
   );
 
-  d.universal.forEach((q, i) => {
-    correctionBox(state, `${i + 1}.`, { prefill: q, lines: 1 });
+  d.universal.questions.forEach((q) => {
+    correctionBox(state, `${q.index}. ${ORIGIN_LABEL[q.origin]}`, { prefill: q.text, lines: 1 });
   });
+
+  // ‼️ A DROPPED QUESTION IS NAMED, NEVER SILENTLY ABSENT. Outside med_spa a question
+  // whose placeholder nothing on the record fills is dropped rather than materialized with the
+  // wrong noun, and a set that quietly came back at seventeen reads as a set of seventeen.
+  if (d.universal.dropped.length) {
+    paragraph(
+      state,
+      `${d.universal.dropped.length} question(s) were dropped rather than filled with a value that is not true of this business:`,
+      { color: AMBER, bold: true, size: 9.5 }
+    );
+    bulletList(
+      state,
+      d.universal.dropped.map((x) => `${x.index}. "${x.source}" — ${x.reason}`),
+      { color: MUTED, size: 8.5 }
+    );
+  }
+
+  if (d.universal.fallbacksUsed.length) {
+    paragraph(
+      state,
+      `Filled from the standard fallback rather than from your record: ${d.universal.fallbacksUsed.join(", ")}. Correct them here if they are wrong.`,
+      { color: AMBER, size: 9 }
+    );
+  }
+
+  paragraph(
+    state,
+    d.questionSetVersion
+      ? `Tracked set: ${d.questionSetVersion}. It is frozen, so the wording cannot change without becoming a new version and a new baseline.`
+      : "⚠ No frozen question set version could be written, so nothing here can be cited as the tracked set yet.",
+    { color: d.questionSetVersion ? MUTED : RED, size: 9 }
+  );
 
   paragraph(state, "The custom set is drafted at step 12 and prints here once it exists.", {
     color: MUTED,
@@ -394,7 +442,8 @@ export async function generateCallSheet(
   // this mapping is how the call sheet ends up reading a question out loud that differs from
   // the one actually being tracked. The call sheet is the document whose entire job is to be
   // correct while the client checks it.
-  const substitutions = (await substitutionsFor(clientId)) ?? {
+  const resolved = await substitutionsWithProvenance(clientId);
+  const substitutions: Substitutions = resolved?.values ?? {
     city: "",
     state: "",
     treatmentPrimary: "",
@@ -404,7 +453,29 @@ export async function generateCallSheet(
     devicePrimary: MATERIALIZATION_FALLBACKS.devicePrimary,
   };
 
-  const universal = materializeAll(substitutions);
+  // ‼️ THE SET IS RESOLVED PER VERTICAL AND FROZEN, NOT MATERIALIZED FROM THE MED SPA TWENTY.
+  //
+  // materializeAll() renders UNIVERSAL_V1_MED_SPA whatever the client sells, which is how this
+  // document came to ask an AI-visibility marketing agency "Who does the best lip filler in
+  // Greensboro, NC?" with treatmentPrimary reading "Chatgpt ads". universalSetFor() returns the
+  // shipped twenty for a med spa and that client's own frozen set for anybody else, and
+  // composeTrackedSet() puts the client's OWN two questions first, built from what they typed at
+  // intake, and DROPS any of the rest it cannot fill honestly rather than substituting melasma
+  // into a business that has never heard of the word.
+  const set = await universalSetFor(clientId);
+  if (!set.ok) {
+    return { ok: false, error: set.error };
+  }
+
+  const universal = composeTrackedSet(set.questions, substitutions, resolved?.provenance ?? {
+    city: "missing",
+    state: "missing",
+    treatmentPrimary: "missing",
+    clientName: "missing",
+    competitorIntake1: "missing",
+    concern: "fallback",
+    devicePrimary: "fallback",
+  }, { vertical: set.vertical });
 
   const data: CallSheetData = {
     clientName: ((client.dba_name || client.legal_name) as string) ?? "",
@@ -419,6 +490,7 @@ export async function generateCallSheet(
     cnameTarget: (cname?.value as string) ?? process.env.HUB_CNAME_TARGET ?? "cname.vercel-dns.com",
     searchConsoleTxt: (txt?.value as string | null) ?? null,
     universal,
+    questionSetVersion: set.frozen ? set.version : null,
     substitutions,
     competitors,
     sweep,
@@ -442,6 +514,15 @@ export async function generateCallSheet(
   if (data.intel && !data.intel.resolverHealthy) warnings.push("the DNS lookup failed, so the provider is unconfirmed");
   if (!data.searchConsoleTxt) warnings.push("no Search Console TXT value yet");
   if (data.incentiveFlag) warnings.push("intake flagged an incentive or a lobby tablet — that stops the call");
+  // The drop count belongs in the thread, not only in the PDF. A tracked set that came back at
+  // seventeen is a decision somebody should see before the call, not discover during it.
+  if (universal.dropped.length) {
+    warnings.push(
+      `${universal.dropped.length} of ${set.questions.length} questions were dropped: nothing on the record fills them`
+    );
+  }
+  if (!set.frozen) warnings.push("the question set could not be frozen, so nothing can cite a tracked version");
+  if (set.note) warnings.push(set.note);
 
   const result = await deliverArtifact({
     clientId,
@@ -451,6 +532,7 @@ export async function generateCallSheet(
     message: [
       `:memo: Call sheet for *${data.clientName}*. Internal — do not send this to the client.`,
       `DNS: ${data.intel?.dnsProvider ?? "provider not identified"}. Hub: ${data.hubHost}. Reviews: ${data.reviewsHost}.`,
+      `Question set: ${universal.questions.length} tracked for *${set.vertical}* (${set.frozen ? set.version : "not frozen"}).`,
       warnings.length ? `:warning: ${warnings.join(" · ")}` : "Everything it needs is on the record.",
     ].join("\n"),
   });

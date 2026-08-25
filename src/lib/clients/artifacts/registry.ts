@@ -157,9 +157,32 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return generateReviewCard(clientId);
   },
 
+  // ‼️ TWO DOCUMENTS, ONE RUNNER, AND THE SECOND ONE IS FILED AGAINST A DIFFERENT STEP.
+  //
+  // The call sheet is step 18. generateCallQuestions writes step 20's closing questions and files
+  // them against `call_held`, because they are built from the SAME reports and there is no point
+  // spending a second pass over them. No AUTO_RUNNERS key is added: `call_held` is a manual step
+  // and giving it a runner would put it in unreachableAutoSteps()'s sights for no reason.
+  //
+  // ‼️ A FAILURE IN THE SECOND HALF NEVER FAILS THE FIRST. The call sheet is what the call
+  // cannot happen without; the questions are what makes it a better call. generateCallQuestions
+  // posts nothing to Slack on purpose (it would create step 20's anchor two steps early and break
+  // one-anchor-at-a-time), so the only place its outcome can be reported is this note.
   call_sheet: async (clientId) => {
     const { generateCallSheet } = await import("./call-sheet");
-    return generateCallSheet(clientId);
+    const sheet = await generateCallSheet(clientId);
+
+    const { generateCallQuestions } = await import("./call-questions");
+    const questions = await generateCallQuestions(clientId).catch((e) => ({
+      ok: false as const,
+      error: (e as Error).message,
+    }));
+
+    const note = questions.ok
+      ? questions.note
+      : `:warning: The closing questions for step 20 were not generated: ${questions.error}`;
+
+    return { ...sheet, note };
   },
 
   // ── The five added when the `auto` tag was made true across the board ──────

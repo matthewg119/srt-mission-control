@@ -17,7 +17,15 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepByKey, type DeliveryStep } from "@/lib/clients/delivery-checklist";
-import { CORE_SIX, EXTENDED, PLATFORM_COUNT } from "@/config/presence-platforms";
+import {
+  ALL_PLATFORMS,
+  CORE_SIX,
+  EXTENDED,
+  PLATFORM_COUNT,
+  RECOMMENDED,
+  SWEEP_GATE_COUNT,
+  platformByKey,
+} from "@/config/presence-platforms";
 import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
 // The channel surface. Everything this module says about a step goes through these, never
 // through notifyThread: a step's output belongs in that step's thread.
@@ -339,8 +347,24 @@ async function instructionsFor(
       ];
     }
 
-    case "access_granted":
+    case "access_granted": {
+      // ‼️ THE GATE LINE GOES ABOVE THE CLICK PATHS, AND THE CLICK PATHS ARE UNCHANGED.
+      // They are correct and they are what somebody reads off the phone. What was missing was
+      // the sentence explaining why none of them is asked before the client has committed.
+      const { paymentRecorded, isRecorded, paymentLine, ACCESS_GATE_REASON } = await import(
+        "./payment"
+      );
+      const pay = await paymentRecorded(c.id);
+      const gate = pay.ok && isRecorded(pay.payment);
+
       return [
+        gate
+          ? `:white_check_mark: ${paymentLine(pay.payment)}. That is an assertion this board keeps, not evidence of a charge.`
+          : `:lock: *No payment recorded, so [Done] refuses.* ${ACCESS_GATE_REASON}`,
+        gate
+          ? ""
+          : `Record it on the board: ${boardUrl(c, "payment")}`,
+        "",
         "Per platform, the literal ask:",
         "  • *GBP* — business.google.com, select the clinic, Users, Add, invite us as Manager",
         "  • *Search Console* — search.google.com/search-console, add the domain as a Domain property",
@@ -350,6 +374,7 @@ async function instructionsFor(
         "credibility moment. If an old agency holds it, start Google's ownership request ON",
         "THE CALL: it is a fixed seven-day wait and it is usually the long pole.",
       ];
+    }
 
     case "hub_preview": {
       // ‼️ THIS CARD USED TO BE A LABEL AND THREE BUTTONS. There was no case here at all, so
@@ -660,9 +685,17 @@ async function instructionsFor(
     case "call_held": {
       const refs = await outputRefsFor(c.id);
       const sheet = docLink(c.id, refs.get("call_sheet"), "the call sheet PDF");
+      // ‼️ STEP 20's OWN output_ref, WRITTEN AT STEP 18. generateCallQuestions files the
+      // closing questions here rather than posting them, because deliverArtifact would have
+      // created THIS anchor two steps early and put a second thing on the board while the call
+      // sheet was still the one to work on. This line is where they surface.
+      const closing = docLink(c.id, refs.get("call_held"), "the 33 closing questions");
 
       return [
         sheet ? `*Read off this:* ${sheet}` : "*The call sheet has not been generated yet.*",
+        closing
+          ? `*Run the conversation off this:* ${closing} — CLOSER order, tick the ones you want, and everything below the divider waits for the card.`
+          : "*The closing questions were not generated.* Retry step 18 on the board; they are built from the same reports as the call sheet.",
         "",
         "Five things have to happen on the call, and the label lists them because each one",
         "unblocks something later:",
@@ -1135,6 +1168,29 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
   if (step.key === "presence_sweep_manual") {
     const refusal = await presenceRefusal(clientId, stepKey);
     if (refusal) return { ok: false, message: refusal };
+  }
+
+  // ‼️ STEP 21 WAITS FOR THE PAYMENT RECORD, AND THE REFUSAL STATES THE REASON.
+  //
+  // Matthew: "After we receive the payment it unlocks step 21 for GBP manager search console
+  // etc." A refusal that states the RULE teaches people to look for the way round it; this one
+  // states why asking early costs the call.
+  //
+  // The REAL gate is step-verify.ts's `access_granted` verifier, because this function is called
+  // from the Slack action route and nowhere else, and the client board's checkbox goes straight
+  // to setDeliveryStep. This copy exists so the Slack button answers at the press rather than
+  // after the cascade has run. Both read the same module.
+  if (stepKey === "access_granted") {
+    const { paymentRecorded, isRecorded, ACCESS_GATE_REASON, ACCESS_GATE_TODO } = await import(
+      "./payment"
+    );
+    const result = await paymentRecorded(clientId);
+    if (result.ok && !isRecorded(result.payment)) {
+      return {
+        ok: false,
+        message: `Not yet — no payment has been recorded. ${ACCESS_GATE_REASON} ${ACCESS_GATE_TODO}`,
+      };
+    }
   }
 
   if (stepKey === "hub_preview") {
