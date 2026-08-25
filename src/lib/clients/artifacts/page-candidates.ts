@@ -30,6 +30,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { commercialIntent, isObjection, verticalFor } from "../harvest";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
+import { confirmedAvatarFor } from "../avatars";
 import {
   startDoc,
   finishDoc,
@@ -123,11 +124,20 @@ const MIN_CLUSTER = 3;
 /**
  * Theme, not avatar.
  *
- * ‼️ `clients.primary_avatar` DOES NOT EXIST. `avatar_confirmed` is a manual step whose
- * instructions say to "map one to a1/a2/a3", and nothing stores the answer — so the column
- * `page_candidates.avatar` stays null and grouping happens by SHAPE instead. Writing a guessed
- * a1/a2/a3 here would be inventing the tag and then treating it as evidence, which is the exact
- * thing the question_bank migration's own comment forbids one table over.
+ * ‼️ THIS COMMENT USED TO SAY `clients.primary_avatar` DOES NOT EXIST. It did not, until
+ * 2026-08-25, when the avatar lane built `confirmAvatar` and `confirmedAvatarFor` for it. The
+ * conclusion survives the premise being fixed, and for a better reason than the old one:
+ *
+ * A client has exactly ONE confirmed avatar, so grouping this list by it produces one group
+ * containing everything. It would replace an axis that separates rows with a constant.
+ *
+ * ‼️ `page_candidates.avatar` STILL STAYS NULL, and the reason is now about the corpus rather
+ * than about a missing column. The honest per-row tag is `question_bank.avatar`, which records
+ * which buyer that phrase was harvested FOR — and it is null on every row written before the
+ * avatar could be confirmed. Stamping the client's current avatar onto rows harvested before
+ * anybody chose it is inventing the tag and then treating it as evidence, which is exactly what
+ * the question_bank migration's own comment forbids one table over. The column has no reader and
+ * no writer anywhere in src/; it stays that way until a harvest run tags its own rows.
  */
 export function themeOf(question: string): string {
   const q = question.toLowerCase();
@@ -388,6 +398,11 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   const subs = await substitutionsFor(clientId);
   if (!subs) return { ok: false, error: "Client not found while reading substitutions." };
 
+  // Read, never written back onto a row. It only ever reaches the "Grouped by theme" paragraph,
+  // which has to say something true about what this build is aimed at. A null here is a real
+  // state (step 8 not yet confirmed) and the paragraph says so rather than going quiet.
+  const confirmedAvatar = await confirmedAvatarFor(clientId);
+
   const { data: bank } = await supabaseAdmin
     .from("question_bank")
     .select("id, phrase, frequency_score, commercial_intent_score, objection_phrase")
@@ -452,7 +467,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       ok: false,
       error:
         `No harvested phrases for vertical "${vertical}", so there is nothing to score. ` +
-        `The avatar phrase harvest (step 9) fills question_bank, and it either has not run ` +
+        `The avatar phrase harvest (step 10) fills question_bank, and it either has not run ` +
         `or came back empty. Nothing was written.`,
     };
   }
@@ -529,12 +544,22 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   );
 
   // ‼️ Grouped by theme rather than by avatar, and the document says why out loud.
+  //
+  // This paragraph used to say "nothing in the system records which avatar was confirmed". That
+  // was true when it was written and false the same afternoon, once the avatar lane shipped its
+  // writer. A client-facing document explaining an absence that has been filled is worse than no
+  // explanation, so it states the real reason instead: one client has one avatar, so the tag
+  // would be a constant. See the themeOf doc block above.
   sectionHeading(state, "Grouped by theme");
   paragraph(
     state,
-    "Not grouped by avatar: nothing in the system records which avatar was confirmed, so an " +
-      "a1/a2/a3 tag here would be invented rather than read. Theme is derived from the shape of " +
-      "the question itself.",
+    (confirmedAvatar
+      ? `This build is aimed at one confirmed customer, ${confirmedAvatar.label}, so an avatar ` +
+        "tag on these rows would read the same on every one of them and separate nothing. "
+      : "No avatar has been confirmed yet, which is delivery step 8. ") +
+      "Every phrase below was harvested against the vertical rather than tagged per avatar, so " +
+      "theme is the axis that actually tells one row from another. It is derived from the shape " +
+      "of the question itself.",
     { color: MUTED, size: 9 }
   );
 

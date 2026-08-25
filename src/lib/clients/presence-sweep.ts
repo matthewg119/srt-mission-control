@@ -5,7 +5,7 @@
 // ‼️ THE AUTOMATED TIER IS EMPTY AND THIS FILE SAYS SO OUT LOUD.
 // Google Places, Bing Maps, Foursquare and Yelp Fusion are all unkeyed. Runner v3 section 6:
 // "Report which of these are ACTUALLY KEYED before building against them... Do not build
-// against a key that does not exist." So `nap_sweep` seeds eighteen rows at 'not_checked' and
+// against a key that does not exist." So `nap_sweep` seeds nineteen rows at 'not_checked' and
 // completes immediately, having honestly checked nothing, and the manual card does the work.
 // That is not a stub — it is the correct behaviour for the keys that exist today, and the shape
 // is already right for the day one lands.

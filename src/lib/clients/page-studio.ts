@@ -231,7 +231,7 @@ async function startSession(text: string, messageTs: string): Promise<void> {
     await say(
       messageTs,
       `*${client.name}* has no scored page candidates yet. That is step 13 on the delivery ` +
-        "checklist, and it needs the phrase harvest (step 9) to have run first.\n" +
+        "checklist, and it needs the phrase harvest (step 10) to have run first.\n" +
         `${appUrl()}/dashboard/clients/${client.id}`
     );
     return;

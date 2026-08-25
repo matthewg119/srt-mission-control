@@ -717,7 +717,7 @@ export default async function ClientDetailPage({
           <p className="text-sm text-[rgba(255,255,255,0.5)]">
             Nothing filed yet. Reply to this client&apos;s thread in{" "}
             <code>#onboarding-srt-aeo</code> with a screenshot and it lands here on its own —
-            no uploading, no naming, no folder. That is how the presence sweep&apos;s eighteen
+            no uploading, no naming, no folder. That is how the presence sweep&apos;s nineteen
             platforms become the evidence behind the findings doc.
           </p>
         ) : (

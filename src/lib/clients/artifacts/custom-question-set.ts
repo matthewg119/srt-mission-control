@@ -198,7 +198,7 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       ok: false,
       error:
         `Nothing to draft from: question_bank is empty for "${vertical}" and intake recorded no ` +
-        `objections in the owner's own words. Run the avatar phrase harvest (step 9) first.`,
+        `objections in the owner's own words. Run the avatar phrase harvest (step 10) first.`,
     };
   }
 
@@ -366,6 +366,13 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     docId: delivered.docId,
     note:
       `Custom question set drafted: ${questions.length} questions (${tier})` +
-      (provenance.shortfall.length ? `, composition short in ${provenance.shortfall.length} bucket(s).` : "."),
+      (provenance.shortfall.length ? `, composition short in ${provenance.shortfall.length} bucket(s).` : ".") +
+      // The other half of the pair page-candidates.ts states on step 13, said here so step 12
+      // says it too. Both steps are mode:"auto", so postReadySteps skips them and
+      // instructionsFor is never reached — this note is the whole surface either one has, and a
+      // distinction stated on only one of two steps that share a corpus is not stated.
+      `\n*This is step 12, the MEASUREMENT set: these are frozen at Day 0 and the day 30/60/90 ` +
+      `numbers are scored against exactly them.* Nothing is ever published from this list. ` +
+      `Step 13 is the PUBLISHING backlog, same corpus, opposite job.`,
   };
 }

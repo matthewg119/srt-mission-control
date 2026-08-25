@@ -127,6 +127,28 @@ export interface SavePageInput {
   sourceReportId?: string | null;
 }
 
+/**
+ * Bust the per-client page cache, and never let that undo a write that already succeeded.
+ *
+ * ‼️ OUTSIDE A REQUEST CONTEXT `revalidateTag` THROWS, AND TWO OF THIS FILE'S CALLERS ARE NOW
+ * OUTSIDE ONE. `startPageDraft` and `appendPageBody` are reached from `handlePageStudioEvent`,
+ * which `api/slack/events/route.ts` invokes inside `waitUntil`. The throw lands AFTER the row is
+ * written, so the failure mode is the worst shape available: the draft exists, the thread never
+ * confirms it, and `page_studio_sessions.page_id` is never set, leaving a session that can never
+ * be claimed and a user looking at nothing.
+ *
+ * Same guard and the same reasoning as `revalidateClientHub()` in hub/resolve.ts and the attach
+ * path in hub/vercel-domains.ts, both of which already wrote this down. The tag expires on its
+ * own; a lost write does not.
+ */
+function bustPages(clientId: string): void {
+  try {
+    revalidateTag(pagesTag(clientId));
+  } catch {
+    // Not in a request (the Slack lane's waitUntil, a cron, a script). The TTL covers it.
+  }
+}
+
 export async function savePage(input: SavePageInput): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const slug = pageSlug(input.slug || input.title);
   if (!slug) return { ok: false, error: "That title does not produce a usable web address." };
@@ -164,7 +186,7 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
   const id = (data?.id as string | undefined) ?? input.id;
   if (!id) return { ok: false, error: "The page was not saved." };
 
-  revalidateTag(pagesTag(input.clientId));
+  bustPages(input.clientId);
   return { ok: true, id };
 }
 
@@ -204,7 +226,7 @@ export async function setPublished(
 
   if (error) return { ok: false, error: error.message };
 
-  revalidateTag(pagesTag(clientId));
+  bustPages(clientId);
   return { ok: true, slug: existing.slug as string };
 }
 
@@ -287,7 +309,7 @@ export async function startPageDraft(input: {
   }
   if (!data?.id) return { ok: false, error: "The draft was not opened." };
 
-  revalidateTag(pagesTag(input.clientId));
+  bustPages(input.clientId);
   return { ok: true, id: data.id as string, slug: data.slug as string, resumed: false };
 }
 
@@ -335,6 +357,6 @@ export async function appendPageBody(
 
   if (error) return { ok: false, error: error.message };
 
-  revalidateTag(pagesTag(clientId));
+  bustPages(clientId);
   return { ok: true, words: next.split(/\s+/).filter(Boolean).length };
 }

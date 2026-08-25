@@ -226,13 +226,18 @@ export function platformByKey(key: string): PresencePlatform | undefined {
 }
 
 /**
- * The six that gate the manual sweep. The twelve extended are context and never block.
+ * The core six. The thirteen extended are context and never block.
  *
- * ‼️ THIS IS NOT PLATFORM_COUNT AND THE TWO ARE NOT INTERCHANGEABLE. nap_sweep seeds all
- * EIGHTEEN rows and its verifier really does want eighteen. presence_sweep_manual closes on the
- * SIX, because the card has always described the extended tier as "context only. Findings, not
- * week-one cleanup", while the gate silently demanded all eighteen screenshots. Making the gate
- * agree with what the card already said is Matthew's call, 2026-08-24.
+ * ‼️ THIS IS NOT PLATFORM_COUNT, IT IS NOT THE GATE, AND NO TWO OF THE THREE ARE
+ * INTERCHANGEABLE. nap_sweep seeds all NINETEEN rows and its verifier really does want nineteen.
+ * The gate is SWEEP_GATE_COUNT, which is four DISTINCT platforms of any tier: the card had
+ * always described the extended tier as "context only. Findings, not week-one cleanup" while the
+ * gate silently demanded all eighteen screenshots, so the gate came down to six (2026-08-24) and
+ * then to a free choice of four (2026-08-25).
+ *
+ * CORE_SIX survives the gate no longer being keyed on it, deliberately: citation-cleanup.ts
+ * sorts core-six first and presence-pdf.ts renders the two tiers separately, and both go to the
+ * client. It is a SEVERITY tier, and it stopped being a gate.
  */
 export const CORE_SIX_KEYS: ReadonlySet<string> = new Set(CORE_SIX.map((p) => p.key));
 export const CORE_SIX_COUNT = CORE_SIX.length;

@@ -191,7 +191,7 @@ export async function renderPresencePdf(args: {
   engines: string[];
   questionSetVersions: string[];
   /**
-   * The state of the manual sweep STEP, as opposed to the state of the eighteen rows.
+   * The state of the manual sweep STEP, as opposed to the state of the nineteen rows.
    *
    * ‼️ WITHOUT THIS, A SKIPPED SWEEP AND AN UNFINISHED ONE RENDER IDENTICALLY. This document is
    * shown to the client on the onboarding call, and the gate is four distinct platforms out of

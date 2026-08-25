@@ -878,7 +878,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   // ‼️ IT READS THE CONFIRMED STATUS, NOT `status`, AND THAT USED TO BE A GREEN TICK OVER
   // WORK NOBODY HAD DONE.
   //
-  // `status` is the SEED column: seedPresenceSweep writes 'not_checked' into it eighteen times
+  // `status` is the SEED column: seedPresenceSweep writes 'not_checked' into it nineteen times
   // and nothing ever writes 'mismatch' there. `confirmed_status` is the ANSWER, and every other
   // consumer in this codebase reads it through effectiveStatus() (citation-cleanup.ts,
   // findings.ts, call-sheet.ts, presence-pdf.ts). This verifier counted `status = 'mismatch'`,

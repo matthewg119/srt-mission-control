@@ -2463,6 +2463,224 @@ is carved out by name — a domain would send `hub_preview`'s runner at the real
 used to assert step 9 sat at `ready`, which is **the state of a failed card post**: `postStep`'s
 last act is to park the row at `awaiting_me`, so `ready` only survives when the Slack post threw.
 
+### Four lanes in one checkout, merged (2026-08-25)
+
+Four sessions built four features side by side in this working tree under
+`docs/lanes/CONTRACT.md`: file ownership instead of branches, because four sessions in one folder
+would otherwise fight over `HEAD`. They composed on the first build. What follows is what each
+one changed, and then the three places where two correct changes made a third thing wrong, which
+is the part no lane could have found on its own.
+
+**The screenshot already says which platform it is.** `resolvePlatformFromUrl` reads the address
+bar off a sweep screenshot (`screenshot-read.ts`, Haiku, `temperature: 0`), so filing thirteen
+pictures no longer means typing thirteen platform names. Text attribution still wins and the
+write sits behind the same `.is("presence_platform", null)` predicate the text backfill uses, so
+**a model can never relabel what a person named**. The gate moved from six named platforms to
+`SWEEP_GATE_COUNT` = four DISTINCT platforms of any tier, counted over platforms and never over
+files; Trustpilot joined `EXTENDED`, making `PLATFORM_COUNT` 19.
+
+> ‼️ **A BRAND MARK IN A PAGE IS NOT AN ADDRESS BAR, AND THE LIVE CLIENT PROVES IT TWICE.** Only
+> `domains` on the platform record resolves anything; `chamber` has no `domains` entry and must
+> not get one, because its search surface is a Google results page. Of the five unattributed
+> screenshots on SRT Agency LLC, one resolves and four are viewport captures cropped above the
+> browser toolbar. Reading the logos would have made the table say 5 of 5 — and one of those four
+> is a **Bing Maps** page that the reader's own evidence string called "appears to be Google
+> Maps". A brand-mark reader would have filed it as Google Business Profile: a green tick on the
+> wrong platform, which is worse than no tick. The honest fix is one sentence of copy in the
+> thread note asking for the shot to include the browser bar.
+
+**The avatar is decided first, and something can finally write it.** `clients.primary_avatar` had
+a column, a CHECK constraint and a verifier and **no writer anywhere**, so on the first real
+client that step came out `skipped` because no human being could tick it. `clients/avatars.ts` is
+that writer. `avatar_confirmed` moved from position 11 to **8**, immediately after
+`competitor_shortlist` and `blockedBy: ["baseline_scan"]`, and `avatar_harvest` gained it as a
+blocker: researching a buyer before anybody has chosen one is the wrong order.
+
+- **Keys are unchanged, only array position and labels.** Renaming a key orphans every
+  `client_delivery_steps` row carrying it, including the `skipped` one this was built to rescue.
+- **`niche_briefs` is keyed on `niche_key`, and nothing keys it on `vertical_slug`.** The obvious
+  lookup returns **zero rows on the one client this had to work for**: its `vertical_slug` is
+  `aeo-agency` and the matching brief is `aeo-marketing-agency`, identified only by its
+  `business_type` matching character for character. `avatarCandidatesFor` walks vertical_slug,
+  then business_type, then niche_key-as-business_type, and reports which one matched. A miss
+  returns an empty list and invites a typed avatar; it never invents a candidate.
+- **`question_bank.avatar` holds the SLUG, not the a1/a2/a3 slot**, and the CHECK widened to
+  `^[a-z0-9][a-z0-9-]{0,59}$` for it. That table has **no `client_id`** and is shared across
+  every client in a vertical forever, so "a1" would mean whatever that client's brief had in
+  position one on the day they confirmed, and two clients would file two different buyers under
+  one tag. The unique key is now `(vertical, avatar, normalized) NULLS NOT DISTINCT` — the third
+  time this repo has had to write that down, and for the same reason each time: all 63 existing
+  rows carry a NULL avatar, nulls compare distinct by default, so a plain index would constrain
+  none of them and every re-run would insert 63 duplicates.
+- **The 63 rows were deliberately NOT backfilled.** They were harvested before anybody had
+  confirmed an avatar, and writing a slug onto them would be inventing which buyer they were
+  collected for.
+- `avatar_briefs (vertical, avatar_slug)` makes the deep research reusable: the second client
+  aiming at the same buyer is offered what the first one produced. The brief itself is now the
+  three-message framework, MENSAJE 1 / 2 / 3, each fenced so one can be copied without picking up
+  the next, with the confirmed avatar filled into `[PRODUCTO]` and the selling slot. Deterministic
+  byte for byte, and asserted as such.
+
+**Stop asking a marketing agency about lip filler.** `universalSetFor` returns the shipped twenty
+for `med_spa` and, for any other vertical, reads or derives-and-freezes `universal_v1@{vertical}`
+from that client's own newest `audit_reports.prompts`. `composeTrackedSet` puts the client's OWN
+two questions first, built from what they typed at intake and LABELLED `from intake` so they can
+see which ones are theirs to correct, and DROPS any of the rest whose placeholders nothing on the
+record fills rather than substituting melasma into a business that has never heard of the word.
+
+> ‼️ **`services.primary_service` HAS NEVER EXISTED.** `substitutionsFor` read it as the fallback
+> for `treatmentPrimary`; the intake key is `services_list`. So every client without
+> `ideal_patient.highest_margin` resolved `[treatment]` to the empty string. Another reader with
+> no writer, and the fourth this file records.
+
+> ‼️ **THE VALUES CARRY THEIR PROVENANCE AND NOT ONLY THE QUESTIONS DO**, and the first merged
+> call sheet is why. The twenty came out clean for the agency, and the substitutions table at the
+> top of the same page still printed `concern: melasma` and `devicePrimary: Morpheus8`, bare,
+> under a heading reading "with your values substituted in". They are neither the client's values
+> nor used by anything — `composeTrackedSet` dropped every question that needed them, which is
+> exactly why they are safe to keep in the object and exactly why they are not safe to print. A
+> fallback that feeds nothing is now NAMED as one rather than removed, because hiding the row
+> would leave a reader wondering why a placeholder they can see has no value.
+
+**Step 21 refuses until a payment is RECORDED.** `clients.payment_recorded_at` and its three
+companions, written by the panel at `id="payment"`.
+
+> ‼️ **IT IS AN ASSERTION THE BOARD RECORDS, NEVER EVIDENCE OF A CHARGE.** Nothing in this
+> application talks to a payment processor, so nothing here can observe money moving. Exactly the
+> distinction `day_0_source` already draws between `photograph_2` and `manual_step`. Every surface
+> reads "payment recorded by X on DATE"; the test suite greps all three payment files, comments
+> stripped first, for `payment received` and for any processor reference.
+
+> ‼️ **THE GATE LIVES IN THE VERIFIER, AND A GATE IN `stepPrecondition` ALONE IS BYPASSED.**
+> `stepPrecondition` is called from `api/slack/actions/route.ts` and nowhere else; the client
+> board's checkbox posts straight to `api/clients/[id]/delivery-step`, which calls
+> `setDeliveryStep`, which runs `verifyStep` before the row write. Both carry the refusal now,
+> reading one module so two copies cannot start disagreeing. The refusal states the REASON, not
+> the rule: technical access is collected after the commitment, because a client who has not
+> committed does not hand over their Google account, and asking early ends the call with neither.
+
+**Step 20 hands over 33 closing questions** (`artifacts/call-questions.ts`), generated by the
+existing `call_sheet` runner in CLOSER order, the same spine `call-coach/suggest` runs on, so the
+document and the live coach cannot be at different stages of one call. The facts are built in
+code and the questions are the model's; absent prompts come from `audit_runs.prompt`, never
+`audit_reports.prompts`, the rule `findings.ts` states for the same reason. It does **not** call
+`deliverArtifact`: that reaches `postStepAnchor` and would put step 20's top-level message in the
+channel while step 18 is still the cursor. It stores the bytes and writes `call_held.output_ref`,
+and step 20's card links it when that step legitimately appears.
+
+**The page studio.** `page <client>` in `#aeo-seo-page-drafting`, a bare digit claims one of the
+frozen candidates, and everything typed or dictated after that goes into `answer_md` **verbatim**.
+`polish` posts a suggestion and never writes. The board finally has an **Edit** control on every
+page row: `savePage` has always accepted an `id` and the route has always forwarded it, so until
+now every saved page was write-once and unreachable.
+
+- **The menu is FROZEN on the session row**, not re-derived at digit time, or a re-run of step 13
+  would change what "2" means between the card and the number. Same hazard `client_pages.question`
+  is stored verbatim to avoid.
+- **A bare digit is a claim only while nothing is claimed.** Once a page is open, `3` is something
+  he said about the page. Same doctrine as `thread-assistant.ts`.
+- **Two client matches is the same answer as zero.** It lists them and refuses to guess, because
+  guessing opens a draft against the wrong client's hub and the mistake only surfaces once a page
+  is live on somebody's real domain.
+- **Derived ideas can never out-rank a measured gap by being a guess.** `page_candidates.origin`
+  separates a phrase a buyer typed from a page this system assembled out of a cluster of them,
+  they get their own PDF section and their own heading on the menu, and `currentlyNamed` is
+  **always null** on one, so the visibility-gap bonus (the largest term) is never collected.
+- **`page_publish_request` does not publish and must not be changed to.** `setPublished` having
+  exactly one caller is what makes `grep -rn "setPublished" src/` a real hole check on the Day 0
+  wall. A Slack publisher would be a second place to get the before/after ordering wrong, on a
+  surface with no session behind it.
+- **Approve was dropped**, on Matthew's call: `client_pages.status` is draft/published/archived
+  and adding an approved state would put a SECOND hard rail into a codebase whose stated doctrine
+  is that Day 0 is the one place it blocks.
+
+> ‼️ **STEPS 12 AND 13 POST NO CARD AT ALL, and their `instructionsFor` arms are dead on the
+> normal path.** Both are `mode: "auto"`, so `postReadySteps` skips them and `instructionsFor` is
+> never reached, the same dead-card class `first_page` was in one pass earlier. The only thing
+> that reaches Slack for either is the runner's `note`, which is therefore where the one line
+> that matters had to go. Both notes now carry the distinction, because it is a distinction about
+> a PAIR and stating it on one of two steps that share a corpus is not stating it: **step 12 is
+> the MEASUREMENT set, frozen at Day 0 and never published from; step 13 is the PUBLISHING
+> backlog. Same corpus, opposite jobs.**
+
+#### The three interactions no single lane could see
+
+**1. A client-facing PDF explained an absence that had been filled that afternoon.**
+`page-candidates.ts` printed *"Not grouped by avatar: nothing in the system records which avatar
+was confirmed, so an a1/a2/a3 tag here would be invented rather than read"* — true when it was
+written, false by the time it shipped, because the avatar lane built the writer in the next room.
+The lane that owned the file was told to leave the comment and the lane that falsified it did not
+own the file, which is exactly the gap a merge exists to close.
+
+> The grouping stays on THEME, and for a better reason than the old one: a client has exactly ONE
+> confirmed avatar, so grouping by it produces one group containing everything. It would replace
+> an axis that separates rows with a constant. The paragraph now names the confirmed avatar, or
+> says step 8 has not happened yet, and says the candidates were harvested against the vertical
+> rather than tagged per avatar.
+>
+> **`page_candidates.avatar` still stays null**, and the reason moved from "the column does not
+> exist" to a statement about the corpus: the honest per-row tag is `question_bank.avatar`, which
+> records which buyer that phrase was harvested FOR and is null on every row written before an
+> avatar could be confirmed. Stamping the client's current avatar onto rows harvested before
+> anybody chose it is inventing the tag and then treating it as evidence.
+
+**2. One waiting step at a time survived the reorder.** `reachableCursor` breaks the walk on the
+first unresolved step whose `mode !== "auto"`, reachable or not, and `avatar_confirmed` is now a
+manual step at position 8 with `custom_question_set` and `page_candidates` both blocked behind it.
+Proved on a throwaway client rather than argued: the walk stops at 5, then 7, then 8, then 9
+(`auto_then_manual` is also not `auto`), each one revealing exactly one more, anchors posted in
+`DELIVERY_STEPS` order, and step 8's verdict coming back `system` tier off the column.
+
+**3. `substitutionsFor`'s CODE path is byte-identical and its VALUES are not, deliberately.**
+`UNIVERSAL_V1_MED_SPA`, `NEEDS_LOCATION_PREFIX`, `materialize`, `materializeAll` and
+`freezeUniversalV1` are unchanged; `SUBSTITUTION_RULES` is the old replace chain lifted into a
+table in the same order; `substitutionsFor` kept its signature and is a two-line delegate, so
+`custom-question-set.ts` and `page-candidates.ts` needed no edit and got none. Verified by
+rendering the twenty at HEAD and at the pre-lane commit with identical `Substitutions` and
+diffing: same bytes, including a fixture where every placeholder is distinct so a rule that
+stopped firing could not hide behind a blank.
+
+> What DID change is what feeds it. `treatmentPrimary` now falls back through `services_list`
+> (see `primary_service` above) and `competitorIntake1` prefers the confirmed step-7 competitor,
+> both filtered through `usableCompetitorName`. Med spa clients inherit both. They are bug fixes,
+> they are not no-ops, and calling the whole thing "unchanged" would be wrong in the one direction
+> that matters.
+
+#### One more, found while proving the page studio
+
+> ‼️ **`revalidateTag` THROWS OUTSIDE A REQUEST CONTEXT, AND `hub/pages.ts` CALLED IT UNGUARDED
+> AT FOUR SITES.** `hub/resolve.ts` and `hub/vercel-domains.ts` had already written this down and
+> wrapped theirs. `startPageDraft` and `appendPageBody` are reached from `handlePageStudioEvent`,
+> which `api/slack/events/route.ts` invokes inside `waitUntil`, and the throw lands AFTER the row
+> is written, so the failure mode is the worst shape available: the draft exists, the thread never
+> confirms it, and `page_studio_sessions.page_id` is never set, leaving a session nobody can claim
+> and a person looking at nothing. All four now go through `bustPages()`. **Failing to bust a
+> cache that expires on its own must never undo a write that already succeeded.**
+
+#### Housekeeping the merge did, and what it left alone
+
+Counts and step numbers that lane work had made false were corrected where they describe the
+PRESENT and left where they describe the past: "eighteen platforms" became nineteen in the six
+places asserting what the config holds today, and stayed in the eight places recounting a bug
+("the gate used to be eighteen files in the thread"). The three refusals naming "the avatar phrase
+harvest (step 9)" now say step 10. `test-onboarding-artifacts.ts`'s *EVERY LANE APPENDS ABOVE THIS
+SUMMARY* marker had drifted 229 lines above the summary, with two lane blocks appended between the
+warning and the thing it warns about, and now sits at the boundary it names.
+
+Migrations, all four applied: `2026-08-25-lane-1-screenshots.sql`, `-lane-2-avatar.sql`,
+`-lane-3-payment.sql`, `-lane-4-pages.sql`. Probes: `_probe-address-bar.ts` (read-only, it never
+calls `attributeFromScreenshot`), `_probe-presence-url.ts`, `_probe-question-set.ts` (dry unless
+`--freeze`), and `_probe-cascade.ts` rewritten for the cursor — its proposition is now exactly one
+waiting step at a time, which INVERTS what it used to assert.
+
+**Still owed, and none of it is code:** the bot is not a member of `#aeo-seo-page-drafting`
+(`is_member: false`), so the page studio cannot receive a message until it is invited;
+`OPENAI_API_KEY` gates the voice-note hop and `transcribeAudio` returns `{ok:false}` with the
+thread saying so rather than failing silently; `CLIENT_LINK_SECRET` is unset, so `clientPreviewUrl`
+returns null and the cards print "No shareable link could be minted" rather than a dead URL; and
+`nap_sweep` reads "18 of 19 seeded" until the step is un-ticked to pick up the Trustpilot row,
+which its own refusal already says.
+
 ### SLACK IS INTERNAL ONLY (2026-08-20)
 ### SLACK IS INTERNAL ONLY (2026-08-20) — this reversed three days after it shipped
 `client-channel.ts` is DELETED. There are no per-client Slack channels and no guest

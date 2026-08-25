@@ -131,7 +131,7 @@ const STEP_LIST = [
   // genuinely the only thing it waits on.
   { key: "avatar_confirmed", phase: PHASE_BEFORE, label: "Avatar confirmed: which customer this whole build is aimed at", mode: "manual", blockedBy: ["baseline_scan"] },
   // ‼️ auto_then_manual, NOT auto, and presence-platforms.ts is the reason.
-  // `api: false` on all eighteen platforms: Google Places, Bing, Foursquare and Yelp Fusion were
+  // `api: false` on all nineteen platforms: Google Places, Bing, Foursquare and Yelp Fusion were
   // each checked and none is keyed here. There is no automated path to a review count, so the
   // runner seeds the rows and composes the searches and a PERSON reads the listings. Ticking
   // this as plain `auto` would mark a measurement complete that measured nothing, and findings

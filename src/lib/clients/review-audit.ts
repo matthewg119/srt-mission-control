@@ -7,7 +7,7 @@
 //
 // ‼️ THIS STEP IS auto_then_manual, AND IT WAS DECLARED PLAIN `auto`. THAT WAS THE BUG.
 //
-// src/config/presence-platforms.ts records `api: false` on all eighteen platforms, and its
+// src/config/presence-platforms.ts records `api: false` on all nineteen platforms, and its
 // header documents that Google Places, Bing Maps, Foursquare and Yelp Fusion were each checked
 // on 2026-08-18 with no key available in this environment. Runner v3's own how-to-work section
 // says the same thing in one line: "Presence-sweep keys: none."

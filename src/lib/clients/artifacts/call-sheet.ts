@@ -20,6 +20,7 @@ import {
   composeTrackedSet,
   ORIGIN_LABEL,
   substitutionsWithProvenance,
+  type SubProvenance,
   universalSetFor,
   type MaterializedSet,
   type Substitutions,
@@ -63,6 +64,8 @@ interface CallSheetData {
   cnameTarget: string;
   searchConsoleTxt: string | null;
   universal: MaterializedSet;
+  /** Where each substitution VALUE came from. See the render for why it is printed. */
+  substitutionProvenance: SubProvenance;
   /** e.g. "universal_v1@aeo-agency", or null when nothing could be frozen. */
   questionSetVersion: string | null;
   substitutions: Substitutions;
@@ -154,9 +157,42 @@ function questions(state: PageState, d: CallSheetData) {
     { color: MUTED, size: 8.5 }
   );
 
+  // ‼️ THE VALUES CARRY THEIR PROVENANCE TOO, AND THE FIRST MERGED CALL SHEET IS WHY.
+  //
+  // The questions came out clean for the agency: no lip filler, no melasma, no Morpheus8. This
+  // table still printed `concern: melasma` and `devicePrimary: Morpheus8` at the top of the same
+  // page, unlabelled, under a heading saying "with your values substituted in". They are neither
+  // the client's values nor used by anything: composeTrackedSet DROPPED every question that
+  // would have needed them, which is exactly why they are safe to leave in the object and
+  // exactly why they are not safe to print bare.
+  //
+  // A fallback that feeds nothing is named as such rather than removed from the table. Hiding it
+  // would leave a reader wondering why a placeholder they can see in the set has no row, and the
+  // whole point of reading this page aloud is that a wrong value can be corrected on the call.
+  const usedInSet = new Set(
+    d.universal.questions.flatMap((q) =>
+      (Object.keys(d.substitutions) as Array<keyof typeof d.substitutions>).filter(
+        (k) => d.substitutions[k].length > 0 && q.text.includes(d.substitutions[k])
+      )
+    )
+  );
+  const SOURCE_WORD: Record<SubProvenance[keyof SubProvenance], string> = {
+    intake: "from intake",
+    selected_competitor: "the competitor you picked",
+    fallback: "stand-in",
+    missing: "nothing on record",
+  };
   keyValueTable(
     state,
-    Object.entries(d.substitutions).map(([k, v]) => ({ label: k, value: v })),
+    Object.entries(d.substitutions).map(([k, v]) => {
+      const src = d.substitutionProvenance[k as keyof typeof d.substitutions];
+      const unused = !usedInSet.has(k as keyof typeof d.substitutions);
+      const note =
+        src === "fallback" && unused
+          ? "stand-in, and no question in this set uses it"
+          : SOURCE_WORD[src];
+      return { label: k, value: `${v}  (${note})`, tone: src === "fallback" ? ("warn" as const) : undefined };
+    }),
     { labelWidth: 55, size: 8.5 }
   );
 
@@ -492,6 +528,15 @@ export async function generateCallSheet(
     universal,
     questionSetVersion: set.frozen ? set.version : null,
     substitutions,
+    substitutionProvenance: resolved?.provenance ?? {
+      city: "missing",
+      state: "missing",
+      treatmentPrimary: "missing",
+      clientName: "missing",
+      competitorIntake1: "missing",
+      concern: "fallback",
+      devicePrimary: "fallback",
+    },
     competitors,
     sweep,
     bookingSoftware: (client.booking_software as string | null) ?? null,

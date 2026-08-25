@@ -5,7 +5,7 @@
 // Acme Med Spa Greensboro NC'."
 //
 // That instruction is the whole design. A checklist row saying "Presence sweep, manual
-// tier" is a to-do; the same row with eighteen search strings already composed from the
+// tier" is a to-do; the same row with nineteen search strings already composed from the
 // canonical NAP is work you can actually start. The difference is whether it gets done on a
 // Tuesday afternoon.
 //
@@ -1031,7 +1031,7 @@ async function presenceRefusal(clientId: string, stepKey: string): Promise<strin
  * Slack's hard limit on one section's text. Exceeding it fails the WHOLE message.
  *
  * ‼️ THE SWEEP CARD WAS ALREADY AT 2,988 CHARACTERS FOR A SHORT BUSINESS NAME, and the name is
- * interpolated into all eighteen search strings. Measured on the cascade probe, whose client is
+ * interpolated into all nineteen search strings. Measured on the cascade probe, whose client is
  * called "ZZ Cascade Probe {epoch}": `invalid_blocks`, no card posted at all, and `postStep`
  * returns early on that failure — so the step sat there with an anchor, no instructions and no
  * buttons. A real client named "Greensboro Aesthetic and Wellness Institute" would have hit it

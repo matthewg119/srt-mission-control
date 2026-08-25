@@ -343,8 +343,9 @@ ok("it never says 'no issues found'", !/no issues found/i.test(untouchedText));
 ok("it does not claim anything matches", !/matches your record/i.test(untouchedText));
 ok("the fidelity footer says one engine", /1 engine/i.test(untouchedText));
 
-// ‼️ A SKIPPED SWEEP MUST SAY SO ON THE FACE OF THE DOCUMENT. With the gate now at the six core
-// platforms, twelve extended will routinely be unchecked, so "why is half of this blank" is the
+// ‼️ A SKIPPED SWEEP MUST SAY SO ON THE FACE OF THE DOCUMENT. With the gate at four distinct
+// platforms of any tier, most of the nineteen will routinely be unchecked, so "why is most of
+// this blank" is the
 // normal state of the page and a row-level count cannot answer it: the rows look identical
 // whether somebody skipped the step or simply has not finished it. The step is the only thing
 // that knows. This is also the case that proves the wording rule survives the addition, because
@@ -1658,9 +1659,6 @@ import { pageSlug } from "../src/lib/hub/pages";
   );
 }
 
-// ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
-// records what happens otherwise: five checks once sat under the process.exit and never ran.
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ---- LANE 1 ---- screenshots become evidence (2026-08-25)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1887,6 +1885,13 @@ import { pageSlug } from "../src/lib/hub/pages";
     framework === buildDeepResearchBrief({ ...briefInput, avatarLabel: "laser hair removal", vertical: "med spa" }), true);
 }
 
+
+// ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
+// records what happens otherwise: five checks once sat under the process.exit and never ran.
+//
+// It sat 229 lines further up until the merge, with two lane blocks appended between the
+// warning and the thing it warns about. A boundary marker that is not at the boundary is
+// how the next lane appends in the right place for the wrong reason.
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} checks failed.`);

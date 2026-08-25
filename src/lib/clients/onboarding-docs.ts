@@ -4,7 +4,7 @@
 // stored in Supabase storage, written to onboarding_docs against that task. That is how
 // screenshots become evidence without me filing anything."
 //
-// That last clause is the requirement. The presence sweep is eighteen platforms, most of
+// That last clause is the requirement. The presence sweep is nineteen platforms, most of
 // them manual, and the evidence for "missing" is a screenshot of an empty search result.
 // If filing it is a separate chore, it does not happen — and then the 3c PDF has nothing
 // to show and findings section 2 has nothing behind it. So the filing has to be a side

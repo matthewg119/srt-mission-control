@@ -1,5 +1,6 @@
 /**
- * Probe: confirming step 2 makes steps 7 and 9 appear BY THEMSELVES.
+ * Probe: exactly ONE step waits for a person at a time, and resolving it reveals exactly one
+ * more.
  *
  *   bunx tsx --env-file=.env.local scripts/_probe-cascade.ts [--keep]
  *
