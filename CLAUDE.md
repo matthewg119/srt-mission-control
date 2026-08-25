@@ -748,6 +748,126 @@ transcribed.
   where that decision is made. Same call `formatNoWebsitePitchNote` made.
 - Probe: `scripts/_probe-booking-script.ts` (the three states, the city trim, identity populated).
 
+### The Instagram DM lane (`dm-pitch.ts` + `lib/instagram/`, 2026-08-25)
+
+The same measured door knock as the Email hook, in a chat bubble, reached from a Chrome extension
+sitting on an Instagram profile instead of from a CRM lead page. Separate repo for the extension
+(`Desktop/Code/srt-ig-extension`, installed unpacked, so a reload in `chrome://extensions` is all a
+change needs). One button: add the lead, run the scan, draft three DMs.
+
+> ‼️ **IT IS A SEPARATE FILE FROM `hook-pitch.ts`, NOT A FLAG ON IT.** The SCAN is imported and never
+> re-run differently; what differs is the SURFACE. An email carries a subject, a greeting, an
+> appended `PERMISSION_CLOSE` and a two-line sign-off, and all four read as an email pasted into a
+> DM. A boolean on `draftHookPitch` would have had to branch around each of them.
+
+**Two lanes into one drafter.** `DmFacts` is a discriminated union, `hook` (there is a site, so
+`runHookCheck` crawls it) or `nowebsite` (`runMiniVisibilityCheck`, name and city only). Deliberately
+not one widened shape: a `?? ""` somewhere downstream would turn "we never looked" into "we looked
+and found nothing".
+
+**The variants differ in WORDING and never in CLAIM.** Three identical DMs read as a bot, which is
+why `DM_OPENERS` exists; three different findings would be inventing two of them, since only one
+thing was measured. The angle is picked once, from the scan. This is the deliberate inversion of the
+"three cards must differ by ANGLE" rule the call-script cards are held to, and the reasoning is
+written above `DM_OPENERS`.
+
+**Five sentences, one question mark**, enforced by `draft-linter.ts` under `stage: "dm"`. `bodyOnly`
+drops the greeting but `DM_CLOSE_LINE` ends in a period and counts, so the real budget is
+finding + ask + close, plus one for the opener.
+
+#### The no-website copy rebuild (2026-08-25)
+
+Matthew read the draft for `leahskinmethod` and rejected it. It said she had no site of her own and
+never said what happened when the engines were asked. Reading `ig_dm_runs.check_json` explained why:
+`{"results": [], "identity": null, "researched": false}`. **Nothing had been asked.** Her CRM row
+read `business_name: "Leah"`, `biz_city: null`, so research got a person's first name with no city,
+missed, produced no trade, and the engine loop was skipped entirely. The limp copy was the symptom.
+
+> ‼️ **THE RIVAL RULE WAS SATISFIED, NOT RELAXED.** `DmSubject.topRival` used to be hardcoded null on
+> the no-website lane because that lane filled `named` via `namesFrom()`, a line-by-line regex whose
+> own comment called it crude on the grounds that it only ever fed a prompt. Correct at the time.
+> The fix was to give that lane the same `extractRecommendedBatch` pass the hook lane runs — filtered
+> by `isClientName`, counted **once per answer** — and to **DELETE `namesFrom()`** rather than bypass
+> it, so it cannot come back. A name good enough to steer a model is still not good enough to print
+> in front of the person it is about.
+
+> ‼️ **EACH RIVAL PRINTS ITS OWN COUNT.** Matthew asked for two names and wrote "Competitor 1 and 2
+> shows up in 3 out of 4 searches". That is only true if BOTH appeared in the same three, and they
+> usually will not have. One count stretched over two names is a false claim about at least one of
+> them, and it is the kind a prospect checks in the thread he is reading it in. `DM_MAX_RIVALS_NOWEBSITE`
+> is 2, `DM_MAX_RIVALS_HOOK` is 1 — the hook lane's one-rival sentence is copy Matthew signed off and
+> widening it was never what he asked for.
+
+> ‼️ **WHY THE ENGINE HAD NOTHING OF THEIRS IS A FACT ABOUT THE PROSPECT, NOT A PHRASING CHOICE.**
+> His draft said "because your website is not visible", which for someone with no site at all
+> describes a situation they do not have. `dmReasonLine` has three versions and `dmSubjectOf` derives
+> which one from the scan that ran, never the model: `none` (no site anywhere), `booking_only` (there
+> IS a page, it ranks, and it belongs to the software vendor) and `not_surfacing` (they have a site
+> and it did not come back — the only case where his original wording is correct). Same failure class
+> as `NOTHING_TO_FIND_LINE` claiming a business has no Google listing.
+>
+> `booking_only` has **no producer yet**: that is the "Only a booking link" lane in
+> `docs/CONTINUATION-booking-link-lane.md`. The line is pinned in `pitch.ts` so both the DM and the
+> email can reach it, which is what that doc asks for.
+
+**The finding folded from two sentences to one, and that was forced arithmetic.** The reason line
+costs a sentence, the ask and the close take two more, and the opener is the fifth. With the old
+two-sentence finding every `pretext` and `question` variant came to six and was rejected by
+`dm-length`. `dmRivalLine` and `dmAbsenceLine` now join with "and", which is also how Matthew's own
+draft reads. `dmPresentLine` is untouched and takes **no** reason line: all three explain an absence,
+and that angle fires when they DID come back.
+
+**The trade comes off their own Instagram bio** (`tradeFromBio`, one Haiku call, never throws). It
+beats research because they wrote it, and it is what lets the questions run at all on a prospect
+research could not identify. `shortTrade`'s job is preserved and is the whole reason this is a model
+call rather than a substring: Leah's bio reads `BBL • Moxi • Morpheus`, which is device branding a
+practitioner is proud of and not what a patient types. The validator is mechanical — 2 to 5 words,
+lowercase, no digits, no `@`, no `#` — because a prose guard is not a guard. A rejected trade falls
+back to research; a wrong trade is a worse question than no question.
+
+> ‼️ **`researched` AND `enginesAnswered` ARE NOW GENUINELY INDEPENDENT.** `runMiniVisibilityCheck`
+> used to return early on a research miss with `results: []`. Everything downstream must branch on
+> the one it actually needs. `miniCheckContext`'s unresearched branch used to open "NO ENGINE
+> QUESTIONS WERE RUN", which became a lie; the PROHIBITION is still right (that branch resolves to
+> `nothing-to-find`, and an email that also reports an engine result is an email with two findings),
+> so the rule stayed and the false statement of fact went. The results are withheld rather than
+> shown, which is the same absent-beats-forbidden move the price gate makes.
+
+**The city gate, twin of `needsWebsite`.** No site and no location returns `needsCity: true` **before
+spending the scan**, and the panel asks for a business name and a city or ZIP, or "I don't know".
+Gated on `!website` only: the hook lane reads the city off the pages it crawls, so asking there would
+be asking a question that already has an answer. A ZIP is resolved to `City, ST` by
+`resolveCityInput` or refused — never passed through, because every sentence that prints a city
+splits it on the first comma and reads it aloud.
+
+> ‼️ **A TYPED VALUE OVERWRITES THE CRM ROW; A SCRAPED ONE ONLY FILLS BLANKS.** `upsertContact`'s
+> fill-blanks rule is right for a scrape and exactly wrong for a person correcting one. Without the
+> inversion a wrong business name read off a profile is permanent — the row is never blank again, so
+> every future press re-reads "Leah" and research keeps missing.
+
+> ‼️ **A CITYLESS RUN MAY NOT EMIT A CITY-SHAPED SENTENCE.** "I don't know" runs national questions,
+> so "when someone asks ChatGPT for laser skin treatments in your area" is a claim about a search
+> nobody made. The fixed lines drop the clause themselves; the `dm-cityless` lint rule catches a
+> model that reaches for it in prose. It is a PHRASE list, not a place-name detector — a detector
+> over free text either rejects good drafts on a capitalised word or misses the one that matters.
+
+**Two bugs this work sat on top of, both fixed:**
+
+| Bug | Was |
+|---|---|
+| fabricated absence | `buildAliases(name, null)` returns `[]` for a name with no usable token, `isMentioned` then returns false, and that was recorded as `appeared: false`. "We could not look" written down as "they were absent", feeding a `missCount` that is now a printed claim. Now `null`, same guard as `hook-pitch.ts` |
+| a paragraph in a chat bubble | `dmSubjectOf` read `identity.whatTheyDo`, a whole research sentence, and not even the string the questions were asked with (`shortTrade` was applied to the prompts and thrown away). `MiniCheck.trade` now stores what was asked |
+
+**`check_json` is whatever shape `MiniCheck` had the day it was written**, and Regenerate rehydrates
+it through `factsFromRow`. Rows from before this change carry no `trade` or `topRivals`, so that
+function defaults them and `dmSubjectOf`/`pickAngle` both `?? []` as well.
+
+- Probe: `scripts/_probe-dm-pitch.ts`, 85 pure checks, no network. **Its summary and `process.exit`
+  must stay the last two lines of the file** — five checks once sat below them and never ran.
+- Table: `ig_dm_runs` (`docs/2026-08-25-instagram-dm-lane.sql`). **Read the rows rather than
+  reasoning about them.** That table is how the `threads` alias bug was found and how the empty
+  `leahskinmethod` scan above was found, and it has beaten reading the code every time.
+
 ## /scan — the self-serve public funnel (2026-08-05)
 `srtagency.com/scan` (Vercel rewrite → `mission.srtagency.com/scan`). Paste a URL, watch six
 agent steps run, trade an email for the report. It is a FRONT END over the audit engine — no
