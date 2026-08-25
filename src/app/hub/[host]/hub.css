@@ -174,6 +174,62 @@ body:has(.hub-root) {
 }
 .rev-out { margin-top: 0.5rem; }
 
+/* The microphone. Rendered only where the browser has SpeechRecognition; see review-client.tsx
+   for why it is that API and never an upload. */
+.rev-mic {
+  margin-top: 0.5rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--hub-accent);
+  background: transparent;
+  border: 1px solid var(--hub-accent);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+}
+.rev-mic.is-live {
+  color: #ffffff;
+  background: var(--hub-accent);
+}
+
+/* ‼️ THE MIRROR AND THE TEXTAREA MUST MATCH CHARACTER FOR CHARACTER AND METRIC FOR METRIC.
+   The textarea is transparent and sits on top; the div behind it holds the same string with
+   the hard sentences wrapped in <mark>. Any difference in font, size, letter-spacing, padding,
+   border width or wrapping moves the highlight off the words it belongs to. Change one, change
+   both. `white-space: pre-wrap` and `word-break` are what make the two wrap identically. */
+.rev-editor { position: relative; margin-top: 0.5rem; }
+.rev-editor .rev-out {
+  position: relative;
+  margin-top: 0;
+  background: transparent;
+  color: var(--hub-fg);
+  caret-color: var(--hub-fg);
+}
+.rev-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  font: inherit;
+  font-size: 1rem;
+  line-height: normal;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--hub-bg);
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.rev-mirror mark {
+  background: var(--hub-accent-soft);
+  color: transparent;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 0 var(--hub-accent);
+}
+
+.rev-reading { font-size: 0.9375rem; color: var(--hub-muted); margin-top: 0.75rem; }
+
 .rev-dests { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
 .rev-dests a {
   border: 1px solid var(--hub-accent);

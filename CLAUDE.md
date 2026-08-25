@@ -148,10 +148,13 @@ AUDIT_SIGNATURE_NAME=      # DEAD IN PRACTICE. Microsoft removed GET /beta/me/ma
 OUTREACH_SIGNATURE_NAME=   # Who cold outreach is SIGNED by, two plain lines. Default "Matthew
                            # Garcia". Different thing from AUDIT_SIGNATURE_NAME above.
 OUTREACH_SIGNATURE_AGENCY= # Default "SRT Agency".
-SRT_PAYMENT_URL=           # Where they pay. The Loom v2 close ("click the link I sent over") and the
-                           # delivery email both carry it. UNSET IS HANDLED, not ignored: the script
-                           # prints a correction instead of the close, PRE-FLIGHT says NO PAYMENT
-                           # LINK SET, and the delivery email flags it. Set it before recording.
+SRT_ONBOARDING_CALL_URL=   # Where they BOOK. Replaced SRT_PAYMENT_URL on 2026-08-25: nothing is
+                           # charged up front any more, so the Loom close, the delivery email and
+                           # the audit report CTA all send them to the onboarding call instead of a
+                           # checkout page. UNSET IS HANDLED, not ignored: the script prints a
+                           # correction instead of the close, PRE-FLIGHT says NO BOOKING LINK SET,
+                           # the delivery email flags it in Spanish, and PricingCta renders the
+                           # offer with no button rather than a dead link. Set it before recording.
 AUDIT_AUTOSEND_ENABLED=    # Unset = lead pitches NEVER send themselves. "1" arms the timer.
 AUDIT_AUTOSEND_MINUTES=    # Optional, default 5. Only meaningful when the above is on.
 SCAN_IP_SALT=              # Salt for hashing /scan client IPs. Optional but SET IT: the default
@@ -1082,16 +1085,24 @@ COMMITMENTS block. v3 merges them so the fix lands while the problem is still in
 > the guarantee now says properly, with a number, a window, one tier and a stated remedy. Do not put
 > it back beside the guarantee.
 
-`loom_state.tier` (jsonb, **no migration**) carries the decision to the PRE-FLIGHT card, the script,
-`call-script.ts` and `delivery-email.ts`, so the closing call quotes the tier the prospect watched.
-A hand-quoted `loom $499` sets tier to null and drops the guarantee: it belongs to a named tier, not
-to a figure.
+`loom_state.tier` (jsonb) is **DEAD as of 2026-08-25 and nothing reads it.** The field stays because
+old rows are a true record of what those prospects were quoted; reviving it as an input would make a
+bare `script` rebuild quote an offer that no longer exists. A hand-quoted `loom $499` is now the only
+per-recording override that changes the offer, and it drops BOTH standard commitments with it: a
+number agreed by hand does not drag the standard guarantee and free period along.
 
-**`PAYMENT_LINK` is tri-state and both callers handle it.** `SRT_PAYMENT_URL` unset is a real state,
-not a config error to paper over: the script prints a `!!` correction instead of the close, PRE-FLIGHT
-prints `NO PAYMENT LINK SET` instead of a checklist item, and the delivery email flags it and writes
-`[LINK DE PAGO]`. Same discipline as `site_signals` and `robots_check`. A promised link that does not
-exist is discovered by the prospect, after the recording, when nothing can be done about it.
+**`BOOKING_LINK` is tri-state and every caller handles it.** `SRT_ONBOARDING_CALL_URL` unset is a real
+state, not a config error to paper over: the script prints a `!!` correction instead of the close,
+PRE-FLIGHT prints `NO BOOKING LINK SET` instead of a checklist item, the delivery email flags it and
+writes `[LINK DE AGENDA]`, and `PricingCta` renders the offer with no button rather than a dead
+`href="#"`. Same discipline as `site_signals` and `robots_check`. A promised link that does not exist
+is discovered by the prospect, after the recording, when nothing can be done about it.
+
+**Two more constants are deliberately null and say so out loud.** `QUALIFIED_INQUIRY_DEF` is the
+definition of the phrase that STARTS THE BILLING, and nothing in this pipeline can measure
+"AI-sourced"; `FRESHNESS_STAT` is the "87% of citations are under 30 days old" line, which has no
+source in this repo. Both print a warning in the script header until somebody fills them in, and the
+freshness pillar makes its point without a figure in the meantime.
 
 **`TradeVoice.attract` was deleted with v2.** The best customers are now read out as their own card
 labels, so the spoken plural rewording that fed "get in front of more X or Y" had nothing left to
@@ -2114,6 +2125,209 @@ is unchanged. What follows are defects inside it.
 on a real one: `_debug-post-all-steps.ts` forced anchors out for all 33 steps ignoring `blockedBy`,
 and `postStepAnchor` short-circuits on an existing anchor. It refuses to run against the
 production channel.
+
+### Making the 33 steps runnable by a person (2026-08-25)
+No migration. The one-message-per-step shape and the two evidence tiers are unchanged. This pass
+is about what the cards SAY, and about two steps nobody could ever have ticked.
+
+> ‼️ **`clients.vertical_slug` AND `clients.business_type` HAD FOUR READERS AND NO WRITER**, and
+> the cost was a poisoned shared corpus rather than a visible error. `classify.ts` works the
+> answer out on every audit and `run-audit-pipeline.ts` stores it — on `audit_reports`. Nothing
+> copied it to `clients`. So `harvest.ts`, `research-intake.ts`, `custom-question-set.ts` and
+> `page-candidates.ts` all took their `?? "med_spa"` fallback, for every client that has ever
+> existed. Measured: forty correctly-extracted phrases about how to choose an AEO agency, filed
+> under `med_spa`, on a client whose audit had answered the question perfectly.
+>
+> **`question_bank` has no `client_id`.** It is keyed `(vertical, normalized)` and shared across
+> every client in a vertical forever, so the next real med spa would have inherited those phrases
+> as their tracked question set and there is no per-client key to unpick them by.
+>
+> `adoptAuditClassification` (`baseline-scan.ts`) is the writer, hooked into `setDeliveryStep`
+> where `baseline_scan` completes — **not** inside `startBaselineScan`, because a report can also
+> be attached by hand and confirmed with Re-check, which is the path a re-onboarding takes.
+> **It writes only over NULL**, at the database with `.is(...)` and not just in the read: a human
+> correcting a vertical outranks the classifier, and a re-run must not re-file an existing client
+> into a different corpus mid-pilot.
+>
+> **The four fallbacks REFUSE now** (`verticalFor()`, harvest.ts). Matthew's call with both
+> options stated: a step parking in `error` with a fix line costs one Re-check, a silent wrong
+> write costs a corpus. Only two of the four were reported; the other two are the READ side of
+> the same bug, which is worse because building a question set out of somebody else's corpus
+> looks right.
+
+**Two steps could never be confirmed by anybody, and they failed the same way:** a verifier
+pointed at evidence the step does not produce, so honest finished work read as outstanding.
+- **29 `review_request_configured`** read `clients.review_request_mode`, which had two readers
+  and no writer. Its refusal said "Set it on the client board" and there was no such control.
+- **32 `weekly_report`** used `artifactOnRecord`, which demands `output_ref` plus a `client_docs`
+  row. `runWeeklyReports` writes a `client_weekly_reports` row and calls `autoCompleteStep`,
+  which lands on that verifier, gets `not_yet` and writes nothing — every week, forever. Its
+  `todo` told you to re-tick to re-run a generator that does not exist and cannot: the step is in
+  `ROUTE_COMPLETED` because it is a PREDICATE about ongoing behaviour. It counts the reports now.
+
+**The Review handover panel** (`/api/clients/[id]/review-workflow` + `review-workflow-form.tsx`)
+is the missing writer for `review_request_mode`, `review_owner_name` and
+`review_workflow.google_url` / `.realself_url`. That last pair is why **the review tool's "Post on
+Google" button has never appeared for any client**: `destinationsFor()` has always read those keys
+and intake step 4 collects `destinations` as a multiselect of display LABELS. Every customer got
+the fallback hint telling her to go and find the review page herself.
+- **The bag is MERGED, never replaced.** `review_workflow` is intake step 4's jsonb and owns ten
+  other keys; `save/route.ts` assigns the whole bag, so a replace here deletes the intake answers
+  the call sheet is built from.
+- A URL is parsed and must be `https:`, or refused. `review-tool.tsx`'s rule is unchanged and is
+  the reason: **absent beats wrong, never synthesise a link**, because a guessed review URL sends
+  a real customer to somebody else's business.
+- `review_destination_secondary` still has zero readers. Left in place, noted here rather than
+  dropped.
+
+> ‼️ **STEP 27 `first_page` HAD A CARD THAT COULD NEVER BE POSTED**, and it is the same shape
+> `day_zero_archive` was in one pass earlier. It declared `mode: "auto_then_manual"` with no
+> `auto` flag and no `AUTO_RUNNERS` entry. The only writer of `status: "ready"` is
+> `runReadyAutoSteps`, gated on a runner existing; `postReadySteps` skips `auto_then_manual`
+> unless the row is `ready`. So the good copy in `instructionsFor` was dead on the normal path
+> and had only ever appeared because `_debug-post-all-steps.ts` calls `postStep` directly.
+>
+> It is `mode: "manual"` now — publishing happens on the board, behind the Day 0 wall, so there
+> was never anything to run. **`unreachableAutoSteps()` is widened to read `mode` as well as
+> `auto`**, which is what let this slip: `auto` says the system TICKS it, `mode` says whether it
+> waits, and a step declaring either needs something behind it. The test suite asserts the set is
+> empty and that no `auto_then_manual` step lacks a runner.
+
+**One anchor at a time** (`reachableCursor`, step-engine.ts). `ensureReachableAnchors` used to
+post every step whose blockers were clear: two at intake, then four, then two. All three
+schedulers gate on the cursor now, and **all three must** — `postStep` calls `anchorTsFor`, which
+CREATES an anchor, and a runner's `note` goes out through `notifyStep`, which does the same. The
+leak that would have been missed is `hub_preview`: its only blocker is `intake_received`, so
+gating the anchor function alone still puts step 15's top-level message in the channel at intake.
+
+> ‼️ **THE WALK BREAKS ON THE FIRST WAITING STEP WHETHER OR NOT IT IS REACHABLE**, and the
+> obvious version gets this wrong. Walking PAST a blocked waiting step, on the reasonable grounds
+> that it is not workable, lets a later one leapfrog: at intake everything between
+> `presence_sweep_manual` and `hub_preview` is blocked, so the walk reaches step 15 and anchors
+> it. Breaking is safe because a blocker is always an EARLIER step, so it has already been seen.
+>
+> **What it costs, stated once so nobody rediscovers it as a bug:** work that could legitimately
+> happen in parallel is serialised. `call_booked` has no `blockedBy` at all — it used to appear
+> at intake so the call could be booked while the scan ran, and it now waits for step 18. Matthew
+> asked for calm over throughput. If the serialisation bites, widen the function; do not bypass
+> it in one caller.
+
+`headerText`'s "the one next step" line is now the whole board, so its `next` picks the first
+WORKABLE unresolved step rather than the first unresolved one — a header naming a step the
+channel is not showing leaves nothing on screen and nothing explaining why.
+
+**Phases are three: before / during / after the call.** `Measure` + `Prepare` (1-18), `The call`
+(19-22), `Day 0` + `Build` (23-33). Step order, numbers, `blockedBy` and `gate` are untouched.
+Nothing keyed on the literal `"Day 0"` — the wall keys on `step.gate` and `DAY_ZERO_STEP_KEY`.
+**Phases must stay CONTIGUOUS in `DELIVERY_STEPS`**: `delivery-checklist-form.tsx` groups with a
+running-string sentinel, not a `groupBy`, so a phase reappearing renders its header twice. The
+test asserts contiguity. `headerText` prints three counts, derived by grouping rather than from a
+literal list, so a rename is one edit.
+
+**Cards say what to do and link what already exists.** `instructionsFor` now receives the step's
+row and has `outputRefsFor` / `docForStep` / `docLink`, because **no case in that switch read
+`output_ref`**, so no step ever showed the artifact an earlier one produced. Six manual steps
+(19, 20, 24, 25, 29, 33) posted a label and three buttons and nothing else. The links that matter
+most: 23 links the **AI Visibility Scorecard PDF** (Matthew asked by name; it is an upload against
+step 2, so it comes from `client_docs`, not `output_ref`), 25 links step 14's cleanup PDF and
+leads with the `not_checked` count because that is what its verifier refuses on first, 27 links
+step 13's candidates and the `client_pages` drafts, 28 links step 17's PDF and the REAL reviews
+host, 11 links step 9's brief, 33 computes day 30 from the Day-0 stamp and says so when there
+isn't one. `docLink` returns null rather than a dead link.
+
+> ‼️ **A CARD BODY OVER 3,000 CHARACTERS FAILS THE WHOLE SLACK MESSAGE**, and the sweep card was
+> already at 2,988 for a short business name. The name is interpolated into all eighteen search
+> strings, so "Greensboro Aesthetic and Wellness Institute" goes over — `invalid_blocks`, no card,
+> and `postStep` returns early, leaving an anchor with no instructions and no buttons. Found by
+> the cascade probe, whose client name carries an epoch. `bodySections()` splits ON LINE
+> BOUNDARIES, never mid-line: these bodies are search strings, URLs and DNS values that get
+> pasted, and a value split across two blocks is a value somebody pastes wrong.
+
+> ‼️ **THE PINNED HEADER'S "Full checklist" LINK HAS BEEN A 404 SINCE IT SHIPPED.** It built
+> `/dashboard/clients/{slug}` and that page queries `.eq("id", id)` against a uuid column, so a
+> slug is a CAST ERROR rather than a miss: the query throws, the page gets null and calls
+> `notFound()`. The one navigation aid on the header went nowhere and it read as a permissions
+> problem. Every board link is built from `client.id` now, header and cards alike.
+
+**Step 31 `time_log_entries` gets a thread note, not a card.** It is `mode: "auto"` so
+`postReadySteps` skips it, but nothing runs itself either — `/api/clients/[id]/time-log` ticks it.
+A [Done] button would be a button whose press the verifier can refuse, over work that is not a
+button press.
+
+**The top 3 competitors are pre-picked** (`applyDefaultSelection`). Matthew: *"I didnt really pick
+any competitors, just make sure it auto selects the top 3 most mentioned from the audit."* It
+no-ops the moment anyone has chosen, and it does NOT tick the step — he still presses Done and the
+verifier still counts `selected` rows, so the evidence rule is untouched.
+- **A zero-mention intake guess is never a default.** `isExcludedFromShortlist` drops aggregators
+  and chains at build time; this is a different filter. The live case is a client who typed `"a"`
+  into the competitor box. It stays on the shortlist, because a client naming businesses no engine
+  has heard of is itself a finding.
+- **A tie-break is never printed as a ranking.** On the first real client, two candidates had 2
+  mentions and then FIVE were level at 1, so picks 2 and 3 were a coin toss. `tieAtCutoff` counts
+  them and the card says so.
+- `competitors/route.ts` now SETS then CLEARS. Clear-then-set left a client with **zero**
+  selections whenever the set errored or the partial-match guard tripped, both of which return a
+  4xx after the clear has committed, with no transaction to roll it back — while the response said
+  nothing had changed.
+
+`setDeliveryStep` **returns the verdict on success too**. It always declared `verdict?: Verdict`
+and only ever returned one on refusal, so `_probe-cascade.ts` had an assertion about step 2's
+evidence tier that could not have gone green on any run.
+
+#### The review tool: a microphone and a readability hint, and still no model
+
+> ‼️ **MATTHEW ASKED FOR REVIEWS REWRITTEN TO A 6TH-GRADE LEVEL WITH AN EMOTIONAL HOOK ADDED, AND
+> THAT IS THE ONE THING THIS TOOL CANNOT DO.** It is generating review content the customer did
+> not write, attributed to her, on the client's Google profile: FTC 16 CFR Part 465, the Rytr fact
+> pattern. **He was told why and chose the readability hint instead. Do not reopen it.**
+
+- **The microphone is on-device only.** `SpeechRecognition` / `webkitSpeechRecognition`, dictating
+  into the four boxes, hidden entirely where the API is absent. **Do NOT wire `transcribeAudio()`
+  (`clients/voice-notes.ts`, whisper-1) in here**: `review_tool_submissions` has deliberately no
+  column for a name, email, phone, IP, user agent or session id, and *the absence of the column is
+  the enforcement* — a voice is more identifying than any field it refuses. Nothing reaches our
+  servers and there is nothing to delete. She edits the transcript before submitting.
+  `language` is passed separately from `needsSpanish`, which is true for `"both"`: rendering a
+  Spanish note and LISTENING in Spanish are different decisions, and `es-ES` recognition on a
+  bilingual client garbles every English speaker who taps the button.
+- **`src/lib/hub/readability.ts` imports nothing**, same discipline as `review-assemble.ts`. Pure
+  Flesch-Kincaid: syllables, words, sentences. It returns offsets so the flagged sentences
+  highlight in place under a mirrored div. **It may point at a sentence. It may not rewrite one,
+  and there is no "fix it for me" button** — the moment software supplies the replacement words we
+  are back over the line. The test asserts the module exports nothing named rewrite/simplify/
+  suggest/improve/fix/shorten and that it imports nothing.
+- `Copy my words` is now **Copy and go**, and its second half works for the first time once step
+  29's panel has the URLs.
+
+**The three review steps are different things and the cards now say so**, because Matthew
+conflated 8 and 16. Step 8 is the competitor review-COUNT grid (internal, feeds findings §3), 16
+owns whether the tool renders and is themed, 30 owns the handover. Step 16's card also says out
+loud that **`reviewPreviewUrl()` cannot be handed to a client**: it is a `/dashboard/` path and the
+page calls `notFound()` without a session, so a logged-out visitor gets a 404, not a login screen.
+It belongs in that step's thread, which is internal. The client-facing surface is `reviews.{domain}`.
+
+**Step 9 is NOT redundant with the audit and must not be merged into it.** It makes **zero model
+calls** — `harvest.ts` imports `supabaseAdmin` and nothing else — and it CONSUMES the audit: it
+reads `audit_runs.citations` and fetches up to 40 of the pages the engines cited. Three reasons it
+cannot be replaced by `audit_reports.prompts`: that column is **regenerated by every audit run**
+(`findings.ts` spells out the hazard), so quoting it would let a later scan rewrite the questions
+in a report already sent — the Day-0 tracked set has to be frozen; the 20 prompts are model-invented
+clean phrasing while `question_bank` is verbatim market wording with typos kept, carrying
+`frequency_score`, `commercial_intent_score`, `objection_phrase` and a `source_url`; and deleting it
+breaks step 12 outright (`custom-question-set.ts` hard-fails with "Run the avatar phrase harvest
+(step 9) first") and starves `page-candidates.ts`. **The avatars are not in step 9 at all** — they
+live in `niche_briefs.avatars`, per vertical, and `question_bank.avatar` stays NULL until step 11.
+The LABEL is renamed to stop it reading as a duplicate; the KEY is not, because renaming a key
+orphans every row carrying it.
+
+`_probe-cascade.ts` is rewritten for the cursor. Its proposition is now **exactly one waiting step
+at a time, and resolving it reveals exactly one more** — the old one asserted that confirming step
+2 surfaced BOTH 7 and 9, which is the behaviour that was removed. Two fixture notes: the throwaway
+client gets a canonical NAP (without it `nap_sweep` errors, `presence_sweep_manual` never unblocks
+and the probe measures nothing), and it deliberately gets NO domain, so `site_dns_intel` fails and
+is carved out by name — a domain would send `hub_preview`'s runner at the real Vercel API. It also
+used to assert step 9 sat at `ready`, which is **the state of a failed card post**: `postStep`'s
+last act is to park the row at `awaiting_me`, so `ready` only survives when the Slack post threw.
 
 ### SLACK IS INTERNAL ONLY (2026-08-20)
 ### SLACK IS INTERNAL ONLY (2026-08-20) — this reversed three days after it shipped

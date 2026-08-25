@@ -23,7 +23,7 @@
 // frozen set, that is a build stop. freezeUniversalV1() remains the only writer.
 
 import { supabaseAdmin } from "@/lib/db";
-import { extractPhrases, mergePhrases, type HarvestedPhrase } from "./harvest";
+import { extractPhrases, mergePhrases, verticalFor, type HarvestedPhrase } from "./harvest";
 
 /** What a message has to start with to be treated as research. Case-insensitive. */
 export const RESEARCH_PREFIX = /^\s*research\s*:/i;
@@ -92,7 +92,12 @@ export async function ingestResearch(args: {
     .maybeSingle();
 
   if (!client) return { ok: false, error: "client not found" };
-  const vertical = ((client.vertical_slug || client.business_type) as string) ?? "med_spa";
+
+  // Refuses rather than guessing. See verticalFor() in harvest.ts: this WRITES into the shared
+  // question_bank, which has no client_id, so a wrong vertical here cannot be unpicked later.
+  const resolved = await verticalFor(args.clientId);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const vertical = resolved.vertical;
 
   const phrases: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
 

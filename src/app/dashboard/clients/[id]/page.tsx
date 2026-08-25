@@ -24,6 +24,7 @@ import { ThemeForm, type ThemeView } from "./theme-form";
 import { BaselineForm } from "./baseline-form";
 import { CompetitorForm } from "./competitor-form";
 import { ReviewAuditForm } from "./review-audit-form";
+import { ReviewWorkflowForm, type ReviewWorkflowView } from "./review-workflow-form";
 import { PresenceSweepForm } from "./presence-sweep-form";
 import { loadCandidates, REQUIRED_SELECTIONS } from "@/lib/clients/competitors";
 import { loadReviewAudit, reviewPlatformLabel } from "@/lib/clients/review-audit";
@@ -193,10 +194,26 @@ export default async function ClientDetailPage({
 
   if (!client) notFound();
 
+  // Steps 29 and 30. `review_workflow` is intake step 4's bag; the two URL keys are added to it
+  // by the Review handover panel and are read by destinationsFor() in the hub's review tool.
+  const reviewWorkflowBag = (client.review_workflow ?? {}) as Record<string, unknown>;
+  const reviewWorkflowView: ReviewWorkflowView = {
+    mode: (client.review_request_mode as ReviewWorkflowView["mode"]) ?? null,
+    ownerName: (client.review_owner_name as string | null) ?? null,
+    googleUrl: typeof reviewWorkflowBag.google_url === "string" ? reviewWorkflowBag.google_url : null,
+    realselfUrl:
+      typeof reviewWorkflowBag.realself_url === "string" ? reviewWorkflowBag.realself_url : null,
+    intakeDestinations: Array.isArray(reviewWorkflowBag.destinations)
+      ? (reviewWorkflowBag.destinations as string[])
+      : [],
+    bookingSoftware: (client.booking_software as string | null) ?? null,
+  };
+
   // The twenty questions this client's most recent audit actually ran, which are what a
-  // page gets written to answer. audit_reports has no client_id: it predates the clients
-  // table and joins through contact_id, with the domain as the fallback for a report that
-  // ran before the contact was linked.
+  // page gets written to answer. `audit_reports.client_id` is the link and it is populated;
+  // the contact_id and domain fallbacks below are for a report that ran BEFORE the client row
+  // existed, which is the normal case for a prospect who converted. (This comment used to say
+  // audit_reports had no client_id at all, forty lines above a query that filters on it.)
   const auditFilter = client.contact_id
     ? { column: "contact_id", value: client.contact_id as string }
     : client.domain
@@ -539,6 +556,25 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <ReviewAuditForm clientId={id} rows={reviewViews} />
+      </div>
+
+      {/*
+        Steps 29 and 30. ‼️ Nothing wrote clients.review_request_mode, clients.review_owner_name
+        or review_workflow.google_url / .realself_url before this panel existed, so step 29 could
+        never be confirmed by anybody and the review tool's "Post on Google" button has never
+        appeared for a single client. Read the route header before changing what it writes.
+      */}
+      <div
+        id="review-handover"
+        className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Review handover</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            steps 29 and 30
+          </span>
+        </div>
+        <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />
       </div>
 
       {/* ── DNS ── */}

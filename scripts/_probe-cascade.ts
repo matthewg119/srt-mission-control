@@ -9,11 +9,23 @@
  * skips any row that already has a slack_message_ts, so the code path under test can never run
  * again on that client. A throwaway client is the only way to observe the cascade.
  *
- * THE PROPOSITION: with baseline_scan confirmed, competitor_shortlist (manual) gets an anchor
- * and a card, and avatar_harvest (auto_then_manual) runs its generator and THEN gets a card,
- * without anybody doing anything. Both are blockedBy ["baseline_scan"]. The second is the case
- * that starved before ac0b733, which is why `ready` plus a card is asserted rather than just
- * "an anchor exists".
+ * THE PROPOSITION, rewritten 2026-08-25 for the one-at-a-time cursor: at every moment there is
+ * EXACTLY ONE step waiting for a person, and resolving it reveals exactly one more. Auto steps
+ * may share a moment, because they resolve themselves; two things to DO is the thing that must
+ * never happen.
+ *
+ * That inverts what this probe used to assert. Confirming baseline_scan used to surface
+ * competitor_shortlist AND avatar_harvest together, and the old version checked for both. Under
+ * `reachableCursor` neither appears while the presence sweep is still open, so the negative is
+ * now the interesting half and the walk down to step 9 is what proves the chain still advances.
+ *
+ * `ready` plus a card at step 9 is still asserted rather than just "an anchor exists": that is
+ * the auto_then_manual invariant that starved before ac0b733.
+ *
+ * hub_preview is the specific trap this catches. Its only blocker is intake_received, so it is
+ * reachable from the very first transition, and its runner posts a note through notifyStep,
+ * which CREATES an anchor. Gate the anchor function alone and its top-level message still lands
+ * in the channel out of turn, with nothing looking broken.
  *
  * ‼️ WHAT IT CANNOT PROVE, and does not claim to: that Slack RENDERED anything (only that a ts
  * came back), and that a real audit produces competitors. Both are correct limits. The thing
@@ -51,6 +63,26 @@ async function stepRows(clientId: string) {
   const byKey = new Map<string, Record<string, unknown>>();
   for (const r of data ?? []) byKey.set(r.step_key as string, r as Record<string, unknown>);
   return byKey;
+}
+
+/**
+ * Steps that are ANCHORED, unresolved, and wait for a person.
+ *
+ * The count this probe is really about. Auto steps are excluded because they resolve themselves
+ * inside the same cascade and never ask anybody for anything, so several of them sharing a
+ * moment is correct rather than a wall.
+ */
+function waiting(rows: Map<string, Record<string, unknown>>): string[] {
+  return DELIVERY_STEPS.filter((s) => {
+    const r = rows.get(s.key);
+    if (!r?.slack_anchor_ts) return false;
+    if (r.status === "complete" || r.status === "skipped") return false;
+    return s.mode !== "auto";
+  }).map((s) => s.key);
+}
+
+function eq(label: string, got: string, want: string) {
+  ok(`${label} (${got})`, got === want, got === want ? undefined : `wanted ${want}`);
 }
 
 async function cleanup(clientId: string, reportId: string | null) {
@@ -115,9 +147,27 @@ async function main() {
     await seedDeliverySteps(clientId);
 
     // ── Get to the starting line: confirm step 1 ────────────────────────────
+    //
+    // ‼️ A CANONICAL NAP IS PART OF THE FIXTURE, and without it this probe measures the wrong
+    // thing. nap_sweep refuses with "no canonical address or phone on the client record" and
+    // parks in `error`; presence_sweep_manual is blockedBy it, so the ONE step that should be
+    // waiting for a person after step 1 never becomes reachable and the board correctly shows
+    // nothing to do. That is right behaviour and a useless test.
+    //
+    // ‼️ STILL NO DOMAIN, DELIBERATELY. A domain sends hub_preview's runner at Vercel to
+    // ATTACH one, which is a real API call against the production project for a client that is
+    // about to be deleted. site_dns_intel therefore fails on "no domain on the client", which
+    // is expected and carved out of the error check at the end.
     await supabaseAdmin
       .from("clients")
-      .update({ intake_completed_at: new Date().toISOString() })
+      .update({
+        intake_completed_at: new Date().toISOString(),
+        address_line1: "1 Probe Street",
+        city: "Greensboro",
+        state: "NC",
+        postal_code: "27410",
+        phone: "+13368332303",
+      })
       .eq("id", clientId);
 
     const step1 = await setDeliveryStep({
@@ -130,19 +180,39 @@ async function main() {
 
     let rows = await stepRows(clientId);
 
+    // ── After step 1 ────────────────────────────────────────────────────────
+    //
+    // The three auto steps below it all become reachable at once and all three resolve
+    // themselves, so they legitimately share a moment. What must NOT happen is a second thing
+    // for a person to do.
     console.log("\nAfter step 1");
     for (const key of ["baseline_scan", "site_dns_intel", "nap_sweep"]) {
       ok(`${key} has an anchor`, Boolean(rows.get(key)?.slack_anchor_ts));
     }
+    ok("exactly one step is waiting for a person", waiting(rows).length === 1, waiting(rows).join(", "));
+    eq("and it is the presence sweep", waiting(rows)[0] ?? "none", "presence_sweep_manual");
+
     // ‼️ THE NEGATIVE IS HALF THE PROOF, and it is the half _debug-post-all-steps.ts destroyed
-    // on the real client. If 7 and 9 are already anchored here, the cascade below proves nothing.
-    for (const key of ["competitor_shortlist", "avatar_harvest"]) {
+    // on the real client: it forced anchors out for all 33 ignoring blockedBy, and
+    // postStepAnchor short-circuits on an existing anchor, so the code path under test can
+    // never run again there.
+    for (const key of ["competitor_shortlist", "avatar_harvest", "hub_preview"]) {
       ok(
-        `${key} has NO anchor yet, because baseline_scan is not confirmed`,
+        `${key} has NO anchor yet`,
         !rows.get(key)?.slack_anchor_ts,
         String(rows.get(key)?.slack_anchor_ts ?? "")
       );
     }
+
+    // ‼️ hub_preview IS THE ONE THAT PROVES runReadyAutoSteps IS GATED TOO. Its only blocker is
+    // intake_received, so it is reachable the moment step 1 lands — and its runner posts a note
+    // through notifyStep, which CREATES an anchor. Gating only the anchor function would leave
+    // this step's top-level message in the channel anyway, with nothing looking broken.
+    ok(
+      "hub_preview's runner did not fire out of turn",
+      rows.get("hub_preview")?.status !== "ready" && rows.get("hub_preview")?.status !== "complete",
+      String(rows.get("hub_preview")?.status ?? "missing")
+    );
 
     // ── Satisfy step 2 the way production does ─────────────────────────────
     //
@@ -158,6 +228,8 @@ async function main() {
         status: "done",
         score: 3,
         client_id: clientId,
+        vertical_slug: "cascade_probe_vertical",
+        business_type: "a throwaway used by the cascade probe",
       })
       .select("id")
       .single();
@@ -186,10 +258,50 @@ async function main() {
       step2.verdict && !step2.verdict.ok ? step2.verdict.found : undefined
     );
 
-    // ── The proposition ────────────────────────────────────────────────────
+    // ‼️ THE CLASSIFICATION IS ADOPTED WHEN STEP 2 CONFIRMS, and until 2026-08-25 nothing
+    // anywhere wrote these two columns. Every client fell through to a hardcoded "med_spa" and
+    // forty phrases were filed under it in a corpus that has no client_id to unpick them by.
+    const { data: adopted } = await supabaseAdmin
+      .from("clients")
+      .select("vertical_slug, business_type")
+      .eq("id", clientId)
+      .maybeSingle();
+    eq(
+      "the audit's vertical landed on the client row",
+      String(adopted?.vertical_slug ?? "null"),
+      "cascade_probe_vertical"
+    );
+    ok("and its business type with it", Boolean(adopted?.business_type));
+
+    // ── The proposition: ONE step at a time, and resolving it reveals the next ONE ──
     rows = await stepRows(clientId);
 
     console.log("\nAfter step 2, nobody having done anything else");
+    ok("still exactly one step waiting", waiting(rows).length === 1, waiting(rows).join(", "));
+    eq("and it is still the presence sweep", waiting(rows)[0] ?? "none", "presence_sweep_manual");
+    // Before the cursor, confirming step 2 surfaced BOTH of these at once. Matthew asked for one.
+    for (const key of ["competitor_shortlist", "avatar_harvest"]) {
+      ok(`${key} still has no anchor`, !rows.get(key)?.slack_anchor_ts);
+    }
+
+    // ── Resolve step 5, and watch exactly one more appear ───────────────────
+    //
+    // Skipped rather than completed: the sweep needs six attributed screenshots in a Slack
+    // thread and this probe cannot produce those. A skip is a resolution everywhere in this
+    // system except the Day-0 wall, which is the point of using it here.
+    const step5 = await setDeliveryStep({
+      clientId,
+      stepKey: "presence_sweep_manual",
+      transition: "skipped",
+      skippedReason: "cascade probe: no screenshots to file",
+      actor: "cascade probe",
+    });
+    ok("step 5 skips", step5.ok, step5.error);
+
+    rows = await stepRows(clientId);
+    console.log("\nAfter step 5 resolves");
+    ok("exactly one step is waiting again", waiting(rows).length === 1, waiting(rows).join(", "));
+    eq("and it is the competitor shortlist", waiting(rows)[0] ?? "none", "competitor_shortlist");
 
     const seven = rows.get("competitor_shortlist");
     ok("competitor_shortlist got an anchor by itself", Boolean(seven?.slack_anchor_ts));
@@ -199,15 +311,46 @@ async function main() {
       seven?.status === "awaiting_me",
       String(seven?.status ?? "missing")
     );
+    ok("avatar_harvest is STILL not anchored", !rows.get("avatar_harvest")?.slack_anchor_ts);
+
+    // ── Resolve 7 and 8 to reach the auto_then_manual runner at 9 ───────────
+    for (const key of ["competitor_shortlist", "review_audit"] as const) {
+      const res = await setDeliveryStep({
+        clientId,
+        stepKey: key,
+        transition: "skipped",
+        skippedReason: "cascade probe: walking to step 9",
+        actor: "cascade probe",
+      });
+      ok(`${key} skips`, res.ok, res.error);
+    }
+
+    rows = await stepRows(clientId);
+    console.log("\nAt step 9");
 
     const nine = rows.get("avatar_harvest");
     ok("avatar_harvest got an anchor by itself", Boolean(nine?.slack_anchor_ts));
-    // `ready` plus a card is precisely "the runner ran and then waited for a person", which is
-    // the invariant that broke when postReadySteps ran before runReadyAutoSteps and parked the
-    // row at awaiting_me where no runner could ever claim it.
-    ok("avatar_harvest ran its generator and waited", nine?.status === "ready", String(nine?.status ?? "missing"));
-    ok("avatar_harvest filed an output_ref", Boolean(nine?.output_ref));
+
+    // ‼️ THE EVIDENCE IS output_ref PLUS A CARD PLUS awaiting_me, AND THIS USED TO ASSERT
+    // `ready`, WHICH IS THE STATE OF A BROKEN CARD POST.
+    //
+    // runReadyAutoSteps writes `ready` and then calls postStep, whose last act is to park the
+    // row at `awaiting_me`. So a healthy auto_then_manual step is NEVER observed at `ready`
+    // once the dust settles — it only stays there when postStep returns early, which it does
+    // on a failed Slack post. The old assertion passed only while the card was failing.
+    //
+    // What actually needs proving is unchanged: the runner RAN (output_ref), it produced a
+    // card, and it then WAITED for a person instead of ticking itself. That is the invariant
+    // that broke when postReadySteps ran before runReadyAutoSteps and parked the row where no
+    // runner could ever claim it.
+    ok("avatar_harvest filed an output_ref, so its generator ran", Boolean(nine?.output_ref));
     ok("avatar_harvest got its card", Boolean(nine?.slack_message_ts));
+    ok(
+      "and then waited for a person rather than ticking itself",
+      nine?.status === "awaiting_me",
+      String(nine?.status ?? "missing")
+    );
+    ok("and it is the only thing waiting", waiting(rows).length === 1, waiting(rows).join(", "));
 
     // ── Anchors are in DELIVERY_STEPS order ────────────────────────────────
     //
@@ -226,11 +369,23 @@ async function main() {
       sorted.map((a) => a.key).join(" -> ")
     );
 
-    const errored = [...rows.entries()].filter(([, r]) => r.status === "error");
+    // ‼️ ONE CARVE-OUT, NAMED. site_dns_intel needs a domain and the fixture deliberately has
+    // none (see the NAP block above: a domain would send hub_preview at the Vercel API). Its
+    // failure is the fixture, not the cascade — and nothing is blockedBy it, so it stalls
+    // nothing. Every other step erroring IS a real failure of this probe.
+    const EXPECTED_ERRORS = new Set(["site_dns_intel"]);
+    const errored = [...rows.entries()].filter(
+      ([k, r]) => r.status === "error" && !EXPECTED_ERRORS.has(k)
+    );
     ok(
-      "no step is in error",
+      "no step is in error, other than the one the fixture cannot satisfy",
       errored.length === 0,
       errored.map(([k, r]) => `${k}: ${r.error_detail}`).join("; ")
+    );
+    ok(
+      "an errored auto step does not stall the walk",
+      waiting(rows).length === 1,
+      waiting(rows).join(", ")
     );
   } finally {
     await cleanup(clientId, reportId);

@@ -42,18 +42,19 @@ export async function POST(
 
   const ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
 
-  // ‼️ CLEAR EVERY ROW FIRST, THEN SET THE CHOSEN ONES. A write that only SETS leaves a
-  // competitor selected forever once it has been unticked, which is how a fourth business
-  // survives into findings section 3 without anybody choosing it.
-  const { error: clearError } = await supabaseAdmin
-    .from("competitor_candidates")
-    .update({ selected: false, selected_at: null, selected_by: null })
-    .eq("client_id", clientId);
-
-  if (clearError) {
-    return NextResponse.json({ ok: false, error: clearError.message }, { status: 500 });
-  }
-
+  // ‼️ SET THE CHOSEN ONES FIRST, THEN CLEAR EVERYTHING ELSE. THE ORDER IS THE FIX.
+  //
+  // It used to clear every row and then set, which is correct in the happy case and leaves the
+  // client with ZERO selections in two failure cases that both really happen: the set query
+  // erroring, and the partial-match guard below tripping. Both return a 4xx/5xx after the clear
+  // has already committed, and there is no transaction here to roll it back — so the response
+  // says "nothing was changed, reload the board" while the previous pick has in fact been
+  // deleted, and the review audit and findings section 3 are now about nobody.
+  //
+  // Set-then-clear inverts which state a failure leaves behind. A failed SET leaves the old pick
+  // intact; a failed CLEAR leaves a superset, which the board renders visibly (four ticks where
+  // three were asked for) rather than silently. Neither is a transaction, but only one of them
+  // fails toward the state somebody can see.
   if (ids.length) {
     // Scoped by client_id as well as by id: an id from another client's shortlist must not be
     // writable through this route just because it is a valid uuid.
@@ -76,11 +77,25 @@ export async function POST(
       return NextResponse.json(
         {
           ok: false,
-          error: `only ${written?.length ?? 0} of ${ids.length} picks belong to this client, so nothing is reliable. Reload the board.`,
+          error: `only ${written?.length ?? 0} of ${ids.length} picks belong to this client, so nothing is reliable. The previous pick has been left alone. Reload the board.`,
         },
         { status: 400 }
       );
     }
+  }
+
+  // Now drop everything that is not in the new pick. A write that only SETS leaves a competitor
+  // selected forever once it has been unticked, which is how a fourth business survives into
+  // findings section 3 without anybody choosing it.
+  let clearQuery = supabaseAdmin
+    .from("competitor_candidates")
+    .update({ selected: false, selected_at: null, selected_by: null })
+    .eq("client_id", clientId);
+  if (ids.length) clearQuery = clearQuery.not("id", "in", `(${ids.join(",")})`);
+
+  const { error: clearError } = await clearQuery;
+  if (clearError) {
+    return NextResponse.json({ ok: false, error: clearError.message }, { status: 500 });
   }
 
   // Seeding the review grid here rather than waiting for step 8's card to be re-posted: it

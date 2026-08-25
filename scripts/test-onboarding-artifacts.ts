@@ -45,7 +45,15 @@ import {
 } from "../src/lib/clients/artifacts/registry";
 import { DELIVERY_STEPS } from "../src/lib/clients/delivery-checklist";
 import { formatSweepCard } from "../src/lib/clients/presence-sweep";
-import { formatShortlistCard } from "../src/lib/clients/competitors";
+import {
+  formatShortlistCard,
+  tieAtCutoff,
+  REQUIRED_SELECTIONS,
+} from "../src/lib/clients/competitors";
+import { analyse, gradeLevel, sentences as splitSentences } from "../src/lib/hub/readability";
+import { PHASE_BEFORE, PHASE_DURING, PHASE_AFTER } from "../src/config/delivery-steps";
+import fs from "node:fs";
+import path from "node:path";
 import {
   isResearchPaste,
   stripPrefix,
@@ -615,7 +623,13 @@ const shortlist = formatShortlistCard(
 ok("the shortlist ranks by how many named them", shortlist.includes("named in 11 of 20"));
 // ‼️ A competitor the client guessed that NO engine named is a finding, not a blank row.
 ok("a client guess nobody named is called out", /NOT named by any engine/i.test(shortlist));
-ok("it says pick exactly three", /exactly 3/i.test(shortlist));
+// The card no longer says "pick exactly 3": the top three are pre-picked by
+// applyDefaultSelection before it renders, so its job is to say WHICH three are picked and that
+// they are a changeable default. With nothing selected — as in this fixture, where the only
+// engine-named candidate would be the single default — it says there is no default rather than
+// describing a pick that does not exist.
+ok("with nothing picked, the card says so", /Nothing is pre-picked/.test(shortlist));
+ok("and still names the number to pick", /Pick 3 on the board/.test(shortlist));
 ok("it explains the exclusions", /consensus lock|aggregator/i.test(shortlist));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -717,6 +731,195 @@ eq(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The step board is RUNNABLE — 2026-08-25
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ‼️ NO REACHABLE STEP THAT WAITS FOR A PERSON MAY POST AN EMPTY CARD.
+// blocks() adds no body section when instructionsFor returns null, so such a step renders as a
+// label and three buttons — which is what six of them did. instructionsFor cannot be called
+// here (it reaches Supabase), so this asserts on the switch's covered keys, read out of the
+// source. A source read is the only way to check a switch's coverage without a database.
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "step-engine.ts"),
+    "utf8"
+  );
+  const body = src.slice(
+    src.indexOf("async function instructionsFor"),
+    src.indexOf("\n    default:")
+  );
+  const covered = new Set([...body.matchAll(/case "([a-z0-9_]+)"/g)].map((m) => m[1] as string));
+  // The Day-0 case is `case DAY_ZERO_STEP_KEY:`, by constant rather than by literal.
+  if (/case DAY_ZERO_STEP_KEY:/.test(body)) covered.add("day_zero_archive");
+
+  const silent = DELIVERY_STEPS.filter((s) => s.mode !== "auto" && !covered.has(s.key)).map(
+    (s) => s.key
+  );
+  eq("every step that waits for a person has an instruction card", silent, []);
+}
+
+// ‼️ THE WIDENED REACHABILITY CHECK. first_page declared mode auto_then_manual with no `auto`
+// and no runner, so the old `s.auto === true` predicate could not see it and its card could
+// never post. Empty means every step declaring automation has something behind it.
+eq("no step declares automation with nothing behind it", [...unreachableAutoSteps()], []);
+
+// The specific regression: a step may not be auto_then_manual without a runner, because the
+// only writer of `ready` is the runner and postReadySteps waits for `ready`.
+for (const step of DELIVERY_STEPS) {
+  if (step.mode !== "auto_then_manual") continue;
+  ok(
+    `${step.key}: auto_then_manual has a runner to reach 'ready'`,
+    Boolean(AUTO_RUNNERS[step.key])
+  );
+}
+eq(
+  "first_page is manual, so its card can post",
+  DELIVERY_STEPS.find((s) => s.key === "first_page")?.mode,
+  "manual"
+);
+
+// ── Phases: three, and contiguous ────────────────────────────────────────────
+// delivery-checklist-form.tsx groups with a running-string sentinel rather than a groupBy, so a
+// phase reappearing after an interruption renders its header twice.
+{
+  const order: string[] = [];
+  for (const s of DELIVERY_STEPS) if (order[order.length - 1] !== s.phase) order.push(s.phase);
+  eq("three phases, in order, each appearing once", order, [
+    PHASE_BEFORE,
+    PHASE_DURING,
+    PHASE_AFTER,
+  ]);
+  ok(
+    "the gate is in the after-the-call phase",
+    DELIVERY_STEPS.find((s) => s.gate)?.phase === PHASE_AFTER
+  );
+  // Nothing may key on the old literal again. The wall keys on `gate` and DAY_ZERO_STEP_KEY.
+  ok("no step still carries a 'Day 0' phase", DELIVERY_STEPS.every((s) => s.phase !== "Day 0"));
+}
+
+// ── The competitor tie-break is never dressed as a ranking ───────────────────
+{
+  const cand = (
+    name: string,
+    timesNamed: number,
+    extra: { selected?: boolean; source?: "baseline_named" | "client_intake" | "both" } = {}
+  ) => ({
+    id: name,
+    name,
+    normalizedName: name.toLowerCase(),
+    website: null,
+    address: null,
+    source: extra.source ?? ("baseline_named" as const),
+    timesNamed,
+    engines: ["openai"],
+    sampleQuestions: [],
+    selected: extra.selected ?? false,
+  });
+
+  // The live shape on the first real client: two at 2, then five level at 1. The third pick is
+  // a coin toss, and the card has to say so.
+  const live = [
+    cand("Posirank", 2, { selected: true }),
+    cand("D3 Corp", 2, { selected: true }),
+    cand("KailxLabs", 1, { selected: true }),
+    cand("AEO Agents", 1),
+    cand("EVOIX", 1),
+    cand("Magna", 1),
+    cand("Hook Agency", 1),
+    cand("a", 0, { source: "client_intake" }),
+  ];
+  const tie = tieAtCutoff(live, REQUIRED_SELECTIONS);
+  ok("a tie at the cutoff is detected", tie.tied);
+  eq("and counts everyone level with the last pick", tie.among, 5);
+
+  const card = formatShortlistCard("Test Co", live, 20, null);
+  ok("the card says the cut is a tie-break", /tie-break, not a ranking/.test(card));
+  ok("and names how many are level", card.includes("5 businesses are level"));
+  ok("and says the pick is a default", /DEFAULT, not a decision/.test(card));
+
+  // A clean ranking must NOT claim a tie.
+  const clean = [
+    cand("A", 9, { selected: true }),
+    cand("B", 6, { selected: true }),
+    cand("C", 4, { selected: true }),
+    cand("D", 1),
+  ];
+  ok("a clean ranking reports no tie", !tieAtCutoff(clean, REQUIRED_SELECTIONS).tied);
+  ok(
+    "and its card does not cry tie-break",
+    !/tie-break/.test(formatShortlistCard("Test Co", clean, 20, null))
+  );
+}
+
+// ── Readability: it POINTS, it never rewrites ────────────────────────────────
+// ‼️ FTC 16 CFR Part 465. See the header of src/lib/hub/readability.ts. This is the structural
+// half of that promise: the module may not gain a function that returns edited text.
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "readability.ts"),
+    "utf8"
+  );
+  ok("readability.ts imports nothing", !/^\s*import\s/m.test(src));
+  ok(
+    "readability.ts has no rewrite/simplify/suggest export",
+    !/export\s+(async\s+)?function\s+(rewrite|simplify|suggest|improve|fix|shorten)/i.test(src)
+  );
+
+  const short = analyse("The staff were kind. I felt calm. It went well.");
+  eq("three short sentences are all easy", short.hard.length, 0);
+  eq("and they are counted", short.sentences, 3);
+
+  const long = analyse(
+    "I was really worried about whether the treatment would hurt at all because I have had a " +
+      "genuinely bad experience somewhere else before and I did not want to go through anything " +
+      "like that again in my life."
+  );
+  eq("one long sentence is flagged", long.hard.length, 1);
+  eq("as long, not dense", long.hard[0]?.reason, "long");
+  ok("with offsets into the original text", (long.hard[0]?.end ?? 0) > (long.hard[0]?.start ?? 0));
+
+  eq("empty text has no complaints", analyse("").hard.length, 0);
+  eq("and no words", analyse("   ").words, 0);
+  ok("a simple sentence reads low", gradeLevel("The staff were kind to me.") < 8);
+  eq(
+    "sentence splitting keeps offsets in order",
+    splitSentences("One. Two.").map((s) => s.start),
+    [0, 5]
+  );
+}
+
+// ── The review path still has no model in it ─────────────────────────────────
+// review-assemble.ts importing nothing is the enforcement, not the comment above it.
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "review-assemble.ts"),
+    "utf8"
+  );
+  ok("review-assemble.ts imports nothing", !/^\s*import\s/m.test(src));
+  ok(
+    "assembleLabelled and assemblePlain are both declared",
+    /function assembleLabelled/.test(src) && /function assemblePlain/.test(src)
+  );
+
+  const client = fs.readFileSync(
+    path.join(__dirname, "..", "src", "app", "hub", "[host]", "reviews", "review-client.tsx"),
+    "utf8"
+  );
+  // The whisper transcriber must never be wired into the customer-facing tool: review_tool_
+  // submissions has nowhere to put an identity and a voice is more identifying than any column
+  // it refuses.
+  //
+  // Matched on the IMPORT LINE ONLY, deliberately. The file header names transcribeAudio() at
+  // length to explain why it is not used, and a check that fired on the mention would force
+  // somebody to delete the explanation to make the test pass — which is how the reasoning gets
+  // lost and the helper gets wired in a year later.
+  ok(
+    "the review tool never imports the transcriber",
+    !/^\s*import[^\n]*voice-notes/m.test(client)
+  );
+}
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} checks failed.`);

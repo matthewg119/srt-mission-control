@@ -30,7 +30,7 @@
 // custom_v1 happens on approval, which is `call_held`, and is separate work.
 
 import { supabaseAdmin } from "@/lib/db";
-import { commercialIntent, isObjection } from "../harvest";
+import { commercialIntent, isObjection, verticalFor } from "../harvest";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import {
   startDoc,
@@ -141,7 +141,12 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
 
   if (!client) return { ok: false, error: "Client not found." };
 
-  const vertical = ((client.vertical_slug || client.business_type) as string | null) ?? "med_spa";
+  // ‼️ REFUSES RATHER THAN GUESSING, and this is the READ side of the same bug harvest.ts
+  // documents. A wrong vertical here does not corrupt anything, it silently builds the client's
+  // tracked question set out of SOMEBODY ELSE'S corpus — which is worse, because it looks right.
+  const resolvedVertical = await verticalFor(clientId);
+  if (!resolvedVertical.ok) return { ok: false, error: resolvedVertical.error };
+  const vertical = resolvedVertical.vertical;
   const tier = ((client.tier_scope as string | null) ?? "core") === "complete" ? "complete" : "core";
   const target = SET_SIZE[tier];
 

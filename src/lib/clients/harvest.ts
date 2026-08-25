@@ -205,6 +205,57 @@ async function fetchPage(url: string): Promise<string | null> {
   }
 }
 
+/**
+ * Which vertical is this client, or why we will not guess.
+ *
+ * ‼️ IT REFUSES. THE `?? "med_spa"` IT REPLACED WAS A SILENT WRONG-VERTICAL WRITE (2026-08-25).
+ *
+ * `clients.vertical_slug` and `clients.business_type` were read by four call sites and written by
+ * NOTHING, on any path, ever — the same readers-with-no-writer class as `clients.audit_report_id`.
+ * The audit knew the answer and put it on `audit_reports`; nothing copied it across. So every
+ * client in the system fell through to the literal `"med_spa"`.
+ *
+ * Measured on the first real client: forty correctly-extracted phrases about how to choose an AEO
+ * agency, filed under `med_spa`. `question_bank` has NO `client_id` — it is keyed
+ * `(vertical, normalized)` and shared across every client in a vertical forever — so the next real
+ * med spa would have inherited them as their tracked question set, and there is no per-client key
+ * to unpick them by afterwards.
+ *
+ * Matthew's call, made with both options stated: refuse. A step that parks in `error` with a fix
+ * line costs one Re-check. A wrong write costs a corpus nobody can clean.
+ *
+ * `adoptAuditClassification` (baseline-scan.ts) is the writer that makes this succeed; it runs
+ * when step 2 is confirmed.
+ */
+export async function verticalFor(
+  clientId: string
+): Promise<{ ok: true; vertical: string } | { ok: false; error: string }> {
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("vertical_slug, business_type")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (!client) return { ok: false, error: "client not found" };
+
+  const vertical = (
+    ((client.vertical_slug as string | null) || (client.business_type as string | null)) ?? ""
+  ).trim();
+
+  if (!vertical) {
+    return {
+      ok: false,
+      error:
+        "No vertical on the client row. A harvest filed under a guessed vertical poisons the " +
+        "shared question bank for every real client in it, and question_bank has no client_id " +
+        "so it cannot be unpicked afterwards. Confirm the baseline scan first: that is what " +
+        "copies the audit's classification onto clients.vertical_slug.",
+    };
+  }
+
+  return { ok: true, vertical };
+}
+
 export async function runHarvest(
   clientId: string
 ): Promise<{ ok: boolean; error?: string; phrases?: number; pages?: number; runId?: string }> {
@@ -216,7 +267,9 @@ export async function runHarvest(
 
   if (!client) return { ok: false, error: "client not found" };
 
-  const vertical = ((client.vertical_slug || client.business_type) as string) ?? "med_spa";
+  const resolved = await verticalFor(clientId);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const vertical = resolved.vertical;
 
   const { data: report } = await supabaseAdmin
     .from("audit_reports")

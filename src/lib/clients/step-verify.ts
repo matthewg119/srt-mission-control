@@ -943,11 +943,18 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
           "into this thread. Their booking software is not something this app can query."
       );
     }
+    // ‼️ THIS REFUSAL USED TO POINT AT A CONTROL THAT DID NOT EXIST, so the step could never be
+    // confirmed by anybody. `clients.review_request_mode` had two readers (here and
+    // call-sheet.ts) and NO WRITER anywhere in the repo — the same readers-with-no-writer class
+    // as competitor_candidates.selected. The Review handover panel is that writer now, and the
+    // todo names its URL rather than "the client board" generally.
     return notYet(
       "clients.review_request_mode",
       "not set, so neither branch of this step has been chosen",
-      "Set it on the client board to booking_system or card_only. The label allows either, but " +
-        "it has to be one of them."
+      "Record it on the Review handover panel of the client board: booking_system or card_only. " +
+        "The label allows either, but it has to be one of them. While you are there, add the " +
+        "review URLs: the tool's Post on Google button reads them and shows a fallback hint " +
+        "when they are missing."
     );
   },
 
@@ -991,7 +998,45 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`${count} time log entr${count === 1 ? "y" : "ies"}${day0 ? " since day 0" : ""}`);
   },
 
-  weekly_report: async (ctx) => artifactOnRecord(ctx, "the weekly report"),
+  // ‼️ THIS STEP COULD NEVER BE TICKED BY ANYBODY, AND IT USED `artifactOnRecord` TO DO IT.
+  //
+  // That helper demands `output_ref` plus a `client_docs` row, i.e. it assumes a generator ran
+  // through deliverArtifact. `weekly_report` has no AUTO_RUNNERS entry and is in ROUTE_COMPLETED
+  // on purpose: it is a PREDICATE about ongoing behaviour, not a document. runWeeklyReports
+  // writes a `client_weekly_reports` row, posts the body into the step's thread, and calls
+  // autoCompleteStep — which lands here, gets `not_yet`, and writes nothing. Every week. Forever.
+  //
+  // The `todo` made it worse by telling whoever read it to "un-tick and re-tick to re-run the
+  // generator", naming a generator that does not exist and never will.
+  //
+  // Same class as review_request_configured: a verifier pointed at the wrong evidence, so honest
+  // finished work reads as outstanding. The real evidence is the reports themselves.
+  weekly_report: async (ctx) => {
+    const { data, error, count } = await supabaseAdmin
+      .from("client_weekly_reports")
+      .select("week_stamp", { count: "exact" })
+      .eq("client_id", ctx.clientId)
+      .order("week_stamp", { ascending: false })
+      .limit(1);
+
+    if (error) return dbUnreachable("client_weekly_reports");
+
+    if (!count) {
+      return notYet(
+        "client_weekly_reports rows for this client",
+        "no weekly report has posted yet",
+        "Nothing is owed here until the digest next runs, and it posts on one weekday. This is " +
+          "a rhythm rather than a task: the first report that actually posts ticks the step by " +
+          "itself, so there is nothing to do but let it run."
+      );
+    }
+
+    const newest = (data?.[0]?.week_stamp as string | null) ?? null;
+    return verified(
+      `${count} weekly report${count === 1 ? "" : "s"} posted for this client`,
+      ...(newest ? [`newest is week ${newest}`] : [])
+    );
+  },
 
   day_30_date: async (ctx) => {
     const replies = await humanReplies(ctx);

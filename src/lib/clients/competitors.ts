@@ -218,20 +218,165 @@ export async function selectedCompetitors(clientId: string): Promise<CandidateRo
   return (await loadCandidates(clientId)).filter((c) => c.selected);
 }
 
-/** The shortlist card. Numbered, with the count and one example question each. */
-export function formatShortlistCard(clientName: string, candidates: CandidateRow[], totalPrompts: number): string {
+/**
+ * How arbitrary the third pick is.
+ *
+ * ‼️ A TIE-BREAK IS NOT A RANKING AND THE CARD MUST NOT PRINT IT AS ONE.
+ *
+ * `times_named` out of twenty prompts is a coarse signal and it ties constantly. On the first
+ * real client the top two had 2 mentions each and then FIVE businesses were level at 1, so
+ * "the top 3" was two facts and a coin toss. Printing 1, 2, 3 with no qualifier tells Matthew
+ * the third business beat the fourth, which is not something the data says.
+ *
+ * Pure, so the card and any later caller cannot disagree about what happened.
+ */
+export function tieAtCutoff(
+  candidates: CandidateRow[],
+  cutoff = REQUIRED_SELECTIONS
+): { tied: boolean; atCount: number; among: number } {
+  const eligible = candidates.filter(isDefaultEligible);
+  if (eligible.length <= cutoff) return { tied: false, atCount: 0, among: 0 };
+
+  const atCount = eligible[cutoff - 1]?.timesNamed ?? 0;
+  const among = eligible.filter((c) => c.timesNamed === atCount).length;
+  return { tied: among > 1, atCount, among };
+}
+
+/**
+ * May this candidate be picked AUTOMATICALLY?
+ *
+ * ‼️ A DIFFERENT FILTER FROM `isExcludedFromShortlist`, AND BOTH ARE NEEDED.
+ *
+ * That one drops aggregators and national chains at BUILD time, because a consensus lock is not
+ * a competitor for anybody. This one is about what may be chosen with nobody watching, and the
+ * case that produced it is real: the first client typed `"a"` into intake step 2's competitor
+ * box, which became a candidate with `times_named: 0` and `source: "client_intake"`.
+ *
+ * An intake guess no engine has ever named is the one thing on this list with NO evidence behind
+ * it. It stays on the shortlist, because a client naming three businesses the engines have never
+ * heard of is itself a finding worth raising on the call — it just is not something to select on
+ * their behalf.
+ */
+function isDefaultEligible(c: CandidateRow): boolean {
+  if (c.timesNamed < 1) return false;
+  // A name too short to identify a business cannot be verified before the call, and the point of
+  // a default is that it survives being googled.
+  if (c.name.trim().length < 3) return false;
+  return true;
+}
+
+/**
+ * Pre-select the top three by `times_named`, as a DEFAULT Matthew can change.
+ *
+ * Matthew: "I didnt really pick any competitors, just make sure it auto selects the top 3 most
+ * mentioned from the audit."
+ *
+ * ‼️ THE EVIDENCE RULE IS UNTOUCHED. This writes `selected`, which is a real recorded decision
+ * about which businesses the review audit and findings section 3 are built from. It does NOT
+ * tick step 7 — he still presses Done, and the verifier still counts `selected = true` rows.
+ * A default that also ticked the step would be a green checkmark over a choice nobody made,
+ * which is the worst bug this board can have.
+ *
+ * ‼️ IT NEVER OVERWRITES A DECISION. Any row already carrying `selected` or a `selected_at`
+ * stamp means somebody has been here, and this returns untouched. That is also what makes it
+ * safe to call from `instructionsFor`, which re-runs every time the card is refreshed.
+ */
+export async function applyDefaultSelection(
+  clientId: string
+): Promise<{ ok: boolean; error?: string; picked?: CandidateRow[]; alreadyChosen?: boolean }> {
+  const candidates = await loadCandidates(clientId);
+  if (!candidates.length) return { ok: true, picked: [] };
+
+  const { data: existing, error: existingErr } = await supabaseAdmin
+    .from("competitor_candidates")
+    .select("id")
+    .eq("client_id", clientId)
+    .or("selected.eq.true,selected_at.not.is.null")
+    .limit(1);
+
+  if (existingErr) return { ok: false, error: existingErr.message };
+  if (existing?.length) {
+    return { ok: true, alreadyChosen: true, picked: candidates.filter((c) => c.selected) };
+  }
+
+  // loadCandidates already orders by times_named desc.
+  const picks = candidates.filter(isDefaultEligible).slice(0, REQUIRED_SELECTIONS);
+  if (!picks.length) return { ok: true, picked: [] };
+
+  const { error } = await supabaseAdmin
+    .from("competitor_candidates")
+    .update({
+      selected: true,
+      selected_at: new Date().toISOString(),
+      // Named so a human reading the row later knows nobody chose these by hand. The board's
+      // own writer stamps a real actor.
+      selected_by: "Mission Control (default)",
+    })
+    .eq("client_id", clientId)
+    .in(
+      "id",
+      picks.map((p) => p.id)
+    )
+    // The claim, and it is what makes a concurrent card refresh harmless: the loser updates
+    // zero rows rather than re-stamping somebody's pick with a fresh timestamp.
+    .is("selected_at", null);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, picked: picks.map((p) => ({ ...p, selected: true })) };
+}
+
+/**
+ * The shortlist card. Numbered, with the count and one example question each.
+ *
+ * The top three are pre-ticked by `applyDefaultSelection` before this renders, so the card's job
+ * is to say WHICH three are picked, that they are a default rather than a judgement, and how
+ * arbitrary the last one is.
+ */
+export function formatShortlistCard(
+  clientName: string,
+  candidates: CandidateRow[],
+  totalPrompts: number,
+  boardUrl?: string | null
+): string {
+  const picked = candidates.filter((c) => c.selected);
+  const tie = tieAtCutoff(candidates);
+
   const lines = [
-    `*Competitor shortlist for ${clientName}* — pick exactly ${REQUIRED_SELECTIONS}.`,
-    `Ranked by how many of the ${totalPrompts} questions named them. Google each one before picking.`,
+    `*Competitor shortlist for ${clientName}*`,
+    `Ranked by how many of the ${totalPrompts} questions named them. Google each one before confirming.`,
     "",
   ];
+
+  if (picked.length) {
+    lines.push(
+      `:heavy_check_mark: *Pre-picked for you:* ${picked.map((c) => c.name).join(", ")}.`,
+      `The top ${picked.length} by mentions, chosen automatically. It is a DEFAULT, not a decision — ` +
+        "change it on the board if you know better, then hit Done to confirm."
+    );
+    // ‼️ Never present a tie-break as a ranking. On the first real client this read
+    // "5 businesses are level at 1 mention", which is the honest description of picks 2 and 3.
+    if (tie.tied) {
+      lines.push(
+        `:warning: The cut is a tie-break, not a ranking: ${tie.among} businesses are level at ` +
+          `${tie.atCount} mention${tie.atCount === 1 ? "" : "s"}, so which of them made the ` +
+          "list is arbitrary. Pick the ones you actually compete with."
+      );
+    }
+    lines.push("");
+  } else {
+    lines.push(
+      `Nothing is pre-picked: no candidate was named by an engine even once, so there is no ` +
+        `default to offer. Pick ${REQUIRED_SELECTIONS} on the board.`,
+      ""
+    );
+  }
 
   candidates.forEach((c, i) => {
     const named =
       c.timesNamed > 0
         ? `named in ${c.timesNamed} of ${totalPrompts}`
         : "NOT named by any engine — this is the client's own guess, and that gap is worth saying on the call";
-    lines.push(`${i + 1}. *${c.name}* — ${named}`);
+    lines.push(`${c.selected ? ":heavy_check_mark:" : `${i + 1}.`} *${c.name}* — ${named}`);
     if (c.source === "both") lines.push("    Named by the engines and by the client at intake.");
     if (c.source === "client_intake") lines.push("    From intake step 2 only.");
     if (c.website) lines.push(`    ${c.website}`);
@@ -240,7 +385,10 @@ export function formatShortlistCard(clientName: string, candidates: CandidateRow
 
   lines.push(
     "",
-    "National chains and aggregators are already excluded: those are a consensus lock, not competitors."
+    "National chains and aggregators are already excluded: those are a consensus lock, not competitors.",
+    "The review audit and findings section 3 are both built from this pick, so a wrong one makes " +
+      "both of them about the wrong businesses."
   );
+  if (boardUrl) lines.push(`Change the pick: ${boardUrl}`);
   return lines.join("\n");
 }

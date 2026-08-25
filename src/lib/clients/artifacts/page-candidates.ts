@@ -28,7 +28,7 @@
 // number that moves on its own makes the day-30 comparison meaningless.
 
 import { supabaseAdmin } from "@/lib/db";
-import { commercialIntent, isObjection } from "../harvest";
+import { commercialIntent, isObjection, verticalFor } from "../harvest";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import {
   startDoc,
@@ -202,7 +202,11 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
 
   if (!client) return { ok: false, error: "Client not found." };
 
-  const vertical = ((client.vertical_slug || client.business_type) as string | null) ?? "med_spa";
+  // Refuses rather than guessing. Same read-side reasoning as custom-question-set.ts: page
+  // candidates scored against another vertical's phrases are a ranked list of the wrong questions.
+  const resolvedVertical = await verticalFor(clientId);
+  if (!resolvedVertical.ok) return { ok: false, error: resolvedVertical.error };
+  const vertical = resolvedVertical.vertical;
   const subs = await substitutionsFor(clientId);
   if (!subs) return { ok: false, error: "Client not found while reading substitutions." };
 

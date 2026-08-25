@@ -270,11 +270,25 @@ export const ROUTE_COMPLETED = new Set([
  * "FLAGS out-of-order work" and day_zero_archive is the single exception that really refuses.
  * Waiving unreachable blockers restores that, and narrowly: a blocker a HUMAN can satisfy still
  * blocks, because that one is a real wait rather than a dead end.
+ *
+ * ‼️ THE PREDICATE READS `mode` AS WELL AS `auto`, AND IT USED TO READ ONLY `auto` (2026-08-25).
+ *
+ * `first_page` was declared `mode: "auto_then_manual"` with no `auto: true` and no runner, so it
+ * satisfied neither half of the old test and was invisible to this check — while being exactly
+ * the thing this check exists to find. Its card could never post, because postReadySteps waits
+ * for `ready` and only a runner writes that.
+ *
+ * `auto` and `mode` answer different questions (`auto` = the system TICKS it, `mode` = whether it
+ * waits for a person), and a step that declares EITHER kind of automation needs something behind
+ * it. `day_zero_archive` is correctly excluded: it is `mode: "manual"` and asserts nothing.
  */
 export function unreachableAutoSteps(): Set<string> {
   return new Set(
     DELIVERY_STEPS.filter(
-      (s) => s.auto === true && !AUTO_RUNNERS[s.key] && !ROUTE_COMPLETED.has(s.key)
+      (s) =>
+        (s.auto === true || s.mode === "auto" || s.mode === "auto_then_manual") &&
+        !AUTO_RUNNERS[s.key] &&
+        !ROUTE_COMPLETED.has(s.key)
     ).map((s) => s.key)
   );
 }

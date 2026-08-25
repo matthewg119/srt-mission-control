@@ -51,13 +51,119 @@ interface ClientFacts {
   phone: string | null;
 }
 
+/** The row the card is being built for. `output_ref` is this step's own artifact. */
+interface StepRowFacts {
+  outputRef: string | null;
+}
+
+function appUrl(): string {
+  return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+}
+
+/**
+ * The client board, which is where most of the work a card describes actually happens.
+ *
+ * ‼️ THE ID, NEVER THE SLUG. `/dashboard/clients/[id]` queries `.eq("id", id)` against a uuid
+ * column, so a slug is a cast error rather than a miss: the query throws, the page gets null and
+ * calls notFound(). The pinned header had been linking the slug since it shipped and every one
+ * of those links was a 404. A card that prints a dead link is worse than one that prints none —
+ * see docLink above, which returns null for exactly that reason.
+ */
+function boardUrl(c: ClientFacts, panel?: string): string {
+  return `${appUrl()}/dashboard/clients/${c.id}${panel ? `#${panel}` : ""}`;
+}
+
+/**
+ * A Slack link to a generated artifact, or null when there is no artifact.
+ *
+ * ‼️ NULL RATHER THAN A LINK TO NOTHING. `deliverArtifact` writes `output_ref` before it posts
+ * to Slack, so a doc id on the row is a real stored file at this URL — but a step that has not
+ * run yet has no id, and a card printing a dead link teaches people the links do not work. Every
+ * caller says "not generated yet" instead, which is also the more useful sentence.
+ */
+function docLink(clientId: string, docId: string | null | undefined, label: string): string | null {
+  if (!docId) return null;
+  return `<${appUrl()}/api/clients/${clientId}/docs/${docId}|${label}>`;
+}
+
+/**
+ * Every step's `output_ref`, in one query.
+ *
+ * ‼️ THIS IS WHAT MAKES A CARD ABLE TO SHOW THE ARTIFACT AN EARLIER STEP PRODUCED, AND NOTHING
+ * COULD BEFORE (2026-08-25). `instructionsFor` received only `ClientFacts`, so no case in the
+ * switch read `client_delivery_steps.output_ref` — the citation cleanup step could not link the
+ * cleanup PDF built for it two steps earlier, the first-page step could not link its own page
+ * candidates, and the Day-0 archive could not link the scorecard it exists to protect. Matthew
+ * had to go and find each one on the board.
+ *
+ * Matthew's general instruction: every step that CAN be pre-populated from earlier steps should
+ * be. He should not have to press Done to find out what is missing.
+ */
+async function outputRefsFor(clientId: string): Promise<Map<string, string>> {
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("step_key, output_ref")
+    .eq("client_id", clientId);
+
+  const out = new Map<string, string>();
+  for (const r of data ?? []) {
+    const ref = r.output_ref as string | null;
+    if (ref) out.set(r.step_key as string, ref);
+  }
+  return out;
+}
+
+/**
+ * The newest generated document filed against a step, by step key.
+ *
+ * Separate from `output_ref` on purpose: a document can arrive by being UPLOADED into a step's
+ * thread rather than generated, and the AI Visibility Scorecard is exactly that case. It is
+ * dropped into step 2's thread by the audit pipeline, so `baseline_scan.output_ref` is null and
+ * `client_docs.delivery_step_key` is where it lives.
+ */
+async function docForStep(
+  clientId: string,
+  stepKey: string
+): Promise<{ id: string; filename: string } | null> {
+  const { data } = await supabaseAdmin
+    .from("client_docs")
+    .select("id, filename")
+    .eq("client_id", clientId)
+    .eq("delivery_step_key", stepKey)
+    .order("uploaded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!data) return null;
+  return { id: data.id as string, filename: (data.filename as string) ?? "the file" };
+}
+
+/** `YYYY-MM-DD` for a date this app computed. Never a date somebody said out loud. */
+function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 /**
  * The literal instructions for one step.
  *
  * Returns null for a step that needs no extra explanation — the label is the instruction and
  * padding it with boilerplate teaches people to stop reading these posts.
+ *
+ * ‼️ SIX MANUAL STEPS USED TO RETURN NULL AND SHOULD NEVER HAVE (2026-08-25): call_booked,
+ * call_held, gbp_buildout, citation_cleanup, review_request_configured and day_30_date. For
+ * those, `blocks()` adds no body section at all, so the card was a label and three buttons —
+ * and the label is a summary of the work, not an instruction for doing it. Runner v3 §3 is the
+ * standard the rest of this switch is written to: "Never 'check the listing.' Always 'Search
+ * Google for: Acme Med Spa Greensboro NC'."
+ *
+ * `default: return null` stays, because a step whose label really is the whole instruction
+ * should not be padded. What is gone is a step needing an instruction and getting silence.
  */
-async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<string[] | null> {
+async function instructionsFor(
+  step: DeliveryStep,
+  c: ClientFacts,
+  row: StepRowFacts
+): Promise<string[] | null> {
   const where = [c.city, c.state].filter(Boolean).join(" ");
   const q = `${c.name} ${where}`.trim();
 
@@ -81,7 +187,8 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
       // one there: buildShortlist() existed and had no caller, so competitor_candidates was
       // always empty and findings §3 was permanently blank. It now prints the real list, and
       // when the list is empty it says so instead of describing a board that does not exist.
-      const { buildShortlist, loadCandidates, formatShortlistCard } = await import("./competitors");
+      const { buildShortlist, loadCandidates, formatShortlistCard, applyDefaultSelection } =
+        await import("./competitors");
 
       // Built HERE rather than by a separate auto step, because this card is posted exactly when
       // its blocker `baseline_scan` clears — which is the first moment audit_runs.recommended
@@ -95,6 +202,17 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
         console.error(`[step-engine] shortlist build failed for ${c.id}: ${built.error}`);
       }
 
+      // ‼️ THE TOP THREE ARE PRE-PICKED, AND THIS IS THE ONLY PLACE THAT HAPPENS.
+      // Matthew: "I didnt really pick any competitors, just make sure it auto selects the top 3
+      // most mentioned from the audit." applyDefaultSelection no-ops the moment anybody has
+      // chosen, so re-posting this card never overwrites a decision — and it does NOT tick the
+      // step, so the evidence rule is untouched: he still presses Done, the verifier still
+      // counts `selected` rows.
+      const defaulted = await applyDefaultSelection(c.id);
+      if (!defaulted.ok) {
+        console.error(`[step-engine] default competitor pick failed for ${c.id}: ${defaulted.error}`);
+      }
+
       const candidates = await loadCandidates(c.id);
       if (!candidates.length) {
         return [
@@ -103,7 +221,42 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
           "which is itself worth saying on the call.",
         ];
       }
-      return formatShortlistCard(c.name, candidates, 20).split("\n");
+      return formatShortlistCard(c.name, candidates, 20, boardUrl(c)).split("\n");
+    }
+
+    case "avatar_harvest": {
+      // ‼️ THIS STEP READS AS A DUPLICATE OF THE AUDIT AND IS NOT ONE. Matthew asked whether it
+      // repeats the audit and burns tokens; the card is where that gets answered, permanently,
+      // rather than in a conversation nobody can find later.
+      const { data: bank } = await supabaseAdmin
+        .from("question_bank")
+        .select("phrase")
+        .eq("source", "harvest")
+        .order("commercial_intent_score", { ascending: false })
+        .limit(3);
+
+      const brief = docLink(c.id, row.outputRef, "the deep-research brief");
+
+      return [
+        "*This does not repeat the audit. It runs ON the audit.*",
+        "It reads `audit_runs.citations` — every URL the engines actually cited about this",
+        "business — and fetches up to 40 of those pages. *Zero model calls*: the cost is plain",
+        "page fetches. The phrases come back as verbatim market wording, typos kept on purpose,",
+        "which is the difference from the audit's twenty clean model-written prompts.",
+        "",
+        "Those twenty cannot replace this: `audit_reports.prompts` is REGENERATED by every audit",
+        "run, so quoting them would let a later scan silently rewrite the questions in a report",
+        "already sent to a client. The Day-0 tracked set has to be frozen.",
+        "",
+        ...(bank?.length
+          ? ["Sample of what came back:", ...bank.map((b) => `  • "${b.phrase as string}"`), ""]
+          : []),
+        `*The half that needs you:* ${brief ?? "the deep-research brief (not generated yet)"}.`,
+        "Run it, paste the result back into this thread with `research:` in front of it, then Done.",
+        "",
+        "_The avatar is not decided here._ Avatars live in `niche_briefs`, per vertical, and one",
+        "is confirmed at step 11. This step leaves `question_bank.avatar` null on purpose.",
+      ];
     }
 
     case "review_audit": {
@@ -124,22 +277,67 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
       const rows = await loadReviewAudit(c.id);
       const competitors = await selectedCompetitors(c.id);
 
-      return formatReviewAuditCard({
-        clientName: c.name,
-        city: c.city ?? "",
-        state: c.state ?? "",
-        competitors: competitors.map((x) => ({ name: x.name })),
-        rows,
-      }).split("\n");
+      return [
+        // ‼️ MATTHEW CONFLATED THIS WITH STEP 16 AND THE CARDS HAVE TO MAKE THE DIFFERENCE
+        // OBVIOUS. Three steps have "review" in the label and they own three different things.
+        "*This is the competitor review-COUNT grid.* It is internal and no customer ever sees it.",
+        "It feeds findings section 3. The tool a customer uses is step 16; handing it over is step 30.",
+        "",
+        ...formatReviewAuditCard({
+          clientName: c.name,
+          city: c.city ?? "",
+          state: c.state ?? "",
+          competitors: competitors.map((x) => ({ name: x.name })),
+          rows,
+        }).split("\n"),
+        "",
+        `Type the counts in on the board: ${boardUrl(c)}`,
+      ];
     }
 
-    case "avatar_confirmed":
+    case "review_tool_preview": {
+      const { reviewPreviewUrl } = await import("./review-preview");
+      const { data: host } = await supabaseAdmin
+        .from("client_hosts")
+        .select("host, vercel_attached_at")
+        .eq("client_id", c.id)
+        .eq("kind", "reviews")
+        .maybeSingle();
+
+      return [
+        "*This step owns whether the tool RENDERS and is themed.* It is not the review audit",
+        "(step 8, an internal competitor grid) and not the handover (step 30).",
+        "",
+        `Internal preview: ${reviewPreviewUrl(c.id)}`,
+        ":lock: *That URL cannot be sent to a client.* It is a `/dashboard/` path and the page",
+        "calls `notFound()` without a session, so a logged-out visitor gets a 404 rather than a",
+        "login screen. It belongs in this thread, which is internal, and nowhere else.",
+        "",
+        host?.host
+          ? `The client-facing surface is \`${host.host}\`${host.vercel_attached_at ? ", attached" : ", NOT attached to Vercel yet"}.`
+          : "The client-facing surface is the `reviews.` host, and no `client_hosts` row exists for it yet.",
+      ];
+    }
+
+    case "avatar_confirmed": {
+      const refs = await outputRefsFor(c.id);
+      const brief = docLink(c.id, refs.get("avatar_harvest"), "the deep-research brief from step 9");
+
       return [
         "The proposal is on the board. Audit avatars are CANDIDATES only, and only when the",
         "cached niche matches this client's vertical — they are cached per niche, not per",
         "business, so every med spa audited this month has the same three. Map one to",
         "a1 / a2 / a3 or reject them all.",
+        "",
+        brief
+          ? `Read first: ${brief}. It is the market's own wording for this business.`
+          : "Step 9's deep-research brief has not been generated yet, so there is nothing harvested to read against.",
+        "",
+        `Confirm on the board: ${boardUrl(c)}`,
+        "The custom question set (step 12) and the page candidates (step 13) are both scored",
+        "against this choice, so neither means anything until it is made.",
       ];
+    }
 
     case "access_granted":
       return [
@@ -211,40 +409,340 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
       ];
     }
 
-    case "first_page":
+    case "first_page": {
+      const refs = await outputRefsFor(c.id);
+      const candidates = docLink(c.id, refs.get("page_candidates"), "step 13's ranked page candidates");
+
+      const { listAllForBoard } = await import("@/lib/hub/pages");
+      const pages = await listAllForBoard(c.id);
+      const drafts = pages.filter((p) => p.status !== "published");
+      const published = pages.filter((p) => p.status === "published");
+
       return [
         "Pages are written and published from the Hub panel on the client board.",
-        "Pick one of the twenty questions the audit actually ran, draft the answer, edit it,",
-        "then Publish.",
+        `Start here: ${candidates ?? "step 13's page candidates (not generated yet)"}.`,
+        "Pick a question, draft the answer, edit it, then Publish.",
+        "",
+        published.length
+          ? `*${published.length} published:* ${published.map((p) => `/${p.slug}`).join(", ")}`
+          : "*Nothing is published yet*, which is what this step is waiting on.",
+        drafts.length
+          ? `*${drafts.length} draft${drafts.length === 1 ? "" : "s"} written:* ${drafts.map((p) => `/${p.slug}`).join(", ")}`
+          : "No drafts written yet.",
         "",
         ":lock: *Publishing refuses while Day 0 is unarchived.* That is the one hard wall in",
         "this checklist and it is deliberate: once a page is live, the baseline the day 30, 60",
         "and 90 numbers are measured against cannot be recovered.",
+        "",
+        `Write and publish: ${boardUrl(c)}`,
       ];
+    }
 
-    case DAY_ZERO_STEP_KEY:
+    case DAY_ZERO_STEP_KEY: {
+      // ‼️ THE SCORECARD PDF, LINKED BY NAME. Matthew asked for this one specifically: the
+      // archive this step asserts IS the baseline scan's output, and it was two screens away.
+      // It arrives as an UPLOAD into step 2's thread, so it is on client_docs and not on
+      // baseline_scan.output_ref — which is why this reads docForStep rather than outputRefsFor.
+      const scorecard = await docForStep(c.id, "baseline_scan");
+      const link = docLink(c.id, scorecard?.id, scorecard?.filename ?? "the AI Visibility Scorecard");
+
       return [
         "*The one step that blocks rather than flags.* Nothing may be published until it is",
         "ticked, and ticking it stamps `clients.day_0_archived_at`.",
+        "",
+        link
+          ? `*The before picture:* ${link}`
+          : "*No scorecard is filed against the baseline scan yet.* That is what this step archives, so find it before ticking.",
         "",
         "It means: the before picture is captured and stored, so the day 30, 60 and 90 reports",
         "have something honest to be measured against. Tick it only once that is true — the",
         "column records `manual_step`, which is an ASSERTION that the archive happened, not",
         "evidence of it, and no artifact may call that a photograph.",
+        "",
+        "Post the archived scan into this thread before ticking. That is what [Done] reads.",
+      ];
+    }
+
+    case "gbp_buildout":
+      return [
+        "business.google.com, select the profile, then in order:",
+        "  • *Categories* — one primary that matches what they actually sell, then every",
+        "    secondary that is genuinely true. A wrong primary outranks everything else here.",
+        "  • *Services* — every service named, each with a description. Empty service",
+        "    descriptions are the most common gap and the cheapest to close.",
+        "  • *Photos* — exterior, interior, team, and the work itself. Dated, not stock.",
+        "  • *Q&A* — seed the questions buyers actually ask. Post them from the business",
+        "    profile and answer them; an empty Q&A gets filled in by strangers eventually.",
+        "",
+        `Search to check your work: \`${q}\``,
+        "",
+        "*[Done] reads a screenshot in this thread*, so post one of the finished profile.",
+        "Nothing about somebody else's Google profile is observable from here.",
       ];
 
-    case "cards_printed":
-      return [
-        "The card PDF is on the board. The QR points at the reviews host, which is live from",
-        "the moment the domain is attached, so the cards work before the hub has pages.",
-      ];
+    case "citation_cleanup": {
+      const refs = await outputRefsFor(c.id);
+      const list = docLink(c.id, refs.get("citation_cleanup_list"), "step 14's ranked cleanup list");
 
-    case "review_tool_handed":
+      const { loadSweep, countByStatus, effectiveStatus, worstFirst } = await import("./presence-sweep");
+      const rows = await loadSweep(c.id);
+      const counts = countByStatus(rows);
+
+      const needsWork = worstFirst(rows).filter((r) =>
+        ["duplicate", "mismatch", "missing"].includes(effectiveStatus(r))
+      );
+
       return [
+        list ? `*The list:* ${list}` : "*Step 14's cleanup list has not been generated yet.*",
+        "",
+        // The verifier refuses on not_checked FIRST, so the card says it first. A card that
+        // buried this under the mismatch count would have him fixing listings and still
+        // getting refused for a reason he had not read.
+        counts.not_checked > 0
+          ? `:warning: *${counts.not_checked} of ${rows.length} listings carry no confirmed status.* ` +
+            "[Done] refuses on that before it looks at anything else: a row nobody has read is " +
+            "not a row that was cleaned. Confirm each one on the Presence sweep panel."
+          : `All ${rows.length} listings carry a confirmed status.`,
+        `${counts.mismatch} mismatch · ${counts.duplicate} duplicate · ${counts.missing} missing · ${counts.match} match`,
+        "",
+        ...(needsWork.length
+          ? [
+              "*Outstanding, worst first:*",
+              ...needsWork
+                .slice(0, 12)
+                .map((r) => `  • ${r.platform} — ${effectiveStatus(r)}${r.listingUrl ? ` — ${r.listingUrl}` : ""}`),
+              ...(needsWork.length > 12 ? [`  …and ${needsWork.length - 12} more on the board.`] : []),
+              "",
+            ]
+          : []),
+        `Confirm and record on the board: ${boardUrl(c)}`,
+      ];
+    }
+
+    case "cards_printed": {
+      const refs = await outputRefsFor(c.id);
+      const pdf = docLink(c.id, refs.get("review_card_pdf"), "step 17's review card PDF");
+
+      const { data: host } = await supabaseAdmin
+        .from("client_hosts")
+        .select("host, vercel_attached_at")
+        .eq("client_id", c.id)
+        .eq("kind", "reviews")
+        .maybeSingle();
+
+      return [
+        pdf ? `*Print this:* ${pdf}` : "*Step 17's card PDF has not been generated yet.*",
+        "",
+        // ‼️ THE REAL HOST OR NOTHING. review-card.ts already refuses to derive this and says
+        // why: somebody fixing a typo on the board must not silently invalidate a thousand
+        // printed cards. A card that guessed the hostname here would contradict the PDF.
+        host?.host
+          ? `The QR points at \`${host.host}\`${host.vercel_attached_at ? ", which is attached and live from the moment the domain resolves" : " — *NOT attached to Vercel yet*, so check step 15 before printing"}.`
+          : ":warning: *No reviews host is attached for this client*, so the QR on that PDF has " +
+            "nothing behind it. Do not print until step 15 has attached it.",
+        "",
+        "The cards work before the hub has any pages: the reviews host is independent of them.",
+        "",
+        "*[Done] reads a photo in this thread.* Post one of the printed cards. Nothing",
+        "observable from here says a card exists on a counter.",
+      ];
+    }
+
+    case "review_request_configured": {
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("booking_software, review_workflow, review_request_mode, review_owner_name")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const workflow = (client?.review_workflow ?? {}) as Record<string, unknown>;
+      const destinations = Array.isArray(workflow.destinations)
+        ? (workflow.destinations as string[])
+        : [];
+      const mode = (client?.review_request_mode as string | null) ?? null;
+      const booking = (client?.booking_software as string | null) ?? null;
+
+      return [
+        "*Two branches and the label allows either.* Pick one, record it, and this step can close.",
+        "",
+        `  • *booking_system* — switch the automated request on inside ${booking ? `*${booking}*` : "their booking software"},`,
+        "    then post a screenshot of the configured request into this thread. Their booking",
+        "    software is not something this app can query, so a screenshot is the only evidence.",
+        "  • *card_only* — they are not automating it and the printed cards are the whole",
+        "    mechanism. That is a real answer, recorded on the row, and it needs no screenshot.",
+        "",
+        mode
+          ? `Recorded so far: *${mode}*.`
+          : ":warning: *Nothing is recorded yet, so neither branch has been chosen* and [Done] will refuse.",
+        client?.review_owner_name
+          ? `The named person on the record is *${client.review_owner_name as string}*.`
+          : "No named person is on the record yet. Step 30 wants one.",
+        "",
+        ...(destinations.length
+          ? [`They told us at intake they collect on: ${destinations.join(", ")}.`]
+          : []),
+        "While you are there, add the *review URLs*. The tool's Post on Google button reads them,",
+        "and with nothing set every customer gets a hint telling her to find the page herself.",
+        "",
+        `Record it on the board: ${boardUrl(c, "review-handover")}`,
+      ];
+    }
+
+    case "review_tool_handed": {
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("review_owner_name")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const { data: host } = await supabaseAdmin
+        .from("client_hosts")
+        .select("host")
+        .eq("client_id", c.id)
+        .eq("kind", "reviews")
+        .maybeSingle();
+
+      const owner = (client?.review_owner_name as string | null) ?? null;
+
+      return [
+        "*This step owns the HANDOVER.* Step 16 owned whether the tool renders; this is the",
+        "conversation where a person is shown it and takes it on.",
+        "",
+        owner
+          ? `The record says the named person is *${owner}*.`
+          : "No named person is on the record. Add one on the board so this card can check your work.",
+        host?.host
+          ? `What you are handing over: \`https://${host.host}\``
+          : ":warning: No reviews host is attached, so there is nothing live to hand over yet.",
+        "",
         "Hand it to the NAMED person from the call sheet — a name, not \"the front desk\".",
         "Restate once: every patient, own phone at home, nothing offered, nobody prompted",
         "for a name.",
+        "",
+        "*[Done] reads a reply in this thread.* Say who took it and how they were shown it.",
+        "A link emailed to a business address is not a handover.",
       ];
+    }
+
+    case "call_booked": {
+      // ‼️ THE MEASURE GATE IS REPEATED HERE, not left to the pinned header. The header states
+      // it about the run as a whole; this is the card he is looking at when he books, which is
+      // the moment the warning is actionable.
+      const { data: steps } = await supabaseAdmin
+        .from("client_delivery_steps")
+        .select("step_key, status")
+        .eq("client_id", c.id)
+        .in("step_key", ["baseline_scan", "findings_doc"]);
+
+      const missing = ["baseline_scan", "findings_doc"].filter(
+        (k) => (steps ?? []).find((s) => s.step_key === k)?.status !== "complete"
+      );
+
+      return [
+        "Book it, then *reply in this thread with the date*. That reply is the evidence: [Done]",
+        "reads the thread for a date and refuses without one, because a booking that exists only",
+        "in somebody's calendar is not something this board can see.",
+        "",
+        ...(missing.length
+          ? [
+              ":warning: *The baseline is not finished.* " +
+                `Still outstanding: ${missing.join(", ")}. The call is where we show them what the ` +
+                "engines are saying and agree who we are going after, and both come out of the " +
+                "baseline. Held first, it is opinions instead of screenshots.",
+              "This flags, it does not block. Booking early is your judgement to make.",
+              "",
+            ]
+          : ["The baseline is finished, so the call has evidence to be about.", ""]),
+        "Nothing else on the board is waiting on this one.",
+      ];
+    }
+
+    case "call_held": {
+      const refs = await outputRefsFor(c.id);
+      const sheet = docLink(c.id, refs.get("call_sheet"), "the call sheet PDF");
+
+      return [
+        sheet ? `*Read off this:* ${sheet}` : "*The call sheet has not been generated yet.*",
+        "",
+        "Five things have to happen on the call, and the label lists them because each one",
+        "unblocks something later:",
+        "  • *NAP read aloud* — the canonical record is what every listing is corrected to.",
+        "  • *Question set approved* — step 12's set is what day 30/60/90 is measured on.",
+        "  • *Consent confirmed* — named or anonymized results. It defaults to anonymized.",
+        "  • *Preview walked* — the hub and the review tool, on their own screen.",
+        "  • *Pages picked* — which of the candidates gets written first.",
+        "",
+        "*[Done] reads your call notes in this thread.* Paste them: it needs real notes, not a",
+        "one-liner, and a message that @mentions the bot is treated as a question instead.",
+        "The notes are also what the post-call email and the CRM note are written from.",
+      ];
+    }
+
+    case "day_30_date": {
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("day_0_archived_at, intake_completed_at")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const day0 = (client?.day_0_archived_at as string | null) ?? null;
+
+      // ‼️ COMPUTED FROM THE DAY-0 STAMP AND NOTHING ELSE. report-reminders.ts falls back to
+      // intake_completed_at and SAYS SO in the reminder; a card that quietly did the same would
+      // print a date that is wrong by however long the call took to happen.
+      const due = day0 ? isoDay(new Date(new Date(day0).getTime() + 30 * 86400000)) : null;
+
+      return [
+        day0
+          ? `Day 0 was stamped ${isoDay(new Date(day0))}, so *day 30 is ${due}*.`
+          : ":warning: *Day 0 is not archived yet*, so there is no date to compute. It counts " +
+            "from the Day-0 stamp, never from signup, and quoting a signup-based date here " +
+            "would promise the client a report on the wrong day.",
+        "",
+        "*Reply in this thread with the date you are promising them.* [Done] reads the thread",
+        "for a date and refuses without one.",
+        "",
+        "The reminder rides on the follow-up digest and counts from the Day-0 stamp on its own.",
+        "This reply is the human record of what was actually promised, which is the thing that",
+        "matters when the two disagree.",
+      ];
+    }
+
+    case "subdomain_live": {
+      const { formatDnsRecords } = await import("./hub-setup");
+      const { loadDnsRows } = await import("./dns-records");
+
+      const { data: row2 } = await supabaseAdmin
+        .from("clients")
+        .select("domain")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const domain = (row2?.domain as string | null) ?? null;
+      if (!domain) return ["No domain on file, so there is nothing to resolve."];
+
+      const rows = await loadDnsRows(c.id);
+      const hub = rows.find((r) => r.record_key === "cname_hub");
+      const verified = rows.filter((r) => r.status === "verified").length;
+
+      return [
+        `${verified} of ${rows.length} records verified.`,
+        "",
+        // ‼️ The gate is the HUB CNAME specifically, not "all three" and not the runner's ok
+        // flag — which returns true for any client with a domain, because it is also the runner
+        // and a runner that failed on propagation would park this step in error.
+        hub
+          ? hub.status === "verified"
+            ? `:white_check_mark: The hub CNAME is verified. That is what this step gates on.`
+            : `:hourglass_flowing_sand: The hub CNAME reads \`${hub.status}\`. *That specific record is what [Done] checks*, not the other two.`
+          : ":warning: There is no hub CNAME row, so nothing can verify.",
+        "",
+        ...formatDnsRecords(rows, domain),
+        "",
+        "Propagation is normally under an hour and can be several. A record added ninety seconds",
+        "ago reading `not_found` is the normal state, not a fault, and nothing is written for it.",
+      ];
+    }
 
     default:
       return null;
@@ -295,6 +793,50 @@ async function presenceRefusal(clientId: string, stepKey: string): Promise<strin
   return lines.join(" ");
 }
 
+/**
+ * Slack's hard limit on one section's text. Exceeding it fails the WHOLE message.
+ *
+ * ‼️ THE SWEEP CARD WAS ALREADY AT 2,988 CHARACTERS FOR A SHORT BUSINESS NAME, and the name is
+ * interpolated into all eighteen search strings. Measured on the cascade probe, whose client is
+ * called "ZZ Cascade Probe {epoch}": `invalid_blocks`, no card posted at all, and `postStep`
+ * returns early on that failure — so the step sat there with an anchor, no instructions and no
+ * buttons. A real client named "Greensboro Aesthetic and Wellness Institute" would have hit it
+ * on the first run and it would have looked like Slack being flaky.
+ *
+ * The new cards make this likelier, not less: the citation cleanup card prints up to twelve
+ * listings and the shortlist card prints ten candidates with example questions.
+ */
+const SECTION_LIMIT = 2900;
+
+/**
+ * Split a body across as many sections as it needs, ON LINE BOUNDARIES.
+ *
+ * Never mid-line: these bodies are search strings, URLs and DNS values that get read aloud or
+ * pasted, and a value broken across two Slack blocks is a value somebody pastes wrong. A single
+ * line longer than the limit is passed through whole and would still fail — but nothing here
+ * generates one, and truncating a DNS value to make the message send is the worse failure.
+ */
+function bodySections(body: string[]): SlackBlock[] {
+  const out: SlackBlock[] = [];
+  let buf: string[] = [];
+  let size = 0;
+
+  const flush = () => {
+    if (!buf.length) return;
+    out.push({ type: "section", text: { type: "mrkdwn", text: buf.join("\n") } });
+    buf = [];
+    size = 0;
+  };
+
+  for (const line of body) {
+    if (buf.length && size + line.length + 1 > SECTION_LIMIT) flush();
+    buf.push(line);
+    size += line.length + 1;
+  }
+  flush();
+  return out;
+}
+
 function blocks(step: DeliveryStep, c: ClientFacts, body: string[]): SlackBlock[] {
   const out: SlackBlock[] = [
     {
@@ -307,7 +849,7 @@ function blocks(step: DeliveryStep, c: ClientFacts, body: string[]): SlackBlock[
   ];
 
   if (body.length) {
-    out.push({ type: "section", text: { type: "mrkdwn", text: body.join("\n") } });
+    out.push(...bodySections(body));
   }
 
   out.push({
@@ -382,7 +924,7 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
     loadFacts(clientId),
     supabaseAdmin
       .from("client_delivery_steps")
-      .select("status, slack_message_ts")
+      .select("status, slack_message_ts, output_ref")
       .eq("client_id", clientId)
       .eq("step_key", stepKey)
       .maybeSingle(),
@@ -399,7 +941,10 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
     return;
   }
 
-  const body = (await instructionsFor(step, facts)) ?? [];
+  const body =
+    (await instructionsFor(step, facts, {
+      outputRef: (row?.output_ref as string | null) ?? null,
+    })) ?? [];
   const kit = blocks(step, facts, body);
   const fallback = `${facts.name} · ${step.label}`;
 
@@ -654,28 +1199,115 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
  *
  * Idempotent: postStepAnchor claims with `.is(null)` and returns the existing ts.
  */
-export async function ensureReachableAnchors(clientId: string): Promise<void> {
+/**
+ * Which steps may appear right now. THE single answer, read by all three schedulers.
+ *
+ * ‼️ EXACTLY ONE WAITING STEP AT A TIME. MATTHEW'S CALL, AND IT COSTS SOMETHING REAL.
+ *
+ * `ensureReachableAnchors` used to anchor EVERY step whose blockers were clear, which on the
+ * first real client meant two messages at intake, then four, then two. Four things to work on
+ * is four things to choose between, and the whole point of one-message-per-step was that a step
+ * could be worked one at a time.
+ *
+ * **What it costs:** work that could legitimately happen in parallel is now serialised. The
+ * clearest case is `call_booked`, which has no `blockedBy` at all — today it appears at intake
+ * and the call can be booked while the scan is still running; under this cursor it does not
+ * appear until step 18 resolves. That is not an oversight, it is the trade: Matthew asked for
+ * calm over throughput, and a board that shows one thing is calm in a way a board that shows
+ * the true dependency graph is not. If the serialisation ever bites, the fix is to widen this
+ * function, not to bypass it in one caller.
+ *
+ * The walk:
+ *  - a RESOLVED step is walked past (complete or skipped, the reading every scheduler here uses);
+ *  - an unresolved step that is REACHABLE joins the cursor;
+ *  - an AUTO step never ends the walk, because it resolves itself inside this same cascade and
+ *    stopping on one would deadlock the board before anything had run;
+ *  - the first unresolved step that will WAIT FOR A PERSON ends the walk — **whether or not it
+ *    is reachable yet**.
+ *
+ * ‼️ THAT LAST CLAUSE IS THE LOAD-BEARING ONE AND THE OBVIOUS VERSION GETS IT WRONG.
+ *
+ * Walking PAST a blocked waiting step, on the reasonable-sounding grounds that it is not
+ * workable, lets a later step leapfrog it. The live case: at intake, `presence_sweep_manual` is
+ * blocked on `nap_sweep`, `competitor_shortlist` is blocked on `baseline_scan`, and everything
+ * between them is blocked too — so the walk would run all the way down to `hub_preview`, whose
+ * only blocker is `intake_received`, and anchor it. Four messages at intake, which is the
+ * behaviour this function exists to stop.
+ *
+ * Breaking on it instead is right because the blocker is an EARLIER step, so it has already been
+ * seen by this same walk and is either in the cursor or is what stopped it. The board is
+ * therefore never empty while anything is unresolved, and it never shows two things to do.
+ */
+export async function reachableCursor(clientId: string): Promise<Set<string>> {
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
-    .select("step_key, status, slack_anchor_ts")
+    .select("step_key, status")
     .eq("client_id", clientId);
 
-  const rows = data ?? [];
   const done = new Set(
-    rows.filter((r) => r.status === "complete" || r.status === "skipped").map((r) => r.step_key as string)
-  );
-  const anchored = new Set(
-    rows.filter((r) => r.slack_anchor_ts).map((r) => r.step_key as string)
+    (data ?? [])
+      .filter((r) => r.status === "complete" || r.status === "skipped")
+      .map((r) => r.step_key as string)
   );
 
+  const cursor = new Set<string>();
   for (const step of DELIVERY_STEPS) {
+    if (done.has(step.key)) continue;
+
+    // Blocked steps get no anchor: a top-level message for work that cannot start is the wall
+    // coming back. They can still END the walk, which is the point above.
+    if (!(step.blockedBy ?? []).some((k) => !done.has(k))) cursor.add(step.key);
+
+    if (step.mode !== "auto") break;
+  }
+  return cursor;
+}
+
+export async function ensureReachableAnchors(clientId: string): Promise<void> {
+  const cursor = await reachableCursor(clientId);
+
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("step_key, slack_anchor_ts")
+    .eq("client_id", clientId);
+
+  const anchored = new Set(
+    (data ?? []).filter((r) => r.slack_anchor_ts).map((r) => r.step_key as string)
+  );
+
+  // In DELIVERY_STEPS order, because Slack orders a channel by post time and nothing can
+  // reorder it afterwards. See the doc block above this function.
+  for (const step of DELIVERY_STEPS) {
+    if (!cursor.has(step.key)) continue;
     if (anchored.has(step.key)) continue;
-    // Blocked steps get no message at all. Matthew chose post-on-unblock over all 33 at
-    // intake, so the newest message in the channel is always the thing to work on next.
-    if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
 
     const res = await postStepAnchor(clientId, step.key);
-    if (!res.ok) console.error(`[step-engine] anchor for ${step.key} failed:`, res.error);
+    if (!res.ok) {
+      console.error(`[step-engine] anchor for ${step.key} failed:`, res.error);
+      continue;
+    }
+
+    // ‼️ STEP 31 GETS A NOTE, NOT A CARD, AND THAT IS THE HONEST SHAPE FOR IT.
+    // time_log_entries is `mode: "auto"`, so postReadySteps skips it and no card is ever
+    // posted — but nothing about it runs itself either: /api/clients/[id]/time-log ticks it
+    // when the first entry is saved. So the anchor said "Time log has entries from day 0" and
+    // nothing said where to put them. A [Done] button would be worse: it is a button whose
+    // press the verifier can refuse, over work that is not a button press.
+    if (step.key === "time_log_entries") {
+      await notifyStep(
+        clientId,
+        step.key,
+        [
+          "This one ticks itself. There is no button and nothing here is yours to press.",
+          "",
+          `Log time on the client board: ${appUrl()}/dashboard/clients/${clientId}`,
+          "The first entry saved after the Day-0 stamp completes this step.",
+          "",
+          "It matters because the pilot's cost is measured from this log. An empty log does not",
+          "make the pilot free, it makes it unevaluable.",
+        ].join("\n")
+      ).catch((e) => console.error("[step-engine] time-log note failed:", (e as Error).message));
+    }
   }
 }
 
@@ -683,6 +1315,12 @@ export async function postReadySteps(clientId: string): Promise<void> {
   // Anchors first and in order, always. postReadySteps is called from several places, so the
   // ordering guarantee has to live at the top of this function rather than in the callers.
   await ensureReachableAnchors(clientId);
+
+  // ‼️ GATED ON THE CURSOR, AND IT HAS TO BE. postStep calls anchorTsFor, which CREATES an
+  // anchor rather than falling back — so a card posted outside the cursor drags its step's
+  // top-level message into the channel with it, and the one-at-a-time rule comes apart one
+  // message at a time.
+  const cursor = await reachableCursor(clientId);
 
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
@@ -699,6 +1337,7 @@ export async function postReadySteps(clientId: string): Promise<void> {
   const statusOf = new Map(rows.map((r) => [r.step_key as string, r.status as string]));
 
   for (const step of DELIVERY_STEPS) {
+    if (!cursor.has(step.key)) continue;
     if ((step.blockedBy ?? []).some((k) => !done.has(k))) continue;
     if (step.mode === "auto") continue;
     if (done.has(step.key) || posted.has(step.key)) continue;
@@ -744,6 +1383,13 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
   // what this was hiding: findings_doc and call_sheet could not generate for any client.
   const unreachable = unreachableAutoSteps();
 
+  // ‼️ GATED ON THE CURSOR TOO, AND THIS IS THE LEAK THAT WOULD HAVE BEEN MISSED.
+  // A runner's `note` goes out through notifyStep, which creates the step's anchor. hub_preview
+  // is `blockedBy: ["intake_received"]` alone, so without this it runs the moment intake
+  // finishes and posts a top-level message for step 15 while step 5 is the one being worked —
+  // one-at-a-time defeated by a function that never touches the anchor code.
+  const cursor = await reachableCursor(clientId);
+
   const { data } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("step_key, status")
@@ -758,6 +1404,7 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
   for (const step of DELIVERY_STEPS) {
     const runner = AUTO_RUNNERS[step.key];
     if (!runner) continue;
+    if (!cursor.has(step.key)) continue;
 
     const status = byKey.get(step.key);
     // 'pending', 'blocked' and 'ready' are all startable. 'running', 'awaiting_me', 'complete',

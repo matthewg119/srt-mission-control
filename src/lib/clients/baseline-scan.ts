@@ -37,6 +37,80 @@ export async function measuredPrompts(reportId: string): Promise<number> {
 }
 
 /**
+ * Copy the audit's classification onto the client row.
+ *
+ * ‼️ THE WRITER FOR TWO COLUMNS THAT HAD FOUR READERS AND NO WRITER (2026-08-25).
+ *
+ * `classify.ts` works out `vertical_slug` and `business_type` on every audit and
+ * `run-audit-pipeline.ts` stores both — on `audit_reports`. Nothing in the repo has ever copied
+ * them across to `clients`, so `clients.vertical_slug` and `clients.business_type` were NULL for
+ * every client that ever existed, including one whose audit had answered the question perfectly.
+ * Four call sites read them and every one of them fell through to a literal `"med_spa"`. See
+ * `verticalFor()` in harvest.ts for what that cost.
+ *
+ * Same class as `clients.audit_report_id`, which CLAUDE.md already documents: a column with
+ * readers and no writer does not error, it just quietly answers wrong.
+ *
+ * ‼️ IT WRITES ONLY OVER NULL, AND BOTH HALVES OF THAT MATTER.
+ *  - A human who corrects a vertical on the board outranks the classifier, permanently.
+ *  - A re-run of the audit must not silently re-file an existing client into a different
+ *    corpus. `question_bank` is keyed on the vertical and shared, so a flip mid-pilot would
+ *    strand every phrase harvested so far somewhere nothing reads.
+ *
+ * Called from setDeliveryStep when `baseline_scan` completes, which is the one moment the report
+ * is known to be finished, and which covers BOTH the automatic tick from startBaselineScan and a
+ * manual Re-check on a report attached by hand.
+ */
+export async function adoptAuditClassification(
+  clientId: string
+): Promise<{ ok: boolean; adopted?: string; error?: string }> {
+  const { data: client, error: clientErr } = await supabaseAdmin
+    .from("clients")
+    .select("vertical_slug, business_type")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (clientErr) return { ok: false, error: clientErr.message };
+  if (!client) return { ok: false, error: "client not found" };
+
+  // Already answered, by the classifier on an earlier run or by a person. Leave it alone.
+  if (client.vertical_slug || client.business_type) return { ok: true };
+
+  const { data: report, error: reportErr } = await supabaseAdmin
+    .from("audit_reports")
+    .select("vertical_slug, business_type")
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (reportErr) return { ok: false, error: reportErr.message };
+
+  const vertical = (report?.vertical_slug as string | null) ?? null;
+  const businessType = (report?.business_type as string | null) ?? null;
+
+  // No report, or a report that classified nothing. Nothing to adopt and nothing to invent:
+  // the four readers refuse loudly, which is the designed outcome.
+  if (!vertical && !businessType) return { ok: true };
+
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({
+      vertical_slug: vertical,
+      business_type: businessType,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", clientId)
+    // The claim. Two transitions landing at once must not race, and this keeps the
+    // write-only-over-null rule true at the database rather than only in the read above.
+    .is("vertical_slug", null)
+    .is("business_type", null);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, adopted: vertical ?? businessType ?? undefined };
+}
+
+/**
  * Fire the AI visibility scan against the website the client confirmed at intake.
  *
  * Honest about what it is. The pilot spec's Photograph I is 20 questions across four

@@ -40,6 +40,11 @@ export function ReviewTool({ client }: { client: HubClient }) {
       // Spanish is NOT generated here. English renders until reviewed copy exists, the same
       // refusal isUnwritten() already makes for an unwritten WhatsApp draft.
       needsSpanish={client.language === "es" || client.language === "both"}
+      // ‼️ THE RAW VALUE AS WELL, and it is not a duplicate of the flag above. needsSpanish is
+      // true for "both", so using it to pick the DICTATION language would set es-ES recognition
+      // for a bilingual client and garble every English speaker who taps the microphone.
+      // Rendering a Spanish note and listening in Spanish are different decisions.
+      language={client.language ?? null}
     />
   );
 }

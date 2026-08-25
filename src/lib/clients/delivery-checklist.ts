@@ -409,6 +409,30 @@ export async function setDeliveryStep(args: {
     }
   }
 
+  // ‼️ THE AUDIT'S CLASSIFICATION IS ADOPTED HERE, AND HERE IS THE ONLY PLACE IT CAN BE.
+  //
+  // clients.vertical_slug and clients.business_type had four readers and no writer, so every
+  // client fell through to a hardcoded "med_spa" and forty phrases about choosing an AEO agency
+  // were filed under it. See adoptAuditClassification in baseline-scan.ts.
+  //
+  // This hook rather than inside startBaselineScan, because the report can also be attached by
+  // hand and the step confirmed with Re-check — which is exactly the path the SRT re-onboarding
+  // takes, and startBaselineScan never runs on it. Completing step 2 is the one moment the
+  // report is known finished, whichever route got it there.
+  //
+  // Swallowed, unlike the Day-0 stamp above. A missing vertical is not a silent wrong state:
+  // verticalFor() refuses out loud at step 9 and names this step as the fix.
+  if (args.stepKey === "baseline_scan" && complete) {
+    const { adoptAuditClassification } = await import("@/lib/clients/baseline-scan");
+    const adopted = await adoptAuditClassification(args.clientId).catch((e) => ({
+      ok: false as const,
+      error: (e as Error).message,
+    }));
+    if (!adopted.ok) {
+      console.error("[delivery-checklist] adopting the audit classification failed:", adopted.error);
+    }
+  }
+
   // The eight pilot stages on the board are DERIVED from these rows, so they are
   // recomputed on every transition rather than maintained separately. Before this, nothing
   // advanced them past 'intake' and the board contradicted this very checklist. Swallowed
@@ -522,7 +546,13 @@ export async function setDeliveryStep(args: {
     await refreshHeader(args.clientId);
   }
 
-  return { ok: true };
+  // ‼️ THE VERDICT COMES BACK ON SUCCESS TOO, AND IT USED NOT TO.
+  // The signature has always declared `verdict?: Verdict`, and the only return that carried one
+  // was the refusal — so a caller asking "was that a system tick or a thread tick?" got
+  // undefined for every step that passed, and `_probe-cascade.ts` had an assertion about step
+  // 2's evidence tier that could not have gone green on any run. It is undefined on a skip and
+  // a reopen, which is correct: neither is a claim about work, so neither is verified.
+  return { ok: true, verdict };
 }
 
 /**

@@ -360,6 +360,43 @@ export async function notifyStep(
  * same doctrine as the market-overlap check: a call booked early is a judgement somebody made,
  * and a board that refused would just get worked around. What it must not do is stay quiet.
  */
+/**
+ * `Before the call 12/18 · During the call 0/4 · After the call 0/11`.
+ *
+ * ‼️ THREE COUNTS BECAUSE THERE ARE NOW THREE PHASES (2026-08-25). They were Measure, Prepare,
+ * The call, Day 0 and Build; Matthew regrouped them as before / during / after the call, because
+ * the call is the only fixed point in the job and "which side of it is this" is the question a
+ * board is actually being asked.
+ *
+ * DERIVED by grouping, never a literal list. A hardcoded set of three names would keep printing
+ * the old ones after a rename, silently, and the counts would still add up.
+ *
+ * Complete only, never complete-or-skipped, for the same reason `isDone` is: "we decided not to"
+ * and "we did it" are opposite claims and a progress count that merges them overstates the run.
+ */
+function phaseCounts(rows: BoardRow[]): string {
+  const status = new Map(rows.map((r) => [r.step_key, r.status]));
+  const order: string[] = [];
+  const totals = new Map<string, { done: number; total: number }>();
+
+  for (const step of DELIVERY_STEPS) {
+    if (!totals.has(step.phase)) {
+      totals.set(step.phase, { done: 0, total: 0 });
+      order.push(step.phase);
+    }
+    const bucket = totals.get(step.phase)!;
+    bucket.total += 1;
+    if (status.get(step.key) === "complete") bucket.done += 1;
+  }
+
+  return order
+    .map((phase) => {
+      const b = totals.get(phase)!;
+      return `${phase} ${b.done}/${b.total}`;
+    })
+    .join(" · ");
+}
+
 function headerText(client: BoardClient, rows: BoardRow[]): string {
   const status = new Map(rows.map((r) => [r.step_key, r.status]));
   const anchors = new Map(rows.map((r) => [r.step_key, r.slack_anchor_ts]));
@@ -376,13 +413,24 @@ function headerText(client: BoardClient, rows: BoardRow[]): string {
 
   // Resolved is complete-or-skipped, the same reading the schedulers use. A step somebody
   // decided not to do must not be the answer to "what is next" forever.
-  const next = DELIVERY_STEPS.find(
-    (s) => status.get(s.key) !== "complete" && status.get(s.key) !== "skipped"
-  );
+  //
+  // ‼️ IT MUST NAME A WORKABLE STEP, AND IT USED TO NAME THE FIRST UNRESOLVED ONE.
+  // With one anchor at a time, this line IS the board — so a header naming a step that the
+  // channel is not showing (because it is blocked) leaves nothing on screen to work on and
+  // nothing explaining why. `reachableCursor` breaks the walk on the first waiting step
+  // whether or not it is reachable; this picks the first one that actually is.
+  const resolved = (key: string) =>
+    status.get(key) === "complete" || status.get(key) === "skipped";
+  const unresolved = DELIVERY_STEPS.filter((s) => !resolved(s.key));
+  const next =
+    unresolved.find((s) => !(s.blockedBy ?? []).some((k) => !resolved(k))) ?? unresolved[0];
 
   const lines = [
     `:pushpin: *${client.name} · onboarding*`,
     `${done} of ${DELIVERY_STEPS.length} done.${skipped > 0 ? ` ${skipped} skipped.` : ""}`,
+    // Three counts, one per phase, derived by grouping DELIVERY_STEPS rather than hardcoded —
+    // so renaming a phase is one edit in config/delivery-steps.ts and not two.
+    phaseCounts(rows),
   ];
 
   if (!next) {
@@ -443,8 +491,13 @@ function headerText(client: BoardClient, rows: BoardRow[]): string {
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (appUrl && client.slug) {
-    lines.push(`Full checklist: ${appUrl}/dashboard/clients/${client.slug}`);
+  // ‼️ THE ID, NOT THE SLUG, AND THIS LINK HAS BEEN A 404 SINCE IT SHIPPED.
+  // The board page is `/dashboard/clients/[id]` and it queries `.eq("id", id)` against a uuid
+  // column. Handed `srt-agency-llc` that is a cast error, not a miss, so the query throws, `data`
+  // comes back null and the page calls notFound(). The one navigation aid on the pinned header
+  // went nowhere, and it looked like a permissions problem rather than a wrong path.
+  if (appUrl) {
+    lines.push(`Full checklist: ${appUrl}/dashboard/clients/${client.id}`);
   }
 
   return lines.join("\n");
