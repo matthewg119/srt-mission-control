@@ -49,6 +49,13 @@ export const BOOKING_HOSTS = new Set([
   "simplybook.me", "timely.com", "podium.com",
   "calendly.com", "booksy.com", "vagaro.com", "mindbodyonline.com",
   "square.site", "squareup.com",
+  // ‼️ ADDED AFTER A LIVE MISS, and the miss is the argument for keeping this list ahead of the
+  // prospecting rather than behind it. booking.mangomint.com was taken as two med spas' own site,
+  // crawled, judged thin because a booking widget is thin, and both runs died on an error message
+  // about the prospect's page that was really about Mangomint's. The panel now recovers from that
+  // in one press, but the list is where it stops being an error at all.
+  "mangomint.com", "booker.com", "mindbody.io", "pabau.com",
+  "symplast.com", "patientnow.com", "repeatmd.com",
 ]);
 
 export const NEVER_THEIR_SITE_HOSTS = new Set([

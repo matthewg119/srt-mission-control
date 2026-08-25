@@ -19,12 +19,12 @@ import {
   normalizeHandle,
   firstNameFrom,
   cityFromBio,
-  resolveBioLink,
+  resolveBioLinks,
   resolveCityInput,
   unwrapInstagramLink,
   businessNameFrom,
 } from "@/lib/instagram/profile";
-import { hostOf, isBookingHost } from "@/lib/audit-engine/web-hosts";
+import { hostOf, isBookingHost, isNeverTheirSite } from "@/lib/audit-engine/web-hosts";
 import { IG_CLAIM_MINUTES, startDmRun, leadUrl, profileUrl } from "@/lib/instagram/dm-run";
 
 export const runtime = "nodejs";
@@ -43,6 +43,15 @@ interface Body {
   fullName?: string;
   bio?: string;
   externalUrl?: string | null;
+  /**
+   * Every link in the bio, in the order Instagram lists them.
+   *
+   * ‼️ A MULTI-LINK BIO LEAVES external_url NULL, which is not the same thing as having no
+   * link, and for months it was read as if it were. leahskinmethod's bio shows a booking page "and
+   * 3 more" and arrived here as nothing at all. The panel now sends the array; externalUrl is kept
+   * because a single-link profile still populates it and nothing else needs to change.
+   */
+  bioLinks?: string[] | null;
   category?: string | null;
   businessEmail?: string | null;
   businessPhone?: string | null;
@@ -133,6 +142,11 @@ export async function POST(req: NextRequest) {
   const city = resolvedTypedCity ?? cityFromBio(bio);
 
   // 1. Where the site comes from, in priority order. What Matthew typed always wins.
+  // externalUrl first because a single-link profile only fills that one, then the rest of the bio.
+  const bioLinks: (string | null | undefined)[] = [
+    body.externalUrl,
+    ...(Array.isArray(body.bioLinks) ? body.bioLinks : []),
+  ];
   const typed = (body.websiteOverride ?? "").trim();
   // Both answers mean the same thing to the crawler: there is no site of theirs to read.
   const noSiteOfTheirOwn = Boolean(body.noWebsite || body.bookingOnly);
@@ -146,7 +160,7 @@ export async function POST(req: NextRequest) {
       return jsonCors(req, { ok: false, error: `That does not look like a URL: ${typed}`, field: "websiteOverride" }, 400);
     }
   } else if (!noSiteOfTheirOwn) {
-    const resolved = await resolveBioLink(body.externalUrl);
+    const resolved = await resolveBioLinks(bioLinks);
     website = resolved.website;
     websiteNote = resolved.note;
     bookingHost = resolved.bookingHost;
@@ -156,7 +170,7 @@ export async function POST(req: NextRequest) {
     // button works even when the panel had nothing structured to echo.
     const echoed = unwrapInstagramLink(body.bookingUrl ?? null);
     const echoedHost = isBookingHost(echoed) ? hostOf(echoed) : null;
-    bookingHost = echoedHost ?? (await resolveBioLink(body.externalUrl)).bookingHost;
+    bookingHost = echoedHost ?? (await resolveBioLinks(bioLinks)).bookingHost;
     // A degrade, not a failure: dmReasonLine("none") is weaker and still true, so the run goes on
     // rather than asking him to prove his own prospect uses booking software.
     websiteNote = bookingHost
@@ -193,7 +207,11 @@ export async function POST(req: NextRequest) {
       // What the "Only a booking link" button needs in order to say which platform it is. Null on
       // every other kind of dead-end link, which is what keeps that button honest.
       bookingHost,
-      bookingUrl: bookingHost ? unwrapInstagramLink(body.externalUrl) : null,
+      // The link that actually produced bookingHost, which on a multi-link bio is usually not the
+      // first one. Sending externalUrl here sent null on exactly the profiles this exists for.
+      bookingUrl: bookingHost
+        ? bioLinks.map((l) => unwrapInstagramLink(l)).find((u) => hostOf(u) === bookingHost) ?? null
+        : null,
       note: websiteNote,
     });
   }
@@ -355,7 +373,15 @@ async function upsertContact(input: {
     if ((input.typedName || !existing.business_name) && input.businessName) {
       patch.business_name = input.businessName;
     }
-    if (!existing.website && input.website) patch.website = input.website;
+    // ‼️ A BOOKING PAGE ALREADY IN THE FIELD IS OUR OWN BAD SCRAPE, NOT A PERSON'S ANSWER, so
+    // the fill-blanks-only rule is wrong for it and would make it permanent. Four leads carried a
+    // Mangomint or an Aesthetic Record URL as their website: the row is never blank again, so every
+    // later press would keep the vendor's page and every later scan would keep reading it. Cleared
+    // even when this run found nothing better, because no website is nearer the truth than
+    // somebody else's.
+    const borrowed = isNeverTheirSite(existing.website as string | null);
+    if (borrowed && !input.website) patch.website = null;
+    else if ((borrowed || !existing.website) && input.website) patch.website = input.website;
     if (!existing.email && input.email) patch.email = input.email;
     if (!existing.phone && phone) patch.phone = phone;
     if ((input.typedCity || !existing.biz_city) && cityPart) patch.biz_city = cityPart;
