@@ -918,11 +918,23 @@ export const DM_OPENERS = [
   {
     id: "pretext",
     // The email hook's move, compressed. Explains why this landed in their inbox first.
+    //
+    // ‼️ IT USED TO SAY "AND THIS BUSINESS CAME UP IN THEM", WHICH IS THE FINDING'S OPPOSITE.
+    // Three live runs on leahskinmethod opened with "The Plump Room kept coming up in the searches"
+    // and then stated, one sentence later, that it does not come back in any of them. The model was
+    // reading the pretext exactly as written; the wording was wrong, not the drafter. A message
+    // whose whole value is that a stranger can reproduce it cannot contradict itself in two
+    // sentences, and this is the ONE opener with room to do it, because it is the only one that
+    // says anything before the fixed line. What is true, and what it says now, is why this profile
+    // was looked at. Nothing about what the answers contained: that is the finding's job.
     instruction:
-      "Open with ONE short sentence of pretext before the finding: the questions were being run " +
-      "for another client in the area and this business came up in them. Do not say who the other " +
-      "client is, what they do, or how they are doing, and do not suggest you work with one of " +
-      "this prospect's competitors. Then the fixed finding line.",
+      "Open with ONE short sentence of pretext before the finding: you were already running these " +
+      "questions for another client in the same area, which is why you looked at this business " +
+      "too. You must NOT say or imply that this business appeared, came up, showed up, came back " +
+      "or was mentioned in those searches. The fixed line underneath may state the exact opposite, " +
+      "and a message that contradicts itself one sentence later is worse than no message. Do not " +
+      "say who the other client is, what they do, or how they are doing, and do not suggest you " +
+      "work with one of this prospect's competitors. Then the fixed finding line.",
   },
   {
     id: "question",
