@@ -1511,6 +1511,151 @@ const PROV_MED_SPA: SubProvenance = {
   );
 }
 
+
+// ---- LANE 4 ----------------------------------------------------------------
+// Writing and publishing the pages. Pure functions and source greps only: no network, no
+// database, no model. Everything with a Supabase call in it is exercised by the probes.
+
+import { themeOf, scoreCandidate, DERIVED_CAP } from "../src/lib/clients/artifacts/page-candidates";
+import { pageSlug } from "../src/lib/hub/pages";
+
+{
+  // ── themeOf: the two new arms, and the one they must not steal from ────────
+  ok('themeOf finds a Tool', themeOf("botox cost calculator") === "Tool");
+  ok('and a session-count question is a Tool', themeOf("how many sessions does laser take") === "Tool");
+  ok('themeOf finds a Guide', themeOf("how do i prepare for a consultation") === "Guide");
+  ok('and aftercare is a Guide', themeOf("what to expect after treatment") === "Guide");
+  ok('Comparison is unchanged', themeOf("botox vs dysport") === "Comparison");
+
+  // ‼️ THE REGRESSION THE ORDERING EXISTS TO STOP. "how much does X cost" opens with "how" and
+  // contains "cost". A Tool arm keyed on \bhow\b, or a Guide arm placed above Price, swallows
+  // the entire pricing theme and the call then picks from a list of calculators nobody asked
+  // for. Both new arms are written narrowly for this one case.
+  ok('"how much does it cost" is still Price', themeOf("how much does botox cost") === "Price");
+  ok('and so is a financing question', themeOf("do you offer financing") === "Price");
+  ok('an objection still outranks everything', themeOf("is botox worth it or a waste of money").length > 0);
+
+  // ── scoreCandidate: the tri-state the derived pass depends on ──────────────
+  const base = { frequency: 4, intent: 0.5, objection: false, inOwnReviews: false };
+  const gap = scoreCandidate({ ...base, currentlyNamed: false });
+  const named = scoreCandidate({ ...base, currentlyNamed: true });
+  const unmeasured = scoreCandidate({ ...base, currentlyNamed: null });
+
+  ok("a measured gap scores highest", gap > unmeasured && gap > named);
+  ok(
+    "and an unmeasured question scores exactly like a named one, never like a gap",
+    unmeasured === named
+  );
+
+  // ‼️ THIS IS WHY DERIVED IDEAS PASS currentlyNamed: null RATHER THAN false. No engine has
+  // ever been asked about a page that does not exist, so there is no answer. Passing false
+  // would hand every idea we invented the largest term in the formula and rank our own guesses
+  // above the client's measured gaps.
+  ok("so a derived idea cannot buy the gap bonus by being a guess", unmeasured < gap);
+  ok("the derived cap is a real cap", DERIVED_CAP > 0 && DERIVED_CAP <= 25);
+
+  // ── the page studio opens usable drafts ────────────────────────────────────
+  ok(
+    "a claimed question produces a usable slug",
+    pageSlug("How much does Botox cost in Greensboro, NC?") === "how-much-does-botox-cost-in-greensboro-nc"
+  );
+  ok("and a derived idea's longer title still slugs", pageSlug("A guide covering \"what to expect\" and 4 related questions").length > 0);
+  ok("a question with no letters produces nothing rather than a bare dash", pageSlug("?? !!") === "");
+
+  // ── the digit parser, which is what a bare number in the thread goes through ─
+  const digit = (t: string) => /^([0-9]{1,2})$/.exec(t.trim());
+  ok("a bare digit is a claim", digit("3")?.[1] === "3");
+  ok("two digits are a claim", digit("12")?.[1] === "12");
+  ok("a sentence starting with a number is not", digit("3 things to say here") === null);
+  ok("and neither is a decimal", digit("3.5") === null);
+
+  // 1-based against the frozen menu, the way pickFitWorkflow reads fit_menu.
+  const menu = ["a", "b", "c"];
+  ok("item 1 is the first", menu[1 - 1] === "a");
+  ok("item 3 is the last", menu[3 - 1] === "c");
+  ok("item 4 is out of range rather than wrapping", menu[4 - 1] === undefined);
+  ok("and so is item 0", menu[0 - 1] === undefined);
+
+  // ── the Day 0 wall still has exactly one door ──────────────────────────────
+  //
+  // ‼️ THIS IS day-zero.ts's OWN HOLE CHECK, RUN AS A TEST. Its comment says to verify with
+  // `grep -rn "setPublished" src/`, which is a thing somebody has to remember to do. The wall
+  // holds because there is ONE caller and it runs assertDay0Archived first; a second caller
+  // added anywhere is the failure this catches. Comments are stripped for the same reason the
+  // lane 3 check strips them: every one of these files explains the rule at length.
+  // ‼️ LINE COMMENTS FIRST, THEN BLOCK COMMENTS, AND THAT ORDER IS NOT COSMETIC.
+  // The hub route's auth header contains the path "/dashboard/*". Stripping block comments
+  // first, the way the obvious version does, latches onto that "/*" and eats everything up to
+  // the next "*/" — which swallowed `await setPublished(...)` and made this check report ZERO
+  // callers, i.e. the wall looking safer than it is. A hole check that fails open is worse than
+  // no hole check. Found by this test disagreeing with the grep it is a copy of.
+  const stripLane4Comments = (src: string) =>
+    src.replace(/^\s*\/\/.*$/gm, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+
+  const srcRoot = path.join(__dirname, "..", "src");
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      return e.isDirectory() ? walk(full) : /\.tsx?$/.test(e.name) ? [full] : [];
+    });
+
+  const callers = walk(srcRoot).filter((f) => {
+    if (f.endsWith(path.join("lib", "hub", "pages.ts"))) return false;
+    return /\bsetPublished\s*\(/.test(stripLane4Comments(fs.readFileSync(f, "utf8")));
+  });
+
+  ok("setPublished has exactly one caller outside its own module", callers.length === 1);
+  ok(
+    "and that caller is the hub route, which asserts Day 0 first",
+    callers[0]?.includes(path.join("api", "clients", "[id]", "hub")) ?? false
+  );
+
+  if (callers[0]) {
+    const route = fs.readFileSync(callers[0], "utf8");
+    ok(
+      "the Day 0 assertion is written BEFORE the publish, not after",
+      route.indexOf("assertDay0Archived") < route.indexOf("await setPublished")
+    );
+  }
+
+  // ── the page body is markdown, never raw HTML ──────────────────────────────
+  //
+  // ‼️ THE EDITOR IS A SECOND react-markdown CALL SITE BESIDE hub-bodies.tsx, AND THE ONE
+  // THING THAT MAY NEVER DRIFT BETWEEN THEM IS THIS FLAG. Per-page font and size is the
+  // obvious next request and rehype-raw is the obvious way to build it, on the one surface in
+  // this app that a client's own customers visit.
+  const renderers = [
+    "src/components/hub/hub-bodies.tsx",
+    "src/app/dashboard/clients/[id]/hub-form.tsx",
+  ].map((f) => stripLane4Comments(fs.readFileSync(path.join(__dirname, "..", f), "utf8")));
+
+  ok(
+    "no page-body renderer imports rehype-raw",
+    renderers.every((src) => !/rehype-?raw/i.test(src))
+  );
+  ok(
+    "and none of them passes a rehypePlugins array",
+    renderers.every((src) => !/rehypePlugins/.test(src))
+  );
+
+  // ── the page studio never quietly rewrites him ─────────────────────────────
+  const studio = stripLane4Comments(
+    fs.readFileSync(path.join(__dirname, "..", "src/lib/clients/page-studio.ts"), "utf8")
+  );
+  ok(
+    "the page studio reaches a model in exactly one place",
+    (studio.match(/draftPage\(/g) ?? []).length === 1
+  );
+  ok(
+    "and that place is the polish command",
+    /polish/.test(studio) && /existingBody/.test(studio)
+  );
+  ok(
+    "appending never routes through a model",
+    /appendPageBody\(/.test(studio)
+  );
+}
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 

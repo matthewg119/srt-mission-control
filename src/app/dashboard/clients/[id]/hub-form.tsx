@@ -12,8 +12,11 @@
 // the DNS panel already reports as "they added it, not confirmed", so it is rendered as
 // grey context and never as a status of its own.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { hasBannedDash } from "@/lib/copy-guard";
 
 export interface HubHostView {
   host: string;
@@ -40,7 +43,73 @@ export interface AuditPromptView {
   reportId: string | null;
 }
 
-const BLANK = { title: "", question: "", answerMd: "", metaDescription: "", sourceReportId: "" };
+// `id` is what turns the writer into an editor. savePage has always accepted one and the
+// route has always forwarded it; there was simply no control on this panel that could set it,
+// so every saved page was write-once and unreachable.
+const BLANK = {
+  id: "",
+  title: "",
+  question: "",
+  answerMd: "",
+  metaDescription: "",
+  sourceReportId: "",
+};
+
+/**
+ * The markdown toolbar.
+ *
+ * Plain textarea surgery: selectionStart/selectionEnd and setRangeText, no editor library.
+ * There is none in this repo and one button row does not justify adding one, on a surface
+ * whose output has to stay markdown a person can read in a diff.
+ *
+ * ‼️ THERE IS NO FONT OR SIZE CONTROL HERE AND THERE MUST NOT BE. See the note rendered
+ * under the box: react-markdown runs WITHOUT rehype-raw, deliberately, and per-page styling
+ * means turning that off on the one surface a client's customers visit.
+ */
+type Tool =
+  | { kind: "wrap"; label: string; title: string; before: string; after: string; placeholder: string }
+  | { kind: "line"; label: string; title: string; prefix: string; placeholder: string }
+  | { kind: "ordered"; label: string; title: string; placeholder: string };
+
+const TOOLS: Tool[] = [
+  { kind: "wrap", label: "B", title: "Bold", before: "**", after: "**", placeholder: "bold text" },
+  { kind: "wrap", label: "I", title: "Italic", before: "_", after: "_", placeholder: "italic text" },
+  { kind: "line", label: "H2", title: "Heading", prefix: "## ", placeholder: "Heading" },
+  { kind: "line", label: "• List", title: "Bulleted list", prefix: "- ", placeholder: "item" },
+  { kind: "ordered", label: "1. List", title: "Numbered list", placeholder: "item" },
+  { kind: "line", label: "Quote", title: "Quote", prefix: "> ", placeholder: "quote" },
+  { kind: "wrap", label: "Link", title: "Link", before: "[", after: "](https://)", placeholder: "link text" },
+];
+
+function applyTool(el: HTMLTextAreaElement, tool: Tool): string {
+  const value = el.value;
+  const start = el.selectionStart;
+  const end = el.selectionEnd;
+  const selected = value.slice(start, end);
+
+  if (tool.kind === "wrap") {
+    const body = selected || tool.placeholder;
+    const next = value.slice(0, start) + tool.before + body + tool.after + value.slice(end);
+    const caret = start + tool.before.length;
+    queueMicrotask(() => el.setSelectionRange(caret, caret + body.length));
+    return next;
+  }
+
+  // Line tools apply to every line of the selection, or to the line the caret sits on. Taking
+  // only the first line would silently leave everything below it unmarked on a multi-line
+  // selection, which is the shape a pasted paragraph always arrives in.
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  const nextBreak = value.indexOf("\n", start);
+  const lineEnd = end === start ? (nextBreak === -1 ? value.length : nextBreak) : end;
+  const block = value.slice(lineStart, lineEnd) || tool.placeholder;
+  const marked = block
+    .split("\n")
+    .map((line, i) => (tool.kind === "ordered" ? `${i + 1}. ${line}` : `${tool.prefix}${line}`))
+    .join("\n");
+  const next = value.slice(0, lineStart) + marked + value.slice(lineEnd);
+  queueMicrotask(() => el.setSelectionRange(lineStart, lineStart + marked.length));
+  return next;
+}
 
 export function HubForm({
   clientId,
@@ -89,6 +158,62 @@ export function HubForm({
   const [open, setOpen] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(true);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const runTool = (tool: Tool) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const next = applyTool(el, tool);
+    setDraft((d) => ({ ...d, answerMd: next }));
+    el.focus();
+  };
+
+  /**
+   * Open a saved page in the writer.
+   *
+   * ‼️ THE BODY IS FETCHED, NOT SHIPPED WITH THE PAGE. The board's own query selects only
+   * id/slug/title/question/status/published_at, and widening it would put every page body of
+   * every client into the initial HTML of a page that mostly is not being used to edit one.
+   * GET /api/clients/[id]/hub already returns listAllForBoard, which carries answerMd, so the
+   * cost is one request at the moment somebody actually presses Edit.
+   */
+  const editPage = async (pageId: string) => {
+    setBusy(pageId);
+    setError(null);
+    setDraftError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/hub`);
+      const json = (await res.json()) as {
+        ok?: boolean;
+        pages?: Array<{
+          id: string;
+          title: string;
+          question: string;
+          answerMd?: string;
+          metaDescription?: string | null;
+        }>;
+      };
+      const found = json.pages?.find((x) => x.id === pageId);
+      if (!found) {
+        setError("That page could not be loaded.");
+        return;
+      }
+      setDraft({
+        id: found.id,
+        title: found.title,
+        question: found.question,
+        answerMd: found.answerMd ?? "",
+        metaDescription: found.metaDescription ?? "",
+        sourceReportId: "",
+      });
+      setOpen(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   // The waive form only appears after a publish has actually been refused. Offering it
   // up front would make it a button beside Publish, which is the same as not having a
@@ -366,6 +491,15 @@ export function HubForm({
                 /{page.slug}
               </div>
             </div>
+            <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => editPage(page.id)}
+              disabled={busy !== null}
+              className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40 disabled:opacity-40"
+            >
+              Edit
+            </button>
             <button
               type="button"
               onClick={() =>
@@ -391,6 +525,7 @@ export function HubForm({
                   ? "Unpublish"
                   : "Publish"}
             </button>
+            </div>
           </div>
         ))}
 
@@ -448,10 +583,15 @@ export function HubForm({
 
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => {
+            // Clearing the draft on close is load-bearing: leaving an id behind would make the
+            // next "Write a page" quietly overwrite the page that was last edited.
+            if (open) setDraft({ ...BLANK });
+            setOpen((v) => !v);
+          }}
           className="rounded border border-white/15 px-3 py-1.5 text-sm hover:border-white/40"
         >
-          {open ? "Cancel" : "Write a page"}
+          {open ? "Close" : "Write a page"}
         </button>
       </div>
 
@@ -505,15 +645,89 @@ export function HubForm({
           />
 
           <div>
-            <label className="mb-1 block text-xs text-[rgba(255,255,255,0.5)]">
-              The answer, in Markdown
-            </label>
-            <textarea
-              rows={12}
-              value={draft.answerMd}
-              onChange={(e) => setDraft((d) => ({ ...d, answerMd: e.target.value }))}
-              className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 font-mono text-xs"
-            />
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs text-[rgba(255,255,255,0.5)]">
+                The answer, in Markdown
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowPreview((v) => !v)}
+                className="rounded border border-white/15 px-2 py-0.5 text-xs text-white/60 hover:border-white/40 hover:text-white"
+              >
+                {showPreview ? "Hide preview" : "Show preview"}
+              </button>
+            </div>
+
+            <div className="mb-1 flex flex-wrap gap-1">
+              {TOOLS.map((tool) => (
+                <button
+                  key={tool.label}
+                  type="button"
+                  title={tool.title}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => runTool(tool)}
+                  className="rounded border border-white/10 px-2 py-1 text-xs text-white/70 hover:border-white/40 hover:text-white"
+                >
+                  {tool.label}
+                </button>
+              ))}
+            </div>
+
+            <div className={showPreview ? "grid gap-2 md:grid-cols-2" : ""}>
+              <textarea
+                ref={bodyRef}
+                rows={showPreview ? 18 : 12}
+                value={draft.answerMd}
+                onChange={(e) => setDraft((d) => ({ ...d, answerMd: e.target.value }))}
+                className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 font-mono text-xs"
+              />
+              {showPreview && (
+                <div className="min-h-[8rem] overflow-auto rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/85 [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-white/20 [&_blockquote]:pl-3 [&_blockquote]:text-white/60 [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-3 [&_h3]:text-sm [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5">
+                  {/*
+                    ‼️ NO rehype-raw, HERE OR IN src/components/hub/hub-bodies.tsx. That file is
+                    the authority on how a body renders and this is a second renderer beside it,
+                    which is a drift risk taken deliberately: hub-bodies.tsx is a server
+                    component and cannot be imported into a "use client" file. The ONE thing
+                    that must never drift is this flag. A body is typed into this box and then
+                    served on the client's own domain under their name, so a paste carrying a
+                    <script> would be an XSS on their site, not ours. If this preview ever
+                    renders something the live page does not, fix the preview.
+                  */}
+                  {draft.answerMd.trim() ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.answerMd}</ReactMarkdown>
+                  ) : (
+                    <p className="text-xs text-[rgba(255,255,255,0.35)]">
+                      The preview shows what a reader sees.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/*
+              ‼️ FONT STYLE AND SIZE ARE A THEME DECISION, NOT A PER-PAGE ONE, AND THE PANEL HAS
+              TO SAY SO RATHER THAN JUST NOT OFFERING THEM. Asked for "at least the font style,
+              size and other stuff", the obvious build is inline styling per page, and the
+              obvious way to ship that is to turn rehype-raw on. That is the one change this
+              surface cannot take: these bodies go out on a client's own domain, in front of
+              their customers. theme.fontFamily already exists, is validated by safeFontFamily,
+              applies to the whole hub, and is the correct control.
+            */}
+            <p className="mt-2 text-xs text-[rgba(255,255,255,0.4)]">
+              Font and size are set once for the whole hub in{" "}
+              <span className="text-white/70">Identity and theme</span> above, not per page. This
+              box is Markdown on purpose: raw HTML is not rendered, because a page served on{" "}
+              {domain ? <span className="font-mono">{domain}</span> : "the client's own domain"}{" "}
+              under their name must not be able to carry a pasted script.
+            </p>
+
+            {hasBannedDash(draft.answerMd) && (
+              <p className="mt-1 text-xs text-[#F5A623]">
+                There is an em dash, en dash or double hyphen in the body. SRT copy uses commas,
+                periods and single hyphens. Nothing blocks the save; this is the same rule
+                guard() enforces at build time on copy written in code.
+              </p>
+            )}
             {/*
               ‼️ THE NOTE HERE USED TO SAY "Nothing here drafts it for you", AND ITS REASON WAS
               RIGHT ABOUT THE WRONG CONTROL. A page goes out on the client's own domain under
@@ -550,6 +764,14 @@ export function HubForm({
               const ok = await post(
                 {
                   action: "page_save",
+                  // Present only when editing. savePage branches on it: with an id it UPDATES
+                  // that row, without one it inserts. Sending "" would be an insert with a
+                  // slug that already exists, i.e. a 23505 on every save of an edited page.
+                  id: draft.id || undefined,
+                  // ‼️ THE SLUG COMES FROM THE TITLE, WHICH MEANS RETITLING AN EDITED PAGE
+                  // MOVES ITS URL. That is right while it is a draft and wrong once it is
+                  // published and indexed. Publish is the deliberate press that ends the
+                  // first case, and an already-published page is edited knowingly.
                   slug: draft.title,
                   title: draft.title,
                   question: draft.question,
@@ -567,7 +789,7 @@ export function HubForm({
             disabled={busy !== null}
             className="rounded border border-white/15 px-3 py-1.5 text-sm hover:border-white/40 disabled:opacity-40"
           >
-            {busy === "save" ? "Saving…" : "Save as draft"}
+            {busy === "save" ? "Saving…" : draft.id ? "Save changes" : "Save as draft"}
           </button>
         </div>
       )}

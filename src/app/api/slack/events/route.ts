@@ -106,6 +106,7 @@ import { classifyByKeywords } from "@/config/content-workflows";
 import { deliverPendingDraft } from "@/lib/imessage-send";
 import { postManualSendConfirm } from "@/lib/imessage-suggestion";
 import { handleAuditThreadReply } from "@/lib/audit-engine/thread-assistant";
+import { handlePageStudioEvent, pageStudioChannel } from "@/lib/clients/page-studio";
 
 interface SlackEventFile {
   id: string;
@@ -524,6 +525,26 @@ export async function POST(request: NextRequest) {
             })().catch((e) => console.error("[slack/events] agent message error:", (e as Error).message))
           );
         }
+        return NextResponse.json({ ok: true });
+      }
+
+      // The page studio (lane 4). One channel, one call, and the logic lives in page-studio.ts:
+      // this file gets a call, not an implementation.
+      //
+      // Placed immediately ABOVE the #content-full block below because it is a dedicated
+      // channel and must never fall through to a handler that would read a dictated page as
+      // content to render a reel from. It handles its own files rather than leaning on the
+      // file_shared path: that event carries no message text and resolves through
+      // clientForThread, which knows nothing about this channel.
+      if (Boolean(channel) && channel === pageStudioChannel()) {
+        waitUntil(
+          handlePageStudioEvent({
+            text: userText,
+            messageTs: event.ts as string,
+            threadTs: parentThreadTs,
+            files: attachedFiles,
+          }).catch((e) => console.error("[slack/events] page studio error:", (e as Error).message))
+        );
         return NextResponse.json({ ok: true });
       }
 

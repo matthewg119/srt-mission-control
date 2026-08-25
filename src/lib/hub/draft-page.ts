@@ -30,6 +30,11 @@ export interface DraftedPage {
 interface Grounding {
   clientName: string;
   question: string;
+  /**
+   * What he already wrote or dictated, when there is any. Null on the board's Draft it
+   * button, which starts from nothing.
+   */
+  existingBody: string | null;
   city: string | null;
   state: string | null;
   phone: string | null;
@@ -125,7 +130,11 @@ function whyInvalid(v: unknown): string {
   return "The payload did not match the shape.";
 }
 
-async function gather(clientId: string, question: string): Promise<Grounding | { error: string }> {
+async function gather(
+  clientId: string,
+  question: string,
+  existingBody: string | null
+): Promise<Grounding | { error: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
     .select("id, legal_name, dba_name, city, state, phone, website, domain, contact_id")
@@ -163,6 +172,7 @@ async function gather(clientId: string, question: string): Promise<Grounding | {
   return {
     clientName: name,
     question,
+    existingBody,
     city: (client.city as string | null) ?? (report?.city as string | null) ?? null,
     state: (client.state as string | null) ?? null,
     phone: (client.phone as string | null) ?? null,
@@ -220,6 +230,29 @@ function userPrompt(g: Grounding): string {
     lines.push("equipment, no hours. A shorter page is the correct outcome here.");
   }
 
+  // ‼️ HIS OWN WORDS OUTRANK EVERYTHING ELSE IN THIS PROMPT, AND THE JOB CHANGES SHAPE.
+  // Without a body this function writes a page from the audit and the website. With one the
+  // page has already been written, by him, out loud, and the only honest job left is to tidy
+  // it. A model handed a dictated draft and the ordinary "write a page" instruction does not
+  // tidy it: it writes its own page and quietly drops whatever he said that it would not have
+  // thought of, which is the half worth keeping. Same doctrine as intake_answers and the call
+  // notes, where what a human actually said outranks anything generic.
+  if (g.existingBody) {
+    lines.push("");
+    lines.push("‼️ HE HAS ALREADY WRITTEN THIS PAGE. What follows is his own draft, dictated or");
+    lines.push("typed. YOUR JOB IS TO TIDY IT, NOT TO REPLACE IT:");
+    lines.push("  - Keep his points, his order, his opinions and his examples. All of them.");
+    lines.push("  - Fix what speech does to text: false starts, repetition, run-ons, filler.");
+    lines.push("  - Add headings, paragraph breaks and lists so it reads on a page.");
+    lines.push("  - You may NOT add a fact, a number, a service, a price or a claim that is not");
+    lines.push("    already in his draft or on the website above. If he did not say it, it does");
+    lines.push("    not go in. A shorter page is the correct outcome.");
+    lines.push("  - You may NOT contradict him, soften a position he took, or add a hedge.");
+    lines.push("");
+    lines.push("HIS DRAFT:");
+    lines.push(g.existingBody.slice(0, 12000));
+  }
+
   if (g.alreadyPublished.length) {
     lines.push("");
     lines.push("ALREADY PUBLISHED for this business, so do not answer these again:");
@@ -231,14 +264,19 @@ function userPrompt(g: Grounding): string {
 
 /**
  * Draft one page. Returns the draft for a human to edit, never saves and never publishes.
+ *
+ * `existingBody` is the page studio's `polish`. Without it this is unchanged and writes a page
+ * from the audit and the website, which is what the board's Draft it button does. With it, the
+ * model is tidying HIS draft under a prompt that forbids adding anything he did not say.
  */
 export async function draftPage(
   clientId: string,
-  question: string
+  question: string,
+  opts?: { existingBody?: string | null }
 ): Promise<{ ok: true; page: DraftedPage } | { ok: false; error: string }> {
   if (!question.trim()) return { ok: false, error: "No question was given." };
 
-  const g = await gather(clientId, question.trim());
+  const g = await gather(clientId, question.trim(), opts?.existingBody?.trim() || null);
   if ("error" in g) return { ok: false, error: g.error };
 
   try {

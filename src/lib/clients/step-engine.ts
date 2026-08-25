@@ -35,6 +35,7 @@ import {
   postStepAnchor,
   refreshStepAnchor,
 } from "@/lib/clients/step-board";
+import { pageStudioHint } from "./page-studio";
 
 // ‼️ THE PLATFORM LIST LIVES IN @/config/presence-platforms AND NOWHERE ELSE.
 //
@@ -434,6 +435,65 @@ async function instructionsFor(
       ];
     }
 
+    // ‼️ STEPS 12 AND 13 COME FROM THE SAME CORPUS AND DO OPPOSITE JOBS, AND NEITHER CARD
+    // SAID SO. Matthew asked what the difference between them was, which is the sign that the
+    // labels alone were not carrying it: "Custom question set drafted for approval" and "Page
+    // candidates scored and ranked for the call" read as two versions of the same task.
+    //
+    // ‼️ BOTH STEPS ARE mode:"auto", SO postReadySteps SKIPS THEM AND THIS IS DEAD ON THE
+    // NORMAL PATH. It is here because it is correct the day either mode changes, and because
+    // _debug-post-all-steps.ts posts them directly. The line that actually reaches a person
+    // today is the runner note, and for step 13 it is in page-candidates.ts. Step 12's
+    // equivalent is owed and is written up in docs/lanes/RESULT-lane-4.md. Same shape the
+    // first_page card was in before 2026-08-25, and it is recorded rather than papered over.
+    case "custom_question_set": {
+      const doc = await docForStep(c.id, "custom_question_set");
+      const link = docLink(c.id, doc?.id, doc?.filename ?? "the drafted question set");
+
+      return [
+        "*This is the MEASUREMENT set.* 40 or 60 questions, approved on the call, then FROZEN",
+        "at Day 0. The day 30, 60 and 90 numbers are scored against exactly these and nothing",
+        "else, which is why it is frozen: a set that moved would make the comparison meaningless.",
+        "",
+        "*Nothing is ever published from it.* That is step 13, which is a different list built",
+        "from the same corpus. This one says what we MEASURE. That one says what we WRITE.",
+        "",
+        link ? `*The draft:* ${link}` : "*Not generated yet.*",
+        "",
+        `Approve or edit on the board: ${boardUrl(c)}`,
+      ];
+    }
+
+    case "page_candidates": {
+      const doc = await docForStep(c.id, "page_candidates");
+      const link = docLink(c.id, doc?.id, doc?.filename ?? "the ranked candidates PDF");
+
+      const { data: counts } = await supabaseAdmin
+        .from("page_candidates")
+        .select("origin")
+        .eq("client_id", c.id);
+      const rows = counts ?? [];
+      const derived = rows.filter((r) => (r.origin as string | null) === "derived").length;
+
+      return [
+        "*This is the PUBLISHING backlog.* The same corpus as step 12, scored for which",
+        "questions are worth building a page about, with `currently_named` as a tri-state so a",
+        "question the engines already name them for can be skipped.",
+        "",
+        "*It is not the tracked set.* Step 12 is the measurement set and is frozen at Day 0.",
+        "This list is regenerated and is meant to change.",
+        "",
+        link ? `*The ranked list:* ${link}` : "*Not generated yet.*",
+        rows.length
+          ? `${rows.length} scored${derived ? `, of which ${derived} are DERIVED ideas we proposed rather than phrases anybody typed` : ""}.`
+          : "Nothing scored yet.",
+        "",
+        `*To turn any of them into a draft:* post \`page ${c.name}\` in ${pageStudioHint()},`,
+        "pick a number, then type or send a voice note. Your words go into the page verbatim and",
+        "no model touches them unless you ask for that by name.",
+      ];
+    }
+
     case "first_page": {
       const refs = await outputRefsFor(c.id);
       const candidates = docLink(c.id, refs.get("page_candidates"), "step 13's ranked page candidates");
@@ -445,8 +505,13 @@ async function instructionsFor(
 
       return [
         "Pages are written and published from the Hub panel on the client board.",
-        `Start here: ${candidates ?? "step 13's page candidates (not generated yet)"}.`,
-        "Pick a question, draft the answer, edit it, then Publish.",
+        `Start here: ${candidates ?? "step 13's page candidates (not generated yet)"} — the`,
+        "PUBLISHING backlog. Step 12's question set is the MEASUREMENT set and nothing is ever",
+        "published from it.",
+        "",
+        "Two ways in. On the board: pick a question, write the answer, edit it, then Publish.",
+        `In Slack: post \`page ${c.name}\` in ${pageStudioHint()}, pick a number, then type or`,
+        "send a voice note and your own words land in the page verbatim.",
         "",
         published.length
           ? `*${published.length} published:* ${published.map((p) => `/${p.slug}`).join(", ")}`

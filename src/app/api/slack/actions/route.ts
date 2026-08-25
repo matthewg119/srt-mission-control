@@ -199,9 +199,79 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         value: action.value ?? "",
       });
+    case "page_publish_request":
+      return pagePublishRequestAction({
+        channel,
+        userId,
+        threadTs: payload.container?.message_ts ?? "",
+        value: action.value ?? "",
+      });
     default:
       return NextResponse.json({ ok: true });
   }
+}
+
+/**
+ * "Can this publish?" on a page-studio card.
+ *
+ * ‼️ IT DOES NOT PUBLISH, AND IT MUST NOT BE CHANGED TO.
+ * setPublished has exactly one caller, POST /api/clients/[id]/hub action=page_publish, and
+ * that caller runs assertDay0Archived BEFORE it. That "exactly one" is what makes
+ * `grep -rn "setPublished" src/` a real hole check for the Day 0 wall rather than a habit,
+ * and day-zero.ts says so at the bottom of the file. A second publisher here would be a
+ * second place to get the ordering wrong, on a surface with no session behind it.
+ *
+ * What it is for: answering the question BEFORE the walk to the board. The wall is discovered
+ * at the Publish button today, which is the most expensive moment to find out.
+ */
+async function pagePublishRequestAction(args: {
+  channel: string;
+  userId: string;
+  threadTs: string;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId] = args.value.split(":");
+  if (!clientId) return NextResponse.json({ ok: true });
+
+  waitUntil(
+    (async () => {
+      const { readDay0 } = await import("@/lib/clients/day-zero");
+      const { stepByKey } = await import("@/lib/clients/delivery-checklist");
+      const { DAY_ZERO_STEP_KEY } = await import("@/config/delivery-steps");
+
+      const board = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/dashboard/clients/${clientId}`;
+      const state = await readDay0(clientId);
+      const label = stepByKey(DAY_ZERO_STEP_KEY)?.label ?? "the Day-0 archive";
+
+      // null is the client not existing, which is a different answer from "not archived" and
+      // must not be reported as one. Same rule readDay0's own callers follow: a miss is a
+      // miss, never a negative.
+      if (!state) {
+        await slack.postThreadReply(args.channel, args.threadTs, "That client could not be read.");
+        return;
+      }
+
+      const text = state.archivedAt
+        ? `:unlock: Day 0 was archived on ${new Date(state.archivedAt).toISOString().slice(0, 10)}` +
+          `${state.source ? ` (${state.source})` : ""}. Publishing is open.
+${board}`
+        : `:lock: Day 0 is not archived, so publishing will refuse. Tick *${label}* on the ` +
+          `delivery checklist first, or waive it there with a reason.
+${board}`;
+
+      const posted = (await slack.postThreadReply(args.channel, args.threadTs, text)) as {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!posted?.ok) {
+        console.error("[slack/actions] page_publish_request reply failed:", posted?.error ?? "unknown");
+      }
+    })().catch((e) =>
+      console.error("[slack/actions] page_publish_request failed:", (e as Error).message)
+    )
+  );
+
+  return NextResponse.json({ ok: true });
 }
 
 /**

@@ -62,12 +62,21 @@ export const GATED = [
  *     client types the record; we never write their zone.
  *   page_save                         — a draft is not published. Drafting before the
  *     call is the entire point of the PREPARE phase.
+ *   startPageDraft / appendPageBody   — the page studio, same reasoning one step earlier.
+ *     Claiming a question and dictating into the body writes client_pages rows at
+ *     status:'draft' and nothing else. It reaches a client's domain only through
+ *     page_publish, which is gated above.
+ *   page_publish_request (Slack)      — it READS the Day 0 state and answers. It does not
+ *     call setPublished and must never be changed to: exactly one caller is what makes the
+ *     grep at the bottom of this file a real hole check rather than a habit.
  *   the preview route                 — our infrastructure, noindex, no client DNS.
  *   the review tool                   — theirs to hand out, and it publishes nothing.
  */
 export const NOT_GATED = [
   "POST /api/clients/[id]/hub  action=register",
   "POST /api/clients/[id]/hub  action=page_save",
+  "hub/pages.ts startPageDraft / appendPageBody  (the page studio)",
+  "slack/actions page_publish_request  (reads the state, never publishes)",
   "POST /api/clients/[id]/dns  (every action)",
   "scripts/hub-register.ts",
 ] as const;
