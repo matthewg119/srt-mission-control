@@ -27,14 +27,15 @@
 
 import { callClaudeJSON } from "@/lib/claude-calls";
 import {
+  BOOKING_LINK,
   DELIVERY_MAX_WORDS,
   DELIVERY_REQUIRED_LINES,
-  LOOM_PRICE_LABEL,
+  FREE_UNTIL_LINE,
+  GUARANTEE_LINE,
   LOOM_TEXT_NUMBER,
   ONBOARDING_WINDOW,
-  PAYMENT_LINK,
-  guaranteeFor,
-  priceForTier,
+  PRICE_RETAINER,
+  QUALIFIED_INQUIRY_DEF,
 } from "@/config/pitch";
 import { polishBody } from "./format-guard";
 import { ensureSignoff, noDashes } from "./email-assistant";
@@ -126,12 +127,16 @@ function reportUrl(slug: string): string {
  * The figures, and only the figures. Handed to the model as the sole source of numbers.
  */
 function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name: string; count: number } | null): string {
-  // The tier the RECORDING quoted, not the default. This email is the written half of a video the
-  // reader has already watched, so a price or a guarantee that differs from what was said on
+  // What the RECORDING quoted, not the default. This email is the written half of a video the
+  // reader has already watched, so a price or a commitment that differs from what was said on
   // camera is the one mismatch it cannot survive.
-  const tier = report.loom_state?.price ? null : report.loom_state?.tier ?? null;
-  const guarantee = guaranteeFor(tier);
-  const price = report.loom_state?.price ?? priceForTier(tier) ?? LOOM_PRICE_LABEL;
+  //
+  // A hand-quoted price nulls both commitments, exactly as it does in the script and on the call:
+  // a number agreed off the standard offer does not drag the standard offer's promises with it.
+  const handQuoted = Boolean(report.loom_state?.price);
+  const guarantee = handQuoted ? null : GUARANTEE_LINE;
+  const freeUntil = handQuoted ? null : FREE_UNTIL_LINE;
+  const price = report.loom_state?.price ?? PRICE_RETAINER;
   const blocks = view.blockStats
     .map((b) => `${BLOCK_LABEL[b.block] ?? b.block}: ${b.mentioned} of ${b.total}`)
     .join(" · ");
@@ -148,16 +153,19 @@ function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name:
       ? `Top competitor in the questions they are MISSING from: ${topAbsent.name}, in ${topAbsent.count} of those questions`
       : "No competitor was named often enough in the missing questions to quote",
     `Report link: ${reportUrl(report.slug)}`,
-    `Price: ${price}${tier ? ` (${tier})` : ""}`,
+    `Price: ${price}`,
     // Quoted so the model reproduces the approved wording rather than its own summary of it.
     // spokenPromises() only exempts the exact string, so a paraphrase is rejected downstream.
+    freeUntil
+      ? `The free period, and you may state it ONLY in these exact words: "${freeUntil}". Nothing is charged now and no card is taken.${QUALIFIED_INQUIRY_DEF ? ` A qualified AI-sourced inquiry means: ${QUALIFIED_INQUIRY_DEF}` : ""}`
+      : `This price was quoted by hand, so the standard free period does NOT apply. Do not offer it.`,
     guarantee
-      ? `The guarantee, and you may state it ONLY in these exact words: "${guarantee}". It is on this tier alone. It is not a refund and not a trial.`
-      : `There is NO guarantee on this tier. Never imply one, and never write risk-free, money-back or refund.`,
-    PAYMENT_LINK
-      ? `Payment link, this is the next step: ${PAYMENT_LINK}`
-      : `Payment link: NONE CONFIGURED. Write [LINK DE PAGO] where the link belongs.`,
-    `After payment they get an invitation link, and getting started takes ${ONBOARDING_WINDOW}.`,
+      ? `The guarantee, and you may state it ONLY in these exact words: "${guarantee}". It is a visibility commitment. It is not a refund and not a trial.`
+      : `There is NO guarantee on this one. Never imply one, and never write risk-free, money-back or refund.`,
+    BOOKING_LINK
+      ? `Booking link for the onboarding call, this is the next step: ${BOOKING_LINK}`
+      : `Booking link: NONE CONFIGURED. Write [LINK DE AGENDA] where the link belongs.`,
+    `The onboarding call itself takes ${ONBOARDING_WINDOW}.`,
     `Phone for questions: ${LOOM_TEXT_NUMBER}`,
     site ? `Thing on their own site: ${site}` : "",
   ]
@@ -178,7 +186,7 @@ function ensureRequiredLines(body: string, reportLink: string): string {
   if (!lower.includes(DELIVERY_REQUIRED_LINES[0])) {
     additions.push("The full report is attached and it is yours to keep either way.");
   }
-  if (!lower.includes("incognito")) {
+  if (!lower.includes(DELIVERY_REQUIRED_LINES[1])) {
     additions.push(`You can run any of those questions yourself in an incognito window and see the same thing: ${reportLink}`);
   }
   return additions.length ? `${body.trimEnd()}\n\n${additions.join("\n\n")}` : body;
@@ -197,8 +205,7 @@ export async function draftDeliveryEmail(
   const facts = factsBlock(report, view, topAbsent);
 
   // Rule 4, against the RECORDING. A hit here is information, not a blocker: it already happened.
-  const deliveryTier = report.loom_state?.price ? null : report.loom_state?.tier ?? null;
-  const promises = spokenPromises(transcript, { allowedTier: deliveryTier });
+  const promises = spokenPromises(transcript);
   for (const p of promises) {
     flags.push(`El video ${p.detail}${p.at ? ` en ${p.at}` : ""}: "${p.phrase}". No lo repetí en el correo.`);
   }
@@ -216,15 +223,18 @@ export async function draftDeliveryEmail(
 
   // Rule 9, ADVISORY since template v2 (2026-08-16).
   //
-  // The v2 close sends them to the payment link, so a video with no reply phrase in it is now the
-  // normal case rather than a gap: there is nothing to confirm, the next step is the link. When the
-  // recording DID name a phrase it is still honoured verbatim, because a video that said "reply
-  // let's do it" and an email that says something else is the same broken promise it always was.
+  // The close sends them to a link, so a video with no reply phrase in it is now the normal case
+  // rather than a gap: there is nothing to confirm, the next step is the link. When the recording
+  // DID name a phrase it is still honoured verbatim, because a video that said "reply let's do it"
+  // and an email that says something else is the same broken promise it always was.
   const phrase = replyPhrase(transcript);
 
   // What DOES need flagging is a close with nowhere to send them.
-  if (!PAYMENT_LINK) {
-    flags.push("No hay link de pago configurado (SRT_PAYMENT_URL). Dejé [LINK DE PAGO] en el cierre.");
+  if (!BOOKING_LINK) {
+    flags.push("No hay link de agenda configurado (SRT_ONBOARDING_CALL_URL). Dejé [LINK DE AGENDA] en el cierre.");
+  }
+  if (!QUALIFIED_INQUIRY_DEF) {
+    flags.push('No hay definición de "qualified AI-sourced inquiry" (QUALIFIED_INQUIRY_DEF). Esa frase es la que arranca el cobro, así que acordala en la llamada de onboarding.');
   }
 
   const { data } = await callClaudeJSON<ModelOut>({
@@ -280,7 +290,7 @@ export async function draftDeliveryEmail(
         typeof o.scoreStamp === "string" &&
         typeof o.priceStamp === "string" &&
         wordCount(o.body) <= DELIVERY_MAX_WORDS &&
-        spokenPromises(o.body, { allowedTier: deliveryTier }).length === 0
+        spokenPromises(o.body).length === 0
       );
     },
     describeInvalid: (p) => {
@@ -292,7 +302,7 @@ export async function draftDeliveryEmail(
       if (typeof o.body === "string") {
         const n = wordCount(o.body);
         if (n > DELIVERY_MAX_WORDS) problems.push(`the body is ${n} words, the limit is ${DELIVERY_MAX_WORDS}`);
-        const inDraft = spokenPromises(o.body, { allowedTier: deliveryTier });
+        const inDraft = spokenPromises(o.body);
         if (inDraft.length) {
           problems.push(`the body ${inDraft[0].detail} ("${inDraft[0].phrase}"), which this audit cannot promise. Remove it, do not soften it`);
         }

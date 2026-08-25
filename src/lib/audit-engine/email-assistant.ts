@@ -39,10 +39,8 @@ import {
   crawlBlockAngle,
   noWebsiteAngle,
   OFFER_EXIT_LINE,
-  PRICE_ADS,
-  PRICE_COMPLETE,
-  PRICE_CORE,
-  RECOMMENDED_TIER,
+  FREE_UNTIL_LINE,
+  PRICE_RETAINER,
   VIDEO_LENGTH_LABEL,
 } from "@/config/pitch";
 import { polishBody } from "./format-guard";
@@ -1293,13 +1291,17 @@ export async function draftPermissionEmail(
  * bare `reveal` handed a prospect a price that does not exist and never did under the current
  * offer. A price literal anywhere outside config/pitch.ts is the bug, not the value it holds.
  *
- * ‼️ THE LADDER, NEVER THE GUARANTEE. The reveal is a written message generated before any tier
- * has been chosen and before a recording exists, so there is nothing to attach a performance
- * commitment to. The guarantee is made ON CAMERA, once, against a tier Matthew picked on purpose
- * with `loom`, and `spokenPromises()` only exempts it for that tier. A guarantee that first
- * appears in a model-written email is the exact shape DELIVERY_BANNED_PROMISES exists to stop.
+ * ‼️ THE TERMS, NEVER THE GUARANTEE. The reveal is a written message generated before a recording
+ * exists, so it states what the arrangement costs and stops there. The guarantee is made ON CAMERA,
+ * once, in fixed words. A guarantee that first appears in a model-written email is the exact shape
+ * DELIVERY_BANNED_PROMISES exists to stop, and this constant must never grow one.
+ *
+ * ‼️ FREE_UNTIL_LINE IS SAFE HERE AND THE GUARANTEE IS NOT, WHICH LOOKS INCONSISTENT AND IS NOT.
+ * The free period is a fact about the invoice: nothing is charged until the inquiries land. The
+ * guarantee is a commitment about an outcome. One of them is true the moment it is written down;
+ * the other only becomes true because somebody decided to go and deliver it.
  */
-const DEFAULT_REVEAL_TERMS = `${PRICE_ADS} for ${RECOMMENDED_TIER}, ${PRICE_COMPLETE} for Complete or ${PRICE_CORE} for Core, month to month, and ${OFFER_EXIT_LINE.charAt(0).toLowerCase()}${OFFER_EXIT_LINE.slice(1, -1)}`;
+const DEFAULT_REVEAL_TERMS = `${FREE_UNTIL_LINE}, then ${PRICE_RETAINER}, month to month, and ${OFFER_EXIT_LINE.charAt(0).toLowerCase()}${OFFER_EXIT_LINE.slice(1, -1)}`;
 
 /**
  * The message that fires when they say yes. This is the ONLY place in the cold lane where

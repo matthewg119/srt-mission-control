@@ -97,31 +97,35 @@ function situation(truth: ThreadTruth): string {
  *  - The tiers are laid out in full and compared, so the decision can be made inside the email.
  *  - "Leave anytime, keep everything" is risk framing that is TRUE. It is not a guarantee, a
  *    refund or a performance promise, and it must never be rewritten into one.
- *  - The yes is one word. "Reply Core or Complete."
+ *  - The yes is one word. "Reply yes and I'll send the booking link."
  *  - The NO is given explicitly and cheaply: "if it's a no, just say so and I'll stop the emails."
  *    That is what makes the yes mean something, and it is the beat models delete first.
  *  - It ends on the give: "the scorecard is yours either way."
  *
- * ‼️ Withheld unless the link policy is `any`. It quotes prices, and showing it on a permission
- * stage follow-up teaches the model to quote them to someone who has not seen the work yet.
+ * ‼️ Withheld unless the link policy is `any`. It quotes the price, and showing it on a permission
+ * stage follow-up teaches the model to quote it to someone who has not seen the work yet.
+ *
+ * ‼️ THE FIGURES IN HERE ARE A COPY AND NOTHING BINDS THEM (2026-08-25). This is a few-shot example,
+ * so it has to read as a finished email rather than as an interpolated template, which means the
+ * price is a literal. It went stale once already, quoting a two-tier ladder for four days after the
+ * offer changed. If you edit config/pitch.ts, edit this string in the same commit.
+ *
+ * ‼️ THE SCARCITY LINE IS NOW TRUE AND IT WAS NOT BEFORE. It used to say "we can only take 5
+ * clients at a time and this month we already took 2", which was a slot count attached to nothing,
+ * of exactly the kind FREE_FIRST_BUILD's doc comment bans. The founding cohort IS a real countable
+ * limit, so the example states that instead. If the founding seats fill, this paragraph comes out.
  */
 const FOLLOWUP_EXAMPLE_POST_PITCH = `One thing I owe you in writing before you decide.
 
-There's no discount clock on this. But we can only take 5 clients at a time and this month we already took 2 clients.
+There's no discount clock on this. What there is, is 5 founding seats, and they're given in exchange for a case study when we hit the results.
 
-Both options are month-to-month:
+You start free. The monthly retainer only starts once we've brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it's $499/mo, month to month.
 
-Core  $349/mo
-· 8 pages on your site each month 4 new, 4 updated each one answering a question patients actually ask
-· Your 20 question audit re-run every month across ChatGPT, Perplexity, Gemini and Google AI, measured against your baseline
-· Automated review requests to your patients
-· A one-page scorecard + short video every month
-
-Complete  $499/mo
-Everything in Core, doubled (8 new, 8 updated, 40 questions tracked), plus the work beyond your own site:
-· Placements in the directories, listicles and local forums AI actually cites
-· Your review replies written for you, including the bad ones
-· Tracking which clinics the AI names instead of you
+What that covers, every month:
+· We re-write your current pages
+· We turn your happy customers into the evidence the engines quote
+· We fix any NAP mismatches online
+· Your monthly AI Visibility Report, so you're measuring me rather than trusting me
 
 Leave anytime, keep everything
 pages, profiles, data.

@@ -26,7 +26,13 @@
 // free-text instruction typed into the thread.
 
 import { callClaudeJSON, camelizeKeys } from "@/lib/claude-calls";
-import { LOOM_PRICE_LABEL, LOOM_START_WINDOW, RECOMMENDED_TIER, guaranteeFor, priceForTier } from "@/config/pitch";
+import {
+  FREE_UNTIL_LINE,
+  GUARANTEE_LINE,
+  LOOM_START_WINDOW,
+  PRICE_RETAINER,
+  QUALIFIED_INQUIRY_DEF,
+} from "@/config/pitch";
 import { noDashes } from "./email-assistant";
 import { usefulIntakeAnswers } from "./outreach-intake";
 import { getNicheAvatars, type BestAvatar, type NicheAvatars, type WorstCustomer } from "./niche-avatars";
@@ -181,8 +187,10 @@ function openerAngle(f: CallFacts): string {
  * Non-negotiable. Stated to the model, and the last three are re-checked in code by lintScript.
  *
  * ‼️ A FUNCTION SINCE 2026-08-21, BECAUSE ONE OF THESE LINES IS NOW CONDITIONAL. Pass the
- * guarantee from `guaranteeFor(tier)` and the ban inverts into a permission with exact wording
- * attached; pass null and it reads exactly as it always did.
+ * guarantee and the ban inverts into a permission with exact wording attached; pass null and it
+ * reads exactly as it always did. The tier gate that used to decide that is gone (2026-08-25) —
+ * there is one offer and it carries the guarantee — but a HAND-QUOTED price still passes null,
+ * because a number agreed off the standard offer does not drag the standard commitments with it.
  *
  * Null is the right argument almost everywhere, and it is the only right argument on a FOLLOW-UP
  * call, which withholds the price for the same reason: nothing is being sold on that dial, so a
@@ -197,8 +205,8 @@ export function hardLines(guarantee: string | null): string[] {
   return [
     "NEVER invent a number. You may only speak figures that appear in FACTS below. The prospect has the report open and can count.",
     guarantee
-      ? `THE ONE GUARANTEE, WORD FOR WORD: "${guarantee}". Say it exactly that way or not at all. It exists on the ChatGPT Ads tier and NO OTHER, so it may never be attached to a lower tier or offered as a way to close someone who is buying one. It is NOT a refund and NOT a trial: never say risk-free, money-back or refund.`
-      : "There is NO GUARANTEE on this offer. Never say risk-free, money-back, guaranteed results, or 'if it doesn't work you don't pay'. Month to month is not a guarantee and must not be dressed up as one.",
+      ? `THE ONE GUARANTEE, WORD FOR WORD: "${guarantee}". Say it exactly that way or not at all. It is a VISIBILITY commitment: placement in AI answers, which is the thing we actually measure. It is NOT a refund, NOT a trial and NOT a promise about money: never say risk-free, money-back, refund, or that they will make their investment back.`
+      : "There is NO GUARANTEE on this call. Never say risk-free, money-back, guaranteed results, or 'if it doesn't work you don't pay'.",
     "Never promise customers, jobs, leads or revenue. We report VISIBILITY and nothing else. 'You will get more calls' is a banned claim.",
     "Never suggest a personal credit card, a retirement account, a personal loan, or selling anything personal. If it cannot come out of the business the deal is too big: offer a smaller scope or walk.",
     "No fake scarcity, no invented deadlines, no made-up case studies, no other clients' names or results.",
@@ -312,15 +320,19 @@ interface CallFacts {
   isReposition: boolean;
   price: string;
   /**
-   * The tier the Loom quoted, and the guarantee that rides on it (or null).
+   * The two commitments the Loom made, or null when the price was quoted by hand.
    *
-   * Read off `loom_state.tier` for the same reason `price` is read off `loom_state.price`: the
-   * prospect on this call watched a specific recording, and a closing script that has never heard
-   * of the guarantee they were just made is not a small inconsistency. It is the prospect finding
-   * out the offer moves depending on who they are talking to.
+   * Carried onto the call for the same reason `price` is: the prospect watched a specific
+   * recording, and a closing script that has never heard of the free period they were just
+   * promised is not a small inconsistency. It is the prospect finding out the offer moves
+   * depending on who they are talking to.
+   *
+   * ‼️ `freeUntil` IS THE ANSWER TO A PRICE OBJECTION AND THE ONLY ONE THERE IS. The four-tier
+   * ladder that used to answer "can you do better" is gone (2026-08-25), so this string is what
+   * fills that slot in the request. Leave it out and a helpful model invents a smaller package.
    */
-  tier: string | null;
   guarantee: string | null;
+  freeUntil: string | null;
   startWindow: string;
   /** What they have already been sent, so the call never repeats it. */
   seen: string[];
@@ -433,9 +445,13 @@ export async function buildCallFacts(report: AuditReportRow, view: ReportView): 
     isReposition,
     // A per-recording override belongs to the whole conversation, not just the video: if the Loom
     // said $499 then $499 is the price on this call, and quoting the default would contradict it.
-    price: report.loom_state?.price ?? priceForTier(report.loom_state?.tier ?? null) ?? LOOM_PRICE_LABEL,
-    tier: report.loom_state?.price ? null : report.loom_state?.tier ?? null,
-    guarantee: report.loom_state?.price ? null : guaranteeFor(report.loom_state?.tier ?? null),
+    price: report.loom_state?.price ?? PRICE_RETAINER,
+    // ‼️ THE GUARANTEE IS NO LONGER GATED BY A TIER, BUT IT IS STILL DROPPED BY A HAND-QUOTED
+    // PRICE. `loom $299` means somebody quoted one number for this prospect by hand, off the
+    // standard offer, and the commitments that ride on the standard offer are not automatically
+    // part of whatever was agreed. Same precedence the script and the delivery email apply.
+    guarantee: report.loom_state?.price ? null : GUARANTEE_LINE,
+    freeUntil: report.loom_state?.price ? null : FREE_UNTIL_LINE,
     startWindow: report.loom_state?.window ?? LOOM_START_WINDOW,
     seen: whatTheySaw(report),
     redesignUrl: report.redesign_url,
@@ -478,10 +494,13 @@ function factsPrompt(f: CallFacts): string {
       : "",
     f.isReposition ? "NOTE: this pick repositions the business into work it does not currently present as doing. That reposition IS the angle." : "",
     "",
-    `Price: ${f.price}${f.tier ? ` (${f.tier})` : ""}. Realistic first movement on the organic work: ${f.startWindow}.`,
+    `Price: ${f.price}. Realistic first movement on the organic work: ${f.startWindow}.`,
+    f.freeUntil
+      ? `THE FREE PERIOD, and it is the answer to every price objection: "${f.freeUntil}". Nothing is charged up front and no card is taken.${QUALIFIED_INQUIRY_DEF ? ` A qualified AI-sourced inquiry means: ${QUALIFIED_INQUIRY_DEF}` : ""}`
+      : "This prospect was quoted a price by hand, so the standard free period does not automatically apply. Do not offer it.",
     f.guarantee
-      ? `THE GUARANTEE, and it is on THIS tier only: "${f.guarantee}". It is a performance commitment, not a trial and not a refund.`
-      : "THERE IS NO GUARANTEE. No trial, no refund promise, no performance guarantee.",
+      ? `THE GUARANTEE: "${f.guarantee}". It is a VISIBILITY commitment, not a trial and not a refund.`
+      : "THERE IS NO GUARANTEE on this one. No trial, no refund promise, no performance guarantee.",
     "",
     f.seen.length ? `What they have already seen: ${f.seen.join("; ")}` : "Nothing has been sent yet beyond the first email.",
     f.installedBeliefs.length
@@ -1154,9 +1173,12 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
         `If they ask how much: the video is free and theirs to keep, price is a conversation for after they have seen the work.`,
       ]
     : [
-        `PRICE: ${f.price}${f.tier ? ` (${f.tier})` : ""}. First movement on the organic work realistically ${f.startWindow}.`,
+        `PRICE: ${f.price}. First movement on the organic work realistically ${f.startWindow}.`,
+        f.freeUntil
+          ? `THE FREE PERIOD, WORD FOR WORD: "${f.freeUntil}". This is what they are actually being asked to say yes to. Nothing is charged today.`
+          : `NO STANDARD FREE PERIOD on this one, the price was quoted by hand. Do not offer it.`,
         f.guarantee
-          ? `THE GUARANTEE, WORD FOR WORD: "${f.guarantee}". This tier only. It is a performance commitment, NOT a refund, NOT a trial, and never "risk free".`
+          ? `THE GUARANTEE, WORD FOR WORD: "${f.guarantee}". It is a VISIBILITY commitment, NOT a refund, NOT a trial, and never "risk free".`
           : `NO GUARANTEE. No trial, no refund, no performance promise. Never imply one.`,
       ];
 
@@ -1212,18 +1234,18 @@ export function buildCoachNotes(f: CallFacts, mode: CallMode = "closing"): strin
     `NEVER estimate reach: no "in front of X more people". Nothing measures that.`,
     followup
       ? `IF THEY STALL: the ask is only the video. Shrink it, never push. One reply is the win.`
-      : // Four tiers, so a request for less has a real answer that is not a discount: step DOWN
-        // the ladder, which is a smaller scope for a smaller number. Below Core there is nothing,
-        // and inventing a figure between two rungs is banned.
+      : // ‼️ THE LADDER IS GONE AND THE FREE PERIOD REPLACED IT (2026-08-25).
         //
-        // ‼️ Stepping down off the ads tier DROPS THE GUARANTEE, and that has to be said out loud
-        // rather than discovered on the invoice. It is also the honest reason to stay: the
-        // guarantee is not a bonus attached to a price, it is what the paid layer pays for.
-        `IF THEY ASK FOR LESS: step down a tier. ${RECOMMENDED_TIER} to Complete to Core, each one a smaller scope for a smaller number, never a discount. ${
-          f.guarantee
-            ? `Say plainly that stepping off ${RECOMMENDED_TIER} means there is no guarantee any more, because there are no ads to deliver it. `
-            : ""
-        }There is nothing below Core and no figure between two tiers exists.`,
+        // There used to be four tiers here, so "can you do better" had a real answer that was not
+        // a discount: step DOWN a rung, a smaller scope for a smaller number. One offer means
+        // there is no rung to step down to, and that is exactly the moment a helpful model
+        // invents one. So it is handed the replacement answer explicitly rather than left to
+        // improvise: they do not pay anything until the inquiries land.
+        //
+        // That is a STRONGER answer than the ladder was, and saying so is the point. A discount
+        // says the first number was soft. A free period says the number is real and we will earn
+        // it first.
+        `IF THEY ASK FOR LESS: the answer is THE FREE PERIOD, never a smaller number. ${f.freeUntil ?? "They start free and the retainer begins once the inquiries land."} There is no tier below this, no discount, and no figure other than ${f.price} exists. Do not invent a smaller package to make it easier, and do not ask what number would work.`,
   ];
   return lines.filter((l) => l !== "").join("\n").replace(/\n{3,}/g, "\n\n");
 }

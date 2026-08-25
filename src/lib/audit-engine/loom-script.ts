@@ -27,28 +27,52 @@
 // still in the room.
 //
 //   1. We put you in the list.                      (v2's Findable pillar + commitment 1)
-//   2. We put you in front of buyers today.         (NEW: ChatGPT Ads. Where the guarantee lives)
+//   2. We put you in front of buyers today.         (ChatGPT Ads. Where the guarantee lived)
 //   3. We make you the default answer.              (v2's Familiar + Freshness + commitments 2, 3)
 //
-// ‼️ PROMISE 2 EXISTS ONLY ON THE TIER THAT SELLS ADS, AND SO DOES THE GUARANTEE. On `loom core`
-// or `loom complete` it is not softened, hedged or reworded: it is not rendered, and neither is
-// the BIG PROMISE beat. Selling a paid layer that is not in the tier they are being quoted is the
-// same error as promising a return we have no mechanism to deliver, and both come out of the same
-// decision. `guaranteeFor()` in config/pitch.ts is the gate; absent beats forbidden.
+// ── Template v4 (2026-08-25) ────────────────────────────────────────────────
+// New offer, new middle, and a competitor named on camera. The template is Matthew's med-spa Loom
+// script, generalized. The evidence half survives again: score first, the customers, the 20
+// prompts, the either-or, the live ChatGPT window with the concession opening it.
 //
-// The v2 "one extra client a month will very likely make back the investment" line is GONE. It was
-// a deliberate, documented DELIVERY_BANNED_PROMISES violation, spoken only, and it was a vaguer
-// version of the claim the guarantee now makes properly: with a number, a window, one tier, and a
-// stated remedy if it is missed. Do not put it back alongside the guarantee.
+// What changed:
+//
+//  1. THE OFFER. The four tiers are gone and so is the money guarantee that rode on one of them.
+//     There is one price, a free period in front of it, and a founding cohort. Nothing is charged
+//     up front, so the close is a BOOKING LINK and not a payment page. See config/pitch.ts.
+//
+//  2. PROMISES BECAME PILLARS AGAIN, and this time they are named up front and explained later —
+//     Findable, Familiar, Fresh. v3 merged the two passes because they were redundant; v4 splits
+//     them again for a different reason: the naming is fifteen seconds long and it is a promise of
+//     STRUCTURE, which is what buys the next four minutes. It is not v2's two-pass explanation.
+//
+//  3. THE ADS ARE THE LAST BEAT, not the second promise. They stopped being a tier, so they stop
+//     being a thing the video sells and become the answer to "what if I do not want to wait".
+//     No figure is attached to them anywhere.
+//
+//  4. A COMPETITOR IS NAMED, twice: once as a count in WHAT WE FOUND, once by name in the closing
+//     either-or. Both come off this audit's own run through pickRival(), and when the run turned
+//     up no usable rival the script says nothing about one rather than reaching for "your
+//     competitor". See the note over pickRival().
+//
+//  5. THE AESTHETICS LANE. A med spa, clinic or TRT practice gets Matthew's hand-written patient
+//     types, dollar figures included. Everybody else gets the researched niche set, without any.
+//     See isAesthetics() and the note over MEDSPA_PATIENTS for why those two are not the same
+//     kind of sentence and must not be merged.
+//
+// The v2 "one extra client a month will very likely make back the investment" line is still GONE,
+// and the v3 money guarantee that replaced it is gone too. What the video commits to now is
+// VISIBILITY, which is the thing this pipeline actually measures. Do not put either back.
 //
 // ── What is filled from real data and what is not ───────────────────────────
-// The score, the X of Y, the prompts, the prompt they rank best on and the ones they are absent
-// from all come from this audit's own run. The customers named in the open are the niche's own
-// avatars (niche-avatars.ts), not something written here. ONE Claude call supplies the wordings
-// that are a fact about the TRADE rather than about this business: the verb for what they do
-// when a lead lands, the jobs in the owner's own words, and the customers to avoid REWORDED for
-// saying out loud. The three pillars are hand-written constants and must stay that way, for the
-// reason spelled out over loomPromises(). Nothing else is generated, and nothing is estimated.
+// The score, the X of Y, the prompts, the prompt they rank best on, the ones they are absent from
+// and the competitor named on camera all come from this audit's own run. The customers are either
+// the niche's own avatars (niche-avatars.ts) or the hand-written aesthetics block, never invented
+// here. ONE Claude call supplies the wordings that are a fact about the TRADE rather than about
+// this business: the verb for what they do when a lead lands, the jobs in the owner's own words,
+// and the customers to avoid REWORDED for saying out loud. The three pillars are hand-written
+// constants and must stay that way, for the reason spelled out over loomPillars(). Nothing else is
+// generated, and nothing is estimated.
 //
 // ── The name ────────────────────────────────────────────────────────────────
 // The video opens on the owner's first name, because that is the whole difference between a
@@ -67,26 +91,30 @@
 
 import { callClaudeJSON } from "@/lib/claude-calls";
 import {
-  ADS_WINDOW_LINE,
-  ANNUAL_LINE,
+  ADS_ACCELERATOR,
+  BOOKING_LINK,
   DEFAULT_ANSWER_LINE,
+  FAST_WINDOW,
+  FOUNDING_BONUS,
+  FOUNDING_EXCHANGE,
+  FOUNDING_SPOTS,
+  FREE_UNTIL_LINE,
+  FRESHNESS_STAT,
   GUARANTEE_LINE,
-  GUARANTEE_MATH,
   GUARANTEE_RESTATE,
+  KEEP_WORKING_FREE_LINE,
   LOOM_CLIENT_COUNT_CLAIM,
   LOOM_START_WINDOW,
   LOOM_TEXT_NUMBER,
+  OFFER_INCLUDES,
   ONBOARDING_WINDOW,
-  PAYMENT_LINK,
-  PRICE_ADS,
-  PRICE_COMPLETE,
-  PRICE_CORE,
-  PRICE_ENTERPRISE_FROM,
-  RECOMMENDED_TIER,
-  TIER_CONTRAST,
-  guaranteeFor,
-  priceForTier,
+  PRICE_RETAINER,
+  PRICE_RETAINER_AMOUNT,
+  QUALIFIED_INQUIRY_DEF,
+  VALUE_MONTH_ONE,
+  VALUE_RECURRING,
 } from "@/config/pitch";
+import { competitorsWhereAbsent } from "./delivery-guards";
 import { noDashes } from "./email-assistant";
 import type { BeatSheetFacts } from "./loom-beatsheet";
 import type { BestAvatar, NicheAvatars, WorstCustomer } from "./niche-avatars";
@@ -107,14 +135,6 @@ export interface LoomScriptOptions {
   avatars?: NicheAvatars | null;
   /** The name read on camera, from `loom Fran`. Outranks the row. */
   greetName?: string | null;
-  /**
-   * Which tier this recording sells. A name out of OFFER_TIERS, defaulting to RECOMMENDED_TIER.
-   *
-   * ‼️ It decides two things at once, and they are the same decision: whether Promise 2 (the ads)
-   * is in the video, and whether the guarantee is spoken. A tier without the paid layer cannot
-   * deliver a 30 day return, so it does not get to promise one.
-   */
-  tier?: string | null;
 }
 
 export interface LoomScriptResult {
@@ -246,28 +266,21 @@ function pluralish(label: string): string {
 }
 
 /**
- * One promise, in the doc's fixed 4-beat pattern.
+ * One pillar of the middle section, in the doc's fixed 4-beat pattern.
  *
  * The beats are separate fields rather than one `lines` array because the pattern IS the template:
  * outcome in the buyer's language, the trap that makes it hard, the specific work that fixes it,
  * then the outcome again, transformed. v2 stored flat line lists and the shape drifted — one
  * pillar was all trap and no work, another was all work. Named beats make an omission visible.
  */
-interface Promise4Beat {
+interface Pillar4Beat {
   /**
    * ‼️ SPOKEN AS "Number 1.", NOT "Promise 1.", AND THAT IS A GUARD DECISION NOT A STYLE ONE.
    *
    * `DELIVERY_BANNED_PROMISES` matches the bare word "promise", and it is deliberately broad.
-   * v2 spoke that word exactly once ("our promise is simple"), so a transcript flag meant
-   * something. Titling all three of these "Promise N" would put five hits in every transcript,
-   * and a flag block that fires five times on every recording is a flag block nobody reads to the
-   * end. The doc's names for the three promises are kept in full; only the colliding noun is not
-   * said out loud. It also matches the numbering Matthew already reads off v2 cards.
-   *
-   * ‼️ THE NUMBER IS APPLIED AT RENDER TIME, NOT STORED HERE. Promise 2 is dropped on a tier with
-   * no ads, so a number baked into the constant would have the script say "Number 1 ... Number 3"
-   * two sentences after announcing two things. Read out loud that is not a typo, it is the
-   * listener wondering what they missed.
+   * Titling these "Promise N" would put three hits in every transcript, and a flag block that
+   * fires three times on every recording is a flag block nobody reads to the end. Only the
+   * colliding noun is avoided; the pillar names are said in full.
    */
   name: string;
   /** What they get, one or two sentences, in their language. */
@@ -281,48 +294,54 @@ interface Promise4Beat {
 }
 
 /**
- * ‼️ THE THREE PROMISES ARE COPY, NOT PROMPT MATERIAL, AND THEY MUST STAY THAT WAY.
+ * ‼️ THE THREE PILLARS ARE COPY, NOT PROMPT MATERIAL, AND THEY MUST STAY THAT WAY.
  *
  * Same precedent as PERMISSION_CLOSE, NOT_SELLING_LINE and REPLY_ASK_LINE, but the reason here is
- * sharper than "the model rewrites it". Two of these three promises are carried by a STORY ABOUT A
- * REAL PERSON: an operator in Florida whose own reviews were quoted to recommend his competitors,
- * and Matthew's wife booking a laser appointment off a review ChatGPT surfaced at a barbecue. A
- * model asked to "tell a client story for this niche" does not decline for lack of one. It invents
- * a client, on camera, in a pitch whose entire basis is "you can verify all of this yourself".
+ * sharper than "the model rewrites it". Two of these three pillars are carried by a STORY ABOUT A
+ * REAL PERSON: a nurse practitioner in Fort Pierce whose own patient reviews were quoted to
+ * recommend the clinic two miles down the road, and Matthew's wife booking a laser appointment off
+ * a review ChatGPT surfaced at a barbecue. A model asked to "tell a client story for this niche"
+ * does not decline for lack of one. It invents a client, on camera, in a pitch whose entire basis
+ * is "you can verify all of this yourself".
  *
  * That is the same no-fabrication rule run-prompts.ts states for engine results, applied to speech.
  * If a new anecdote is ever worth telling, it gets written here by a person who was there.
  *
- * ‼️ THE REBUILD DOC'S §7 SAYS TO GENERATE A PARALLEL STORY FOR NON-AESTHETIC VERTICALS. WE DO
- * NOT DO THAT, and the decision is Matthew's (2026-08-21). The barbecue story is told to
- * contractors, clinics and film studios alike for the reason it always was: the point of it is HOW
- * the machine chose, not what was being bought. A per-vertical anecdote buys a little relevance and
- * reopens exactly the door this comment exists to keep shut.
+ * ‼️ THE FORT PIERCE STORY IS TOLD TO EVERY VERTICAL, NOT JUST TO CLINICS (2026-08-25). It arrived
+ * with Matthew's med-spa script and it replaced the Florida surface-sealing operator who used to
+ * carry this beat, because it is the sharper telling of the same thing. It stays global for exactly
+ * the reason the barbecue story always was: the point of it is HOW the machine chose, not what was
+ * being bought. Generating a parallel story per vertical buys a little relevance and reopens
+ * precisely the door this comment exists to keep shut. That decision is Matthew's and it survived
+ * the offer rebuild.
  *
- * This is a function only because Promise 2 needs the trade, the market and who is typing the
- * prompts. Every sentence in it is still written here, by hand.
+ * ‼️ THE CITY IN THE STORY IS FORT PIERCE, ONCE, EVERYWHERE. The source script said Tampa in the
+ * setup and Fort Pierce in both quoted searches. It is one anecdote about one person, so it gets
+ * one city, and Matthew chose Fort Pierce (2026-08-25). Do not "fix" it back to Tampa in one place.
+ *
+ * This is a function only because the pillars need the trade, the market and the city. Every
+ * sentence in it is still written here, by hand.
  */
-function loomPromises(ctx: {
+function loomPillars(ctx: {
   trade: string;
   where: string;
   city: string;
-  adsBuyers: string;
   startWindow: string;
-  guaranteed: boolean;
-}): Promise4Beat[] {
-  const { trade, where, city, adsBuyers, startWindow, guaranteed } = ctx;
+}): Pillar4Beat[] {
+  const { trade, where, city, startWindow } = ctx;
 
-  const findable: Promise4Beat = {
-    name: "We put you in the list.",
+  const findable: Pillar4Beat = {
+    name: "Being findable.",
     outcome: [
       `When your ideal customer opens ChatGPT, Claude or Perplexity and asks who is the best ${trade}${where}, your name is in the handful that comes back.`,
     ],
     trap: [
       "Most people think being on top of Google is enough.",
-      "But AI is not like Google. There is no twenty options and a hundred pages of results.",
-      "It hands back three or five business names. That is the whole list.",
-      "I had a guy in Florida. Twenty years in business, hundreds of reviews.",
-      "And the engine was quoting his own reviews to recommend his competitors.",
+      "But AI is not like Google. Google shows you twenty options across a hundred pages.",
+      "AI shows three names, total, and that is it.",
+      "I worked with a nurse practitioner in Fort Pierce. Fourteen years injecting, three hundred and eighty five-star Google reviews, ranked number one for Botox in Fort Pierce.",
+      "And when I asked ChatGPT where to get Botox in Fort Pierce, it quoted her patient reviews to recommend the SkinSpirit two miles down the street.",
+      "Her words. Recommending her competitor. I know, insane.",
       "That is because most sites are written for people. The machine cannot read them.",
       "So you can be easy to find on Google and still be hard to find in the AI answers, and that is a whole different fix.",
     ],
@@ -331,48 +350,17 @@ function loomPromises(ctx: {
       `Answers only your ideal customer${where} actually asks.`,
       "And we answer them in words the machine can actually quote.",
     ],
-    ret: ["So when your prospect asks the machine who to hire, your name is one of the few that comes back."],
+    ret: ["So when your prospect asks the machine who to go to, your name is one of the few that comes back."],
   };
 
-  const ads: Promise4Beat = {
-    name: "We put you in front of buyers today, with ChatGPT Ads.",
+  const familiar: Pillar4Beat = {
+    name: "Being familiar.",
     outcome: [
-      `While the organic work is compounding, the buyers asking ChatGPT for ${aTrade(trade)}${where} right now see your name. Not organically. Placed there directly.`,
-      "Inquiries this week, not this quarter.",
+      "The engine has seen your name enough times, in enough places it trusts, that recommending you is the safe answer.",
     ],
     trap: [
-      "Here is why that matters.",
-      `Organic AI visibility takes ${startWindow} to compound. That is real, and it works.`,
-      "But most of your competitors are sitting and waiting on that curve.",
-      `Meanwhile ChatGPT just opened its ad platform, and almost nobody in your industry knows how to run it yet.`,
-      // sentence() because ADS_WINDOW_LINE is stored as a fragment for use mid-line elsewhere, and
-      // dropped raw after a period it reads "again. same low CPMs" — exactly where someone
-      // reading aloud stumbles.
-      `It is 2016 Facebook ads all over again. ${sentence(ADS_WINDOW_LINE)}`,
-    ],
-    work: [
-      `So we build the creative, we target the exact prompt patterns ${adsBuyers} are typing, and we manage the budget end to end.`,
-      "Weekly performance reports, so you see every dollar working.",
-    ],
-    ret: guaranteed
-      ? [
-          "You are getting real inquiries inside your first week.",
-          `And that is how we hit the guarantee. ${sentence(GUARANTEE_RESTATE)}`,
-        ]
-      : ["You are getting real inquiries inside your first week."],
-  };
-
-  const dflt: Promise4Beat = {
-    name: "We make you the default answer.",
-    outcome: [
-      `Every time a buyer asks, your name keeps coming back, until the default answer when somebody asks for ${aTrade(trade)}${where} is you.`,
-      ...(guaranteed ? ["This is the equity that stays even after we turn the ads off."] : []),
-    ],
-    trap: [
-      "Here is what most people miss. Getting picked once means nothing.",
-      "The machine builds a new answer every single time. Recent beats old.",
-      "And the longer the same names keep coming back, the harder they set.",
-      "It is like asking the machine who owns Tesla. It already has a memory, and it says Elon Musk instantly.",
+      "Here is what most people miss. It is barely reading your website.",
+      "It reads what other people said about you. Reviews, forums, blogs.",
       "It is also scared of being wrong. So it picks whoever it has the most evidence for.",
       "I was at a barbecue with my wife, and we had a trip coming up the next weekend.",
       "We had just moved to a new city, and she had never had laser treatment here.",
@@ -380,7 +368,6 @@ function loomPromises(ctx: {
       "She pulls out her phone and starts talking to it. She tells it she had a bad experience with laser treatment before, and asks what places it recommends.",
       "And it pulled a review one of those websites had, from someone with her exact problem.",
       "She did not even hesitate. She booked that week, and they sold her on a yearly plan.",
-      "It barely reads your website. It reads what other people said about you. Reviews, forums, blogs.",
       "And it checks whether your information matches everywhere. One mismatch and it drops you.",
     ],
     work: [
@@ -388,25 +375,138 @@ function loomPromises(ctx: {
       "We set up automatic workflows so the reviews come out pain driven, with real customer details, and end on what changed for them.",
       "We get your facts matching everywhere the machine checks.",
       "And we do outreach to the forums and the blogs that make the lists the engine quotes.",
-      `Then every single month we run these same real questions your buyers${city ? ` in ${city}` : ""} are asking, and we send you the findings.`,
+    ],
+    ret: ["So by the time it is deciding who to name, you are the one it has the most reason to trust."],
+  };
+
+  const fresh: Pillar4Beat = {
+    name: "Staying fresh.",
+    outcome: [
+      `Every time a buyer asks, your name keeps coming back, until the default answer when somebody asks for ${aTrade(trade)}${where} is you.`,
+    ],
+    trap: [
+      "Getting picked once means nothing.",
+      "The machine builds a new answer every single time. Recent beats old.",
+      // ‼️ FRESHNESS_STAT is null until it has a source. See the note over it in config/pitch.ts:
+      // the pillar has to make this point without a figure, because an invented statistic is the
+      // same failure as an invented client and it is the easier one to get caught on.
+      ...(FRESHNESS_STAT ? [FRESHNESS_STAT] : []),
+      "And the longer the same names keep coming back, the harder they set.",
+      "It is like asking the machine who owns Tesla. It already has a memory, and it says Elon Musk instantly.",
+    ],
+    work: [
+      "So we rewrite your pages every single month, and we keep adding the new questions your buyers are asking.",
+      `Then every month we run these same real questions your buyers${city ? ` in ${city}` : ""} are asking, and we send you the findings.`,
       "Whether your name showed up, and whether it moved.",
-      ...(guaranteed
-        ? ["So you get the guarantee and you get the scorecard. You are not just trusting the guarantee, you are watching it move."]
-        : []),
       "You are measuring me, not trusting me.",
     ],
     ret: [
       DEFAULT_ANSWER_LINE,
-      ...(guaranteed
-        ? ["Not because you paid to be there. Because the machine keeps coming back to you."]
-        : ["Not because you asked it to. Because the machine keeps coming back to you."]),
+      "Not because you asked it to. Because the machine keeps coming back to you.",
+      `And that is the part that takes ${startWindow} to fully set, which is why we start it on day one.`,
     ],
   };
 
-  // ‼️ Promise 2 is DROPPED, not softened, when the tier has no ads in it. See the v3 note in the
-  // file header: a recording that sells a paid layer the invoice does not include is the same
-  // mistake as a guarantee with no mechanism behind it, and it is the same decision that causes it.
-  return guaranteed ? [findable, ads, dflt] : [findable, dflt];
+  return [findable, familiar, fresh];
+}
+
+// ── The aesthetics lane ─────────────────────────────────────────────────────
+/**
+ * ‼️ WHICH BUSINESSES GET THE HAND-WRITTEN PATIENT BLOCK INSTEAD OF THE GENERATED AVATARS.
+ *
+ * Matthew wrote MEDSPA_PATIENTS by hand, with real dollar ranges in it, because he knows this
+ * market. Everywhere else the customers come from niche-avatars.ts, which researches them per
+ * niche and is explicitly forbidden from putting a dollar figure in a spoken label. That asymmetry
+ * is the whole point and it is not a bug: a hand-written figure is somebody's knowledge, and a
+ * generated one is a guess with a dollar sign on it.
+ *
+ * So this gate decides which of those two things is about to be read out loud, and it has to stay
+ * narrow. A pest control company matching this regex would have Matthew reading Botox prices on
+ * camera.
+ *
+ * Deliberately the same haystack shape as choosePreset() in dream-lead.ts — vertical_slug, then
+ * business_type, then buyer_persona — because a business that gets the aesthetic dream-lead image
+ * is the same business that should get this block, and two different answers to "is this a clinic"
+ * is how the picture and the script end up describing different companies.
+ */
+const AESTHETICS_RE =
+  /\b(?:med[\s-]?spa|medspa|medical spa|aesthetic|esthetic|injectable|botox|filler|dysport|laser|cosmetic|dermatolog|derm\b|plastic surgery|trt\b|hormone|testosterone|wellness|weight loss)/i;
+
+function isAesthetics(report: AuditReportRow): boolean {
+  const haystack = `${report.vertical_slug ?? ""} ${report.business_type ?? ""} ${report.buyer_persona ?? ""}`;
+  return AESTHETICS_RE.test(haystack);
+}
+
+/**
+ * The three patients an aesthetics clinic actually wants, and the one it does not.
+ *
+ * ‼️ HAND-WRITTEN BY MATTHEW, DOLLAR FIGURES INCLUDED, AND THAT IS WHY THEY ARE ALLOWED HERE.
+ * niche-avatars.ts strips money out of every spoken label it generates, on the grounds that a
+ * researched figure said on camera is a guess the prospect can call. These are not researched.
+ * They are what Matthew knows about this market, said in his own words, and he owns them.
+ *
+ * ‼️ THEY ARE PATIENT LIFETIME VALUES, NOT A FORECAST, AND THE SCRIPT MUST KEEP THEM THAT WAY.
+ * "This kind of patient is worth $4,200 to $6,800 a year" is a fact about the segment. "You will
+ * get patients worth $4,200 to $6,800 a year" is a promise of revenue, it trips
+ * DELIVERY_BANNED_PROMISES, and it is not masked because it is not an approved constant. The
+ * wording below is the first sentence, deliberately, every time.
+ */
+const MEDSPA_PATIENTS = {
+  attract: [
+    {
+      label: "First-time injectable patients",
+      note: "People who tried Botox and are searching for filler for the first time. They used to ask Google, now they are asking AI for the safest place to go. That kind of patient is worth $4,200 to $6,800 a year.",
+    },
+    {
+      label: "Membership program buyers",
+      note: "The ones searching for a med spa to commit to for a year. Those are worth $2,000 to $4,000 on autopilot, depending on the package.",
+    },
+    {
+      label: "High-lifetime-value cosmetic patients",
+      note: "Botox every three months, filler twice a year, laser packages. The kind that spend $4,000 or more a year without blinking.",
+    },
+  ],
+  avoid: "Groupon deal hunters",
+  /**
+   * ‼️ A COST OF AN EMPTY CHAIR, NOT A PROMISE OF A FULL ONE. Same line as the LTV figures: it
+   * describes what a slow Tuesday costs a clinic, which is a fact about their business, and it
+   * must never be flipped into "we will fill your Tuesdays".
+   */
+  emptyChairs: "An empty Tuesday costs a clinic somewhere between $1,500 and $3,000.",
+} as const;
+
+// ── The competitor the script names ─────────────────────────────────────────
+/**
+ * ‼️ THE ONE COMPETITOR NUMBER THE RECORDING IS ALLOWED TO SAY, AND WHERE IT COMES FROM.
+ *
+ * `competitorsWhereAbsent(view)` counts a rival ONLY in the buyer questions this client is missing
+ * from. That is the number the sentence "you showed up in 3, they showed up in 11" has to survive
+ * being checked against, because the prospect has the report open and can count the rows.
+ *
+ * ‼️ NOT `view.mostRecommended`. Its own doc comment in delivery-guards.ts says in bold that the
+ * two must not be reconciled: that one counts audit_runs rows without ever asking whether the
+ * client appeared, so it is the right number for "who owns the answers" and the wrong number for
+ * this sentence. It is used here only as a FALLBACK, and when it is used the gap count is not
+ * spoken at all — only the name — because the two counts do not mean the same thing.
+ *
+ * Three states, and the third one is the reason this is a function and not an inline lookup:
+ *   1. A rival with a gap count. The full sentence.
+ *   2. A rival with no gap count. Name only.
+ *   3. Neither. The script says nothing about competitors and NEVER INVENTS ONE. An audit where
+ *      the engines returned no usable rival is a real outcome, and a script that fills the hole
+ *      with "your competitor" is making a claim about a business that may not exist.
+ */
+interface Rival {
+  name: string;
+  /** Questions this rival came up in AND the client did not. Null when only a name is known. */
+  gap: number | null;
+}
+
+function pickRival(view: ReportView, facts: BeatSheetFacts): Rival | null {
+  const absent = competitorsWhereAbsent(view)[0];
+  if (absent?.name) return { name: absent.name, gap: absent.count };
+  if (facts.topCompetitor?.name) return { name: facts.topCompetitor.name, gap: null };
+  return null;
 }
 
 /**
@@ -415,23 +515,26 @@ function loomPromises(ctx: {
  * ONE source for both readings. Said twice from two hand-written copies they drift by a word or
  * two, and a repeated line that is not quite the same line is worse than saying it once: the second
  * pass sounds like a different thought instead of the point landing again.
+ *
+ * ‼️ THE RIVAL IS NAMED ONLY IN THE CLOSING READING, AND ONLY IF THERE IS ONE. Matthew's script
+ * ends on "either you're the name ChatGPT keeps quoting in [City] or [Competitor] is", which is the
+ * sharpest sentence in the video precisely because it is a real name off their own run. With no
+ * rival the beat falls back to "somebody in your city", which is the v3 wording and is still true.
+ * It never says "your competitor" as a stand-in for a business we could not find.
  */
-function urgencyBeat(city: string | null, withPromise: boolean, inside30 = false): string[] {
+function urgencyBeat(city: string | null, withPromise: boolean, rival: Rival | null = null): string[] {
   const where = city ?? "your city";
   const lines = [
     "And either you start doing something about it or you don't.",
     "",
-    `Somebody in ${where} is going to become the name that keeps getting quoted.`,
+    rival
+      ? `In the next six months, either you are the name ChatGPT keeps quoting in ${where}, or ${rival.name} is.`
+      : `Somebody in ${where} is going to become the name that keeps getting quoted.`,
     "",
     "Right now it is leaning their way.",
   ];
   if (withPromise) {
-    // "Starting inside 30 days" is only said where a 30 day mechanism exists. On a tier with no
-    // ads in it the same sentence would be a timeline nothing in the offer can hold.
-    lines.push(
-      "",
-      `But do not worry. In this video I am going to show you how to become the one it quotes${inside30 ? ", starting inside 30 days" : ""}.`
-    );
+    lines.push("", "But do not worry. In this video I am going to show you how to become the one it quotes.");
   }
   return lines;
 }
@@ -559,9 +662,9 @@ export async function buildLoomScript(
   avatar: BestAvatar,
   opts: LoomScriptOptions = {}
 ): Promise<LoomScriptResult> {
-  // All three to attract, the picked one first: v2 reads the whole best-customer set out as the
-  // jobs this points at, where the old script named one. Two to avoid: the first two on the card,
-  // which is the order they were judged in.
+  // All three to attract, the picked one first: the script reads the whole best-customer set out as
+  // the jobs this points at, where the old script named one. Two to avoid: the first two on the
+  // card, which is the order they were judged in.
   const others = (opts.avatars?.best ?? []).filter((b) => b.label !== avatar.label);
   const attractAvatars = [avatar, ...others].slice(0, 3);
   const avoidAvatars = (opts.avatars?.worst ?? []).slice(0, 2);
@@ -572,18 +675,20 @@ export async function buildLoomScript(
   const startWindow = opts.window || LOOM_START_WINDOW;
   const where = report.city ? ` in ${report.city}` : "";
   const trade = report.business_type ?? "what you do";
+  const price = opts.price ?? PRICE_RETAINER;
 
-  // ‼️ ONE DECISION, READ ONCE, USED EVERYWHERE. The tier decides whether Promise 2 exists, whether
-  // the BIG PROMISE beat is rendered, whether the either-or says "starting inside 30 days", and
-  // which price leads the investment block. Deriving it separately at each of those four points is
-  // how a script ends up promising a return and then quoting a tier that cannot deliver one.
+  // ‼️ TWO DECISIONS, READ ONCE, USED EVERYWHERE.
   //
-  // A `loom $499` price override also drops the guarantee: it means the recording quotes ONE
-  // number chosen by hand, and the guarantee is attached to a named tier, not to a figure.
-  const tier = opts.price ? null : opts.tier ?? RECOMMENDED_TIER;
-  const guarantee = guaranteeFor(tier);
-  const guaranteed = guarantee !== null;
-  const tierPrice = priceForTier(tier);
+  // `aesthetics` decides whether the customers about to be read out are Matthew's hand-written
+  // patient types (with their dollar figures) or the researched niche set (without any). See the
+  // note over MEDSPA_PATIENTS for why those two are not interchangeable.
+  //
+  // `rival` decides whether the recording names a competitor at all. Deriving it separately at the
+  // two points that use it is how a script ends up naming one business in the middle and a
+  // different one in the close.
+  const aesthetics = isAesthetics(report);
+  const rival = pickRival(view, facts);
+
   // Named as "the other agents" only when they are genuinely other: an engine that returned data
   // on this run has already been named out loud, and naming it twice invites "wait, which is it".
   const otherEngines = ["Claude", "Gemini", "Perplexity"].filter((e) => !facts.engines.includes(e));
@@ -599,27 +704,39 @@ export async function buildLoomScript(
     `LOOM SCRIPT`,
     `${company}${report.city ? ` · ${report.city}` : ""}`,
     `Customer this is aimed at: ${avatar.label}`,
-    `Selling: ${opts.price ? `${opts.price}, quoted by hand` : `${tier}${tierPrice ? `, ${tierPrice}` : ""}`}`,
-    guaranteed
-      ? `GUARANTEE: ON. You are promising ${GUARANTEE_RESTATE}. Only record this if we can actually run the ads.`
-      : `GUARANTEE: OFF. This tier has no ads and no guarantee. Do not say either.`,
+    `Customers block: ${aesthetics ? "AESTHETICS (hand-written patient types, with figures)" : "generated niche set"}`,
+    `Selling: ${opts.price ? `${opts.price}, quoted by hand` : PRICE_RETAINER}, free until the first 5 qualified AI-sourced inquiries`,
+    `GUARANTEE: ${sentence(GUARANTEE_RESTATE)} Only record this if we will actually chase those 5 queries.`,
+    rival
+      ? `Competitor named on camera: ${rival.name}${rival.gap === null ? " (name only, no gap count is said)" : `, in ${rival.gap} of the questions they are missing from`}`
+      : `NO COMPETITOR FOUND in this run. The script says nothing about a rival and does not invent one.`,
     `Target 6 minutes. Read it out loud, paste the screenshots over the top.`,
     `The image is the TARGET, never a lead that already arrived. Do not say "this came in".`
   );
   if (!name) {
     say(`NAME: not known. Say their name in the first line, or reply "loom <name>" and rebuild.`);
   }
-  if (!PAYMENT_LINK) {
+  if (!BOOKING_LINK) {
     say(
-      `NO PAYMENT LINK SET. The close below asks them to click the link in the email. Set SRT_PAYMENT_URL before recording, or that sentence promises something that does not exist.`
+      `NO BOOKING LINK SET. The close below sends them to the onboarding call. Set SRT_ONBOARDING_CALL_URL and rebuild this script, or that sentence points at a page that does not exist.`
+    );
+  }
+  if (!QUALIFIED_INQUIRY_DEF) {
+    say(
+      `NO DEFINITION OF "QUALIFIED AI-SOURCED INQUIRY" IS SET. That phrase is what starts the billing, so you and the client will read it differently on day 31. Set QUALIFIED_INQUIRY_DEF in config/pitch.ts, or be ready to define it on the onboarding call.`
+    );
+  }
+  if (!FRESHNESS_STAT) {
+    say(
+      `FRESHNESS STAT OMITTED. The "87% of AI citations are under 30 days old" line is not in this script because nothing here sources it. Set FRESHNESS_STAT with its source if you want it back. Do not say it from memory.`
     );
   }
 
-  // 1 + 2. Greeting and THE SCORE, which is now the first thing said.
+  // 1 + 2. Greeting and THE SCORE, which is the first thing said.
   //
-  // v2 opens on the number rather than working up to it. The reason is the thumbnail: the video is
-  // sent as the answer to "want me to send it over", so the viewer already knows roughly what this
-  // is, and holding the score back for ninety seconds spends the only attention that was granted.
+  // The video is sent as the answer to "want me to send it over", so the viewer already knows
+  // roughly what this is, and holding the score back for ninety seconds spends the only attention
+  // that was granted.
   say(
     screen("the PDF scorecard"),
     "",
@@ -627,67 +744,101 @@ export async function buildLoomScript(
     "",
     `In this video I am going to show you your current visibility status.`,
     "",
-    `As you can see here, you scored ${facts.score} out of 100. You showed up in ${facts.appeared} of the ${facts.total} questions we tested.`
+    `As you can see here, you scored ${facts.score} out of 100.`
   );
 
-  // 3. Who this points at. v2 names the WHOLE best-customer set, where the old script named one.
+  // 2b. The three pillars, NAMED but not explained. New in v4.
   //
-  // The pitch is in this list: not "more visibility" but three named customers they want more of.
-  // They are the niche set's own labels, the same ones on the Slack card, so what he reads here is
-  // what he already agreed to when he picked. Labels rather than the spoken rewording, because read
-  // as a list they are titles, and a title is what makes a customer type sound like a real segment.
-  const avoid = voice.avoid.length ? orList(voice.avoid.map((a) => `the ${a}`)) : null;
-  say(...rule("THE JOBS"));
+  // Matthew's script announces them in the first fifteen seconds and breaks them down later. That
+  // is a promise of structure, and it is what buys the next four minutes: the listener now knows
+  // the video has three parts and roughly where they are in it.
+  say(
+    "",
+    `AI citation comes down to three main pillars.`,
+    "",
+    `  Being findable`,
+    `  Being familiar`,
+    `  And staying fresh`,
+    "",
+    `I will break those down in a second.`
+  );
+
+  // 3. Who this points at.
+  //
+  // The pitch is in this list: not "more visibility" but named customers they want more of. Two
+  // sources, never mixed — see MEDSPA_PATIENTS and isAesthetics().
+  say(...rule("THE PATIENTS"));
   say(
     screen("the dream lead image, full screen"),
     "",
-    LOOM_CLIENT_COUNT_CLAIM
-      ? `When you decide to increase your AI visibility, we will be able to get you ${LOOM_CLIENT_COUNT_CLAIM}${where}.`
-      : `When you decide to increase your AI visibility, we will be able to get you in front of this type of job${where}.`,
+    `When we turn your score around, the kind of ${aesthetics ? "patients" : "customers"} that start showing up for you depend on your targeting.`,
+    "",
+    `We focus on attracting.`,
     ""
   );
-  for (const a of attractAvatars) say(`  ${a.label}`);
-  if (avoid) say("", `And keep you away from ${avoid}.`);
-  say(
-    "",
-    `This right here is the exact kind of inquiry we point at your phone.`,
-    "",
-    `Someone like ${avatar.label}. ${sentence(avatar.ticket)}`,
-    "",
-    `And look at the line in the message. They asked ChatGPT for ${avatar.aiQuestion}, and that is how they found you.`
-  );
-  if (voice.jobs.length) {
-    say("", `Which in your world is work like this.`, "");
-    for (const job of voice.jobs) say(`  ${job}`);
+
+  if (aesthetics) {
+    for (const p of MEDSPA_PATIENTS.attract) {
+      say(`  ${p.label}`, `  ${p.note}`, "");
+    }
+    say(
+      `Not ${MEDSPA_PATIENTS.avoid}.`,
+      "",
+      `So ideally high-lifetime-value cosmetic patients. The kind that spend without blinking, so you can fill up your Tuesdays. ${MEDSPA_PATIENTS.emptyChairs}`
+    );
+  } else {
+    const avoid = voice.avoid.length ? orList(voice.avoid.map((a) => `the ${a}`)) : null;
+    if (LOOM_CLIENT_COUNT_CLAIM) {
+      say(`We will be able to get you ${LOOM_CLIENT_COUNT_CLAIM}${where}.`, "");
+    }
+    for (const a of attractAvatars) say(`  ${a.label}`);
+    if (avoid) say("", `And keep you away from ${avoid}.`);
+    say(
+      "",
+      `This right here is the exact kind of inquiry we point at your phone.`,
+      "",
+      `Someone like ${avatar.label}. ${sentence(avatar.ticket)}`,
+      "",
+      `And look at the line in the message. They asked ChatGPT for ${avatar.aiQuestion}, and that is how they found you.`
+    );
+    if (voice.jobs.length) {
+      say("", `Which in your world is work like this.`, "");
+      for (const job of voice.jobs) say(`  ${job}`);
+    }
   }
 
-  // 4. Speed to lead. Said early because it is the one thing HE needs from THEM.
-  say(...rule("SPEED"));
-  say(
-    `One thing before I show you the rest, because it decides whether this works for you or not.`,
-    "",
-    `We found this works really well when you call the lead within five minutes of the inquiry.`,
-    "",
-    `Speed is the name of the game. If you can be fast, this can work for you.`
-  );
-
-  // 5. The 20 prompts, framed by what makes them fair: none of them say the business name.
+  // 4. The 20 prompts, framed by what makes them fair: none of them say the business name. This is
+  // also where the competitor read-out lands, because the count only means anything once the
+  // listener has seen what was actually asked.
   say(...rule("WHAT WE FOUND"));
   say(
     screen("the list of 20 prompts"),
     "",
-    `These are the phrases we used to try and find you, without mentioning your name completely.`,
+    `These are the phrases we tested to see if AI would recommend your ${aesthetics ? "med spa" : "business"}, without mentioning your name.`,
     "",
-    `Real things people type into ChatGPT when they are looking for ${aTrade(report.business_type ?? "what you do")}${where}.`,
+    `Real things people type into ChatGPT when they are looking for ${aTrade(trade)}${where}.`,
     ""
   );
   for (const p of view.prompts) say(`  ${p.prompt}`);
+  say("", `You showed up in ${facts.appeared} of the ${facts.total}.`);
+  if (rival?.gap != null) {
+    // ‼️ THE GAP COUNT, NOT A TOTAL. `competitorsWhereAbsent` counts only the questions this client
+    // is MISSING FROM, so the sentence has to say that or the number does not check out against
+    // the report the prospect has open. See pickRival().
+    say(
+      "",
+      `${rival.name} showed up in ${rival.gap} of the ones you are missing from.`
+    );
+  } else if (rival) {
+    say("", `${rival.name} is the name that kept coming back instead.`);
+  }
 
-  // 6. The either-or. First of two readings; this one carries the promise that sets up the middle.
+  // 5. The either-or. First of two readings. The rival is NOT named here: it is held for the close,
+  // where it is the last thing they hear.
   say("");
-  say(...urgencyBeat(report.city, true, guaranteed));
+  say(...urgencyBeat(report.city, true));
 
-  // 7. Live. The concession first, because he will check it himself afterwards.
+  // 6. Live. The concession first, because he will check it himself afterwards.
   say(...rule("LIVE"));
   say(screen("a temporary ChatGPT window"), "");
   if (facts.trampa) {
@@ -721,141 +872,148 @@ export async function buildLoomScript(
   // evidence and deleting it outright would have thrown away the strongest thing some audits find.
   // See renderPreflight() in loom-beatsheet.ts.
 
-  // 8. THE BIG PROMISE. Only on the tier that can deliver it.
-  //
-  // It sits here, after the live demo, rather than in the open: the guarantee is an answer, and it
-  // only lands as one once they have watched their own name fail to come back on camera.
-  if (guarantee) {
-    say(...rule("THE BIG PROMISE"));
-    say(
-      `So here is my promise.`,
-      "",
-      `If you run ${aTrade(trade)} and you are serious about winning customers from AI in the next 30 days, ${guarantee}.`,
-      "",
-      GUARANTEE_MATH,
-      "",
-      `Here is exactly what that looks like. Three specific things we commit to.`
-    );
-  }
+  // 7. Speed to lead. Said here because it is the one thing HE needs from THEM, and because the
+  // hot-dog line only lands once they have watched their own name fail to come back.
+  say(...rule("SPEED"));
+  say(
+    `One thing before I show you the fix, because it decides whether this works for you or not.`,
+    "",
+    `This works best if you or your front desk can respond to an inquiry within five minutes.`,
+    "",
+    `Speed is the name of the game. AI-sourced ${aesthetics ? "patients" : "customers"} are like word of mouth referrals. They are already eighty percent of the way booked when they message you.`,
+    "",
+    `Compared to Meta ads, ChatGPT is like cold calling people at dinner versus selling hot dogs outside the club at three in the morning.`,
+    "",
+    `One of them is interrupting somebody. The other one is standing where the hungry people already are.`
+  );
 
-  // 9. THE PROMISES. The explanatory middle of the video, and the only part that is the same every
-  // time. See loomPromises() for why the anecdotes are written there and not generated.
-  //
-  // This replaced v2's PILLARS-then-COMMITMENTS, which explained a problem and then, ninety seconds
-  // later, gave the fix for it. Each promise now runs Outcome, Trap, Work, Return in one pass.
-  const promises = loomPromises({
+  // 8. THE PILLARS. The explanatory middle, and the only part that is the same every time.
+  // See loomPillars() for why the anecdotes are written there and not generated.
+  const pillars = loomPillars({
     trade,
     where,
     city: report.city ?? "",
-    adsBuyers: voice.adsBuyers ?? (report.buyer_persona ?? "your buyers"),
     startWindow,
-    guaranteed,
   });
 
-  say(...rule("THE PROMISES"));
-  if (!guarantee) {
-    say(
-      `So you can do all of this yourself.`,
-      "",
-      `But if you want us to do it for you, our promise is simple. We commit to two things.`
-    );
-  }
-  for (const [i, p] of promises.entries()) {
+  say(...rule("THE THREE PILLARS"));
+  say(`So let me break down those three pillars, and what we do about each one.`);
+  for (const [i, p] of pillars.entries()) {
     say("", `Number ${i + 1}. ${p.name}`, "");
     for (const line of [...p.outcome, ...p.trap, ...p.work, ...p.ret]) say(line, "");
   }
   say(`And then all you have to do is ${voice.action}.`);
-
   say("");
-  say(`You will not win all of the jobs. But if you are fast, you will win more than you don't.`);
+  say(`You will not win all of them. But if you are fast, you will win more than you don't.`);
 
-  // 10. Price and timeline. The recommended tier first, then the alternatives, in the doc's order.
+  // 9. THE GUARANTEE. It sits after the pillars rather than in the open: it is an answer, and it
+  // only lands as one once they have watched their own name fail to come back on camera.
+  say(...rule("THE GUARANTEE"));
+  say(`So here is my guarantee.`, "", `${sentence(GUARANTEE_LINE)}`);
+
+  // 10. The value stack, then the price, then the free period. Order matters: the stack has to be
+  // in the room before the number is, or the number is the only thing they have to react to.
   say(...rule("THE INVESTMENT"));
-  if (opts.price) {
-    // A `loom $499` override means the recording quotes one number, so the ladder would describe
-    // a choice that is not being offered.
-    say(`If you want to get started, the investment is ${opts.price}.`);
-  } else if (guaranteed) {
-    say(
-      `For anyone serious about winning customers from AI in the next 30 days, this is what we recommend. ${RECOMMENDED_TIER}, at ${PRICE_ADS}, with the guarantee.`,
-      "",
-      `${sentence(GUARANTEE_RESTATE)} That is the tier where all three promises fully activate.`,
-      "",
-      `If you are not ready for the ads and you want to build the organic foundation first, Complete Visibility is ${PRICE_COMPLETE}. Same organic work, no ads, no guarantee. You are on the compound curve, ${startWindow}. It works, it just does not move as fast.`,
-      "",
-      `If you just want the basics, Core Visibility is ${PRICE_CORE}. ${TIER_CONTRAST.Core.line} ${TIER_CONTRAST.Core.detail} The minimum needed to stop being invisible.`,
-      "",
-      `And if you are running 2 or more locations, there is a version built for that. Enterprise starts at ${PRICE_ENTERPRISE_FROM}. ${TIER_CONTRAST.Enterprise.line} ${TIER_CONTRAST.Enterprise.detail}`,
-      "",
-      TIER_CONTRAST.both,
-      "",
-      ANNUAL_LINE
-    );
-  } else {
-    say(
-      `We have our core Visibility program, which is ${PRICE_CORE}.`,
-      "",
-      `Or the complete Visibility program, where the investment is ${PRICE_COMPLETE}.`,
-      "",
-      `${TIER_CONTRAST.Core.line} ${TIER_CONTRAST.Core.detail}`,
-      "",
-      `${TIER_CONTRAST.Complete.line} ${TIER_CONTRAST.Complete.detail}`,
-      "",
-      TIER_CONTRAST.both
-    );
-  }
-
-  // The organic timeline, said out loud in both cases, because it is the one thing the prospect
-  // will otherwise reconcile wrongly: on the guaranteed tier he has just heard "30 days" and
-  // "60 to 90 days" in the same video, and it has to be clear which half each belongs to.
-  const engineLine = `${orList(facts.engines)}${otherEngines.length ? `, and the other search agents like ${orList(otherEngines)}` : ""}`;
-  say("");
-  if (guaranteed) {
-    say(
-      `One thing to be clear about. On the organic side you typically start getting pushed by ${engineLine}, in anywhere from ${startWindow}.`,
-      "",
-      `The ads are what carry the first 30 days while that builds. That is the whole reason they are in there.`
-    );
-  } else {
-    say(
-      `Typically you start getting pushed by ${engineLine}, in anywhere from ${startWindow}.`,
-      "",
-      `So it does take some time to kick in. The work requires us to be patient.`
-    );
-  }
-  say("", `And again, it works really well if you can call the leads within five minutes.`);
-
-  // 12. The CTA and what happens next. v2 sends them to the payment link rather than asking for a
-  // reply phrase, so the delivery email carries that link. Both are read off PAYMENT_LINK.
-  say(...rule("THE CLOSE"));
-  if (PAYMENT_LINK) {
-    say(
-      `If this sounds like you and you would like to get started, click the link I sent over to your email.`,
-      "",
-      screen(`the payment page, ${PAYMENT_LINK}`),
-      "",
-      `It takes you to this page, where you can pay by credit card, PayPal or direct ACH.`,
-      "",
-      `After the payment is completed you will receive an invitation link to get you started right away.`,
-      "",
-      `Getting started usually takes ${ONBOARDING_WINDOW}, depending on how busy we are.`
-    );
-  } else {
-    say(
-      `!! NO PAYMENT LINK IS SET, so do not say "click the link I sent over". Set SRT_PAYMENT_URL and rebuild this script, or say you will send the invoice over after this video and stop there.`,
-      "",
-      `If this sounds like you and you would like to get started, reply to the email I sent over and I will send the invoice.`
-    );
-  }
-  say("");
-  say(...urgencyBeat(report.city, false));
+  say(`So each month, here is what we do.`, "");
+  for (const item of OFFER_INCLUDES) say(`  ${item.work}. ${item.value}.`);
   say(
     "",
-    `If you have any questions you can reach me on this guy right here. My number is ${LOOM_TEXT_NUMBER}. Feel free to text me.`,
+    `And since we are opening this vertical, founding members also get ${FOUNDING_BONUS.headline}.`,
+    ""
+  );
+  for (const item of FOUNDING_BONUS.items) say(`  ${item}`);
+  say("", `That part is only for the first ${FOUNDING_SPOTS}.`);
+
+  say("");
+  // ‼️ VALUE_MONTH_ONE is null until Matthew picks it, because the line items do not add to the
+  // $4,000 the source script says. See the note over it. While it is null the recording says only
+  // the recurring figure, which does check out.
+  if (VALUE_MONTH_ONE) {
+    say(`Total delivered value: ${VALUE_MONTH_ONE} in month one, ${VALUE_RECURRING} every month after.`);
+  } else {
+    say(`Total delivered value: ${VALUE_RECURRING} every month.`);
+  }
+
+  say(
     "",
-    `I hope I explained myself. And if you feel like I did not understand your business correctly, or I missed something, we clarify all of it on the onboarding call as soon as the payment is completed. Or you can just call me.`,
+    `But today, we will do that for free.`,
     "",
-    `And if it is not for you, thanks for your time. I hope you learned something that gets you ready for the age of AI ahead of us.`
+    `${sentence(FREE_UNTIL_LINE)}`,
+    ...(QUALIFIED_INQUIRY_DEF ? ["", QUALIFIED_INQUIRY_DEF] : []),
+    "",
+    // ‼️ THE SECOND BEAT ATTACHES THE PRICE AND DOES NOT RESTATE THE TERMS. It used to say
+    // "So you start free" one line under a sentence that had just said exactly that, which
+    // reads as a stutter out loud. What the listener still needs at this point is the number.
+    //
+    // PRICE_RETAINER_AMOUNT, not PRICE_RETAINER: the sentence already says "monthly".
+    `And if we hit that, the monthly retainer is ${opts.price ?? PRICE_RETAINER_AMOUNT}.`
+  );
+
+  // 11. Founding cohort. The scarcity is real and countable, which is the only reason it is said
+  // out loud at all — see the note over FOUNDING_BONUS in config/pitch.ts.
+  say(...rule("FOUNDING"));
+  say(
+    `But remember, I am taking on ${FOUNDING_SPOTS} independent ${aesthetics ? "med spas" : "businesses"} as founding clients in this vertical.`,
+    "",
+    `In exchange for ${FOUNDING_EXCHANGE}.`,
+    "",
+    // KEEP_WORKING_FREE_LINE already names the window and the outcome, so the lead-in must
+    // not. Said as it was, this beat read "better visibility in two to three weeks" twice in
+    // one breath.
+    `You are going to see movement fast. And ${KEEP_WORKING_FREE_LINE}.`
+  );
+
+  // 12. The timeline, and then the ads as the answer to it. This is the one place the prospect
+  // will otherwise reconcile wrongly: he has just heard "30 days" and "60 to 90 days" in the same
+  // video, and it has to be clear which half each belongs to.
+  const engineLine = `${orList(facts.engines)}${otherEngines.length ? `, and the other search agents like ${orList(otherEngines)}` : ""}`;
+  say(...rule("THE ACCELERATOR"));
+  say(
+    `Organic AI visibility takes ${startWindow} to fully kick in. That is how long it takes to get pushed by ${engineLine}.`,
+    "",
+    `Because of your industry, we know we can get you there in about ${FAST_WINDOW}.`,
+    "",
+    `But if you do not want to wait for real momentum, there is a faster lane.`,
+    ""
+  );
+  for (const line of ADS_ACCELERATOR) say(line, "");
+
+  // 13. The CTA. The close is the onboarding call, not a payment page: nothing is charged up front
+  // under this offer, so a checkout link here would contradict the free period two beats earlier.
+  say(...rule("THE CLOSE"));
+  if (BOOKING_LINK) {
+    say(
+      `So here is what happens next.`,
+      "",
+      `The link to book the onboarding call is right here.`,
+      "",
+      screen(`the booking page, ${BOOKING_LINK}`),
+      "",
+      `We write the first few pages after the onboarding call, but we will have a few examples ready for you before then.`,
+      "",
+      `Getting started usually takes ${ONBOARDING_WINDOW}.`
+    );
+  } else {
+    say(
+      `!! NO BOOKING LINK IS SET, so do not say "the link to book the onboarding call". Set SRT_ONBOARDING_CALL_URL and rebuild this script, or tell them you will send the booking link right after this video and stop there.`,
+      "",
+      `So here is what happens next. Reply to the email I sent over and I will send you the link to book the onboarding call.`
+    );
+  }
+  say(
+    "",
+    `If you have one question before you click, my number is ${LOOM_TEXT_NUMBER}. Text me, I will answer.`
+  );
+
+  say("");
+  say(...urgencyBeat(report.city, false, rival));
+  say(
+    "",
+    `So hit the link and schedule the onboarding call. The founding offer is only ${FOUNDING_SPOTS} spots.`,
+    "",
+    `And if you feel like I did not understand your business correctly, or I missed something, we clarify all of it on that call. Or you can just call me.`,
+    "",
+    `Let's get AI to send you ${aesthetics ? "patients" : "clients"}.`
   );
 
   say(

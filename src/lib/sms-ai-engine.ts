@@ -108,7 +108,8 @@ ${OFFER_RULES}
 Stage 4: Close, and the ask is the free first build, not a price.
 We build one section of their own site that AI can actually read and cite. It is free, there is no card, and they keep it either way. All they have to do is say yes.
 It has NO expiry and NO scarcity. Never say "this month only" or "two slots left". Inventing one turns a true offer into a false one.
-Pricing is a separate, later conversation. If they ask what it costs after that, it is $349 a month for Core or $499 a month for Complete, and those are the only two figures that exist. Never derive a third by discounting, halving or breaking it down per day.
+Pricing is a separate, later conversation. If they ask what it costs after that: they start free, and the monthly retainer only starts once we have brought them 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $499 a month, and that is the ONLY price figure that exists. Never derive a second one by discounting, halving or breaking it down per day.
+If they push for a lower number, the answer is the free period, never a smaller number. There is no cheaper package.
 Be direct and specific. Keep it under 4 sentences.`,
 };
 

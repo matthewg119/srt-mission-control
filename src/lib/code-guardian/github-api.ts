@@ -94,19 +94,32 @@ export interface ProposedFix {
 /** Create a branch, commit the fixes, and open a PR. Returns the PR URL. */
 export async function createFixPR(opts: {
   repo: string;
-  baseSha: string;
+  /** The commit that failed. Context only — the fix branches from head of main. */
+  baseSha?: string;
   fixes: ProposedFix[];
   branchName: string;
   prTitle: string;
   prBody: string;
 }): Promise<string> {
-  const { repo, baseSha, fixes, branchName, prTitle, prBody } = opts;
+  const { repo, fixes, branchName, prTitle, prBody } = opts;
 
-  // 1. Get the base branch ref
+  // 1. Branch from the CURRENT head of main, tree and parent both.
+  //
+  // These used to disagree: the tree was based on the failing commit while the
+  // parent was head of main. Git resolves that as "make the repo look like the old
+  // commit, on top of main", so merging the PR silently reverted every file changed
+  // in between. The failing commit is still shown on the card for context, but it
+  // must never be the base of the fix.
   const refRes = await fetch(`${GH_API}/repos/${repo}/git/ref/heads/main`, { headers: headers() });
   if (!refRes.ok) throw new Error(`Failed to get main ref: ${await refRes.text()}`);
   const refJson = (await refRes.json()) as { object: { sha: string } };
-  const baseTreeSha = refJson.object.sha;
+  const headSha = refJson.object.sha;
+
+  // base_tree needs a TREE sha, not a commit sha — read the commit to get it.
+  const headCommitRes = await fetch(`${GH_API}/repos/${repo}/git/commits/${headSha}`, { headers: headers() });
+  if (!headCommitRes.ok) throw new Error(`Failed to read main commit: ${await headCommitRes.text()}`);
+  const headCommit = (await headCommitRes.json()) as { tree: { sha: string } };
+  const baseTreeSha = headCommit.tree.sha;
 
   // 2. Create blobs for each changed file
   const treeItems = await Promise.all(
@@ -126,7 +139,7 @@ export async function createFixPR(opts: {
   const treeRes = await fetch(`${GH_API}/repos/${repo}/git/trees`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ base_tree: baseSha, tree: treeItems }),
+    body: JSON.stringify({ base_tree: baseTreeSha, tree: treeItems }),
   });
   if (!treeRes.ok) throw new Error(`Failed to create tree: ${await treeRes.text()}`);
   const tree = (await treeRes.json()) as { sha: string };
@@ -138,7 +151,7 @@ export async function createFixPR(opts: {
     body: JSON.stringify({
       message: `fix: ${prTitle}\n\nApplied by Code Guardian`,
       tree: tree.sha,
-      parents: [baseTreeSha],
+      parents: [headSha],
     }),
   });
   if (!commitRes.ok) throw new Error(`Failed to create commit: ${await commitRes.text()}`);

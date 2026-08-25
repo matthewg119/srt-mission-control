@@ -13,8 +13,8 @@
       "schedule": "0 23 * * *"
     },
     {
-      "path": "/api/cron/graph-subscription-renew",
-      "schedule": "0 6 * * *"
+      "path": "/api/cron/cron-health",
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/bot-scan",

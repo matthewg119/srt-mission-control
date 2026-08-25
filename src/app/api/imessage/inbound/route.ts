@@ -331,9 +331,8 @@ async function finalizeBackfill(): Promise<NextResponse> {
     .limit(100000);
   const threads = new Set((convRows ?? []).map((r) => r.conversation_id as string)).size;
 
-  const channel = process.env.SLACK_SUB_CHANNEL || "C0AJXH7PTBM"; // #srt-sub
   await slack.postMessage(
-    channel,
+    slack.channels.bridge,
     `📥 *iMessage backfill complete* — imported ${msgCount ?? 0} messages across ${threads} CRM contact thread${threads === 1 ? "" : "s"}. Unknown numbers were discarded.`
   );
 

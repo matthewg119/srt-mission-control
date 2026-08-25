@@ -10,6 +10,10 @@
 //    is a visible placeholder on purpose, see <Placeholder/>.
 //  · Pricing and FAQ text is lifted verbatim from the live site's JSON-LD, so
 //    the preview cannot quietly drift from what srtagency.com already promises.
+//    ‼️ IT DRIFTED ANYWAY, and for months. This page quoted a $299/mo Tier 1 and
+//    a "$999 setup waived to $499" that had not existed under any offer for a long
+//    time, because nothing here imports config/pitch.ts and nothing checked. If you
+//    edit the offer, edit this file in the same commit.
 
 import { ScanForm } from "../scan/scan-form";
 
@@ -61,7 +65,7 @@ const FAQ = [
   },
   {
     q: "How much does this cost?",
-    a: "Our audit is free. Setup is $999 (waived to $499 for founding clients). Ongoing is $299/mo (Tier 1) or $999/mo (Tier 2). Typical AEO retainers run well into the thousands per month, so this is built for local businesses.",
+    a: "Our audit is free, and so is the work at first: you start free and the monthly retainer only starts once we have brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $499/mo, month to month. Typical AEO retainers run well into the thousands per month, so this is built for local businesses.",
   },
   {
     q: "Why can't I just check my own phone?",
@@ -322,30 +326,30 @@ function Pricing() {
           </div>
 
           <div className="v2-price is-featured">
-            <span className="v2-price-tag">Most take this</span>
-            <h3>Tier 1</h3>
+            <span className="v2-price-tag">The whole offer</span>
+            <h3>AI Visibility</h3>
             <div className="v2-price-amount">
-              $299<small> /mo</small>
+              $499<small> /mo</small>
             </div>
-            <div className="v2-price-note">Setup $999, waived to $499 for founding clients</div>
+            <div className="v2-price-note">Free until your first 5 AI-sourced inquiries</div>
             <ul>
-              <li>Everything in the audit, monthly</li>
+              <li>Everything in the audit, every month</li>
               <li>Entity, surface, sources and proof work</li>
               <li>Monthly scorecard showing the movement</li>
             </ul>
           </div>
 
           <div className="v2-price">
-            <span className="v2-price-tag">Wider footprint</span>
-            <h3>Tier 2</h3>
+            <span className="v2-price-tag">Founding</span>
+            <h3>Founding seat</h3>
             <div className="v2-price-amount">
-              $999<small> /mo</small>
+              5<small> spots</small>
             </div>
-            <div className="v2-price-note">For multi-location or competitive categories</div>
+            <div className="v2-price-note">In exchange for a case study when we hit results</div>
             <ul>
-              <li>Everything in Tier 1</li>
-              <li>More questions and more surfaces tracked</li>
-              <li>Competitor movement tracked alongside yours</li>
+              <li>A full Google Business Profile rebuild in week one</li>
+              <li>Category, description, 10 geo-tagged photos, 4 posts</li>
+              <li>Nothing is charged up front</li>
             </ul>
           </div>
         </div>

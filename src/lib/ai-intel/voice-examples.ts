@@ -3,9 +3,10 @@ import { MATTHEW } from "@/config/rep-profile";
 
 // ── Voice learning ─────────────────────────────────────────────────────────
 // Pulls Matt's recent merchant-facing sent emails from MS Graph so Claude can
-// learn his tone. We cache in-memory with a 30-minute TTL so the ai-guardian
-// cron (runs every 4h) gets fresh examples on each invocation without hammering
-// Graph on every single draft call.
+// learn his tone. We cache in-memory with a 30-minute TTL so a burst of drafts
+// shares one Graph fetch without going stale. (This used to be justified by the
+// 4-hourly ai-guardian cron, which no longer exists; the callers now are
+// email-director and followup-director.)
 
 interface CachedExamples {
   examples: VoiceExample[];

@@ -21,7 +21,14 @@
 // the trampa in the script.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
-import { GUARANTEE_RESTATE, PAYMENT_LINK, guaranteeFor, priceForTier } from "@/config/pitch";
+import {
+  BOOKING_LINK,
+  FOUNDING_SPOTS,
+  FREE_UNTIL_LINE,
+  GUARANTEE_RESTATE,
+  PRICE_RETAINER,
+  QUALIFIED_INQUIRY_DEF,
+} from "@/config/pitch";
 import { buildAliases } from "./mention-match";
 import { robotsVerdict, searchBotFindings, type RobotsVerdict } from "./robots-check";
 import type { AuditReportRow, AuditRunRow } from "./types";
@@ -313,7 +320,7 @@ export async function computeBeatSheetFacts(
  * The script itself is a separate artifact (loom-script.ts) and is uploaded as a file, because a
  * page of prose read off a Slack message scrolls while you are talking.
  */
-export function renderPreflight(view: ReportView, f: BeatSheetFacts, tier?: string | null): string {
+export function renderPreflight(view: ReportView, f: BeatSheetFacts, price?: string | null): string {
   const promptList = view.prompts.map((p) => p.prompt).join("\n\n");
 
   const shortPrompt = (p: PromptPick | null): string => {
@@ -334,24 +341,28 @@ export function renderPreflight(view: ReportView, f: BeatSheetFacts, tier?: stri
 
   const brandedCount = view.prompts.filter((p) => p.isBranded).length;
 
-  // ‼️ THE TIER GOES ON THE CHECKLIST BECAUSE IT IS THE ONE THING HERE THAT CANNOT BE FIXED AFTER
-  // THE FACT. Every other item costs a re-record at worst. A guarantee said on camera to a
-  // business we cannot run ads for is a commitment that outlives the video, and the person about
-  // to read it out is the only one who knows whether we can actually deliver it.
-  const guaranteeItems = guaranteeFor(tier)
-    ? [
-        `[ ] Selling ${tier}, ${priceForTier(tier ?? null) ?? "price not set"}`,
-        `[ ] :rotating_light: THIS RECORDING PROMISES: ${GUARANTEE_RESTATE}`,
-        `[ ] Say it ONLY if we can actually run ChatGPT Ads for this business`,
-      ]
-    : [
-        `[ ] Selling ${tier ?? "a price quoted by hand"}${priceForTier(tier ?? null) ? `, ${priceForTier(tier ?? null)}` : ""}`,
-        `[ ] NO ADS AND NO GUARANTEE on this one. Do not say either`,
-      ];
+  // ‼️ THE COMMITMENTS GO ON THE CHECKLIST BECAUSE THEY ARE THE THINGS HERE THAT CANNOT BE FIXED
+  // AFTER THE FACT. Every other item costs a re-record at worst. A guarantee and a free period said
+  // on camera outlive the video, and the person about to read them out is the only one who knows
+  // whether we will actually do the work behind them.
+  //
+  // The tier branch that used to live here is gone with the tiers (2026-08-25). There is one offer,
+  // so there is nothing to choose and nothing to withhold — but the two commitments still get
+  // called out one at a time, because "the offer" is not a thing anybody double-checks and
+  // "we are promising 5 queries by day 30" is.
+  const commitmentItems = [
+    `[ ] Selling ${price ?? PRICE_RETAINER}, free until the first 5 qualified AI-sourced inquiries`,
+    `[ ] :rotating_light: THIS RECORDING PROMISES: ${GUARANTEE_RESTATE}`,
+    `[ ] :rotating_light: AND IT PROMISES: ${FREE_UNTIL_LINE}`,
+    QUALIFIED_INQUIRY_DEF
+      ? `[ ] "Qualified AI-sourced inquiry" means: ${QUALIFIED_INQUIRY_DEF}`
+      : `[ ] NO DEFINITION OF "QUALIFIED AI-SOURCED INQUIRY" IS SET. That phrase starts the billing. Be ready to define it on the call`,
+    `[ ] Founding cohort is ${FOUNDING_SPOTS} seats. Only say that while it is still true`,
+  ];
 
   const preflight = [
     `*PRE-FLIGHT* · the things that cost you the call if you get them wrong`,
-    ...guaranteeItems,
+    ...commitmentItems,
     `[ ] Temporary chat visible on screen`,
     f.trampa
       ? `[ ] DO NOT OPEN WITH: ${shortPrompt(f.trampa)}`
@@ -360,13 +371,16 @@ export function renderPreflight(view: ReportView, f: BeatSheetFacts, tier?: stri
     brandedCount ? `[ ] ${brandedCount} branded prompts, they do not count as wins` : null,
     `[ ] Dream-lead image pasted and on screen for the open`,
     `[ ] PDF open in a tab`,
-    // The v2 close tells them to click the link in the email, so the link has to exist and has to
-    // be on screen. With none configured this is not a checklist item, it is a correction: the
-    // script prints the same warning, because a promised link that does not exist is discovered by
-    // the prospect, after the recording, when nothing can be done about it.
-    PAYMENT_LINK
-      ? `[ ] Payment page open in a tab: ${PAYMENT_LINK}`
-      : `[ ] NO PAYMENT LINK SET (SRT_PAYMENT_URL). Do not say "click the link I sent over"`,
+    // The close sends them to the onboarding call, so the link has to exist and has to be on
+    // screen. With none configured this is not a checklist item, it is a correction: the script
+    // prints the same warning, because a promised link that does not exist is discovered by the
+    // prospect, after the recording, when nothing can be done about it.
+    //
+    // It was PAYMENT_LINK until 2026-08-25. Nothing is charged up front under the new offer, so a
+    // checkout page open in a tab would contradict the free period the video just promised.
+    BOOKING_LINK
+      ? `[ ] Booking page open in a tab: ${BOOKING_LINK}`
+      : `[ ] NO BOOKING LINK SET (SRT_ONBOARDING_CALL_URL). Do not say "the link to book the onboarding call"`,
     f.robotsVerdict === "soft"
       ? `[ ] robots.txt blocks ${f.robotsBot}, TRAINING only. Do NOT say "your site blocks ${f.robotsEngine}"`
       : null,

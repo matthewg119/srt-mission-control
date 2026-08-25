@@ -5,15 +5,15 @@ name: Code Guardian
 
 on:
   workflow_run:
+    # Only workflows that actually exist in .github/workflows. Naming one that
+    # does not is silently dead config, and naming one that fails on every run
+    # (as "AI Guardian Cron" did against its deleted route) turns the guardian
+    # into a spam source. Vercel crons are covered separately by
+    # /api/cron/cron-health, which posts here with source="vercel-cron".
     workflows:
-      - "AI Guardian Cron"
+      - "Sequence Segmenter Cron"
       - "Daily Content Ideas Cron"
       - "Email Director Cron"
-      - "Stale Deals Cron"
-      - "Daily Recap Cron"
-      - "Process Sequences Cron"
-      - "Bot Monitor Cron"
-      - "Bot Daily Summary Cron"
     types: [completed]
   workflow_dispatch:
     inputs:

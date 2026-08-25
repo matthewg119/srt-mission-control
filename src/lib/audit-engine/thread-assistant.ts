@@ -55,7 +55,7 @@ import {
   readIntakeImages,
   type IntakeImage,
 } from "./outreach-intake";
-import { GUARANTEE_RESTATE, RECOMMENDED_TIER, guaranteeFor } from "@/config/pitch";
+import { FREE_UNTIL_LINE, GUARANTEE_RESTATE, PRICE_RETAINER } from "@/config/pitch";
 import { computeBeatSheetFacts, renderPreflight } from "./loom-beatsheet";
 import { buildLoomScript } from "./loom-script";
 import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
@@ -582,26 +582,22 @@ function unwrapSlackUrl(raw: string): string {
  * rather than as a stranger's name read out on camera.
  */
 /**
- * ‼️ WHICH TIER A WORD SELECTS. THE DEFAULT IS THE GUARANTEED ONE, WHICH IS WHY THIS IS EXPLICIT.
+ * ‼️ THE TIER WORDS ARE GONE (2026-08-25), AND THE ONLY OVERRIDE LEFT IS A HAND-QUOTED PRICE.
  *
- * A bare `loom` sells RECOMMENDED_TIER and therefore speaks the guarantee, because that is the
- * pitch. Stepping DOWN off it has to be something Matthew types on purpose, and the words he would
- * reach for are the tier names and "no ads" — so all of them are here, mapped to a real name out
- * of OFFER_TIERS rather than to free text. `loom enterprise` is deliberately absent: Enterprise is
- * priced by location count, so a recording quoting it needs the count first, and `loom $6,999`
- * already covers that case honestly.
+ * `LOOM_TIER_WORDS` used to map `loom core` / `loom complete` / `loom noads` onto a name out of
+ * OFFER_TIERS, because the tier decided whether the guarantee was spoken. There is one offer now,
+ * so there is nothing to select and nothing to step down to. `loom $299` still works and still
+ * means what it always did: one number chosen by hand for this prospect, which drops the standard
+ * commitments with it.
+ *
+ * The old tier words stay in NOT_A_NAME below. They are no longer commands, but they are still not
+ * names, and somebody typing `loom complete` out of habit must not get a video that opens
+ * "Hey complete,".
  */
-const LOOM_TIER_WORDS: Array<{ re: RegExp; tier: string }> = [
-  { re: /\b(?:no ?ads|without ads|no guarantee|complete)\b/i, tier: "Complete" },
-  { re: /\bcore\b/i, tier: "Core" },
-  { re: /\b(?:ads|999)\b/i, tier: RECOMMENDED_TIER },
-];
-
 function parseLoomOverrides(rest: string): {
   price: string | null;
   window: string | null;
   name: string | null;
-  tier: string | null;
 } {
   const rawPrice = rest.match(/\$\s?[\d,]+(?:\s*\/\s*(?:mo|month|monthly))?/i)?.[0]?.trim() ?? null;
   const window = rest.match(/\d+\s*(?:to|-|–)\s*\d+\s*days?|\b\d+\s*days?\b/i)?.[0]?.trim() ?? null;
@@ -609,11 +605,6 @@ function parseLoomOverrides(rest: string): {
   let remainder = rest;
   for (const part of [rawPrice, window]) if (part) remainder = remainder.replace(part, " ");
   remainder = remainder.replace(/[,;]/g, " ").trim();
-
-  // Tier words come out of the remainder BEFORE the name check, or `loom core` reads as a prospect
-  // called Core and opens the video "Hey Core,".
-  const tierHit = LOOM_TIER_WORDS.find((t) => t.re.test(remainder)) ?? null;
-  if (tierHit) remainder = remainder.replace(tierHit.re, " ").trim();
 
   // A word that is obviously a command is not a name. Nothing here is a `loom` subcommand today,
   // but `avatars fresh` exists, so `loom fresh` is the kind of thing that gets typed by analogy,
@@ -626,7 +617,7 @@ function parseLoomOverrides(rest: string): {
   // printed on the invoice line, so "$349," is not a cosmetic problem.
   const price = rawPrice?.replace(/[,\s]+$/, "") || null;
 
-  return { price, window, name: looksLikeName ? remainder : null, tier: tierHit?.tier ?? null };
+  return { price, window, name: looksLikeName ? remainder : null };
 }
 
 /** The niche's avatar set, or null when it can't be built. */
@@ -723,17 +714,12 @@ async function startLoomWizard(
   }
 
   const overrides = parseLoomOverrides(rest);
-  // A hand-quoted price outranks a tier: `loom $499` means one number chosen for this prospect,
-  // and the guarantee belongs to a named tier rather than to a figure. Same precedence the script
-  // itself applies, kept identical so the PRE-FLIGHT cannot describe a different recording.
-  const tier = overrides.price ? null : overrides.tier ?? RECOMMENDED_TIER;
   const carry = {
     price: overrides.price ?? undefined,
     window: overrides.window ?? undefined,
     greetName: overrides.name ?? undefined,
-    tier: tier ?? undefined,
   };
-  await slack.postThreadReply(channel, threadTs, renderPreflight(view, facts, tier));
+  await slack.postThreadReply(channel, threadTs, renderPreflight(view, facts, overrides.price));
 
   let result;
   try {
@@ -788,8 +774,8 @@ async function startLoomWizard(
       [
         `:dart: *Who are we recording for?*`,
         `Reply *1*, *2* or *3* and I'll show you six ways to picture that customer, then write the script.`,
-        `_This run: ${[overrides.price ?? tier, overrides.window].filter(Boolean).join(", ")}${
-          guaranteeFor(tier) ? ", *with the guarantee*" : ", no guarantee"
+        `_This run: ${[overrides.price ?? PRICE_RETAINER, overrides.window].filter(Boolean).join(", ")}${
+          overrides.price ? ", price quoted by hand, NO standard guarantee or free period" : ", with the guarantee and the free period"
         }._`,
       ]
         .filter(Boolean)
@@ -913,16 +899,15 @@ async function postLoomScript(
 
   const greetName = overrides.greetName ?? report.loom_state?.greetName ?? null;
   const price = overrides.price ?? report.loom_state?.price ?? null;
-  // Rows written before tiers existed have no `tier`, and a bare `script` rebuild on one of those
-  // must not silently start promising a return. `?? RECOMMENDED_TIER` is only reached when there
-  // is also no hand-quoted price, which is the state a fresh `loom` always writes.
-  const tier = price ? null : report.loom_state?.tier ?? RECOMMENDED_TIER;
+  // ‼️ `loom_state.tier` IS DEAD AND IS DELIBERATELY NOT READ (2026-08-25). Old rows still carry
+  // a tier name from the four-tier offer, and reviving it would make a `script` rebuild on a row
+  // from last week quote an offer that no longer exists. The column stays for history; nothing
+  // reads it. See the note on it in types.ts.
   const script = await buildLoomScript(report, view, facts, resolved.avatar, {
     price,
     window: overrides.window ?? report.loom_state?.window ?? null,
     avatars: resolved.avatars,
     greetName,
-    tier,
   });
 
   // Whether it opens on a name is the first thing to check, so say which one it used. On a cold
@@ -936,9 +921,9 @@ async function postLoomScript(
     [
       `:page_facing_up: *The script* · read it out loud, paste the screenshots over the top.`,
       `Aimed at ${resolved.index ? `customer #${resolved.index}, ` : ""}${resolved.avatar.label}. Target 6 minutes.`,
-      guaranteeFor(tier)
-        ? `:rotating_light: Selling *${tier}* WITH the guarantee: ${GUARANTEE_RESTATE}. Rebuild with \`loom complete\` if we cannot run the ads.`
-        : `Selling ${price ?? tier}. No ads section and no guarantee in this one.`,
+      price
+        ? `Selling *${price}*, quoted by hand. NO standard guarantee and NO free period in this one. Reply \`loom\` to rebuild on the standard offer.`
+        : `:rotating_light: Selling *${PRICE_RETAINER}* WITH the guarantee (${GUARANTEE_RESTATE}) and the free period (${FREE_UNTIL_LINE}).`,
       named
         ? `Opens on *${named}*. Wrong name? Reply \`loom <name>\` and I'll rebuild it.`
         : `:warning: No name on this one, so it opens on the trade instead. Reply \`loom <name>\` to fix that.`,
@@ -1392,7 +1377,7 @@ export async function handleAuditThreadReply(args: {
       const footer = [
         THREAD_COMMANDS,
         missing.length > 0 ? `Not included: ${missing.join(", ")}.` : "",
-        terms ? "" : "Offer terms defaulted to both tiers, reply `reveal Core only` or `reveal $499/mo, setup waived` to change them.",
+        terms ? "" : "Offer terms defaulted to the standard offer, reply `reveal $299/mo, no free period` to change them.",
       ]
         .filter(Boolean)
         .join(" ");

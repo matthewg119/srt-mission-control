@@ -10,7 +10,7 @@
 
 import { callClaudeJSON, camelizeKeys } from "@/lib/claude-calls";
 import { supabaseAdmin } from "@/lib/db";
-import { OFFER_TIERS } from "@/config/pitch";
+import { FREE_UNTIL_LINE, GUARANTEE_LINE, PRICE_RETAINER } from "@/config/pitch";
 import type { CoachCallType } from "./call-type";
 
 const MODEL = "claude-sonnet-4-6" as const;
@@ -113,7 +113,6 @@ export async function generateWrap(input: {
     .map(([k, v]) => `${k}: ${v}`)
     .join("\n");
 
-  const tiers = OFFER_TIERS.map((t) => `${t.name} ${t.price}`).join(" or ");
 
   const { data } = await callClaudeJSON<CallWrap>({
     model: MODEL,
@@ -131,9 +130,16 @@ export async function generateWrap(input: {
       "emailSubject and emailBody: the follow-up email to send after this call. It goes out as a REPLY on the existing thread when one exists, so do not re-introduce yourself. Reference the actual conversation, not the audit in general. Short. One ask at the end, the smallest one that moves this forward. If the call went badly or they said no, write the graceful version that leaves the door open rather than pretending it went well.",
       "",
       "HARD LINES, no exceptions:",
-      "- There is NO guarantee. Never say guaranteed, risk-free, money-back, or anything implying one.",
+      // ‼️ THIS LINE USED TO SAY "There is NO guarantee" UNCONDITIONALLY, AND IT WAS WRONG BEFORE
+      // THE REBUILD TOO. A call that closed on the ChatGPT Ads tier had a guarantee made on camera
+      // and repeated on the phone, and this file then produced a CRM note and a follow-up email
+      // that flatly denied it existed. Every other consumer branched on the tier; this one never
+      // imported the gate. There is one offer now, so there is nothing to branch on and the fix is
+      // to state the commitment in its approved words.
+      `- THE GUARANTEE, and these are the only words for it: "${GUARANTEE_LINE}". It is a VISIBILITY commitment. Never write guaranteed results, risk-free, money-back or refund, and never promise a return on their money.`,
       "- Never promise customers, jobs, leads or revenue. This measures VISIBILITY only.",
-      `- The only prices that exist are ${tiers}. Never invent a third figure, never do arithmetic on these two, and do not mention price at all unless it actually came up on the call.`,
+      `- The only price that exists is ${PRICE_RETAINER}. Never invent a second figure, never do arithmetic on it, and do not mention price at all unless it actually came up on the call.`,
+      `- THE FREE PERIOD, in these words if it comes up: "${FREE_UNTIL_LINE}". Nothing is charged up front and no card is taken, so never write that they signed up, paid, or started billing unless the transcript says so.`,
       "- Never claim reach: no \"in front of X more people\". Nothing measures that.",
       "- No em dashes, no en dashes, never ' - ' as a connector.",
       "",
