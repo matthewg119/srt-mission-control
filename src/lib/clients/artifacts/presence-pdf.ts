@@ -190,6 +190,24 @@ export async function renderPresencePdf(args: {
   rows: SweepRow[];
   engines: string[];
   questionSetVersions: string[];
+  /**
+   * The state of the manual sweep STEP, as opposed to the state of the eighteen rows.
+   *
+   * ‼️ WITHOUT THIS, A SKIPPED SWEEP AND AN UNFINISHED ONE RENDER IDENTICALLY. This document is
+   * shown to the client on the onboarding call, and with the gate now at six core platforms the
+   * twelve extended will routinely be unchecked, so "why is half of this blank" stops being an
+   * edge case and becomes the normal state of the page. A row-level count cannot answer it: the
+   * rows look the same either way. Only the step knows whether somebody decided not to do this.
+   *
+   * OPTIONAL, because scripts/test-onboarding-artifacts.ts calls this function directly with a
+   * fixed argument object and must keep compiling.
+   */
+  manualSweep?: {
+    status: string;
+    skippedReason: string | null;
+    completedAt: string | null;
+    completedBy: string | null;
+  } | null;
 }): Promise<Buffer> {
   const state = startDoc({
     title: `${args.clientName} — presence and consistency`,
@@ -210,6 +228,28 @@ export async function renderPresencePdf(args: {
     subtitle:
       "What the internet currently publishes about this business, and where those records disagree with each other.",
   });
+
+  // ‼️ THE STEP'S STATE, ON THE FACE OF THE DOCUMENT, BEFORE ANY FINDING.
+  //
+  // The wording cannot be copied from step-board.ts or delivery-checklist.ts even though it is
+  // saying the same thing, and that is not a style choice: scripts/test-onboarding-artifacts.ts
+  // asserts the string "no issues found" appears NOWHERE in a rendered client PDF, in any
+  // casing, including inside a sentence disclaiming it. That invariant is grep-able on purpose.
+  // The Slack copy contains the phrase. Say the same thing without it.
+  const sweepStatus = args.manualSweep?.status ?? null;
+  if (sweepStatus === "skipped") {
+    paragraph(
+      state,
+      'The manual half of this sweep was marked not applicable, so every platform below reads as "not checked". Nothing on these pages is a statement that these listings are correct.',
+      { color: AMBER, bold: true, size: 10 }
+    );
+  } else if (sweepStatus && sweepStatus !== "complete") {
+    paragraph(
+      state,
+      'The manual half of this sweep is still open. Anything marked "not checked" below has not been looked at yet.',
+      { color: AMBER, bold: true, size: 10 }
+    );
+  }
 
   sectionHeading(state, "The canonical record");
   paragraph(
@@ -242,6 +282,26 @@ export async function renderPresencePdf(args: {
   await findingsBlock(state, args.canonical, args.rows);
 
   sectionHeading(state, "How this was checked");
+
+  // The step-level statement, said again where the reader is asking the question. Same
+  // constraint as the cover: the phrase "no issues found" may not appear on this page at all.
+  if (sweepStatus === "skipped") {
+    const when = args.manualSweep?.completedAt?.slice(0, 10) ?? "a date that was not recorded";
+    const who = args.manualSweep?.completedBy ?? "somebody";
+    paragraph(
+      state,
+      `The manual sweep step was skipped on ${when} by ${who}. A skipped step reads as "not checked" everywhere, and that is an absence of evidence, never evidence of correctness.`,
+      { color: AMBER, bold: true, size: 9.5 }
+    );
+    paragraph(
+      state,
+      args.manualSweep?.skippedReason
+        ? `Reason recorded: ${args.manualSweep.skippedReason}`
+        : "No reason was recorded.",
+      { color: MUTED, size: 9 }
+    );
+  }
+
   const automated = args.rows.filter((r) => r.source === "api").length;
   const skipped = args.rows.filter((r) => effectiveStatus(r) === "not_checked");
   bulletList(state, [
@@ -292,6 +352,15 @@ export async function generatePresencePdf(
     .select("version")
     .eq("vertical", "med_spa");
 
+  // The manual sweep STEP, not its rows. A skipped step and an unfinished one leave the
+  // eighteen rows looking identical, and this document is shown to the client on the call.
+  const { data: sweepStep } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("status, skipped_reason, completed_at, completed_by")
+    .eq("client_id", clientId)
+    .eq("step_key", "presence_sweep_manual")
+    .maybeSingle();
+
   let buffer: Buffer;
   try {
     buffer = await renderPresencePdf({
@@ -300,6 +369,14 @@ export async function generatePresencePdf(
       rows,
       engines: ((report?.engines as string[] | null) ?? ["chatgpt_web"]),
       questionSetVersions: (versions ?? []).map((v) => v.version as string),
+      manualSweep: sweepStep
+        ? {
+            status: sweepStep.status as string,
+            skippedReason: (sweepStep.skipped_reason as string | null) ?? null,
+            completedAt: (sweepStep.completed_at as string | null) ?? null,
+            completedBy: (sweepStep.completed_by as string | null) ?? null,
+          }
+        : null,
     });
   } catch (e) {
     return { ok: false, error: `render failed: ${(e as Error).message}` };

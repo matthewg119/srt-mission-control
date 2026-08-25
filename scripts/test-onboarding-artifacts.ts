@@ -333,6 +333,34 @@ ok("it never says 'no issues found'", !/no issues found/i.test(untouchedText));
 ok("it does not claim anything matches", !/matches your record/i.test(untouchedText));
 ok("the fidelity footer says one engine", /1 engine/i.test(untouchedText));
 
+// ‼️ A SKIPPED SWEEP MUST SAY SO ON THE FACE OF THE DOCUMENT. With the gate now at the six core
+// platforms, twelve extended will routinely be unchecked, so "why is half of this blank" is the
+// normal state of the page and a row-level count cannot answer it: the rows look identical
+// whether somebody skipped the step or simply has not finished it. The step is the only thing
+// that knows. This is also the case that proves the wording rule survives the addition, because
+// the Slack copy for a skip contains the exact phrase this document may never print.
+const skippedPdf = await renderPresencePdf({
+  clientName: "Acme Med Spa",
+  canonical: canonicalFixture,
+  rows: untouched,
+  engines: ["chatgpt_web"],
+  questionSetVersions: ["universal_v1@med_spa"],
+  manualSweep: {
+    status: "skipped",
+    skippedReason: "The client has no listings outside Google and said so on the call.",
+    completedAt: "2026-08-24T10:00:00.000Z",
+    completedBy: "Matthew",
+  },
+});
+const skippedText = pdfText(skippedPdf);
+
+ok("a skipped sweep says it was not applicable", /not applicable/i.test(skippedText));
+ok("a skipped sweep names the step as skipped", /skipped/i.test(skippedText));
+ok("a skipped sweep prints the reason", /no listings outside Google/i.test(skippedText));
+// The invariant, re-asserted on the new branch: the Slack copy for a skip says "never as no
+// issues found", and copying it verbatim into this file would put the phrase on a client PDF.
+ok("a skipped sweep still never says 'no issues found'", !/no issues found/i.test(skippedText));
+
 // Confirmed findings DO render, with the raw published values.
 const confirmed: SweepRow[] = untouched.map((r, i) =>
   i === 0

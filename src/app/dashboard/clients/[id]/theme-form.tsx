@@ -84,7 +84,21 @@ export function ThemeForm({
   }
 
   const confirmed = Boolean(theme.confirmedAt);
-  const hasAny = Boolean(theme.logoUrl || theme.accent || theme.fontFamily);
+  // ‼️ IT READS THE SAVED THEME, NOT THE INPUT STATE, AND THAT IS DELIBERATE.
+  // The obvious "improvement" is to read `logo` / `accent` / `font` so the label updates as you
+  // type. It must not: this describes what is STORED, and a Confirm pressed against a value that
+  // was never saved would record a decision about a colour nobody wrote down.
+  //
+  // accentSoft is counted because activeTheme() counts it and the route's `set` action accepts
+  // it. Leaving it out made the panel and the renderer disagree about what an override is.
+  //
+  // ‼️ THIS NO LONGER GATES THE CONFIRM BUTTON. It used to, and that was the deadlock: the panel
+  // said an empty theme was "a fine place to start" directly above a disabled Confirm, so
+  // "I am keeping the defaults" was an unconfirmable choice and hub_preview could never complete.
+  // Confirmed and has-overrides are two different facts. See themeConfirmed() in hub-setup.ts.
+  const hasOverrides = Boolean(
+    theme.logoUrl || theme.accent || theme.accentSoft || theme.fontFamily
+  );
 
   return (
     <div className="space-y-5">
@@ -221,8 +235,10 @@ export function ThemeForm({
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <span className="text-xs text-[#4ADE80]">
               Confirmed by {theme.confirmedBy ?? "someone"} on{" "}
-              {new Date(theme.confirmedAt as string).toLocaleDateString()}. It is live on the
-              hub and the review tool.
+              {new Date(theme.confirmedAt as string).toLocaleDateString()}.{" "}
+              {hasOverrides
+                ? "It is live on the hub and the review tool."
+                : "No overrides are set, so the hub and the review tool render SRT's defaults on their domain. That is a recorded decision, not an unfinished step."}
             </span>
             <button
               type="button"
@@ -236,9 +252,9 @@ export function ThemeForm({
         ) : (
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <span className="text-xs text-[rgba(255,255,255,0.5)]">
-              {hasAny
+              {hasOverrides
                 ? "Not confirmed, so the hub still renders the default. Look at the preview first."
-                : "Nothing set. The hub renders the default palette, which is a fine place to start."}
+                : "Nothing is overridden. Confirming now records a decision to keep SRT's defaults on their domain, which unblocks the hub and review tool steps. Set a colour first if you would rather not."}
             </span>
             <span className="flex gap-2">
               <a
@@ -252,7 +268,7 @@ export function ThemeForm({
               <button
                 type="button"
                 onClick={() => post({ action: "confirm" }, "confirm")}
-                disabled={busy !== null || !hasAny}
+                disabled={busy !== null}
                 className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40 disabled:opacity-40"
               >
                 {busy === "confirm" ? "…" : "Confirm the theme"}

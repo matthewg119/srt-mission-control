@@ -28,7 +28,7 @@ import {
   type DnsRow,
 } from "@/lib/clients/dns-records";
 import { subdomainLabel } from "@/lib/clients/normalize";
-import { activeTheme, readTheme } from "@/lib/hub/theme";
+import { readTheme } from "@/lib/hub/theme";
 
 interface ClientRow {
   id: string;
@@ -47,13 +47,68 @@ async function loadHubClient(clientId: string): Promise<ClientRow | null> {
   return (data as ClientRow | null) ?? null;
 }
 
-/** Has a person confirmed the theme? `review_tool_preview` refuses until they have. */
+/**
+ * Has a person confirmed the theme? `hub_preview` and `review_tool_preview` refuse until they have.
+ *
+ * ‼️ CONFIRMED AND HAS-OVERRIDES ARE TWO DIFFERENT QUESTIONS AND CONFLATING THEM WAS A DEADLOCK.
+ *
+ * This used to be `activeTheme(readTheme(...)) !== null`, and activeTheme returns null when
+ * nothing is overridden as well as when nothing is confirmed. So a client who looked at the
+ * default palette and decided to keep it could never satisfy this: the panel said "Nothing set.
+ * The hub renders the default palette, which is a fine place to start" directly above a DISABLED
+ * Confirm button, and step 15 could never complete, taking 16, 17 and 18 with it.
+ *
+ * CONFIRMED is "a person looked at it and said yes", which is `confirmedAt` and nothing else.
+ * HAS OVERRIDES is "there is something to apply when rendering", which is what activeTheme
+ * answers, and it must keep returning null for an empty theme so the hub renders its defaults.
+ * Confirming nothing is a decision and it is recorded as one.
+ */
 export async function themeConfirmed(clientId: string): Promise<boolean> {
   const client = await loadHubClient(clientId);
   if (!client) return false;
-  return activeTheme(readTheme(client.theme)) !== null;
+  return readTheme(client.theme).confirmedAt !== null;
 }
 
+/**
+ * Which theme fields are actually overridden, in words, for a message that has to say which of
+ * the two states above it is in. Empty means the client renders SRT's defaults.
+ *
+ * Reads the same four fields activeTheme() does, so the two can never disagree about what
+ * counts as an override.
+ */
+export async function themeOverrides(clientId: string): Promise<string[]> {
+  const client = await loadHubClient(clientId);
+  if (!client) return [];
+  const t = readTheme(client.theme);
+  const out: string[] = [];
+  if (t.logoUrl) out.push("logo");
+  if (t.accent) out.push("accent");
+  if (t.accentSoft) out.push("accent soft");
+  if (t.fontFamily) out.push("font");
+  return out;
+}
+
+/** The one sentence every card uses to describe the theme, so the wording cannot drift. */
+export function themeLine(confirmed: boolean, overrides: string[]): string {
+  if (!confirmed) {
+    return (
+      ":warning: *[Done] will refuse until the theme is confirmed.* Client board, Theme panel. " +
+      "Set the colours, or press Confirm with nothing set to keep SRT's defaults deliberately. " +
+      "Either is a decision; leaving it unconfirmed is not."
+    );
+  }
+  if (overrides.length === 0) {
+    return (
+      ":white_check_mark: Theme confirmed with no overrides, so the hub and the review tool " +
+      "render SRT's defaults on the client's own domain. That is a recorded decision, not an " +
+      "unfinished step. [Done] will go through."
+    );
+  }
+  return `:white_check_mark: Theme confirmed (${overrides.join(", ")}). [Done] will go through.`;
+}
+
+/**
+ * The three records, rendered the way they are typed into a registrar.
 /**
  * The three records, rendered the way they are typed into a registrar.
  *
@@ -64,23 +119,48 @@ export async function themeConfirmed(clientId: string): Promise<boolean> {
  *
  * `fqdn()` is used only for the "what this becomes" line, never for the Host column.
  */
-export function formatDnsRecords(rows: DnsRow[], domain: string): string[] {
+export function formatDnsRecords(
+  rows: DnsRow[],
+  domain: string,
+  opts?: { preview?: boolean }
+): string[] {
   if (!rows.length) return ["No DNS rows have been seeded for this client yet."];
 
-  const out: string[] = [
-    "*Three records. Two CNAMEs and one TXT.* Say it that way: \"CNAME and TXT\" reads as two.",
-    "Type in the *Host* column exactly as written. The registrar adds the domain itself.",
-    "",
-    "```",
-  ];
+  const preview = opts?.preview === true;
+
+  const out: string[] = preview
+    ? [
+        "*Three records. Two CNAMEs and one TXT.* Say it that way: \"CNAME and TXT\" reads as two.",
+        "*For reference only right now.* Do not put these in yet: step 15 attaches the hostnames",
+        "and fills in the real values, and step 22 is where they get typed into the registrar and",
+        "confirmed. This is here so the whole DNS conversation is in one thread while you are on",
+        "the phone.",
+        "",
+        "```",
+      ]
+    : [
+        "*Three records. Two CNAMEs and one TXT.* Say it that way: \"CNAME and TXT\" reads as two.",
+        "Type in the *Host* column exactly as written. The registrar adds the domain itself.",
+        "",
+        "```",
+      ];
 
   for (const row of rows) {
     const def = dnsRecordByKey(row.record_key);
-    const value =
-      row.value ??
-      (def?.valueIsExternal
+    // ‼️ PREVIEW MODE NEVER PRINTS A CNAME TARGET, AND THAT IS THE WHOLE POINT OF THE FLAG.
+    // The true target is per-domain and is only known after registerClientHosts reads it back
+    // out of Vercel at step 15. hubCnameTarget()'s fallback is `cname.vercel-dns.com`, which is
+    // MEASURED WRONG for this project (rank 1 is a per-project vercel-dns-017.com name). A
+    // value printed here is a value somebody reads down the phone, three steps before anything
+    // could correct it.
+    const value = preview
+      ? def?.valueIsExternal
         ? "generated in Search Console on the call"
-        : "not set yet — attach the hub first");
+        : "issued by Vercel at step 15"
+      : row.value ??
+        (def?.valueIsExternal
+          ? "generated in Search Console on the call"
+          : "not set yet — attach the hub first");
     out.push(`${row.record_type.padEnd(6)} ${row.host.padEnd(10)} ${value}`);
   }
 
@@ -88,7 +168,11 @@ export function formatDnsRecords(rows: DnsRow[], domain: string): string[] {
   out.push("");
 
   for (const row of rows) {
-    out.push(`  • ${row.host} becomes ${fqdn(row.host, domain)} — currently *${row.status}*`);
+    out.push(
+      preview
+        ? `  • ${row.host} becomes ${fqdn(row.host, domain)} once step 15 attaches it`
+        : `  • ${row.host} becomes ${fqdn(row.host, domain)} — currently *${row.status}*`
+    );
   }
 
   return out;
@@ -161,16 +245,17 @@ export async function registerHubAndSeedDns(clientId: string): Promise<{
   // review_tool_preview fails. That is exactly what happened on the pilot: hub_preview was
   // ticked, and the very next step refused with "the theme has not been confirmed", which
   // reads as a failure of the review tool rather than as the unfinished half of this step.
-  const themed = activeTheme(readTheme(client.theme)) !== null;
+  // Same helper the step card uses, so the two cannot drift into saying different things
+  // about the same client.
+  const stored = readTheme(client.theme);
+  const themed = stored.confirmedAt !== null;
+  const overrides: string[] = [];
+  if (stored.logoUrl) overrides.push("logo");
+  if (stored.accent) overrides.push("accent");
+  if (stored.accentSoft) overrides.push("accent soft");
+  if (stored.fontFamily) overrides.push("font");
   lines.push("");
-  lines.push(
-    themed
-      ? ":white_check_mark: Theme confirmed. [Done] will go through."
-      : ":warning: *The theme is not confirmed yet, so this step is not finished.* Open the " +
-          "client board, extract or set the colours, then press Confirm on the Theme panel. " +
-          "Until you do, the hub and the review tool render in SRT's colours rather than theirs, " +
-          "and `review_tool_preview` will refuse."
-  );
+  lines.push(themeLine(themed, overrides));
 
   const attached = result.hosts.filter((h) => h.attached).length;
   if (attached === 0) {

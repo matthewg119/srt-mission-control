@@ -8,7 +8,11 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
-import { clientForThread, captureOnboardingFile } from "@/lib/clients/onboarding-docs";
+import {
+  clientForThread,
+  captureOnboardingFile,
+  attributePresenceDoc,
+} from "@/lib/clients/onboarding-docs";
 import { isVoiceNote, handleClientVoiceNote } from "@/lib/clients/voice-notes";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
 import {
@@ -721,20 +725,27 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // A deep-research dump pasted into a client's ops thread. Explicit prefix only: see
-      // research-intake.ts for why sniffing is not acceptable here. This is the second half of
-      // delivery step 9 — the brief went out, this is the answer coming back.
+      // ── #onboarding-srt-aeo owns everything in it, and it ALWAYS returns ─────────────
+      //
+      // ‼️ NOTHING FROM THIS CHANNEL MAY REACH THE GENERIC ASSISTANT TAIL. That tail ends in
+      // `slack.postMessage(channel, reply)` with no thread_ts, in raw model markdown, and on
+      // the first real run it put a long "## What I See / **bold**" answer at CHANNEL TOP LEVEL
+      // while the screenshots it was about sat correctly filed in a step thread. A top-level
+      // post in this channel that is not a step anchor or the pinned header is the wall the
+      // step board replaced, coming back one message at a time.
+      //
+      // The old gate here fired only for a research paste and let everything else fall through,
+      // which is precisely how that happened. This one owns the channel: every branch returns.
       const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-      if (
-        onboardingChannel &&
-        channel === onboardingChannel &&
-        parentThreadTs &&
-        userText.trim().length > 0
-      ) {
-        const { isResearchPaste } = await import("@/lib/clients/research-intake");
-        if (isResearchPaste(userText)) {
-          const client = await clientForThread(channel, parentThreadTs);
-          if (client) {
+      if (onboardingChannel && channel === onboardingChannel) {
+        const client = parentThreadTs ? await clientForThread(channel, parentThreadTs) : null;
+
+        // 1. A deep-research dump pasted into a client's thread. Explicit prefix only: see
+        //    research-intake.ts for why sniffing is not acceptable here. This is the second
+        //    half of delivery step 9 — the brief went out, this is the answer coming back.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { isResearchPaste } = await import("@/lib/clients/research-intake");
+          if (isResearchPaste(userText)) {
             const { ingestResearch, formatIntakeReply } = await import("@/lib/clients/research-intake");
             const { extractPhrases, mergePhrases } = await import("@/lib/clients/harvest");
 
@@ -743,12 +754,83 @@ export async function POST(request: NextRequest) {
               ? mergePhrases(extractPhrases(userText, "deep_research")).slice(0, 6)
               : [];
 
-            await slack
-              .postThreadReply(channel, parentThreadTs, formatIntakeReply(result, top))
-              .catch(() => {});
+            const posted = await slack.postThreadReply(
+              channel,
+              parentThreadTs,
+              formatIntakeReply(result, top)
+            );
+            if (!slackOk(posted)) {
+              console.error("[slack/events] research reply failed in", parentThreadTs);
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 2. Screenshots with a platform named in the message. handleFileShared files the same
+        //    upload from the files.info side, which carries no message text, so whichever event
+        //    wins the race the attribution ends up here, the only place that can see the words.
+        if (client && parentThreadTs && attachedFiles.length > 0) {
+          await captureOnboardingUploads({
+            channel,
+            threadTs: parentThreadTs,
+            client,
+            files: attachedFiles,
+            text: userText,
+          });
+          return NextResponse.json({ ok: true });
+        }
+
+        // 3. A question in a STEP's thread. The answer goes in that step's thread, through
+        //    notifyStep, which is the only door. No fallback to postMessage: a message in the
+        //    wrong place is harder to notice than a message that is missing, and a fallback is
+        //    exactly how the wall comes back.
+        if (client && userText.trim().length > 0 && isAIConfigured()) {
+          const { toSlackMrkdwn } = await import("@/lib/slack-bot");
+          // Scoped to the THREAD, not the channel. `slack-${channel}` gave one client's step
+          // thread the last twenty messages from a different client's.
+          const { reply } = await askAssistant({
+            conversationId: `slack-${channel}-${parentThreadTs}`,
+            agentType: getAgentType(channel),
+            userText,
+            files: attachedFiles,
+          });
+
+          if (client.stepKey) {
+            const { notifyStep } = await import("@/lib/clients/step-board");
+            const res = await notifyStep(client.id, client.stepKey, toSlackMrkdwn(reply));
+            if (!res.ok) {
+              console.error(
+                `[slack/events] assistant reply failed on ${client.stepKey}: ${res.error}`
+              );
+            }
+          } else {
+            // The pinned header thread. Not a step, so notifyStep has nothing to route to, and
+            // notifyThread is the door for messages that belong to the CLIENT rather than to
+            // any one step.
+            const { notifyThread } = await import("@/lib/clients/delivery-checklist");
+            await notifyThread(client.id, toSlackMrkdwn(reply));
           }
           return NextResponse.json({ ok: true });
         }
+
+        // 4. Top level, or a thread that belongs to no client. There is nothing to answer INTO:
+        //    this channel holds many clients and thirty-three anchors each, so there is no
+        //    honest "the" thread to pick, and a channel message is the wall. An ephemeral is
+        //    visible only to the person who typed, cannot be replied to, and disappears.
+        if (userText.trim().length > 0 && event.user) {
+          const said = await slack.postEphemeral(
+            channel,
+            event.user as string,
+            "This channel is one message per delivery step. Ask inside a step's thread and I " +
+              "will answer there. Nothing gets posted at the top level here, because a " +
+              "top-level message is what the step board replaced."
+          );
+          if (!slackOk(said)) {
+            // Log and post nothing. Never fall back to a channel message.
+            console.error("[slack/events] onboarding ephemeral failed in", channel);
+          }
+        }
+        return NextResponse.json({ ok: true });
       }
 
       // Matthew typed in #personal-texts or #lead-texts thread → queue outbound reply
@@ -922,72 +1004,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // Determine which agent to use
       const agentType = getAgentType(channel);
       const conversationId = `slack-${channel}`;
-
-      // Load conversation history
-      let history: Array<{ role: "user" | "assistant"; content: string }> = [];
-      try {
-        const { data } = await supabaseAdmin
-          .from("chat_messages")
-          .select("role, content")
-          .eq("conversation_id", conversationId)
-          .order("created_at", { ascending: true })
-          .limit(20);
-        history = (data || []).map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content as string,
-        }));
-      } catch {
-        // Continue without history
-      }
-
-      // Build system prompt with agent personality
-      const basePrompt = await buildSystemPrompt();
-      const agentPrompt = AGENT_PROMPTS[agentType] || AGENT_PROMPTS.brainheart;
-      const systemPrompt = `${agentPrompt}\n\n${basePrompt}`;
-
-      // Download any image files attached to the message so Claude can see them
-      const imageFiles = attachedFiles.filter((f) => (f.mimetype ?? "").startsWith("image/"));
-      let imageBlocks: ImageBlock[] = [];
-      if (imageFiles.length > 0) {
-        const botToken = process.env.SLACK_BOT_TOKEN || "";
-        imageBlocks = (
-          await Promise.all(
-            imageFiles.map(async (f) => {
-              try {
-                const url = f.url_private ?? f.url_private_download;
-                if (!url) return null;
-                const res = await fetch(url, { headers: { Authorization: `Bearer ${botToken}` } });
-                if (!res.ok) return null;
-                const buf = Buffer.from(await res.arrayBuffer());
-                const mediaType = (f.mimetype ?? "image/jpeg").split(";")[0];
-                return {
-                  type: "image" as const,
-                  source: { type: "base64" as const, media_type: mediaType, data: buf.toString("base64") },
-                } satisfies ImageBlock;
-              } catch {
-                return null;
-              }
-            })
-          )
-        ).filter((b): b is ImageBlock => b !== null);
-      }
-
-      // Run AI — pass images as extra content on the last user message
-      const messages = [...history, { role: "user" as const, content: userText || (imageBlocks.length > 0 ? "What do you see in this image?" : "") }];
-      const { response, actions } = await runConversationWithTools(messages, systemPrompt, imageBlocks.length > 0 ? imageBlocks : undefined);
-
-      // Format response with tool summary
-      let reply = response;
-      if (actions.length > 0) {
-        const toolSummary = actions
-          .map((a) => a.split("(")[0])
-          .filter((v, i, arr) => arr.indexOf(v) === i)
-          .join(", ");
-        reply = `_[${toolSummary}]_\n\n${response}`;
-      }
+      const { reply, response } = await askAssistant({
+        conversationId,
+        agentType,
+        userText,
+        files: attachedFiles,
+      });
 
       // Send reply directly in channel
       await slack.postMessage(channel, reply);
@@ -1568,6 +1592,188 @@ interface SlackFileInfo {
   };
 }
 
+/**
+ * Did that Slack call actually work?
+ *
+ * ‼️ slackFetch NEVER THROWS. Slack answers HTTP 200 for everything and puts real failures in
+ * `ok: false`, so every `.catch(() => {})` around a Slack call catches nothing whatsoever: a
+ * `message_not_found`, a bot that is not in the channel or a missing scope all resolve as
+ * success and the caller carries on as though the message had landed. Check the body, never the
+ * promise. Same helper as the one in src/app/api/slack/actions/route.ts, which is where this
+ * was fixed the first time.
+ */
+function slackOk(res: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(res && res.ok === true);
+}
+
+/**
+ * File the screenshots on a message, and attribute them to a platform when the message named
+ * exactly one.
+ *
+ * ‼️ ONE REPLY PER MESSAGE, NOT ONE PER FILE. Matthew pastes several screenshots at a time, and
+ * four identical "which platform is this" replies under one upload is noise nobody reads to the
+ * end. Errors keep their own per-file reply, because a file that failed to save is a different
+ * problem from one that saved unattributed and the two must not merge into one confusing line.
+ */
+async function captureOnboardingUploads(args: {
+  channel: string;
+  threadTs: string;
+  client: { id: string; legalName: string; stepKey: string | null };
+  files: SlackEventFile[];
+  text: string;
+}): Promise<void> {
+  const { resolvePlatformsFromText, platformByKey } = await import("@/config/presence-platforms");
+
+  const isSweep = args.client.stepKey === "presence_sweep_manual";
+  const named = isSweep ? resolvePlatformsFromText(args.text) : [];
+  const platform = named.length === 1 ? named[0] : null;
+
+  let filed = 0;
+
+  for (const file of args.files) {
+    const result = await captureOnboardingFile({
+      clientId: args.client.id,
+      file: file as Parameters<typeof captureOnboardingFile>[0]["file"],
+      threadTs: args.threadTs,
+      stepKey: args.client.stepKey,
+      messageText: args.text,
+    });
+
+    if (!result.ok && !result.skipped) {
+      console.error("[slack/events] onboarding capture failed:", result.error);
+      const said = await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        `:warning: Could not file *${file.name ?? "that file"}*: ${result.error}. It is not saved — please try again.`
+      );
+      if (!slackOk(said)) console.error("[slack/events] capture failure notice failed");
+      continue;
+    }
+
+    filed += 1;
+
+    // handleFileShared won the race and inserted the row before this handler saw the text.
+    // The .is(null) predicate inside makes this a backfill rather than a relabel.
+    if (result.skipped === "duplicate" && platform) {
+      await attributePresenceDoc(file.id, platform);
+    }
+  }
+
+  if (!isSweep || filed === 0) return;
+
+  let note: string | null = null;
+  if (named.length === 0) {
+    note =
+      `:warning: Filed ${filed} screenshot${filed === 1 ? "" : "s"}, but the message did not ` +
+      "name a platform, so they do not count toward the core six. Post one platform per " +
+      "message with its name in the message, for example `Yelp` and the image.";
+  } else if (named.length > 1) {
+    const labels = named.map((k) => platformByKey(k)?.label ?? k).join(" and ");
+    note =
+      `:warning: That message names ${labels}, so there is no way to tell which one these ` +
+      `${filed} screenshot${filed === 1 ? "" : "s"} show. Filed, but not counted. One platform ` +
+      "per message.";
+  }
+
+  if (note) {
+    const said = await slack.postThreadReply(args.channel, args.threadTs, note);
+    if (!slackOk(said)) console.error("[slack/events] attribution note failed");
+  }
+}
+
+/**
+ * The general BrainHeart assistant: history, system prompt, images, one tool loop.
+ *
+ * Hoisted out of the request handler because two callers need it now. The onboarding channel
+ * answers inside a step's thread and everything else answers in the channel, and duplicating
+ * fifty lines to change one `postMessage` is how the two drift.
+ *
+ * ‼️ IT DOES NOT POST. The caller decides where the answer goes, which is the entire point of
+ * the split: in #onboarding-srt-aeo a top-level channel message is the wall the step board
+ * replaced, so that caller has to route through notifyStep instead.
+ */
+async function askAssistant(args: {
+  conversationId: string;
+  agentType: string;
+  userText: string;
+  files: SlackEventFile[];
+}): Promise<{ reply: string; response: string }> {
+  const { conversationId, agentType, userText, files } = args;
+
+  // Load conversation history
+  let history: Array<{ role: "user" | "assistant"; content: string }> = [];
+  try {
+    const { data } = await supabaseAdmin
+      .from("chat_messages")
+      .select("role, content")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true })
+      .limit(20);
+    history = (data || []).map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content as string,
+    }));
+  } catch {
+    // Continue without history
+  }
+
+  // Build system prompt with agent personality
+  const basePrompt = await buildSystemPrompt();
+  const agentPrompt = AGENT_PROMPTS[agentType] || AGENT_PROMPTS.brainheart;
+  const systemPrompt = `${agentPrompt}\n\n${basePrompt}`;
+
+  // Download any image files attached to the message so Claude can see them
+  const imageFiles = files.filter((f) => (f.mimetype ?? "").startsWith("image/"));
+  let imageBlocks: ImageBlock[] = [];
+  if (imageFiles.length > 0) {
+    const botToken = process.env.SLACK_BOT_TOKEN || "";
+    imageBlocks = (
+      await Promise.all(
+        imageFiles.map(async (f) => {
+          try {
+            const url = f.url_private ?? f.url_private_download;
+            if (!url) return null;
+            const res = await fetch(url, { headers: { Authorization: `Bearer ${botToken}` } });
+            if (!res.ok) return null;
+            const buf = Buffer.from(await res.arrayBuffer());
+            const mediaType = (f.mimetype ?? "image/jpeg").split(";")[0];
+            return {
+              type: "image" as const,
+              source: { type: "base64" as const, media_type: mediaType, data: buf.toString("base64") },
+            } satisfies ImageBlock;
+          } catch {
+            return null;
+          }
+        })
+      )
+    ).filter((b): b is ImageBlock => b !== null);
+  }
+
+  const messages = [
+    ...history,
+    {
+      role: "user" as const,
+      content: userText || (imageBlocks.length > 0 ? "What do you see in this image?" : ""),
+    },
+  ];
+  const { response, actions } = await runConversationWithTools(
+    messages,
+    systemPrompt,
+    imageBlocks.length > 0 ? imageBlocks : undefined
+  );
+
+  let reply = response;
+  if (actions.length > 0) {
+    const toolSummary = actions
+      .map((a) => a.split("(")[0])
+      .filter((v, i, arr) => arr.indexOf(v) === i)
+      .join(", ");
+    reply = `_[${toolSummary}]_\n\n${response}`;
+  }
+
+  return { reply, response };
+}
+
 async function handleFileShared(fileId: string): Promise<void> {
   const info = (await slack.filesInfo(fileId)) as { ok: boolean; file?: SlackFileInfo; error?: string };
   if (!info.ok || !info.file) {
@@ -1609,8 +1815,14 @@ async function handleFileShared(fileId: string): Promise<void> {
         // Which step this is evidence for, taken from WHICH THREAD it was dropped in rather
         // than guessed. Null when it landed under the pinned header instead of a step.
         stepKey: client.stepKey,
+        // ‼️ NULL, AND EXPLICITLY SO. files.info returns the file and its shares and no message
+        // text at all, so this path can never attribute a presence screenshot to a platform.
+        // The `message` event handler (captureOnboardingUploads, above) is the one that can,
+        // and it backfills through attributePresenceDoc when this path wins the race. This is
+        // left in place rather than skipped for onboarding files, because it is the path that
+        // works today for an upload posted with no comment at all.
+        messageText: null,
       });
-
       // Errors are said out loud in the thread. A screenshot somebody believes was filed
       // and was not is worse than one that visibly failed, because the gap only surfaces
       // when the findings doc is being assembled and the evidence is not there.

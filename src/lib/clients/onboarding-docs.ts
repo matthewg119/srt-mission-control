@@ -18,6 +18,7 @@
 // infrastructure, with no login. Reads go through short-lived signed URLs.
 
 import { supabaseAdmin } from "@/lib/db";
+import { resolvePlatformsFromText } from "@/config/presence-platforms";
 import { slack } from "@/lib/slack-bot";
 
 const BUCKET = "onboarding";
@@ -110,9 +111,25 @@ export async function captureOnboardingFile(args: {
   };
   threadTs: string;
   stepKey?: string | null;
-}): Promise<{ ok: boolean; skipped?: "duplicate" | "no_url"; error?: string }> {
+  /**
+   * The text of the Slack message this file was posted with, when there was one.
+   *
+   * ‼️ ONLY THE MESSAGE EVENT HAS THIS. handleFileShared goes through files.info, which returns
+   * the file and its shares and no message text at all, so it passes null. Slack fires BOTH a
+   * message (subtype file_share) and a file_shared for one upload with a comment, in no
+   * guaranteed order, which is why attributePresenceDoc below exists: whichever event lands
+   * first writes the row, and the message path backfills the attribution it is the only one
+   * able to see.
+   */
+  messageText?: string | null;
+}): Promise<{
+  ok: boolean;
+  skipped?: "duplicate" | "no_url";
+  error?: string;
+  /** The platform this was attributed to, when exactly one was named. */
+  presencePlatform?: string | null;
+}> {
   const { clientId, file, threadTs } = args;
-
   if (!file.url_private_download) return { ok: false, skipped: "no_url" };
 
   // Claim first, download second. A file that fails to download leaves no row, and the
@@ -144,6 +161,20 @@ export async function captureOnboardingFile(args: {
 
   if (up.error) return { ok: false, error: `upload failed: ${up.error.message}` };
 
+  // ‼️ ATTRIBUTED ONLY ON THE MANUAL SWEEP STEP, AND ONLY WHEN EXACTLY ONE PLATFORM IS NAMED.
+  //
+  // Scoped to the step so a screenshot for access_granted or gbp_buildout whose message happens
+  // to say "Google" does not acquire a presence_platform it has no business carrying. Zero
+  // matches and two matches both leave it null, which is a real answer meaning nobody could
+  // tell: two named platforms give no honest way to decide which one the picture shows, and
+  // guessing would put a green tick on a platform nobody swept. The thread says what is
+  // missing; the file is filed either way.
+  const named =
+    args.stepKey === "presence_sweep_manual" && args.messageText
+      ? resolvePlatformsFromText(args.messageText)
+      : [];
+  const presencePlatform = named.length === 1 ? named[0] : null;
+
   const { error } = await supabaseAdmin.from("client_docs").insert({
     client_id: clientId,
     filename,
@@ -157,6 +188,7 @@ export async function captureOnboardingFile(args: {
     slack_file_id: file.id,
     slack_thread_ts: threadTs,
     uploaded_by: file.user ?? null,
+    presence_platform: presencePlatform,
   });
 
   // 23505 = the unique index did its job between the check above and here.
@@ -165,12 +197,42 @@ export async function captureOnboardingFile(args: {
   }
   if (error) return { ok: false, error: error.message };
 
-  return { ok: true };
+  return { ok: true, presencePlatform };
+}
+
+/**
+ * Attach a platform to a screenshot that was already filed without one.
+ *
+ * ‼️ THIS EXISTS BECAUSE TWO SLACK EVENTS RACE FOR ONE UPLOAD. A file posted with a comment
+ * fires a `message` (subtype file_share) carrying the text, AND a `file_shared` carrying no
+ * text, in no guaranteed order. Whichever lands first inserts the row. When file_shared wins,
+ * the row goes in unattributed and the message handler backfills it here.
+ *
+ * The `.is("presence_platform", null)` predicate is what makes this a backfill and not an
+ * overwrite: a row that already carries a platform is left alone, so a redelivered message
+ * cannot relabel a screenshot. Same conditional-claim pattern postStepAnchor uses on
+ * slack_anchor_ts.
+ */
+export async function attributePresenceDoc(
+  slackFileId: string,
+  platform: string
+): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("client_docs")
+    .update({ presence_platform: platform })
+    .eq("slack_file_id", slackFileId)
+    .is("presence_platform", null)
+    .select("id");
+
+  if (error) {
+    console.error("[clients/onboarding-docs] attribution failed:", error.message);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
 }
 
 /**
  * File a PDF this app GENERATED, as opposed to evidence somebody uploaded.
- *
  * captureOnboardingFile above cannot do this: it is Slack-inbound-shaped, requiring a
  * `file.id` and a `url_private_download`, and it dedupes on the unique slack_file_id index.
  * A generated artifact has neither. It writes slack_file_id null, which the index already

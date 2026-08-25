@@ -32,10 +32,70 @@ export type AutoRunner = (clientId: string) => Promise<AutoResult>;
  * only wanted a step label.
  */
 export const AUTO_RUNNERS: Record<string, AutoRunner> = {
+  // ‼️ STEP 3 PRINTS THE THREE RECORDS TOO, FOR REFERENCE. Matthew's call, 2026-08-24, and not
+  // a bug fix: step 3 answers WHERE and WHO (registrar, the click path, mail, hosting) and step
+  // 15 answers WHAT TO TYPE, and he wants the whole DNS conversation in one thread while he is
+  // on the phone. Step 22 is still where the records get confirmed, and the copy says so, so
+  // nobody ticks step 3 believing they have done the DNS work.
+  //
+  // ‼️ IT SYNTHESISES THE ROWS AND SEEDS NOTHING. seedDnsRecords needs a subdomain label, and
+  // step 3 is the step that DECIDES that label, so seeding here would write a guess. Worse, the
+  // CNAME value only becomes true after registerClientHosts reads the per-domain target back
+  // out of Vercel at step 15: hubCnameTarget()'s fallback is measured WRONG for this project.
+  // A wrong value on a row labelled `ready`, three steps before anything could correct it, is a
+  // value somebody reads down the phone. Preview mode prints no target at all.
   site_dns_intel: async (clientId) => {
     const { runSiteIntel, formatSiteIntel } = await import("../site-intel");
     const r = await runSiteIntel(clientId);
-    return { ok: r.ok, error: r.error, note: r.intel ? formatSiteIntel(r.intel) : undefined };
+    if (!r.ok || !r.intel) return { ok: r.ok, error: r.error };
+
+    const note: string[] = [formatSiteIntel(r.intel)];
+
+    // The resolver not answering means no subdomain was chosen, and formatSiteIntel already
+    // says so. Printing a host built on a guess underneath that would contradict it.
+    if (r.intel.resolverHealthy) {
+      const { formatDnsRecords } = await import("../hub-setup");
+      const { loadDnsRows, DNS_RECORDS } = await import("../dns-records");
+      const { subdomainLabel } = await import("../normalize");
+      const { supabaseAdmin } = await import("@/lib/db");
+
+      const { data: row } = await supabaseAdmin
+        .from("clients")
+        .select("subdomain, domain")
+        .eq("id", clientId)
+        .maybeSingle();
+
+      const domain = (row?.domain as string | null) ?? r.intel.domain;
+      const label =
+        r.intel.subdomainConvention ??
+        subdomainLabel((row?.subdomain as string | null) ?? null, domain);
+
+      if (label) {
+        // Real rows if step 15 has already run (a re-run of step 3 on an older client), which
+        // is the more useful message. Otherwise three rows that exist for one message only.
+        const existing = await loadDnsRows(clientId);
+        const rows =
+          existing.length > 0
+            ? existing
+            : DNS_RECORDS.map(
+                (def) =>
+                  ({
+                    record_key: def.key,
+                    record_type: def.type,
+                    host: def.host(label),
+                    value: null,
+                    status: "pending",
+                    observed: null,
+                    last_checked_at: null,
+                    verified_at: null,
+                  }) as Awaited<ReturnType<typeof loadDnsRows>>[number]
+              );
+
+        note.push("", ...formatDnsRecords(rows, domain, { preview: existing.length === 0 }));
+      }
+    }
+
+    return { ok: true, note: note.join("\n") };
   },
 
   nap_sweep: async (clientId) => {

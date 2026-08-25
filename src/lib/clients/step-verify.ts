@@ -33,7 +33,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, type StepKey } from "@/config/delivery-steps";
-import { PLATFORM_COUNT } from "@/config/presence-platforms";
+import { CORE_SIX, CORE_SIX_COUNT, PLATFORM_COUNT } from "@/config/presence-platforms";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The verdict
@@ -248,38 +248,52 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`intake completed at ${at}`);
   },
 
+  // ‼️ THE REPORT IS FOUND BY audit_reports.client_id, NEWEST FIRST. THREE THINGS HERE ARE
+  // DELIBERATE AND THE NEXT PERSON WILL TRY TO UNDO ALL THREE.
+  //
+  // 1. NOT clients.audit_report_id. That column exists and is ALWAYS NULL: nothing in this repo
+  //    has ever written it, and this verifier was its only reader. So step 2 refused for every
+  //    client that had a perfectly good audit attached, and it took steps 7 and 9 down with it
+  //    because both are blockedBy baseline_scan. The link lives the other way round, on
+  //    audit_reports.client_id (docs/2026-08-19-artifact-plumbing.sql), and it IS populated.
+  //
+  // 2. `score`, NOT `visibility_score`. There is no visibility_score column. PostgREST fails the
+  //    WHOLE select with 42703 on one unknown name in the projection, so a single wrong word
+  //    here makes a working verifier return `broken` about a report that is fine. That was the
+  //    second fault, hiding behind the first.
+  //
+  // 3. client_id ONLY, with no contact_id or domain fallback. deep-research-brief.ts:225-238
+  //    explains why: both of those can match a `prospect_audit`, the one-engine prospecting run
+  //    the audit bot fires at a lead, and A2 D-P14 says such a run is never a photograph. This
+  //    is the baseline the day 30, 60 and 90 numbers are measured against, so "a run fired FOR
+  //    this client" is the only acceptable link. presence-pdf.ts resolves it the same way.
   baseline_scan: async (ctx) => {
-    const reportId = ctx.client.audit_report_id as string | null;
-    if (!reportId) {
-      return notYet(
-        "clients.audit_report_id",
-        "no audit report is attached to this client",
-        "Photograph I has not started. Un-tick this step to re-run the baseline scan."
-      );
-    }
-
     const { data: report, error } = await supabaseAdmin
       .from("audit_reports")
-      .select("status, visibility_score")
-      .eq("id", reportId)
+      .select("id, status, score")
+      .eq("client_id", ctx.clientId)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     if (error) return dbUnreachable("audit_reports");
+
     if (!report) {
-      return broken(
-        "the audit report this client points at",
-        `clients.audit_report_id is ${reportId} but no such row exists in audit_reports`,
-        "The report row was deleted while the client kept pointing at it. Clear " +
-          "clients.audit_report_id and re-run the baseline scan."
+      return notYet(
+        "audit_reports rows carrying this client's id",
+        "no baseline run has been recorded against this client",
+        "Photograph I has not started. Un-tick this step to re-run the baseline scan."
       );
     }
 
     if (report.status !== "done") {
       return notYet(
-        "the attached audit report",
+        "this client's newest audit report",
         `its status is "${report.status}", not "done"`,
         "The scan is still running, or it stopped part way. Give it a few minutes, then re-check."
       );
     }
+
+    const reportId = report.id as string;
 
     const { count, error: runErr } = await supabaseAdmin
       .from("audit_runs")
@@ -295,7 +309,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     if (!count) {
       return broken(
-        "audit_runs for the attached report",
+        "audit_runs for this client's newest report",
         "the report says done but not one prompt run was recorded",
         "A report marked done with no runs means finishReport ran over an empty batch. Check " +
           "src/app/api/audit/process/route.ts for this report id before trusting any score."
@@ -304,7 +318,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     return verified(
       `${count} audit_runs rows, ${answered ?? 0} with a real answer`,
-      `report status done, score ${report.visibility_score ?? "unscored"}`
+      `report status done, score ${report.score ?? "unscored"}`
     );
   },
 
@@ -341,11 +355,14 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return broken(
         "nap_discrepancies rows for this client",
         `found 0, expected ${PLATFORM_COUNT}`,
-        "The seed wrote nothing. This step failed on every run before 2026-08-22 with " +
-          '"there is no unique or exclusion constraint matching the ON CONFLICT specification" ' +
-          "because seedPresenceSweep named a bare column list against an expression index. If " +
-          "that error is back, the onConflict option has been re-added to the upsert in " +
-          "src/lib/clients/presence-sweep.ts."
+        "The seed wrote nothing. This step has failed two different ways and the fix for the " +
+          "first caused the second, so check which one you have. 42P10 (\"no unique or " +
+          "exclusion constraint matching the ON CONFLICT specification\") means the target in " +
+          "seedPresenceSweep does not match any index: confirm " +
+          "nap_discrepancies_client_platform_url_key exists and is declared NULLS NOT DISTINCT " +
+          "(docs/2026-08-24-step-board-fixes.sql). A duplicate-key violation means the target " +
+          "has been removed again, which turns the upsert back into a plain INSERT. The target " +
+          "BELONGS there; it is the index that has to be inferrable from a column list."
       );
     }
     if (n < PLATFORM_COUNT) {
@@ -358,19 +375,44 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`${n} platform rows seeded for the manual tier to work through`);
   },
 
+  // ‼️ THE GATE IS THE SIX CORE PLATFORMS, ATTRIBUTED BY NAME, NOT EIGHTEEN FILES.
+  //
+  // It used to count client_docs rows in the thread against PLATFORM_COUNT. Two things were
+  // wrong with that. The card has always described the twelve extended directories as "context
+  // only. Findings, not week-one cleanup" while the gate silently demanded screenshots of all
+  // eighteen; and a bare count cannot tell six platforms from six screenshots of Yelp, because
+  // every pasted Slack screenshot is called image.png. Attribution now comes from the platform
+  // named in the message the file arrived with, stored on client_docs.presence_platform.
+  //
+  // Still THREAD tier, and the wording stays inside what a screenshot proves: that the searches
+  // were run and captured, never what they showed. What they showed is confirmed_status, which
+  // is a different step and a different control.
   presence_sweep_manual: async (ctx) => {
-    const docs = await docsInThread(ctx);
-    if (docs === null) return dbUnreachable("client_docs");
-    if (docs < PLATFORM_COUNT) {
+    const { presenceCoverageFor } = await import("./step-engine");
+    const cover = await presenceCoverageFor(ctx.clientId, ctx.stepKey);
+    if (cover === null) return dbUnreachable("client_docs");
+
+    if (cover.coreMissing.length > 0) {
+      const extra =
+        cover.unattributed > 0
+          ? `. ${cover.unattributed} file${cover.unattributed === 1 ? "" : "s"} in the thread name no platform I recognise, so they are filed but not counted`
+          : "";
       return notYet(
-        "screenshots filed against this step's thread",
-        `${docs} of ${PLATFORM_COUNT}`,
-        "Reply in this thread with the rest. Where a business genuinely has no listing, the " +
-          "screenshot of the empty search result is the evidence."
+        "screenshots filed against this step's thread, by platform",
+        `${cover.coreCovered.length} of the ${CORE_SIX_COUNT} core platforms${extra}`,
+        `Still needed: ${cover.coreMissing.join(", ")}. Post one screenshot per message with ` +
+          "the platform name in the message. Where a business genuinely has no listing, the " +
+          "screenshot of the empty search result is the evidence. The extended directories " +
+          "never block this step."
       );
     }
+
+    const labels = CORE_SIX.map((p) => p.label).join(", ");
     return confirmed(
-      `${docs} screenshots filed against this step's thread`,
+      `screenshots filed for all ${CORE_SIX_COUNT} core platforms in this step's thread (${labels})` +
+        (cover.extendedCovered.length
+          ? `, plus ${cover.extendedCovered.length} of the extended directories`
+          : ""),
       "That is evidence the searches were run and captured, not a reading of what they showed."
     );
   },
@@ -442,19 +484,25 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       ((ctx.client.vertical_slug as string | null) ||
         (ctx.client.business_type as string | null)) ??
       null;
-    let harvested: number | null = 0;
+
+    // ‼️ question_bank HAS NO client_id. This count is per VERTICAL and it is SHARED: every med
+    // spa ever harvested is in it, forever. It cannot say anything about this client's run and
+    // the wording below must not pretend it does. The per-client evidence is output_ref, which
+    // is the deep-research brief this step generated, and that is what the success line leads
+    // with.
+    let verticalPhrases: number | null = 0;
     if (vertical) {
       const { count, error } = await supabaseAdmin
         .from("question_bank")
         .select("id", { count: "exact", head: true })
         .eq("vertical", vertical);
-      harvested = error ? null : (count ?? 0);
+      verticalPhrases = error ? null : (count ?? 0);
     }
-    if (harvested === null) return dbUnreachable("question_bank");
+    if (verticalPhrases === null) return dbUnreachable("question_bank");
 
-    if (!ctx.row.output_ref && harvested === 0) {
+    if (!ctx.row.output_ref && verticalPhrases === 0) {
       return notYet(
-        "question_bank phrases for this vertical and the deep-research brief",
+        "the deep-research brief for this step, and the shared question_bank corpus for this vertical",
         "neither the harvest nor the brief has produced anything",
         "Un-tick the step to re-run the harvest. The brief is generated for a person to RUN " +
           "and paste back, so it is only half of this step."
@@ -463,13 +511,14 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     if (!ctx.row.output_ref) {
       return notYet(
         "the deep-research brief for this step",
-        `${harvested} harvested phrases, but no brief was generated`,
+        `${verticalPhrases} phrases in the vertical-wide corpus, but no brief was generated for this client`,
         "The cited-source half is done. Un-tick to regenerate the brief."
       );
     }
     return verified(
-      `${harvested} phrases in question_bank for ${vertical ?? "this vertical"}`,
-      "the deep-research brief is generated and filed"
+      "the deep-research brief for this client is generated and filed",
+      `${verticalPhrases} phrases sit in question_bank for ${vertical ?? "this vertical"}, which is ` +
+        "the shared corpus for the whole vertical and not a count of this client's harvest"
     );
   },
 
@@ -557,23 +606,32 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       );
     }
 
-    const { themeConfirmed } = await import("./hub-setup");
+    // ‼️ CONFIRMED IS confirmedAt, NOT "has overrides". A client who looked at the default
+    // palette and kept it deliberately is confirmed, and gating on activeTheme() made that
+    // state unreachable: step 15 could never complete for anybody happy with the defaults, and
+    // steps 16, 17 and 18 sat behind it. Overrides are read only so the evidence line can say
+    // which of the two states this is. Still system tier: a stored timestamp is real state.
+    const { themeConfirmed, themeOverrides } = await import("./hub-setup");
     if (!(await themeConfirmed(ctx.clientId))) {
       // The label says "themed". Ticking with the theme unconfirmed is what made
       // review_tool_preview refuse on the next line with a message that read as its own fault.
       return notYet(
         "the theme on this client's hub",
         `${attached.length} host${attached.length === 1 ? "" : "s"} attached, theme not confirmed`,
-        "Open the client board, Theme panel, extract or set the colours, then press Confirm. " +
-          "Until you do, the hub and the review tool render in SRT's colours on the client's own domain."
+        "Open the client board, Theme panel, then press Confirm. Set the colours first, or " +
+          "press Confirm with nothing set to keep SRT's defaults deliberately. Either is a " +
+          "decision; leaving it unconfirmed is not."
       );
     }
+    const overrides = await themeOverrides(ctx.clientId);
 
     return verified(
       `${attached.length} host${attached.length === 1 ? "" : "s"} attached to Vercel (${attached
         .map((h) => h.host)
         .join(", ")})`,
-      "theme confirmed"
+      overrides.length
+        ? `theme confirmed (${overrides.join(", ")})`
+        : "theme confirmed with no overrides, so the hub renders SRT's defaults deliberately"
     );
   },
 
@@ -725,15 +783,26 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "screenshot is the evidence."
     ),
 
+  // ‼️ IT READS THE CONFIRMED STATUS, NOT `status`, AND THAT USED TO BE A GREEN TICK OVER
+  // WORK NOBODY HAD DONE.
+  //
+  // `status` is the SEED column: seedPresenceSweep writes 'not_checked' into it eighteen times
+  // and nothing ever writes 'mismatch' there. `confirmed_status` is the ANSWER, and every other
+  // consumer in this codebase reads it through effectiveStatus() (citation-cleanup.ts,
+  // findings.ts, call-sheet.ts, presence-pdf.ts). This verifier counted `status = 'mismatch'`,
+  // got zero for the obvious reason, and returned ":white_check_mark: no listings remain at
+  // mismatch, out of 18 swept" for a client where not one listing had been opened. An absence
+  // of findings is not a finding of correctness, which is the single rule this whole subsystem
+  // exists to hold. See the doc block at presence-sweep.ts on effectiveStatus.
+  //
+  // The not_checked refusal comes FIRST. A board with two confirmed mismatches and sixteen
+  // untouched rows would otherwise refuse only about the two, which reads as "sixteen are fine".
   citation_cleanup: async (ctx) => {
+    // Counted separately from loadSweep because loadSweep swallows a query error into an empty
+    // array, and "the query failed" must never render as "no rows exist". Same reason countRows
+    // returns null rather than 0.
     const total = await countRows("nap_discrepancies", ctx.clientId);
     if (total === null) return dbUnreachable("nap_discrepancies");
-    const open = await countRows("nap_discrepancies", ctx.clientId, {
-      col: "status",
-      eq: "mismatch",
-    });
-    if (open === null) return dbUnreachable("nap_discrepancies");
-
     if (total === 0) {
       return broken(
         "nap_discrepancies for this client",
@@ -741,29 +810,96 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "The sweep never seeded. Confirm step 4 first."
       );
     }
-    if (open > 0) {
+
+    const { loadSweep, countByStatus } = await import("./presence-sweep");
+    const rows = await loadSweep(ctx.clientId);
+    const counts = countByStatus(rows);
+
+    if (counts.not_checked > 0) {
       return notYet(
-        "nap_discrepancies still marked mismatch",
-        `${open} of ${total} listings still disagree with the canonical NAP`,
+        "the confirmed status on every nap_discrepancies row",
+        `${counts.not_checked} of ${rows.length} listings carry no confirmed status, so they read as not checked`,
+        "Confirm each listing on the Presence sweep panel of the client board. A row with no " +
+          "confirmed status has not been read by anybody, and a cleanup step cannot be ticked " +
+          "over rows nobody has looked at. Runner v3 section 6: the tool proposes, a person confirms."
+      );
+    }
+
+    if (counts.mismatch > 0) {
+      return notYet(
+        "nap_discrepancies still confirmed at mismatch",
+        `${counts.mismatch} of ${rows.length} listings still disagree with the canonical NAP`,
         "Fix them or mark the ones that cannot be fixed, then re-check. A listing left at " +
           "`mismatch` reads as outstanding work, not as a decision."
       );
     }
-    return verified(`no listings remain at mismatch, out of ${total} swept`);
+
+    return verified(
+      `all ${rows.length} listings carry a confirmed status and none is at mismatch`,
+      `${counts.match} match, ${counts.duplicate} duplicate, ${counts.missing} missing`
+    );
   },
 
+  // ‼️ IT READS THE DNS ROWS, NOT checkHubResolving()'s ok FLAG, AND THAT USED TO BE A GREEN
+  // TICK OVER A HOST THAT DOES NOT RESOLVE.
+  //
+  // checkHubResolving() returns ok:true for any client with a domain on file. That is CORRECT
+  // for its other job: it is the auto runner for this step, and a runner that returned ok:false
+  // on an unresolved record would park the step in a terminal `error` over propagation, which
+  // is not a fault. But this verifier passed that flag straight through and printed the note
+  // underneath, so a live board read ":white_check_mark: subdomain_live" above the words
+  // "0 of 3 resolving". Same class of bug as citation_cleanup: the check ran, the answer was no,
+  // and the tick did not look at it.
+  //
+  // The hub CNAME is the one that decides. `reviews` and the Search Console TXT are checked and
+  // reported, but this step is "subdomain live", and a hub that does not resolve is not live
+  // whatever the other two say. first_page sits behind this.
   subdomain_live: async (ctx) => {
     const { checkHubResolving } = await import("./hub-setup");
     const res = await checkHubResolving(ctx.clientId);
     if (!res.ok) {
       return notYet(
         "a live request to the hub host",
-        res.note ?? "the host did not answer",
+        res.error ?? res.note ?? "the host did not answer",
         "The CNAME has to resolve before this is true. Confirm the DNS step, then give " +
           "propagation a few minutes and press Re-check."
       );
     }
-    return verified(res.note ?? "the hub host answered a live request");
+
+    // recheckDnsRecords already ran inside checkHubResolving, so this reads what it just wrote.
+    const { loadDnsRows } = await import("./dns-records");
+    const rows = await loadDnsRows(ctx.clientId);
+    const hub = rows.find((r) => r.record_key === "cname_hub");
+
+    if (!hub) {
+      return broken(
+        "the cname_hub row for this client",
+        "no hub CNAME record has been seeded",
+        "seedDnsRecords never ran for this client. Confirm step 15 first: registerHubAndSeedDns " +
+          "is what writes the three rows."
+      );
+    }
+
+    if (hub.status !== "verified") {
+      const others = rows
+        .filter((r) => r.record_key !== "cname_hub")
+        .map((r) => `${r.host} ${r.record_type} ${r.status}`)
+        .join(", ");
+      return notYet(
+        "the hub CNAME, resolved by a real lookup",
+        `\`${hub.host}\` is ${hub.status}, not verified${others ? ` (${others})` : ""}`,
+        "Nothing published is reachable until this record resolves. A record added in the last " +
+          "hour is normally still propagating, so give it time and press Re-check. If it stays " +
+          "at `ready` for a day, the record was never added; if it reads `mismatch`, it points " +
+          "somewhere else and the value in the DNS panel is the one to compare against."
+      );
+    }
+
+    const verifiedCount = rows.filter((r) => r.status === "verified").length;
+    return verified(
+      `\`${hub.host}\` resolves to the hub target (record status verified)`,
+      `${verifiedCount} of ${rows.length} DNS records verified`
+    );
   },
 
   first_page: async (ctx) => {
@@ -880,8 +1016,14 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 // The entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ‼️ clients.audit_report_id IS NOT IN THIS LIST ON PURPOSE. The column exists and is always
+// NULL: nothing in this repo has ever written it. baseline_scan was its only reader and it
+// resolved the report through a pointer nobody sets, so step 2 refused for every client that
+// had a real audit. Reports are found by audit_reports.client_id, newest first. The column
+// stays in the schema (dropping it is a migration for no gain, the same treatment
+// clients.slack_channel_id got) and stays out of every projection.
 const CLIENT_COLUMNS =
-  "id, legal_name, dba_name, slug, domain, subdomain, intake_completed_at, audit_report_id, " +
+  "id, legal_name, dba_name, slug, domain, subdomain, intake_completed_at, " +
   "site_intel, dns_nameservers, primary_avatar, primary_avatar_label, review_request_mode, " +
   "review_owner_name, day_0_archived_at, day_0_source, vertical_slug, business_type";
 

@@ -17,10 +17,23 @@ import { DELIVERY_STEPS } from "@/config/delivery-steps";
 export function DeliveryChecklistForm({
   clientId,
   completed,
+  errored,
 }: {
   clientId: string;
   /** step_key values currently marked complete. */
   completed: string[];
+  /**
+   * step_key -> error_detail for every row sitting in `status: error`.
+   *
+   * ‼️ AN ERRORED STEP IS A DEAD END WITHOUT THIS. runReadyAutoSteps claims only
+   * pending / blocked / ready, so a runner failure parks the row forever, and the checkbox can
+   * only ever send complete:true for an unticked row. The Retry below sends complete:false,
+   * which the route maps to the existing `reopened` transition, which writes `pending` and
+   * clears error_detail, and the cascade then re-claims the row. No new transition, no new
+   * state, and deliberately not a Slack button: a `broken` verdict gets no button on purpose,
+   * and a second button on the anchor is how "mark done anyway" gets argued for later.
+   */
+  errored: Record<string, string | null>;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -64,6 +77,7 @@ export function DeliveryChecklistForm({
       <ul className="space-y-1">
         {DELIVERY_STEPS.map((step, i) => {
           const isDone = done.has(step.key);
+          const failure = step.key in errored ? (errored[step.key] ?? "no detail recorded") : null;
           const showPhase = step.phase !== phase;
           if (showPhase) phase = step.phase;
 
@@ -105,6 +119,23 @@ export function DeliveryChecklistForm({
                   )}
                 </span>
               </button>
+
+              {failure && (
+                <div className="ml-[26px] flex items-start gap-2 pb-1">
+                  <p className="flex-1 text-[10px] leading-relaxed text-[#F5A623]">
+                    Stopped: {failure} It will not advance on its own.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy === step.key}
+                    title={failure}
+                    onClick={() => toggle(step.key, false)}
+                    className="shrink-0 rounded border border-[rgba(245,166,35,0.4)] px-2 py-0.5 text-[10px] text-[#F5A623] hover:border-[#F5A623] disabled:opacity-40"
+                  >
+                    {busy === step.key ? "…" : "Retry"}
+                  </button>
+                </div>
+              )}
             </li>
           );
         })}

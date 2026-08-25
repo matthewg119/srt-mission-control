@@ -429,3 +429,33 @@ export const slack = {
                             ];
         },
 };
+
+/**
+ * GitHub-flavoured markdown into Slack mrkdwn.
+ *
+ * ‼️ SLACK RENDERS `**bold**` AND `## Heading` LITERALLY. A model answer posted straight through
+ * arrives as a wall of asterisks and hashes, which is what the general assistant was doing in
+ * #onboarding-srt-aeo. Four rules and no more, because every extra one is a way to mangle text
+ * that was already fine. Triple backticks are left alone: Slack renders those natively.
+ *
+ * It lives here rather than beside the audit engine's `toSlackBold` deliberately. That function
+ * is in hook-pitch.ts, which pulls in run-prompts, site-research, classify and claude-calls, and
+ * the Slack primitive must not depend on the audit engine to format a message. The bold regex is
+ * copied verbatim from it so the two cannot disagree about what bold is.
+ */
+export function toSlackMrkdwn(s: string): string {
+        return s
+                  .split("\n")
+                  .map((line) => {
+                            // ## Heading -> *Heading*. Slack has no headings, and bold is what a heading means here.
+                            const heading = line.match(/^\s{0,3}#{1,6}\s+(.*)$/);
+                            if (heading) return `*${heading[1].trim()}*`;
+                            // A leading - or * bullet. Slack has no list syntax, so this is presentational.
+                            return line.replace(/^(\s*)[-*]\s+/, "$1•  ");
+                  })
+                  .join("\n")
+                  // **bold** -> *bold*. Same expression as toSlackBold in hook-pitch.ts.
+                  .replace(/\*\*(?=\S)([^*\n]+?)\*\*/g, "*$1*")
+                  // [label](url) -> <url|label>
+                  .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, "<$2|$1>");
+}

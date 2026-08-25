@@ -2005,11 +2005,117 @@ migration. It is declared `as const satisfies` and re-exported wide, which is wh
   `onConflict: "client_id,platform,listing_url"` against an index keyed on the EXPRESSION
   `coalesce(listing_url,'')`. ON CONFLICT infers by matching key expressions, a bare column list
   does not match one, so it was 42P10 at PLAN time — never a data collision. Production had 0
-  rows in `nap_discrepancies`. Fixed by dropping the `onConflict` option: PostgREST then emits
-  `ON CONFLICT DO NOTHING` with no target, which honours every unique index including that one.
-  **Do NOT add a plain `(client_id, platform, listing_url)` index instead** — seeded rows have a
-  null `listing_url`, nulls compare distinct, and every re-run would insert 18 duplicates.
+  rows in `nap_discrepancies`. Fixed by dropping the `onConflict` option. **That fix caused a
+  second failure and has itself been reverted — see below.**
 
+### The first real run, and the ten things it found (2026-08-24)
+Migration: `docs/2026-08-24-step-board-fixes.sql`. The one-message-per-step SHAPE was right and
+is unchanged. What follows are defects inside it.
+
+> ‼️ **`nap_sweep` HAS NOW FAILED TWO OPPOSITE WAYS AND THE FIX FOR THE FIRST CAUSED THE SECOND.**
+> Removing the `onConflict` target cleared 42P10 and let the FIRST seed write eighteen rows. But
+> with no target there is no arbiter to skip on, so the second seed was a plain INSERT of rows
+> that already existed: `duplicate key value violates unique constraint`. The step sat in a
+> terminal `error`. The production test that "proved" the earlier fix inserted a single row into
+> an empty table and never exercised a duplicate at all.
+>
+> The index is now a COLUMN list, `(client_id, platform, listing_url) NULLS NOT DISTINCT`, and
+> the `onConflict` target is back. **`NULLS NOT DISTINCT` is load-bearing and is not optional**:
+> seeded rows carry a null `listing_url`, nulls compare distinct by default, so a PLAIN index on
+> those columns would constrain none of them and every re-run would insert eighteen duplicates —
+> which is exactly what the old warning here said. It was right about a plain index and wrong
+> only about there being no way to write one. It is semantically identical to
+> `coalesce(listing_url,'')`; only one of the two is inferrable from a column list.
+
+- **`baseline_scan` read `clients.audit_report_id`, which NOTHING HAS EVER WRITTEN.** It was that
+  column's only reader. The link is `audit_reports.client_id` and it is populated. So step 2
+  refused for every client that had a real audit, and it took steps 7 and 9 down with it, both
+  being `blockedBy: ["baseline_scan"]`. The same verifier also selected `visibility_score`, which
+  does not exist (it is `score`) — PostgREST fails the WHOLE select on one unknown name, so that
+  was a second fault hiding behind the first. Resolve by `client_id`, newest first, **no
+  contact_id or domain fallback**: both can match a `prospect_audit`, and this is the baseline the
+  day 30/60/90 numbers are measured against.
+- **THREE COLUMNS HAD READERS AND NO WRITER.** `competitor_candidates.selected`,
+  `review_audit_rows.review_count` and `nap_discrepancies.confirmed_status` were read by the
+  verifiers, the review-audit seed, `citation-cleanup.ts`, `findings.ts`, `call-sheet.ts` and
+  `presence-pdf.ts`, and written by nothing anywhere. Steps 7 and 8 could never be confirmed and
+  their refusals pointed at board panels that did not exist. Now built:
+  `/api/clients/[id]/{competitors,review-audit,presence-sweep}` plus their panels.
+  `review_count` stays NULL until typed (`Number("")` is 0, which is the trap), and the presence
+  route **never writes `status`** — that is the seed column; `confirmed_status` is the answer.
+- **TWO GREEN TICKS OVER WORK NOBODY HAD DONE**, which is the most expensive bug this design can
+  have. `citation_cleanup` counted `status = 'mismatch'`, but `status` is what the seed wrote and
+  every other consumer reads `effectiveStatus` (`confirmed_status ?? 'not_checked'`), so it
+  returned ":white_check_mark: no listings remain at mismatch" on a client where all eighteen were
+  untouched. And `subdomain_live` passed `checkHubResolving()`'s `ok` flag straight through — that
+  function returns `ok: true` for any client with a domain, correctly, because it is also the auto
+  RUNNER and a runner that failed on propagation would park the step in `error`. The board read
+  ":white_check_mark: subdomain_live" above the words "0 of 3 resolving". Both now read the real
+  state; `subdomain_live` gates on the hub CNAME specifically.
+- **`presence_sweep_manual` gates on the CORE SIX, attributed by name.** It demanded all eighteen
+  screenshots while its own card called the extended tier "context only. Findings, not week-one
+  cleanup". Matthew's call: six required, twelve optional. **A count alone was not enough** — every
+  pasted Slack screenshot is `image.png`, so six shots of Yelp would have satisfied a six-platform
+  gate. Attribution comes from the platform named in the message (`resolvePlatformsFromText`,
+  pure, word-boundary matching so "yp" does not fire inside "type") and lands on
+  `client_docs.presence_platform`. Zero matches and two matches both leave it null and say so in
+  the thread: guessing which of two named platforms a picture shows is not available.
+  > ‼️ **BOTH SLACK EVENTS WRITE, AND ONLY ONE CAN SEE THE TEXT.** An upload with a comment fires
+  > a `message` (subtype file_share) carrying the text AND a `file_shared` carrying none, in no
+  > guaranteed order. `handleFileShared` goes through `files.info`, which has no message text at
+  > all. Whichever wins inserts the row; the message path backfills via `attributePresenceDoc`,
+  > whose `.is("presence_platform", null)` predicate makes it a backfill and never a relabel.
+- **The theme was an unconfirmable choice.** `themeConfirmed()` called `activeTheme()`, which
+  returns null when nothing is OVERRIDDEN as well as when nothing is CONFIRMED, and the panel
+  disabled Confirm on the same test. So a client happy with the defaults could never satisfy it
+  and `hub_preview` could never complete, taking 16, 17 and 18 with it — while the panel said
+  "the default palette, which is a fine place to start" directly above the disabled button.
+  **Confirmed is `confirmedAt`. Has-overrides is `activeTheme`.** They are two different facts.
+  `activeTheme()` is unchanged and must keep returning null for an empty theme, or the hub stops
+  rendering its defaults. `review-preview.ts` was the second half of the same deadlock.
+- **`error` was a terminal state with no way out.** `runReadyAutoSteps` claims only
+  pending/blocked/ready and the board's checkbox can only send `complete:true` for an unticked
+  row, so a failed runner parked forever. An amber **Retry** on the client board sends
+  `complete:false`, i.e. the existing `reopened` transition — no new transition and no new state,
+  and deliberately NOT a Slack button, because a `broken` verdict gets none on purpose.
+  `setDeliveryStep` now clears `error_detail` on every transition; without that, `verifyStep`'s
+  "a recorded error outranks not_yet" rule turns honest work-owed into a permanent code fault.
+- **The general assistant posted at CHANNEL TOP LEVEL, in raw markdown.** The only onboarding-
+  channel gate fired for a research paste and everything else fell through to
+  `slack.postMessage(channel, reply)` with no `thread_ts`. One consolidated gate now owns the
+  channel and **every branch returns**: research paste, files, a question in a step thread
+  (answered via `notifyStep`, the only door), the header thread (`notifyThread`), and top level —
+  which gets a `chat.postEphemeral` and no channel message at all, because there is no honest
+  "the" thread to pick and a channel post is the wall coming back. `toSlackMrkdwn` lives in
+  `slack-bot.ts`, not beside `toSlackBold` in `hook-pitch.ts`, so the Slack primitive does not
+  depend on the audit engine. `conversationId` is now thread-scoped: `slack-${channel}` gave one
+  client's step thread the last twenty messages from another client's.
+- **`avatar_harvest` claimed work it had not measured.** `question_bank` has no `client_id`, so
+  its count is per-VERTICAL and shared across every client ever harvested. The per-client evidence
+  is `output_ref`, and the success line leads with it now.
+- **The presence PDF could not say step 5 was SKIPPED.** It reads only `nap_discrepancies` and
+  never `client_delivery_steps`, so a skipped sweep and an unfinished one rendered identically —
+  and with the gate at six, twelve unchecked platforms is now the NORMAL state of a document
+  Matthew shows the client on the call. It reads the step row and says so on its face.
+  > ‼️ **The Slack skip copy cannot be pasted into that PDF.** `test-onboarding-artifacts.ts`
+  > asserts the string `no issues found` appears NOWHERE in a rendered client PDF, in any casing,
+  > *including inside a sentence disclaiming it*, and the Slack wording contains the phrase. Say
+  > the same thing without it. The invariant is grep-able on purpose.
+- **Step 3 prints the three DNS records too**, for reference (Matthew asked; both steps were
+  working as built). Step 3 answers where and who, step 15 answers what to type, and he wants the
+  whole DNS conversation in one thread while he is on the phone. `formatDnsRecords` gained a
+  `preview` mode and is used a third time rather than copied. **It seeds nothing and prints no
+  CNAME target**: step 3 is the step that DECIDES the subdomain label, and the true per-domain
+  target is only known after `registerClientHosts` at step 15 — `hubCnameTarget()`'s fallback is
+  measured WRONG for this project, and a wrong value on a row labelled `ready` is one somebody
+  reads down the phone.
+
+`scripts/_probe-cascade.ts` proves the cascade on a THROWAWAY client, because it cannot be proved
+on a real one: `_debug-post-all-steps.ts` forced anchors out for all 33 steps ignoring `blockedBy`,
+and `postStepAnchor` short-circuits on an existing anchor. It refuses to run against the
+production channel.
+
+### SLACK IS INTERNAL ONLY (2026-08-20)
 ### SLACK IS INTERNAL ONLY (2026-08-20) — this reversed three days after it shipped
 `client-channel.ts` is DELETED. There are no per-client Slack channels and no guest
 invites. Single-channel guests are free at 5 per **PAID ACTIVE MEMBER**, not per channel

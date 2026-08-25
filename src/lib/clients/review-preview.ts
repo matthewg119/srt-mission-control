@@ -66,19 +66,28 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
 
   // ── The check that can actually fail ──────────────────────────────────────
   //
-  // activeTheme() returns null until confirmedAt is set, which is exactly what the manual
-  // half of hub_preview confirms. Ticking this step against a null theme would put "themed
-  // to match" on the checklist for a page rendering in SRT's own colours.
-  const theme = activeTheme(readTheme(client.theme));
-  if (!theme) {
+  // ‼️ IT GATES ON confirmedAt, NOT ON activeTheme, AND THAT IS THE SECOND HALF OF THE THEME
+  // DEADLOCK. activeTheme returns null both when nothing is confirmed AND when nothing is
+  // overridden, so a client who confirmed the SRT defaults on purpose would get "the theme has
+  // not been confirmed" here, which is a false statement, and this step would land in a terminal
+  // error one line after step 15 finally passed. Confirmed is confirmedAt; overrides are a
+  // separate question, answered below only so the message can say which state it is in.
+  const stored = readTheme(client.theme);
+  if (!stored.confirmedAt) {
     return {
       ok: false,
       error:
         "The theme has not been confirmed, so the review tool would render in SRT's default " +
         "colours rather than the client's. Confirm the theme on the client board (that is the " +
-        "manual half of the hub preview step) and this runs itself.",
+        "manual half of the hub preview step) and this runs itself. Confirming with nothing set " +
+        "is allowed and means keeping SRT's defaults deliberately.",
     };
   }
+  const theme = activeTheme(stored);
+  const themeNote = theme
+    ? ""
+    : " The theme is confirmed with no overrides, so the review tool renders SRT's defaults on " +
+      "the client's own domain. That is a recorded decision, not an unfinished step.";
 
   // ── The check that only warns ─────────────────────────────────────────────
   //
@@ -125,10 +134,11 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
     "review_tool_preview",
     [
       `*Review tool preview — ${name}*`,
-      `Themed and live: ${url}`,
+      theme ? `Themed and live: ${url}` : `Live: ${url}`,
       "",
       `• ${PREVIEW_DEMO_RULE}`,
       `• ${PREVIEW_DISCARD_RULE}`,
+      themeNote.trim(),
       hostWarning,
     ]
       .filter(Boolean)

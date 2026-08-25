@@ -61,35 +61,54 @@ export async function canonicalFor(clientId: string): Promise<Canonical | null> 
 /**
  * Create one row per platform at 'not_checked'.
  *
- * Idempotent via the unique index on (client_id, platform, coalesce(listing_url,'')), so
- * re-running the step never duplicates and — more importantly — never resets a row somebody has
- * already filled in. Runner v3 section 2: "Every auto task is idempotent. Re-running writes a
- * new output_ref and supersedes; it never duplicates rows in nap_discrepancies."
+ * ‼️ THIS HAS NOW FAILED TWO DIFFERENT WAYS AND THE FIX FOR THE FIRST IS WHAT CAUSED THE SECOND.
+ * Both are written down because the third attempt looks like a partial revert of the second.
  *
- * ‼️ NO `onConflict` TARGET, DELIBERATELY, AND PUTTING ONE BACK BREAKS THIS STEP OUTRIGHT.
- *
- * It used to pass `onConflict: "client_id,platform,listing_url"` and this step failed on every
- * run since it shipped, first one included, with:
+ * FAILURE ONE, every run from ship day to 2026-08-22: 42P10 at PLAN time.
  *
  *   there is no unique or exclusion constraint matching the ON CONFLICT specification
  *
- * ON CONFLICT infers an index by matching the inference spec against the index's key
- * EXPRESSIONS. The index above is keyed on `coalesce(listing_url, '')`, and a bare column name
- * does not match an expression, so Postgres found no candidate and raised 42P10. Not a data
- * collision — an inference failure, which is why it could never succeed even once. Production
- * proved it: nap_discrepancies had zero rows.
+ * It passed onConflict "client_id,platform,listing_url" against the only unique index on the
+ * table, which was keyed on the EXPRESSION coalesce(listing_url, ''). ON CONFLICT infers an
+ * arbiter by matching the inference spec against the index's key expressions, and a bare column
+ * name never matches an expression. Not a data collision: the statement could not be PLANNED,
+ * so it could not succeed even once. Production had zero rows in nap_discrepancies.
  *
- * PostgREST's `on_conflict` parameter takes column NAMES only, so `coalesce(listing_url,'')`
- * cannot be spelled there at all. Omitting it makes PostgREST emit `ON CONFLICT DO NOTHING`
- * with no target, which needs no inference and honours EVERY unique index on the table,
- * including the expression one. Works only because `ignoreDuplicates` is true; a merge upsert
- * would still need a target.
+ * FAILURE TWO, introduced by the fix for failure one, and the state this was found in:
  *
- * Do NOT "fix" this by adding a plain unique index on (client_id, platform, listing_url). These
- * seeded rows have a null listing_url, nulls compare distinct by default, and every re-run
- * would insert eighteen fresh duplicates — the exact thing this function promises not to do.
+ *   duplicate key value violates unique constraint "nap_discrepancies_platform_listing_key"
+ *
+ * That fix removed the onConflict option entirely, which cleared 42P10 and let the FIRST seed
+ * write eighteen rows. But with no conflict target there is no arbiter to skip on, so the second
+ * seed for a client was a plain INSERT of eighteen rows that already existed. nap_sweep went to
+ * a terminal 'error' and stayed there. The production test that "proved" the fix inserted a
+ * single row into an empty table and therefore never exercised a duplicate at all.
+ *
+ * THE FIX, docs/2026-08-24-step-board-fixes.sql: a unique index on the COLUMNS
+ * (client_id, platform, listing_url) declared NULLS NOT DISTINCT, and the target back here.
+ *
+ * ‼️ NULLS NOT DISTINCT IS THE ENTIRE REASON THIS IS SAFE, AND THE COMMENT THAT USED TO SIT
+ * HERE WAS RIGHT TO FORBID THE INDEX WITHOUT IT. Every seeded row has a null listing_url. Under
+ * Postgres's default nulls compare distinct, so a plain unique index on those three columns
+ * constrains none of these rows and every re-run inserts eighteen fresh duplicates. NULLS NOT
+ * DISTINCT makes two nulls collide, which is exactly the semantics coalesce(listing_url,'') had,
+ * spelled as columns so ON CONFLICT can infer it and so PostgREST's on_conflict parameter, which
+ * takes column NAMES only and can never spell a coalesce, can name it. The two indexes are
+ * semantically the same; only one of them is inferrable from a column list.
+ *
+ * ignoreDuplicates is still required and is a separate thing from the target: it is what makes
+ * this DO NOTHING rather than DO UPDATE, so a row somebody has already filled in is never reset.
+ * A merge upsert would overwrite the manual sweep with eighteen blanks.
+ *
+ * ‼️ THE RETURN VALUE IS A MEASUREMENT, NOT A RESTATEMENT OF THE INPUT. It used to return
+ * `seeded: rows.length`, i.e. 18, on every call whatever happened, which is how a run that
+ * inserted nothing reported eighteen. `.select("id")` makes PostgREST hand back only the rows
+ * DO NOTHING actually inserted. `seeded` and `onFile` are both returned because "0 inserted"
+ * and "0 rows exist" are opposite outcomes and one field cannot carry both.
  */
-export async function seedPresenceSweep(clientId: string): Promise<{ ok: boolean; seeded: number; error?: string }> {
+export async function seedPresenceSweep(
+  clientId: string
+): Promise<{ ok: boolean; seeded: number; onFile: number; error?: string }> {
   const rows = ALL_PLATFORMS.map((p) => ({
     client_id: clientId,
     platform: p.key,
@@ -98,12 +117,23 @@ export async function seedPresenceSweep(clientId: string): Promise<{ ok: boolean
     status: "not_checked" as const,
   }));
 
-  const { error } = await supabaseAdmin
+  const { data: inserted, error } = await supabaseAdmin
     .from("nap_discrepancies")
-    .upsert(rows, { ignoreDuplicates: true });
+    .upsert(rows, { onConflict: "client_id,platform,listing_url", ignoreDuplicates: true })
+    .select("id");
 
-  if (error) return { ok: false, seeded: 0, error: error.message };
-  return { ok: true, seeded: rows.length };
+  if (error) return { ok: false, seeded: 0, onFile: 0, error: error.message };
+
+  const { count, error: countError } = await supabaseAdmin
+    .from("nap_discrepancies")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId);
+
+  if (countError) {
+    return { ok: false, seeded: inserted?.length ?? 0, onFile: 0, error: countError.message };
+  }
+
+  return { ok: true, seeded: inserted?.length ?? 0, onFile: count ?? 0 };
 }
 
 export async function loadSweep(clientId: string): Promise<SweepRow[]> {
@@ -199,7 +229,11 @@ export function formatSweepCard(client: { name: string; city: string; state: str
     "",
     "Search the string, screenshot what you see, reply in this thread.",
     "",
-    "*CORE SIX* — the findings gate, and the only tier we fix in week one",
+    "*One platform per message.* Put the platform name in the message with the screenshot: type",
+    "`Yelp` and attach the image. That is how the file gets attributed. A screenshot with no",
+    "platform named is still filed and still kept, it just does not count toward the six.",
+    "",
+    `*CORE SIX* — the findings gate, and what [Done] checks. All ${CORE_SIX.length} close this step.`,
   ];
 
   CORE_SIX.forEach((p, i) => {
@@ -207,7 +241,7 @@ export function formatSweepCard(client: { name: string; city: string; state: str
     if (p.note) lines.push(`     ${p.note}`);
   });
 
-  lines.push("", "*EXTENDED* — context only. Findings, not week-one cleanup.");
+  lines.push("", "*EXTENDED* — context only. Findings, not week-one cleanup. These never block the step.");
   EXTENDED.forEach((p, i) => {
     lines.push(` ${CORE_SIX.length + i + 1}. ${p.label} — search: \`${p.search(args)}\`  <${p.url}|open>`);
     if (p.note) lines.push(`     ${p.note}`);
@@ -250,7 +284,8 @@ export async function runAutomatedSweep(
   return {
     ok: true,
     note:
-      `Seeded ${PLATFORM_COUNT} platforms at "not checked". ` +
+      `${seeded.onFile} of ${PLATFORM_COUNT} platforms are on file at "not checked" ` +
+      `(${seeded.seeded} written on this run). ` +
       `Nothing was checked automatically: no presence provider is keyed. The manual sweep is the sweep.`,
   };
 }

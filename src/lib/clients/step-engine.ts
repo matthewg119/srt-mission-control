@@ -17,7 +17,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepByKey, type DeliveryStep } from "@/lib/clients/delivery-checklist";
-import { PLATFORM_COUNT } from "@/config/presence-platforms";
+import { CORE_SIX, EXTENDED, PLATFORM_COUNT } from "@/config/presence-platforms";
 import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
 // The channel surface. Everything this module says about a step goes through these, never
 // through notifyThread: a step's output belongs in that step's thread.
@@ -158,7 +158,9 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
       // the one step that produces the hostnames and the CNAME values said nothing about
       // either, and the only way to learn the theme was still outstanding was to tick it and
       // watch the NEXT step refuse.
-      const { formatDnsRecords, themeConfirmed } = await import("./hub-setup");
+      const { formatDnsRecords, themeConfirmed, themeOverrides, themeLine } = await import(
+        "./hub-setup"
+      );
       const { loadDnsRows } = await import("./dns-records");
       const { hostsFor } = await import("@/lib/hub/vercel-domains");
 
@@ -173,6 +175,7 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
 
       const hosts = hostsFor({ subdomain: (row?.subdomain as string | null) ?? null, domain });
       const themed = await themeConfirmed(c.id);
+      const overrides = themed ? await themeOverrides(c.id) : [];
 
       return [
         "The hostnames are attached to Vercel already. What is left is the THEME.",
@@ -181,11 +184,7 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
         "",
         ...formatDnsRecords(await loadDnsRows(c.id), domain),
         "",
-        themed
-          ? ":white_check_mark: Theme confirmed. [Done] will go through."
-          : ":warning: *[Done] will refuse until the theme is confirmed.* Client board, Theme " +
-            "panel, extract or set the colours, then Confirm. Unthemed, the hub and the review " +
-            "tool render in SRT's colours on the client's own domain.",
+        themeLine(themed, overrides),
       ];
     }
 
@@ -252,10 +251,48 @@ async function instructionsFor(step: DeliveryStep, c: ClientFacts): Promise<stri
   }
 }
 
-/** How many files this step expects in its thread before [Done] stops complaining. */
-function expectedUploads(step: DeliveryStep): number {
-  if (step.key === "presence_sweep_manual") return PLATFORM_COUNT;
-  return 0;
+/**
+ * The refusal for the manual sweep, or null when it may go through.
+ *
+ * ‼️ THE GATE IS THE SIX CORE PLATFORMS, NOT EIGHTEEN FILES. It used to return PLATFORM_COUNT,
+ * so [Done] demanded all eighteen screenshots while the step's own card described the twelve
+ * extended directories as "context only. Findings, not week-one cleanup". Matthew filed four and
+ * was told "4 of 18". Making the gate agree with what the card already said is his call.
+ *
+ * And the count alone is not enough: six screenshots that are all Yelp must not satisfy a
+ * six-platform gate. Attribution comes from the platform named in the message the screenshot
+ * was posted with. A file nobody could attribute is still filed and still kept; it just does
+ * not count toward the six, and the refusal says so rather than leaving it a mystery.
+ */
+async function presenceRefusal(clientId: string, stepKey: string): Promise<string | null> {
+  const cover = await presenceCoverageFor(clientId, stepKey);
+
+  if (!cover) {
+    return (
+      "Could not check. The query for this step's screenshots failed, so nothing can be " +
+      "confirmed either way. Try again in a moment rather than ticking past it."
+    );
+  }
+
+  if (cover.coreMissing.length === 0) return null;
+
+  const lines = [
+    `Not yet — ${cover.coreCovered.length} of the ${CORE_SIX.length} core platforms have a screenshot filed against this step.`,
+    `Missing: ${cover.coreMissing.join(", ")}.`,
+    "Post one screenshot per message with the platform name in the message, then hit Done.",
+    "Where a business genuinely has no listing, the screenshot of the empty search result is the evidence.",
+    `The ${EXTENDED.length} extended directories never block this step.`,
+  ];
+
+  if (cover.unattributed > 0) {
+    lines.push(
+      `${cover.unattributed} file${cover.unattributed === 1 ? "" : "s"} in this thread name no ` +
+        "platform I recognise, so they are filed but not counted. Reply with the platform name " +
+        "and re-post, one platform per message."
+    );
+  }
+
+  return lines.join(" ");
 }
 
 function blocks(step: DeliveryStep, c: ClientFacts, body: string[]): SlackBlock[] {
@@ -450,10 +487,76 @@ export async function uploadsFor(clientId: string, stepKey: string): Promise<num
   return count ?? 0;
 }
 
-/** Expected-vs-actual, for the [Done] handler's refusal message. */
-export function expectedFor(stepKey: string): number {
-  const step = stepByKey(stepKey);
-  return step ? expectedUploads(step) : 0;
+/**
+ * Which PLATFORMS have a screenshot filed against this step, as opposed to how many FILES are
+ * in its thread.
+ *
+ * ‼️ COUNTING FILES WAS THE BUG. The gate used to be "eighteen files in the thread", and the
+ * four screenshots the first real run produced were all called image.png, so nothing in the
+ * database could say which platform any of them showed. Six screenshots of Yelp would have
+ * satisfied a six-platform gate. Attribution comes from the message text the file arrived with
+ * (see resolvePlatformsFromText and captureOnboardingFile), and lands on
+ * client_docs.presence_platform.
+ *
+ * Reads slack_thread_ts against the ANCHOR ts for exactly the reason uploadsFor documents
+ * above: Slack threads are one level deep, so a reply "to the card" carries the ts of what the
+ * card was replying to, and comparing against slack_message_ts matches nothing, ever.
+ *
+ * Returns null when the query itself failed, so a caller can say "could not check" rather than
+ * reporting somebody's finished work as missing. Same reason countRows in step-verify returns
+ * null rather than 0.
+ */
+export interface PresenceCoverage {
+  /** Distinct CORE_SIX keys with at least one attributed screenshot. */
+  coreCovered: string[];
+  /** The core platforms still missing, as labels, for the refusal. */
+  coreMissing: string[];
+  extendedCovered: string[];
+  /** Files in the thread whose message named no platform, or named more than one. */
+  unattributed: number;
+  /** Every file in the thread, which is the number the old gate counted. */
+  files: number;
+}
+
+export async function presenceCoverageFor(
+  clientId: string,
+  stepKey: string
+): Promise<PresenceCoverage | null> {
+  const { data: row } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("slack_anchor_ts")
+    .eq("client_id", clientId)
+    .eq("step_key", stepKey)
+    .maybeSingle();
+
+  const ts = (row?.slack_anchor_ts as string | null) ?? null;
+  if (!ts) {
+    return { coreCovered: [], coreMissing: CORE_SIX.map((p) => p.label), extendedCovered: [], unattributed: 0, files: 0 };
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("client_docs")
+    .select("presence_platform")
+    .eq("client_id", clientId)
+    .eq("slack_thread_ts", ts);
+
+  if (error) {
+    console.error("[step-engine] presence coverage query failed:", error.message);
+    return null;
+  }
+
+  const rows = data ?? [];
+  const seen = new Set(
+    rows.map((r) => (r.presence_platform as string | null) ?? "").filter(Boolean)
+  );
+
+  return {
+    coreCovered: CORE_SIX.filter((p) => seen.has(p.key)).map((p) => p.key),
+    coreMissing: CORE_SIX.filter((p) => !seen.has(p.key)).map((p) => p.label),
+    extendedCovered: EXTENDED.filter((p) => seen.has(p.key)).map((p) => p.key),
+    unattributed: rows.filter((r) => !r.presence_platform).length,
+    files: rows.length,
+  };
 }
 
 export interface Precondition {
@@ -484,18 +587,9 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
   const step = stepByKey(stepKey);
   if (!step) return { ok: true };
 
-  const expected = expectedUploads(step);
-  if (expected > 0) {
-    const have = await uploadsFor(clientId, stepKey);
-    if (have < expected) {
-      return {
-        ok: false,
-        message:
-          `Not yet — ${have} of ${expected} screenshots are filed against this step. ` +
-          `Reply in the thread with the rest, then hit Done. If some genuinely have no ` +
-          `listing, the screenshot of the empty search result is the evidence.`,
-      };
-    }
+  if (step.key === "presence_sweep_manual") {
+    const refusal = await presenceRefusal(clientId, stepKey);
+    if (refusal) return { ok: false, message: refusal };
   }
 
   if (stepKey === "hub_preview") {
@@ -505,9 +599,10 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
         ok: false,
         message:
           "Not yet — the theme has not been confirmed, and this step's label says \"themed\". " +
-          "Open the client board, Theme panel, extract or set the colours, then press Confirm. " +
-          "Until you do, the hub and the review tool render in SRT's colours on the client's " +
-          "own domain, and review_tool_preview will refuse for the same reason.",
+          "Open the client board, Theme panel, then press Confirm. Until you do, the hub and " +
+          "the review tool render in SRT's colours on the client's own domain, and " +
+          "review_tool_preview will refuse for the same reason. Confirming with NOTHING SET is " +
+          "allowed and means you are keeping the defaults on purpose.",
       };
     }
   }

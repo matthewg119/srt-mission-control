@@ -346,6 +346,14 @@ export async function setDeliveryStep(args: {
       verified_source: verdict?.ok ? verdict.kind : null,
       verified_detail: verdict?.ok ? verdictDetail(verdict) : null,
       verified_at: verdict?.ok ? now : null,
+      // ‼️ CLEARED ON EVERY TRANSITION, INCLUDING A REOPEN, AND THAT IS THE POINT.
+      // A tick, a skip and a reopen are all somebody RESOLVING the step, so a runner error from
+      // the last attempt has been dealt with by definition. Leaving it behind poisons the next
+      // pass: verifyStep upgrades a `not_yet` to `broken` whenever error_detail is set, so an
+      // honest "there is work to do" would render as a code fault forever. It is also what makes
+      // the board's Retry work: reopen clears the error, runReadyAutoSteps claims the now-pending
+      // row, and the runner gets a clean second go.
+      error_detail: null,
       updated_at: now,
     })
     .eq("client_id", args.clientId)

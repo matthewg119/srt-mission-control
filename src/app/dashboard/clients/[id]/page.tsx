@@ -22,6 +22,13 @@ import { DnsForm, type DnsRowView } from "./dns-form";
 import { HubForm, type HubHostView, type HubPageView, type AuditPromptView } from "./hub-form";
 import { ThemeForm, type ThemeView } from "./theme-form";
 import { BaselineForm } from "./baseline-form";
+import { CompetitorForm } from "./competitor-form";
+import { ReviewAuditForm } from "./review-audit-form";
+import { PresenceSweepForm } from "./presence-sweep-form";
+import { loadCandidates, REQUIRED_SELECTIONS } from "@/lib/clients/competitors";
+import { loadReviewAudit, reviewPlatformLabel } from "@/lib/clients/review-audit";
+import { loadSweep } from "@/lib/clients/presence-sweep";
+import { platformByKey } from "@/config/presence-platforms";
 import { readTheme } from "@/lib/hub/theme";
 import { listOnboardingDocs } from "@/lib/clients/onboarding-docs";
 import { stepByKey } from "@/lib/clients/delivery-checklist";
@@ -120,7 +127,7 @@ export default async function ClientDetailPage({
         .limit(50),
       supabaseAdmin
         .from("client_delivery_steps")
-        .select("step_key, status")
+        .select("step_key, status, error_detail")
         .eq("client_id", id),
       supabaseAdmin
         .from("client_messages")
@@ -142,6 +149,47 @@ export default async function ClientDetailPage({
     ]);
 
   const docs = await listOnboardingDocs(id);
+
+  // The three grids a person fills in: the presence sweep (steps 4, 5 and 25), the competitor
+  // pick (step 7) and the review audit (step 8). Every one of them writes a column that had a
+  // reader and no writer until 2026-08-24, which is why three delivery steps could never be
+  // confirmed and citation_cleanup returned a green tick over work nobody had done.
+  const [sweepRows, candidates, reviewRows] = await Promise.all([
+    loadSweep(id),
+    loadCandidates(id),
+    loadReviewAudit(id),
+  ]);
+
+  const sweepViews = sweepRows.map((r) => ({
+    id: r.id,
+    platform: r.platform,
+    platformLabel: platformByKey(r.platform)?.label ?? r.platform,
+    tier: r.tier,
+    status: r.status,
+    rawName: r.rawName,
+    rawAddress: r.rawAddress,
+    rawPhone: r.rawPhone,
+    listingUrl: r.listingUrl,
+    skipReason: r.skipReason,
+    confirmedStatus: r.confirmedStatus,
+    checkedBy: r.checkedBy,
+    checkedAt: r.checkedAt,
+  }));
+
+  const reviewViews = reviewRows.map((r) => ({
+    id: r.id,
+    subjectType: r.subjectType,
+    subjectName: r.subjectName,
+    platform: r.platform,
+    platformLabel: reviewPlatformLabel(r.platform),
+    reviewCount: r.reviewCount,
+    averageRating: r.averageRating,
+    mostRecentReviewAt: r.mostRecentReviewAt,
+    ownerResponseRate: r.ownerResponseRate,
+    negativeThemes: r.negativeThemes,
+    checkedBy: r.checkedBy,
+    checkedAt: r.checkedAt,
+  }));
 
   if (!client) notFound();
 
@@ -208,6 +256,12 @@ export default async function ClientDetailPage({
   const completedSteps = (delivery ?? [])
     .filter((d) => d.status === "complete")
     .map((d) => d.step_key as string);
+  // Steps a runner failed on. runReadyAutoSteps will not claim an `error` row, so without a
+  // control here the step is parked forever. The checklist renders a Retry beside each one.
+  const erroredSteps: Record<string, string | null> = {};
+  for (const d of delivery ?? []) {
+    if (d.status === "error") erroredSteps[d.step_key as string] = (d.error_detail as string | null) ?? null;
+  }
   const deliveryTotal = DELIVERY_STEPS.length;
 
   // 'implementation' is excluded from the subscription total in EVERY rollup. It is
@@ -431,7 +485,7 @@ export default async function ClientDetailPage({
             {client.ops_checklist_ts ? " · mirrored in Slack" : ""}
           </span>
         </div>
-        <DeliveryChecklistForm clientId={id} completed={completedSteps} />
+        <DeliveryChecklistForm clientId={id} completed={completedSteps} errored={erroredSteps} />
 
         <div className="mt-5 border-t border-[rgba(255,255,255,0.07)] pt-4">
           <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
@@ -444,6 +498,47 @@ export default async function ClientDetailPage({
             scannedAt={(baselineRow?.created_at as string | null) ?? null}
           />
         </div>
+      </div>
+
+      {/* ── Measure: the three grids a person fills in, in DELIVERY_STEPS order ── */}
+
+      {/* Step 4, 5 and 25. Nothing wrote confirmed_status before this panel existed. */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Presence sweep</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {sweepRows.filter((r) => r.confirmedStatus !== null).length} of {sweepRows.length}{" "}
+            confirmed
+          </span>
+        </div>
+        <PresenceSweepForm clientId={id} rows={sweepViews} />
+      </div>
+
+      {/* Step 7. Nothing wrote competitor_candidates.selected before this panel existed. */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Competitors</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {candidates.filter((c) => c.selected).length} of {REQUIRED_SELECTIONS} picked
+          </span>
+        </div>
+        <CompetitorForm
+          clientId={id}
+          candidates={candidates}
+          required={REQUIRED_SELECTIONS}
+        />
+      </div>
+
+      {/* Step 8. Nothing wrote review_audit_rows.review_count before this panel existed. */}
+      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Review audit</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {reviewRows.filter((r) => r.reviewCount !== null && r.checkedAt !== null).length} of{" "}
+            {reviewRows.length} measured
+          </span>
+        </div>
+        <ReviewAuditForm clientId={id} rows={reviewViews} />
       </div>
 
       {/* ── DNS ── */}
