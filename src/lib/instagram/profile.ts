@@ -260,6 +260,52 @@ export async function resolveBioLink(rawUrl: string | null | undefined): Promise
 }
 
 /**
+ * The same question asked of a bio that holds MORE THAN ONE link.
+ *
+ * ‼️ INSTAGRAM STOPPED PUTTING THE LINK IN external_url AND NOTHING NOTICED. A profile with
+ * several links returns them as bio_links[] and leaves external_url null, so leahskinmethod, whose
+ * bio shows an Aesthetic Record booking page "and 3 more", arrived here as no link at all: the
+ * panel said "No link in the bio.", the booking button had nothing to send, and the one lane built
+ * for exactly that prospect could not name the platform.
+ *
+ * ‼️ A REAL SITE OUTRANKS A BOOKING PAGE, whatever order they are listed in. The links are
+ * a bio, not a priority list: a clinic that puts its booking page first and its website third still
+ * has a website, and the hook lane is written from their own pages. So every link is resolved with
+ * the single-link resolver above and the best ANSWER wins, rather than the first one that parses.
+ * Booking pages are the fallback, and they are still worth returning, because bookingHost is what
+ * licenses the booking_only sentence.
+ *
+ * One hop per link, unchanged: resolveBioLink follows an aggregator once and never twice.
+ */
+export async function resolveBioLinks(
+  rawUrls: (string | null | undefined)[]
+): Promise<ResolvedLink> {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const raw of rawUrls) {
+    const url = unwrapInstagramLink(raw);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+    // A bio is a handful of links. A profile claiming forty is a profile we stop reading.
+    if (urls.length >= 6) break;
+  }
+
+  if (urls.length === 0) return resolveBioLink(null);
+
+  const results: ResolvedLink[] = [];
+  for (const url of urls) {
+    const resolved = await resolveBioLink(url);
+    // A site of their own ends it: nothing later in the list can beat one.
+    if (resolved.website) return resolved;
+    results.push(resolved);
+  }
+
+  return results.find((r) => r.bookingHost) ?? results[0];
+}
+
+
+/**
  * Open an aggregator page and return the first outbound link that could be their own site.
  *
  * Best effort by construction: many of these render their links from JSON in a script tag rather

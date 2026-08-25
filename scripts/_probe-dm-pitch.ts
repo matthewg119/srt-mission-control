@@ -29,6 +29,7 @@ import {
 } from "../src/config/pitch";
 import { buildAliases, isMentioned } from "../src/lib/audit-engine/mention-match";
 import { isNeverTheirSite, isBookingHost } from "../src/lib/audit-engine/web-hosts";
+import { resolveBioLinks } from "../src/lib/instagram/profile";
 
 /** 1 of 4 for the business: the shape Matthew asked the DM to state. */
 const RIVAL_COUNTS = { appeared: 1, measured: 4 };
@@ -639,5 +640,33 @@ check("a booking subdomain is a booking host", isBookingHost("https://theplumpro
 check("a facebook page is not booking software", isBookingHost("https://facebook.com/theplumproom"), false);
 check("...but it is still not their site", isNeverTheirSite("https://facebook.com/theplumproom"), true);
 
-console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
-process.exit(failures === 0 ? 0 : 1);
+// The vendor that cost two live runs. Both clinics' bio link was a booking.mangomint.com page,
+// which was read as their own website, crawled, and reported as thin.
+check("mangomint is a booking host", isBookingHost("https://booking.mangomint.com/gcav?staffId=23"), true);
+check("...and so is not their site", isNeverTheirSite("https://booking.mangomint.com/gcav?staffId=23"), true);
+
+// A multi-link bio. ‼️ NO NETWORK IS TOUCHED HERE because none of these is an aggregator;
+// resolveBioLink only fetches when it has to follow a linktree.
+// Not top-level: this file is transpiled to CJS, where a top-level await will not parse.
+async function bioLinkChecks() {
+  const both = await resolveBioLinks([
+    null,
+    "https://booking.mangomint.com/gcav?staffId=23",
+    "https://theplumproom.com",
+  ]);
+  check("a real site outranks a booking page listed before it", both.website, "https://theplumproom.com/");
+
+  const bookingOnly = await resolveBioLinks([null, "https://theplumproom.myaestheticrecord.com/online-booking"]);
+  check("a bio of nothing but a booking page still names the platform", bookingOnly.bookingHost, "theplumproom.myaestheticrecord.com");
+  check("...and offers no website to crawl", bookingOnly.website, null);
+
+  // The leahskinmethod shape: external_url null, the links only in bio_links.
+  const empty = await resolveBioLinks([null, undefined]);
+  check("an empty bio is still 'no link in the bio'", empty.note, "No link in the bio.");
+}
+
+void bioLinkChecks().then(() => {
+  console.log("");
+  console.log(failures === 0 ? "All checks passed." : failures + " check(s) FAILED.");
+  process.exit(failures === 0 ? 0 : 1);
+});
