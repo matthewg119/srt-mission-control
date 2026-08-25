@@ -69,7 +69,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
           city: subject.city,
           measuredCount: subject.measuredCount,
           appearedCount: subject.appearedCount,
-          topRival: subject.topRival,
+          topRivals: subject.topRivals,
+          // The panel says whether this was a local scan or a national one, because "absent in
+          // Coral Gables" and "absent in the United States" are very different findings.
+          cityless: subject.cityless,
           questions: subject.questions,
         }
       : null,

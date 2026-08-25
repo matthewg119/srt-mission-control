@@ -29,6 +29,7 @@ export type LintRule =
   | "double-ask"
   | "draft-1-length"
   | "dm-length"
+  | "dm-cityless"
   | "robots-tease"
   | "banned-jargon"
   | "absolutes"
@@ -70,6 +71,16 @@ export interface LintInput {
   siteSignals?: Array<{ kind: string; detail: string }> | null;
   /** Leave undefined to auto-detect from the body, which is what every caller should do. */
   hasWebsiteTease?: boolean;
+  /**
+   * `dm` stage only: the scan ran with NO location in the questions.
+   *
+   * ‼️ IT GUARDS AGAINST A CLAIM ABOUT A SEARCH NOBODY MADE. When Matthew answers "I don't know" to
+   * the city prompt, the questions go out as plain national ones. A draft that then says "when
+   * someone asks ChatGPT for laser skin treatments in your area" describes a local result that was
+   * never measured, on a message whose entire basis is that the reader can reproduce it. The
+   * drafter is told not to; this is what makes it structural, because a prose guard is not a guard.
+   */
+  cityless?: boolean;
   /**
    * An objection reply is allowed, and required, to re-seed the belief that broke. Suppresses
    * rule 7 only — every other rule still applies.
@@ -113,6 +124,17 @@ const PLACEHOLDER_RE = /\{[A-Za-z][A-Za-z0-9_]*\}/g;
  * Auto-detected rather than passed in, because the line is written by the model and a caller
  * that had to remember to declare it would eventually forget.
  */
+/**
+ * The location phrases a model reaches for when it has no city and wants the sentence to feel local.
+ *
+ * Deliberately a PHRASE list rather than an attempt to detect "in <SomePlace>". A place-name
+ * detector over free text is a guess, and a guess here either rejects good drafts on a capitalised
+ * word or misses the one that matters. These are the constructions that actually appeared, plus
+ * their nearest neighbours, and every one of them is unambiguously a claim about a local search.
+ */
+const CITYLESS_LOCATION_RE =
+  /\b(?:in|near|around)\s+(?:your|the)\s+(?:area|city|town|region|neighbou?rhood)\b|\bnear\s+you\b|\blocally\b|\bin\s+town\b|\byour\s+local\s+(?:area|market)\b/i;
+
 const WEBSITE_TEASE_RE =
   /\b(?:something|one thing|algo)\b[^.!?]{0,60}?\b(?:on|in|en)\b[^.!?]{0,25}?\b(?:your|their|su)\b[^.!?]{0,25}?\b(?:site|website|sitio|markup)\b/i;
 
@@ -191,6 +213,19 @@ export function lintDraft(input: LintInput): LintResult {
         rule: "double-ask",
         detail: `${questions} question marks aimed at the reader. A DM asks exactly once, and the ask is the close.`,
       });
+    }
+
+    // 2c — a cityless run may not emit a city-shaped sentence. See LintInput.cityless.
+    if (input.cityless) {
+      const m = CITYLESS_LOCATION_RE.exec(input.body);
+      if (m) {
+        findings.push({
+          rule: "dm-cityless",
+          detail:
+            `Says "${m[0].trim()}", but no city was known and the questions were asked with no ` +
+            "location in them. That is a claim about a local search nobody ran. Cut the location.",
+        });
+      }
     }
   }
 

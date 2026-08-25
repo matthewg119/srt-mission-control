@@ -17,6 +17,7 @@ import {
   isAggregatorHost,
   isNeverTheirSite,
 } from "@/lib/audit-engine/web-hosts";
+import { callClaudeJSON } from "@/lib/claude-calls";
 
 /** `@Hairthetics_FL`, a profile URL, or a bare handle -> `hairthetics_fl`. */
 export function normalizeHandle(raw: string | null | undefined): string | null {
@@ -330,4 +331,52 @@ export function businessNameFrom(fullName: string): string {
   }
 
   return segments[0] ?? "";
+}
+
+/**
+ * A location Matthew typed into the panel, turned into something the scan can use.
+ *
+ * ‼️ THIS IS THE ONE PLACE A ZIP IS ALLOWED TO EXIST, AND IT NEVER LEAVES AS ONE. Every sentence
+ * that prints a city splits it on the first comma and reads it aloud (dmRivalLine,
+ * hookPositioningLine), so "when someone asks ChatGPT for laser skin treatments in 33009" is a
+ * sentence no person would write. A ZIP is resolved to "City, ST" or it is refused, and refusing
+ * costs one retyped word because the panel simply asks again.
+ *
+ * Everything else passes through trimmed. He may type "Coral Gables", "Coral Gables, FL" or
+ * "Coral Gables, Florida", and all three are fine: the engine prompts take the string as given, and
+ * the printed lines keep only what is before the first comma.
+ *
+ * Best-effort and it never throws, the same contract as tradeFromBio: a null here means the panel
+ * asks again, which is recoverable, where a wrong city is not.
+ */
+export async function resolveCityInput(raw: string | null | undefined): Promise<string | null> {
+  const s = (raw ?? "").trim();
+  if (!s) return null;
+  if (!/^\d{5}(?:-\d{4})?$/.test(s)) return s.replace(/\s+/g, " ");
+
+  const zip = s.slice(0, 5);
+  try {
+    const { data } = await callClaudeJSON<{ city: string | null; state: string | null }>({
+      model: "claude-haiku-4-5-20251001",
+      system:
+        "You map a US ZIP code to the city and two-letter state it is in. Return the primary city " +
+        'name only, with no county and no "area". Return nulls when you are not sure which ZIP ' +
+        "this is. A wrong city is worse than no city.",
+      user: `ZIP: ${zip}`,
+      schemaHint: '{ "city": string | null, "state": string | null }',
+      maxTokens: 100,
+      temperature: 0,
+      validate: (v): v is { city: string | null; state: string | null } =>
+        typeof v === "object" && v !== null && "city" in v && "state" in v,
+    });
+    const city = (data.city ?? "").trim();
+    const state = (data.state ?? "").trim().toUpperCase();
+    // Validated against the same table cityFromBio validates against, so a hallucinated "ZZ" or a
+    // county name in the state slot is rejected rather than printed at a prospect.
+    if (!city || !STATE_ABBR.has(state)) return null;
+    return `${city}, ${state}`;
+  } catch (e) {
+    console.error("[instagram/profile] ZIP lookup failed:", (e as Error).message);
+    return null;
+  }
 }

@@ -66,7 +66,21 @@ export function factsFromRow(row: Pick<IgRunRow, "lane" | "check_json" | "handle
   if (!row.check_json) return null;
   if (row.lane === "hook") return { kind: "hook", check: row.check_json as HookCheck };
   if (row.lane === "nowebsite") {
-    return { kind: "nowebsite", check: row.check_json as MiniCheck, businessName };
+    // ‼️ A STORED check_json IS WHATEVER SHAPE MiniCheck HAD THE DAY IT WAS WRITTEN. Rows from
+    // before 2026-08-25 carry no `trade`, `tradeSource` or `topRivals`, and a redraft of one of
+    // them must degrade to "no rivals, no trade" rather than throw on a read of undefined.length.
+    // dmSubjectOf and pickAngle both `?? []` for the same reason; this is the belt to that braces.
+    const stored = row.check_json as Partial<MiniCheck>;
+    return {
+      kind: "nowebsite",
+      check: {
+        ...(stored as MiniCheck),
+        trade: stored.trade ?? null,
+        tradeSource: stored.tradeSource ?? null,
+        topRivals: stored.topRivals ?? [],
+      },
+      businessName,
+    };
   }
   return null;
 }
@@ -164,6 +178,8 @@ export function startDmRun(opts: {
   businessName: string;
   firstName: string | null;
   city: string | null;
+  /** Their Instagram bio, verbatim. The no-website lane reads the trade off it. */
+  bio?: string | null;
   instructions?: string | null;
 }): void {
   const { runId, contactId, handle, website, businessName, firstName, city } = opts;
@@ -190,7 +206,9 @@ export function startDmRun(opts: {
               "No website and no business name, so there was nothing to look up. Add a name or a site and press it again."
             );
           }
-          const outcome = await runMiniVisibilityCheck(businessName, city);
+          const outcome = await runMiniVisibilityCheck(businessName, city, {
+            bioHint: opts.bio ?? null,
+          });
           if (!outcome.ok) return failRun(runId, contactId, outcome.detail);
           facts = { kind: "nowebsite", check: outcome.check, businessName };
         }

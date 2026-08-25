@@ -5,23 +5,60 @@
 -- (trt_leads, the scraper crons, /trtquiz, /trtquiz2, /autopsystart). Those are a separate
 -- live product and are deliberately left alone.
 --
--- `vertical_id` is plain text everywhere (never a FK), so the rename is a set of updates and
--- the order below matters only for readability. Until it runs, src/config/verticals.ts maps
--- the old id forward via LEGACY_IDS, so nothing breaks in the meantime.
+-- `vertical_id` is plain text everywhere (never a FK), so the rename is a set of updates.
+-- Until it runs, src/config/verticals.ts maps the old id forward via LEGACY_IDS, so nothing
+-- breaks in the meantime.
+--
+-- The per-table updates run inside a DO block that SKIPS tables that do not exist. The first
+-- attempt at this migration aborted the whole transaction on `style_rules` (never created in
+-- prod), which rolled back the rename too. A missing optional table must not block the rename.
 
 begin;
 
--- 1) The row itself, plus its self-reference (it is its own caption voice owner).
+-- 0) style_rules was never created in this project, which is why the first run failed. The
+--    code has always expected it: distillFeedbackToRules / savePendingRules write to it and
+--    loadActiveStyleRules reads it, so the "corrections become saved rules" loop was dead.
+--    DDL lifted verbatim from docs/2026-07-01-style-rules.sql.
+create table if not exists style_rules (
+  id                uuid primary key default gen_random_uuid(),
+  vertical_id       text not null default 'pest_control',
+  scope             text not null default 'brand',   -- 'brand' | 'format'
+  format_group      text,                            -- e.g. 'bug_reveal' when scope='format'
+  rule              text not null,                   -- one concrete, imperative correction
+  status            text not null default 'pending', -- 'pending' | 'active' | 'archived'
+  source_thread_ts  text,
+  slack_channel     text,
+  proposal_ts       text,
+  created_at        timestamptz default now(),
+  approved_at       timestamptz
+);
+create index if not exists idx_style_rules_active   on style_rules (vertical_id, status);
+create index if not exists idx_style_rules_proposal on style_rules (proposal_ts);
+create index if not exists idx_style_rules_scope    on style_rules (vertical_id, scope, format_group);
+
+-- 1) The row itself, plus its self-references (it is its own caption voice owner).
 update verticals set id = 'medspa_owner_ai' where id = 'trt_clinic_ai';
 update verticals set owner_vertical_id = 'medspa_owner_ai' where owner_vertical_id = 'trt_clinic_ai';
 update verticals set workflow_vertical_id = 'medspa_owner_ai' where workflow_vertical_id = 'trt_clinic_ai';
 
--- 2) Everything filed under the old id. All plain-text columns, no FKs to worry about.
-update content_examples set vertical_id = 'medspa_owner_ai' where vertical_id = 'trt_clinic_ai';
-update style_rules     set vertical_id = 'medspa_owner_ai' where vertical_id = 'trt_clinic_ai';
-update content_jobs    set vertical_id = 'medspa_owner_ai' where vertical_id = 'trt_clinic_ai';
-update workflows       set vertical_id = 'medspa_owner_ai' where vertical_id = 'trt_clinic_ai';
-update reference_asks  set vertical_id = 'medspa_owner_ai' where vertical_id = 'trt_clinic_ai';
+-- 2) Everything filed under the old id, skipping any table this project never created.
+do $rename$
+declare
+  t text;
+begin
+  foreach t in array array['content_examples', 'style_rules', 'content_jobs', 'workflows', 'reference_asks']
+  loop
+    if to_regclass('public.' || t) is null then
+      raise notice 'skipping %, table does not exist', t;
+      continue;
+    end if;
+    execute format(
+      'update %I set vertical_id = %L where vertical_id = %L',
+      t, 'medspa_owner_ai', 'trt_clinic_ai'
+    );
+  end loop;
+end
+$rename$;
 
 -- 3) The caption voice anchor. The old letters sold TRT clinics against $99/month telehealth;
 --    every one of them is replaced below. Integrity rules are unchanged: approved numbers
@@ -201,7 +238,8 @@ where id = 'medspa_owner_ai';
 
 commit;
 
--- Verify:
+-- Verify (expect one medspa_owner_ai row, no trt_clinic_ai row, and 0 leftovers):
 --   select id, name, owner_vertical_id, workflow_vertical_id, drop_mode, slack_drop_channel_id
 --     from verticals where id in ('medspa_owner_ai','trt_clinic_ai');
---   select count(*) from content_examples where vertical_id = 'trt_clinic_ai';  -- expect 0
+--   select count(*) from content_examples where vertical_id = 'trt_clinic_ai';
+--   select left(sales_letter_examples, 90) from verticals where id = 'medspa_owner_ai';

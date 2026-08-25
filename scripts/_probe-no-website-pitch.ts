@@ -41,12 +41,19 @@ const WITH_ENGINES: MiniCheck = {
   identity,
   researched: true,
   city: "Charlotte, NC",
+  trade: "taquerias",
+  tradeSource: "research",
   results: [
     { prompt: "Who are the best taquerias in Charlotte, NC?", appeared: false, named: ["Taqueria El Rey", "Tacos El Nevado", "Cuzcatlan"] },
     { prompt: "Who should I hire for taco catering in Charlotte, NC?", appeared: false, named: ["Taqueria El Rey"] },
     { prompt: "Can you recommend a few taquerias in Charlotte, NC?", appeared: false, named: ["Tacos El Nevado"] },
   ],
   enginesAnswered: true,
+  topRivals: [
+    { name: "Taqueria El Rey", count: 2 },
+    { name: "Tacos El Nevado", count: 2 },
+    { name: "Cuzcatlan", count: 1 },
+  ],
   platform: "https://www.facebook.com/michoacana3mendos",
 };
 
@@ -55,12 +62,15 @@ const NO_ENGINES: MiniCheck = {
   identity,
   researched: true,
   city: "Charlotte, NC",
+  trade: "taquerias",
+  tradeSource: "research",
   results: [
     { prompt: "Who are the best taquerias in Charlotte, NC?", appeared: null, named: [] },
     { prompt: "Who should I hire for taco catering in Charlotte, NC?", appeared: null, named: [] },
     { prompt: "Can you recommend a few taquerias in Charlotte, NC?", appeared: null, named: [] },
   ],
   enginesAnswered: false,
+  topRivals: [],
   platform: "https://www.facebook.com/michoacana3mendos",
 };
 
@@ -73,8 +83,11 @@ const NO_RESEARCH: MiniCheck = {
   identity: null,
   researched: false,
   city: "Charlotte, NC",
+  trade: null,
+  tradeSource: null,
   results: [],
   enginesAnswered: false,
+  topRivals: [],
   platform: null,
 };
 

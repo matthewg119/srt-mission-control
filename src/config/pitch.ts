@@ -701,43 +701,123 @@ export function hookResultLine(appeared: number, measured: number): string {
 export const DM_MAX_SENTENCES = 5;
 
 /**
- * The absence, with the rival that took the slot. THE REFERENCE LINE, from Matthew's own message.
+ * The absence, with the rivals that took the slot. THE REFERENCE LINE, from Matthew's own message.
  *
- * ‼️ ONLY EVER CALLED BEHIND THE `rival-substitute` GATE, which requires both a measured miss and a
- * rival that extractRecommendedBatch actually pulled out of an answer we received. The name in this
- * sentence is a checkable claim: the prospect can reproduce it from his phone in thirty seconds,
- * which is exactly why it lands, and exactly why it can never be a guess. See pickDmAngle.
+ * ‼️ ONLY EVER CALLED BEHIND THE `rival-substitute` GATE, which requires both a measured miss and at
+ * least one rival that extractRecommendedBatch actually pulled out of an answer we received. The
+ * names in this sentence are a checkable claim: the prospect can reproduce them from his phone in
+ * thirty seconds, which is exactly why it lands, and exactly why they can never be a guess. See
+ * pickDmAngle.
  */
 export interface DmCounts {
-  /** Answers the rival was named in. */
-  rival: number;
   /** Answers THIS business was named in. The numerator Matthew asks for. */
   appeared: number;
   /** Answers that came back at all. THE DENOMINATOR, never the number asked. */
   measured: number;
 }
 
+/** One rival and the number of ANSWERS it was named in. Never a number of mentions. */
+export interface DmRival {
+  name: string;
+  count: number;
+}
+
+/**
+ * ‼️ HOW MANY RIVALS EACH LANE MAY NAME, and the two numbers differ on purpose.
+ *
+ * Matthew asked for two names on the no-website lane, where the copy was being rewritten. The hook
+ * lane's one-rival sentence is copy he has already read and signed off, so it stays at one rather
+ * than being widened by a change that was never about it. Flipping either lane is this one number.
+ */
+export const DM_MAX_RIVALS_NOWEBSITE = 2;
+export const DM_MAX_RIVALS_HOOK = 1;
+
+/**
+ * ‼️ EACH RIVAL PRINTS ITS OWN COUNT, ALWAYS, and this is not a formatting preference.
+ *
+ * Matthew's draft read "Competitor 1 and 2 shows up in 3 out of 4 searches". That sentence is only
+ * true if BOTH names appeared in the same three answers, and they usually will not have. One count
+ * stretched over two names is a false claim about at least one of them, and it is exactly the kind
+ * a prospect checks, in the same thread he is reading it in. So the counts are never merged: two
+ * names means two numbers, one name means one, and zero names means this line is never reached.
+ */
 export function dmRivalLine(
   service: string,
   city: string | null,
-  rival: string,
+  rivals: DmRival[],
   business: string,
   counts: DmCounts
 ): string {
   // City is split on the first comma for the same reason hookPositioningLine does it: classify.ts
-  // stores "Hallandale Beach, FL" and a person writing this sentence would not say the state.
+  // stores "Hallandale Beach, FL" and a person writing this sentence would not say the state. A
+  // null city drops the clause entirely rather than reaching for "in your area", which would be a
+  // claim about a local search that a cityless run never made. See the dm-cityless lint rule.
   const where = city?.split(",")[0]?.trim();
-  // ‼️ TWO SENTENCES, NOT FOUR. The counts are folded into the finding rather than added after it
-  // because the DM budget is five sentences and the ask and the close take two of them. An
-  // earlier draft stated the rival, then the ratio, then the business, and ran to six.
+  // ‼️ ONE SENTENCE, and it used to be two. The budget is five: the reason line, the ask and the
+  // close now take three of them, so a two-sentence finding leaves no room for an opener and every
+  // pretext variant fails dm-length. Matthew's own draft joins them with "and", which is also how
+  // a person says it out loud.
+  const named = rivals
+    .map((r, i) =>
+      i === 0
+        ? `${r.name} shows up in ${r.count} of the ${counts.measured} searches I ran`
+        : `${r.name} in ${r.count}`
+    )
+    .join(" and ");
   const tail =
     counts.appeared === 0
-      ? `${business} doesn't come back in any of them.`
-      : `${business} comes back in ${counts.appeared}.`;
+      ? `${business} doesn't come back in any of them`
+      : `${business} in ${counts.appeared}`;
   return (
     `I ran a quick check and when someone asks ChatGPT for ${service}${where ? ` in ${where}` : ""}, ` +
-    `${rival} shows up in ${counts.rival} of the ${counts.measured} searches I ran. ${tail}`
+    `${named}, and ${tail}.`
   );
+}
+
+/**
+ * ‼️ WHY THE ENGINE HAD NOTHING OF THEIRS. One sentence, three versions, and WHICH ONE IS TRUE IS A
+ * FACT ABOUT THE PROSPECT rather than a stylistic choice.
+ *
+ * Matthew's draft said "because your website is not visible". For a prospect with no site at all
+ * that is not true in the way it reads: there is nothing of theirs to be invisible, so the sentence
+ * describes a situation they do not have and can correct on the first line. Same failure class as
+ * NOTHING_TO_FIND_LINE claiming a business has no Google listing.
+ *
+ * The honest split is by what the engine can actually reach:
+ *
+ *   none           there is no site of theirs anywhere
+ *   booking_only   there is a page, it ranks, and it belongs to the booking software vendor
+ *   not_surfacing  they have a site and it did not come back. The ONLY case where Matthew's
+ *                  original wording is correct, which is why it is the only one that says it.
+ *
+ * ‼️ NEVER PICKED BY THE MODEL. dmSubjectOf derives it from which scan ran, the same way the angle
+ * itself is derived from what was measured.
+ */
+export type DmSiteState = "none" | "booking_only" | "not_surfacing";
+
+export function dmReasonLine(state: DmSiteState): string {
+  switch (state) {
+    case "none":
+      return (
+        "When someone asks an engine for a business like yours there is nothing of yours for it to " +
+        "cite, because you do not have a site of your own."
+      );
+    case "booking_only":
+      // No producer yet: this is the "Only a booking link" lane, still to be built. It is pinned
+      // here rather than in that lane because docs/CONTINUATION-booking-link-lane.md asks for it
+      // here, so both the DM and the email can reach the same sentence.
+      return (
+        "When someone asks an engine for a business like yours the only page of yours it can find " +
+        "belongs to your booking software, so what it repeats was written to sell appointments " +
+        "rather than written by you."
+      );
+    case "not_surfacing":
+      return (
+        "When someone asks an engine for a business like yours your site is not showing up in what " +
+        "it pulls back, so it repeats what a directory, a review site or a competitor's page says " +
+        "about you instead."
+      );
+  }
 }
 
 /**
@@ -747,21 +827,24 @@ export function dmRivalLine(
  * strictly less than dmRivalLine and nothing that is not measured. It does NOT reach for "you are
  * invisible" to compensate: that is the unfalsifiable scare line NOTHING_TO_FIND_LINE exists to
  * prevent, and a weaker true sentence beats a stronger one we cannot support.
+ *
+ * ONE sentence, folded for the same budget reason dmRivalLine was: the reason line that follows it
+ * costs a sentence, and the ask and the close take two more.
  */
 export function dmAbsenceLine(
   service: string,
   city: string | null,
   business: string,
-  counts: Pick<DmCounts, "appeared" | "measured">
+  counts: DmCounts
 ): string {
   const where = city?.split(",")[0]?.trim();
   const tail =
     counts.appeared === 0
-      ? `${business} isn't on any of the ${counts.measured} I ran.`
-      : `${business} is on ${counts.appeared} of the ${counts.measured} I ran.`;
+      ? `${business} isn't on any of the ${counts.measured} I ran`
+      : `${business} is on ${counts.appeared} of the ${counts.measured} I ran`;
   return (
     `I ran a quick check and when someone asks ChatGPT for ${service}${where ? ` in ${where}` : ""}, ` +
-    `it answers with a list of businesses. ${tail}`
+    `it answers with a list of businesses, and ${tail}.`
   );
 }
 
@@ -771,13 +854,18 @@ export function dmAbsenceLine(
  * Mirror of the `present-but-thin` angle in hook-pitch.ts and bound by the same rule: nothing in a
  * message built on this line may read as bad news about their visibility. What is true, and what
  * this says, is that the description belongs to whoever wrote it.
+ *
+ * ‼️ IT TAKES NO REASON LINE and it is the only finding line that does not. All three dmReasonLine
+ * versions explain why an engine had nothing of theirs to cite. This angle fires when the engine
+ * DID come back with them, so there is no absence to explain and attaching one would contradict the
+ * finding in the sentence underneath it. Its own second sentence already carries the point.
  */
 export function dmPresentLine(
   service: string,
   city: string | null,
   business: string,
-  counts: Pick<DmCounts, "appeared" | "measured">,
-  rival: { name: string; count: number } | null
+  counts: DmCounts,
+  rival: DmRival | null
 ): string {
   const where = city?.split(",")[0]?.trim();
   // The rival is named here too when we have one, because "you came back and so did they" is the

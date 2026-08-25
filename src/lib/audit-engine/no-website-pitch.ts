@@ -20,10 +20,11 @@
 // is the same rule run-prompts.ts enforces with status:"no_data" and the same one the cold-call
 // script enforces with "offer to look, never claim to have looked".
 
-import { callClaudeText } from "@/lib/claude-calls";
+import { callClaudeText, callClaudeJSON } from "@/lib/claude-calls";
 import { researchViaClaudeDetailed, isOwnDomain, type BusinessIdentity } from "./claude-research";
 import { runOpenAI } from "./run-prompts";
-import { buildAliases, isMentioned } from "./mention-match";
+import { buildAliases, isMentioned, isClientName } from "./mention-match";
+import { extractRecommendedBatch } from "./extract-recommended";
 import {
   prePitchRules,
   PARAGRAPH_RULES,
@@ -50,7 +51,12 @@ import { chooseOutreachMailbox, mailboxLine } from "@/lib/followup-operator/mail
 import { toGraphMailbox } from "@/config/outreach-mailboxes";
 import { microsoft } from "@/lib/microsoft";
 import { draftWithLint, retryInstruction } from "./draft-linter";
-import { NO_WEBSITE_LINE, NOTHING_TO_FIND_LINE, NAME_COMPETITORS_IN_COLD_EMAIL } from "@/config/pitch";
+import {
+  NO_WEBSITE_LINE,
+  NOTHING_TO_FIND_LINE,
+  NAME_COMPETITORS_IN_COLD_EMAIL,
+  type DmRival,
+} from "@/config/pitch";
 
 /** How many buyer questions the mini check runs. Three, not twenty: this is a door knock, and
  *  every question is a live engine call in front of a person waiting on a button. */
@@ -83,10 +89,29 @@ export interface MiniCheck {
   /** False when identity is null. Gates the three angles that quote research back at them. */
   researched: boolean;
   city: string | null;
+  /**
+   * ‼️ THE SHORT, BUYER-LANGUAGE TRADE THE PROMPTS WERE ACTUALLY BUILT FROM, and it exists because
+   * the alternative was a paragraph in a chat bubble. dmSubjectOf used to read
+   * `identity.whatTheyDo` directly, which is a whole sentence off the research call
+   * ("Independent automotive repair and maintenance shop serving all makes..."). shortTrade was
+   * applied only to the engine prompts and thrown away, so the string a printed line would
+   * interpolate was never the string the questions were asked with. Storing what was asked means
+   * the message and the measurement can never describe different trades.
+   */
+  trade: string | null;
+  /** Where `trade` came from. "bio" beats "research": the bio is written by them. */
+  tradeSource: "bio" | "research" | null;
   results: MiniPromptResult[];
   /** True when at least one engine call actually returned an answer. Gates every angle whose
    *  copy asserts that we asked an engine something. */
   enginesAnswered: boolean;
+  /**
+   * Businesses an engine named instead, ranked, counted ONCE PER ANSWER.
+   *
+   * ‼️ SOURCED BY extractRecommendedBatch AND NOTHING ELSE, which is what makes these names
+   * printable in front of the person they are about. See the field doc on DmSubject.topRivals.
+   */
+  topRivals: DmRival[];
   /** The third-party page the engines and research lean on, if there is an obvious one. */
   platform: string | null;
 }
@@ -109,19 +134,86 @@ function miniPrompts(trade: string, city: string | null): string[] {
   ].slice(0, MINI_PROMPT_COUNT);
 }
 
-/** Pull the business names an engine listed. Crude on purpose: it feeds a prompt, never a claim
- *  with a number attached, and a parser that guessed harder would be a parser that guessed. */
-function namesFrom(raw: string, aliases: string[]): string[] {
-  const out: string[] = [];
-  for (const line of raw.split("\n")) {
-    // Numbered or bulleted list items are where recommendations live.
-    const m = /^\s*(?:\d+[.)]|[-*•])\s*(?:\*\*)?([^*\n:(]{3,60}?)(?:\*\*)?\s*(?::|$|\()/.exec(line);
-    if (!m) continue;
-    const name = m[1].trim().replace(/[.,;]$/, "");
-    if (!name || isMentioned(name, aliases)) continue;
-    if (!out.some((o) => o.toLowerCase() === name.toLowerCase())) out.push(name);
+// ‼️ namesFrom() WAS DELETED HERE, AND MUST NOT COME BACK (2026-08-25).
+//
+// It was a line-by-line regex over the engine's answer, and its own comment called it crude on the
+// grounds that it only ever fed a prompt. That stopped being true: this lane now names rivals in a
+// message a stranger reads, with a count attached, and a name good enough to steer a model is not
+// good enough to put in front of the person it is about. Both lanes now use
+// extractRecommendedBatch, which is the same extractor that fills audit_runs.recommended, so "who
+// came back" means the same thing in a DM as it does in a report. See runMiniVisibilityCheck step 4
+// and the field doc on DmSubject.topRivals.
+
+/**
+ * What a BUYER would type, read off their own Instagram bio.
+ *
+ * ‼️ THE BIO BEATS RESEARCH, and this exists because of a live run. leahskinmethod has no site and
+ * research was handed "Leah" with no city, missed entirely, and produced no trade at all, so the
+ * engine loop was skipped and the DM had nothing measured to say. Her bio, meanwhile, is explicit:
+ *
+ *     Skin Strategist x Laser Layering
+ *     Advanced Skin @theplumproom
+ *     Sciton Clinical Specialist @sciton
+ *     BBL • Moxi • Morpheus • Skin
+ *
+ * ‼️ AND IT IS USELESS PASTED IN RAW, which is the whole reason this is a model call rather than a
+ * substring. "BBL, Moxi and Morpheus" is device branding: it is what the practitioner is proud of
+ * and it is not what a patient types. A buyer question has to read like a buyer wrote it, which is
+ * shortTrade's job and is preserved here. "laser skin treatments" is the answer; a bullet list of
+ * device names in a search query is not.
+ *
+ * Best-effort only, exactly like extractRecommendedBatch: it never throws, and a null falls through
+ * to whatever research found. A wrong trade is a worse question than no question.
+ */
+async function tradeFromBio(bio: string | null | undefined, businessName: string): Promise<string | null> {
+  const text = (bio ?? "").trim();
+  if (text.length < 12) return null;
+
+  try {
+    const { data } = await callClaudeJSON<{ trade: string | null }>({
+      model: "claude-haiku-4-5-20251001",
+      system:
+        "You are given an Instagram bio. Return the words a BUYER would type into ChatGPT when " +
+        "looking for a business like this one, in the buyer's own language.\n" +
+        "Rules, all of them hard:\n" +
+        "- Two to five words, lowercase, plural where it reads naturally.\n" +
+        "- NEVER a device, machine, product or brand name. A customer does not know them and would " +
+        "not search for them. Say what the device DOES.\n" +
+        "- NEVER the business's own name, a person's name, or an @handle.\n" +
+        "- NEVER a job title, a credential, or how they describe themselves professionally.\n" +
+        '- Return {"trade": null} when the bio does not say what they actually sell. A wrong guess ' +
+        "is worse than nothing.\n" +
+        'Example bio: "Sciton Clinical Specialist. BBL - Moxi - Morpheus" -> {"trade": "laser skin treatments"}',
+      user: `Business name: ${businessName || "unknown"}\n\nBio:\n"""\n${text.slice(0, 1200)}\n"""`,
+      schemaHint: '{ "trade": string | null }',
+      maxTokens: 200,
+      temperature: 0,
+      validate: isUsableTrade,
+    });
+    return data.trade ? data.trade.trim().toLowerCase() : null;
+  } catch (e) {
+    console.error("[no-website] trade-from-bio failed:", (e as Error).message);
+    return null;
   }
-  return out.slice(0, 5);
+}
+
+/**
+ * ‼️ THE RULES ARE CHECKED IN CODE, not just stated in the prompt, because a prose guard is not a
+ * guard and this string is interpolated into a sentence a stranger reads. Anything that smells like
+ * a handle, a hashtag, a model number or a whole sentence is rejected outright, and rejection means
+ * research supplies the trade instead.
+ */
+function isUsableTrade(v: unknown): v is { trade: string | null } {
+  if (typeof v !== "object" || v === null || !("trade" in v)) return false;
+  const t = (v as { trade: unknown }).trade;
+  if (t === null) return true;
+  if (typeof t !== "string") return false;
+  const s = t.trim();
+  if (s.length < 3 || s.length > 45) return false;
+  if (/[@#"'|]/.test(s)) return false;
+  if (/\d/.test(s)) return false;
+  const words = s.split(/\s+/);
+  return words.length >= 2 && words.length <= 5;
 }
 
 /**
@@ -140,6 +232,10 @@ export type MiniCheckOutcome =
 /**
  * Identify the business, then ask three real buyer questions and record who came back.
  *
+ * `opts.bioHint` is the prospect's own Instagram bio, threaded down from the extension panel. It
+ * takes precedence over research for the trade, and it is what lets the questions run at all on a
+ * prospect research could not identify. See tradeFromBio.
+ *
  * When the business cannot be identified, this does NOT give up: it returns a check with
  * `identity: null` and `researched: false`, which pickAngle resolves to `nothing-to-find`. The
  * old behaviour — refuse outright, on the grounds that a pitch about a business we could not find
@@ -150,66 +246,111 @@ export type MiniCheckOutcome =
  */
 export async function runMiniVisibilityCheck(
   businessName: string,
-  city?: string | null
+  city?: string | null,
+  opts?: { bioHint?: string | null }
 ): Promise<MiniCheckOutcome> {
   const { result: found, miss } = await researchViaClaudeDetailed(
     { kind: "name", name: businessName, city: city ?? undefined },
     null
   );
 
-  if (!found) {
-    // The one miss that is about our infrastructure rather than about them.
-    if (miss === "call_failed") {
-      return { ok: false, detail: "The research call failed before it returned anything." };
-    }
-    return {
-      ok: true,
-      check: {
-        identity: null,
-        researched: false,
-        city: city?.trim() || null,
-        // No trade was learned, so there is no buyer question to ask. That is not a gap to fill
-        // with a guess: a question about the wrong trade would be a worse email than no question,
-        // and enginesAnswered:false already forbids every angle that claims we asked one.
-        results: [],
-        enginesAnswered: false,
-        platform: null,
-      },
-    };
+  // The one miss that is about our infrastructure rather than about them.
+  if (!found && miss === "call_failed") {
+    return { ok: false, detail: "The research call failed before it returned anything." };
   }
 
-  const identity = found.identity;
+  // ‼️ A RESEARCH MISS NO LONGER RETURNS EARLY, and that early return was the whole defect.
+  //
+  // It used to hand back `results: []` on the grounds that no trade was learned, so there was no
+  // buyer question to ask. That reasoning was right about RESEARCH and wrong about the prospect:
+  // their own Instagram bio often says exactly what they sell, and it is a better source than
+  // research inference because they wrote it. leahskinmethod is the live case - research was given
+  // "Leah" with no city, missed, and the DM went out having measured nothing at all.
+  //
+  // `researched` and `enginesAnswered` are now genuinely independent. Everything downstream must
+  // branch on the one it actually needs rather than treating either as a proxy for the other.
+  const identity = found?.identity ?? null;
   const resolvedCity =
-    city?.trim() || [identity.city, identity.state].filter(Boolean).join(", ") || null;
+    city?.trim() ||
+    (identity ? [identity.city, identity.state].filter(Boolean).join(", ") : "") ||
+    null;
 
-  const trade = identity.whatTheyDo ? shortTrade(identity.whatTheyDo) : null;
-  const aliases = buildAliases(identity.tradingName ?? businessName, null);
+  const bioTrade = await tradeFromBio(opts?.bioHint, businessName);
+  const researchTrade = identity?.whatTheyDo ? shortTrade(identity.whatTheyDo) : null;
+  const trade = bioTrade ?? researchTrade;
+  const tradeSource: MiniCheck["tradeSource"] = bioTrade ? "bio" : researchTrade ? "research" : null;
 
-  let results: MiniPromptResult[] = [];
+  const aliases = buildAliases(identity?.tradingName ?? businessName, null);
+
+  // 1. Ask the engines, when there is a real trade to ask about. A question about the wrong trade
+  //    is worse than no question, so a null trade still means no questions.
+  let raw: Array<{ prompt: string; appeared: boolean | null; text: string }> = [];
   if (trade) {
     const prompts = miniPrompts(trade, resolvedCity);
-    results = await Promise.all(
-      prompts.map(async (prompt): Promise<MiniPromptResult> => {
+    raw = await Promise.all(
+      prompts.map(async (prompt) => {
         const r = await runOpenAI(prompt, resolvedCity);
         // status:"no_data" is a real answer meaning "we do not know", never "they were absent".
         // Conflating the two would let a dead API key read as a finding about the prospect.
-        if (r.status !== "ok" || !r.raw) return { prompt, appeared: null, named: [] };
-        return { prompt, appeared: isMentioned(r.raw, aliases), named: namesFrom(r.raw, aliases) };
+        if (r.status !== "ok" || !r.raw) return { prompt, appeared: null as boolean | null, text: "" };
+        // ‼️ AN EMPTY ALIAS SET MEANS "WE COULD NOT LOOK", NEVER "THEY WERE ABSENT". This lane
+        // builds aliases off a name alone, with no domain, because there is no site - and
+        // buildAliases returns [] for a name it cannot get a usable token out of. isMentioned then
+        // returns false, and recording that as `appeared: false` writes a fabricated absence into
+        // missCount, which is now a printed claim. Same guard, same reason, as hook-pitch.ts.
+        if (aliases.length === 0) return { prompt, appeared: null as boolean | null, text: r.raw };
+        return { prompt, appeared: isMentioned(r.raw, aliases), text: r.raw };
       })
     );
   }
 
+  // 2. Who came back instead. ONE Haiku call over the whole batch, the same extractor the real
+  //    audit uses to fill audit_runs.recommended. The ids index the FILTERED array, which is why
+  //    the read side below walks its own cursor rather than reusing the loop index.
+  const extracted = await extractRecommendedBatch(
+    raw.filter((r) => r.text).map((r, i) => ({ id: String(i), text: r.text }))
+  );
+
+  const results: MiniPromptResult[] = [];
+  const rivalCounts = new Map<string, { display: string; count: number }>();
+  let cursor = 0;
+  for (const r of raw) {
+    let named: string[] = [];
+    if (r.text) {
+      named = (extracted[String(cursor)] ?? [])
+        .map((n) => n.trim())
+        .filter((n) => n && !isClientName(n, aliases));
+      cursor += 1;
+      // Count each rival ONCE PER ANSWER, the way report-view.ts ranks mostRecommended, so a count
+      // in the DM is a number of answers and never a number of mentions.
+      for (const name of new Set(named.map((n) => n.toLowerCase()))) {
+        const display = named.find((n) => n.toLowerCase() === name) ?? name;
+        const existing = rivalCounts.get(name);
+        if (existing) existing.count += 1;
+        else rivalCounts.set(name, { display, count: 1 });
+      }
+    }
+    results.push({ prompt: r.prompt, appeared: r.appeared, named });
+  }
+
+  const topRivals: DmRival[] = [...rivalCounts.values()]
+    .sort((a, b) => b.count - a.count)
+    .map((r) => ({ name: r.display, count: r.count }));
+
   const platform =
-    identity.websites.find((w) => !isOwnDomain(w, identity.tradingName ?? businessName)) ?? null;
+    identity?.websites.find((w) => !isOwnDomain(w, identity.tradingName ?? businessName)) ?? null;
 
   return {
     ok: true,
     check: {
       identity,
-      researched: true,
+      researched: Boolean(identity),
       city: resolvedCity,
+      trade,
+      tradeSource,
       results,
       enginesAnswered: results.some((r) => r.appeared !== null),
+      topRivals,
       platform,
     },
   };
@@ -307,7 +448,9 @@ const ANGLES: Angle[] = [
 /** Pick the strongest angle the evidence actually supports. Order matters: the list is strongest
  *  first, and the first one whose preconditions hold wins. */
 export function pickAngle(check: MiniCheck): Angle {
-  const hasCompetitor = check.results.some((r) => r.named.length > 0);
+  // Reads topRivals rather than results[].named so the email lane and the DM lane agree on what
+  // counts as "a competitor we can name". `?? []` covers rows written before topRivals existed.
+  const hasCompetitor = (check.topRivals ?? []).length > 0;
   for (const a of ANGLES) {
     // Both directions, and both are required. An unresearched angle offered to a prospect we DID
     // research throws away everything we learned; a researched angle offered when we learned
@@ -348,8 +491,19 @@ export function miniCheckContext(check: MiniCheck, fallbackName?: string): strin
         "third-party page below. You know their name, their city, and that fact. Everything you " +
         "write must rest on those three things.",
       "",
-      "NO ENGINE QUESTIONS WERE RUN for this prospect. You must NOT write that you asked ChatGPT " +
-        "anything, that you ran anything, or that you saw who came up instead.",
+      // ‼️ THIS USED TO OPEN "NO ENGINE QUESTIONS WERE RUN", AND THAT BECAME A LIE (2026-08-25).
+      //
+      // A trade read off their own Instagram bio is enough to ask a real buyer question, so this
+      // branch can now arrive with measured answers in hand. The PROHIBITION is still exactly
+      // right - the angle this branch resolves to is `nothing-to-find`, whose whole finding is
+      // that research turned up nothing readable, and an email that also reports an engine result
+      // is an email with two findings. So the rule stays and the false statement of fact goes:
+      // this says what the drafter may not do, without asserting something about the run that may
+      // not be true. The results are withheld rather than shown, which is the same
+      // absent-beats-forbidden move the price gate makes.
+      "The engine questions, if any ran, are NOT this email's material. You must NOT write that " +
+        "you asked ChatGPT anything, that you ran anything, or that you saw who came up instead. " +
+        "Everything you write must rest on the fact that nothing readable came back.",
       "",
       "You must NOT state or imply that they have no Google listing, no reviews, no directory " +
         "entry, or no presence anywhere at all. You do not know any of that and they can check it " +
@@ -366,30 +520,39 @@ export function miniCheckContext(check: MiniCheck, fallbackName?: string): strin
 
   if (check.platform) lines.push(`The third-party page describing them: ${check.platform}`);
 
-  if (check.enginesAnswered) {
-    lines.push("", `Questions actually asked of the engine (${check.results.length}):`);
-    for (const r of check.results) {
-      const verdict =
-        r.appeared === null
-          ? "no answer came back, so this question proves nothing"
-          : r.appeared
-            ? "they WERE named"
-            : "they were NOT named";
-      const named = r.named.length ? ` Named instead: ${r.named.join(", ")}.` : "";
-      lines.push(`- "${r.prompt}" -> ${verdict}.${named}`);
-    }
-  } else {
-    // Absent beats forbidden, the same doctrine as the price gate: a model handed engine results
-    // it must not cite will cite them. There are none here, so it cannot.
-    lines.push(
-      "",
-      "NO ENGINE QUESTIONS WERE RUN for this prospect. You must NOT write that you asked ChatGPT " +
-        "anything, that you ran anything, or that you saw who came up instead. Everything you say " +
-        "must rest on the research above."
-    );
-  }
+  lines.push("", ...engineBlock(check));
 
   return lines.join("\n");
+}
+
+/**
+ * What the drafter may say about the engine questions, in the one shape both branches share.
+ *
+ * Absent beats forbidden, the same doctrine as the price gate: a model handed engine results it
+ * must not cite will cite them. When there are none, there is nothing to cite. When there ARE some,
+ * saying there are none is the mirror error and just as bad.
+ */
+function engineBlock(check: MiniCheck): string[] {
+  if (!check.enginesAnswered) {
+    return [
+      "NO ENGINE QUESTIONS WERE RUN for this prospect. You must NOT write that you asked ChatGPT " +
+        "anything, that you ran anything, or that you saw who came up instead. Everything you say " +
+        "must rest on the research above.",
+    ];
+  }
+
+  const out = [`Questions actually asked of the engine (${check.results.length}):`];
+  for (const r of check.results) {
+    const verdict =
+      r.appeared === null
+        ? "no answer came back, so this question proves nothing"
+        : r.appeared
+          ? "they WERE named"
+          : "they were NOT named";
+    const named = r.named.length ? ` Named instead: ${r.named.join(", ")}.` : "";
+    out.push(`- "${r.prompt}" -> ${verdict}.${named}`);
+  }
+  return out;
 }
 
 /**

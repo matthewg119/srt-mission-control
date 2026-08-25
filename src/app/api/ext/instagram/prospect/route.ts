@@ -20,6 +20,7 @@ import {
   firstNameFrom,
   cityFromBio,
   resolveBioLink,
+  resolveCityInput,
   unwrapInstagramLink,
   businessNameFrom,
 } from "@/lib/instagram/profile";
@@ -48,6 +49,22 @@ interface Body {
   websiteOverride?: string | null;
   /** Set when he answered "no website at all" rather than pasting one. */
   noWebsite?: boolean;
+  /**
+   * A city or a ZIP he typed into the panel. Beats cityFromBio, and on most med spa profiles it is
+   * the only source there is: the bio carries a booking link and no address.
+   */
+  cityOverride?: string | null;
+  /** Set when he answered "I don't know" to the city prompt. The scan then runs national questions. */
+  noCity?: boolean;
+  /**
+   * The BUSINESS name he typed into the panel, replacing what was read off the profile.
+   *
+   * ‼️ IT IS THE DIFFERENCE BETWEEN A SCAN AND NO SCAN. leahskinmethod posts under her own name, so
+   * businessNameFrom(fullName) produced "Leah", research was handed a person's first name with no
+   * city, missed entirely, and the DM went out having measured nothing. The clinic is The Plump
+   * Room and only a person knows that.
+   */
+  businessNameOverride?: string | null;
   /** Free text from the panel, passed to the drafter verbatim. */
   instructions?: string | null;
 }
@@ -74,9 +91,28 @@ export async function POST(req: NextRequest) {
   // override to whatever it is handed and every alias and mention match downstream is built from
   // it; see the override doc in classify.ts. An empty string is the right answer when the profile
   // gave us nothing usable, because it lets the classifier read the name off the crawled pages.
-  const businessName = businessNameFrom(fullName);
+  // ‼️ WHAT HE TYPED BEATS WHAT WAS SCRAPED, on both fields, and `typedBy` is what carries that
+  // distinction down to upsertContact. Every other value here is read off a profile page, and a
+  // scrape is a weaker source than a person: the CRM's "only fill blanks" rule is right for the
+  // former and exactly wrong for the latter, which is how `business_name: "Leah"` survived.
+  const typedName = (body.businessNameOverride ?? "").trim();
+  const businessName = typedName || businessNameFrom(fullName);
   const firstName = firstNameFrom(fullName);
-  const city = cityFromBio(bio);
+
+  const typedCity = (body.cityOverride ?? "").trim();
+  const resolvedTypedCity = typedCity ? await resolveCityInput(typedCity) : null;
+  if (typedCity && !resolvedTypedCity) {
+    return jsonCors(
+      req,
+      {
+        ok: false,
+        error: `I could not place "${typedCity}". Type a city name rather than a ZIP.`,
+        field: "cityOverride",
+      },
+      400
+    );
+  }
+  const city = resolvedTypedCity ?? cityFromBio(bio);
 
   // 1. Where the site comes from, in priority order. What Matthew typed always wins.
   const typed = (body.websiteOverride ?? "").trim();
@@ -107,6 +143,8 @@ export async function POST(req: NextRequest) {
     email: (body.businessEmail ?? "").trim() || null,
     phone: (body.businessPhone ?? "").trim() || null,
     category: (body.category ?? "").trim() || null,
+    typedName: Boolean(typedName),
+    typedCity: Boolean(resolvedTypedCity),
   });
 
   // 3. No site and he has not yet said there is none: ask, and spend nothing.
@@ -114,6 +152,30 @@ export async function POST(req: NextRequest) {
     return jsonCors(req, {
       ok: true,
       needsWebsite: true,
+      contactId,
+      leadUrl: leadUrl(contactId),
+      handle,
+      businessName,
+      note: websiteNote,
+    });
+  }
+
+  // 3b. No site, and no idea where they are: ask, and spend nothing. Twin of the gate above, and
+  //     it sits here for the same reason that one does, BEFORE the claim guard and the run row.
+  //
+  // ‼️ GATED ON `!website` ONLY. The hook lane reads the city off the pages it crawls
+  // (classification.city_detected), so asking there would be asking a question that already has an
+  // answer. This lane has nothing to read: runMiniVisibilityCheck resolves the city from what it is
+  // handed or from research that has usually already missed, and a null there means three national
+  // questions asked about a local business.
+  //
+  // `noCity` is a real answer, not a giving-up. The scan runs, the questions go out without a
+  // location, and DmSubject.cityless plus the dm-cityless lint rule keep the message from claiming
+  // a local result it never measured.
+  if (!website && !city && !body.noCity) {
+    return jsonCors(req, {
+      ok: true,
+      needsCity: true,
       contactId,
       leadUrl: leadUrl(contactId),
       handle,
@@ -185,6 +247,9 @@ export async function POST(req: NextRequest) {
     businessName,
     firstName,
     city,
+    // The bio was read at the top of this route, used once by cityFromBio, and thrown away. It is
+    // often the best statement of what they sell that exists anywhere: see tradeFromBio.
+    bio: bio || null,
     instructions: body.instructions ?? null,
   });
 
@@ -213,9 +278,16 @@ export async function POST(req: NextRequest) {
  * Deduped on `instagram_handle`, which is the only identifier a profile reliably has: many med
  * spas publish no email and a shared front-desk number, so phone and email are not keys here.
  *
- * ‼️ ONLY FILLS BLANKS. `upsert` would overwrite a hand-corrected business name or a website
- * Matthew fixed in the CRM with whatever the bio says today, and a scrape is a weaker source than
- * a person. So an existing row is patched field by field, and only where it is empty.
+ * ‼️ ONLY FILLS BLANKS, EXCEPT WHERE A PERSON TYPED IT. `upsert` would overwrite a hand-corrected
+ * business name or a website Matthew fixed in the CRM with whatever the bio says today, and a
+ * scrape is a weaker source than a person. So an existing row is patched field by field, and only
+ * where it is empty.
+ *
+ * `typedName` / `typedCity` are the inverse case and they invert the rule for exactly those two
+ * fields. A value Matthew typed into the panel is a person correcting the scrape, which is the
+ * stronger source by the same argument, so it overwrites. Without this, a wrong business name read
+ * off a profile is permanent: the row is never blank again, so every future press re-reads "Leah"
+ * and research keeps missing.
  */
 async function upsertContact(input: {
   handle: string;
@@ -226,6 +298,8 @@ async function upsertContact(input: {
   email: string | null;
   phone: string | null;
   category: string | null;
+  typedName: boolean;
+  typedCity: boolean;
 }): Promise<string | null> {
   const { data: existing } = await supabaseAdmin
     .from("contacts")
@@ -239,12 +313,14 @@ async function upsertContact(input: {
   if (existing?.id) {
     const patch: Record<string, unknown> = {};
     if (!existing.first_name && input.firstName) patch.first_name = input.firstName;
-    if (!existing.business_name && input.businessName) patch.business_name = input.businessName;
+    if ((input.typedName || !existing.business_name) && input.businessName) {
+      patch.business_name = input.businessName;
+    }
     if (!existing.website && input.website) patch.website = input.website;
     if (!existing.email && input.email) patch.email = input.email;
     if (!existing.phone && phone) patch.phone = phone;
-    if (!existing.biz_city && cityPart) patch.biz_city = cityPart;
-    if (!existing.biz_state && statePart) patch.biz_state = statePart;
+    if ((input.typedCity || !existing.biz_city) && cityPart) patch.biz_city = cityPart;
+    if ((input.typedCity || !existing.biz_state) && statePart) patch.biz_state = statePart;
 
     if (Object.keys(patch).length > 0) {
       await supabaseAdmin.from("contacts").update(patch).eq("id", existing.id);

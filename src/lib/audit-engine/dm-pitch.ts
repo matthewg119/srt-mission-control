@@ -49,14 +49,19 @@ import { lintDraft, retryInstruction, type LintFinding } from "./draft-linter";
 import {
   DM_ASK_LINE,
   DM_CLOSE_LINE,
+  DM_MAX_RIVALS_HOOK,
+  DM_MAX_RIVALS_NOWEBSITE,
   DM_MAX_SENTENCES,
   DM_OPENERS,
   NAME_COMPETITORS_IN_COLD_EMAIL,
   NO_WEBSITE_LINE,
   dmAbsenceLine,
   dmPresentLine,
+  dmReasonLine,
   dmRivalLine,
   type DmOpenerId,
+  type DmRival,
+  type DmSiteState,
 } from "@/config/pitch";
 
 function model(): "claude-opus-4-7" | "claude-sonnet-4-6" {
@@ -94,16 +99,40 @@ export interface DmSubject {
   /** Measured questions in which they were NOT named. */
   missCount: number;
   /**
-   * ‼️ NULL ON THE NO-WEBSITE LANE, ALWAYS, EVEN WHEN THAT CHECK CARRIES NAMES.
+   * The businesses an engine named instead, ranked, each with the number of ANSWERS it was in.
    *
-   * runMiniVisibilityCheck fills MiniPromptResult.named via namesFrom(), whose own comment in
-   * no-website-pitch.ts calls it crude on the grounds that it only ever feeds a prompt. This
-   * message PRINTS the name it is given and attaches a claim to it, so the only acceptable source
-   * is extractRecommendedBatch, which is what the hook lane already uses and what fills
-   * audit_runs.recommended. A name good enough to steer a model is not good enough to put in
-   * front of the person it is about. Same reasoning as hook-pitch.ts line 251.
+   * ‼️ extractRecommendedBatch IS THE ONLY ACCEPTABLE SOURCE, ON BOTH LANES. This message PRINTS
+   * these names and attaches a count to each, so a name good enough to steer a model is not good
+   * enough to put in front of the person it is about.
+   *
+   * This field used to be a single `topRival` that was hardcoded null on the no-website lane, and
+   * the reason given was correct at the time: that lane filled MiniPromptResult.named with
+   * namesFrom(), a line-by-line regex whose own comment called it crude because it only ever fed a
+   * prompt. **The rule was satisfied rather than relaxed** (2026-08-25): runMiniVisibilityCheck now
+   * runs the same batch extractor the hook lane runs, filtered by isClientName and counted once per
+   * answer, and namesFrom() was DELETED rather than merely bypassed so it cannot come back.
+   *
+   * ‼️ HOW MANY MAY BE PRINTED IS A LANE DECISION, not a data one: this list is ranked and full,
+   * and dmSubjectOf caps it per lane (DM_MAX_RIVALS_NOWEBSITE / DM_MAX_RIVALS_HOOK). Each printed
+   * name carries its OWN count. Merging two names under one count is a false claim about at least
+   * one of them; see dmRivalLine.
    */
-  topRival: { name: string; count: number } | null;
+  topRivals: DmRival[];
+  /**
+   * Why an engine had nothing of theirs to cite, as a fact about the prospect rather than a phrasing
+   * choice. Derived from which scan ran, never chosen by the model. See dmReasonLine.
+   */
+  siteState: DmSiteState;
+  /**
+   * True when the questions were asked with NO location in them.
+   *
+   * ‼️ IT GATES A SENTENCE THAT WOULD OTHERWISE BE A CLAIM ABOUT A SEARCH NOBODY MADE. Matthew can
+   * answer "I don't know" to the city prompt, and the scan then runs national questions. "when
+   * someone asks ChatGPT for laser skin treatments in your area" describes a local search that was
+   * never run. The fixed lines drop the clause on their own; this flag is what tells the drafter,
+   * and what arms the dm-cityless lint rule against a model that reaches for it anyway.
+   */
+  cityless: boolean;
   questions: Array<{ prompt: string; appeared: boolean | null; named: string[] }>;
 }
 
@@ -118,7 +147,13 @@ export function dmSubjectOf(facts: DmFacts): DmSubject {
       measuredCount: c.measuredCount,
       appearedCount: c.appearedCount,
       missCount: c.results.filter((r) => r.appeared === false).length,
-      topRival: c.topRival,
+      // The hook lane stores one already-ranked winner. It stays at one name: that sentence is copy
+      // Matthew has read and approved, and widening it was never what he asked for. See
+      // DM_MAX_RIVALS_HOOK.
+      topRivals: c.topRival ? [c.topRival].slice(0, DM_MAX_RIVALS_HOOK) : [],
+      // A site was crawled and classified, so the honest reason is that it did not surface.
+      siteState: "not_surfacing",
+      cityless: !c.city,
       questions: c.results.map((r) => ({ prompt: r.prompt, appeared: r.appeared, named: r.named })),
     };
   }
@@ -127,13 +162,23 @@ export function dmSubjectOf(facts: DmFacts): DmSubject {
   const measured = c.results.filter((r) => r.appeared !== null);
   return {
     businessName: facts.businessName,
-    trade: c.identity?.whatTheyDo?.trim() || null,
+    // ‼️ MiniCheck.trade, NEVER identity.whatTheyDo. The latter is a whole sentence off the research
+    // call, and it is not the string the questions were asked with either: shortTrade was applied
+    // to the prompts and thrown away. Reading it here would put a paragraph inside a chat bubble
+    // and describe a different trade from the one that was measured.
+    trade: c.trade ?? null,
     buyerPersona: null,
     city: c.city,
     measuredCount: measured.length,
     appearedCount: measured.filter((r) => r.appeared === true).length,
     missCount: measured.filter((r) => r.appeared === false).length,
-    topRival: null, // see the field doc. Not "none found": not sourced well enough to print.
+    // `?? []` covers rows written to ig_dm_runs.check_json before this field existed, which
+    // factsFromRow rehydrates unchanged.
+    topRivals: (c.topRivals ?? []).slice(0, DM_MAX_RIVALS_NOWEBSITE),
+    // This lane is reached only when there is no site of theirs at all. The booking-link lane, when
+    // it is built, is what produces "booking_only".
+    siteState: "none",
+    cityless: !c.city,
     questions: c.results.map((r) => ({ prompt: r.prompt, appeared: r.appeared, named: r.named })),
   };
 }
@@ -166,6 +211,22 @@ export interface DmAngle {
  * reading it in. The mirror matters as much: `present-but-thin` handed to a business that was
  * missing everywhere would congratulate someone on a result they did not get.
  */
+/**
+ * Glue the measured absence to the reason it happened.
+ *
+ * ‼️ TWO SENTENCES TOTAL, AND THAT IS THE ENTIRE BUDGET CALCULATION. DM_MAX_SENTENCES is 5, the ask
+ * and the close take two, and an opener takes one, which leaves two for the finding. dmRivalLine and
+ * dmAbsenceLine were folded from two sentences to one specifically to make room for this line: with
+ * the old two-sentence finding, every `pretext` and `question` variant came to six and was rejected
+ * by dm-length. Matthew's own draft joins the counts with "and" for the same reason.
+ *
+ * It is one paragraph, not two, because dmContext orders the model to reproduce the finding as a
+ * single paragraph verbatim and findingWarningFor checks that it did.
+ */
+function withReason(finding: string, s: DmSubject): string {
+  return `${finding} ${dmReasonLine(s.siteState)}`;
+}
+
 const DM_ANGLES: DmAngle[] = [
   {
     // The reference message. Absence, proven by the name that took the slot.
@@ -175,18 +236,20 @@ const DM_ANGLES: DmAngle[] = [
     needsCleanSweep: false,
     needsMeasured: true,
     finding: (s) =>
-      dmRivalLine(s.trade ?? "a business like theirs", s.city, s.topRival!.name, s.businessName, {
-        rival: s.topRival!.count,
-        appeared: s.appearedCount,
-        measured: s.measuredCount,
-      }),
+      withReason(
+        dmRivalLine(s.trade ?? "a business like theirs", s.city, s.topRivals, s.businessName, {
+          appeared: s.appearedCount,
+          measured: s.measuredCount,
+        }),
+        s
+      ),
     instruction:
       "The finding is that a real buying question was put to ChatGPT, it answered with a list of " +
-      "businesses, and this one was not on it while the named rival was. Report it and stop. Do " +
-      "NOT editorialise about the rival, do not say it is better, and do not suggest it let anyone " +
-      "down. The counts are already in the fixed line and are the measured ones: do not restate " +
-      "them, round them, or add a percentage. You are reporting what an engine returned, which " +
-      "they can reproduce themselves.",
+      "businesses, and this one was not on it while the named rivals were. Report it and stop. Do " +
+      "NOT editorialise about the rivals, do not say they are better, and do not suggest they let " +
+      "anyone down. The counts are already in the fixed lines and are the measured ones: do not " +
+      "restate them, round them, merge two names under one count, or add a percentage. You are " +
+      "reporting what an engine returned, which they can reproduce themselves.",
   },
   {
     id: "buying-question",
@@ -195,10 +258,13 @@ const DM_ANGLES: DmAngle[] = [
     needsCleanSweep: false,
     needsMeasured: true,
     finding: (s) =>
-      dmAbsenceLine(s.trade ?? "a business like theirs", s.city, s.businessName, {
-        appeared: s.appearedCount,
-        measured: s.measuredCount,
-      }),
+      withReason(
+        dmAbsenceLine(s.trade ?? "a business like theirs", s.city, s.businessName, {
+          appeared: s.appearedCount,
+          measured: s.measuredCount,
+        }),
+        s
+      ),
     instruction:
       "The finding is that somebody asking who to hire has already decided to buy, and the engine " +
       "answered that question without this business in it. Do NOT name any of the businesses that " +
@@ -216,7 +282,9 @@ const DM_ANGLES: DmAngle[] = [
         s.city,
         s.businessName,
         { appeared: s.appearedCount, measured: s.measuredCount },
-        NAME_COMPETITORS_IN_COLD_EMAIL ? s.topRival : null
+        // One name only, even on the no-website lane. "you came back and so did they" is a single
+        // comparison; a list of names turns a good-news line into a leaderboard they are losing.
+        NAME_COMPETITORS_IN_COLD_EMAIL ? (s.topRivals[0] ?? null) : null
       ),
     instruction:
       "The finding is that they DID come back, and this message must say so plainly and without " +
@@ -226,7 +294,10 @@ const DM_ANGLES: DmAngle[] = [
       "the description is not theirs and is not under their control.",
   },
   {
-    // The floor. No site to read, or nothing came back at all.
+    // ‼️ THE FLOOR, AND IT STAYS. It fires when there are no rivals AND nothing measured, which is
+    // still a real and common outcome: research missed, the bio said nothing usable, or every
+    // engine call came back empty. That case still has to produce something, and this is the only
+    // thing sayable when it does. It is deliberately the weakest sentence in the file.
     id: "no-site",
     needsMiss: false,
     needsRival: false,
@@ -243,14 +314,21 @@ const DM_ANGLES: DmAngle[] = [
 
 export function pickDmAngle(facts: DmFacts): DmAngle {
   const s = dmSubjectOf(facts);
-  const hasRival = Boolean(s.topRival) && NAME_COMPETITORS_IN_COLD_EMAIL;
+  const hasRival = s.topRivals.length > 0 && NAME_COMPETITORS_IN_COLD_EMAIL;
   const cleanSweep = s.measuredCount > 0 && s.missCount === 0;
 
+  // ‼️ THE BLANKET no-website VETO WAS REMOVED HERE (2026-08-25). It read
+  // `if (facts.kind === "nowebsite" && a.id !== "no-site") continue;` and gave two reasons: the
+  // trade would be a research guess rather than something read off their pages, and there was no
+  // rival name this file was allowed to print. Both were true and both are now false - MiniCheck
+  // carries the short buyer-language trade the questions were actually asked with, and its rivals
+  // come from extractRecommendedBatch like the hook lane's. What the veto cost was the whole point
+  // of the run: a prospect measurably absent from three of three buying questions was told a
+  // generic category fact and never told what happened when the engines were asked.
+  //
+  // Nothing was loosened to achieve that. The gates below are unchanged and still decide it, in
+  // both directions, off what was actually measured.
   for (const a of DM_ANGLES) {
-    // The no-website lane may only ever reach the last angle. It has no site read, so the trade in
-    // the three lines above it would be a research guess rather than something read off their
-    // pages, and it has no rival name this file is allowed to print. See DmSubject.topRival.
-    if (facts.kind === "nowebsite" && a.id !== "no-site") continue;
     if (a.needsMeasured && s.measuredCount === 0) continue;
     if (a.needsMiss && s.missCount === 0) continue;
     if (a.needsRival && !hasRival) continue;
@@ -279,7 +357,9 @@ export function dmContext(facts: DmFacts, angle: DmAngle): string {
     `Business: ${s.businessName}`,
     `What they do: ${s.trade ?? "not established, so never name their trade in the message"}`,
     `Who buys from them: ${s.buyerPersona ?? "unknown, so do not name a buyer type rather than inventing one"}`,
-    `City: ${s.city ?? "unknown"}`,
+    s.cityless
+      ? "City: NOT KNOWN, and the questions below were asked with no location in them"
+      : `City: ${s.city}`,
     "",
     s.questions.length
       ? `Questions actually put to ChatGPT (${s.questions.length}):`
@@ -313,15 +393,33 @@ export function dmContext(facts: DmFacts, angle: DmAngle): string {
     DM_CLOSE_LINE
   );
 
-  if (s.topRival && NAME_COMPETITORS_IN_COLD_EMAIL && angle.needsRival) {
+  if (s.topRivals.length > 0 && NAME_COMPETITORS_IN_COLD_EMAIL && angle.needsRival) {
     lines.push(
       "",
-      `The one rival you may name: ${s.topRival.name}, and it is already written into the fixed ` +
-        "sentence above. Do not mention it a second time, and do not mention any other name that " +
-        "appears in this brief. Every other name here is context for you alone."
+      `The only rival${s.topRivals.length > 1 ? "s" : ""} you may name: ` +
+        `${s.topRivals.map((r) => r.name).join(" and ")}, and ${
+          s.topRivals.length > 1 ? "they are" : "it is"
+        } already written into the fixed sentence above with ` +
+        "the right count against each one. Do not mention them a second time, do not attach a " +
+        "count to a name yourself, and do not mention any other name that appears in this brief. " +
+        "Every other name here is context for you alone."
     );
   } else {
     lines.push("", "You may NOT name any competitor in this message.");
+  }
+
+  // ‼️ A CITYLESS RUN ASKED NATIONAL QUESTIONS, and the message may not imply otherwise. The fixed
+  // lines drop the location clause on their own, so this exists to stop the model putting one back
+  // in prose. Stated as its own block rather than as a clause on the city line above, because a
+  // rule and its exception in one breath is heard as the rule. The dm-cityless lint rule is what
+  // makes it structural; this is what makes it avoidable.
+  if (s.cityless) {
+    lines.push(
+      "",
+      "‼️ THESE QUESTIONS WERE NOT TIED TO A PLACE. No city was known, so they were asked as plain " +
+        "national questions. You must NOT write 'in your area', 'near you', 'locally', 'in your " +
+        "city', or name any town, city, state or region. Say nothing at all about where."
+    );
   }
 
   // ‼️ The site tease is not offered on this lane at all. It is the email's move: it works there
@@ -510,6 +608,7 @@ async function finish(
     // anyway, `robots-tease` rejects it rather than letting an unbacked claim through.
     siteSignals: [],
     robots: null,
+    cityless: s.cityless,
   });
 
   return {
@@ -578,14 +677,18 @@ export function formatDmCard(
       : `:speech_balloon: *Instagram DM drafted* - *${s.businessName}*`
   );
   lines.push(`<${profileUrl}|Instagram profile>${leadUrl ? ` · <${leadUrl}|Open lead in CRM>` : ""}`);
+  // A run with no city asked national questions, and that has to be visible to the person deciding
+  // whether to send it. It is the difference between "absent in Coral Gables" and "absent in the
+  // United States", which are very different findings wearing the same sentence.
+  const where = s.cityless ? " · :globe_with_meridians: NO CITY, national questions" : "";
   lines.push(
     s.measuredCount > 0
       ? `Appeared in ${s.appearedCount} of ${s.measuredCount} measured${
           s.questions.length !== s.measuredCount
             ? ` (${s.questions.length - s.measuredCount} question(s) got no answer)`
             : ""
-        } · angle \`${set.angle}\` · lane \`${set.lane}\``
-      : `No questions came back · angle \`${set.angle}\` · lane \`${set.lane}\``
+        } · angle \`${set.angle}\` · lane \`${set.lane}\`${where}`
+      : `No questions came back · angle \`${set.angle}\` · lane \`${set.lane}\`${where}`
   );
 
   if (s.questions.length) {
@@ -597,7 +700,12 @@ export function formatDmCard(
     }
   }
 
-  if (s.topRival) lines.push("", `*Top rival:* ${s.topRival.name} (${s.topRival.count}x)`);
+  if (s.topRivals.length) {
+    lines.push(
+      "",
+      `*Named instead:* ${s.topRivals.map((r) => `${r.name} (${r.count}x)`).join(", ")}`
+    );
+  }
 
   for (const v of set.variants) {
     lines.push("", `*${v.opener}*${v.lintOk ? "" : "  :no_entry: REJECTED, do not send"}`);
@@ -628,13 +736,19 @@ export function formatDmNote(
       : `No questions came back. Angle: ${set.angle}. Lane: ${set.lane}.`
   );
 
+  if (s.cityless) {
+    lines.push("No city was known, so the questions were asked with no location in them.");
+  }
+
   for (const q of s.questions) {
     const verdict = q.appeared === null ? "no answer" : q.appeared ? "named" : "NOT named";
     const named = q.named.length ? ` Instead: ${q.named.join(", ")}.` : "";
     lines.push(`- "${q.prompt}" -> ${verdict}.${named}`);
   }
 
-  if (s.topRival) lines.push("", `Top rival: ${s.topRival.name} (${s.topRival.count}x)`);
+  if (s.topRivals.length) {
+    lines.push("", `Named instead: ${s.topRivals.map((r) => `${r.name} (${r.count}x)`).join(", ")}`);
+  }
 
   for (const v of set.variants) {
     lines.push("", `[${v.opener}]${v.lintOk ? "" : " REJECTED BY THE LINTER, do not send:"}`);

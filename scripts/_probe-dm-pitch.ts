@@ -20,14 +20,26 @@ import type { HookCheck } from "../src/lib/audit-engine/hook-pitch";
 import type { MiniCheck } from "../src/lib/audit-engine/no-website-pitch";
 import { lintDraft } from "../src/lib/audit-engine/draft-linter";
 import { PERMISSION_CLOSE } from "../src/lib/audit-engine/email-assistant";
-import { dmRivalLine, DM_ASK_LINE, DM_CLOSE_LINE, DM_MAX_SENTENCES } from "../src/config/pitch";
+import {
+  dmRivalLine,
+  dmReasonLine,
+  DM_ASK_LINE,
+  DM_CLOSE_LINE,
+  DM_MAX_SENTENCES,
+} from "../src/config/pitch";
 import { buildAliases, isMentioned } from "../src/lib/audit-engine/mention-match";
 import { isNeverTheirSite } from "../src/lib/audit-engine/web-hosts";
 
-/** 3 of 4 for the rival, 1 of 4 for the business: the shape Matthew asked the DM to state. */
-const RIVAL_COUNTS = { rival: 3, appeared: 1, measured: 4 };
+/** 1 of 4 for the business: the shape Matthew asked the DM to state. */
+const RIVAL_COUNTS = { appeared: 1, measured: 4 };
 /** The same run with a clean miss, which is the wording that carries an apostrophe. */
-const ZERO_COUNTS = { rival: 3, appeared: 0, measured: 4 };
+const ZERO_COUNTS = { appeared: 0, measured: 4 };
+/** Each rival carries its OWN count. Two names under one count is a false claim about one of them. */
+const ONE_RIVAL = [{ name: "Foundation Hair", count: 3 }];
+const TWO_RIVALS = [
+  { name: "Foundation Hair", count: 3 },
+  { name: "Bogat Aesthetics", count: 2 },
+];
 import {
   normalizeHandle,
   firstNameFrom,
@@ -106,8 +118,11 @@ function mini(over: Partial<MiniCheck> = {}): DmFacts {
       identity: null,
       researched: false,
       city: "Hallandale Beach, FL",
+      trade: "hair transplant surgery",
+      tradeSource: "bio",
       results: [],
       enginesAnswered: false,
+      topRivals: [],
       platform: null,
       ...over,
     } as MiniCheck,
@@ -115,21 +130,47 @@ function mini(over: Partial<MiniCheck> = {}): DmFacts {
 }
 
 check(
-  "the no-website lane only ever reaches the no-site angle",
-  pickDmAngle(mini({ results: [MISS, HIT], enginesAnswered: true })).id,
+  "the no-website lane reaches rival-substitute once it has measured rivals",
+  pickDmAngle(mini({ results: [MISS, HIT], enginesAnswered: true, topRivals: ONE_RIVAL })).id,
+  "rival-substitute"
+);
+
+check(
+  "‼️ with no rivals extracted it falls to the absence angle rather than inventing one",
+  pickDmAngle(mini({ results: [MISS, HIT], enginesAnswered: true, topRivals: [] })).id,
+  "buying-question"
+);
+
+check(
+  "‼️ and with nothing measured at all it still falls to the no-site floor",
+  pickDmAngle(mini({ results: [], enginesAnswered: false, topRivals: [] })).id,
   "no-site"
 );
 
 check(
-  "the no-website lane NEVER carries a rival, even when the check names one",
-  dmSubjectOf(mini({ results: [MISS], enginesAnswered: true })).topRival,
-  null
+  "the no-website lane carries at most two rivals",
+  dmSubjectOf(
+    mini({
+      results: [MISS],
+      enginesAnswered: true,
+      topRivals: [...TWO_RIVALS, { name: "Third Place", count: 1 }],
+    })
+  ).topRivals.length,
+  2
 );
 
 check(
-  "and so its brief tells the drafter it may not name a competitor",
-  dmContext(mini({ results: [MISS], enginesAnswered: true }), pickDmAngle(mini({ results: [MISS] })))
-    .includes("You may NOT name any competitor in this message."),
+  "‼️ the trade is the SHORT one the questions were asked with, never identity.whatTheyDo",
+  dmSubjectOf(mini({ trade: "laser skin treatments" })).trade,
+  "laser skin treatments"
+);
+
+check(
+  "a run with no rivals still tells the drafter it may not name a competitor",
+  dmContext(
+    mini({ results: [MISS], enginesAnswered: true, topRivals: [] }),
+    pickDmAngle(mini({ results: [MISS], enginesAnswered: true, topRivals: [] }))
+  ).includes("You may NOT name any competitor in this message."),
   true
 );
 
@@ -144,27 +185,45 @@ const RIVAL_FACTS = hook({
 
 check(
   "the reference line reads exactly as Matthew wrote it",
-  dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", RIVAL_COUNTS),
-  "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics comes back in 1."
+  dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", ONE_RIVAL, "Hairthetics", RIVAL_COUNTS),
+  "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran, and Hairthetics in 1."
+);
+
+check(
+  "‼️ two rivals print SEPARATE counts, because one count over two names is false about one of them",
+  dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", TWO_RIVALS, "Hairthetics", ZERO_COUNTS),
+  "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran and Bogat Aesthetics in 2, and Hairthetics doesn't come back in any of them."
+);
+
+check(
+  "‼️ the finding stays ONE sentence, so the reason line and an opener both fit inside the budget",
+  (dmRivalLine("x", "Y, ZZ", TWO_RIVALS, "B", ZERO_COUNTS).match(/[.!?]+(?=\s|$)/g) ?? []).length,
+  1
 );
 
 check(
   "the state is dropped from the city, so the sentence does not carry two commas in four words",
-  dmRivalLine("laser hair removal", "Bakersfield, CA", "X", "Y", RIVAL_COUNTS).includes("in Bakersfield,"),
+  dmRivalLine("laser hair removal", "Bakersfield, CA", ONE_RIVAL, "Y", RIVAL_COUNTS).includes("in Bakersfield,"),
   true
 );
 
 check(
+  "‼️ a cityless run drops the location clause rather than reaching for 'in your area'",
+  dmRivalLine("laser hair removal", null, ONE_RIVAL, "Y", RIVAL_COUNTS),
+  "I ran a quick check and when someone asks ChatGPT for laser hair removal, Foundation Hair shows up in 3 of the 4 searches I ran, and Y in 1."
+);
+
+check(
   "the brief hands the finished sentence over rather than asking for a fraction",
-  dmContext(RIVAL_FACTS, pickDmAngle(RIVAL_FACTS)).includes("Foundation Hair shows up in 1 of the 2 searches I ran. Hairthetics comes back in 1."),
+  dmContext(RIVAL_FACTS, pickDmAngle(RIVAL_FACTS)).includes("Foundation Hair shows up in 1 of the 2 searches I ran, and Hairthetics in 1."),
   true
 );
 
 check(
   "a body that reproduced the fixed line raises no warning",
   findingWarningFor(
-    "Hey Han,\n\nI ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics comes back in 1.\n\n" + DM_ASK_LINE,
-    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", RIVAL_COUNTS)
+    "Hey Han,\n\nI ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran, and Hairthetics in 1.\n\n" + DM_ASK_LINE,
+    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", ONE_RIVAL, "Hairthetics", RIVAL_COUNTS)
   ),
   null
 );
@@ -172,8 +231,8 @@ check(
 check(
   "a curly apostrophe still counts as reproduced",
   findingWarningFor(
-    "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran. Hairthetics doesn’t come back in any of them.",
-    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", ZERO_COUNTS)
+    "I ran a quick check and when someone asks ChatGPT for hair transplant surgery in Hallandale Beach, Foundation Hair shows up in 3 of the 4 searches I ran, and Hairthetics doesn’t come back in any of them.",
+    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", ONE_RIVAL, "Hairthetics", ZERO_COUNTS)
   ),
   null
 );
@@ -182,7 +241,7 @@ check(
   "a REWORDED fixed line is caught",
   findingWarningFor(
     "I checked and Foundation Hair ranks above you for hair transplants.",
-    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", "Foundation Hair", "Hairthetics", RIVAL_COUNTS)
+    dmRivalLine("hair transplant surgery", "Hallandale Beach, FL", ONE_RIVAL, "Hairthetics", RIVAL_COUNTS)
   ) !== null,
   true
 );
@@ -371,6 +430,162 @@ check(
     buildAliases("The Plump Room", "https://theplumproom.myaestheticrecord.com/online-booking")
   ),
   true
+);
+
+// ── The reason line, and the sentence budget it has to fit inside ────────────
+//
+// Matthew's draft said "because your website is not visible". For a prospect with no site at all
+// that is false in the way it reads, so the reason is picked from what the scan could actually
+// reach. These check that each version is one sentence and that each says only its own thing.
+
+for (const [state, must] of [
+  ["none", "you do not have a site of your own"],
+  ["booking_only", "belongs to your booking software"],
+  ["not_surfacing", "not showing up in what it pulls back"],
+] as const) {
+  check(`the ${state} reason line says the thing only IT may say`, dmReasonLine(state).includes(must), true);
+  check(
+    `the ${state} reason line is exactly one sentence`,
+    (dmReasonLine(state).match(/[.!?]+(?=\s|$)/g) ?? []).length,
+    1
+  );
+  check(`the ${state} reason line carries no em dash`, /[—–]/.test(dmReasonLine(state)), false);
+}
+
+check(
+  "‼️ the no-site reason says there is nothing to cite, NOT that a site is invisible",
+  /not visible|invisible/.test(dmReasonLine("none")),
+  false
+);
+
+// ‼️ THE WHOLE ANGLE, ASSEMBLED, AGAINST THE REAL GATE. The finding is now two sentences (the
+// measured absence plus the reason), the ask and the close are two more, and an opener is the
+// fifth. If any of them grows, every pretext variant starts failing dm-length, and this is the
+// check that says so before a live run does.
+const NOSITE_FACTS = mini({
+  results: [MISS, MISS, HIT],
+  enginesAnswered: true,
+  topRivals: TWO_RIVALS,
+  trade: "laser skin treatments",
+});
+const NOSITE_ANGLE = pickDmAngle(NOSITE_FACTS);
+const ASSEMBLED = [
+  NOSITE_ANGLE.finding(dmSubjectOf(NOSITE_FACTS)),
+  DM_ASK_LINE,
+  DM_CLOSE_LINE,
+].join("\n\n");
+
+check("the assembled no-site DM picks the rival angle", NOSITE_ANGLE.id, "rival-substitute");
+
+check(
+  "‼️ finding + reason + ask + close is FOUR sentences, leaving exactly one for the opener",
+  lintDraft({ body: ASSEMBLED, stage: "dm", siteSignals: [], robots: null }).findings.map((f) => f.rule),
+  []
+);
+
+check(
+  "...and it still passes with a one-sentence pretext opener in front of it",
+  lintDraft({
+    body: "Was running queries for another client and your name came up.\n\n" + ASSEMBLED,
+    stage: "dm",
+    siteSignals: [],
+    robots: null,
+  }).ok,
+  true
+);
+
+check(
+  "...while a second opener sentence is over budget and IS caught",
+  lintDraft({
+    body: "Was running queries for another client. Your name came up in what came back.\n\n" + ASSEMBLED,
+    stage: "dm",
+    siteSignals: [],
+    robots: null,
+  }).findings.map((f) => f.rule),
+  ["dm-length"]
+);
+
+check(
+  "the assembled DM names both rivals with their own counts",
+  ASSEMBLED.includes("Foundation Hair shows up in 3 of the 3 searches I ran and Bogat Aesthetics in 2"),
+  true
+);
+
+check(
+  "...and carries the no-site reason rather than the hook lane's",
+  ASSEMBLED.includes(dmReasonLine("none")),
+  true
+);
+
+// ── The cityless gate ────────────────────────────────────────────────────────
+//
+// "I don't know" on the city prompt runs the questions with no location in them. A message that
+// then says "in your area" describes a local search nobody ran, on a pitch whose whole basis is
+// that the reader can reproduce it.
+
+check("a cityless check reports itself as cityless", dmSubjectOf(mini({ city: null })).cityless, true);
+
+check("...and a run with a city does not", dmSubjectOf(mini({ city: "Coral Gables, FL" })).cityless, false);
+
+check(
+  "‼️ the brief tells a cityless run to say nothing at all about where",
+  dmContext(mini({ city: null, results: [MISS], enginesAnswered: true }), NOSITE_ANGLE).includes(
+    "THESE QUESTIONS WERE NOT TIED TO A PLACE"
+  ),
+  true
+);
+
+for (const phrase of ["in your area", "near you", "locally", "in the area", "in town"]) {
+  check(
+    `"${phrase}" is rejected on a cityless run`,
+    lintDraft({
+      body: `I ran a quick check on what ChatGPT recommends ${phrase}. ` + DM_ASK_LINE,
+      stage: "dm",
+      cityless: true,
+      siteSignals: [],
+      robots: null,
+    }).findings.map((f) => f.rule),
+    ["dm-cityless"]
+  );
+}
+
+check(
+  "‼️ ...and the SAME body passes when a city WAS known, so this is a gate and not a word ban",
+  lintDraft({
+    body: "I ran a quick check on what ChatGPT recommends in your area. " + DM_ASK_LINE,
+    stage: "dm",
+    cityless: false,
+    siteSignals: [],
+    robots: null,
+  }).ok,
+  true
+);
+
+check(
+  "a cityless draft that says nothing about where passes",
+  lintDraft({ body: ASSEMBLED, stage: "dm", cityless: true, siteSignals: [], robots: null }).ok,
+  true
+);
+
+// ── Rows written before topRivals existed ────────────────────────────────────
+//
+// check_json is whatever shape MiniCheck had the day it was written, and Regenerate rehydrates it
+// unchanged. A redraft of an old run must degrade to "no rivals, no trade" rather than throw.
+
+check(
+  "an old-shape stored check degrades to no rivals rather than throwing",
+  dmSubjectOf({
+    kind: "nowebsite",
+    businessName: "Hairthetics",
+    check: {
+      identity: null,
+      researched: false,
+      city: null,
+      results: [],
+      enginesAnswered: false,
+    } as unknown as MiniCheck,
+  }).topRivals,
+  []
 );
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
