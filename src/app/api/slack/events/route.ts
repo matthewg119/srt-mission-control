@@ -773,7 +773,7 @@ export async function POST(request: NextRequest) {
 
         // 1. A deep-research dump pasted into a client's thread. Explicit prefix only: see
         //    research-intake.ts for why sniffing is not acceptable here. This is the second
-        //    half of delivery step 9 — the brief went out, this is the answer coming back.
+        //    half of the avatar harvest step — the brief went out, this is the answer back.
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { isResearchPaste } = await import("@/lib/clients/research-intake");
           if (isResearchPaste(userText)) {
@@ -793,6 +793,30 @@ export async function POST(request: NextRequest) {
             if (!slackOk(posted)) {
               console.error("[slack/events] research reply failed in", parentThreadTs);
             }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 1b. `avatar: laser hair removal` in step 8's thread, or in step 23's on the call.
+        //
+        // ‼️ IT SITS ABOVE THE ASSISTANT BRANCH, WHICH IS THE BRANCH IT WOULD OTHERWISE BE EATEN
+        // BY. Free text in a step thread falls through to the general assistant, so without this
+        // a typed avatar would be answered by a model instead of written to the column, which is
+        // the exact shape of the bug that left clients.primary_avatar with no writer.
+        //
+        // The real logic is in clients/avatars.ts. This is a call, not an implementation: the
+        // prefix test, the Day-0 refusal and the question-set regeneration all live there.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleAvatarThreadReply } = await import("@/lib/clients/avatars");
+          const said = await handleAvatarThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (said) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
+            if (!slackOk(posted)) console.error("[slack/events] avatar reply failed");
             return NextResponse.json({ ok: true });
           }
         }
@@ -1691,6 +1715,35 @@ async function captureOnboardingUploads(args: {
   }
 
   if (filed === 0) return;
+
+  // ── Step 10: the research PDF coming back ──────────────────────────────────
+  //
+  // The deep research tool hands back a document, and asking somebody to select all of it and
+  // paste it into Slack behind a prefix is asking them to do the export by hand. Dropping the
+  // file into the step's own thread is the same explicit act the `research:` prefix is, scoped to
+  // the step it belongs to. No model reads the PDF: research-intake.ts says why.
+  if (args.client.stepKey === "avatar_harvest") {
+    const { ingestResearchPdf, formatIntakeReply } = await import("@/lib/clients/research-intake");
+
+    const pdfs = args.files.filter(
+      (f) => /pdf/i.test(f.mimetype ?? "") || /\.pdf$/i.test(f.name ?? "")
+    );
+    if (pdfs.length === 0) return;
+
+    for (const file of pdfs) {
+      const result = await ingestResearchPdf({ clientId: args.client.id, slackFileId: file.id });
+      // No sample of the phrases here: the text was never held in this scope and re-reading the
+      // PDF to print six lines is a second extraction for decoration. The counts are the answer.
+      const top: never[] = [];
+      const said = await slack.postThreadReply(
+        args.channel,
+        args.threadTs,
+        `*${result.filename ?? file.name ?? "That file"}*\n${formatIntakeReply(result, top)}`
+      );
+      if (!slackOk(said)) console.error("[slack/events] research PDF reply failed");
+    }
+    return;
+  }
 
   // ── Step 8: the review grid. Screenshots in, one grouped card out ──────────
   //

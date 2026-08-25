@@ -1766,6 +1766,128 @@ import { pageSlug } from "../src/lib/hub/pages";
 }
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- LANE 2 ---- avatar first (2026-08-25)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const {
+    slugifyAvatar,
+    isAvatarReply,
+    avatarLabelFromReply,
+    slotForTypedAvatar,
+    isAvatarSlot,
+    AVATAR_SLOTS,
+  } = require("../src/lib/clients/avatars") as typeof import("../src/lib/clients/avatars");
+  const { DELIVERY_STEPS: STEPS } =
+    require("../src/config/delivery-steps") as typeof import("../src/config/delivery-steps");
+  const { RESEARCH_METHOD_PART_1, RESEARCH_METHOD_PART_2, RESEARCH_METHOD_DOCUMENTS } =
+    require("../src/config/research-method") as typeof import("../src/config/research-method");
+
+  // ── The reorder ────────────────────────────────────────────────────────────
+  //
+  // ‼️ THE KEYS DO NOT CHANGE AND THE ARRAY POSITION DOES. Renaming a key would orphan every
+  // client_delivery_steps row already carrying it, including the one on the live client where
+  // this step came out `skipped`.
+  const keys = STEPS.map((s) => s.key);
+  eq("the avatar sits immediately after the competitor shortlist",
+    keys[keys.indexOf("competitor_shortlist") + 1], "avatar_confirmed");
+  ok("the harvest now waits on the avatar",
+    (STEPS.find((s) => s.key === "avatar_harvest")?.blockedBy ?? []).includes("avatar_confirmed"));
+  ok("the avatar itself waits only on the baseline scan",
+    JSON.stringify(STEPS.find((s) => s.key === "avatar_confirmed")?.blockedBy ?? []) ===
+      JSON.stringify(["baseline_scan"]));
+  // ‼️ IT HAS TO STAY `manual`. reachableCursor breaks the walk on the first unresolved step that
+  // waits for a person, and that break is what stops the harvest being anchored before the avatar
+  // it researches has been chosen.
+  eq("and it still waits for a person", STEPS.find((s) => s.key === "avatar_confirmed")?.mode ?? "none", "manual");
+  eq("the step count is unchanged", STEPS.length, 33);
+
+  {
+    const seenPhases = new Set<string>();
+    let running = "";
+    let contiguous = true;
+    for (const s of STEPS) {
+      if (s.phase !== running) {
+        if (seenPhases.has(s.phase)) contiguous = false;
+        seenPhases.add(s.phase);
+        running = s.phase;
+      }
+    }
+    ok("phases are still contiguous after the move", contiguous);
+  }
+
+  // ── The slug, which is what travels between clients ────────────────────────
+  //
+  // ‼️ IT HAS TO SATISFY question_bank_avatar_check, `^[a-z0-9][a-z0-9-]{0,59}$`. A slug that
+  // fails it does not fail at the panel, it fails at the next harvest write.
+  const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
+  eq("a plain label", slugifyAvatar("laser hair removal"), "laser-hair-removal");
+  eq("punctuation and case", slugifyAvatar("Cash-Pay Clinic Operator (Aesthetics)"), "cash-pay-clinic-operator-aesthetics");
+  ok("a long label still satisfies the check constraint",
+    SLUG_RE.test(slugifyAvatar("Healthcare Group or DSO Expanding Into Cash-Pay Ancillary Services")));
+  ok("no slug ends on a hyphen after truncation", !slugifyAvatar("a".repeat(58) + " tail").endsWith("-"));
+  eq("something with nothing in it reduces to nothing", slugifyAvatar("!!! ???"), "");
+
+  // ── The slot is constrained, the label is not ──────────────────────────────
+  //
+  // That asymmetry is why "type a new one" needed no migration at all: the CHECK constraint on
+  // clients.primary_avatar allows a1/a2/a3 and stays, and a typed avatar occupies a slot under
+  // whatever label was typed.
+  eq("three slots", [...AVATAR_SLOTS], ["a1", "a2", "a3"]);
+  ok("a1 is a slot", isAvatarSlot("a1"));
+  ok("a label is not a slot", !isAvatarSlot("laser hair removal"));
+
+  const candidates = [
+    { slot: "a1" as const, label: "Cash-Pay Clinic Operator", slug: "cash-pay-clinic-operator", why: null, ticket: null, aiQuestion: null },
+    { slot: "a2" as const, label: "Multi-Location Franchise", slug: "multi-location-franchise", why: null, ticket: null, aiQuestion: null },
+    { slot: "a3" as const, label: "Healthcare Group", slug: "healthcare-group", why: null, ticket: null, aiQuestion: null },
+  ];
+  eq("a typed label that matches a candidate takes its slot", slotForTypedAvatar("cash-pay clinic operator", candidates), "a1");
+  eq("a genuinely new one still lands in a slot", slotForTypedAvatar("laser hair removal", candidates), "a1");
+  eq("and it takes a free slot when there is one", slotForTypedAvatar("laser hair removal", candidates.slice(0, 1)), "a2");
+
+  // ── The prefix, which is required and never sniffed ────────────────────────
+  //
+  // Same rule research-intake.ts carries for `research:`. A confirmed avatar decides what the
+  // harvest researches and what the Day-0 question set is built from, so a sentence somebody
+  // typed while thinking out loud must not be able to become one.
+  ok("the prefix is recognised", isAvatarReply("avatar: laser hair removal"));
+  ok("case and spacing do not matter", isAvatarReply("  Avatar :  filler"));
+  ok("a sentence about avatars is NOT an avatar", !isAvatarReply("I think the avatar should be filler"));
+  eq("the label comes back clean", avatarLabelFromReply("avatar:  laser hair removal  "), "laser hair removal");
+
+  // ── The two research documents ─────────────────────────────────────────────
+  ok("part 1 is embedded verbatim", RESEARCH_METHOD_PART_1.includes("¿Por qué empezamos con la investigación?"));
+  ok("part 2 is embedded verbatim", RESEARCH_METHOD_PART_2.includes("pérdida de peso"));
+  ok("the repo's own note is not in the constant", !RESEARCH_METHOD_PART_1.includes("Source material for"));
+  ok("both documents are handed over together",
+    RESEARCH_METHOD_DOCUMENTS.includes(RESEARCH_METHOD_PART_1) && RESEARCH_METHOD_DOCUMENTS.includes(RESEARCH_METHOD_PART_2));
+  ok("no em dashes anywhere in the method", !RESEARCH_METHOD_DOCUMENTS.includes("—"));
+
+  // ── The brief is his three messages ────────────────────────────────────────
+  const framework = buildDeepResearchBrief({ ...briefInput, avatarLabel: "laser hair removal", vertical: "med spa" });
+  ok("message 1 sets the writer up", framework.includes("Eres mi redactor experto"));
+  ok("message 2 hands over the method", framework.includes("dos documentos que enseñan"));
+  ok("message 3 asks for the deep research prompt", framework.includes("llamada deep research"));
+  ok("the three are in order",
+    framework.indexOf("MENSAJE 1") < framework.indexOf("MENSAJE 2") &&
+      framework.indexOf("MENSAJE 2") < framework.indexOf("MENSAJE 3"));
+  // ‼️ [PRODUCTO] IS THE CONFIRMED AVATAR, WHICH IS THE WHOLE REASON THIS LANE EXISTS.
+  ok("the avatar fills [PRODUCTO]", framework.includes("investigación para laser hair removal"));
+  ok("and the slot itself is gone", !framework.includes("[PRODUCTO]"));
+  ok("the sales page instruction is there", /adjuntar la página de ventas/.test(framework));
+  ok("the method travels with it", framework.includes(RESEARCH_METHOD_PART_2));
+  ok("no em dashes in the brief", !framework.includes("—"));
+  // Absent says so rather than researching "the business", which is what every brief did while
+  // the column had no writer at all.
+  const noAvatar = buildDeepResearchBrief(briefInput);
+  ok("no avatar says so out loud", noAvatar.includes("NOT CONFIRMED YET"));
+  ok("and message 3 does not invent one", noAvatar.includes("[AVATAR NO CONFIRMADO]"));
+  eq("still deterministic with the avatar in it",
+    framework === buildDeepResearchBrief({ ...briefInput, avatarLabel: "laser hair removal", vertical: "med spa" }), true);
+}
+
+
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} checks failed.`);
   process.exit(1);

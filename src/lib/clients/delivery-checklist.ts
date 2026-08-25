@@ -421,7 +421,7 @@ export async function setDeliveryStep(args: {
   // report is known finished, whichever route got it there.
   //
   // Swallowed, unlike the Day-0 stamp above. A missing vertical is not a silent wrong state:
-  // verticalFor() refuses out loud at step 9 and names this step as the fix.
+  // verticalFor() refuses out loud at the harvest step and names this step as the fix.
   if (args.stepKey === "baseline_scan" && complete) {
     const { adoptAuditClassification } = await import("@/lib/clients/baseline-scan");
     const adopted = await adoptAuditClassification(args.clientId).catch((e) => ({

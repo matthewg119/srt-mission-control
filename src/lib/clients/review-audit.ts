@@ -1,4 +1,5 @@
-// The review audit — delivery step 8, Runner v3 section 8 / SOP 2.2.
+// The review audit — delivery step 9, Runner v3 section 8 / SOP 2.2.
+// (Step 8 as of 2026-08-25 the avatar sits above it; the KEY is unchanged, only the number.)
 //
 // Per review-bearing platform, for this client AND each of the three competitors picked at
 // step 7: total reviews, average rating, date of the most recent one, how often the owner
@@ -406,7 +407,7 @@ export interface ReviewIngestResult {
 const MAX_VISION_BYTES = 6 * 1024 * 1024;
 
 /**
- * Read every screenshot in step 8's thread that has not already produced a proposal.
+ * Read every screenshot in the review audit step's thread that has not produced a proposal.
  *
  * ‼️ IT WRITES `proposed` AND NOTHING ELSE. Not review_count, not checked_at, not
  * owner_response_rate. A row that already carries a recorded count is skipped outright, so a

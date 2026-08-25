@@ -1,4 +1,4 @@
-// The other end of the deep research brief — delivery step 9, the half that comes back.
+// The other end of the deep research brief — delivery step 10, the half that comes back.
 //
 // The brief goes out, a person runs it in a deep-research tool, and the answer arrives as a
 // wall of text pasted into the client's ops thread. Without this file that answer has nowhere
@@ -99,6 +99,23 @@ export async function ingestResearch(args: {
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const vertical = resolved.vertical;
 
+  // ‼️ DYNAMIC IMPORT: avatars.ts reaches this module through reuseAvatarResearch, so a static
+  // import here closes a cycle. Same reason harvest.ts does it.
+  const { confirmedAvatarFor } = await import("./avatars");
+  const avatar = await confirmedAvatarFor(args.clientId);
+
+  // Refuses for the same reason the harvest refuses: question_bank has no client_id, so a phrase
+  // filed under a null avatar cannot be attributed to a buyer afterwards, and this text is going
+  // into a corpus every client in the vertical reads from.
+  if (!avatar) {
+    return {
+      ok: false,
+      error:
+        "No avatar is confirmed on this client, so there is nothing to file this research under. " +
+        "Confirm the avatar first: it is what the research was supposed to be about.",
+    };
+  }
+
   const phrases: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
 
   if (!phrases.length) {
@@ -146,6 +163,7 @@ export async function ingestResearch(args: {
     .from("question_bank")
     .select("normalized")
     .eq("vertical", vertical)
+    .eq("avatar", avatar.slug)
     .in("normalized", phrases.map((p) => p.normalized));
 
   const knownSet = new Set((known ?? []).map((k) => k.normalized as string));
@@ -161,11 +179,18 @@ export async function ingestResearch(args: {
       source_url: null,
       frequency_score: p.frequencyScore,
       commercial_intent_score: p.commercialIntentScore,
-      // ‼️ avatar stays NULL. The avatar is confirmed by a human at step 11; tagging a1/a2/a3
-      // here would be inventing the tag two steps early and then treating it as evidence.
+      // ‼️ TAGGED WITH THE CONFIRMED AVATAR'S SLUG. THIS COMMENT USED TO SAY THE OPPOSITE.
+      //
+      // It read "avatar stays NULL, the avatar is confirmed by a human at step 11", which was
+      // true while the confirmation came after this step. It comes before it now, so the research
+      // was commissioned FOR a named buyer and the tag records which. The slug rather than the
+      // slot, because this table is shared across every client in the vertical.
+      avatar: avatar.slug,
       objection_phrase: p.objectionPhrase,
     })),
-    { onConflict: "vertical,normalized", ignoreDuplicates: false }
+    // Must match question_bank_phrase_avatar_key exactly. A target that matches no index is
+    // 42P10 at PLAN time, so it fails on every run rather than on a collision.
+    { onConflict: "vertical,avatar,normalized", ignoreDuplicates: false }
   );
 
   if (error) return { ok: false, error: error.message };
@@ -201,4 +226,65 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
   );
 
   return lines.join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The other way it comes back: the PDF the research tool produced
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Read a PDF dropped into step 10's thread as the research answer.
+ *
+ * Matthew: "If I click done I should paste back the PDF that It gave me for the deep research."
+ * Deep research tools hand back a document, and asking somebody to select all of it and paste it
+ * into Slack with a prefix in front is asking them to do the export by hand.
+ *
+ * ‼️ NO MODEL RUNS IN THE EXTRACTION, AND THAT IS NOT AN OPTIMIZATION. src/lib/deck/extract.ts
+ * says it in its own header: a model asked to transcribe a PDF tidies punctuation, drops a stray
+ * line and fixes what it reads as a typo. Here that would destroy the exact thing this step
+ * collects, which is the market's own wording with its typos intact. `unpdf`, and the same
+ * extractor the automated harvest uses on the text that comes out.
+ *
+ * ‼️ A PDF UPLOAD IS AN EXPLICIT ACT, WHICH IS WHY IT QUALIFIES WHERE SNIFFING WOULD NOT. The
+ * `research:` prefix exists because a message in a thread might be somebody thinking out loud
+ * and a phrase that reaches question_bank can end up in a set frozen at Day 0. Dropping a file
+ * into a step's thread is not something anybody does by accident, and it is scoped to THAT step.
+ */
+export async function ingestResearchPdf(args: {
+  clientId: string;
+  slackFileId: string;
+}): Promise<ResearchIntakeResult & { filename?: string }> {
+  const { data: doc } = await supabaseAdmin
+    .from("client_docs")
+    .select("filename, content_type, storage_ref")
+    .eq("slack_file_id", args.slackFileId)
+    .maybeSingle();
+
+  if (!doc?.storage_ref) {
+    return { ok: false, error: "that file is not filed yet, so there is nothing to read" };
+  }
+
+  const filename = (doc.filename as string | null) ?? "that file";
+  const contentType = (doc.content_type as string | null) ?? "";
+  if (!/pdf/i.test(contentType) && !/\.pdf$/i.test(filename)) {
+    return { ok: false, error: "that is not a PDF", filename };
+  }
+
+  const dl = await supabaseAdmin.storage.from("onboarding").download(doc.storage_ref as string);
+  if (dl.error || !dl.data) {
+    return { ok: false, error: dl.error?.message ?? "the stored file could not be read", filename };
+  }
+
+  const { extractPdfText } = await import("@/lib/deck/extract");
+  let text: string;
+  try {
+    text = await extractPdfText(Buffer.from(await dl.data.arrayBuffer()));
+  } catch (e) {
+    return { ok: false, error: `that PDF could not be read: ${(e as Error).message}`, filename };
+  }
+
+  // The prefix is added HERE rather than relaxing the trigger, so ingestResearch keeps exactly
+  // one rule about what counts as research and there is no second, looser door into it.
+  const result = await ingestResearch({ clientId: args.clientId, text: `research: ${text}` });
+  return { ...result, filename };
 }

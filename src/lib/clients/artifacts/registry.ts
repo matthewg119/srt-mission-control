@@ -109,7 +109,7 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return generatePresencePdf(clientId);
   },
 
-  // Both halves of step 9. The citations harvest runs itself; the brief is generated and then
+  // Both halves of the avatar harvest. The citations harvest runs itself; the brief is then
   // WAITS for a person, which is why the step is auto_then_manual rather than auto.
   avatar_harvest: async (clientId) => {
     const { runHarvest, formatHarvestSummary } = await import("../harvest");

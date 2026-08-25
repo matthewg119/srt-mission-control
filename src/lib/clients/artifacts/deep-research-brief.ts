@@ -1,39 +1,62 @@
-// Delivery step 9, the half of it a person runs.
+// Delivery step 10, the half of it a person runs.
 //
-// ‼️ RECONSTRUCTED 2026-08-19 after this file was accidentally overwritten while it was
-// still untracked. The contract below is taken from scripts/test-onboarding-artifacts.ts,
-// which asserts the section headings, the verbatim rules and the deterministic output, and
-// from registry.ts, which calls generateDeepResearchBrief(clientId). If anything here reads
-// as a paraphrase of the original intent rather than the original wording, that is why.
+// ‼️ IT IS MATTHEW'S THREE-MESSAGE CHATGPT FRAMEWORK NOW (2026-08-25). What it emits is three
+// paste-ready blocks in his wording, in the language he runs them in, with the slots filled from
+// this client's record. Message 1 sets the writer up, message 2 teaches it how to research by
+// handing it his two documents, and message 3 asks it to write the deep-research prompt for the
+// CONFIRMED AVATAR, which is the whole reason the avatar moved to step 8.
 //
-// The step is `auto_then_manual`: runHarvest() in ../harvest.ts is the automatic half and
-// scrapes real phrasings off the pages the engines cited; this is the manual half. It emits
-// a brief a person pastes into a deep-research tool, and the result comes back into
-// question_bank with source 'deep_research'.
+// The step is `auto_then_manual`: runHarvest() in ../harvest.ts is the automatic half and scrapes
+// real phrasings off the pages the engines cited; this is the manual half. It emits a brief a
+// person runs, and the result comes back into question_bank with source 'deep_research'.
 //
 // ─── THE BRIEF IS WRITTEN, NOT GENERATED ─────────────────────────────────────────────
 //
-// A model asked to "write a research brief" writes a different one every run, which makes
-// two clients' phrase sets incomparable and makes a regression in the template invisible.
-// So the template is code and the client's facts are interpolated into it. The test asserts
-// buildDeepResearchBrief(x) === buildDeepResearchBrief(x), byte for byte, and that assertion
-// is the whole reason this is a function and not a prompt.
+// A model asked to "write a research brief" writes a different one every run, which makes two
+// clients' phrase sets incomparable and makes a regression in the template invisible. So the
+// template is code and the client's facts are interpolated into it. The test asserts
+// buildDeepResearchBrief(x) === buildDeepResearchBrief(x), byte for byte, and that assertion is
+// the whole reason this is a function and not a prompt.
+//
+// The two teaching documents are TEXT CONSTANTS in @/config/research-method for the same reason.
+// A file read would make determinism a property of the filesystem, and a file read inside a
+// lambda is a deployment concern on top of that.
 //
 // ─── VERBATIM MEANS VERBATIM ─────────────────────────────────────────────────────────
 //
-// The owner's own words for their objections, their ideal customer and who they do not want
-// go in EXACTLY as typed, typos included. They are the most valuable strings in the file:
-// an owner writing "im scared itll look fake" has told you the register their buyers think
-// in, and tidying it into "concerns about unnatural results" throws that away and replaces
-// it with agency language. The test checks for the typo on purpose.
+// The owner's own words for their objections, their ideal customer and who they do not want go in
+// EXACTLY as typed, typos included. They are the most valuable strings in the file: an owner
+// writing "im scared itll look fake" has told you the register their buyers think in, and tidying
+// it into "concerns about unnatural results" throws that away and replaces it with agency
+// language. The test checks for the typo on purpose.
+//
+// ─── WHY THE ENGLISH SPEC SURVIVED THE REWRITE ───────────────────────────────────────
+//
+// Message 3 asks the model to write a deep-research prompt and says to be as specific as
+// possible. WHAT SPECIFIC MEANS is the block that was already here: six pages minimum, a source
+// per claim, the three parts of the customer-awareness framework, the reading level, and a ranked
+// list of twenty-five phrases with the source each came from. Matthew's call, made with both
+// options stated. Deleting it would have thrown away the only part of this file that says what
+// good output looks like, and it is also what fifteen assertions in
+// scripts/test-onboarding-artifacts.ts check.
 
 import { supabaseAdmin } from "@/lib/db";
+import { RESEARCH_METHOD_DOCUMENTS } from "@/config/research-method";
 import { deliverArtifact } from "./deliver";
 
 export interface BriefInput {
   clinicName: string;
   city: string | null;
   state: string | null;
+  /**
+   * The confirmed avatar's label, which is what [PRODUCTO] in message 3 becomes.
+   *
+   * ‼️ OPTIONAL, AND ITS ABSENCE IS STATED RATHER THAN PAPERED OVER. Step 10 is blocked on the
+   * confirmation so in practice it is always here; when it is not, the brief says which step
+   * fills it instead of quietly researching "the business", which is what every brief did before
+   * the avatar had a writer at all.
+   */
+  avatarLabel?: string | null;
   /** The treatment the money is in. Null when intake never recorded one. */
   primaryTreatment: string | null;
   services: string[];
@@ -46,6 +69,8 @@ export interface BriefInput {
   citedDomains: string[];
   /** Businesses the engines named instead of this one. */
   namedInstead: string[];
+  /** The vertical, so message 1 can say what this business IS in one phrase. */
+  vertical?: string | null;
 }
 
 /** An absent value says so rather than leaving a hole the reader has to interpret. */
@@ -60,28 +85,88 @@ function list(items: string[], empty: string): string {
   return items.length > 0 ? items.map((i) => `- ${i}`).join("\n") : `- ${empty}`;
 }
 
+const RULE = "────────────────────────────────────────────────────────────";
+
 /**
  * The brief. Deterministic: same input, same bytes.
  *
- * Structured on the customer-awareness framework the rest of SRT's research uses, so the
- * three parts are stable headings a reader learns once. The test asserts each of them.
+ * Three messages, in order, each fenced so it can be copied without picking up the one after it.
  */
 export function buildDeepResearchBrief(input: BriefInput): string {
   const where = [input.city, input.state].filter(Boolean).join(", ") || NOT_RECORDED;
+  const avatar = (input.avatarLabel ?? "").trim();
+  const producto = avatar || "[AVATAR NO CONFIRMADO]";
+  const trade = (input.vertical ?? "").trim();
+
+  // ‼️ [EXPLICA QUÉ ESTÁS VENDIENDO Y A QUIÉN] IS THE SLOT AND THIS IS WHAT FILLS IT. It is the
+  // avatar, the trade, the city and what they sell, in one sentence, because that is the whole
+  // job of message 1, and a slot left as a bracket is a slot somebody has to fill by hand at the
+  // exact moment they are trying to paste.
+  const selling = [
+    `Vendo los servicios de ${input.clinicName}`,
+    trade ? ` (${trade})` : "",
+    where !== NOT_RECORDED ? ` en ${where}` : "",
+    ". El cliente al que quiero atraer es: ",
+    avatar || "todavía no hay un avatar confirmado, ver el paso 8 del tablero",
+    ".",
+    input.primaryTreatment ? ` El servicio donde está el dinero es ${input.primaryTreatment}.` : "",
+    input.services.length ? ` También ofrecemos: ${input.services.join(", ")}.` : "",
+  ].join("");
 
   return `DEEP RESEARCH BRIEF
 ${input.clinicName}${where !== NOT_RECORDED ? `, ${where}` : ""}
+Avatar: ${avatar || "NOT CONFIRMED YET. Confirm it on the board, it is the step above this one."}
 
-WHAT THIS IS FOR
+HOW TO RUN THIS
 
-I am building pages that answer the questions real buyers ask before they choose a
-provider. I need their language, not the industry's. Everything below feeds a ranked list
-of phrases, so precision matters more than polish.
+Three messages, in order, into one new conversation. Send message 1 and wait for the answer
+before sending message 2. Everything between the rules is what gets pasted; nothing outside them
+does.
+
+Attach this client's own AI Visibility Scorecard PDF to message 1 as the sales page. It is filed
+against the baseline scan step on the board.
+
+${RULE}
+MENSAJE 1
+${RULE}
+
+Eres mi redactor experto y te especializas en escribir textos altamente persuasivos de estilo de
+respuesta directa para mi marca.
+
+${selling}
+
+Te voy a adjuntar la página de ventas de este negocio para que entiendas la oferta, el tono y las
+promesas que ya estamos haciendo. Léela completa antes de responder.
+
+Responde solamente confirmando que entendiste el producto y a quién se lo vendemos.
+
+${RULE}
+MENSAJE 2
+${RULE}
+
+Te voy a enviar dos documentos que enseñan cómo hacer una investigación profunda sobre tu
+producto y sobre el mercado. Léelos completos. No resumas todavía: confirma que los entendiste y
+dime en una línea cuál es el objetivo de la investigación.
+
+${RESEARCH_METHOD_DOCUMENTS}
+
+${RULE}
+MENSAJE 3
+${RULE}
+
+Genial, ahora que entiendes correctamente cómo hacer investigación, quiero que crees un prompt
+completo para la nueva herramienta de OpenAI llamada deep research para que realice esta
+investigación para ${producto}. Por favor, sé lo más específico posible aquí para obtener la mejor
+calidad de investigación. Incluye también que quieres que deep research compile toda la
+investigación encontrada.
+
+Esto es lo que ya sabemos del negocio, y esto es lo que el prompt tiene que pedir de vuelta.
 
 WHAT I ALREADY KNOW
 
 Business: ${input.clinicName}
 Where: ${where}
+The customer this is aimed at: ${val(avatar)}
 The treatment the money is in: ${val(input.primaryTreatment)}
 Services offered:
 ${list(input.services, NOT_RECORDED)}
@@ -137,7 +222,12 @@ at, because a page pitched above it does not get read.
 
 Finish with a ranked list of the twenty-five phrases you would build pages around, most
 commercially urgent first, each with the source it came from and one line on why it earns
-its place.`;
+its place.
+
+${RULE}
+
+Bring the answer back into this step's thread. Either paste it with \`research:\` in front of it,
+or drop the PDF the tool gave you straight in: both file the phrases against this avatar.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,7 +252,7 @@ interface AutoResult {
 export async function generateDeepResearchBrief(clientId: string): Promise<AutoResult> {
   const { data: client } = await supabaseAdmin
     .from("clients")
-    .select("legal_name, dba_name, city, state, contact_id, domain, services, ideal_patient")
+    .select("legal_name, dba_name, city, state, contact_id, domain, services, ideal_patient, business_type")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -191,10 +281,25 @@ export async function generateDeepResearchBrief(clientId: string): Promise<AutoR
     (client.domain as string | null) ?? null
   );
 
+  // The confirmed avatar is what [PRODUCTO] in message 3 becomes, and it is the reason this step
+  // now runs AFTER the confirmation rather than two steps before it.
+  const { confirmedAvatarFor, recordAvatarPrompt } = await import("../avatars");
+  const { verticalFor } = await import("../harvest");
+  const avatar = await confirmedAvatarFor(clientId);
+  const resolvedVertical = await verticalFor(clientId);
+
   const brief = buildDeepResearchBrief({
     clinicName: (client.dba_name as string) || (client.legal_name as string) || "This business",
     city: (client.city as string | null) ?? null,
     state: (client.state as string | null) ?? null,
+    avatarLabel: avatar?.label ?? null,
+    // ‼️ THE PROSE ONE, NOT THE KEY. business_type reads "AI visibility (AEO) marketing agency
+    // for local businesses"; vertical_slug reads "aeo-agency". Message 1 is a sentence somebody
+    // pastes into a chat, and a slug in the middle of it tells the model less than the phrase the
+    // classifier already wrote. verticalFor() is still what KEYS everything, and it is unchanged.
+    vertical:
+      ((client.business_type as string | null) ?? "").trim() ||
+      (resolvedVertical.ok ? resolvedVertical.vertical : null),
     primaryTreatment: str(services.primary_treatment) ?? str(services.primaryTreatment),
     services: serviceList,
     objections: str(ideal.objections),
@@ -205,15 +310,32 @@ export async function generateDeepResearchBrief(clientId: string): Promise<AutoR
     namedInstead,
   });
 
+  // ‼️ THE RENDERED PROMPT IS FILED AGAINST THE AVATAR, NOT AGAINST THE CLIENT. That is the
+  // reuse mechanism: the next client in this vertical aiming at the same buyer is offered this
+  // back instead of spending the research run again. It never overwrites research somebody has
+  // already brought back, and it is skipped entirely when there is no avatar to file it under.
+  if (avatar && resolvedVertical.ok) {
+    await recordAvatarPrompt({
+      vertical: resolvedVertical.vertical,
+      avatarSlug: avatar.slug,
+      avatarLabel: avatar.label,
+      promptText: brief,
+      clientId,
+    });
+  }
+
   const result = await deliverArtifact({
     clientId,
     stepKey: "avatar_harvest",
     filename: "deep-research-brief.txt",
     buffer: Buffer.from(brief, "utf8"),
     contentType: "text/plain; charset=utf-8",
-    message:
-      "Deep research brief. Paste it into the research tool, then bring the ranked list back " +
-      "into this thread. The step stays open until that lands.",
+    message: avatar
+      ? `Deep research brief for *${avatar.label}*. Three messages, in order, into one new ` +
+        "conversation. Bring the answer back into this thread: paste it with `research:` in " +
+        "front of it, or drop the PDF straight in. The step stays open until that lands."
+      : "Deep research brief. No avatar is confirmed, so message 3 has no product in it: " +
+        "confirm one on the board and un-tick this step to regenerate.",
   });
 
   return { ok: result.ok, error: result.error, docId: result.docId };

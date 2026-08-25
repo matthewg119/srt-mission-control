@@ -1,4 +1,10 @@
-// The automated half of the avatar phrase harvest — delivery step 9, Runner v3 section 9.
+// The automated half of the avatar phrase harvest — delivery step 10, Runner v3 section 9.
+//
+// ‼️ IT RUNS AFTER THE AVATAR IS CONFIRMED NOW, AND THAT REVERSED THIS FILE'S OLD PREMISE.
+// The confirmation moved from position 11 to position 8 on 2026-08-25, because the avatar decides
+// which buyer the phrases are being collected for. Everything harvested here is TAGGED with that
+// avatar's slug, which is what lets the next client in the vertical aiming at the same buyer reuse
+// the work instead of paying for it again.
 //
 // ‼️ WHAT THIS READS, AND WHAT IT DELIBERATELY DOES NOT.
 //
@@ -258,7 +264,7 @@ export async function verticalFor(
 
 export async function runHarvest(
   clientId: string
-): Promise<{ ok: boolean; error?: string; phrases?: number; pages?: number; runId?: string }> {
+): Promise<{ ok: boolean; error?: string; phrases?: number; pages?: number; runId?: string; avatar?: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
     .select("vertical_slug, business_type, city, state, ideal_patient")
@@ -270,6 +276,31 @@ export async function runHarvest(
   const resolved = await verticalFor(clientId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const vertical = resolved.vertical;
+
+  // ‼️ DYNAMIC IMPORT, AND IT HAS TO BE. avatars.ts imports verticalFor from THIS file, so a
+  // static import here closes a cycle that builds in dev and fails on a cold module graph. Same
+  // move audit-tools.ts makes for edit_draft, and for the same reason.
+  const { confirmedAvatarFor } = await import("./avatars");
+  const avatar = await confirmedAvatarFor(clientId);
+
+  // ‼️ IT REFUSES RATHER THAN FILING UNDER NULL, and that reverses what this step used to do.
+  //
+  // The avatar is confirmed at step 8 now and this step is blocked on it, so an unconfirmed
+  // avatar here means something skipped the gate rather than that the work is early. Filing the
+  // phrases under a null avatar would put them in the shared corpus untagged, and question_bank
+  // has no client_id, so there is no per-client key to unpick them by afterwards. Same reasoning
+  // verticalFor() records one function up, and Matthew's same call: a step that parks in `error`
+  // with a fix line costs one Re-check; a wrong write costs a corpus.
+  if (!avatar) {
+    return {
+      ok: false,
+      error:
+        "No avatar is confirmed on this client, so there is nothing to file these phrases under. " +
+        "question_bank has no client_id and is shared across every client in the vertical, so an " +
+        "untagged harvest cannot be unpicked later. Confirm the avatar first: it is the step " +
+        "directly above this one on the board.",
+    };
+  }
 
   const { data: report } = await supabaseAdmin
     .from("audit_reports")
@@ -340,14 +371,26 @@ export async function runHarvest(
       source_url: p.sourceUrl,
       frequency_score: p.frequencyScore,
       commercial_intent_score: p.commercialIntentScore,
-      // ‼️ avatar stays NULL. Step 11 is where a human confirms an avatar; tagging a1/a2/a3 two
-      // steps early would be inventing the tag and then treating it as evidence.
+      // ‼️ TAGGED WITH THE CONFIRMED AVATAR'S SLUG. THIS COMMENT USED TO SAY THE OPPOSITE.
+      //
+      // It read "avatar stays NULL, step 11 is where a human confirms an avatar", which was true
+      // while the confirmation came two steps after this one. The avatar is confirmed BEFORE this
+      // runs now, so the tag is a record rather than a guess.
+      //
+      // The SLUG, never the a1/a2/a3 slot: this table has no client_id and is shared across every
+      // client in the vertical forever, and a slot only means something next to the one niche
+      // brief that offered it.
+      avatar: avatar.slug,
       objection_phrase: p.objectionPhrase,
     }));
 
+    // ‼️ THE TARGET HAS TO MATCH THE INDEX EXACTLY OR IT IS 42P10 AT PLAN TIME, ON EVERY RUN.
+    // (vertical, avatar, normalized) NULLS NOT DISTINCT, from docs/2026-08-25-lane-2-avatar.sql.
+    // That failure has happened twice in this repo and it is never a data collision: the
+    // statement cannot be PLANNED, so it fails even against an empty table.
     const { error } = await supabaseAdmin
       .from("question_bank")
-      .upsert(rows, { onConflict: "vertical,normalized", ignoreDuplicates: false });
+      .upsert(rows, { onConflict: "vertical,avatar,normalized", ignoreDuplicates: false });
 
     if (error) {
       await supabaseAdmin.from("harvest_runs").update({ error: error.message }).eq("id", runRow.id);
@@ -360,7 +403,7 @@ export async function runHarvest(
     .update({ results_count: merged.length, sources: { citations: pagesRead, reddit: false, deep_research: false } })
     .eq("id", runRow.id);
 
-  return { ok: true, phrases: merged.length, pages: pagesRead, runId: runRow.id };
+  return { ok: true, phrases: merged.length, pages: pagesRead, runId: runRow.id, avatar: avatar.label };
 }
 
 /** What Matthew reads in the thread. States what did not run as plainly as what did. */

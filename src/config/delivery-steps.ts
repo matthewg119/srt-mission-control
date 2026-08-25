@@ -115,6 +115,21 @@ const STEP_LIST = [
   { key: "presence_sweep_manual", phase: PHASE_BEFORE, label: "Presence sweep: manual tier, screenshots in the thread", mode: "manual", blockedBy: ["nap_sweep"] },
   { key: "presence_pdf", phase: PHASE_BEFORE, label: "Presence and consistency PDF report", auto: true, mode: "auto", blockedBy: ["presence_sweep_manual"] },
   { key: "competitor_shortlist", phase: PHASE_BEFORE, label: "Competitor shortlist of 10, top 3 pre-picked, I confirm", mode: "manual", blockedBy: ["baseline_scan"] },
+  // ‼️ MOVED HERE FROM POSITION 11 ON 2026-08-25, AND THE MOVE IS THE WHOLE POINT.
+  //
+  // Matthew: "i see avatar is proposed in step 11 but this should be before step 9 for the actual
+  // deep research for the avatar that we actually want." The avatar decides what the phrase
+  // harvest RESEARCHES and what the deep-research brief is written about, so confirming it after
+  // that step ran meant the research was always about a customer nobody had chosen yet.
+  //
+  // ‼️ THE KEY DID NOT CHANGE AND MUST NOT. Renaming it would orphan every client_delivery_steps
+  // row already carrying it, including the one on the live client where this came out `skipped`.
+  // The ARRAY owns the numbering, so moving the element renumbers the board and nothing else.
+  //
+  // blockedBy is baseline_scan rather than avatar_harvest: the candidates come from
+  // niche_briefs.avatars, which is keyed on the vertical the baseline scan adopts, so step 2 is
+  // genuinely the only thing it waits on.
+  { key: "avatar_confirmed", phase: PHASE_BEFORE, label: "Avatar confirmed: which customer this whole build is aimed at", mode: "manual", blockedBy: ["baseline_scan"] },
   // ‼️ auto_then_manual, NOT auto, and presence-platforms.ts is the reason.
   // `api: false` on all eighteen platforms: Google Places, Bing, Foursquare and Yelp Fusion were
   // each checked and none is keyed here. There is no automated path to a review count, so the
@@ -133,16 +148,19 @@ const STEP_LIST = [
   // Matthew asked whether this step repeats the AI visibility audit and burns tokens. It makes
   // ZERO model calls (harvest.ts imports supabaseAdmin and nothing else) and it CONSUMES the
   // audit rather than repeating it: it reads audit_runs.citations and fetches the pages the
-  // engines actually cited. "Avatar phrase harvest" was the wrong name twice over, because the
-  // avatars are not here either — they live in niche_briefs.avatars, per vertical, and
-  // question_bank.avatar stays NULL until step 11 confirms one.
+  // engines actually cited.
+  //
+  // ‼️ THE AVATAR IS NOW CONFIRMED BEFORE THIS RUNS, WHICH REVERSED WHAT THIS COMMENT SAID.
+  // It used to read "the avatars are not here either, and question_bank.avatar stays NULL until
+  // step 11 confirms one". True while the confirmation came two steps later; false now. The
+  // avatars still live in niche_briefs.avatars per vertical, but a client has picked one by the
+  // time this runs, so every phrase this step writes is TAGGED with that avatar slug.
   //
   // Renaming the KEY would orphan every row already carrying it. Labels are free; keys are not.
-  { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest from the audit's cited pages, plus the deep-research brief to run", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan"] },
+  { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest for the confirmed avatar, plus the deep-research brief to run", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan", "avatar_confirmed"] },
   { key: "findings_doc", phase: PHASE_BEFORE, label: "Findings written up and attached", auto: true, mode: "auto", blockedBy: ["presence_pdf", "review_audit"] },
 
   // ── BEFORE THE CALL: prepare. None of it touches their properties ─────────
-  { key: "avatar_confirmed", phase: PHASE_BEFORE, label: "Avatar proposed, I confirm one", mode: "manual", blockedBy: ["avatar_harvest"] },
   { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
   // ‼️ The label no longer promises a hundred. `prompt_library` does not exist -- the corpus is
   // question_bank plus this client's own twenty -- so 100 is the CEILING the artifact prints

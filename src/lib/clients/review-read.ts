@@ -1,4 +1,4 @@
-// Reading a review listing off a screenshot of it — delivery step 8.
+// Reading a review listing off a screenshot of it — the review audit step.
 //
 // Matthew: "the review audit it will be better if we can just send screenshots inside of slack
 // and it groups them all automatically and creates the report, that section in mission control

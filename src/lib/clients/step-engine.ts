@@ -234,6 +234,14 @@ async function instructionsFor(
       // ‼️ THIS STEP READS AS A DUPLICATE OF THE AUDIT AND IS NOT ONE. Matthew asked whether it
       // repeats the audit and burns tokens; the card is where that gets answered, permanently,
       // rather than in a conversation nobody can find later.
+      const { confirmedAvatarFor, avatarBriefFor } = await import("./avatars");
+      const { verticalFor } = await import("./harvest");
+
+      const avatar = await confirmedAvatarFor(c.id);
+      const resolved = await verticalFor(c.id);
+      const cached =
+        avatar && resolved.ok ? await avatarBriefFor(resolved.vertical, avatar.slug) : null;
+
       const { data: bank } = await supabaseAdmin
         .from("question_bank")
         .select("phrase")
@@ -243,7 +251,30 @@ async function instructionsFor(
 
       const brief = docLink(c.id, row.outputRef, "the deep-research brief");
 
+      // ‼️ THE REUSE OFFER IS THE HALF HE ASKED FOR BY NAME: "this way if another client has the
+      // same LHR client, we can use the same prompt saved in the databse and make it optional to
+      // run deep research again." avatar_briefs is keyed (vertical, avatar_slug) and NOT by
+      // client, which is the entire mechanism.
+      const reuse = cached?.researchText
+        ? [
+            "",
+            `:recycle: *This avatar already has research from ${cached.createdAt.slice(0, 10)}*` +
+              (cached.timesReused > 0
+                ? `, reused by ${cached.timesReused} client${cached.timesReused === 1 ? "" : "s"} since.`
+                : "."),
+            "Reuse it and the phrases are filed against this client without running anything, or",
+            "run it again and this waits for the paste. Buttons below.",
+          ]
+        : [];
+
       return [
+        avatar
+          ? `*Researching: ${avatar.label}.* That is the avatar confirmed at the step above, and it`
+          : "*No avatar is confirmed*, so this step has nothing to research. Confirm one at the step",
+        avatar
+          ? "is what this whole step is about."
+          : "above and un-tick this one.",
+        "",
         "*This does not repeat the audit. It runs ON the audit.*",
         "It reads `audit_runs.citations` — every URL the engines actually cited about this",
         "business — and fetches up to 40 of those pages. *Zero model calls*: the cost is plain",
@@ -257,11 +288,16 @@ async function instructionsFor(
         ...(bank?.length
           ? ["Sample of what came back:", ...bank.map((b) => `  • "${b.phrase as string}"`), ""]
           : []),
-        `*The half that needs you:* ${brief ?? "the deep-research brief (not generated yet)"}.`,
-        "Run it, paste the result back into this thread with `research:` in front of it, then Done.",
+        ...reuse,
         "",
-        "_The avatar is not decided here._ Avatars live in `niche_briefs`, per vertical, and one",
-        "is confirmed at step 11. This step leaves `question_bank.avatar` null on purpose.",
+        `*The half that needs you:* ${brief ?? "the deep-research brief (not generated yet)"}.`,
+        "It is three messages for one ChatGPT conversation, in order. Run them, then bring the",
+        "answer back into this thread: paste it with `research:` in front of it, or drop the PDF",
+        "the tool gave you straight in. Both file the phrases against this avatar.",
+        "",
+        "_[Skip] still works_, and what it costs is stated when you press it: the universal twenty",
+        "still run, so the Day-0 measurement is intact, but the tracked set will not carry this",
+        "avatar's own wording.",
       ];
     }
 
@@ -287,7 +323,8 @@ async function instructionsFor(
         // ‼️ MATTHEW CONFLATED THIS WITH STEP 16 AND THE CARDS HAVE TO MAKE THE DIFFERENCE
         // OBVIOUS. Three steps have "review" in the label and they own three different things.
         "*This is the competitor review-COUNT grid.* It is internal and no customer ever sees it.",
-        "It feeds findings section 3. The tool a customer uses is step 16; handing it over is step 30.",
+        "It feeds findings section 3. The tool a customer uses is the review tool preview; handing",
+        "it over is step 30.",
         "",
         ...formatReviewAuditCard({
           clientName: c.name,
@@ -312,7 +349,7 @@ async function instructionsFor(
 
       return [
         "*This step owns whether the tool RENDERS and is themed.* It is not the review audit",
-        "(step 8, an internal competitor grid) and not the handover (step 30).",
+        "(the review audit, an internal competitor grid) and not the handover (step 30).",
         "",
         `Internal preview: ${reviewPreviewUrl(c.id)}`,
         ":lock: *That URL cannot be sent to a client.* It is a `/dashboard/` path and the page",
@@ -332,22 +369,64 @@ async function instructionsFor(
     }
 
     case "avatar_confirmed": {
-      const refs = await outputRefsFor(c.id);
-      const brief = docLink(c.id, refs.get("avatar_harvest"), "the deep-research brief from step 9");
+      // ‼️ THIS CARD USED TO SAY "The proposal is on the board" AND THERE WAS NO SUCH PANEL.
+      // clients.primary_avatar had two readers and zero writers anywhere in the codebase, so on
+      // the first real client this step came out `skipped`: no human being could have ticked it.
+      // There is a panel now, and three buttons on this card.
+      const { avatarCandidatesFor, confirmedAvatarFor } = await import("./avatars");
+      const found = await avatarCandidatesFor(c.id);
+      const already = await confirmedAvatarFor(c.id);
+
+      const head = [
+        "*Which customer is this whole build aimed at?* Everything after this is scored against",
+        "the answer: step 10 researches THIS buyer, the custom question set is built from their",
+        "wording, and the page candidates are ranked for them.",
+        "",
+      ];
+
+      if (!found.ok) {
+        return [
+          ...head,
+          `:warning: ${found.error}`,
+          "",
+          `Type one instead, or set it on the board: ${boardUrl(c)}#avatar`,
+        ];
+      }
+
+      const body = found.candidates.length
+        ? [
+            // ‼️ THE CAVEAT STAYS. These are cached per NICHE, not per business, so every client
+            // audited in this niche this month has the same three. They are candidates and never
+            // a default, and rejecting all three is an available answer.
+            `Three candidates from the \`${found.nicheKey}\` brief. They are cached per NICHE, not`,
+            "per business, so every client audited in this niche this month has the same three.",
+            "Candidates, never a default. Rejecting all three is a real answer.",
+            "",
+            ...found.candidates.flatMap((a) => [
+              `*${a.slot} — ${a.label}*`,
+              ...(a.ticket ? [`     ${a.ticket}`] : []),
+              ...(a.why ? [`     ${a.why}`] : []),
+            ]),
+          ]
+        : [
+            "No niche brief carries candidates for this vertical, so there are no three to offer.",
+            "Type the one you want; that is a supported answer rather than a workaround.",
+          ];
 
       return [
-        "The proposal is on the board. Audit avatars are CANDIDATES only, and only when the",
-        "cached niche matches this client's vertical — they are cached per niche, not per",
-        "business, so every med spa audited this month has the same three. Map one to",
-        "a1 / a2 / a3 or reject them all.",
+        ...head,
+        ...body,
         "",
-        brief
-          ? `Read first: ${brief}. It is the market's own wording for this business.`
-          : "Step 9's deep-research brief has not been generated yet, so there is nothing harvested to read against.",
+        "*Pick one with a button below*, or reply in this thread with your own:",
+        "`avatar: laser hair removal`",
+        "The slot is a1/a2/a3 and the label is whatever you type, so a new one needs nothing but",
+        "the words. For a med spa that is laser hair removal, filler, HIFU, BBL, whichever one",
+        "this client actually makes money on.",
         "",
-        `Confirm on the board: ${boardUrl(c)}`,
-        "The custom question set (step 12) and the page candidates (step 13) are both scored",
-        "against this choice, so neither means anything until it is made.",
+        already
+          ? `Currently confirmed: *${already.label}* (${already.slot}). Confirming again replaces it and the old one is kept in the history.`
+          : "Nothing is confirmed yet, so step 10 has nothing to research.",
+        `Or on the board: ${boardUrl(c)}#avatar`,
       ];
     }
 
@@ -546,7 +625,40 @@ async function instructionsFor(
       const scorecard = await docForStep(c.id, "baseline_scan");
       const link = docLink(c.id, scorecard?.id, scorecard?.filename ?? "the AI Visibility Scorecard");
 
+      // ‼️ THE AVATAR AND THE QUESTION SET ARE PRINTED HERE BECAUSE THIS IS THE LAST MOMENT THEY
+      // CAN CHANGE. Matthew: "So avatar can be changed in the call so make sure we ask follow up
+      // question regarding the avatar and the questions we want to run in the AI for day 0 scan."
+      // Ticking this step stamps day_0_archived_at and both are frozen from then on, so a card
+      // that did not show them would be asking somebody to freeze something they cannot see.
+      const { confirmedAvatarFor } = await import("./avatars");
+      const avatar = await confirmedAvatarFor(c.id);
+
+      const { data: qset } = await supabaseAdmin
+        .from("client_question_sets")
+        .select("version, status, questions")
+        .eq("client_id", c.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const questionCount = Array.isArray(qset?.questions) ? (qset!.questions as unknown[]).length : 0;
+
       return [
+        "*What this scan will be measured against, and this is the last moment either can change:*",
+        avatar
+          ? `  • Avatar: *${avatar.label}* (${avatar.slot})`
+          : "  • Avatar: *none confirmed*, so the tracked set was built without one",
+        qset
+          ? `  • Question set: *${qset.version}* (${qset.status}), ${questionCount} questions`
+          : "  • Question set: none drafted yet",
+        "",
+        "Change the avatar from here by replying `avatar: laser hair removal`, and the custom",
+        "question set is regenerated against it as a new version. Reply `questions:` with what you",
+        "want changed and it goes in this thread against that set.",
+        ":lock: *Both refuse once this step is ticked.* The stamp is what the day 30, 60 and 90",
+        "numbers are measured against, and a target changed afterwards leaves the case study",
+        "comparing two different questions. The universal twenty stay in place underneath either way.",
+        "",
         "*The one step that blocks rather than flags.* Nothing may be published until it is",
         "ticked, and ticking it stamps `clients.day_0_archived_at`.",
         "",
@@ -959,7 +1071,25 @@ function bodySections(body: string[]): SlackBlock[] {
   return out;
 }
 
-function blocks(step: DeliveryStep, c: ClientFacts, body: string[]): SlackBlock[] {
+/**
+ * Buttons a specific step's card carries BESIDE Done / Skip / I hit a problem.
+ *
+ * ‼️ ADDITIVE, AND THE THREE STANDARD BUTTONS ARE UNTOUCHED IN BOTH ORDER AND MEANING. A step
+ * whose whole content is a choice between three named things needs those three things to be
+ * pressable where the card is, and telling somebody to open a dashboard to press one of three
+ * buttons is how a step ends up `skipped`, which is exactly what happened to avatar_confirmed on
+ * the first real client.
+ *
+ * Slack allows 25 elements in one actions block, so three plus three is not near anything.
+ */
+type StepAction = { label: string; actionId: string; value: string };
+
+function blocks(
+  step: DeliveryStep,
+  c: ClientFacts,
+  body: string[],
+  extra: StepAction[] = []
+): SlackBlock[] {
   const out: SlackBlock[] = [
     {
       type: "section",
@@ -996,10 +1126,55 @@ function blocks(step: DeliveryStep, c: ClientFacts, body: string[]): SlackBlock[
         action_id: "step_problem",
         value: `${c.id}:${step.key}`,
       },
+      ...extra.map((e) => ({
+        type: "button",
+        text: { type: "plain_text", text: e.label },
+        action_id: e.actionId,
+        value: e.value,
+      })),
     ],
   } as SlackBlock);
 
   return out;
+}
+
+/**
+ * The per-step extras. One step has any today and the switch says which.
+ *
+ * Kept out of instructionsFor because that returns the BODY and a button is not a line of text;
+ * kept out of blocks() because blocks() is synchronous and this needs a database read.
+ */
+async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<StepAction[]> {
+  // ‼️ [Reuse it] IS ONLY OFFERED WHEN THERE IS SOMETHING TO REUSE. A button that says research
+  // exists, over an avatar_briefs row carrying only a prompt, would be a promise the next press
+  // cannot keep. Both halves are checked: a row AND research_text on it.
+  if (step.key === "avatar_harvest") {
+    const { confirmedAvatarFor, avatarBriefFor } = await import("./avatars");
+    const { verticalFor } = await import("./harvest");
+    const avatar = await confirmedAvatarFor(c.id);
+    const resolved = await verticalFor(c.id);
+    if (!avatar || !resolved.ok) return [];
+    const cached = await avatarBriefFor(resolved.vertical, avatar.slug);
+    if (!cached?.researchText) return [];
+    return [
+      { label: "Reuse it", actionId: "avatar_reuse_research", value: `${c.id}` },
+      { label: "Run it again", actionId: "avatar_rerun_research", value: `${c.id}` },
+    ];
+  }
+
+  if (step.key !== "avatar_confirmed") return [];
+
+  const { avatarCandidatesFor } = await import("./avatars");
+  const found = await avatarCandidatesFor(c.id);
+
+  // A label over 75 characters is rejected by Slack, and these come from a niche brief that
+  // routinely writes "The New-Build Neighborhood HOA Property Manager". Truncated for the BUTTON
+  // only; the card body prints every one of them in full.
+  return found.candidates.map((cand) => ({
+    label: cand.label.length > 70 ? `${cand.label.slice(0, 67)}...` : cand.label,
+    actionId: "avatar_pick",
+    value: `${c.id}:${cand.slot}:${cand.label}`.slice(0, 2000),
+  }));
 }
 
 async function loadFacts(clientId: string): Promise<ClientFacts | null> {
@@ -1067,7 +1242,7 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
     (await instructionsFor(step, facts, {
       outputRef: (row?.output_ref as string | null) ?? null,
     })) ?? [];
-  const kit = blocks(step, facts, body);
+  const kit = blocks(step, facts, body, await extraActionsFor(step, facts));
   const fallback = `${facts.name} · ${step.label}`;
 
   if (row?.slack_message_ts) {
@@ -1417,6 +1592,55 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
         ok: false,
         message: `Not yet — no payment has been recorded. ${ACCESS_GATE_REASON} ${ACCESS_GATE_TODO}`,
       };
+    }
+  }
+
+  // ‼️ [Done] WANTS THE RESEARCH BACK, AND [Skip] IS UNTOUCHED.
+  //
+  // Matthew: "If I click done I should paste back the PDF that It gave me for the deep research,
+  // not just allow me to skip it since we need this phrases for the in depth ai visibility audit
+  // (day 0 official run) with more strategic questions, but leave it skippable since we already
+  // have the main 20 but if client doesnt like them we can re run them."
+  //
+  // So this refuses [Done] and says what is missing; it does not refuse the step. Skip still
+  // works and the refusal states its cost rather than hiding it: the universal twenty still run,
+  // so the Day-0 measurement is intact, but the tracked set will not carry this avatar's own
+  // wording.
+  //
+  // TWO WAYS TO SATISFY IT, because there are two ways the answer arrives: a `research:` paste
+  // and a PDF dropped in the thread both end in question_bank under this avatar, and a document
+  // filed against the step counts on its own for the case where the phrases came back thin.
+  if (step.key === "avatar_harvest") {
+    const { confirmedAvatarFor } = await import("./avatars");
+    const { verticalFor } = await import("./harvest");
+
+    const avatar = await confirmedAvatarFor(clientId);
+    const resolved = await verticalFor(clientId);
+
+    if (avatar && resolved.ok) {
+      const { count } = await supabaseAdmin
+        .from("question_bank")
+        .select("id", { count: "exact", head: true })
+        .eq("vertical", resolved.vertical)
+        .eq("avatar", avatar.slug)
+        .eq("source", "deep_research");
+
+      const filed = await uploadsFor(clientId, stepKey);
+
+      if ((count ?? 0) === 0 && filed === 0) {
+        return {
+          ok: false,
+          message:
+            `Not yet — nothing has come back from the deep research for *${avatar.label}*. ` +
+            "Run the three messages in the brief above, then either paste the answer in here " +
+            "with `research:` in front of it or drop the PDF the tool gave you straight into " +
+            "this thread. Both file the phrases against this avatar. " +
+            "If you genuinely do not want to run it, [Skip] still works: the universal twenty " +
+            "still run so the Day-0 measurement is intact, but the tracked question set will " +
+            "not carry this avatar's own wording, which is the half a client recognises as " +
+            "their own market talking.",
+        };
+      }
     }
   }
 

@@ -564,18 +564,30 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   findings_doc: async (ctx) => artifactOnRecord(ctx, "the findings document"),
 
   // ── PREPARE ────────────────────────────────────────────────────────────────
+  // ‼️ THIS VERIFIER WAS CORRECT AND UNSATISFIABLE FOR THE WHOLE LIFE OF THE COLUMN.
+  // clients.primary_avatar had two readers and NO WRITER anywhere, so it read null forever and
+  // this step could only ever be skipped. Its refusal said "Pick one on the client board" and
+  // there was no such control. Both halves exist now: a panel at #avatar and three buttons on the
+  // card. The check itself barely changes, which is the point: it was never the broken half.
   avatar_confirmed: async (ctx) => {
     const avatar = ctx.client.primary_avatar as string | null;
     if (!avatar) {
       return notYet(
         "clients.primary_avatar",
         "no avatar has been confirmed",
-        "Pick one on the client board. The custom question set and the page candidates are " +
-          "both scored against it, so neither is meaningful until it is chosen."
+        "Pick one of the three on this card, or reply `avatar: laser hair removal` with your " +
+          "own, or use the Avatar panel on the client board. Step 10 researches whoever is " +
+          "picked, and the custom question set and the page candidates are both scored against " +
+          "it, so none of the three means anything until this is answered."
       );
     }
     const label = (ctx.client.primary_avatar_label as string | null) ?? avatar;
-    return verified(`primary avatar ${avatar} (${label}) confirmed`);
+    const by = (ctx.client.primary_avatar_confirmed_by as string | null) ?? null;
+    return verified(
+      `primary avatar ${avatar} (${label}) confirmed${by ? ` by ${by}` : ""}`,
+      "Everything downstream is aimed at this customer: the phrase harvest, the tracked question " +
+        "set and the page ranking."
+    );
   },
 
   custom_question_set: async (ctx) => {

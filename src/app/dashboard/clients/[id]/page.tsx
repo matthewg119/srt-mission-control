@@ -26,6 +26,8 @@ import { CompetitorForm } from "./competitor-form";
 import { ReviewAuditForm } from "./review-audit-form";
 import { ReviewWorkflowForm, type ReviewWorkflowView } from "./review-workflow-form";
 import { PresenceSweepForm } from "./presence-sweep-form";
+import { AvatarForm } from "./avatar-form";
+import { avatarCandidatesFor, confirmedAvatarFor } from "@/lib/clients/avatars";
 import { PaymentForm, type PaymentView } from "./payment-form";
 import { loadCandidates, REQUIRED_SELECTIONS } from "@/lib/clients/competitors";
 import { loadReviewAudit, reviewPlatformLabel } from "@/lib/clients/review-audit";
@@ -153,13 +155,17 @@ export default async function ClientDetailPage({
   const docs = await listOnboardingDocs(id);
 
   // The three grids a person fills in: the presence sweep (steps 4, 5 and 25), the competitor
-  // pick (step 7) and the review audit (step 8). Every one of them writes a column that had a
+  // pick (step 7) and the review audit. Every one of them writes a column that had a
   // reader and no writer until 2026-08-24, which is why three delivery steps could never be
   // confirmed and citation_cleanup returned a green tick over work nobody had done.
-  const [sweepRows, candidates, reviewRows] = await Promise.all([
+  const [sweepRows, candidates, reviewRows, avatarCandidates, avatarConfirmed] = await Promise.all([
     loadSweep(id),
     loadCandidates(id),
     loadReviewAudit(id),
+    // Step 8, and the fourth column in that list: clients.primary_avatar had a reader and no
+    // writer of any kind, so the step it gates could never be ticked by anybody.
+    avatarCandidatesFor(id),
+    confirmedAvatarFor(id),
   ]);
 
   const sweepViews = sweepRows.map((r) => ({
@@ -569,6 +575,31 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <ReviewAuditForm clientId={id} rows={reviewViews} />
+      </div>
+
+      {/*
+        Step 8. ‼️ THIS PANEL IS THE WRITER clients.primary_avatar NEVER HAD. Its card told
+        Matthew "the proposal is on the board" and there was no such control, so the step came out
+        `skipped` on the first real client. Placed above the review handover because the avatar is
+        decided before the call and the handover after it.
+      */}
+      <div
+        id="avatar"
+        className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Avatar</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">step 8</span>
+        </div>
+        <AvatarForm
+          clientId={id}
+          candidates={avatarCandidates.candidates}
+          confirmed={avatarConfirmed}
+          nicheKey={avatarCandidates.nicheKey}
+          matchedBy={avatarCandidates.matchedBy}
+          frozen={Boolean(client.day_0_archived_at)}
+          loadError={avatarCandidates.ok ? null : avatarCandidates.error ?? null}
+        />
       </div>
 
       {/*

@@ -35,6 +35,7 @@
 
 import { DELIVERY_STEPS } from "../src/config/delivery-steps";
 import { supabaseAdmin } from "../src/lib/db";
+import { confirmAvatar } from "../src/lib/clients/avatars";
 
 // ‼️ NEVER AGAINST THE REAL CHANNEL. This probe posts real anchors, and a throwaway client in
 // #onboarding-srt-aeo would leave permanent top-level messages that cannot be reordered later.
@@ -311,22 +312,76 @@ async function main() {
       seven?.status === "awaiting_me",
       String(seven?.status ?? "missing")
     );
-    ok("avatar_harvest is STILL not anchored", !rows.get("avatar_harvest")?.slack_anchor_ts);
+    ok("avatar_confirmed is STILL not anchored", !rows.get("avatar_confirmed")?.slack_anchor_ts);
 
-    // ── Resolve 7 and 8 to reach the auto_then_manual runner at 9 ───────────
-    for (const key of ["competitor_shortlist", "review_audit"] as const) {
+    // ── Resolve 7, and the AVATAR is what appears next ─────────────────────
+    //
+    // ‼️ THIS IS THE STEP THAT MOVED ON 2026-08-25, AND THE WALK IS WHERE THE MOVE IS VISIBLE.
+    // avatar_confirmed used to sit at position 11, after the harvest that researches whoever it
+    // names. It is position 8 now, immediately after the competitor shortlist, because the
+    // avatar decides what the harvest is FOR. It is `mode: "manual"`, so under reachableCursor
+    // it ends the walk: review_audit and avatar_harvest both wait behind it, which is the
+    // serialisation the cursor's doc block says is the deliberate cost of calm over throughput.
+    {
       const res = await setDeliveryStep({
         clientId,
-        stepKey: key,
+        stepKey: "competitor_shortlist",
         transition: "skipped",
-        skippedReason: "cascade probe: walking to step 9",
+        skippedReason: "cascade probe: walking to the avatar",
         actor: "cascade probe",
       });
-      ok(`${key} skips`, res.ok, res.error);
+      ok("competitor_shortlist skips", res.ok, res.error);
     }
 
     rows = await stepRows(clientId);
-    console.log("\nAt step 9");
+    console.log("\nAt the avatar");
+    ok("exactly one step is waiting", waiting(rows).length === 1, waiting(rows).join(", "));
+    eq("and it is the avatar", waiting(rows)[0] ?? "none", "avatar_confirmed");
+
+    const eight = rows.get("avatar_confirmed");
+    ok("avatar_confirmed got an anchor by itself", Boolean(eight?.slack_anchor_ts));
+    ok("avatar_confirmed got its card", Boolean(eight?.slack_message_ts));
+    ok("avatar_harvest is STILL not anchored", !rows.get("avatar_harvest")?.slack_anchor_ts);
+
+    // ‼️ CONFIRMED FOR REAL RATHER THAN SKIPPED, AND THAT IS THE POINT OF THIS PROBE NOW.
+    // The whole lane exists because clients.primary_avatar had no writer and this step could
+    // only ever be skipped. confirmAvatar is the writer; setDeliveryStep then VERIFIES against
+    // the column it wrote, so a green tick here is the first one this step has ever earned.
+    const picked = await confirmAvatar({
+      clientId,
+      slot: "a1",
+      label: "cascade probe avatar",
+      by: "cascade probe",
+    });
+    ok("the avatar is writable at all", picked.ok, picked.error);
+
+    const eightDone = await setDeliveryStep({
+      clientId,
+      stepKey: "avatar_confirmed",
+      transition: "complete",
+      actor: "cascade probe",
+    });
+    ok("avatar_confirmed CONFIRMS rather than skipping", eightDone.ok, eightDone.error);
+    eq(
+      "and its evidence is system tier, off the column",
+      eightDone.verdict?.ok ? eightDone.verdict.kind : "refused",
+      "system"
+    );
+
+    // ── Resolve the review audit to reach the auto_then_manual runner ───────
+    {
+      const res = await setDeliveryStep({
+        clientId,
+        stepKey: "review_audit",
+        transition: "skipped",
+        skippedReason: "cascade probe: walking to the harvest",
+        actor: "cascade probe",
+      });
+      ok("review_audit skips", res.ok, res.error);
+    }
+
+    rows = await stepRows(clientId);
+    console.log("\nAt the harvest");
 
     const nine = rows.get("avatar_harvest");
     ok("avatar_harvest got an anchor by itself", Boolean(nine?.slack_anchor_ts));

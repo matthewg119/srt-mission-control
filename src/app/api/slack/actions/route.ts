@@ -206,6 +206,25 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         threadTs: payload.container?.message_ts ?? "",
         value: action.value ?? "",
       });
+    // ── LANE 2: the avatar, and the research it decides ──
+    case "avatar_pick":
+      return avatarPickAction({
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        value: action.value ?? "",
+      });
+    case "avatar_reuse_research":
+    case "avatar_rerun_research":
+      return avatarResearchAction({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        clientId: action.value ?? "",
+      });
     // ── LANE 1: readings become records, and only a person makes that happen ──
     case "review_confirm_readings":
       return reviewConfirmReadingsAction({
@@ -1575,6 +1594,151 @@ async function cleanupConfirmAllAction(args: {
         ].join("\n")
       );
     })().catch((e) => console.error("[slack/actions] cleanup_confirm_all failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LANE 2 — the avatar picker, and the research it decides
+//
+// ‼️ THREE BUTTONS ON A CARD RATHER THAN A LINK TO A PANEL, AND THE REASON IS MEASURED.
+// clients.primary_avatar had a column, a CHECK constraint and a verifier and no writer anywhere,
+// and the card said "The proposal is on the board" pointing at a panel that did not exist. On the
+// first real client the step came out `skipped`. The panel exists now; so does the button, in the
+// place the decision is actually being read.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function avatarPickAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  // `${clientId}:${slot}:${label}` — the label is last because it is the only part that can
+  // contain a colon, and splitting on the first two keeps it whole.
+  const [clientId, slot, ...rest] = args.value.split(":");
+  const label = rest.join(":").trim();
+  if (!clientId || !slot || !label) return NextResponse.json({ ok: true });
+
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { confirmAvatar } = await import("@/lib/clients/avatars");
+      const result = await confirmAvatar({ clientId, slot, label, by: actor });
+
+      if (!result.ok) {
+        await slack.postThreadReply(args.channel, args.slackTs, `:warning: Not confirmed: ${result.error}`);
+        return;
+      }
+
+      const lines = [
+        `:white_check_mark: Avatar confirmed: *${label}* (${slot}), by ${actor}.`,
+        result.changed && result.previous
+          ? `It replaces *${result.previous.label}*, which is kept in this client's avatar history.`
+          : "",
+        "The phrase harvest researches this buyer, and the custom question set and the page",
+        "candidates are both scored against them. Press [Done] on this step when you are happy.",
+      ].filter(Boolean);
+
+      await slack.postThreadReply(args.channel, args.slackTs, lines.join("\n"));
+    })().catch((e) => console.error("[slack/actions] avatar_pick failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * [Reuse it] and [Run it again] on step 10's card.
+ *
+ * ‼️ THE RESEARCH IS KEYED ON (vertical, avatar_slug) AND NOT ON THE CLIENT, WHICH IS THE WHOLE
+ * FEATURE. Matthew: "this way if another client has the same LHR client, we can use the same
+ * prompt saved in the databse and make it optional to run deep research again." The second med
+ * spa aiming at laser hair removal gets the first one's work.
+ *
+ * [Run it again] deliberately does NOT delete what is stored. It says the step is waiting for a
+ * fresh paste; the cached research stays for every other client in the vertical, who did not ask
+ * for it to be thrown away.
+ */
+async function avatarResearchAction(args: {
+  actionId: string;
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  if (!args.clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { confirmedAvatarFor, reuseAvatarResearch, avatarBriefFor } = await import(
+        "@/lib/clients/avatars"
+      );
+      const { verticalFor } = await import("@/lib/clients/harvest");
+
+      const avatar = await confirmedAvatarFor(args.clientId);
+      const resolved = await verticalFor(args.clientId);
+
+      if (!avatar || !resolved.ok) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          ":warning: No avatar is confirmed on this client, so there is no research to reuse."
+        );
+        return;
+      }
+
+      if (args.actionId === "avatar_rerun_research") {
+        const cached = await avatarBriefFor(resolved.vertical, avatar.slug);
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          [
+            `:arrows_counterclockwise: Running it again for *${avatar.label}*, asked by ${actor}.`,
+            "Run the three messages in the brief above and bring the answer back into this thread:",
+            "paste it with `research:` in front of it, or drop the PDF straight in.",
+            cached?.researchText
+              ? "What is already stored is left alone until the new answer lands. It belongs to every client in this vertical, not just this one."
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+        return;
+      }
+
+      const result = await reuseAvatarResearch({
+        clientId: args.clientId,
+        vertical: resolved.vertical,
+        avatarSlug: avatar.slug,
+      });
+
+      if (!result.ok) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          `:warning: Nothing was reused: ${result.error}`
+        );
+        return;
+      }
+
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        [
+          `:recycle: Reused the stored research for *${avatar.label}*, by ${actor}.`,
+          `*${result.stored} new phrases*, ${result.seen} already in the bank for this avatar.`,
+          `That is ${result.timesReused} client${result.timesReused === 1 ? "" : "s"} this research has now served.`,
+          "",
+          "These are candidates, not a tracked set. The custom set is approved on the call and",
+          "frozen then. The step is still open: press [Done] when you are satisfied.",
+        ].join("\n")
+      );
+    })().catch((e) => console.error("[slack/actions] avatar research action failed:", e))
   );
 
   return NextResponse.json({ ok: true });
