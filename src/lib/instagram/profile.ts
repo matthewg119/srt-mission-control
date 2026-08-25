@@ -18,7 +18,6 @@ import {
   isNeverTheirSite,
   isBookingHost,
 } from "@/lib/audit-engine/web-hosts";
-import { callClaudeJSON } from "@/lib/claude-calls";
 
 /** `@Hairthetics_FL`, a profile URL, or a bare handle -> `hairthetics_fl`. */
 export function normalizeHandle(raw: string | null | undefined): string | null {
@@ -362,6 +361,23 @@ export function businessNameFrom(fullName: string): string {
  * "Coral Gables, Florida", and all three are fine: the engine prompts take the string as given, and
  * the printed lines keep only what is before the first comma.
  *
+ * ‼️ IT IS LOOKED UP, NOT ASKED OF A MODEL, AND THAT IS NOT A STYLE PREFERENCE. This was one
+ * Haiku call for two months and it was wrong on ordinary ZIPs while sounding certain: 33134 came
+ * back "Palmetto, FL" and 33009 came back "Homestead, FL", against real answers of Coral Gables
+ * and Hallandale. It only ever got the famous ones right. The state guard below did not catch it,
+ * because the state was FL both times - the guard checked the half the model found easy.
+ *
+ * A wrong city is not a cosmetic defect here. It is interpolated into the buyer questions, so the
+ * whole measurement is about a town the prospect does not trade in; it is printed in the fixed
+ * finding sentence; and upsertContact treats a typed city as a person correcting a scrape, so it
+ * OVERWRITES a correct biz_city on the CRM row. A model is the wrong tool for a fact that is
+ * written down in a table somewhere.
+ *
+ * The place name is whatever USPS calls that ZIP, which is occasionally the bigger neighbour
+ * ("Miami" for 33134 rather than "Coral Gables"). That is a real fact about the postcode and it is
+ * the sort of thing a person says out loud, which is the bar this sentence has to clear. Inventing
+ * a town in the wrong county is not.
+ *
  * Best-effort and it never throws, the same contract as tradeFromBio: a null here means the panel
  * asks again, which is recoverable, where a wrong city is not.
  */
@@ -372,23 +388,19 @@ export async function resolveCityInput(raw: string | null | undefined): Promise<
 
   const zip = s.slice(0, 5);
   try {
-    const { data } = await callClaudeJSON<{ city: string | null; state: string | null }>({
-      model: "claude-haiku-4-5-20251001",
-      system:
-        "You map a US ZIP code to the city and two-letter state it is in. Return the primary city " +
-        'name only, with no county and no "area". Return nulls when you are not sure which ZIP ' +
-        "this is. A wrong city is worse than no city.",
-      user: `ZIP: ${zip}`,
-      schemaHint: '{ "city": string | null, "state": string | null }',
-      maxTokens: 100,
-      temperature: 0,
-      validate: (v): v is { city: string | null; state: string | null } =>
-        typeof v === "object" && v !== null && "city" in v && "state" in v,
+    // Free, no key, and it answers 404 for a ZIP that does not exist, which is the answer we want.
+    const res = await fetch(`https://api.zippopotam.us/us/${zip}`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(6000),
     });
-    const city = (data.city ?? "").trim();
-    const state = (data.state ?? "").trim().toUpperCase();
-    // Validated against the same table cityFromBio validates against, so a hallucinated "ZZ" or a
-    // county name in the state slot is rejected rather than printed at a prospect.
+    if (!res.ok) return null;
+    const data = (await res.json()) as { places?: Array<Record<string, unknown>> };
+    const place = data?.places?.[0];
+    if (!place) return null;
+    const city = String(place["place name"] ?? "").trim();
+    const state = String(place["state abbreviation"] ?? "").trim().toUpperCase();
+    // The same table cityFromBio validates against, kept from the old implementation: a malformed
+    // payload must not put "undefined" in front of a prospect.
     if (!city || !STATE_ABBR.has(state)) return null;
     return `${city}, ${state}`;
   } catch (e) {
