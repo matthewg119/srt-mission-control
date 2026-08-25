@@ -175,9 +175,15 @@ export function dmSubjectOf(facts: DmFacts): DmSubject {
     // `?? []` covers rows written to ig_dm_runs.check_json before this field existed, which
     // factsFromRow rehydrates unchanged.
     topRivals: (c.topRivals ?? []).slice(0, DM_MAX_RIVALS_NOWEBSITE),
-    // This lane is reached only when there is no site of theirs at all. The booking-link lane, when
-    // it is built, is what produces "booking_only".
-    siteState: "none",
+    // ‼️ DERIVED FROM WHAT WAS RESOLVED, NEVER FROM THE MODEL, and the two values this picks
+    // between describe genuinely different prospects. "none" means an engine has nothing of theirs
+    // to reach at all. "booking_only" means it has a page, that page ranks, and it belongs to the
+    // software vendor - which is the stronger finding and the more specific sentence. The flag
+    // reaches here from the "Only a booking link" button, through a host that passed isBookingHost
+    // server-side, so an unresolvable or non-booking link degrades to "none" rather than claiming
+    // software the prospect may not use. Nothing else about the message changes: withReason() picks
+    // the sentence up from dmReasonLine and the sentence budget is unmoved.
+    siteState: c.bookingHost ? "booking_only" : "none",
     cityless: !c.city,
     questions: c.results.map((r) => ({ prompt: r.prompt, appeared: r.appeared, named: r.named })),
   };

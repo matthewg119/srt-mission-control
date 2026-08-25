@@ -803,9 +803,14 @@ export function dmReasonLine(state: DmSiteState): string {
         "cite, because you do not have a site of your own."
       );
     case "booking_only":
-      // No producer yet: this is the "Only a booking link" lane, still to be built. It is pinned
-      // here rather than in that lane because docs/CONTINUATION-booking-link-lane.md asks for it
-      // here, so both the DM and the email can reach the same sentence.
+      // Produced by the "Only a booking link" button on the Instagram panel, which reaches this
+      // through MiniCheck.bookingHost and dmSubjectOf. It stays pinned here rather than in that
+      // lane so the email can reach the same sentence when it grows the same button.
+      //
+      // What the sentence asserts is that the page belongs to booking SOFTWARE, so the flag is
+      // gated on isBookingHost and not on isNeverTheirSite. A Facebook or Yelp link is also not
+      // their site, and telling someone their Facebook page is their booking software is a
+      // correction they make on the first line.
       return (
         "When someone asks an engine for a business like yours the only page of yours it can find " +
         "belongs to your booking software, so what it repeats was written to sell appointments " +

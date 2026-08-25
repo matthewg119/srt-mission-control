@@ -806,9 +806,20 @@ missed, produced no trade, and the engine loop was skipped entirely. The limp co
 > and it did not come back — the only case where his original wording is correct). Same failure class
 > as `NOTHING_TO_FIND_LINE` claiming a business has no Google listing.
 >
-> `booking_only` has **no producer yet**: that is the "Only a booking link" lane in
-> `docs/CONTINUATION-booking-link-lane.md`. The line is pinned in `pitch.ts` so both the DM and the
-> email can reach it, which is what that doc asks for.
+> `booking_only` is produced by the **"Only a booking link"** button on the panel (2026-08-25). It
+> is the SAME lane and the same scan as "no website": a third `DmFacts.kind` would return null from
+> `factsFromRow`, which 409s Regenerate and blanks the panel's evidence block, so the flag rides on
+> `MiniCheck.bookingHost` instead and `dmSubjectOf` picks the sentence off it. The engines are still
+> asked, because the finding is still that they did not come back.
+>
+> ‼️ **IT IS GATED ON `isBookingHost`, A SUBSET OF `NEVER_THEIR_SITE_HOSTS`, NOT ON THAT LIST.**
+> The sentence tells the prospect the page belongs to their booking software. That is true of an
+> Aesthetic Record or a Vagaro page and false of the Facebook, Yelp and Threads links sitting in the
+> same set, and false in a way they correct on the first line. Directories that also take bookings
+> (zocdoc, healthgrades) are deliberately excluded: somebody else writing about them is what
+> `not_surfacing` already describes. The route re-resolves the host itself and never trusts the
+> panel's string; a link that is not booking software degrades the run to `none`, which is weaker
+> and still true.
 
 **The finding folded from two sentences to one, and that was forced arithmetic.** The reason line
 costs a sentence, the ask and the close take two more, and the opener is the fifth. With the old

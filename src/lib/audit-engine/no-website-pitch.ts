@@ -114,6 +114,21 @@ export interface MiniCheck {
   topRivals: DmRival[];
   /** The third-party page the engines and research lean on, if there is an obvious one. */
   platform: string | null;
+  /**
+   * The booking platform their bio link points at, when Matthew answered "Only a booking link".
+   *
+   * ‼️ IT IS AN INPUT, NOT SOMETHING THIS SCAN MEASURED, and it rides on the check anyway for
+   * one reason: check_json is what factsFromRow rehydrates, so a value carried here survives a
+   * Regenerate for free, where a column on ig_dm_runs would have to be plumbed into that function
+   * separately and would be forgotten the first time somebody added a lane.
+   *
+   * ‼️ IT IS NOT `platform` ABOVE AND MUST NOT BE MERGED INTO IT. That one is whatever
+   * third-party page RESEARCH happened to surface (a Yelp listing, a directory entry) and nothing
+   * validates what kind of thing it is. This one is a host that passed isBookingHost, which is what
+   * licenses dmReasonLine("booking_only") to tell a stranger the page belongs to software they pay
+   * for. A claim and a research artefact are not the same field.
+   */
+  bookingHost: string | null;
 }
 
 /**
@@ -247,7 +262,7 @@ export type MiniCheckOutcome =
 export async function runMiniVisibilityCheck(
   businessName: string,
   city?: string | null,
-  opts?: { bioHint?: string | null }
+  opts?: { bioHint?: string | null; bookingHost?: string | null }
 ): Promise<MiniCheckOutcome> {
   const { result: found, miss } = await researchViaClaudeDetailed(
     { kind: "name", name: businessName, city: city ?? undefined },
@@ -352,6 +367,7 @@ export async function runMiniVisibilityCheck(
       enginesAnswered: results.some((r) => r.appeared !== null),
       topRivals,
       platform,
+      bookingHost: opts?.bookingHost ?? null,
     },
   };
 }

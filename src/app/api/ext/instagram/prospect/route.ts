@@ -24,6 +24,7 @@ import {
   unwrapInstagramLink,
   businessNameFrom,
 } from "@/lib/instagram/profile";
+import { hostOf, isBookingHost } from "@/lib/audit-engine/web-hosts";
 import { IG_CLAIM_MINUTES, startDmRun, leadUrl, profileUrl } from "@/lib/instagram/dm-run";
 
 export const runtime = "nodejs";
@@ -49,6 +50,23 @@ interface Body {
   websiteOverride?: string | null;
   /** Set when he answered "no website at all" rather than pasting one. */
   noWebsite?: boolean;
+  /**
+   * Set when he answered "only a booking link" rather than "no website at all".
+   *
+   * ‼️ A DIFFERENT PROSPECT, NOT A DIFFERENT SPELLING OF noWebsite. Both mean there is no site
+   * of their own to crawl, so both run the same scan. What differs is what an engine can reach: a
+   * booking-only business HAS a page that ranks, written by the vendor, and dmReasonLine says so.
+   */
+  bookingOnly?: boolean;
+  /**
+   * The booking page itself, echoed back by the panel.
+   *
+   * ‼️ IT IS RE-VALIDATED HERE AND IS NEVER TAKEN ON TRUST. The claim built from it names the
+   * prospect's booking software, so the decision about what counts as one belongs on this side of
+   * the wire. A URL that is not a BOOKING_HOSTS host degrades the run to the plain no-website lane
+   * rather than failing it: the weaker sentence is still true.
+   */
+  bookingUrl?: string | null;
   /**
    * A city or a ZIP he typed into the panel. Beats cityFromBio, and on most med spa profiles it is
    * the only source there is: the bio carries a booking link and no address.
@@ -116,18 +134,34 @@ export async function POST(req: NextRequest) {
 
   // 1. Where the site comes from, in priority order. What Matthew typed always wins.
   const typed = (body.websiteOverride ?? "").trim();
+  // Both answers mean the same thing to the crawler: there is no site of theirs to read.
+  const noSiteOfTheirOwn = Boolean(body.noWebsite || body.bookingOnly);
   let website: string | null = null;
   let websiteNote = "";
+  let bookingHost: string | null = null;
   if (typed) {
     website = unwrapInstagramLink(typed);
     websiteNote = website ? "Website typed in the panel." : "";
     if (!website) {
       return jsonCors(req, { ok: false, error: `That does not look like a URL: ${typed}`, field: "websiteOverride" }, 400);
     }
-  } else if (!body.noWebsite) {
+  } else if (!noSiteOfTheirOwn) {
     const resolved = await resolveBioLink(body.externalUrl);
     website = resolved.website;
     websiteNote = resolved.note;
+    bookingHost = resolved.bookingHost;
+  } else if (body.bookingOnly) {
+    // ‼️ RESOLVED HERE, NEVER READ OFF THE BODY. The panel echoes the URL back; what makes it a
+    // booking page is isBookingHost, on this side. The bio link is re-resolved as a fallback so the
+    // button works even when the panel had nothing structured to echo.
+    const echoed = unwrapInstagramLink(body.bookingUrl ?? null);
+    const echoedHost = isBookingHost(echoed) ? hostOf(echoed) : null;
+    bookingHost = echoedHost ?? (await resolveBioLink(body.externalUrl)).bookingHost;
+    // A degrade, not a failure: dmReasonLine("none") is weaker and still true, so the run goes on
+    // rather than asking him to prove his own prospect uses booking software.
+    websiteNote = bookingHost
+      ? `Marked as having only a booking link: ${bookingHost}.`
+      : "Marked as having only a booking link, but that link is not a booking platform we recognise, so this runs as no website at all.";
   } else {
     websiteNote = "Marked as having no website of their own.";
   }
@@ -148,7 +182,7 @@ export async function POST(req: NextRequest) {
   });
 
   // 3. No site and he has not yet said there is none: ask, and spend nothing.
-  if (!website && !body.noWebsite) {
+  if (!website && !noSiteOfTheirOwn) {
     return jsonCors(req, {
       ok: true,
       needsWebsite: true,
@@ -156,6 +190,10 @@ export async function POST(req: NextRequest) {
       leadUrl: leadUrl(contactId),
       handle,
       businessName,
+      // What the "Only a booking link" button needs in order to say which platform it is. Null on
+      // every other kind of dead-end link, which is what keeps that button honest.
+      bookingHost,
+      bookingUrl: bookingHost ? unwrapInstagramLink(body.externalUrl) : null,
       note: websiteNote,
     });
   }
@@ -250,6 +288,7 @@ export async function POST(req: NextRequest) {
     // The bio was read at the top of this route, used once by cityFromBio, and thrown away. It is
     // often the best statement of what they sell that exists anywhere: see tradeFromBio.
     bio: bio || null,
+    bookingHost,
     instructions: body.instructions ?? null,
   });
 

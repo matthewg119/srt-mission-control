@@ -67,9 +67,9 @@ export function factsFromRow(row: Pick<IgRunRow, "lane" | "check_json" | "handle
   if (row.lane === "hook") return { kind: "hook", check: row.check_json as HookCheck };
   if (row.lane === "nowebsite") {
     // ‼️ A STORED check_json IS WHATEVER SHAPE MiniCheck HAD THE DAY IT WAS WRITTEN. Rows from
-    // before 2026-08-25 carry no `trade`, `tradeSource` or `topRivals`, and a redraft of one of
-    // them must degrade to "no rivals, no trade" rather than throw on a read of undefined.length.
-    // dmSubjectOf and pickAngle both `?? []` for the same reason; this is the belt to that braces.
+    // before 2026-08-25 carry no `trade`, `tradeSource`, `topRivals` or `bookingHost`, and a redraft
+    // of one must degrade to "no rivals, no trade, no booking page" rather than throw on a read of
+    // undefined.length. dmSubjectOf and pickAngle both `?? []` too; this is the belt to that braces.
     const stored = row.check_json as Partial<MiniCheck>;
     return {
       kind: "nowebsite",
@@ -78,6 +78,7 @@ export function factsFromRow(row: Pick<IgRunRow, "lane" | "check_json" | "handle
         trade: stored.trade ?? null,
         tradeSource: stored.tradeSource ?? null,
         topRivals: stored.topRivals ?? [],
+        bookingHost: stored.bookingHost ?? null,
       },
       businessName,
     };
@@ -180,6 +181,17 @@ export function startDmRun(opts: {
   city: string | null;
   /** Their Instagram bio, verbatim. The no-website lane reads the trade off it. */
   bio?: string | null;
+  /**
+   * The booking platform their bio link points at, when Matthew pressed "Only a booking link".
+   *
+   * ‼️ IT DOES NOT SELECT A LANE. A booking-only prospect has no site of their own, so the scan
+   * that fits is the same runMiniVisibilityCheck the no-website button runs, and the run is stored
+   * under lane "nowebsite" like any other. A third lane value would return null from factsFromRow,
+   * which 409s Regenerate and blanks the evidence block in the panel. What the flag changes is one
+   * sentence, chosen in dmSubjectOf. The engines are still asked, because the finding is still that
+   * they did not come back.
+   */
+  bookingHost?: string | null;
   instructions?: string | null;
 }): void {
   const { runId, contactId, handle, website, businessName, firstName, city } = opts;
@@ -208,6 +220,7 @@ export function startDmRun(opts: {
           }
           const outcome = await runMiniVisibilityCheck(businessName, city, {
             bioHint: opts.bio ?? null,
+            bookingHost: opts.bookingHost ?? null,
           });
           if (!outcome.ok) return failRun(runId, contactId, outcome.detail);
           facts = { kind: "nowebsite", check: outcome.check, businessName };

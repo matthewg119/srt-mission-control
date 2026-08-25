@@ -55,6 +55,7 @@ const WITH_ENGINES: MiniCheck = {
     { name: "Cuzcatlan", count: 1 },
   ],
   platform: "https://www.facebook.com/michoacana3mendos",
+  bookingHost: null,
 };
 
 /** The honesty case: every engine call came back empty (no key, rate limited, outage). */
@@ -72,6 +73,7 @@ const NO_ENGINES: MiniCheck = {
   enginesAnswered: false,
   topRivals: [],
   platform: "https://www.facebook.com/michoacana3mendos",
+  bookingHost: null,
 };
 
 /**
@@ -89,6 +91,7 @@ const NO_RESEARCH: MiniCheck = {
   enginesAnswered: false,
   topRivals: [],
   platform: null,
+  bookingHost: null,
 };
 
 /** Claims that are only true if an engine actually answered. */

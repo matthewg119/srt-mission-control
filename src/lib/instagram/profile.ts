@@ -16,6 +16,7 @@ import {
   hostOf,
   isAggregatorHost,
   isNeverTheirSite,
+  isBookingHost,
 } from "@/lib/audit-engine/web-hosts";
 import { callClaudeJSON } from "@/lib/claude-calls";
 
@@ -204,6 +205,18 @@ export interface ResolvedLink {
   website: string | null;
   /** Why, in one line, for the panel to show when it asks Matthew to type one. */
   note: string;
+  /**
+   * The booking platform the bio link points at, when that is what it is. Null otherwise.
+   *
+   * ‼️ A STRUCTURED FIELD BECAUSE A CLAIM IS BUILT FROM IT, and the note above is not one. The
+   * note is prose for a human to read in the panel; this is what the "Only a booking link" button
+   * sends back and what dmReasonLine("booking_only") is ultimately gated on. Parsing it out of the
+   * sentence, or letting the extension decide for itself what counts as a booking host, would put
+   * the decision somewhere it cannot be checked. Set ONLY for BOOKING_HOSTS, never for the rest of
+   * NEVER_THEIR_SITE_HOSTS: a Facebook link is also not their site and is not their booking
+   * software.
+   */
+  bookingHost: string | null;
 }
 
 /**
@@ -220,28 +233,31 @@ export interface ResolvedLink {
  */
 export async function resolveBioLink(rawUrl: string | null | undefined): Promise<ResolvedLink> {
   const url = unwrapInstagramLink(rawUrl);
-  if (!url) return { website: null, note: "No link in the bio." };
+  if (!url) return { website: null, note: "No link in the bio.", bookingHost: null };
 
   const host = hostOf(url);
-  if (!host) return { website: null, note: `The bio link could not be read: ${rawUrl}` };
+  if (!host) return { website: null, note: `The bio link could not be read: ${rawUrl}`, bookingHost: null };
 
   if (isNeverTheirSite(host)) {
     return {
       website: null,
       note: `The bio link points at ${host}, which is not a site they control. The hook is written from their own pages.`,
+      // Narrower than the branch it sits in, deliberately. See ResolvedLink.bookingHost.
+      bookingHost: isBookingHost(host) ? host : null,
     };
   }
 
-  if (!AGGREGATOR_HOSTS.has(host)) return { website: url, note: `Using the bio link: ${host}` };
+  if (!AGGREGATOR_HOSTS.has(host)) return { website: url, note: `Using the bio link: ${host}`, bookingHost: null };
 
   const found = await firstOutboundFrom(url);
   if (!found) {
     return {
       website: null,
       note: `The bio link is a ${host} page and no site of their own was linked from it.`,
+      bookingHost: null,
     };
   }
-  return { website: found, note: `Followed ${host} to ${hostOf(found)}` };
+  return { website: found, note: `Followed ${host} to ${hostOf(found)}`, bookingHost: null };
 }
 
 /**

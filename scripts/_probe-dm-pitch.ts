@@ -28,7 +28,7 @@ import {
   DM_MAX_SENTENCES,
 } from "../src/config/pitch";
 import { buildAliases, isMentioned } from "../src/lib/audit-engine/mention-match";
-import { isNeverTheirSite } from "../src/lib/audit-engine/web-hosts";
+import { isNeverTheirSite, isBookingHost } from "../src/lib/audit-engine/web-hosts";
 
 /** 1 of 4 for the business: the shape Matthew asked the DM to state. */
 const RIVAL_COUNTS = { appeared: 1, measured: 4 };
@@ -124,6 +124,7 @@ function mini(over: Partial<MiniCheck> = {}): DmFacts {
       enginesAnswered: false,
       topRivals: [],
       platform: null,
+      bookingHost: null,
       ...over,
     } as MiniCheck,
   };
@@ -587,6 +588,56 @@ check(
   }).topRivals,
   []
 );
+
+// ── Only a booking link ──────────────────────────────────────
+//
+// The third answer to the website question. It is the SAME lane and the same scan as "no website":
+// what the flag buys is one sentence, dmReasonLine("booking_only"), which had no producer until
+// now. A page that ranks and was written by a vendor is a different prospect from a page that does
+// not exist, and the two sentences say so.
+
+check(
+  "a booking-only run says the page belongs to the software",
+  dmSubjectOf(mini({ bookingHost: "myaestheticrecord.com" })).siteState,
+  "booking_only"
+);
+check("...and without the flag it still says there is nothing at all", dmSubjectOf(mini()).siteState, "none");
+check(
+  "a stored row written before the field existed degrades to none",
+  dmSubjectOf({
+    kind: "nowebsite",
+    businessName: "The Plump Room",
+    check: {
+      identity: null,
+      researched: false,
+      city: null,
+      results: [],
+      enginesAnswered: false,
+    } as unknown as MiniCheck,
+  }).siteState,
+  "none"
+);
+
+// The sentence itself reaches the brief, which is the only way it reaches a prospect.
+const bookingCtx = dmContext(
+  mini({ bookingHost: "myaestheticrecord.com", results: [MISS, HIT], enginesAnswered: true, topRivals: ONE_RIVAL }),
+  pickDmAngle(mini({ bookingHost: "myaestheticrecord.com", results: [MISS, HIT], enginesAnswered: true, topRivals: ONE_RIVAL }))
+);
+check("the booking sentence is pinned into the brief", bookingCtx.includes(dmReasonLine("booking_only")), true);
+check("the no-site sentence is not also in it", bookingCtx.includes(dmReasonLine("none")), false);
+
+// ‼️ THE FLAG DOES NOT LOOSEN A GATE. The finding is still that they did not come back, so a
+// booking-only prospect who DID come back everywhere gets the clean-sweep angle exactly as before.
+check(
+  "a booking-only prospect who came back everywhere still gets present-but-thin",
+  pickDmAngle(mini({ bookingHost: "myaestheticrecord.com", results: [HIT, HIT], enginesAnswered: true })).id,
+  "present-but-thin"
+);
+
+// What licenses the claim, one layer down: only real booking software, never any dead-end host.
+check("a booking subdomain is a booking host", isBookingHost("https://theplumproom.myaestheticrecord.com/online-booking"), true);
+check("a facebook page is not booking software", isBookingHost("https://facebook.com/theplumproom"), false);
+check("...but it is still not their site", isNeverTheirSite("https://facebook.com/theplumproom"), true);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
