@@ -5,7 +5,7 @@ Paste everything below the line into a new Claude Code session.
 ---
 
 Repo: `c:\Users\matth\Desktop\Code\Mission control 2.0\srt-mission-control` (branch `main`).
-Production is mission.srtagency.com, deployed from `main`. Last commit shipped: `beaeab0`.
+Production is mission.srtagency.com, deployed from `main`. Last commit shipped: `5b1659a`.
 
 Read `CLAUDE.md`, and specifically the section **"The Instagram DM lane"**, which is the newest
 section in that file and states the rules this work has to stay inside. Then read the header of
@@ -62,7 +62,7 @@ both moved to private repos for exactly this reason, and the same convention app
 This is the only thing that proves the rebuild, and it has not been done. `tradeFromBio` and the ZIP
 resolver in `resolveCityInput` are both live model calls and **no probe covers either of them**.
 
-1. Confirm Vercel has finished deploying `beaeab0`.
+1. Confirm Vercel has finished deploying `5b1659a`.
 2. Reload the unpacked extension.
 3. Press the button on `leahskinmethod`. The expected path is:
    `needsWebsite` (the booking host is blocked, so no site is resolved) → press
