@@ -613,3 +613,133 @@ export function hookResultLine(appeared: number, measured: number): string {
   if (appeared >= measured) return "You came back in every one of those searches";
   return `You came back in ${Math.round((appeared / measured) * 100)}% of those searches`;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Instagram DM lane
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Sixth sibling of NO_WEBSITE_LINE / NOTHING_TO_FIND_LINE / HOOK_PRETEXT_LINE /
+// hookPositioningLine / hookResultLine, pinned here for the reason stated above all of them: these
+// are the lines that CARRY THE CLAIM, and a model asked to phrase a claim itself reaches for an
+// adjective. Changing the wording must be one edit here rather than a hunt through prompt text.
+//
+// ‼️ hookResultLine IS DELIBERATELY NOT REUSED HERE. It prints a percentage ("You came back in 33%
+// of those searches"), which is right in an email and wrong in a chat bubble: a stranger's first
+// DM containing a statistic reads as a mail merge, and Matthew's reference DM carries no number at
+// all. The DM states the same measured fact qualitatively. The percentage stays the email's.
+
+/**
+ * How many sentences a DM may run. Enforced by draft-linter.ts under `stage: "dm"`.
+ *
+ * Five, against draft-1's skeleton, and the difference is the surface: an email is read in a
+ * reading pane and a DM is read in a bubble about forty characters wide. The reference DM is four
+ * sentences; five leaves room for the pretext opener without licensing a paragraph.
+ */
+export const DM_MAX_SENTENCES = 5;
+
+/**
+ * The absence, with the rival that took the slot. THE REFERENCE LINE, from Matthew's own message.
+ *
+ * ‼️ ONLY EVER CALLED BEHIND THE `rival-substitute` GATE, which requires both a measured miss and a
+ * rival that extractRecommendedBatch actually pulled out of an answer we received. The name in this
+ * sentence is a checkable claim: the prospect can reproduce it from his phone in thirty seconds,
+ * which is exactly why it lands, and exactly why it can never be a guess. See pickDmAngle.
+ */
+export function dmRivalLine(
+  service: string,
+  city: string | null,
+  rival: string,
+  business: string
+): string {
+  // City is split on the first comma for the same reason hookPositioningLine does it: classify.ts
+  // stores "Hallandale Beach, FL" and a person writing this sentence would not say the state.
+  const where = city?.split(",")[0]?.trim();
+  return (
+    `I ran a quick check and when someone asks ChatGPT for ${service}${where ? ` in ${where}` : ""}, ` +
+    `${rival} shows up. ${business} doesn't.`
+  );
+}
+
+/**
+ * The absence with no rival named.
+ *
+ * Used when the scan found a miss but the extractor returned no name we can stand behind. It says
+ * strictly less than dmRivalLine and nothing that is not measured. It does NOT reach for "you are
+ * invisible" to compensate: that is the unfalsifiable scare line NOTHING_TO_FIND_LINE exists to
+ * prevent, and a weaker true sentence beats a stronger one we cannot support.
+ */
+export function dmAbsenceLine(service: string, city: string | null, business: string): string {
+  const where = city?.split(",")[0]?.trim();
+  return (
+    `I ran a quick check and when someone asks ChatGPT for ${service}${where ? ` in ${where}` : ""}, ` +
+    `it comes back with a list of businesses and ${business} isn't on it.`
+  );
+}
+
+/**
+ * The clean-sweep line. They DID come back, so the DM must not imply otherwise.
+ *
+ * Mirror of the `present-but-thin` angle in hook-pitch.ts and bound by the same rule: nothing in a
+ * message built on this line may read as bad news about their visibility. What is true, and what
+ * this says, is that the description belongs to whoever wrote it.
+ */
+export function dmPresentLine(service: string, city: string | null, business: string): string {
+  const where = city?.split(",")[0]?.trim();
+  return (
+    `I ran a quick check on what ChatGPT says when someone asks for ${service}${where ? ` in ${where}` : ""}, ` +
+    `and ${business} does come back. Every word it used to describe you was written by somebody else.`
+  );
+}
+
+/** The ask. One question mark per DM, and this is it. */
+export const DM_ASK_LINE = "Want me to send you the actual queries and results?";
+
+/**
+ * The close. Matthew's wording, kept verbatim.
+ *
+ * It does two jobs a shorter close does not: "takes me 20 seconds to send" removes the cost of
+ * saying yes, and "might change how you think about the next 6 months" is the only claim in the
+ * message that is about them rather than about the scan. It is a hedge on purpose ("might"), which
+ * is what keeps it clear of the guarantee ban in COMPLIANCE_RULES.
+ */
+export const DM_CLOSE_LINE =
+  "Takes me 20 seconds to send, might change how you think about the next 6 months.";
+
+/**
+ * The three opening moves, and the ONLY axis the variants are allowed to differ on.
+ *
+ * ‼️ VARIATION IS A WORDING PROBLEM, NEVER A CLAIM PROBLEM. Matthew asked for variations because
+ * three identical DMs in a row read as a bot, which is true. What he did not ask for, and what
+ * would quietly undo the whole lane, is three different findings: the angle is picked once from
+ * what the scan measured, and all three variants state THAT finding. A variant that reached for a
+ * different claim to sound fresh would be inventing one, since only one was measured.
+ */
+export const DM_OPENERS = [
+  {
+    id: "result",
+    // The reference DM. Straight into what came back.
+    instruction:
+      "Open on the finding itself, in the fixed line, with nothing before it. No pretext, no " +
+      "greeting beyond the first name, no throat-clearing. This is the reference message.",
+  },
+  {
+    id: "pretext",
+    // The email hook's move, compressed. Explains why this landed in their inbox first.
+    instruction:
+      "Open with ONE short sentence of pretext before the finding: the questions were being run " +
+      "for another client in the area and this business came up in them. Do not say who the other " +
+      "client is, what they do, or how they are doing, and do not suggest you work with one of " +
+      "this prospect's competitors. Then the fixed finding line.",
+  },
+  {
+    id: "question",
+    // The lightest open. Note it does NOT add a question mark: it is phrased as a statement.
+    instruction:
+      "Open by naming the thing you checked as a statement rather than a question, for example " +
+      "'Was checking what ChatGPT recommends for X in Y this morning'. It must NOT contain a " +
+      "question mark: the message is allowed exactly one, and that one is the ask at the end. " +
+      "Then the fixed finding line.",
+  },
+] as const;
+
+export type DmOpenerId = (typeof DM_OPENERS)[number]["id"];

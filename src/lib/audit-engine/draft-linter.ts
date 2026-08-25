@@ -15,6 +15,7 @@
 import {
   BANNED_ABSOLUTES,
   BANNED_JARGON,
+  DM_MAX_SENTENCES,
   LINTER_MAX_RETRIES,
   SEED_SENTENCE_ALLOWANCE,
   SKELETON_BODY_SENTENCES,
@@ -27,6 +28,7 @@ export type LintRule =
   | "missing-close"
   | "double-ask"
   | "draft-1-length"
+  | "dm-length"
   | "robots-tease"
   | "banned-jargon"
   | "absolutes"
@@ -48,8 +50,16 @@ export interface LintInput {
   /** Prospect-facing text ONLY. Never pass the SEED LOG or the Slack footer through here. */
   body: string;
   subject?: string;
-  /** Which stage this is. Only `draft-1` is length-checked against the control skeleton. */
-  stage: "draft-1" | "nudge" | "reveal" | "belief" | "objection" | "delivery" | "package";
+  /**
+   * Which stage this is. Only `draft-1` is length-checked against the control skeleton.
+   *
+   * `dm` is the Instagram lane (dm-pitch.ts) and it is the one stage with NO sign-off and no
+   * appended PERMISSION_CLOSE, because it is a chat message rather than an email. It is a stage
+   * here rather than its own linter so that rules 3 to 6 below (the tease needing a real finding,
+   * the jargon list, the banned absolutes, unfilled placeholders) keep applying to it unchanged.
+   * A second linter would have started as a copy of those four rules and drifted from them.
+   */
+  stage: "draft-1" | "dm" | "nudge" | "reveal" | "belief" | "objection" | "delivery" | "package";
   /** Beliefs this draft claims to install. Exactly one is required once seeding is in play. */
   installs?: BeliefId[];
   /** Beliefs already installed in this thread. */
@@ -158,6 +168,28 @@ export function lintDraft(input: LintInput): LintResult {
       findings.push({
         rule: "draft-1-length",
         detail: `Draft 1 runs ${actual} sentences; the control skeleton plus a seed allows ${ceiling}. Cut ${actual - ceiling}.`,
+      });
+    }
+  }
+
+  // 2b — the DM lane. Same intent as rule 2 and rule 1b, in the units a chat message is written
+  // in: it is read in a narrow bubble on a phone, so length is the whole difference between a
+  // note and a wall someone scrolls past. It gets NO missing-close check, since there is no close
+  // to append, but it keeps the one-question rule for the same reason draft-1 has it: a message
+  // that asks twice splits the reply.
+  if (input.stage === "dm") {
+    const actual = countSentences(bodyOnly(input.body));
+    if (actual > DM_MAX_SENTENCES) {
+      findings.push({
+        rule: "dm-length",
+        detail: `The DM runs ${actual} sentences; a DM allows ${DM_MAX_SENTENCES}. Cut ${actual - DM_MAX_SENTENCES}.`,
+      });
+    }
+    const questions = (input.body.match(/\?/g) ?? []).length;
+    if (questions > 1) {
+      findings.push({
+        rule: "double-ask",
+        detail: `${questions} question marks aimed at the reader. A DM asks exactly once, and the ask is the close.`,
       });
     }
   }
