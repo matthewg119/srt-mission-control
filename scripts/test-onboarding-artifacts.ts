@@ -171,8 +171,10 @@ ok("a real local clinic is kept", !isExcludedFromShortlist("Bright Skin Clinic o
 ok("a local name containing 'best' in context is judged", isExcludedFromShortlist("Top 10 Med Spas").excluded);
 
 eq("six core platforms", CORE_SIX.length, 6);
-eq("twelve extended platforms", EXTENDED.length, 12);
-eq("eighteen in total", PLATFORM_COUNT, 18);
+// LANE 1, 2026-08-25: thirteen since Trustpilot joined the extended tier. The TIER is
+// unchanged in meaning; this is one more extended directory, not a promotion.
+eq("thirteen extended platforms", EXTENDED.length, 13);
+eq("nineteen in total", PLATFORM_COUNT, 19);
 ok("nothing is keyed yet", [...CORE_SIX, ...EXTENDED].every((p) => p.api === false));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1658,6 +1660,111 @@ import { pageSlug } from "../src/lib/hub/pages";
 
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- LANE 1 ---- screenshots become evidence (2026-08-25)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const {
+    resolvePlatformFromUrl,
+    SWEEP_GATE_COUNT,
+    RECOMMENDED_KEYS,
+    CORE_SIX: CORE,
+    EXTENDED: EXT,
+    ALL_PLATFORMS: ALL,
+    PLATFORM_COUNT: COUNT,
+  } = require("../src/config/presence-platforms") as typeof import("../src/config/presence-platforms");
+  const { REVIEW_PLATFORM_KEYS, namesLikelySame } =
+    require("../src/lib/clients/review-audit") as typeof import("../src/lib/clients/review-audit");
+  const { formatSweepCard } =
+    require("../src/lib/clients/presence-sweep") as typeof import("../src/lib/clients/presence-sweep");
+
+  // ── The gate and the tiers are different facts ─────────────────────────────
+  //
+  // ‼️ THIS IS THE TRAP THE WHOLE LANE IS WRITTEN AROUND. CORE_SIX and EXTENDED are the
+  // REMEDIATION tiers: citation-cleanup.ts sorts core-six first and multiplies effort by it,
+  // presence-pdf.ts renders them separately, and findings section 3 goes to the client. Cutting
+  // CORE_SIX to four to make the gate four would quietly redefine what "week one cleanup" means
+  // in a document somebody reads.
+  eq("the gate is four distinct platforms", SWEEP_GATE_COUNT, 4);
+  eq("the core six is still six", CORE.length, 6);
+  ok("trustpilot is an EXTENDED directory, not a promotion", EXT.some((p) => p.key === "trustpilot"));
+  eq("nineteen platforms", COUNT, 19);
+  eq("PLATFORM_COUNT matches the list", COUNT, ALL.length);
+
+  // ── The recommended four are a display concept and nothing else ────────────
+  eq("the recommended four", [...RECOMMENDED_KEYS], ["google", "yelp", "trustpilot", "bbb"]);
+  ok(
+    "every recommended key is a real platform",
+    RECOMMENDED_KEYS.every((k) => ALL.some((p) => p.key === k))
+  );
+  // The review grid is those same four, and it is NOT a filter of CORE_SIX: trustpilot and bbb
+  // are extended rows, so a CORE_SIX.filter() would silently return two platforms out of four.
+  eq("the review grid is the same four", [...REVIEW_PLATFORM_KEYS], ["google", "yelp", "trustpilot", "bbb"]);
+
+  // ── The address bar resolver, and the collision it exists for ──────────────
+  eq("google maps is Google Business Profile", resolvePlatformFromUrl("https://www.google.com/maps/place/x"), ["google"]);
+  eq("a google WEB search is nothing", resolvePlatformFromUrl("https://www.google.com/search?q=chamber+of+commerce"), []);
+  eq("a bing WEB search is nothing", resolvePlatformFromUrl("https://www.bing.com/search?q=x"), []);
+  eq("bing maps is Bing Places", resolvePlatformFromUrl("https://www.bing.com/maps?q=x"), ["bing"]);
+  eq("trustpilot", resolvePlatformFromUrl("trustpilot.com/review/srtagency.com"), ["trustpilot"]);
+  eq("a suffix is not a substring", resolvePlatformFromUrl("https://notyelp.com/biz/x"), []);
+  eq("nothing legible is nothing", resolvePlatformFromUrl(""), []);
+
+  // ‼️ chamber MUST STAY UNMAPPABLE. Its search surface IS a Google search page, so its address
+  // bar is indistinguishable from any other Google search. Unmappable from a screenshot is the
+  // honest answer, and a domains entry for it would file every Google search as a chamber.
+  ok(
+    "the chamber of commerce has no domain map, on purpose",
+    !ALL.find((p) => p.key === "chamber")?.domains
+  );
+
+  // ── Matching a listing to a subject ────────────────────────────────────────
+  ok("an entity suffix does not stop a match", namesLikelySame("Acme Med Spa", "Acme Med Spa LLC"));
+  // The city is noise FOR THIS CLIENT and the caller says so, which is how a directory that
+  // prints the city against a record that does not still matches.
+  ok(
+    "a listing that prints the city still matches when the caller declares it",
+    namesLikelySame("Acme Med Spa", "Acme Med Spa of Greensboro", ["Greensboro", "NC"])
+  );
+  // ...and without that declaration it is a MISS rather than a guess. A miss costs one
+  // message; a false match writes a competitor's review count onto the client.
+  ok(
+    "an undeclared extra word is a miss, not a match",
+    !namesLikelySame("Acme Med Spa", "Acme Med Spa of Greensboro")
+  );
+  ok("a different business does not match", !namesLikelySame("Acme Med Spa", "Acme Dental"));
+  ok("nothing matches nothing", !namesLikelySame(null, "Acme Med Spa"));
+  // Category words alone are not identity: every med spa in the county would match every other.
+  ok("category words alone are not a match", !namesLikelySame("Med Spa", "Greensboro Med Spa"));
+
+  // ── The card still fits Slack ──────────────────────────────────────────────
+  //
+  // ‼️ A SECTION OVER 3,000 CHARACTERS FAILS THE WHOLE MESSAGE, and this card was already at
+  // 2,988 for a SHORT business name before a nineteenth platform was added to it. bodySections()
+  // splits on line boundaries at 2,900; what this checks is that no single LINE is over the
+  // limit, because a line cannot be split and would take the card down with it.
+  const card = formatSweepCard(
+    { name: "Greensboro Aesthetic and Wellness Institute", city: "Greensboro", state: "NC" },
+    {
+      name: "Greensboro Aesthetic and Wellness Institute",
+      addressLine1: "1200 W Market St",
+      addressLine2: "Ste 200",
+      city: "Greensboro",
+      state: "NC",
+      postalCode: "27403",
+      phone: "+13368332303",
+    }
+  );
+  const cardLines = card.split("\n");
+  ok("no sweep card line can break a Slack section", Math.max(...cardLines.map((l) => l.length)) < 2900);
+  ok("the sweep card says the gate is four", /any 4 DISTINCT platforms/.test(card));
+  ok("the sweep card offers the address bar as the second route", /address bar/i.test(card));
+  ok("the sweep card still says an empty search result is the evidence", /empty search result/i.test(card));
+  ok("the sweep card leads with the recommended four", card.indexOf("START WITH THESE FOUR") < card.indexOf("THE REST OF THE CORE SIX"));
+  ok("every platform is still on the card", ALL.every((p) => card.includes(p.label)));
+}
+
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} checks failed.`);

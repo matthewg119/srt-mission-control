@@ -9,7 +9,7 @@
 // the screenshot inline · which platforms were automated, which manual, which skipped and why.
 //
 // ‼️ "NOT CHECKED" NEVER RENDERS AS "NO ISSUES FOUND", AND THIS FILE IS WHERE THAT IS ENFORCED.
-// Today nothing is keyed, so a freshly seeded client has eighteen rows of 'not_checked'. The
+// Today nothing is keyed, so a freshly seeded client has nineteen rows of 'not_checked'. The
 // tempting render for that is a clean page with no findings on it, which a client would
 // reasonably read as "we looked everywhere and you are fine". So the summary leads with the
 // number NOT checked whenever there are any, and the per-platform table prints the words "not
@@ -194,10 +194,14 @@ export async function renderPresencePdf(args: {
    * The state of the manual sweep STEP, as opposed to the state of the eighteen rows.
    *
    * ‼️ WITHOUT THIS, A SKIPPED SWEEP AND AN UNFINISHED ONE RENDER IDENTICALLY. This document is
-   * shown to the client on the onboarding call, and with the gate now at six core platforms the
-   * twelve extended will routinely be unchecked, so "why is half of this blank" stops being an
-   * edge case and becomes the normal state of the page. A row-level count cannot answer it: the
-   * rows look the same either way. Only the step knows whether somebody decided not to do this.
+   * shown to the client on the onboarding call, and the gate is four distinct platforms out of
+   * nineteen, so FIFTEEN unchecked rows is not an edge case, it is the ordinary state of this
+   * page. "Why is most of this blank" is therefore a question it has to answer on its face. A
+   * row-level count cannot: the rows look the same whether the sweep was skipped or simply is
+   * not finished. Only the step knows whether somebody decided not to do this.
+   *
+   * The counts printed below are derived from the rows themselves, so they stay correct at any
+   * gate. What the gate changed is how LOUD this has to be, not what it says.
    *
    * OPTIONAL, because scripts/test-onboarding-artifacts.ts calls this function directly with a
    * fixed argument object and must keep compiling.
@@ -302,6 +306,9 @@ export async function renderPresencePdf(args: {
     );
   }
 
+  // ‼️ DERIVED, NEVER A CONSTANT. The gate moved from eighteen files to six named platforms to
+  // any four distinct ones, and this paragraph stayed correct through all three because it
+  // counts the rows in front of it rather than quoting a number from the config.
   const automated = args.rows.filter((r) => r.source === "api").length;
   const skipped = args.rows.filter((r) => effectiveStatus(r) === "not_checked");
   bulletList(state, [

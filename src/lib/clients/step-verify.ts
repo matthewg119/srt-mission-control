@@ -33,7 +33,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, type StepKey } from "@/config/delivery-steps";
-import { CORE_SIX, CORE_SIX_COUNT, PLATFORM_COUNT } from "@/config/presence-platforms";
+import { PLATFORM_COUNT } from "@/config/presence-platforms";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The verdict
@@ -375,44 +375,44 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`${n} platform rows seeded for the manual tier to work through`);
   },
 
-  // ‼️ THE GATE IS THE SIX CORE PLATFORMS, ATTRIBUTED BY NAME, NOT EIGHTEEN FILES.
+  // ‼️ THE GATE IS ANY FOUR DISTINCT PLATFORMS, ATTRIBUTED, NOT FOUR NAMED ONES AND NOT FILES.
   //
-  // It used to count client_docs rows in the thread against PLATFORM_COUNT. Two things were
-  // wrong with that. The card has always described the twelve extended directories as "context
-  // only. Findings, not week-one cleanup" while the gate silently demanded screenshots of all
-  // eighteen; and a bare count cannot tell six platforms from six screenshots of Yelp, because
-  // every pasted Slack screenshot is called image.png. Attribution now comes from the platform
-  // named in the message the file arrived with, stored on client_docs.presence_platform.
+  // It counted client_docs rows against PLATFORM_COUNT once, then the core six by name. Both
+  // were wrong in the same direction: the first could not tell six platforms from six
+  // screenshots of Yelp, because every pasted Slack screenshot is called image.png; the second
+  // forced a fixed set on somebody who knows which platforms matter for this client. Matthew's
+  // call, 2026-08-25: any four DISTINCT platforms of any tier, his choice.
+  //
+  // ‼️ CORE_SIX AND EXTENDED ARE UNTOUCHED BY THIS. They are the remediation tiers, and they
+  // are read far outside this gate: citation-cleanup.ts sorts core-six first and multiplies
+  // effort by it, presence-pdf.ts renders the tiers separately, and findings section 3 goes to
+  // the client. A gate and a tier are different facts.
   //
   // Still THREAD tier, and the wording stays inside what a screenshot proves: that the searches
   // were run and captured, never what they showed. What they showed is confirmed_status, which
   // is a different step and a different control.
   presence_sweep_manual: async (ctx) => {
-    const { presenceCoverageFor } = await import("./step-engine");
+    const { presenceCoverageFor, describeCoverage } = await import("./step-engine");
     const cover = await presenceCoverageFor(ctx.clientId, ctx.stepKey);
     if (cover === null) return dbUnreachable("client_docs");
 
-    if (cover.coreMissing.length > 0) {
+    if (cover.short > 0) {
       const extra =
         cover.unattributed > 0
-          ? `. ${cover.unattributed} file${cover.unattributed === 1 ? "" : "s"} in the thread name no platform I recognise, so they are filed but not counted`
+          ? `. ${cover.unattributed} file${cover.unattributed === 1 ? "" : "s"} in the thread could not be attributed from the message or the address bar, so they are filed but not counted`
           : "";
       return notYet(
-        "screenshots filed against this step's thread, by platform",
-        `${cover.coreCovered.length} of the ${CORE_SIX_COUNT} core platforms${extra}`,
-        `Still needed: ${cover.coreMissing.join(", ")}. Post one screenshot per message with ` +
-          "the platform name in the message. Where a business genuinely has no listing, the " +
-          "screenshot of the empty search result is the evidence. The extended directories " +
-          "never block this step."
+        "screenshots filed against this step's thread, counted by distinct platform",
+        `${cover.distinct} of the ${cover.needed} platforms needed${extra}`,
+        `${cover.short} more, any platform on the list and your choice which. Post one platform ` +
+          "per message with its name in the message, or leave the Chrome address bar in the shot " +
+          "and the URL is read for you. Where a business genuinely has no listing, the screenshot " +
+          "of the empty search result is the evidence."
       );
     }
 
-    const labels = CORE_SIX.map((p) => p.label).join(", ");
     return confirmed(
-      `screenshots filed for all ${CORE_SIX_COUNT} core platforms in this step's thread (${labels})` +
-        (cover.extendedCovered.length
-          ? `, plus ${cover.extendedCovered.length} of the extended directories`
-          : ""),
+      `screenshots filed for ${cover.distinct} distinct platforms in this step's thread: ${describeCoverage(cover)}`,
       "That is evidence the searches were run and captured, not a reading of what they showed."
     );
   },
@@ -446,6 +446,16 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`${picked} of ${total} shortlisted competitors picked`);
   },
 
+  // ‼️ THE CLIENT'S OWN COUNTS ARE REQUIRED. THE COMPETITORS' ARE NOT.
+  //
+  // Matthew, 2026-08-25: "Review audit is good for the customer but not neccesary for
+  // competitors, so make that optional, not for the subject clients reviews, those we need to
+  // pull at least 1." The competitor rows are still seeded, because they are the work list and
+  // findings section 3 uses them when they are filled, and they never block this step.
+  //
+  // ‼️ A PROPOSAL IS NOT A RECORD AND MUST NOT SATISFY THIS. review_count is written by
+  // applyProposedReadings, from one button press by a person. A row carrying only `proposed`
+  // reads as not recorded here, exactly as it does everywhere else.
   review_audit: async (ctx) => {
     const rows = await countRows("review_audit_rows", ctx.clientId);
     if (rows === null) return dbUnreachable("review_audit_rows");
@@ -453,29 +463,58 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         "review_audit_rows for this client",
         "no review audit rows exist",
-        "Un-tick the step to re-seed the grid from the three competitors picked."
+        "Un-tick the step to re-seed the grid from the client and the competitors picked."
       );
     }
 
-    const filled = await countRows("review_audit_rows", ctx.clientId, {
-      col: "review_count",
-      notNull: true,
-    });
-    if (filled === null) return dbUnreachable("review_audit_rows");
+    const { data, error } = await supabaseAdmin
+      .from("review_audit_rows")
+      .select("subject_type, review_count, proposed")
+      .eq("client_id", ctx.clientId);
 
-    // ‼️ SEEDED IS NOT MEASURED. Every one of the eighteen platforms has api:false, so a
-    // person reads the listings and types the counts in. A grid of empty rows is the WORK
-    // LIST, and ticking on its existence would put "review audit complete" on a findings
-    // section that goes to the client with nothing in it.
-    if (filled === 0) {
+    // ‼️ A MISSING COLUMN IS NOT AN UNREACHABLE DATABASE AND MUST NOT SAY IT IS. PostgREST fails
+    // the WHOLE select on one unknown name, so before the lane 1 migration is applied this
+    // verifier cannot check anything at all. dbUnreachable would send somebody to look at the
+    // service role key and the RLS policies, which are both fine. The fix is one file.
+    if (error && /proposed/.test(error.message)) {
+      return broken(
+        "review_audit_rows, including the proposed reading a screenshot produced",
+        `the column does not exist yet: ${error.message}`,
+        "Run docs/2026-08-25-lane-1-screenshots.sql. It adds review_audit_rows.proposed and " +
+          ".proposed_source, which is where a reading lands before a person confirms it. Until " +
+          "then this step cannot be confirmed either way and is correctly refusing to guess."
+      );
+    }
+    if (error) return dbUnreachable("review_audit_rows");
+
+    const all = data ?? [];
+    const clientRows = all.filter((r) => r.subject_type === "client");
+    const clientRecorded = clientRows.filter((r) => r.review_count !== null).length;
+    const competitorRecorded = all.filter(
+      (r) => r.subject_type === "competitor" && r.review_count !== null
+    ).length;
+    const waiting = all.filter((r) => r.review_count === null && r.proposed !== null).length;
+
+    if (clientRecorded === 0) {
+      const extra =
+        waiting > 0
+          ? ` ${waiting} row${waiting === 1 ? " carries a reading" : "s carry readings"} off a screenshot, waiting on [Confirm these readings]: a proposal is not a record.`
+          : "";
       return notYet(
-        "review_audit_rows with a review_count filled in",
-        `${rows} rows seeded, 0 measured`,
-        "No platform here has an API, so the counts are read off the listings by hand. Fill " +
-          "them in on the client board. Section 3 of the findings doc is built from these."
+        "review_audit_rows for the CLIENT carrying a measured review_count",
+        `0 of ${clientRows.length} of the client's own rows are recorded.${extra}`,
+        "No platform here has an API, so the counts come off the listings. Drop the screenshots " +
+          "in this thread and confirm the readings, or type them on the client board. At least " +
+          "one of the client's own is needed; the competitors' are optional and never block."
       );
     }
-    return verified(`${filled} of ${rows} review audit rows carry a measured count`);
+
+    return verified(
+      `${clientRecorded} of ${clientRows.length} of the client's own review rows carry a measured count`,
+      competitorRecorded > 0
+        ? `${competitorRecorded} competitor rows are filled in too, which is optional and was done`
+        : "No competitor counts are recorded, which is optional and does not block this step"
+    );
   },
 
   avatar_harvest: async (ctx) => {

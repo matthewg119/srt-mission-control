@@ -180,6 +180,80 @@ function itemBlock(state: PageState, item: CleanupItem, n: number) {
   }
 }
 
+/**
+ * ‼️ IT READS THE SCREENSHOTS BEFORE IT BUILDS THE LIST, AND THAT ORDER IS THE FIX.
+ *
+ * This document read "0 confirmed findings to correct, with 18 platforms still unchecked" on a
+ * client whose step 5 thread held eighteen screenshots of those exact listings. Nothing was
+ * wrong with the PDF: it reads confirmed_status, correctly, and nothing had ever turned a
+ * picture into one. So the pass runs first, every attributed screenshot becomes a PROPOSED
+ * status, the thread gets one card with a Confirm button on it, and the list below is built
+ * from whatever a person has confirmed by then.
+ *
+ * On the first run that is usually still nothing, and the PDF still says so. The difference is
+ * that confirming is now one tap on a card in the thread rather than eighteen rows of a form.
+ */
+async function proposeFromScreenshots(clientId: string, clientName: string): Promise<void> {
+  const { proposeListingStatuses, formatCleanupProposals } = await import("../listing-read");
+  const { notifyStep } = await import("../step-board");
+
+  const pass = await proposeListingStatuses(clientId);
+  if (!pass.ok) {
+    console.error(`[citation-cleanup] proposal pass failed for ${clientId}: ${pass.error}`);
+    return;
+  }
+  if (!pass.proposed.length && !pass.unreadable.length) return;
+
+  const rows = await loadSweep(clientId);
+  const body = formatCleanupProposals(rows);
+  if (!body.length && !pass.unreadable.length) return;
+
+  const lines = [`*Listings read from the sweep screenshots — ${clientName}*`, "", ...body];
+
+  if (pass.unreadable.length) {
+    lines.push(
+      "",
+      `${pass.unreadable.length} screenshot${pass.unreadable.length === 1 ? "" : "s"} could not be read as a listing: ` +
+        pass.unreadable.map((u) => `${platformByKey(u.platform)?.label ?? u.platform} (${u.evidence})`).join(", ") +
+        ". Those platforms stay at \"not checked\", which is the honest answer."
+    );
+  }
+
+  if (pass.alreadyConfirmed.length) {
+    lines.push(
+      "",
+      `${pass.alreadyConfirmed.length} platform${pass.alreadyConfirmed.length === 1 ? " was" : "s were"} already confirmed by a person and were left alone.`
+    );
+  }
+
+  const board = `${process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com"}/dashboard/clients/${clientId}`;
+  lines.push(
+    "",
+    `Row by row instead: ${board}`,
+    "Confirming writes `confirmed_status` and stamps who confirmed it. Until then every one of",
+    "these reads as \"not checked\" on the client PDF, which is what it is."
+  );
+
+  const text = lines.join("\n");
+
+  await notifyStep(clientId, "citation_cleanup_list", text, [
+    { type: "section", text: { type: "mrkdwn", text: text.slice(0, 2900) } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Confirm all as read" },
+          style: "primary",
+          action_id: "cleanup_confirm_all",
+          value: clientId,
+        },
+      ],
+    },
+  ]).catch((e) => console.error("[citation-cleanup] proposals card failed:", (e as Error).message));
+}
+
+
 export async function generateCitationCleanupList(clientId: string): Promise<AutoResult> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -198,6 +272,10 @@ export async function generateCitationCleanupList(clientId: string): Promise<Aut
         "Finish intake first — the cleanup list is meaningless without it.",
     };
   }
+
+  // The read pass runs BEFORE the rows are loaded, so a screenshot confirmed in this same
+  // session is in the list rather than in the next run of it.
+  await proposeFromScreenshots(clientId, (client.dba_name || client.legal_name || "Client") as string);
 
   const rows = await loadSweep(clientId);
   const counts = countByStatus(rows);

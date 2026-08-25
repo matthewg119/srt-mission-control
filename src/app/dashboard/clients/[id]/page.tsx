@@ -628,7 +628,12 @@ export default async function ClientDetailPage({
       </div>
 
       {/* ── Identity: the name the schema carries, and the look ── */}
-      <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">
+      {/* id="theme" so step 15's card can link straight here. It is the one panel a step card
+          names by anchor, and hub_preview refuses until the theme is confirmed on it. */}
+      <div
+        id="theme"
+        className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5"
+      >
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Identity and theme</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">

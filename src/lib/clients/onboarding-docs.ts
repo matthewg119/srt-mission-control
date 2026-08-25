@@ -18,8 +18,9 @@
 // infrastructure, with no login. Reads go through short-lived signed URLs.
 
 import { supabaseAdmin } from "@/lib/db";
-import { resolvePlatformsFromText } from "@/config/presence-platforms";
+import { resolvePlatformsFromText, resolvePlatformFromUrl, platformByKey } from "@/config/presence-platforms";
 import { slack } from "@/lib/slack-bot";
+import { readAddressBar, isUsableRead, type ScreenshotRead } from "./screenshot-read";
 
 const BUCKET = "onboarding";
 
@@ -189,6 +190,12 @@ export async function captureOnboardingFile(args: {
     slack_thread_ts: threadTs,
     uploaded_by: file.user ?? null,
     presence_platform: presencePlatform,
+    // HOW IT WAS ATTRIBUTED IS ITSELF EVIDENCE, AND THE TWO TIERS ARE NOT EQUAL. A platform a
+    // PERSON named is stronger than one a model read off an address bar, so the thread copy has
+    // to be able to tell them apart. There is no URL on this path, so presence_source_url is
+    // null and stays null rather than being made to mean "nobody looked".
+    presence_source_url: null,
+    presence_attributed_by: presencePlatform ? "message_text" : null,
   });
 
   // 23505 = the unique index did its job between the check above and here.
@@ -349,4 +356,249 @@ export async function signedDocUrl(docId: string): Promise<string | null> {
     return null;
   }
   return data?.signedUrl ?? null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The third writer: the address bar in the picture
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How much of a file we are willing to hand a vision model.
+ *
+ * The biggest screenshot on the live client is 1.5 MB, so this is headroom rather than a
+ * constraint. It exists because a 30 MB PNG dropped in the thread would otherwise be
+ * base64-encoded into a request that fails slowly and takes a whole batch with it.
+ */
+const MAX_VISION_BYTES = 6 * 1024 * 1024;
+
+export type AttributionOutcome =
+  /** Written. The address bar named exactly one platform. */
+  | { kind: "attributed"; platform: string; url: string }
+  /** Somebody else got there first. The backfill predicate did its job. */
+  | { kind: "already"; platform: string | null }
+  /** Read fine, named nothing we sweep. A chamber-of-commerce Google search lands here. */
+  | { kind: "no_match"; url: string }
+  /** Read fine, named more than one. Zero and two are the same answer. */
+  | { kind: "ambiguous"; url: string; platforms: string[] }
+  /** No legible address bar. Not a failure of the file, a fact about the picture. */
+  | { kind: "unreadable"; evidence: string }
+  /** Not a picture, or the bytes could not be fetched. */
+  | { kind: "skipped"; reason: string };
+
+export interface AttributionResult {
+  docId: string;
+  filename: string;
+  outcome: AttributionOutcome;
+  read?: ScreenshotRead;
+}
+
+/**
+ * Attribute one already-filed screenshot from the URL in its own address bar.
+ *
+ * THIS IS THE THIRD WRITER INTO presence_platform AND IT NEEDS THE SAME PREDICATE AS THE OTHER
+ * TWO. captureOnboardingFile writes it on insert, attributePresenceDoc backfills it, and both
+ * are safe because `.is("presence_platform", null)` makes them a backfill and never a relabel.
+ * A model read must never overwrite a platform a PERSON named: the text tier is the stronger
+ * evidence and it wins by construction rather than by ordering.
+ *
+ * ZERO MATCHES AND TWO MATCHES ARE THE SAME ANSWER. Guessing which of two platforms a picture
+ * shows is not available here, for the same reason it is not available in the text path: the
+ * whole point of this column is that the platforms the gate counts are the platforms somebody
+ * actually swept.
+ *
+ * Reads the bytes from storage_ref, never by re-fetching from Slack. They are already
+ * downloaded, and a Slack private URL needs the bot token on every request.
+ */
+export async function attributeFromScreenshot(docId: string): Promise<AttributionResult> {
+  const { data: doc, error } = await supabaseAdmin
+    .from("client_docs")
+    .select("id, filename, content_type, size_bytes, storage_ref, presence_platform")
+    .eq("id", docId)
+    .maybeSingle();
+
+  const filename = (doc?.filename as string | null) ?? "that file";
+
+  if (error || !doc) {
+    return {
+      docId,
+      filename,
+      outcome: { kind: "skipped", reason: error?.message ?? "no such document" },
+    };
+  }
+
+  if (doc.presence_platform) {
+    return {
+      docId,
+      filename,
+      outcome: { kind: "already", platform: doc.presence_platform as string },
+    };
+  }
+
+  const contentType = (doc.content_type as string | null) ?? "";
+  if (!contentType.startsWith("image/")) {
+    return { docId, filename, outcome: { kind: "skipped", reason: "not an image" } };
+  }
+
+  const size = (doc.size_bytes as number | null) ?? 0;
+  if (size > MAX_VISION_BYTES) {
+    return { docId, filename, outcome: { kind: "skipped", reason: "too large to read" } };
+  }
+
+  const key = (doc.storage_ref as string | null) ?? null;
+  if (!key) return { docId, filename, outcome: { kind: "skipped", reason: "no stored bytes" } };
+
+  const dl = await supabaseAdmin.storage.from(BUCKET).download(key);
+  if (dl.error || !dl.data) {
+    return {
+      docId,
+      filename,
+      outcome: {
+        kind: "skipped",
+        reason: `could not read the stored file: ${dl.error?.message ?? "empty"}`,
+      },
+    };
+  }
+
+  const buf = Buffer.from(await dl.data.arrayBuffer());
+  const read = await readAddressBar({ media_type: contentType, data: buf.toString("base64") });
+
+  if (!isUsableRead(read) || !read.urlText) {
+    return { docId, filename, read, outcome: { kind: "unreadable", evidence: read.evidence } };
+  }
+
+  const matches = resolvePlatformFromUrl(read.urlText);
+
+  if (matches.length === 0) {
+    return { docId, filename, read, outcome: { kind: "no_match", url: read.urlText } };
+  }
+  if (matches.length > 1) {
+    return {
+      docId,
+      filename,
+      read,
+      outcome: { kind: "ambiguous", url: read.urlText, platforms: matches },
+    };
+  }
+
+  const platform = matches[0];
+
+  const { data: written, error: writeError } = await supabaseAdmin
+    .from("client_docs")
+    .update({
+      presence_platform: platform,
+      // VERBATIM. The URL as it was read, never normalised or reconstructed: this column is the
+      // evidence for the attribution, and a tidied URL is a different claim.
+      presence_source_url: read.urlText,
+      presence_attributed_by: "screenshot_url",
+    })
+    .eq("id", docId)
+    .is("presence_platform", null)
+    .select("id");
+
+  if (writeError) {
+    console.error("[clients/onboarding-docs] screenshot attribution failed:", writeError.message);
+    return { docId, filename, read, outcome: { kind: "skipped", reason: writeError.message } };
+  }
+
+  // Zero rows means the predicate refused: something attributed it between the read and the
+  // write. That is the backfill rule working, not a failure.
+  if ((written?.length ?? 0) === 0) {
+    return { docId, filename, read, outcome: { kind: "already", platform: null } };
+  }
+
+  return { docId, filename, read, outcome: { kind: "attributed", platform, url: read.urlText } };
+}
+
+/**
+ * Every unattributed screenshot in one step thread, read and attributed where possible.
+ *
+ * IT ONLY EVER LOOKS AT FILES THAT CAME BACK UNATTRIBUTED. The text path runs first and its
+ * result stands; this is the fallback for the ones no message named, which on the live client
+ * is five files out of eighteen. Sequential rather than parallel on purpose: nineteen
+ * concurrent vision calls is a rate-limit error dressed up as a broken feature, and this runs
+ * behind a button rather than in front of somebody waiting.
+ */
+export async function attributeUnreadScreenshots(args: {
+  clientId: string;
+  threadTs: string;
+  /** Belt and braces against a runaway thread. Nineteen platforms, so this is generous. */
+  limit?: number;
+}): Promise<AttributionResult[]> {
+  const { data, error } = await supabaseAdmin
+    .from("client_docs")
+    .select("id")
+    .eq("client_id", args.clientId)
+    .eq("slack_thread_ts", args.threadTs)
+    .is("presence_platform", null)
+    .order("uploaded_at", { ascending: true })
+    .limit(args.limit ?? 40);
+
+  if (error) {
+    console.error("[clients/onboarding-docs] unattributed list failed:", error.message);
+    return [];
+  }
+
+  const out: AttributionResult[] = [];
+  for (const row of data ?? []) {
+    out.push(await attributeFromScreenshot(row.id as string));
+  }
+  return out;
+}
+
+/**
+ * What the thread is told after a read pass.
+ *
+ * IT DESCRIBES WHAT IT FOUND, NEVER WHAT THAT STANDS FOR. Thread tier rule. "Read
+ * trustpilot.com/review/x off the address bar" is true; "Trustpilot is swept" is not something
+ * a URL proves, and what the listing SAID is confirmed_status, a different control on a
+ * different step.
+ *
+ * Returns null when there is nothing worth saying, so a pass where every file was already
+ * attributed posts no message at all.
+ */
+export function formatAttributionNote(results: AttributionResult[]): string | null {
+  const attributed = results.filter((r) => r.outcome.kind === "attributed");
+  const unreadable = results.filter((r) => r.outcome.kind === "unreadable");
+  const noMatch = results.filter((r) => r.outcome.kind === "no_match");
+  const ambiguous = results.filter((r) => r.outcome.kind === "ambiguous");
+
+  if (!attributed.length && !unreadable.length && !noMatch.length && !ambiguous.length) return null;
+
+  const lines: string[] = [];
+
+  if (attributed.length) {
+    const named = attributed.map((r) => {
+      const o = r.outcome as { kind: "attributed"; platform: string; url: string };
+      return `${platformByKey(o.platform)?.label ?? o.platform} (${o.url})`;
+    });
+    lines.push(
+      `:mag: Read the address bar on ${attributed.length} screenshot${attributed.length === 1 ? "" : "s"}: ${named.join(", ")}.`
+    );
+  }
+
+  for (const r of ambiguous) {
+    const o = r.outcome as { kind: "ambiguous"; url: string; platforms: string[] };
+    lines.push(
+      `:warning: ${o.url} matches ${o.platforms.map((k) => platformByKey(k)?.label ?? k).join(" and ")}, so ` +
+        "there is no way to tell which one that picture shows. Filed, not counted. Name it in a message."
+    );
+  }
+
+  if (noMatch.length) {
+    const urls = noMatch.map((r) => (r.outcome as { url: string }).url).join(", ");
+    lines.push(
+      `:warning: ${noMatch.length} address bar${noMatch.length === 1 ? "" : "s"} named no platform on the list: ${urls}. ` +
+        "A chamber of commerce search looks like every other Google search, so that one always needs its name typed."
+    );
+  }
+
+  if (unreadable.length) {
+    lines.push(
+      `:warning: ${unreadable.length} screenshot${unreadable.length === 1 ? "" : "s"} had no readable address bar ` +
+        `(${unreadable.map((r) => (r.outcome as { evidence: string }).evidence).join("; ")}). ` +
+        "Type the platform name in a message and re-post, or take the shot with the browser bar in frame."
+    );
+  }
+
+  return lines.join("\n");
 }

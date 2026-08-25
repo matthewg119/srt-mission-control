@@ -19,10 +19,7 @@ import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepByKey, type DeliveryStep } from "@/lib/clients/delivery-checklist";
 import {
   ALL_PLATFORMS,
-  CORE_SIX,
-  EXTENDED,
   PLATFORM_COUNT,
-  RECOMMENDED,
   SWEEP_GATE_COUNT,
   platformByKey,
 } from "@/config/presence-platforms";
@@ -300,12 +297,12 @@ async function instructionsFor(
           rows,
         }).split("\n"),
         "",
-        `Type the counts in on the board: ${boardUrl(c)}`,
+        `Drop the screenshots in this thread, or type the counts on the board: ${boardUrl(c)}`,
       ];
     }
 
     case "review_tool_preview": {
-      const { reviewPreviewUrl } = await import("./review-preview");
+      const { reviewPreviewUrl, clientPreviewUrl, previewLinkLine } = await import("./review-preview");
       const { data: host } = await supabaseAdmin
         .from("client_hosts")
         .select("host, vercel_attached_at")
@@ -321,6 +318,12 @@ async function instructionsFor(
         ":lock: *That URL cannot be sent to a client.* It is a `/dashboard/` path and the page",
         "calls `notFound()` without a session, so a logged-out visitor gets a 404 rather than a",
         "login screen. It belongs in this thread, which is internal, and nowhere else.",
+        "It is still the one to use HERE, because it shows drafts and this one does not.",
+        "",
+        ...previewLinkLine(clientPreviewUrl(c.id, "reviews"), "The review tool").split("\n"),
+        "Anything typed into it from either preview is discarded rather than stored: the submit",
+        "route takes the client only from `x-hub-host`, and middleware strips that header on our",
+        "own hostnames. Type into it freely on the call.",
         "",
         host?.host
           ? `The client-facing surface is \`${host.host}\`${host.vercel_attached_at ? ", attached" : ", NOT attached to Vercel yet"}.`
@@ -398,6 +401,7 @@ async function instructionsFor(
       if (!domain) return ["No domain on file, so there is no hub to build."];
 
       const hosts = hostsFor({ subdomain: (row?.subdomain as string | null) ?? null, domain });
+      const { clientPreviewUrl, previewLinkLine } = await import("./review-preview");
       const themed = await themeConfirmed(c.id);
       const overrides = themed ? await themeOverrides(c.id) : [];
 
@@ -409,6 +413,12 @@ async function instructionsFor(
         ...formatDnsRecords(await loadDnsRows(c.id), domain),
         "",
         themeLine(themed, overrides),
+        // Matthew asked for this one by name: "Step 15 needs to give me the link to confirm the
+        // theme in mission control." It is the anchor on the Identity and theme panel, so the
+        // board opens scrolled to the control this step is waiting on rather than at the top.
+        `Confirm the theme: ${boardUrl(c)}#theme`,
+        "",
+        ...previewLinkLine(clientPreviewUrl(c.id, "hub"), "The hub").split("\n"),
       ];
     }
 
@@ -591,7 +601,9 @@ async function instructionsFor(
         counts.not_checked > 0
           ? `:warning: *${counts.not_checked} of ${rows.length} listings carry no confirmed status.* ` +
             "[Done] refuses on that before it looks at anything else: a row nobody has read is " +
-            "not a row that was cleaned. Confirm each one on the Presence sweep panel."
+            "not a row that was cleaned. Step 14 reads the sweep screenshots and posts what it " +
+            "proposes with a *Confirm all as read* button on it, which is one tap for the batch. " +
+            "Row by row instead on the Presence sweep panel."
           : `All ${rows.length} listings carry a confirmed status.`,
         `${counts.mismatch} mismatch · ${counts.duplicate} duplicate · ${counts.missing} missing · ${counts.match} match`,
         "",
@@ -850,15 +862,23 @@ async function instructionsFor(
 /**
  * The refusal for the manual sweep, or null when it may go through.
  *
- * ‼️ THE GATE IS THE SIX CORE PLATFORMS, NOT EIGHTEEN FILES. It used to return PLATFORM_COUNT,
- * so [Done] demanded all eighteen screenshots while the step's own card described the twelve
- * extended directories as "context only. Findings, not week-one cleanup". Matthew filed four and
- * was told "4 of 18". Making the gate agree with what the card already said is his call.
+ * ‼️ THE GATE IS ANY FOUR DISTINCT PLATFORMS HE CHOSE, NOT FOUR NAMED ONES AND NOT FILES.
  *
- * And the count alone is not enough: six screenshots that are all Yelp must not satisfy a
- * six-platform gate. Attribution comes from the platform named in the message the screenshot
- * was posted with. A file nobody could attribute is still filed and still kept; it just does
- * not count toward the six, and the refusal says so rather than leaving it a mystery.
+ * Matthew: "instead of being core 6 make it core 4 also let it let me post the 6 of my
+ * preference and dont force me to do those specifically." So there is nothing left to NAME as
+ * missing, which is why this copy changed shape completely: it used to list the outstanding
+ * core platforms, and with a free choice that list does not exist. It says how many distinct
+ * platforms are filed, which ones they are, and how many more would close it.
+ *
+ * The count alone is still not enough and never was: four screenshots that are all Yelp must
+ * not satisfy a four-platform gate. Every pasted Slack screenshot is called image.png, so the
+ * platform comes from the message text or from the address bar in the picture, and a file
+ * nothing could attribute is still filed and still kept. It just does not count, and this says
+ * so rather than leaving it a mystery.
+ *
+ * ‼️ THE EMPTY-SEARCH-RESULT LINE STAYS. It is why "missing" is a FINDING rather than a gap:
+ * without it, a business with no listing on a platform looks identical to a platform nobody
+ * checked, and those are opposite claims.
  */
 async function presenceRefusal(clientId: string, stepKey: string): Promise<string | null> {
   const cover = await presenceCoverageFor(clientId, stepKey);
@@ -870,21 +890,25 @@ async function presenceRefusal(clientId: string, stepKey: string): Promise<strin
     );
   }
 
-  if (cover.coreMissing.length === 0) return null;
+  if (cover.short === 0) return null;
 
   const lines = [
-    `Not yet — ${cover.coreCovered.length} of the ${CORE_SIX.length} core platforms have a screenshot filed against this step.`,
-    `Missing: ${cover.coreMissing.join(", ")}.`,
-    "Post one screenshot per message with the platform name in the message, then hit Done.",
-    "Where a business genuinely has no listing, the screenshot of the empty search result is the evidence.",
-    `The ${EXTENDED.length} extended directories never block this step.`,
-  ];
+    `Not yet — ${cover.distinct} of the ${cover.needed} distinct platforms this step needs have a screenshot filed against it.`,
+    cover.distinct > 0
+      ? `Filed so far: ${describeCoverage(cover)}.`
+      : `Nothing is attributed yet. Any ${cover.needed} of the ${PLATFORM_COUNT} platforms close this step, and they are your choice.`,
+    cover.distinct > 0
+      ? `${cover.short} more, any platform on the list, and this closes.`
+      : "",
+    "Post one platform per message with its name in the message, or leave the Chrome address bar in the shot and it reads the URL itself.",
+    "Where a business genuinely has no listing, the screenshot of the empty search result is the evidence for \"missing\".",
+  ].filter(Boolean);
 
   if (cover.unattributed > 0) {
     lines.push(
-      `${cover.unattributed} file${cover.unattributed === 1 ? "" : "s"} in this thread name no ` +
-        "platform I recognise, so they are filed but not counted. Reply with the platform name " +
-        "and re-post, one platform per message."
+      `${cover.unattributed} file${cover.unattributed === 1 ? "" : "s"} in this thread could not be ` +
+        "attributed from either the message or the address bar, so they are filed but not counted. " +
+        "Reply with the platform name, one platform per message."
     );
   }
 
@@ -1150,21 +1174,73 @@ export async function uploadsFor(clientId: string, stepKey: string): Promise<num
  * null rather than 0.
  */
 export interface PresenceCoverage {
-  /** Distinct CORE_SIX keys with at least one attributed screenshot. */
-  coreCovered: string[];
-  /** The core platforms still missing, as labels, for the refusal. */
-  coreMissing: string[];
-  extendedCovered: string[];
-  /** Files in the thread whose message named no platform, or named more than one. */
+  /**
+   * Distinct platform keys with at least one attributed screenshot, ANY TIER, in list order.
+   *
+   * ‼️ RENAMED FROM coreCovered, NOT REPURPOSED. The old field meant "of the core six" and the
+   * gate no longer asks that question. Leaving a field called coreMissing holding a different
+   * set is how a caller keeps reading it as if it still meant the old thing.
+   */
+  covered: string[];
+  /** covered.length. What the gate compares, and it is PLATFORMS, never files. */
+  distinct: number;
+  /** SWEEP_GATE_COUNT, carried here so a caller never restates the number. */
+  needed: number;
+  /** How many more distinct platforms would close the step. Zero once the gate is met. */
+  short: number;
+  /**
+   * The same keys split by remediation tier.
+   *
+   * Reported because the tiers still MEAN what they meant: citation-cleanup.ts sorts core-six
+   * first and presence-pdf.ts renders them separately. The gate does not read this.
+   */
+  byTier: { core: string[]; extended: string[] };
+  /**
+   * The same keys split by HOW they were attributed.
+   *
+   * ‼️ TWO TIERS OF EVIDENCE AND THE COPY HAS TO SAY WHICH. A screenshot whose address bar was
+   * READ is weaker than one a person NAMED, and a thread-tier line may only describe the
+   * artifact it found.
+   */
+  bySource: { named: string[]; read: string[] };
+  /** Files in the thread nothing could attribute: no platform named and no URL read. */
   unattributed: number;
-  /** Every file in the thread, which is the number the old gate counted. */
+  /** Every file in the thread, which is the number the very first gate counted. */
   files: number;
 }
 
+/**
+ * Which PLATFORMS have a screenshot filed against this step, as opposed to how many FILES are
+ * in its thread.
+ *
+ * ‼️ COUNTING FILES WAS THE ORIGINAL BUG AND IT STAYS FIXED. Every pasted Slack screenshot is
+ * called image.png, so four shots of Yelp must never satisfy a four-platform gate. Attribution
+ * comes from the platform named in the message (resolvePlatformsFromText) or, failing that,
+ * from the URL read off the address bar (attributeFromScreenshot), and lands on
+ * client_docs.presence_platform either way.
+ *
+ * Reads slack_thread_ts against the ANCHOR ts for the reason uploadsFor documents above: Slack
+ * threads are one level deep, so a reply "to the card" carries the ts of what the card was
+ * replying to, and comparing against slack_message_ts matches nothing, ever.
+ *
+ * Returns null when the query itself failed, so a caller can say "could not check" rather than
+ * reporting somebody's finished work as missing.
+ */
 export async function presenceCoverageFor(
   clientId: string,
   stepKey: string
 ): Promise<PresenceCoverage | null> {
+  const empty: PresenceCoverage = {
+    covered: [],
+    distinct: 0,
+    needed: SWEEP_GATE_COUNT,
+    short: SWEEP_GATE_COUNT,
+    byTier: { core: [], extended: [] },
+    bySource: { named: [], read: [] },
+    unattributed: 0,
+    files: 0,
+  };
+
   const { data: row } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("slack_anchor_ts")
@@ -1173,13 +1249,11 @@ export async function presenceCoverageFor(
     .maybeSingle();
 
   const ts = (row?.slack_anchor_ts as string | null) ?? null;
-  if (!ts) {
-    return { coreCovered: [], coreMissing: CORE_SIX.map((p) => p.label), extendedCovered: [], unattributed: 0, files: 0 };
-  }
+  if (!ts) return empty;
 
   const { data, error } = await supabaseAdmin
     .from("client_docs")
-    .select("presence_platform")
+    .select("presence_platform, presence_attributed_by")
     .eq("client_id", clientId)
     .eq("slack_thread_ts", ts);
 
@@ -1189,17 +1263,60 @@ export async function presenceCoverageFor(
   }
 
   const rows = data ?? [];
-  const seen = new Set(
-    rows.map((r) => (r.presence_platform as string | null) ?? "").filter(Boolean)
-  );
+  const seen = new Set<string>();
+  const readKeys = new Set<string>();
+
+  for (const r of rows) {
+    const key = (r.presence_platform as string | null) ?? "";
+    if (!key) continue;
+    seen.add(key);
+    // ‼️ A NULL presence_attributed_by IS A MESSAGE-TEXT ATTRIBUTION, not an unknown one, and
+    // that is a fact about the history rather than a guess: until the screenshot reader shipped,
+    // the text path was the ONLY writer of presence_platform. The thirteen rows already on the
+    // live client predate the column being filled in.
+    if ((r.presence_attributed_by as string | null) === "screenshot_url") readKeys.add(key);
+  }
+
+  const covered = ALL_PLATFORMS.filter((p) => seen.has(p.key)).map((p) => p.key);
+  const distinct = covered.length;
 
   return {
-    coreCovered: CORE_SIX.filter((p) => seen.has(p.key)).map((p) => p.key),
-    coreMissing: CORE_SIX.filter((p) => !seen.has(p.key)).map((p) => p.label),
-    extendedCovered: EXTENDED.filter((p) => seen.has(p.key)).map((p) => p.key),
+    covered,
+    distinct,
+    needed: SWEEP_GATE_COUNT,
+    short: Math.max(0, SWEEP_GATE_COUNT - distinct),
+    byTier: {
+      core: covered.filter((k) => platformByKey(k)?.tier === "core_six"),
+      extended: covered.filter((k) => platformByKey(k)?.tier === "extended"),
+    },
+    bySource: {
+      named: covered.filter((k) => !readKeys.has(k)),
+      read: covered.filter((k) => readKeys.has(k)),
+    },
     unattributed: rows.filter((r) => !r.presence_platform).length,
     files: rows.length,
   };
+}
+
+/**
+ * The two tiers of evidence, written out for a card or a verdict.
+ *
+ * "Google Business Profile, Yelp (named in the message); Trustpilot, BBB (read off the address
+ * bar in the screenshot)". Returns an empty string when nothing is filed, so a caller can
+ * concatenate it without testing.
+ */
+export function describeCoverage(cover: PresenceCoverage): string {
+  const label = (k: string) => platformByKey(k)?.label ?? k;
+  const parts: string[] = [];
+  if (cover.bySource.named.length) {
+    parts.push(`${cover.bySource.named.map(label).join(", ")} (named in the message)`);
+  }
+  if (cover.bySource.read.length) {
+    parts.push(
+      `${cover.bySource.read.map(label).join(", ")} (read off the address bar in the screenshot)`
+    );
+  }
+  return parts.join("; ");
 }
 
 export interface Precondition {
@@ -1226,11 +1343,56 @@ export interface Precondition {
  * Everything not named here returns ok. Most steps are somebody's word by nature and that is
  * correct: the engine flags, it does not police.
  */
+/**
+ * Read the address bar on every screenshot in the sweep thread that nothing has attributed.
+ *
+ * ‼️ TEXT FIRST, VISION ONLY ON A MISS. `.is("presence_platform", null)` inside
+ * attributeUnreadScreenshots is what makes that true: a file whose message named a platform is
+ * never looked at, so the common case costs nothing and a person's word is never overridden by
+ * a model's reading.
+ *
+ * ‼️ IT RUNS FROM A DELIBERATE ACT, NEVER ON A TIMER. captureOnboardingUploads calls it when
+ * screenshots land, and stepPrecondition calls it on [Done] and on [Re-check], which are the
+ * two moments somebody is asking whether this step is finished. Nineteen platforms is nineteen
+ * model calls if this ever fires unconditionally.
+ *
+ * Failures are swallowed into the thread note. A screenshot that could not be read leaves the
+ * step exactly where it was, which is where it already was.
+ */
+async function readUnattributedSweepShots(clientId: string, stepKey: string): Promise<void> {
+  const { data: row } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("slack_anchor_ts")
+    .eq("client_id", clientId)
+    .eq("step_key", stepKey)
+    .maybeSingle();
+
+  const ts = (row?.slack_anchor_ts as string | null) ?? null;
+  if (!ts) return;
+
+  const { attributeUnreadScreenshots, formatAttributionNote } = await import("./onboarding-docs");
+  const results = await attributeUnreadScreenshots({ clientId, threadTs: ts });
+  if (!results.length) return;
+
+  const note = formatAttributionNote(results);
+  if (!note) return;
+
+  await notifyStep(clientId, stepKey, note).catch((e) =>
+    console.error("[step-engine] attribution note failed:", (e as Error).message)
+  );
+}
+
+
 export async function stepPrecondition(clientId: string, stepKey: string): Promise<Precondition> {
   const step = stepByKey(stepKey);
   if (!step) return { ok: true };
 
   if (step.key === "presence_sweep_manual") {
+    // Before deciding, look at the pictures nobody named. Matthew screenshots from Chrome with
+    // the address bar in shot, so on the live client five of eighteen files carry a URL that
+    // says which platform they are while the message says nothing.
+    await readUnattributedSweepShots(clientId, stepKey);
+
     const refusal = await presenceRefusal(clientId, stepKey);
     if (refusal) return { ok: false, message: refusal };
   }

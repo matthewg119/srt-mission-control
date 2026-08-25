@@ -1690,27 +1690,99 @@ async function captureOnboardingUploads(args: {
     }
   }
 
-  if (!isSweep || filed === 0) return;
+  if (filed === 0) return;
 
-  let note: string | null = null;
-  if (named.length === 0) {
-    note =
-      `:warning: Filed ${filed} screenshot${filed === 1 ? "" : "s"}, but the message did not ` +
-      "name a platform, so they do not count toward the core six. Post one platform per " +
-      "message with its name in the message, for example `Yelp` and the image.";
-  } else if (named.length > 1) {
+  // ── Step 8: the review grid. Screenshots in, one grouped card out ──────────
+  //
+  // Matthew asked for exactly this: "it will be better if we can just send screenshots inside of
+  // slack and it groups them all automatically." The reading, the matching and the card are all
+  // in review-audit.ts; this branch is a call, not an implementation.
+  if (args.client.stepKey === "review_audit") {
+    const { ingestReviewScreenshots, loadReviewAudit, formatReviewGrid } = await import(
+      "@/lib/clients/review-audit"
+    );
+    const results = await ingestReviewScreenshots({
+      clientId: args.client.id,
+      threadTs: args.threadTs,
+    });
+    const rows = await loadReviewAudit(args.client.id);
+    const proposed = results.filter((r) => r.outcome.kind === "proposed").length;
+
+    const card = formatReviewGrid({ rows, results });
+    const posted = await slack.postThreadReply(args.channel, args.threadTs, card, [
+      { type: "section", text: { type: "mrkdwn", text: card.slice(0, 2900) } },
+      ...(proposed > 0
+        ? [
+            {
+              type: "actions",
+              elements: [
+                {
+                  type: "button",
+                  text: { type: "plain_text", text: "Confirm these readings" },
+                  style: "primary",
+                  action_id: "review_confirm_readings",
+                  value: args.client.id,
+                },
+              ],
+            },
+          ]
+        : []),
+    ]);
+    if (!slackOk(posted)) console.error("[slack/events] review grid post failed");
+    return;
+  }
+
+  if (!isSweep) return;
+
+  // ── Step 5: the address bar in the picture ─────────────────────────────────
+  //
+  // ‼️ TEXT FIRST AND THIS SECOND, ALWAYS. attributeUnreadScreenshots only looks at rows whose
+  // presence_platform is still null, so a message that named a platform is never second-guessed
+  // by a model and the common case costs no model call at all.
+  const { attributeUnreadScreenshots, formatAttributionNote } = await import(
+    "@/lib/clients/onboarding-docs"
+  );
+  const read = await attributeUnreadScreenshots({
+    clientId: args.client.id,
+    threadTs: args.threadTs,
+  });
+  const readNote = formatAttributionNote(read);
+  const stillUnattributed = read.filter(
+    (r) =>
+      r.outcome.kind === "unreadable" ||
+      r.outcome.kind === "no_match" ||
+      r.outcome.kind === "ambiguous"
+  ).length;
+
+  const notes: string[] = [];
+
+  if (named.length > 1) {
     const labels = named.map((k) => platformByKey(k)?.label ?? k).join(" and ");
-    note =
+    notes.push(
       `:warning: That message names ${labels}, so there is no way to tell which one these ` +
-      `${filed} screenshot${filed === 1 ? "" : "s"} show. Filed, but not counted. One platform ` +
-      "per message.";
+        `${filed} screenshot${filed === 1 ? "" : "s"} show. One platform per message.`
+    );
   }
 
-  if (note) {
-    const said = await slack.postThreadReply(args.channel, args.threadTs, note);
-    if (!slackOk(said)) console.error("[slack/events] attribution note failed");
+  if (readNote) notes.push(readNote);
+
+  // ‼️ THE "NAME IT" NUDGE ONLY FIRES ON WHAT IS STILL UNATTRIBUTED. It used to fire whenever
+  // the message named nothing, which is now the NORMAL and preferred case: the address bar in
+  // the picture answers it. Telling somebody to type a platform name onto a screenshot that has
+  // just been filed correctly is how a fixed feature keeps reading as a broken one.
+  if (stillUnattributed > 0) {
+    notes.push(
+      `Those ${stillUnattributed === 1 ? "one" : stillUnattributed} are filed and kept but not counted. ` +
+        "Reply with the platform name, one platform per message, and they count."
+    );
   }
+
+  if (!notes.length) return;
+
+  const said = await slack.postThreadReply(args.channel, args.threadTs, notes.join("\n"));
+  if (!slackOk(said)) console.error("[slack/events] attribution note failed");
 }
+
 
 /**
  * The general BrainHeart assistant: history, system prompt, images, one tool loop.

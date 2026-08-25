@@ -29,6 +29,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { readTheme, activeTheme } from "@/lib/hub/theme";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { notifyStep } from "./step-board";
+import { signOnboardingToken } from "./token";
 import type { AutoResult } from "./artifacts/registry";
 
 /**
@@ -54,6 +55,46 @@ function appUrl(): string {
 export function reviewPreviewUrl(clientId: string): string {
   return `${appUrl()}/dashboard/clients/${clientId}/preview?kind=reviews`;
 }
+
+/**
+ * How long a shared preview link lives.
+ *
+ * Shorter than the onboarding token's thirty days, deliberately. This URL is minted to be shown
+ * on a call and it renders a client's unreleased pages; a link that outlives the conversation it
+ * was made for is a link somebody forwards.
+ */
+export const PREVIEW_TOKEN_TTL_DAYS = 14;
+
+/**
+ * A preview link a client may actually be shown.
+ *
+ * ‼️ reviewPreviewUrl ABOVE CANNOT BE HANDED TO ANYBODY AND THIS ONE CAN. That one is a
+ * /dashboard/ path whose page calls notFound() without a session, so a logged-out visitor gets
+ * a 404 rather than a login screen. Both are kept: the dashboard one shows DRAFTS and is the
+ * internal working preview; this one shows published pages only and is the one for a call.
+ *
+ * ‼️ IT RETURNS NULL RATHER THAN A BROKEN LINK. Signing throws when CLIENT_LINK_SECRET is unset,
+ * which is a real state on a fresh environment, and a card printing a URL that 404s is worse
+ * than a card saying the link could not be minted. Same tri-state discipline as BOOKING_LINK and
+ * site_signals: an absent thing says it is absent.
+ */
+export function clientPreviewUrl(clientId: string, kind: "hub" | "reviews" = "hub"): string | null {
+  try {
+    const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
+    return `${appUrl()}/preview/${token}${kind === "reviews" ? "?kind=reviews" : ""}`;
+  } catch (e) {
+    console.error("[clients/review-preview] preview link not minted:", (e as Error).message);
+    return null;
+  }
+}
+
+/** The line a step card prints for a preview link, or the honest absence of one. */
+export function previewLinkLine(url: string | null, what: string): string {
+  return url
+    ? `*${what}, safe to screen-share:* ${url}\nIt needs no login, shows published pages only, and is noindex. It expires in ${PREVIEW_TOKEN_TTL_DAYS} days.`
+    : `*No shareable ${what.toLowerCase()} link could be minted*: CLIENT_LINK_SECRET is not set on this environment, so nothing can sign one. Set it and this prints a URL.`;
+}
+
 
 export async function verifyReviewToolPreview(clientId: string): Promise<AutoResult> {
   const { data: client } = await supabaseAdmin
@@ -135,6 +176,9 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
     [
       `*Review tool preview — ${name}*`,
       theme ? `Themed and live: ${url}` : `Live: ${url}`,
+      ":lock: That one is internal: it is a /dashboard/ path, so a logged-out visitor gets a 404.",
+      "",
+      previewLinkLine(clientPreviewUrl(clientId, "reviews"), "The review tool"),
       "",
       `• ${PREVIEW_DEMO_RULE}`,
       `• ${PREVIEW_DISCARD_RULE}`,

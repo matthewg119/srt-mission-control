@@ -206,6 +206,23 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         threadTs: payload.container?.message_ts ?? "",
         value: action.value ?? "",
       });
+    // ── LANE 1: readings become records, and only a person makes that happen ──
+    case "review_confirm_readings":
+      return reviewConfirmReadingsAction({
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        clientId: action.value ?? "",
+      });
+    case "cleanup_confirm_all":
+      return cleanupConfirmAllAction({
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        clientId: action.value ?? "",
+      });
     default:
       return NextResponse.json({ ok: true });
   }
@@ -1437,4 +1454,128 @@ async function resolveStepCard(
   await notifyThread(clientId, text).catch((e) =>
     console.error("[slack/actions] could not resolve the card or reach the ops thread:", (e as Error).message)
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LANE 1 — the two confirm buttons
+//
+// ‼️ THESE ARE THE HUMAN HALF OF "THE TOOL PROPOSES, A PERSON CONFIRMS", AND THEY ARE THE ONLY
+// WRITERS OF THE COLUMNS THEY WRITE. A model read a number off a picture and put it in a
+// `proposed` slot; nothing downstream reads that slot. One tap moves the whole batch into the
+// real columns and records who did it, which is what makes the tick mean something.
+//
+// One tap for a batch rather than one per row is deliberate. The alternative to a batch confirm
+// is not a more careful review, it is the eighteen-row form nobody fills in, which is the state
+// this whole lane exists to get out of.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function reviewConfirmReadingsAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  if (!args.clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { applyProposedReadings, loadReviewAudit, formatReviewGrid } = await import(
+        "@/lib/clients/review-audit"
+      );
+
+      const result = await applyProposedReadings({ clientId: args.clientId, by: actor });
+
+      if (!result.ok) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          `:warning: Nothing was confirmed: ${result.error}. The proposals are still there.`
+        );
+        return;
+      }
+
+      const lines = [
+        result.confirmed > 0
+          ? `:white_check_mark: ${result.confirmed} reading${result.confirmed === 1 ? "" : "s"} confirmed by ${actor} and written to the grid.`
+          : ":information_source: There was nothing outstanding to confirm.",
+      ];
+
+      // ‼️ WHAT COULD NOT BE WRITTEN IS SAID OUT LOUD. A date column cannot hold "3 weeks ago",
+      // and converting one into a specific day would be inventing a fact that then appears in a
+      // document as though somebody read it there.
+      if (result.datesDropped.length) {
+        lines.push(
+          `The most recent review date was written as a phrase rather than a date on ${result.datesDropped.join(", ")}, so those stayed empty.`
+        );
+      }
+      if (result.noCount.length) {
+        lines.push(
+          `No total was legible on ${result.noCount.join(", ")}, so those were not confirmed at all. Zero reviews and an unreadable total are opposite claims.`
+        );
+      }
+
+      const rows = await loadReviewAudit(args.clientId);
+      lines.push("", formatReviewGrid({ rows }));
+
+      await slack.postThreadReply(args.channel, args.slackTs, lines.join("\n"));
+    })().catch((e) => console.error("[slack/actions] review_confirm_readings failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+async function cleanupConfirmAllAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  if (!args.clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { confirmProposedListings } = await import("@/lib/clients/listing-read");
+      const result = await confirmProposedListings({ clientId: args.clientId, by: actor });
+
+      if (!result.ok) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          `:warning: Nothing was confirmed: ${result.error}. The proposals are still there.`
+        );
+        return;
+      }
+
+      if (result.confirmed === 0) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          ":information_source: There was nothing outstanding to confirm."
+        );
+        return;
+      }
+
+      const summary = Object.entries(result.byStatus)
+        .map(([status, platforms]) => `${platforms.length} ${status} (${platforms.join(", ")})`)
+        .join(" · ");
+
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        [
+          `:white_check_mark: ${result.confirmed} listing${result.confirmed === 1 ? "" : "s"} confirmed by ${actor}.`,
+          summary,
+          "",
+          "Those are what the citation cleanup list and the presence PDF read now. Nothing has",
+          "been submitted anywhere: the list is the work, and a person does the work.",
+        ].join("\n")
+      );
+    })().catch((e) => console.error("[slack/actions] cleanup_confirm_all failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
 }

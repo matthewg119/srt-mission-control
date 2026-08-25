@@ -1,4 +1,4 @@
-// The eighteen platforms, in two tiers that are not the same thing.
+// The nineteen platforms, in two tiers that are not the same thing.
 //
 // Runner v3 section 6: "Two tiers, and they are NOT the same thing. Do not blur them."
 //
@@ -19,6 +19,24 @@
 // are med_spa rows. Do not build a second vertical's list speculatively.
 
 export type PresenceTier = "core_six" | "extended";
+
+/**
+ * One address-bar shape that identifies this platform.
+ *
+ * ‼️ THIS IS ITS OWN FIELD BECAUSE `url` IS NOT A DOMAIN MAP AND DERIVING ONE FROM IT COLLIDES.
+ *
+ * `google`'s url is `google.com/maps` and `chamber`'s is `google.com/search`. `bing` is
+ * `bing.com/maps` while a Bing WEB search is `bing.com`. A naive hostname map would file a
+ * chamber-of-commerce screenshot as Google Business Profile, which is a green tick over a
+ * platform nobody looked at.
+ *
+ * `host` matches the hostname exactly or as a suffix after a dot, so `www.` and `m.` need no
+ * entries of their own. `pathPrefix`, where present, is REQUIRED rather than preferred.
+ */
+export interface PlatformDomain {
+  host: string;
+  pathPrefix?: string;
+}
 
 export interface PresencePlatform {
   /** Stable slug. This is what lands in nap_discrepancies.platform, so it never gets reworded. */
@@ -58,6 +76,17 @@ export interface PresencePlatform {
    * so there is still one list rather than a lookup table somewhere else that drifts.
    */
   aliases?: string[];
+  /**
+   * The address bar shapes that identify this platform.
+   *
+   * ‼️ ONE LIST. This sits next to `aliases` rather than in a lookup table somewhere else,
+   * because the moment there are two lists they drift and a screenshot gets filed under a
+   * platform nobody swept. See PlatformDomain above for why it is not derived from `url`.
+   *
+   * A platform with NO entry is unmappable from a screenshot, which is an honest answer and
+   * not an omission. `chamber` is the worked example.
+   */
+  domains?: PlatformDomain[];
 }
 const nameCity = (a: { name: string; city: string }) => `${a.name} ${a.city}`;
 const nameCityState = (a: { name: string; city: string; state: string }) =>
@@ -67,6 +96,10 @@ export const CORE_SIX: PresencePlatform[] = [
   {
     key: "google",
     aliases: ["gbp", "google business", "google business profile", "google maps", "google my business", "gmb"],
+    // ‼️ `/maps` IS REQUIRED AND `google.com` ALONE IS NEVER THIS PLATFORM. A Google WEB search
+    // is where `chamber` is swept, and a bare hostname match would file a chamber screenshot as
+    // a Google Business Profile that nobody ever looked at.
+    domains: [{ host: "google.com", pathPrefix: "/maps" }, { host: "maps.google.com" }],
     label: "Google Business Profile",
     tier: "core_six",
     api: false,
@@ -79,6 +112,7 @@ export const CORE_SIX: PresencePlatform[] = [
   {
     key: "apple",
     aliases: ["apple maps", "apple business connect", "business connect"],
+    domains: [{ host: "maps.apple.com" }],
     label: "Apple Maps",
     tier: "core_six",
     api: false,
@@ -88,11 +122,12 @@ export const CORE_SIX: PresencePlatform[] = [
     minutes: 25,
     note: "No search API and Apple Business Connect is claim-only. Manual, always.",
   },
-  { key: "bing", label: "Bing Places", tier: "core_six", api: false, aliases: ["bing places", "bing maps"], search: nameCityState, url: "https://www.bing.com/maps", access: "Bing Places account, claimed by post or phone", minutes: 20 },
-  { key: "yelp", label: "Yelp", tier: "core_six", api: false, aliases: ["yelp for business"], search: nameCityState, url: "https://www.yelp.com", access: "Yelp for Business login", minutes: 15 },
+  { key: "bing", label: "Bing Places", tier: "core_six", api: false, aliases: ["bing places", "bing maps"], domains: [{ host: "bing.com", pathPrefix: "/maps" }], search: nameCityState, url: "https://www.bing.com/maps", access: "Bing Places account, claimed by post or phone", minutes: 20 },
+  { key: "yelp", label: "Yelp", tier: "core_six", api: false, aliases: ["yelp for business"], domains: [{ host: "yelp.com" }], search: nameCityState, url: "https://www.yelp.com", access: "Yelp for Business login", minutes: 15 },
   {
     key: "realself",
     aliases: ["real self"],
+    domains: [{ host: "realself.com" }],
     label: "RealSelf",
     tier: "core_six",
     api: false,
@@ -102,19 +137,26 @@ export const CORE_SIX: PresencePlatform[] = [
     minutes: 30,
     note: "Med spa specific. Often the only place a procedure-level review exists.",
   },
-  { key: "facebook", label: "Facebook Page", tier: "core_six", api: false, aliases: ["fb", "facebook page", "meta page"], search: nameCity, url: "https://www.facebook.com", access: "Facebook Page admin", minutes: 15 },
+  { key: "facebook", label: "Facebook Page", tier: "core_six", api: false, aliases: ["fb", "facebook page", "meta page"], domains: [{ host: "facebook.com" }, { host: "fb.com" }], search: nameCity, url: "https://www.facebook.com", access: "Facebook Page admin", minutes: 15 },
 ];
 
 export const EXTENDED: PresencePlatform[] = [
-  { key: "foursquare", label: "Foursquare", tier: "extended", api: false, aliases: ["four square"], search: nameCityState, url: "https://foursquare.com", access: "Foursquare for Business claim", minutes: 20 },
-  { key: "yellowpages", label: "Yellow Pages", tier: "extended", api: false, aliases: ["yellow pages", "yp"], search: nameCityState, url: "https://www.yellowpages.com", access: "YP account, or the free listing correction form", minutes: 15 },
-  { key: "bbb", label: "BBB", tier: "extended", api: false, aliases: ["better business bureau"], search: nameCityState, url: "https://www.bbb.org", access: "BBB business login, or a written correction request", minutes: 25 },
-  { key: "nextdoor", label: "Nextdoor", tier: "extended", api: false, aliases: ["next door"], search: nameCity, url: "https://nextdoor.com", access: "Nextdoor Business Page admin", minutes: 15 },
-  { key: "manta", label: "Manta", tier: "extended", api: false, search: nameCityState, url: "https://www.manta.com", access: "Manta claim, email verification", minutes: 15 },
-  { key: "healthgrades", label: "Healthgrades", tier: "extended", api: false, aliases: ["health grades"], search: nameCityState, url: "https://www.healthgrades.com", access: "Healthgrades provider claim, licence verification", minutes: 30 },
+  { key: "foursquare", label: "Foursquare", tier: "extended", api: false, aliases: ["four square"], domains: [{ host: "foursquare.com" }], search: nameCityState, url: "https://foursquare.com", access: "Foursquare for Business claim", minutes: 20 },
+  { key: "yellowpages", label: "Yellow Pages", tier: "extended", api: false, aliases: ["yellow pages", "yp"], domains: [{ host: "yellowpages.com" }], search: nameCityState, url: "https://www.yellowpages.com", access: "YP account, or the free listing correction form", minutes: 15 },
+  { key: "bbb", label: "BBB", tier: "extended", api: false, aliases: ["better business bureau"], domains: [{ host: "bbb.org" }], search: nameCityState, url: "https://www.bbb.org", access: "BBB business login, or a written correction request", minutes: 25 },
+  // ‼️ ADDED 2026-08-25, AND IT IS AN EXTENDED DIRECTORY, NOT A PROMOTION.
+  // Matthew wants it among the four he is STEERED to (see RECOMMENDED_KEYS below), and those
+  // are two different facts: the tier decides what week-one cleanup means in a document a
+  // client reads, and a suggestion on a card decides nothing. Intake already collects it as
+  // clients.review_destination_primary.
+  { key: "trustpilot", label: "Trustpilot", tier: "extended", api: false, aliases: ["trust pilot"], domains: [{ host: "trustpilot.com" }], search: nameCity, url: "https://www.trustpilot.com", access: "Trustpilot business account, free profile claim", minutes: 20, note: "Often the review destination a client already sends people to. Check the profile is claimed." },
+  { key: "nextdoor", label: "Nextdoor", tier: "extended", api: false, aliases: ["next door"], domains: [{ host: "nextdoor.com" }], search: nameCity, url: "https://nextdoor.com", access: "Nextdoor Business Page admin", minutes: 15 },
+  { key: "manta", label: "Manta", tier: "extended", api: false, domains: [{ host: "manta.com" }], search: nameCityState, url: "https://www.manta.com", access: "Manta claim, email verification", minutes: 15 },
+  { key: "healthgrades", label: "Healthgrades", tier: "extended", api: false, aliases: ["health grades"], domains: [{ host: "healthgrades.com" }], search: nameCityState, url: "https://www.healthgrades.com", access: "Healthgrades provider claim, licence verification", minutes: 30 },
   {
     key: "npi",
     aliases: ["npi registry", "nppes"],
+    domains: [{ host: "npiregistry.cms.hhs.gov" }],
     label: "NPI Registry",
     tier: "extended",
     api: false,
@@ -124,17 +166,60 @@ export const EXTENDED: PresencePlatform[] = [
     minutes: 30,
     note: "Only relevant where a licensed provider is named. Skip cleanly if the clinic has no NPI.",
   },
-  { key: "chamber", label: "Local chamber of commerce", tier: "extended", api: false, aliases: ["chamber of commerce", "local chamber"], search: nameCity, url: "https://www.google.com/search", access: "Whoever at the chamber maintains the directory. Usually an email", minutes: 20 },
-  { key: "mapquest", label: "MapQuest", tier: "extended", api: false, aliases: ["map quest"], search: nameCityState, url: "https://www.mapquest.com", access: "MapQuest is fed by its data partners, so this is a correction request", minutes: 15 },
-  { key: "superpages", label: "Superpages", tier: "extended", api: false, aliases: ["super pages"], search: nameCityState, url: "https://www.superpages.com", access: "Superpages claim, shares an account with YP", minutes: 15 },
-  { key: "hotfrog", label: "Hotfrog", tier: "extended", api: false, search: nameCityState, url: "https://www.hotfrog.com", access: "Hotfrog free claim, email verification", minutes: 10 },
-  { key: "citysearch", label: "Citysearch", tier: "extended", api: false, aliases: ["city search"], search: nameCityState, url: "https://www.citysearch.com", access: "Citysearch correction form", minutes: 15 },
+  // ‼️ NO `domains` ENTRY, DELIBERATELY, AND IT MUST NOT ACQUIRE ONE.
+  // Its search surface IS a Google search page, so its address bar is indistinguishable from
+  // any other Google search: google.com/search?q=... says nothing about which platform the
+  // picture shows. Unmappable from a screenshot is the honest answer, and the same reasoning
+  // applies to anything else whose surface is a general engine. It is still swept, still
+  // attributable by NAME in the message, and still counts toward the gate when named.
+  { key: "chamber", label: "Local chamber of commerce", tier: "extended", api: false, aliases: ["chamber of commerce", "local chamber"], search: nameCity, url: "https://www.google.com/search", access: "Whoever at the chamber maintains the directory. Usually an email", minutes: 20, note: "Its surface is a Google search page, so the address bar cannot identify it. This one always needs its name typed in the message." },
+  { key: "mapquest", label: "MapQuest", tier: "extended", api: false, aliases: ["map quest"], domains: [{ host: "mapquest.com" }], search: nameCityState, url: "https://www.mapquest.com", access: "MapQuest is fed by its data partners, so this is a correction request", minutes: 15 },
+  { key: "superpages", label: "Superpages", tier: "extended", api: false, aliases: ["super pages"], domains: [{ host: "superpages.com" }], search: nameCityState, url: "https://www.superpages.com", access: "Superpages claim, shares an account with YP", minutes: 15 },
+  { key: "hotfrog", label: "Hotfrog", tier: "extended", api: false, domains: [{ host: "hotfrog.com" }], search: nameCityState, url: "https://www.hotfrog.com", access: "Hotfrog free claim, email verification", minutes: 10 },
+  { key: "citysearch", label: "Citysearch", tier: "extended", api: false, aliases: ["city search"], domains: [{ host: "citysearch.com" }], search: nameCityState, url: "https://www.citysearch.com", access: "Citysearch correction form", minutes: 15 },
 ];
 
 export const ALL_PLATFORMS: PresencePlatform[] = [...CORE_SIX, ...EXTENDED];
 
-/** The count the Slack card and the step engine both quote. Eighteen. */
+/** The count the Slack card and the step engine both quote. Nineteen since Trustpilot. */
 export const PLATFORM_COUNT = ALL_PLATFORMS.length;
+
+/**
+ * How many DISTINCT platforms close the manual sweep, whatever tier they came from.
+ *
+ * ‼️ THIS IS THE GATE. `CORE_SIX` IS THE REMEDIATION TIER. THEY ARE DIFFERENT FACTS.
+ *
+ * Matthew: "instead of being core 6 make it core 4 also let it let me post the 6 of my
+ * preference and dont force me to do those specifically." So the gate is any four distinct
+ * platforms HE chooses, from all nineteen, and it is deliberately NOT a subset of the core six.
+ *
+ * `CORE_SIX` / `EXTENDED` are untouched by this and must stay untouched: citation-cleanup.ts
+ * sorts core-six first and multiplies effort by it, presence-pdf.ts renders the two tiers
+ * separately, and findings section 3 goes to the client. Cutting CORE_SIX to four would quietly
+ * redefine what "week one cleanup" means in a document somebody reads.
+ *
+ * ‼️ IT COUNTS PLATFORMS, NEVER FILES. Every pasted Slack screenshot is called image.png, so
+ * four shots of Yelp must not satisfy a four-platform gate. Four is a smaller number than six,
+ * not a weaker rule.
+ */
+export const SWEEP_GATE_COUNT = 4;
+
+/**
+ * The four the card puts first.
+ *
+ * ‼️ A DISPLAY AND SUGGESTION CONCEPT. IT IS NOT A TIER, and nothing in citation-cleanup.ts or
+ * presence-pdf.ts may read it: a client-facing document that treated "recommended" as a
+ * severity would be inventing a third tier out of a card's running order.
+ *
+ * Matthew: "for the presence consistency make this options as the default and most important
+ * ones and all of the rest you can leave the list with alll of them but are secondary."
+ */
+export const RECOMMENDED_KEYS: readonly string[] = ["google", "yelp", "trustpilot", "bbb"];
+
+/** The recommended four as platform records, in the order Matthew named them. */
+export const RECOMMENDED: PresencePlatform[] = RECOMMENDED_KEYS.map(
+  (k) => ALL_PLATFORMS.find((p) => p.key === k)
+).filter((p): p is PresencePlatform => Boolean(p));
 
 export function platformByKey(key: string): PresencePlatform | undefined {
   return ALL_PLATFORMS.find((p) => p.key === key);
@@ -205,6 +290,113 @@ export function resolvePlatformsFromText(text: string): string[] {
     if (hit) out.push(p.key);
   }
   return out;
+}
+
+/**
+ * Which platform an ADDRESS BAR names. Pure, so the probe can test it without a database.
+ *
+ * ‼️ TEXT FIRST, THIS SECOND. resolvePlatformsFromText above stays first and stays unchanged.
+ * A URL cannot be misread; a screenshot can. The same ordering src/lib/call-coach/
+ * resolve-target.ts records for the same shape of problem: vision confirms, it does not decide.
+ *
+ * Tolerant about what it is handed, because what it is handed is a model transcribing pixels:
+ * a missing scheme, a trailing space, mixed case and a bare host are all normal. It is NOT
+ * tolerant about what it concludes.
+ *
+ * ‼️ RETURNING MORE THAN ONE IS A REAL ANSWER AND THE CALLER MUST NOT TAKE THE FIRST, exactly
+ * as with the text resolver. Zero matches and two matches are the same answer: nobody could
+ * tell, so nothing is attributed and the thread says so.
+ *
+ * MOST SPECIFIC FIRST. Where two platforms could match one URL they are on the same host by
+ * definition, so the longer host and then the longer pathPrefix wins, and only the winners are
+ * returned. Where a host is shared, a pathPrefix is REQUIRED rather than preferred: an entry
+ * with no path cannot win a host somebody else has claimed a path on.
+ */
+export function resolvePlatformFromUrl(url: string): string[] {
+  const parsed = splitUrl(url);
+  if (!parsed) return [];
+  const { host, path } = parsed;
+
+  // Hosts claimed by more than one platform. On those, a bare host entry never matches.
+  const claims = new Map<string, number>();
+  for (const p of ALL_PLATFORMS) {
+    for (const d of p.domains ?? []) claims.set(d.host, (claims.get(d.host) ?? 0) + 1);
+  }
+
+  type Hit = { key: string; hostLen: number; pathLen: number };
+  const hits: Hit[] = [];
+
+  for (const p of ALL_PLATFORMS) {
+    for (const d of p.domains ?? []) {
+      if (!hostMatches(host, d.host)) continue;
+      const shared = (claims.get(d.host) ?? 0) > 1;
+      if (!d.pathPrefix) {
+        if (shared) continue;
+        hits.push({ key: p.key, hostLen: d.host.length, pathLen: 0 });
+        continue;
+      }
+      if (!pathMatches(path, d.pathPrefix.toLowerCase())) continue;
+      hits.push({ key: p.key, hostLen: d.host.length, pathLen: d.pathPrefix.length });
+    }
+  }
+
+  if (hits.length === 0) return [];
+
+  const best = hits.reduce((a, b) =>
+    b.hostLen > a.hostLen || (b.hostLen === a.hostLen && b.pathLen > a.pathLen) ? b : a
+  );
+  const winners = new Set(
+    hits
+      .filter((h) => h.hostLen === best.hostLen && h.pathLen === best.pathLen)
+      .map((h) => h.key)
+  );
+
+  // ALL_PLATFORMS order, so two matches are reported the same way every time.
+  return ALL_PLATFORMS.filter((p) => winners.has(p.key)).map((p) => p.key);
+}
+
+/** `sub.example.com` matches `example.com`; `notexample.com` does not. */
+function hostMatches(host: string, want: string): boolean {
+  return host === want || host.endsWith(`.${want}`);
+}
+
+/**
+ * A prefix has to end at a segment boundary. `/maps` must not match `/mapsomething`, and
+ * `/maps?q=x` and `/maps` are the same page.
+ */
+function pathMatches(path: string, prefix: string): boolean {
+  if (!path.startsWith(prefix)) return false;
+  const next = path.charAt(prefix.length);
+  return next === "" || next === "/" || next === "?" || next === "#";
+}
+
+/**
+ * Host and path out of whatever a model transcribed. Returns null rather than guessing.
+ *
+ * new URL() is deliberately not used as the only path: it throws on `google.com/maps`, which
+ * is a perfectly legible address bar in a screenshot of Chrome, where the scheme is hidden.
+ */
+function splitUrl(input: string): { host: string; path: string } | null {
+  const raw = (input ?? "").trim();
+  if (!raw) return null;
+
+  const withoutScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  const cut = withoutScheme.search(/[/?#]/);
+  const hostPart = (cut < 0 ? withoutScheme : withoutScheme.slice(0, cut)).trim();
+  const rest = cut < 0 ? "" : withoutScheme.slice(cut);
+
+  const host = hostPart
+    .replace(/^[^@]*@/, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase()
+    .replace(/^www\./, "")
+    .replace(/\.$/, "");
+
+  // A hostname with no dot is not a website, it is a word the model read off a tab.
+  if (!host || !host.includes(".") || /\s/.test(host)) return null;
+
+  const path = rest.startsWith("/") ? rest.toLowerCase() : `/${rest.toLowerCase()}`;
+  return { host, path: path === "/" ? "/" : path.replace(/\/+$/, "") || "/" };
 }
 
 /**

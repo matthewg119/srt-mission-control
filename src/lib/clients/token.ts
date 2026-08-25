@@ -43,6 +43,32 @@ export function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+/**
+ * What a token is FOR.
+ *
+ * ‼️ ADDED 2026-08-25 AND THE ONBOARDING PAYLOAD IS BYTE-IDENTICAL TO WHAT IT ALWAYS WAS.
+ * Every link already emailed keeps working, because the "onboarding" scope encodes exactly the
+ * string it used to encode and nothing else. Only a NEW scope changes the payload shape.
+ *
+ * ‼️ IT FAILS CLOSED IN BOTH DIRECTIONS, which is the whole reason it exists rather than being
+ * a second token scheme. An onboarding link cannot open a preview, and a preview link cannot
+ * open the onboarding funnel and its business data. Verification takes the scope it EXPECTS and
+ * refuses anything else with its own reason, so the two surfaces cannot be crossed by pasting.
+ */
+export type TokenScope = "onboarding" | "preview";
+
+/**
+ * The signed body for a scope.
+ *
+ * `onboarding` is `<clientId>.<expiresMs>`, unchanged. Anything else is
+ * `<scope>:<clientId>.<expiresMs>`. A uuid contains no colon, so reading the scope back is
+ * unambiguous, and a token minted before this existed decodes as onboarding by construction.
+ */
+function encodeBody(scope: TokenScope, clientId: string, expiresMs: number): string {
+  const id = scope === "onboarding" ? clientId : `${scope}:${clientId}`;
+  return Buffer.from(`${id}.${expiresMs}`).toString("base64url");
+}
+
 export interface SignedOnboardingToken {
   token: string;
   expiresAt: Date;
@@ -56,23 +82,31 @@ export interface SignedOnboardingToken {
  */
 export function signOnboardingToken(
   clientId: string,
-  ttlDays: number = ONBOARDING_TOKEN_TTL_DAYS
+  ttlDays: number = ONBOARDING_TOKEN_TTL_DAYS,
+  scope: TokenScope = "onboarding"
 ): SignedOnboardingToken {
   const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
-  const body = Buffer.from(`${clientId}.${expiresAt.getTime()}`).toString("base64url");
+  const body = encodeBody(scope, clientId, expiresAt.getTime());
   return { token: `${body}.${mac(body)}`, expiresAt };
 }
 
 export type VerifyResult =
-  | { ok: true; clientId: string; expiresAt: Date }
-  | { ok: false; reason: "missing" | "malformed" | "bad_signature" | "expired" };
+  | { ok: true; clientId: string; expiresAt: Date; scope: TokenScope }
+  | { ok: false; reason: "missing" | "malformed" | "bad_signature" | "expired" | "wrong_scope" };
 
 /**
  * Signature first, expiry second. Checking expiry before the MAC would let an
  * unsigned token with a future timestamp reach the "valid but expired" branch, and
  * anything that distinguishes those two states for an attacker is worth avoiding.
+ *
+ * Scope is checked LAST, after the signature and the expiry, for the same reason: a caller
+ * holding a valid token for the wrong surface has already proved they hold a valid token, so
+ * the only new thing `wrong_scope` tells them is that they are on the wrong page.
  */
-export function verifyOnboardingToken(token: string | null | undefined): VerifyResult {
+export function verifyOnboardingToken(
+  token: string | null | undefined,
+  expectedScope: TokenScope = "onboarding"
+): VerifyResult {
   if (!token) return { ok: false, reason: "missing" };
 
   const parts = token.split(".");
@@ -106,13 +140,20 @@ export function verifyOnboardingToken(token: string | null | undefined): VerifyR
   const sep = decoded.lastIndexOf(".");
   if (sep < 1) return { ok: false, reason: "malformed" };
 
-  const clientId = decoded.slice(0, sep);
+  const idPart = decoded.slice(0, sep);
   const expiresMs = Number(decoded.slice(sep + 1));
-  if (!clientId || !Number.isFinite(expiresMs)) return { ok: false, reason: "malformed" };
+  if (!idPart || !Number.isFinite(expiresMs)) return { ok: false, reason: "malformed" };
+
+  const colon = idPart.indexOf(":");
+  const scope = (colon < 0 ? "onboarding" : idPart.slice(0, colon)) as TokenScope;
+  const clientId = colon < 0 ? idPart : idPart.slice(colon + 1);
+  if (!clientId) return { ok: false, reason: "malformed" };
 
   if (Date.now() > expiresMs) {
     return { ok: false, reason: "expired" };
   }
 
-  return { ok: true, clientId, expiresAt: new Date(expiresMs) };
+  if (scope !== expectedScope) return { ok: false, reason: "wrong_scope" };
+
+  return { ok: true, clientId, expiresAt: new Date(expiresMs), scope };
 }

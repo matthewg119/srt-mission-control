@@ -16,7 +16,15 @@
 // of evidence being dressed up as one.
 
 import { supabaseAdmin } from "@/lib/db";
-import { ALL_PLATFORMS, CORE_SIX, EXTENDED, PLATFORM_COUNT } from "@/config/presence-platforms";
+import {
+  ALL_PLATFORMS,
+  CORE_SIX,
+  EXTENDED,
+  PLATFORM_COUNT,
+  RECOMMENDED,
+  RECOMMENDED_KEYS,
+  SWEEP_GATE_COUNT,
+} from "@/config/presence-platforms";
 import { canonicalLine, type Canonical } from "./nap-compare";
 import { normalizeState } from "./normalize";
 
@@ -216,34 +224,69 @@ export function worstFirst(rows: SweepRow[]): SweepRow[] {
  * This replaces the CSV worksheet entirely, which is why every platform gets its own numbered
  * line with the search string already composed — the person doing this is copying and pasting,
  * not deciding anything.
+ *
+ * ‼️ THREE GROUPS, AND ONLY ONE OF THEM IS A TIER.
+ *
+ * RECOMMENDED is where to start and closes nothing by itself: it is a display concept, and
+ * Matthew's own four. CORE SIX and EXTENDED are the REMEDIATION tiers and still mean exactly
+ * what they meant — a core-six mismatch and a Manta mismatch are not equivalent in a document a
+ * client reads. The GATE is neither: any four distinct platforms, of any tier, his choice.
+ *
+ * ‼️ IT RUNS PAST 2,900 CHARACTERS AND THAT IS HANDLED, NOT IGNORED. The eighteen-platform
+ * version measured 2,988 for a short business name, and the name is interpolated into every
+ * search string. bodySections() in step-engine.ts splits this on LINE boundaries into as many
+ * Slack sections as it needs, never mid-line, because these lines are search strings and URLs
+ * somebody pastes.
  */
 export function formatSweepCard(client: { name: string; city: string; state: string }, canonical: Canonical): string {
   const state = normalizeState(client.state || "");
   const args = { name: client.name, city: client.city, state };
+  const line = (n: number, p: (typeof ALL_PLATFORMS)[number]) =>
+    ` ${n}. ${p.label} — search: \`${p.search(args)}\`  <${p.url}|open>`;
+
+  const restOfCore = CORE_SIX.filter((p) => !RECOMMENDED_KEYS.includes(p.key));
+  const restOfExtended = EXTENDED.filter((p) => !RECOMMENDED_KEYS.includes(p.key));
 
   const lines: string[] = [
     `*Presence sweep — 0 of ${PLATFORM_COUNT} done automatically*`,
-    "No presence provider is keyed (Google Places, Bing, Foursquare, Yelp all unkeyed), so all eighteen are manual.",
+    "No presence provider is keyed (Google Places, Bing, Foursquare, Yelp all unkeyed), so every one is manual.",
     "",
     `*Canonical:* ${canonicalLine(canonical)}`,
     "",
     "Search the string, screenshot what you see, reply in this thread.",
     "",
-    "*One platform per message.* Put the platform name in the message with the screenshot: type",
-    "`Yelp` and attach the image. That is how the file gets attributed. A screenshot with no",
-    "platform named is still filed and still kept, it just does not count toward the six.",
+    `*[Done] closes on any ${SWEEP_GATE_COUNT} DISTINCT platforms, and which ${SWEEP_GATE_COUNT} is your choice.*`,
+    `Not four named ones: any ${SWEEP_GATE_COUNT} of the ${PLATFORM_COUNT} below. The first four are where I would start.`,
     "",
-    `*CORE SIX* — the findings gate, and what [Done] checks. All ${CORE_SIX.length} close this step.`,
+    "*Two ways a screenshot gets attributed, and one of them needs nothing typed:*",
+    "  • name the platform in the message: type `Yelp` and attach the image, or",
+    "  • leave the Chrome address bar in the shot and the URL in the picture is read for you.",
+    "One platform per message either way. A screenshot nothing can attribute is still filed and",
+    "still kept, it just does not count toward the four, and the thread says which one it was.",
+    "",
+    "*START WITH THESE FOUR*",
   ];
 
-  CORE_SIX.forEach((p, i) => {
-    lines.push(` ${i + 1}. ${p.label} — search: \`${p.search(args)}\`  <${p.url}|open>`);
+  RECOMMENDED.forEach((p, i) => {
+    lines.push(line(i + 1, p));
     if (p.note) lines.push(`     ${p.note}`);
   });
 
-  lines.push("", "*EXTENDED* — context only. Findings, not week-one cleanup. These never block the step.");
-  EXTENDED.forEach((p, i) => {
-    lines.push(` ${CORE_SIX.length + i + 1}. ${p.label} — search: \`${p.search(args)}\`  <${p.url}|open>`);
+  lines.push(
+    "",
+    "*THE REST OF THE CORE SIX* — the remediation tier. A mismatch here is week-one cleanup work."
+  );
+  restOfCore.forEach((p, i) => {
+    lines.push(line(RECOMMENDED.length + i + 1, p));
+    if (p.note) lines.push(`     ${p.note}`);
+  });
+
+  lines.push(
+    "",
+    "*EXTENDED* — context. Findings, not week-one cleanup. Any of these still counts toward the four."
+  );
+  restOfExtended.forEach((p, i) => {
+    lines.push(line(RECOMMENDED.length + restOfCore.length + i + 1, p));
     if (p.note) lines.push(`     ${p.note}`);
   });
 
@@ -258,7 +301,7 @@ export function formatSweepCard(client: { name: string; city: string; state: str
 }
 
 /**
- * Step 4. Seeds the eighteen rows and reports honestly that it checked none of them.
+ * Step 4. Seeds the nineteen rows and reports honestly that it checked none of them.
  *
  * It completes rather than erroring, because seeding IS the whole of the automated tier while no
  * provider is keyed, and leaving the step in error would block step 5 behind a thing that is
