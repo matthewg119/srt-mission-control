@@ -241,6 +241,13 @@ export async function runHookCheck(
     })
   );
 
+  // ‼️ WHAT KEEPS THE RIVAL COUNT AT OR BELOW THIS NUMBER IS THAT `aliases` IS BUILT ONCE, ABOVE
+  // THE MAP, and step 5 below counts rivals over a set this line has already decided. Either the
+  // alias set is empty, every answer above is null, and the guard on the next line ends the run
+  // before a rival is printed at all; or it is not empty, and an answer carries text exactly when
+  // it was measured, so no rival can be counted in more answers than were measured. Move
+  // buildAliases inside the map, or soften this guard into a warning, and "shows up in 4 of the 3
+  // searches I ran" becomes reachable in dmRivalLine, which is the one sentence a prospect checks.
   const measuredCount = raw.filter((r) => r.appeared !== null).length;
   if (measuredCount === 0) {
     return {

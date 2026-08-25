@@ -16,7 +16,7 @@ import {
   type HookCheck,
 } from "../src/lib/audit-engine/hook-pitch";
 import { buildPitchHtml } from "../src/lib/audit-engine/lead-pitch";
-import { hookResultLine, hookPositioningLine } from "../src/config/pitch";
+import { hookResultLine, hookPositioningLine, dmRivalLine } from "../src/config/pitch";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -166,6 +166,43 @@ check("no live script tag survives", nasty.includes("<script>"), false);
 // An unclosed marker must not swallow the rest of the email.
 const unclosed = buildPitchHtml("one ** two\n\nthree", "");
 check("unclosed bold is left alone", unclosed.includes("<strong>"), false);
+
+// ── 4. A rival is never named in more answers than came back ────────────────
+//
+// ‼️ THIS IS A STATEMENT OF THE CONTRACT AND NOT A TRIPWIRE, and it is worth knowing which it is.
+// runHookCheck holds the invariant in its CONTROL FLOW, not in any value reachable from here:
+// `aliases` is built once above the map, so an empty set nulls every answer and the measuredCount
+// guard ends the run, while a non-empty one means an answer carries text exactly when it was
+// measured. A fixture built in this file therefore satisfies the invariant by construction, and
+// moving buildAliases inside that map would break the real thing without failing anything below.
+// What these checks pin is what a MALFORMED HookCheck would print, so the next person to touch
+// the tally can see the sentence that is at stake rather than having to imagine it.
+
+const mixed = base({
+  results: [miss("q1", ["Coral Skin Bar"]), miss("q2", ["Coral Skin Bar"]), dead("q3")],
+  measuredCount: 2,
+  appearedCount: 0,
+  topRival: { name: "Coral Skin Bar", count: 2 },
+});
+
+check("a dead question stays out of the denominator", mixed.measuredCount, mixed.results.length - 1);
+check(
+  "the rival count never exceeds the measured count",
+  (mixed.topRival?.count ?? 0) <= mixed.measuredCount,
+  true
+);
+
+// The sentence the number is actually printed in. The hook lane topRival crosses into the DM lane
+// through dmSubjectOf, and dmRivalLine is where a count larger than the denominator would read as
+// "shows up in 4 of the 3 searches I ran".
+check(
+  "the printed line reads n of m with n at or below m",
+  dmRivalLine("laser skin treatments", mixed.city, [mixed.topRival!], mixed.businessName, {
+    appeared: mixed.appearedCount,
+    measured: mixed.measuredCount,
+  }).includes("shows up in 2 of the 2 searches I ran"),
+  true
+);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
