@@ -578,8 +578,11 @@ async function instructionsFor(
           : "Nothing scored yet.",
         "",
         `*To turn any of them into a draft:* post \`page ${c.name}\` in ${pageStudioHint()},`,
-        "pick a number, then type or send a voice note. Your words go into the page verbatim and",
-        "no model touches them unless you ask for that by name.",
+        "pick a number, then `ask`. It walks the questions only this business can answer and",
+        "files every reply VERBATIM as evidence. `draft` then writes the page from that and says",
+        "what each claim rests on. No model touches your words unless you ask for that by name.",
+        "",
+        "That evidence is not optional: a page with nothing behind it cannot be published.",
       ];
     }
 
@@ -598,9 +601,20 @@ async function instructionsFor(
         "PUBLISHING backlog. Step 12's question set is the MEASUREMENT set and nothing is ever",
         "published from it.",
         "",
-        "Two ways in. On the board: pick a question, write the answer, edit it, then Publish.",
-        `In Slack: post \`page ${c.name}\` in ${pageStudioHint()}, pick a number, then type or`,
-        "send a voice note and your own words land in the page verbatim.",
+        // ‼️ THE EVIDENCE STEP IS NAMED FIRST BECAUSE THE GATE REFUSES WITHOUT IT.
+        // A person following this card in order used to reach Publish and meet a refusal that
+        // sent them back to the beginning of the page. `ask` is not an optional extra any more:
+        // a page with no source behind it cannot be published at all.
+        `*Start in Slack.* Post \`page ${c.name}\` in ${pageStudioHint()}, pick a number, then`,
+        "`ask`. It walks the questions only they can answer: how they answer it in the room,",
+        "what they see in their own patients, pricing ranges, who they turn away, what people",
+        "get wrong. Talk or send voice notes. Every answer is filed VERBATIM as evidence and",
+        "nothing is written by a model.",
+        "",
+        "Then `draft` writes the page from that evidence and says what each claim rests on,",
+        "`polish` just tidies what you already wrote, and `check` runs the quality gate.",
+        "",
+        "On the board you can do the same by hand: pick a question, write it, Check, Publish.",
         "",
         published.length
           ? `*${published.length} published:* ${published.map((p) => `/${p.slug}`).join(", ")}`
@@ -609,9 +623,16 @@ async function instructionsFor(
           ? `*${drafts.length} draft${drafts.length === 1 ? "" : "s"} written:* ${drafts.map((p) => `/${p.slug}`).join(", ")}`
           : "No drafts written yet.",
         "",
-        ":lock: *Publishing refuses while Day 0 is unarchived.* That is the one hard wall in",
-        "this checklist and it is deliberate: once a page is live, the baseline the day 30, 60",
-        "and 90 numbers are measured against cannot be recovered.",
+        // ‼️ BOTH WALLS, NAMED. This used to say Day 0 was "the one hard wall", which stopped
+        // being true on 2026-08-26. A card that names one of two refusals sends somebody to fix
+        // the first and meet the second, which reads as the fix not having worked.
+        ":lock: *Publishing refuses on two things, and both are deliberate.*",
+        "  1. *Day 0 unarchived.* Once a page is live, the baseline the day 30, 60 and 90",
+        "     numbers are measured against cannot be recovered.",
+        "  2. *The quality gate.* It refuses a claim with no source behind it, a number no",
+        "     source contains, a near-duplicate of a live page, and a page that does not answer",
+        "     its own question. Thin or generic only warns. A verdict counts for the exact body",
+        "     it read, so edit the page and `check` it again.",
         "",
         `Write and publish: ${boardUrl(c)}`,
       ];
