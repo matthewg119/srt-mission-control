@@ -55,11 +55,12 @@ not leave a client-facing PDF explaining an absence that has been filled.
 more:
 
 ```
-SLACK_CLIENT_ONBOARDING_CHANNEL=C0AJXH7PTBM bunx tsx --env-file=.env.local scripts/_probe-cascade.ts
+PROBE_SCRATCH_CHANNEL=<your throwaway channel> bunx tsx --env-file=.env.local scripts/_probe-cascade.ts
 ```
 
-That probe refuses to run against production `C0BLK797PNU`, which is why the env var is set
-inline.
+Create the throwaway channel yourself and invite the bot. The probe refuses production
+`C0BLK797PNU`, `#srt-sub`, and any id already present in your env, so it cannot fall back onto
+a channel somebody reads.
 
 **c. `applySubstitutions`.** Lane 3 changed `substitutionsFor` and the fallback behaviour.
 `custom-question-set.ts` and `page-candidates.ts` both call into that chain. Confirm a

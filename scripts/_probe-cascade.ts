@@ -2,7 +2,7 @@
  * Probe: exactly ONE step waits for a person at a time, and resolving it reveals exactly one
  * more.
  *
- *   bunx tsx --env-file=.env.local scripts/_probe-cascade.ts [--keep]
+ *   PROBE_SCRATCH_CHANNEL=C... bunx tsx --env-file=.env.local scripts/_probe-cascade.ts [--keep]
  *
  * ‼️ WHY THIS CANNOT BE PROVED ON THE REAL CLIENT. scripts/_debug-post-all-steps.ts deliberately
  * ignores blockedBy and forces an anchor out for all thirty-three steps, and it has been run
@@ -38,11 +38,44 @@ import { DELIVERY_STEPS } from "../src/config/delivery-steps";
 import { supabaseAdmin } from "../src/lib/db";
 import { confirmAvatar } from "../src/lib/clients/avatars";
 
-// ‼️ NEVER AGAINST THE REAL CHANNEL. This probe posts real anchors, and a throwaway client in
-// #onboarding-srt-aeo would leave permanent top-level messages that cannot be reordered later.
-// postStepAnchor and notifyStep read this one env var and are the only door, so pointing it
+// ‼️ NEVER AGAINST A CHANNEL ANYBODY READS. This probe posts real anchors, and a throwaway
+// client leaves permanent top-level messages that cannot be reordered later. postStepAnchor and
+// notifyStep read SLACK_CLIENT_ONBOARDING_CHANNEL and are the only door, so pointing it
 // somewhere else is a complete redirect.
-const PRODUCTION_CHANNELS = ["C0BLK797PNU"];
+//
+// ‼️ WHY THIS IS AN OPT-IN AND NOT A BLOCKLIST. It used to be `PRODUCTION_CHANNELS =
+// ["C0BLK797PNU"]` - refuse the real onboarding channel, accept everything else. On 2026-08-25
+// that let seven probe runs put seventy-two anchors into #srt-sub, because the lane briefs named
+// #srt-sub as "the scratch channel" and a blocklist of one had no opinion about it. A channel
+// nobody listed is not thereby a scratch channel. The probe now takes its OWN variable, so the
+// only way to post anywhere is to name that place on purpose.
+const PROBE_CHANNEL_VAR = "PROBE_SCRATCH_CHANNEL";
+
+// Channels that carry work somebody reads. Refused even when handed in explicitly, because the
+// opt-in above only proves somebody typed an id, not that they typed the right one. Ids already
+// present in this shell's env are refused too (configuredChannels), which covers whatever is in
+// .env.local without anyone having to remember to add it here.
+const REAL_CHANNELS: Record<string, string> = {
+  C0BLK797PNU: "#onboarding-srt-aeo, the production onboarding board",
+  C0AJXH7PTBM: "#srt-sub",
+  C0BK9RZM0DT: "the audit channel",
+  C0AJXH2M259: "the CEO channel",
+  C078ANUFJP4: "the hot-leads channel",
+  C0AK0G2QQDT: "#uw",
+  C0AUMJ0UQRZ: "#content-full",
+};
+
+/** Every channel id this shell already has configured, by the var that carries it. */
+function configuredChannels(): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!value || key === PROBE_CHANNEL_VAR) continue;
+    if (!/CHANNEL/.test(key)) continue;
+    const id = value.trim();
+    if (/^C[A-Z0-9]{8,}$/.test(id)) found.set(id, key);
+  }
+  return found;
+}
 
 const KEEP = process.argv.includes("--keep");
 
@@ -104,21 +137,30 @@ async function cleanup(clientId: string, reportId: string | null) {
 }
 
 async function main() {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL ?? "";
+  const channel = (process.env[PROBE_CHANNEL_VAR] ?? "").trim();
   if (!channel) {
     console.error(
-      "SLACK_CLIENT_ONBOARDING_CHANNEL is not set. Point it at a SCRATCH channel and run again."
+      `${PROBE_CHANNEL_VAR} is not set. This probe posts real anchors that cannot be reordered ` +
+        "later, so it will not borrow SLACK_CLIENT_ONBOARDING_CHANNEL and it will not guess. " +
+        "Create a throwaway channel, invite the bot, and pass it in:\n\n" +
+        `  ${PROBE_CHANNEL_VAR}=C... bunx tsx --env-file=.env.local scripts/_probe-cascade.ts\n`
     );
     process.exit(1);
   }
-  if (PRODUCTION_CHANNELS.includes(channel)) {
+
+  const named = REAL_CHANNELS[channel];
+  const configured = configuredChannels().get(channel);
+  if (named || configured) {
     console.error(
-      `Refusing to run: SLACK_CLIENT_ONBOARDING_CHANNEL is ${channel}, which is the production ` +
-        "onboarding channel. This probe posts real anchors and they cannot be reordered later. " +
-        "Point it at a scratch channel."
+      `Refusing to run: ${channel} is ${named ?? `the value of ${configured}`}. This probe posts ` +
+        "real anchors and they cannot be reordered later. Point it at a throwaway channel."
     );
     process.exit(1);
   }
+
+  // The app reads SLACK_CLIENT_ONBOARDING_CHANNEL at call time and every import that reaches it
+  // is dynamic and below this line, so assigning it here is a complete redirect.
+  process.env.SLACK_CLIENT_ONBOARDING_CHANNEL = channel;
   console.log(`Posting into ${channel}.\n`);
 
   const { startPilot } = await import("../src/lib/clients/provision");

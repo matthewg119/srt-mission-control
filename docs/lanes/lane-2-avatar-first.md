@@ -51,8 +51,9 @@ Two things to check rather than assume:
   `groupBy`, so a phase that reappeared would render its header twice.
 - **`reachableCursor`.** Read its doc block in `step-engine.ts` before touching anything near
   it. It is the single answer to what may appear and all three schedulers gate on it. You are
-  changing the walk order, so re-run `_probe-cascade.ts` against `C0AJXH7PTBM` and confirm
-  exactly one waiting step at a time still holds.
+  changing the walk order, so re-run `_probe-cascade.ts` against a throwaway channel you
+  create (`PROBE_SCRATCH_CHANNEL=<id>`) and confirm exactly one waiting step at a time still
+  holds.
 
 ---
 
