@@ -69,6 +69,7 @@ import {
   handleDropReaction,
   handleDropFileDrop,
   handleDropGo,
+  handleDropQuotes,
 } from "@/lib/reel/drop-studio";
 import {
   handleHookStudioStart,
@@ -470,6 +471,15 @@ export async function POST(request: NextRequest) {
           waitUntil(
             handleDropGo(channel, dropVertical.id).catch((e) =>
               console.error("[slack/events] drop go error:", (e as Error).message)
+            )
+          );
+        } else if (/^\s*quotes\b/i.test(userText)) {
+          // `quotes` + a pasted block appends raw customer language to this avatar's bank,
+          // which is what `go` writes its direct-response headlines from. Sits ABOVE the
+          // free-text branch below, or a paste would open a Hook Studio session instead.
+          waitUntil(
+            handleDropQuotes(channel, dropVertical.id, userText).catch((e) =>
+              console.error("[slack/events] drop quotes error:", (e as Error).message)
             )
           );
         } else if (/^\s*(workflows|library|map)\s*$/i.test(userText)) {

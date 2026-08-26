@@ -10,7 +10,9 @@
 
 import { callClaudeJSON, type ClaudeModel, type ClaudeImageInput } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
-import { loadHeadlineSwipe } from "@/data/reel/headline-swipe";
+import { headlineSwipeFor } from "@/data/reel/headline-swipe";
+import { loadDrHeadlineEngine } from "@/data/reel/dr-headline-engine";
+import { vocBlock } from "@/lib/reel/voc-quotes";
 import type { Vertical } from "@/config/verticals";
 import { COPY_ROLE_LIBRARY } from "@/config/workflows";
 import type { Workflow, RenderSpec, RenderMode } from "@/config/workflows";
@@ -21,20 +23,72 @@ function model(): ClaudeModel {
 
 // ---- shared prompt scaffolding ---------------------------------------------------------
 
-export function avatarBlock(vertical: Vertical): string {
+/**
+ * How `offer.headlines` renders into the prompt.
+ *
+ * !! THOSE FOUR LINES ARE THE STRONGEST LENGTH ANCHOR IN ANY PROMPT THAT CARRIES THEM, and
+ * that is fine everywhere except the long-form lane. They are 8-word on-screen titles
+ * labelled PROVEN, so a generator asked for a 35-word advertorial headline reads four
+ * exemplars telling it the house style is eight words, and obeys them. Under "claims" the
+ * same four are handed over for what they ASSERT and explicitly disowned as a shape.
+ */
+type HeadlinesAs = "exemplars" | "claims";
+
+export function avatarBlock(vertical: Vertical, opts?: { headlinesAs?: HeadlinesAs }): string {
   const beliefs = (vertical.beliefs ?? []).map((b) => `- ${b.text}`).join("\n");
   const headlines = (vertical.offer?.headlines ?? [])
     .map((h) => `- ${h.title}${h.subtitle ? ` | ${h.subtitle}` : ""}`)
     .join("\n");
+  const headlineLabel =
+    opts?.headlinesAs === "claims"
+      ? "WHAT THE OFFER MAY CLAIM (for accuracy only. Do NOT imitate their length, shape or\nphrasing. These are short on-screen video titles and you are not writing one):"
+      : "PROVEN OFFER HEADLINES:";
   return [
     `AVATAR: ${vertical.name} (${vertical.business_descriptor}). Wearer: ${vertical.wearer_role}.`,
     vertical.avatar_summary ? `WHO THEY ARE:\n${vertical.avatar_summary}` : "",
     beliefs ? `BUYING BELIEFS (their language):\n${beliefs}` : "",
     vertical.offer?.big_idea ? `BIG IDEA: ${vertical.offer.big_idea}` : "",
-    headlines ? `PROVEN OFFER HEADLINES:\n${headlines}` : "",
+    headlines ? `${headlineLabel}\n${headlines}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/**
+ * The avatar's closed stat list, as a prompt block.
+ *
+ * !! A HEADLINE IS THE WORST PLACE IN THIS PIPELINE FOR AN INVENTED NUMBER, and the first
+ * live run of the long-form lane proved it: it returned "In 2024, 45 Percent of Local
+ * Searches Start With an AI Prompt" (the real figure is 45% of consumers using AI for local
+ * recommendations, BrightLocal Feb 2026, which is a different claim about a different thing),
+ * plus "within 90 days", "the next 15 years" and "a full month of chair time every year",
+ * none of which anything in this repo measures. Specificity is law 4 of the engine, so the
+ * model reaches for a number on almost every line. Handing it the real ones is the only fix
+ * that does not also cost the specificity.
+ *
+ * `approved_numbers` already exists and already carries its sources inline. It just was not
+ * reaching any headline prompt. Empty list means NO figure is allowed, which is the rule that
+ * column was written with.
+ */
+export function approvedNumbersBlock(vertical: Pick<Vertical, "approved_numbers">): string {
+  const nums = (vertical.approved_numbers ?? []).filter((n) => n?.trim());
+  if (!nums.length) {
+    return [
+      "NUMBERS: there are NO approved statistics for this avatar. Do not put a percentage, a",
+      "count, a dollar figure or a timeframe in any headline. Be specific with scenes, roles,",
+      "places and situations instead.",
+    ].join("\n");
+  }
+  return [
+    "APPROVED NUMBERS (the ONLY statistics that may appear in a headline. This list is closed):",
+    ...nums.map((n) => `- ${n}`),
+    "",
+    "Use them with the claim they actually make. Do not restate one as something else, do not",
+    "change its year, do not round it, and do not derive a second number from it by arithmetic.",
+    "Any other figure is invented: no made-up percentages, no invented dollar amounts, and no",
+    "performance timeframes (\"in 90 days\", \"by next month\"). This offer promises no result on",
+    "a clock, so a headline must not either.",
+  ].join("\n");
 }
 
 function workflowBlock(workflow?: Workflow): string {
@@ -93,7 +147,7 @@ export async function generateHooks(args: {
     workflowBlock(args.workflow),
     "",
     "HEADLINE SWIPE (patterns + words to draw on):",
-    loadHeadlineSwipe(),
+    headlineSwipeFor(args.vertical),
     "",
     "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
     "Match the voice of these gold examples:",
@@ -296,7 +350,7 @@ export async function generateHeadlineOptions(args: {
     workflowBlock(args.workflow),
     "",
     "HEADLINE SWIPE (patterns + words to draw on):",
-    loadHeadlineSwipe(),
+    headlineSwipeFor(args.vertical),
     "",
     "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
   ].join("\n");
@@ -316,6 +370,93 @@ export async function generateHeadlineOptions(args: {
     .filter((h) => h && !seen.has(h.toLowerCase()) && seen.add(h.toLowerCase()))
     .slice(0, count);
 }
+
+// ---- 20 LONG-FORM direct-response headlines -------------------------------------------
+//
+// !! THIS IS A DIFFERENT ARTIFACT FROM generateHeadlineOptions ABOVE AND MUST NOT BE MERGED
+// WITH IT. That one writes the on-screen title held for three seconds at the top of a reel,
+// and its contract is "8 words or fewer"; the #content-full pipeline picks one with
+// `headline N` and renders it, so short is correct there. This one writes the advertorial /
+// VSL / long-form ad headline, 12 to 45 words, which is what the drop channel's `go` is for.
+//
+// The operator ran the long-form job through generateHeadlineOptions for months and got
+// twenty 8-word lines every time, because that is what its prompt asks for. Two lengths in
+// one prompt is a prompt whose shorter rule wins, so they are two functions.
+
+/**
+ * Opening words repeated more than twice across the set. "Never repeat the same structure
+ * more than twice" is a real rule and this is the cheap mechanical half of it.
+ *
+ * It WARNS, it never rejects. Precedent is `linkWarning()` and the over-long lines on the
+ * `close` script: throwing away twenty good headlines because three of them start the same
+ * way costs more than printing a note above them. Pure, so the probe covers it.
+ */
+export function repeatedOpenings(headlines: string[], take = 3): string[] {
+  const counts = new Map<string, number>();
+  for (const h of headlines) {
+    const key = h.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/ +/).filter(Boolean).slice(0, take).join(" ");
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()].filter(([, n]) => n > 2).map(([k]) => k);
+}
+
+/**
+ * The direct-response headline set: long-form, built off the avatar's own raw customer
+ * quotes, grounded in the swipe-file methodology. English always.
+ */
+export async function generateDirectResponseHeadlines(args: {
+  vertical: Vertical;
+  count?: number;
+}): Promise<string[]> {
+  const count = args.count ?? 20;
+  const quotes = vocBlock(args.vertical);
+  const system = [
+    `You are an elite direct-response copywriter working for a ${args.vertical.business_descriptor}.`,
+    `Write exactly ${count} high-converting DIRECT-RESPONSE headlines for the avatar below.`,
+    "These are the headlines that open an advertorial, a VSL, or a paid ad. They are not video",
+    "captions and they are not social hooks. Lean on pain, fear, shame, loss of identity and",
+    "frustration; open real loops; carry specifics, timeframes, and mechanisms.",
+    "",
+    avatarBlock(args.vertical, { headlinesAs: "claims" }),
+    "",
+    quotes,
+    "",
+    approvedNumbersBlock(args.vertical),
+    "",
+    loadDrHeadlineEngine(),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const { data } = await callClaudeJSON<HeadlinesResult>({
+    model: model(),
+    system,
+    user: `Return JSON with exactly ${count} direct-response headlines, in English.`,
+    // Twenty headlines at ~40 words is roughly 1,600 tokens with JSON overhead. This must
+    // stay UNDER MAX_RETRY_TOKENS (8000) in claude-calls.ts or the truncation retry silently
+    // disables itself and a cut-off response fails as an unparseable-JSON error instead.
+    maxTokens: 3000,
+    temperature: 0.9,
+    schemaHint: '{ "headlines": [string] }',
+    validate: isHeadlines,
+    describeInvalid: (v) => {
+      const p = v as HeadlinesResult;
+      if (typeof v !== "object" || v === null) return "the response was not a JSON object";
+      if (!Array.isArray(p.headlines)) return 'the "headlines" key was missing or was not an array';
+      const bad = p.headlines.findIndex((h) => typeof h !== "string");
+      if (bad >= 0) return `headlines[${bad}] was not a string`;
+      return `expected ${count} headlines and got ${p.headlines.length}`;
+    },
+  });
+
+  const seen = new Set<string>();
+  return data.headlines
+    .map(clean)
+    .filter((h) => h && !seen.has(h.toLowerCase()) && seen.add(h.toLowerCase()))
+    .slice(0, count);
+}
+
 
 // ---- Reference block: 3 fears / beliefs / desires / facts / fantasies / horror ---------
 
@@ -414,7 +555,7 @@ export async function generateHookSet(args: {
     workflowBlock(args.workflow),
     "",
     "HEADLINE SWIPE:",
-    loadHeadlineSwipe(),
+    headlineSwipeFor(args.vertical),
     "",
     "HARD RULES: never invent guarantees, numbers, rates, or terms; never use em dashes.",
   ].join("\n");

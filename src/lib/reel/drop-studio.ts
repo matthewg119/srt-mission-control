@@ -47,11 +47,13 @@ import {
   reslotCopyToStructure,
   generateStructuredCopy,
   generateStructuredCopyVariants,
-  generateHeadlineOptions,
+  generateDirectResponseHeadlines,
+  repeatedOpenings,
   generateCreativeReference,
   type StructuredCopyLine,
   type CreativeReference,
 } from "@/lib/reel/creative-director";
+import { parseQuotePaste, appendVocQuotes } from "@/lib/reel/voc-quotes";
 import { renderWorkflow, workflowRenderBuild } from "@/lib/reel/render-dispatch";
 import { markWorkflowUsed, ensureWorkflowRow } from "@/lib/reel/workflow-author";
 import { loadReferenceFrames, saveContentExample } from "@/lib/reel/content-examples";
@@ -339,9 +341,13 @@ export async function activeWorkflows(libraryVerticalId: string): Promise<Workfl
 // ---- `go` — headlines + story material (no images needed) ----------------------------------
 
 /**
- * `go` in the drop channel: post 30 headline angles + the avatar's story material so the
- * operator has raw copy to build from, then drop images + lines to render. Mirrors the
- * #agent-wokrflow-creator report but pinned to the pest-control OWNER avatar.
+ * `go` in the drop channel: post 20 LONG-FORM direct-response headlines + the avatar's
+ * story material, then drop images + lines to render. Pinned to the drop channel's OWNER
+ * avatar, so the headlines speak to the person who buys, not to their customer.
+ *
+ * !! The headlines here are advertorial/VSL length (12 to 45 words) and are NOT the reel's
+ * on-screen title. `generateHeadlineOptions` still writes those and #content-full's
+ * `headline N` still picks one of them to render. Do not point this back at that function.
  */
 /** Proven headlines already in the avatar kit — the fallback when Claude is unavailable. */
 function seedHeadlines(vertical: Vertical): string[] {
@@ -367,12 +373,12 @@ function seedReference(vertical: Vertical): CreativeReference {
 export async function handleDropGo(channel: string, dropVerticalId: string): Promise<void> {
   const drop = await loadVertical(dropVerticalId);
   const vertical = await loadVertical(dropOwnerVerticalId(drop));
-  await slack.postMessage(channel, `*${vertical.name}* — pulling 30 headline angles + story material...`);
+  await slack.postMessage(channel, `*${vertical.name}* — pulling 20 direct-response headlines + story material...`);
 
   // Run both independently: one failing (e.g. a transient Claude error) must not kill the
   // other, and either can fall back to the avatar's own seed material so `go` never dead-ends.
   const [hRes, rRes] = await Promise.allSettled([
-    generateHeadlineOptions({ vertical, count: 30 }),
+    generateDirectResponseHeadlines({ vertical, count: 20 }),
     generateCreativeReference(vertical),
   ]);
 
@@ -396,12 +402,18 @@ export async function handleDropGo(channel: string, dropVerticalId: string): Pro
     refFellBack = true;
   }
 
+  const repeated = headlinesFellBack ? [] : repeatedOpenings(headlines);
   await slack.postMessage(
     channel,
     [
-      `*${vertical.name}* — ${headlines.length} headline angles (raw material for your copy):`,
-      headlines.map((h, i) => `${i + 1}. ${h}`).join("\n"),
-      headlinesFellBack ? "\n_(used seed headlines, Claude was unavailable)_" : "",
+      `*${vertical.name}* — ${headlines.length} direct-response headlines:`,
+      repeated.length
+        ? `_Heads up: ${repeated.length} opening${repeated.length > 1 ? "s" : ""} repeat more than twice (${repeated.join("; ")}). Ask for variations if that bothers you._`
+        : "",
+      headlines.map((h, i) => `${i + 1}. ${h}`).join("\n\n"),
+      headlinesFellBack
+        ? "\n_(Claude was unavailable. These are the offer's own short headlines from the avatar kit, not generated direct-response ones. Run `go` again.)_"
+        : "",
     ]
       .filter(Boolean)
       .join("\n")
@@ -418,11 +430,54 @@ export async function handleDropGo(channel: string, dropVerticalId: string): Pro
       `*Horror stories:* ${ref.horror.join(" | ")}`,
       refFellBack ? "_(used seed material, Claude was unavailable)_" : "",
       "",
+      "Want more variations or tweaks? Say so and I'll run it again.",
       "Write your lines, then drop your images + those lines in ONE message and I'll ask which workflow to render.",
     ]
       .filter(Boolean)
       .join("\n")
   );
+}
+
+// ---- `quotes` — append raw customer quotes to this avatar's bank ---------------------------
+
+/**
+ * A message starting with `quotes` in the drop channel appends everything under it to the
+ * OWNER avatar's voice-of-customer bank, which is what `go` builds its headlines from.
+ *
+ * Resolves to the same owner avatar `handleDropGo` does. Writing to the drop vertical instead
+ * would file the quotes somewhere nothing reads, and the failure would look like the paste
+ * having been ignored.
+ *
+ * Append only. There is no `quotes clear` on purpose: a bank is expensive to collect and one
+ * mistyped command should not be able to empty it.
+ */
+export async function handleDropQuotes(
+  channel: string,
+  dropVerticalId: string,
+  text: string
+): Promise<void> {
+  const body = text.replace(/^\s*quotes\s*:?\s*/i, "");
+  const parsed = parseQuotePaste(body);
+  if (!parsed.length) {
+    await slack.postMessage(
+      channel,
+      "No quotes found in that. Paste them under the word `quotes`, one per paragraph, with an optional `(r/MedSpa)` or `Fuente: <url>` under each."
+    );
+    return;
+  }
+
+  const drop = await loadVertical(dropVerticalId);
+  const ownerId = dropOwnerVerticalId(drop);
+  try {
+    const { added, skipped, total } = await appendVocQuotes(ownerId, parsed);
+    const parts = [`Added ${added} quote${added === 1 ? "" : "s"} to *${drop.name}*.`];
+    if (skipped) parts.push(`${skipped} already in the bank.`);
+    parts.push(`Bank is now ${total}. Run \`go\` to write headlines off it.`);
+    await slack.postMessage(channel, parts.join(" "));
+  } catch (e) {
+    console.error("[drop-studio] quotes failed:", (e as Error).message);
+    await slack.postMessage(channel, `Could not save those quotes: ${(e as Error).message}`);
+  }
 }
 
 // ---- drop-and-render -----------------------------------------------------------------------

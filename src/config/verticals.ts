@@ -43,6 +43,14 @@ export interface OfferObjection {
   response: string;
 }
 
+// One raw voice-of-customer quote, verbatim, with where it came from. The emotional source
+// material the direct-response headline lane rebuilds into headlines. Kept UNEDITED on
+// purpose: the typos, the swearing and the run-on sentences are the heat.
+export interface VocQuote {
+  text: string;
+  source?: string; // e.g. "r/MedSpa" or a full thread URL
+}
+
 // One headline option from an offer sheet.
 export interface OfferHeadline {
   title: string;
@@ -111,6 +119,10 @@ export interface Vertical {
   workflow_vertical_id?: string | null; // whose workflow library the drop lane matches (null = pest_control's)
   sales_letter_examples?: string | null; // full-text reference letters (caption voice anchor)
   sales_letter_swipe?: string | null; // distilled format/voice rules override
+  // Raw voice-of-customer quotes for this avatar (Reddit, reviews, DMs). ROW-ONLY like the
+  // rest of this block: an avatar with no bank generates without them and says so, rather
+  // than inheriting another avatar's customers. Appended to by `quotes` in the drop channel.
+  voc_quotes?: VocQuote[] | null;
   drop_mode?: string | null; // "reel_prompts" (default: LRU workflow -> 9 image prompts -> render)
   //                            | "broll_suggestions" (post 3 cinematic B-roll prompts, text only)
 
@@ -861,6 +873,7 @@ interface VerticalRow {
   workflow_vertical_id?: string | null;
   sales_letter_examples?: string | null;
   sales_letter_swipe?: string | null;
+  voc_quotes?: VocQuote[] | null;
   drop_mode?: string | null;
 }
 
@@ -898,6 +911,7 @@ function mergeRowOverSeed(seed: Vertical, row: VerticalRow): Vertical {
     workflow_vertical_id: row.workflow_vertical_id ?? null,
     sales_letter_examples: row.sales_letter_examples ?? null,
     sales_letter_swipe: row.sales_letter_swipe ?? null,
+    voc_quotes: row.voc_quotes ?? null,
     // drop_mode is a normal field (not sensitive wiring): a DB value wins, else the seed's
     // (so the med spa avatar stays "broll_suggestions" even if a row is inserted without it).
     drop_mode: pick(row.drop_mode, seed.drop_mode ?? null),
