@@ -103,7 +103,7 @@ export const QA_CHECKLIST: ChecklistCategory[] = [
         id: "tracking",
         title: "Analytics & Tracking",
         items: [
-          { id: "w-t-01", label: "Meta Pixel ID correct: 2319215808600729", priority: "critical" },
+          { id: "w-t-01", label: "Meta Pixel ID correct: 2571789533326438", priority: "critical" },
           { id: "w-t-02", label: "fbq() initializes without errors", priority: "critical" },
           { id: "w-t-03", label: "PageView fires on every page load", priority: "high" },
           { id: "w-t-04", label: "InitiateCheckout fires on Apply click", priority: "high" },
@@ -473,7 +473,7 @@ export const QA_CHECKLIST: ChecklistCategory[] = [
           { id: "env-03", label: "NEXT_PUBLIC_SUPABASE_URL correct", priority: "critical" },
           { id: "env-04", label: "SUPABASE_SERVICE_ROLE_KEY valid", priority: "critical" },
           { id: "env-05", label: "ANTHROPIC_API_KEY valid", priority: "critical" },
-          { id: "env-08", label: "META_PIXEL_ID = 2319215808600729", priority: "high" },
+          { id: "env-08", label: "META_PIXEL_ID = 2571789533326438", priority: "high" },
           { id: "env-09", label: "META_CAPI_TOKEN valid", priority: "high" },
           { id: "env-10", label: "MICROSOFT_CLIENT_ID valid", priority: "high" },
           { id: "env-11", label: "MICROSOFT_CLIENT_SECRET valid", priority: "high" },

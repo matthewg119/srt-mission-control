@@ -48,6 +48,10 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({} as Record<string, unknown>));
 
+    // ‼️ THIS DESTRUCTURE IS AN ALLOWLIST. A field the caller sends that is not
+    // named here is dropped in silence, with no error anywhere. That is the
+    // fourth such allowlist between the static site and this app, and the only
+    // one that was never written down.
     const {
       path = "",
       host = "",
@@ -64,11 +68,32 @@ export async function POST(request: NextRequest) {
       screenW = null,
       screenH = null,
       tz = "",
-    } = body as Record<string, string | number | null>;
+      // Added 2026-08-26 for the med spa booking A/B/C/D test.
+      event = "",
+      sid = "",
+      mode = "",
+      bucket = "",
+      forced = false,
+      estimated = false,
+    } = body as Record<string, string | number | boolean | null>;
+
+    // Funnel events get their OWN event_type. Every existing query over
+    // system_logs filters on its own event_type, so keeping these out of
+    // 'page_visit' means none of them change meaning. The list is closed:
+    // this route is public, and an open one would let anyone invent event
+    // types in the shared log.
+    const FUNNEL_EVENTS = [
+      "funnel_exposure",
+      "funnel_lead",
+      "funnel_dq",
+      "funnel_book_click",
+      "funnel_booked",
+    ];
+    const isFunnelEvent = typeof event === "string" && FUNNEL_EVENTS.includes(event);
 
     await supabaseAdmin.from("system_logs").insert({
-      event_type: "page_visit",
-      description: `${host}${path}`,
+      event_type: isFunnelEvent ? "funnel_event" : "page_visit",
+      description: isFunnelEvent ? `${event} · ${variant || "?"} · ${host}${path}` : `${host}${path}`,
       metadata: {
         path,
         host,
@@ -85,6 +110,7 @@ export async function POST(request: NextRequest) {
         screenW,
         screenH,
         tz,
+        ...(isFunnelEvent ? { event, sid, mode, bucket, forced, estimated } : {}),
         ip: clientIp,
         ua: clientUserAgent,
         ts: new Date().toISOString(),

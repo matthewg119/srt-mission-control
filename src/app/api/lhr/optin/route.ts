@@ -52,23 +52,20 @@ const LHR_EVENT_SOURCE_URL = "https://srtagency.com/LHR";
 /**
  * Does the Conversions API point at the SAME pixel this page's browser tag fires into?
  *
- * ‼️ THIS GUARD EXISTS BECAUSE THEY CURRENTLY DO NOT, AND SENDING ANYWAY IS WORSE THAN
- * NOT SENDING.
+ * RESOLVED 2026-08-26. There is now ONE pixel, 2571789533326438. The second one
+ * (2319215808600729, which predated these funnels) was retired on the founder's call
+ * and removed from the checklist and .env.example in the same pass.
  *
- * The funnel's browser tag uses PIXEL_ID (2571789533326438), the pixel the ad set
- * optimizes on. `META_PIXEL_ID`, which meta-capi.ts posts to, is a DIFFERENT pixel
- * (2319215808600729) that predates this funnel. Firing the server Lead regardless would
- * do two silently wrong things at once: file the conversion in a dataset the ad set
- * never reads, so it cannot learn from it, and break the eventId dedup, because two
- * pixels are two separate ledgers and the shared id means nothing across them.
+ * ‼️ THE GUARD STAYS ANYWAY, because the failure it catches is invisible. If
+ * META_PIXEL_ID is ever wrong again, firing the server Lead does two silently wrong
+ * things at once: it files the conversion in a dataset the ad set never reads, so the
+ * ad set cannot learn from it, and it breaks eventId dedup, because two pixels are two
+ * separate ledgers and a shared id means nothing across them. Ads Manager shows no
+ * error for either. It just looks like an ad set that is not converting.
  *
- * A skip is loud rather than silent for the same reason a CAPI failure is logged: a
- * missing conversion is invisible in Ads Manager and looks exactly like an ad set that
- * is not converting.
- *
- * This is self-resolving. Point META_PIXEL_ID at the funnel's pixel with a token
- * authorised for it and the server Lead starts flowing with no code change. Until then
- * the browser Lead is the only one, which is the behaviour this page already had.
+ * A skip is loud rather than silent for the same reason a CAPI failure is logged.
+ * Deleting this costs nothing today and costs a month of bad optimisation the next
+ * time an env var drifts.
  */
 function capiTargetsFunnelPixel(): boolean {
   const serverPixel = (process.env.META_PIXEL_ID || "").trim();

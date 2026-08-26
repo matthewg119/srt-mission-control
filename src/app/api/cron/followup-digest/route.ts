@@ -17,6 +17,7 @@ import { runClientReportReminders } from "@/lib/clients/report-reminders";
 import { runContentDigest } from "@/lib/clients/content-digest";
 import { runWeeklyReports } from "@/lib/clients/weekly-report";
 import { runTimeLogNudges } from "@/lib/clients/time-log-nudge";
+import { runFunnelAbReport } from "@/lib/experiments/funnel-ab";
 import { stepDigest } from "@/lib/clients/step-engine";
 import { slack } from "@/lib/slack-bot";
 
@@ -93,6 +94,18 @@ ${text}`);
           return { nudged: 0 };
         });
 
+    // The med spa booking headline test's Friday report to #alerts-infra.
+    // Sixth passenger on this job, for the reason written at the top of the
+    // file: vercel.json's cron list is already long against the plan's
+    // documented limit, and adding an entry to run four counts once a week is
+    // exactly the move that warning exists to prevent. Returns immediately on
+    // the other six days. Unlike the others it honours dry, because its whole
+    // output is one Slack message and a dry run is how you check it.
+    const funnelAb = await runFunnelAbReport({ dry }).catch((e) => {
+      console.error("[followup-digest] funnel A/B report failed:", (e as Error).message);
+      return { posted: 0, reason: "threw" };
+    });
+
     return NextResponse.json({
       ok: true,
       dry,
@@ -101,6 +114,7 @@ ${text}`);
       contentDigest: { posted: content.posted.length, skipped: content.skipped },
       weeklyReports: weekly,
       timeLogNudges: timeLog,
+      funnelAbReport: funnelAb,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
