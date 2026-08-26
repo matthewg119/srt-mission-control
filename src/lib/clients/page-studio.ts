@@ -34,6 +34,15 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { isVoiceNote, transcribeAudio } from "./voice-notes";
 import { startPageDraft, appendPageBody, listAllForBoard, type ClientPage } from "@/lib/hub/pages";
+import {
+  recordSource,
+  loadEvidenceFor,
+  evidenceSummary,
+  nextTopic,
+  topicByKey,
+  topicPosition,
+  type EvidenceTopic,
+} from "./page-evidence";
 
 /**
  * The channel this lane owns.
@@ -77,19 +86,51 @@ interface MenuItem {
   origin: "harvested" | "derived";
 }
 
+/**
+ * What the thread is doing right now.
+ *
+ * ‼️ WITHOUT THIS, TYPED TEXT MEANS TWO DIFFERENT THINGS IN ONE THREAD. In `body` mode, which
+ * is the original behaviour and the default, everything typed appends to answer_md word for
+ * word. In `evidence` mode the same typing files a source and the page body is not touched. The
+ * stored mode is what decides, exactly as the stored pageId already decides whether a bare digit
+ * is a claim or a sentence about the page.
+ */
+type StudioMode = "body" | "evidence";
+
 interface Session {
   threadTs: string;
   clientId: string;
   pageId: string | null;
   candidates: MenuItem[];
+  mode: StudioMode;
+  evidenceTopic: string | null;
 }
 
 async function readSession(threadTs: string): Promise<Session | null> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("page_studio_sessions")
-    .select("thread_ts, client_id, page_id, candidates")
+    // ‼️ THE COLUMN IS `studio_mode`, NOT `mode`, AND THAT IS NOT A STYLE CHOICE.
+    // `mode` is a built-in ordered-set aggregate in Postgres, and a PostgREST select naming a
+    // bare `mode` resolves to the aggregate whenever the column is not there, failing with
+    // "WITHIN GROUP is required for ordered-set aggregate mode". That error names neither this
+    // table nor the missing column, and it would take down `readSession` for every thread.
+    .select("thread_ts, client_id, page_id, candidates, studio_mode, evidence_topic")
     .eq("thread_ts", threadTs)
     .maybeSingle();
+
+  // ‼️ A READ FAILURE AND AN UNKNOWN THREAD ARE THE SAME RETURN VALUE AND VERY DIFFERENT EVENTS,
+  // so the failure is logged rather than swallowed. The caller treats null as "not one of ours"
+  // and stays deliberately silent, which is right for a stray message and catastrophic for a
+  // broken query: if this select ever fails, EVERY thread in the channel goes quiet with nothing
+  // on screen to say so. The way that happens in practice is deploying this file before
+  // docs/2026-08-26-evidence-and-gate.sql has been run, when studio_mode does not exist yet.
+  if (error) {
+    console.error(
+      `[page-studio] session read failed (${error.message}). If this names studio_mode or ` +
+        `evidence_topic, docs/2026-08-26-evidence-and-gate.sql has not been run on this database.`
+    );
+    return null;
+  }
 
   if (!data) return null;
   return {
@@ -97,7 +138,26 @@ async function readSession(threadTs: string): Promise<Session | null> {
     clientId: data.client_id as string,
     pageId: (data.page_id as string | null) ?? null,
     candidates: ((data.candidates as MenuItem[] | null) ?? []).filter((c) => c && c.question),
+    // Rows written before docs/2026-08-26-evidence-and-gate.sql have no mode. Defaulting to
+    // body is correct: everything this lane did before that migration was body mode.
+    mode: ((data.studio_mode as string | null) ?? "body") === "evidence" ? "evidence" : "body",
+    evidenceTopic: (data.evidence_topic as string | null) ?? null,
   };
+}
+
+async function setMode(
+  session: Session,
+  mode: StudioMode,
+  topic: string | null
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("page_studio_sessions")
+    .update({ studio_mode: mode, evidence_topic: topic, updated_at: new Date().toISOString() })
+    .eq("thread_ts", session.threadTs);
+
+  if (error) console.error("[page-studio] mode write failed:", error.message);
+  session.mode = mode;
+  session.evidenceTopic = topic;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -264,8 +324,9 @@ async function startSession(text: string, messageTs: string): Promise<void> {
   }
 
   lines.push("");
-  lines.push("Reply with a number to claim one. Then type, or send a voice note, and your words");
-  lines.push("go into the page exactly as you said them. `polish` when you want it tidied,");
+  lines.push("Reply with a number to claim one. Then `ask` to walk the interview, or just talk");
+  lines.push("and your words go into the page exactly as you said them. `draft` writes it from");
+  lines.push("the evidence, `polish` tidies what you wrote, `check` runs the quality gate,");
   lines.push("`done` when you are finished, `cancel` to drop this.");
 
   const posted = (await slack.postThreadReply(channel, messageTs, lines.join("\n"))) as {
@@ -345,13 +406,21 @@ async function claim(session: Session, n: number): Promise<void> {
       (item.origin === "derived"
         ? "_A page we proposed rather than a question anybody typed._\n"
         : "") +
-      "\nTalk or type. Everything you send lands in the body word for word. " +
-      "`polish` tidies it, `done` finishes."
+      "\n*`ask`* walks the interview: what only they know, filed as evidence rather than as page " +
+      "copy, and the drafter is then held to it.\n" +
+      "Or just talk, and everything you send lands in the body word for word.\n" +
+      "`draft` writes it from the evidence, `polish` tidies what you wrote, `check` runs the " +
+      "quality gate, `done` finishes."
   );
 }
 
 /** Append what he said, verbatim, and say what happened to it. */
-async function append(session: Session, text: string, source: "typed" | "voice"): Promise<void> {
+async function append(
+  session: Session,
+  text: string,
+  source: "typed" | "voice",
+  messageTs: string
+): Promise<void> {
   if (!session.pageId) {
     await say(session.threadTs, "Pick a number from the list first, then this goes into that page.");
     return;
@@ -363,12 +432,260 @@ async function append(session: Session, text: string, source: "typed" | "voice")
     return;
   }
 
+  // ‼️ DICTATION INTO THE BODY IS ALSO EVIDENCE, AND FILING IT IS NOT BOOKKEEPING.
+  // Without this row the page's own body is the only place those words exist, and the publish
+  // gate would read a page dictated by the person who does the work as a page with nothing
+  // behind it: `orphan_numbers` would refuse a price he said out loud, and `no_evidence` would
+  // refuse the best-sourced page this product can produce. The words are already stored
+  // verbatim in answer_md; this says WHERE THEY CAME FROM, which is the thing answer_md cannot.
+  await recordSource({
+    clientId: session.clientId,
+    pageId: session.pageId,
+    sourceType: "CLIENT_VOICE",
+    sourceContent: text,
+    topic: "Dictated straight into the page",
+    collectedVia: source === "voice" ? "slack_voice" : "slack_typed",
+    slackTs: messageTs,
+  }).then((r) => {
+    if (!r.ok) console.error("[page-studio] body source not filed:", r.error);
+  });
+
   await say(
     session.threadTs,
     source === "voice"
       ? `Transcribed and added, word for word. The page is now ${res.words} words.\n> ${text.slice(0, 300)}${text.length > 300 ? "…" : ""}`
       : `Added, word for word. The page is now ${res.words} words.`
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The interview: `ask`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How one topic is put to him. Numbered, so the card says how much is left. */
+function topicCard(topic: EvidenceTopic): string {
+  const { at, of } = topicPosition(topic.key);
+  return (
+    `*${at} of ${of}.* ${topic.prompt}\n` +
+    (topic.scope === "client"
+      ? "_Files against the business, so every future page for them can use it. Answer it once._\n"
+      : "_About this page._\n") +
+    "Talk or type. `next` to move on, `body` to go back to writing the page itself."
+  );
+}
+
+/**
+ * `ask` — switch the thread into the interview.
+ *
+ * ‼️ THE PAGE BODY IS NOT TOUCHED IN THIS MODE, and that separation is the whole feature.
+ * What he says here is knowledge about the business, not prose for one page: pricing philosophy
+ * and candidacy criteria feed every page the client will ever have, and pasting them into one
+ * page's body both loses them for the others and makes that page read like an interview
+ * transcript. The evidence is what the drafter is then held to.
+ */
+async function startInterview(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(
+      session.threadTs,
+      "Pick a number from the list first. The interview files against that page and against the client."
+    );
+    return;
+  }
+
+  const first = nextTopic(null);
+  if (!first) {
+    await say(session.threadTs, "There are no interview topics configured.");
+    return;
+  }
+
+  await setMode(session, "evidence", first.key);
+
+  const existing = await loadEvidenceFor(session.clientId, session.pageId);
+
+  await say(
+    session.threadTs,
+    "*Collecting what only they know.*\n" +
+      "Nothing you say in here goes into the page body. It is filed as evidence, and the " +
+      "drafter is then allowed to use that and nothing else.\n" +
+      (existing.length ? `_Already on file: ${evidenceSummary(existing)}_\n` : "") +
+      "\n" +
+      topicCard(first)
+  );
+}
+
+/** File one answer against the current topic and move the walk on. */
+async function recordAnswer(
+  session: Session,
+  text: string,
+  via: "slack_voice" | "slack_typed",
+  messageTs: string
+): Promise<void> {
+  const topic = session.evidenceTopic ? topicByKey(session.evidenceTopic) : null;
+  if (!topic) {
+    // The stored topic no longer exists, which happens if EVIDENCE_TOPICS is edited under a
+    // live thread. Say so rather than filing the answer against nothing.
+    await say(
+      session.threadTs,
+      ":warning: This thread is on a topic that no longer exists. `ask` restarts the interview, `body` goes back to writing."
+    );
+    return;
+  }
+
+  const res = await recordSource({
+    clientId: session.clientId,
+    // ‼️ A CLIENT-SCOPED TOPIC FILES WITH page_id NULL. That is what makes the answer reusable:
+    // pricing dictated once here shows up as evidence on every page this client ever gets. A
+    // page-scoped answer filed against the client would be worse than useless, because it would
+    // ground a later page in something said about a different question.
+    pageId: topic.scope === "client" ? null : session.pageId,
+    sourceType: "CLIENT_VOICE",
+    sourceContent: text,
+    topic: topic.prompt,
+    collectedVia: via,
+    slackTs: messageTs,
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: That was not filed: ${res.error}\nSay it again.`);
+    return;
+  }
+
+  const words = text.split(/\s+/).filter(Boolean).length;
+  const following = nextTopic(topic.key);
+
+  if (!following) {
+    await setMode(session, "body", null);
+    await say(
+      session.threadTs,
+      `Filed, word for word. ${words} words against *${topic.key}*.\n\n` +
+        "*That is the whole interview.* Back to page mode. `draft` writes the page from what " +
+        "you just gave me, `check` runs it past the quality gate, `done` finishes."
+    );
+    return;
+  }
+
+  await setMode(session, "evidence", following.key);
+  await say(
+    session.threadTs,
+    `Filed, word for word. ${words} words against *${topic.key}*.\n\n${topicCard(following)}`
+  );
+}
+
+/** `next` / `skip` — nothing to say about this one. */
+async function skipTopic(session: Session): Promise<void> {
+  const following = nextTopic(session.evidenceTopic);
+  if (!following) {
+    await setMode(session, "body", null);
+    await say(
+      session.threadTs,
+      "That was the last one. Back to page mode. `draft`, `check` or `done`."
+    );
+    return;
+  }
+  await setMode(session, "evidence", following.key);
+  await say(session.threadTs, topicCard(following));
+}
+
+/** `body` — leave the interview, whatever is left of it. */
+async function leaveInterview(session: Session): Promise<void> {
+  await setMode(session, "body", null);
+  await say(
+    session.threadTs,
+    "Back to page mode. Everything you say now goes into the page body word for word."
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `draft` and `check`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `draft` — write the page from the evidence.
+ *
+ * ‼️ IT SUGGESTS, EXACTLY AS `polish` DOES. Nothing is saved and nothing is overwritten. The
+ * two commands are deliberately separate rather than one smart one: `polish` tidies HIS words
+ * and is allowed to add nothing, `draft` writes from the evidence and has to say what each
+ * claim rests on. A single command guessing which job it is on would sometimes rewrite a
+ * dictated page it was only meant to tidy, and he would find out after it published.
+ */
+async function draft(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `draft` writes that page.");
+    return;
+  }
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("question, slug")
+    .eq("id", session.pageId)
+    .eq("client_id", session.clientId)
+    .maybeSingle();
+
+  const sources = await loadEvidenceFor(session.clientId, session.pageId);
+  if (sources.length === 0) {
+    await say(
+      session.threadTs,
+      "There is nothing on file for this page or this client, so a draft would be a page about " +
+        "the topic rather than about them, and the gate would refuse it. Run `ask` first."
+    );
+    return;
+  }
+
+  await say(session.threadTs, `Writing from ${evidenceSummary(sources)} Nothing in the page changes.`);
+
+  const { draftPage } = await import("@/lib/hub/draft-page");
+  const res = await draftPage(session.clientId, (page?.question as string) ?? "", {
+    pageId: session.pageId,
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: Could not draft that: ${res.error}`);
+    return;
+  }
+
+  const unbacked = res.page.evidenceUsed.filter((c) => c.sourceRef === null);
+
+  await say(
+    session.threadTs,
+    "*A draft from the evidence. This is a suggestion, and your page is unchanged.*\n" +
+      `Title: ${res.page.title}\n\n` +
+      "```\n" +
+      res.page.answerMd.slice(0, 2200) +
+      (res.page.answerMd.length > 2200 ? "\n…" : "") +
+      "\n```\n" +
+      (unbacked.length
+        ? `:warning: *${unbacked.length} claim${unbacked.length === 1 ? "" : "s"} with no source behind ${unbacked.length === 1 ? "it" : "them"}*, which will block the publish:\n` +
+          unbacked.slice(0, 4).map((c) => `  • ${c.claim}`).join("\n") +
+          "\nDictate the missing piece and draft again, or take the claim out on the board.\n"
+        : `:white_check_mark: All ${res.page.evidenceUsed.length} claims trace to a source.\n`) +
+      `Take it or leave it on the board: ${appUrl()}/dashboard/clients/${session.clientId}`
+  );
+}
+
+/** `check` — run the quality gate and say what it found. */
+async function check(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `check` runs the gate on that page.");
+    return;
+  }
+
+  await say(session.threadTs, "Running the gate. This reads the page against its evidence.");
+
+  const { runGate, renderVerdict } = await import("@/lib/hub/page-gate");
+  const res = await runGate(session.clientId, session.pageId, { runBy: "page studio" });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: The gate did not run: ${res.error}`);
+    return;
+  }
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("slug")
+    .eq("id", session.pageId)
+    .maybeSingle();
+
+  await say(session.threadTs, renderVerdict(res.run, (page?.slug as string) ?? ""));
 }
 
 /**
@@ -451,9 +768,12 @@ async function finish(session: Session): Promise<void> {
       `Edit, format and publish it in the Hub panel: ${board}\n\n` +
       // Said here rather than discovered at the Publish button, which is where it costs a walk
       // back to the checklist.
-      "_Publishing refuses while the Day 0 archive is unstamped. That is the one hard wall in " +
-      "this system: once a page is live, the baseline the day 30, 60 and 90 numbers are " +
-      "measured against cannot be recovered._"
+      // Both walls said here rather than discovered at the Publish button, which is where each
+      // costs a walk back.
+      "_Publishing refuses while the Day 0 archive is unstamped. Once a page is live, the " +
+      "baseline the day 30, 60 and 90 numbers are measured against cannot be recovered._\n" +
+      "_It also refuses until the quality gate has read this exact body and not blocked. " +
+      "`check` runs it._"
   );
 }
 
@@ -481,7 +801,11 @@ export interface StudioFile {
  * returns {ok:false}. A failure here has to end in a message asking him to paste it, because
  * the alternative is two minutes of speech going nowhere with no sign that it did.
  */
-async function handleVoice(session: Session, files: StudioFile[]): Promise<void> {
+async function handleVoice(
+  session: Session,
+  files: StudioFile[],
+  messageTs: string
+): Promise<void> {
   const notes = files.filter((f) => isVoiceNote(f));
   if (notes.length === 0) return;
 
@@ -512,7 +836,16 @@ async function handleVoice(session: Session, files: StudioFile[]): Promise<void>
     }
   }
 
-  if (parts.length) await append(session, parts.join("\n\n"), "voice");
+  // The transcript goes wherever the thread is pointing. A voice note in the interview is an
+  // answer to the topic on screen; the same note in body mode is page copy.
+  if (parts.length) {
+    const joined = parts.join("\n\n");
+    if (session.mode === "evidence") {
+      await recordAnswer(session, joined, "slack_voice", messageTs);
+    } else {
+      await append(session, joined, "voice", messageTs);
+    }
+  }
 
   if (failures.length) {
     await say(
@@ -585,10 +918,39 @@ export async function handlePageStudioEvent(args: {
     return true;
   }
 
+  // ‼️ THE MODE COMMANDS ARE MATCHED BEFORE THE BODY APPEND AND AFTER NOTHING ELSE.
+  // They are whole-word only, for the reason `done` and `polish` already are: a sentence that
+  // happens to begin with "next" is a sentence, and swallowing it as a command would lose
+  // dictation with no sign that it did.
+  if (/^ask$/i.test(text)) {
+    await startInterview(session);
+    return true;
+  }
+
+  if (session.mode === "evidence" && /^(next|skip)$/i.test(text)) {
+    await skipTopic(session);
+    return true;
+  }
+
+  if (/^body$/i.test(text)) {
+    await leaveInterview(session);
+    return true;
+  }
+
+  if (/^draft$/i.test(text)) {
+    await draft(session);
+    return true;
+  }
+
+  if (/^check$/i.test(text)) {
+    await check(session);
+    return true;
+  }
+
   // Voice notes first: a note usually arrives with no text at all, and when it does carry a
   // caption that caption is about the recording rather than page copy.
   if (args.files.some((f) => isVoiceNote(f))) {
-    await handleVoice(session, args.files);
+    await handleVoice(session, args.files, args.messageTs);
     return true;
   }
 
@@ -604,6 +966,12 @@ export async function handlePageStudioEvent(args: {
 
   if (!text) return true;
 
-  await append(session, text, "typed");
+  // The stored mode decides what typing means. Body mode is the default and is unchanged.
+  if (session.mode === "evidence") {
+    await recordAnswer(session, text, "slack_typed", args.messageTs);
+    return true;
+  }
+
+  await append(session, text, "typed", args.messageTs);
   return true;
 }

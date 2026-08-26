@@ -125,6 +125,17 @@ export interface SavePageInput {
   answerMd: string;
   metaDescription?: string | null;
   sourceReportId?: string | null;
+  /**
+   * What each claim rests on, from the drafter. `[{ claim, sourceRef }]`.
+   *
+   * ‼️ UNDEFINED AND NULL MEAN DIFFERENT THINGS HERE AND THE WRITE BELOW DEPENDS ON IT.
+   * `undefined` is "this save says nothing about provenance", which is every ordinary form
+   * submission, and the stored map is left alone. `null` is "this body was written by hand and
+   * has no map", which is a real statement and clears it. Collapsing the two would mean editing
+   * a title through the form silently erased the provenance of a drafted page, and the gate
+   * would then read the page as hand-written and skip the check that matters most.
+   */
+  evidenceMap?: unknown[] | null;
 }
 
 /**
@@ -156,7 +167,7 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
   if (!input.question.trim()) return { ok: false, error: "The question this page answers is required." };
   if (!input.answerMd.trim()) return { ok: false, error: "An answer is required." };
 
-  const row = {
+  const row: Record<string, unknown> = {
     client_id: input.clientId,
     slug,
     title: input.title.trim(),
@@ -167,6 +178,30 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
     source_report_id: input.sourceReportId ?? null,
     updated_at: new Date().toISOString(),
   };
+
+  // Only when the caller actually said something about it. See SavePageInput.evidenceMap.
+  if (input.evidenceMap !== undefined) {
+    row.evidence_map = input.evidenceMap;
+  } else if (input.id) {
+    // ‼️ A CHANGED BODY WITH AN UNCHANGED MAP IS A MAP THAT LIES, so the map is dropped.
+    //
+    // The map says "every claim on this page traces to a source". Edit a paragraph by hand and
+    // that sentence is about text that is no longer there, but `unbacked_claims` would keep
+    // reading it and keep passing. Clearing it moves that check to `skip`, which is the honest
+    // state for a body a person wrote, and the model read-through still checks the real words.
+    //
+    // A page nobody edited keeps its map: the read below compares the actual bodies rather than
+    // assuming an update touched one.
+    const { data: before } = await supabaseAdmin
+      .from("client_pages")
+      .select("answer_md")
+      .eq("id", input.id)
+      .eq("client_id", input.clientId)
+      .maybeSingle();
+
+    const previous = ((before?.answer_md as string | null) ?? "").trim();
+    if (previous && previous !== input.answerMd.trim()) row.evidence_map = null;
+  }
 
   const query = input.id
     ? supabaseAdmin.from("client_pages").update(row).eq("id", input.id).eq("client_id", input.clientId)
@@ -351,7 +386,15 @@ export async function appendPageBody(
 
   const { error } = await supabaseAdmin
     .from("client_pages")
-    .update({ answer_md: next, updated_at: new Date().toISOString() })
+    .update({
+      answer_md: next,
+      // Dictating into a drafted page makes its claim map describe a body that no longer
+      // exists. Same reasoning as savePage: a map that no longer matches is worse than none,
+      // because `unbacked_claims` would keep passing on it. The dictation itself is filed as a
+      // source by the page studio, so nothing about where these words came from is lost.
+      evidence_map: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", pageId)
     .eq("client_id", clientId);
 

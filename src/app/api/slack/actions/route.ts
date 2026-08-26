@@ -287,12 +287,22 @@ async function pagePublishRequestAction(args: {
         return;
       }
 
+      // ‼️ "DAY 0 IS OPEN" IS NOT "PUBLISHING IS OPEN" ANY MORE, and this card used to say it
+      // was. Since 2026-08-26 page_publish also refuses on the quality gate, so a card promising
+      // an open door would send somebody to the board to meet a refusal it had just ruled out.
+      // This answers the question it can answer and names the other rail rather than implying
+      // there is only one.
       const text = state.archivedAt
         ? `:unlock: Day 0 was archived on ${new Date(state.archivedAt).toISOString().slice(0, 10)}` +
-          `${state.source ? ` (${state.source})` : ""}. Publishing is open.
+          `${state.source ? ` (${state.source})` : ""}, so that wall is open.
+` +
+          `The quality gate is the other one: it has to have read the page's exact body without ` +
+          `blocking. Type \`check\` in the page thread, or press Check on the board.
 ${board}`
         : `:lock: Day 0 is not archived, so publishing will refuse. Tick *${label}* on the ` +
           `delivery checklist first, or waive it there with a reason.
+` +
+          `The quality gate applies after that, so \`check\` the page as well.
 ${board}`;
 
       const posted = (await slack.postThreadReply(args.channel, args.threadTs, text)) as {

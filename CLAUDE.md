@@ -2592,7 +2592,10 @@ now every saved page was write-once and unreachable.
   surface with no session behind it.
 - **Approve was dropped**, on Matthew's call: `client_pages.status` is draft/published/archived
   and adding an approved state would put a SECOND hard rail into a codebase whose stated doctrine
-  is that Day 0 is the one place it blocks.
+  is that Day 0 is the one place it blocks. **Half of that was reversed on 2026-08-26** (see
+  "Evidence and the quality gate" below): there IS a second rail now, and it still has no fourth
+  status value. `client_pages.status` is unchanged and nothing moves a page through an extra
+  state; the gate is a recorded verdict in `page_gate_runs` that `page_publish` consults.
 
 > ‼️ **STEPS 12 AND 13 POST NO CARD AT ALL, and their `instructionsFor` arms are dead on the
 > normal path.** Both are `mode: "auto"`, so `postReadySteps` skips them and `instructionsFor` is
@@ -3043,6 +3046,79 @@ against**, and once a page is live that baseline cannot be recovered by being ca
 - **The hole check is a grep.** `GATED` and `NOT_GATED` in `day-zero.ts` list every write path and
   why. `setPublished` has exactly one caller and it is gated; verify with
   `grep -rn "setPublished" src/`.
+
+### Evidence and the quality gate (2026-08-26) — the SECOND rail
+`src/lib/clients/page-evidence.ts`, `src/lib/hub/page-gate.ts`. Migration:
+`docs/2026-08-26-evidence-and-gate.sql` (`page_sources`, `page_gate_runs`,
+`client_pages.evidence_map`, `page_studio_sessions.studio_mode` + `evidence_topic`).
+
+`client_pages` held `answer_md` and nothing else, so the system could not say where any sentence
+came from, and `draft-page.ts` fetched the client's website live and threw the crawl away. There
+was no check between a draft and a live page on a domain the client controls beyond one person
+reading it.
+
+> ‼️ **THIS IS A SECOND HARD RAIL AND THE LINE ABOVE ABOUT "the one place it blocks" IS NOW
+> HISTORY.** Matthew reversed it on 2026-08-26 and chose the shape: **block on evidence, warn on
+> style**. What did NOT change is the half of the original objection that was really about
+> workflow: **no fourth `client_pages.status` value exists.** Adding one is still refused.
+
+- **The two tiers, and the line is not taste.** BLOCK covers what can be WRONG on somebody else's
+  domain: `no_evidence`, `unbacked_claims`, `orphan_numbers`, `duplicate`, `answers_the_question`,
+  `unsupported`. WARN covers what can be WEAK: `thin`, `generic`, `keyword_shaped`,
+  `first_party_ratio`, `house_style`. **A gate that blocks on taste gets waived out of habit
+  inside a fortnight**, and a rail everybody steps over is worse than none because it looks like
+  one.
+- **`body_hash` is the whole reliability of the gate.** A verdict describes the body it read.
+  `assertGatePassed` re-hashes the CURRENT `answer_md` and refuses a mismatch with "the page
+  changed", never honours it. Whitespace is normalised so re-wrapping keeps a verdict and changing
+  a word does not. Three distinct refusals — `never_run`, `stale`, `blocked` — because they send
+  a person to three different places, and **only `blocked` is waivable**: offering a waiver for
+  "press Check" teaches people to skip a free fix.
+- **A waiver is a verdict row, not a flag.** `waiveGate` inserts into `page_gate_runs` carrying
+  the hash of the text it waived, so **it goes stale the moment the page is edited**, exactly as a
+  pass does. A boolean on `client_pages` would survive a rewrite and license publishing something
+  nobody looked at.
+- **A null `evidence_map` is a SKIP, not a failure**, and this is the most important line in
+  `page-gate.ts`. A page dictated straight into the body by the person who does the work has no
+  map because no model wrote it. That is the BEST case this product has. Blocking it for missing
+  a machine-generated field would punish exactly the behaviour the lane exists to encourage.
+- **A changed body drops the map.** `savePage` and `appendPageBody` both null `evidence_map` when
+  `answer_md` actually changes and the caller sent no new map, because a map that no longer
+  matches would keep `unbacked_claims` passing on text it never described. `undefined` and `null`
+  therefore mean different things in `SavePageInput`: undefined leaves the stored map alone (a
+  title edit), null clears it.
+- **Dictation into the body is ALSO filed as a source.** Without that row the gate reads a page
+  dictated by the provider as a page with nothing behind it: `orphan_numbers` would refuse a price
+  he said out loud. `answer_md` holds the words; `page_sources` holds where they came from.
+- **`page_id IS NULL` is the client library, not an orphan row.** Pricing, policies,
+  qualifications and their customers' own terminology are dictated once and ground every later
+  page. Nothing may clean those up.
+- **`AI_DERIVED` is not evidence.** It records the ABSENCE of backing so the gate can count it.
+  `isFirstParty()` is the one definition and every consumer imports it.
+- **`numberEvidence()` exists exactly once.** The drafter writes `sourceRef: "S3"` into
+  `evidence_map` and the gate reads it back weeks later. Two numbering schemes would make every
+  stored ref point at a different source than the one it was written against, and
+  `first_party_ratio` would be measuring nothing.
+- **A dangling ref fails validation.** An invented `S9` is worse than a null: null is a claim
+  marked unsupported, a bad ref is an unsupported claim wearing a citation. It goes into
+  `callClaudeJSON`'s correction retry, same as the em dash rule.
+- **A failed model read-through is a SKIP.** Passing would let an API outage publish anything;
+  blocking would make every page unpublishable on a check that never ran.
+- **The column is `studio_mode`, never `mode`.** `mode` is a Postgres ordered-set aggregate, and a
+  PostgREST select naming a bare `mode` resolves to the aggregate when the column is absent,
+  failing with "WITHIN GROUP is required for ordered-set aggregate mode" — an error naming neither
+  the table nor the column. Observed on this table before the column existed.
+- **The hole check, same shape as the wall above:** `grep -rn "assertGatePassed" src/` must match
+  `GATED` in `page-gate.ts`, and `grep -rn "setPublished" src/` must still return exactly one
+  caller. If the second ever returns two, both rails have a hole at once.
+- **The page studio gained `ask`, `next`/`skip`, `body`, `draft` and `check`.** `ask` walks
+  `EVIDENCE_TOPICS`: page-scoped questions first while the claimed question is still what he is
+  thinking about, client-scoped ones after and skippable. `draft` and `polish` stay separate on
+  purpose — `polish` tidies HIS words and may add nothing, `draft` writes from the evidence and
+  must say what each claim rests on. One command guessing which job it is on would sometimes
+  rewrite a dictated page it was only meant to tidy.
+- Probe: `bunx tsx --env-file=.env.local scripts/_probe-page-gate.ts` (add `--model` for the
+  read-through). It creates a throwaway page, asserts four verdicts, and deletes it in `finally`.
 
 ### Env
 ```

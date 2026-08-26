@@ -1645,17 +1645,141 @@ import { pageSlug } from "../src/lib/hub/pages";
   const studio = stripLane4Comments(
     fs.readFileSync(path.join(__dirname, "..", "src/lib/clients/page-studio.ts"), "utf8")
   );
+  // ‼️ THIS USED TO ASSERT "exactly one" draftPage CALL AND THAT WAS A PROXY, NOT THE RULE.
+  // The rule is that a model never touches his words unless he asks for it BY NAME, and that
+  // nothing a model returns is ever written to the page. `draft` (2026-08-26) is a second
+  // opt-in with the same property, so the count moved to two while the invariant did not move
+  // at all. What is asserted below is the invariant itself.
   ok(
-    "the page studio reaches a model in exactly one place",
-    (studio.match(/draftPage\(/g) ?? []).length === 1
+    "the page studio reaches a model only through named commands",
+    (studio.match(/draftPage\(/g) ?? []).length === 2 &&
+      /\/\^polish\$\/i/.test(studio) &&
+      /\/\^draft\$\/i/.test(studio)
   );
   ok(
-    "and that place is the polish command",
-    /polish/.test(studio) && /existingBody/.test(studio)
+    "polish is the one that is handed his own body",
+    /existingBody/.test(studio)
   );
   ok(
-    "appending never routes through a model",
-    /appendPageBody\(/.test(studio)
+    "nothing a model returns can be written to the page from here",
+    !/\bsavePage\b/.test(studio) && !/setPublished/.test(studio)
+  );
+  ok(
+    "appending never routes through a model, and there is one appender",
+    (studio.match(/appendPageBody\(/g) ?? []).length === 1
+  );
+
+  // ── evidence mode does not touch the body ──────────────────────────────────
+  //
+  // The interview and the page body are the same typing in the same thread, told apart only by
+  // stored state. If recordAnswer ever reached appendPageBody, dictating a pricing policy would
+  // silently paste it into one page and it would stop being reusable for the others.
+  const recordAnswerBody = studio.slice(
+    studio.indexOf("async function recordAnswer"),
+    studio.indexOf("async function skipTopic")
+  );
+  ok(
+    "recordAnswer files a source and never appends to the body",
+    recordAnswerBody.includes("recordSource(") && !recordAnswerBody.includes("appendPageBody(")
+  );
+  ok(
+    "a client-scoped topic files against the client, not the page",
+    /pageId:\s*topic\.scope === "client" \? null : session\.pageId/.test(recordAnswerBody)
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The evidence layer and the quality gate (2026-08-26)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const read = (rel: string) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  const gate = read("src/lib/hub/page-gate.ts");
+  const evidence = read("src/lib/clients/page-evidence.ts");
+  const route = read("src/app/api/clients/[id]/hub/route.ts");
+  const studio = read("src/lib/clients/page-studio.ts");
+
+  const walkSrc = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      return e.isDirectory() ? walkSrc(full) : /\.tsx?$/.test(e.name) ? [full] : [];
+    });
+
+  // ‼️ THE ORDERING IS THE WHOLE POINT OF BOTH RAILS. Publishing is not one write: it flips the
+  // status, ticks first_page, refreshes the Slack checklist and tells the client their page is
+  // live. A check after any of that has already said something that should not have been said.
+  const publishBlock = route.slice(route.indexOf('case "page_publish"'));
+  ok(
+    "page_publish gates on Day 0 before the quality gate",
+    publishBlock.indexOf("assertDay0Archived") < publishBlock.indexOf("assertGatePassed")
+  );
+  ok(
+    "and both gates run before setPublished",
+    publishBlock.indexOf("assertGatePassed") < publishBlock.indexOf("await setPublished")
+  );
+
+  // A second publisher would put the ordering above in two places, which is how one of them
+  // ends up wrong. Both walls depend on this being a single caller.
+  const allSrc = walkSrc(path.join(__dirname, "..", "src"))
+    .map((f) => fs.readFileSync(f, "utf8"))
+    .join("\n");
+  ok(
+    "setPublished still has exactly one call site",
+    (allSrc.match(/await setPublished\(/g) ?? []).length === 1
+  );
+  ok(
+    "assertGatePassed still has exactly one call site",
+    (allSrc.match(/await assertGatePassed\(/g) ?? []).length === 1
+  );
+
+  // ‼️ A STALE VERDICT MUST NEVER PASS. A verdict describes the body it read; publishing on one
+  // that no longer matches puts a green light on unread text, which is worse than no gate.
+  ok(
+    "the gate compares a fresh hash against the stored one",
+    /run\.bodyHash !== current/.test(gate)
+  );
+  ok(
+    "a never-run or stale gate is not waivable",
+    /waivable: e\.reason === "blocked"/.test(route)
+  );
+  ok(
+    "a waiver carries the hash of the body it waived",
+    /body_hash: hashBody\(/.test(gate)
+  );
+
+  // ‼️ A HAND-DICTATED PAGE HAS NO CLAIM MAP AND IS THE BEST CASE, NOT THE WORST.
+  ok(
+    "a null evidence_map skips rather than fails",
+    /if \(evidenceMap === null\) \{[\s\S]{0,400}?status: "skip"/.test(gate)
+  );
+
+  // AI_DERIVED records the absence of backing. Counting it as evidence would let a page with
+  // nothing behind it satisfy the check that exists to catch exactly that.
+  const isFirstPartyBody = evidence.slice(
+    evidence.indexOf("export function isFirstParty"),
+    evidence.indexOf("export function isEvidence")
+  );
+  ok(
+    "isFirstParty excludes AI_DERIVED and EXTERNAL_RESEARCH",
+    isFirstPartyBody.length > 0 &&
+      !isFirstPartyBody.includes("AI_DERIVED") &&
+      !isFirstPartyBody.includes("EXTERNAL_RESEARCH")
+  );
+
+  // ‼️ ONE NUMBERING FUNCTION. The drafter stores "S3" and the gate reads it back weeks later.
+  ok(
+    "numberEvidence is defined exactly once and both sides use it",
+    (evidence.match(/export function numberEvidence/g) ?? []).length === 1 &&
+      /loadNumberedEvidence/.test(gate) &&
+      /loadNumberedEvidence/.test(
+        fs.readFileSync(path.join(__dirname, "..", "src/lib/hub/draft-page.ts"), "utf8")
+      )
+  );
+
+  // `mode` is a Postgres ordered-set aggregate. A bare `mode` in a PostgREST select resolves to
+  // the aggregate whenever the column is missing, with an error naming neither.
+  ok(
+    "the studio mode column is never selected as a bare `mode`",
+    !/select\([^)]*[,\s]mode[,\s][^)]*\)/.test(studio)
   );
 }
 

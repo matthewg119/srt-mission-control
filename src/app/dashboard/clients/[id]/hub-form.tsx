@@ -12,7 +12,7 @@
 // the DNS panel already reports as "they added it, not confirmed", so it is rendered as
 // grey context and never as a status of its own.
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -41,6 +41,34 @@ export interface AuditPromptView {
   text: string;
   block: string | null;
   reportId: string | null;
+}
+
+/** One check from the quality gate, as the panel renders it. */
+export interface GateCheckView {
+  key: string;
+  tier: "block" | "warn";
+  status: "pass" | "fail" | "skip";
+  detail: string;
+}
+
+export interface GateRunView {
+  verdict: "pass" | "warn" | "block";
+  checks: GateCheckView[];
+  body_hash: string;
+  created_at: string;
+}
+
+/** One piece of evidence behind a page. */
+export interface SourceView {
+  id: string;
+  pageId: string | null;
+  sourceType: string;
+  sourceContent: string;
+  topic: string | null;
+  collectedVia: string | null;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
 }
 
 // `id` is what turns the writer into an editor. savePage has always accepted one and the
@@ -161,6 +189,62 @@ export function HubForm({
   const [showPreview, setShowPreview] = useState(true);
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // ‼️ THE GATE STATE IS FETCHED, NOT PASSED AS A PROP, for the same reason the page body is.
+  // The board's server query would otherwise have to carry every verdict and every source for
+  // every client into the initial HTML of a page that mostly is not being used to edit one.
+  // GET /api/clients/[id]/hub already returns both.
+  const [gateRuns, setGateRuns] = useState<Record<string, GateRunView>>({});
+  const [sources, setSources] = useState<SourceView[]>([]);
+  const [gateWaiving, setGateWaiving] = useState<string | null>(null);
+  const [gateWaiveReason, setGateWaiveReason] = useState("");
+  const [openVerdict, setOpenVerdict] = useState<string | null>(null);
+  /**
+   * What the last draft said each claim rests on.
+   *
+   * ‼️ IT TRAVELS WITH THE DRAFT AND IS SENT BACK ON SAVE. Losing it here would mean every
+   * drafted page reached the database with a null map, the gate would read it as hand-written,
+   * and `unbacked_claims` would skip on exactly the pages it exists to check.
+   */
+  const [claimMap, setClaimMap] = useState<Array<{ claim: string; sourceRef: string | null }>>([]);
+
+  /** Loading a saved page brings its own sources; the client library is already here. */
+  const loadSources = useCallback(
+    async (pageId: string | null) => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/hub`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "sources_list", pageId }),
+        });
+        const json = (await res.json()) as { ok?: boolean; sources?: SourceView[] };
+        if (json.sources) setSources(json.sources);
+      } catch {
+        // Same as loadHub: the panel degrades to "nothing on file", which is the safe read.
+      }
+    },
+    [clientId]
+  );
+
+  const loadHub = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/clients/${clientId}/hub`);
+      const json = (await res.json()) as {
+        ok?: boolean;
+        gateRuns?: Record<string, GateRunView>;
+        sources?: SourceView[];
+      };
+      if (json.gateRuns) setGateRuns(json.gateRuns);
+      if (json.sources) setSources(json.sources);
+    } catch {
+      // The panel still works without it: every verdict simply reads as unchecked, which is
+      // the safe direction. Publish refuses on an unchecked page anyway.
+    }
+  }, [clientId]);
+
+  useEffect(() => {
+    void loadHub();
+  }, [loadHub]);
+
   const runTool = (tool: Tool) => {
     const el = bodyRef.current;
     if (!el) return;
@@ -207,6 +291,11 @@ export function HubForm({
         metaDescription: found.metaDescription ?? "",
         sourceReportId: "",
       });
+      // A saved page's map lives in the database and is not re-sent on an ordinary save. See
+      // SavePageInput.evidenceMap: an undefined map leaves the stored one alone, which is what
+      // an edit to a title should do.
+      setClaimMap([]);
+      await loadSources(pageId);
       setOpen(true);
     } catch (e) {
       setError((e as Error).message);
@@ -240,13 +329,24 @@ export function HubForm({
         pageUrl?: string | null;
         blockedBy?: string;
         waivable?: boolean;
+        gateReason?: string;
       };
       if (!json.ok) {
         setError(json.error ?? json.warnings?.join(" ") ?? "That did not work.");
         if (json.blockedBy === "day_zero_archive" && json.waivable) setWaiving(true);
+        // ‼️ ONLY A REAL REFUSAL OPENS THE WAIVER. `never_run` and `stale` both mean press
+        // Check, and offering a waiver for those would teach people to skip a free fix, which
+        // is exactly how a gate turns into a button beside Publish.
+        if (json.blockedBy === "quality_gate") {
+          if (json.gateReason === "blocked" && json.waivable) {
+            setGateWaiving(String(body.pageId ?? ""));
+          }
+          setOpenVerdict(String(body.pageId ?? ""));
+        }
       } else if (json.pageUrl) {
         setNotice(`Published: ${json.pageUrl}`);
       }
+      await loadHub();
       router.refresh();
       return json.ok;
     } catch (e) {
@@ -272,12 +372,22 @@ export function HubForm({
       const res = await fetch(`/api/clients/${clientId}/hub`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "page_draft", question: draft.question }),
+        body: JSON.stringify({
+          action: "page_draft",
+          question: draft.question,
+          // So the drafter reads this page's own evidence, not only the client library.
+          pageId: draft.id || null,
+        }),
       });
       const json = (await res.json()) as {
         ok: boolean;
         error?: string;
-        draft?: { title: string; answerMd: string; metaDescription: string };
+        draft?: {
+          title: string;
+          answerMd: string;
+          metaDescription: string;
+          evidenceUsed?: Array<{ claim: string; sourceRef: string | null }>;
+        };
       };
       if (!json.ok || !json.draft) {
         setDraftError(json.error ?? "That did not draft.");
@@ -288,11 +398,81 @@ export function HubForm({
           answerMd: json.draft!.answerMd,
           metaDescription: json.draft!.metaDescription,
         }));
+        setClaimMap(json.draft.evidenceUsed ?? []);
       }
     } catch (e) {
       setDraftError((e as Error).message);
     } finally {
       setDrafting(false);
+    }
+  }
+
+  /** Run the gate on one page and show what it found. */
+  async function checkPage(pageId: string) {
+    setBusy(`check-${pageId}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/hub`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "page_check", pageId }),
+      });
+      const json = (await res.json()) as { ok: boolean; error?: string; run?: GateRunView };
+      if (!json.ok || !json.run) {
+        setError(json.error ?? "The gate did not run.");
+        return;
+      }
+      setGateRuns((m) => ({ ...m, [pageId]: json.run as GateRunView }));
+      setOpenVerdict(pageId);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Publish over a refusal, on purpose, with a reason that is posted where others see it. */
+  async function waiveGateFor(pageId: string) {
+    setBusy(`gate-waive-${pageId}`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/hub`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "page_waive_gate", pageId, reason: gateWaiveReason }),
+      });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) {
+        setError(json.error ?? "That did not work.");
+        return;
+      }
+      setGateWaiving(null);
+      setGateWaiveReason("");
+      setNotice("Gate waived for this page. It has been posted to #alerts-infra.");
+      await loadHub();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function verifySourceRow(sourceId: string, pageId: string | null) {
+    setBusy(`verify-${sourceId}`);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/hub`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "source_verify", sourceId, pageId }),
+      });
+      const json = (await res.json()) as { ok: boolean; error?: string; sources?: SourceView[] };
+      if (!json.ok) setError(json.error ?? "That did not work.");
+      else if (json.sources) setSources(json.sources);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -322,6 +502,13 @@ export function HubForm({
   }
 
   const byKind = new Map(hosts.map((h) => [h.kind, h]));
+
+  // What the writer is standing on: this page's own sources plus the client library. A source
+  // filed against a DIFFERENT page is not shown, because it did not ground this one and
+  // listing it would suggest it did.
+  const visibleSources = sources.filter(
+    (s) => s.pageId === null || (draft.id !== "" && s.pageId === draft.id)
+  );
 
   // ‼️ FIVE THINGS HAVE TO BE TRUE AND THEY FAIL IN A FIXED ORDER, so the panel names the
   // FIRST unmet one rather than showing five independent ticks. On the pilot the hub was
@@ -480,7 +667,17 @@ export function HubForm({
           </p>
         )}
 
-        {pages.map((page) => (
+        {pages.map((page) => {
+          const run = gateRuns[page.id] ?? null;
+          const verdictLabel = !run
+            ? { text: "unchecked", tone: "text-white/40" }
+            : run.verdict === "block"
+              ? { text: "gate: blocked", tone: "text-[#FF6B6B]" }
+              : run.verdict === "warn"
+                ? { text: "gate: warnings", tone: "text-[#F5A623]" }
+                : { text: "gate: passed", tone: "text-[#5AD18D]" };
+
+          return (
           <div
             key={page.id}
             className="flex flex-wrap items-baseline justify-between gap-2 border-b border-white/5 pb-2"
@@ -490,6 +687,14 @@ export function HubForm({
               <div className="truncate font-mono text-xs text-[rgba(255,255,255,0.4)]">
                 /{page.slug}
               </div>
+              <button
+                type="button"
+                onClick={() => setOpenVerdict((v) => (v === page.id ? null : page.id))}
+                className={`text-xs ${verdictLabel.tone} ${run ? "underline decoration-dotted underline-offset-2" : ""}`}
+                disabled={!run}
+              >
+                {verdictLabel.text}
+              </button>
             </div>
             <div className="flex items-center gap-2">
             <button
@@ -499,6 +704,15 @@ export function HubForm({
               className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40 disabled:opacity-40"
             >
               Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => checkPage(page.id)}
+              disabled={busy !== null}
+              title="Read this page against its evidence. Nothing is published."
+              className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40 disabled:opacity-40"
+            >
+              {busy === `check-${page.id}` ? "…" : "Check"}
             </button>
             <button
               type="button"
@@ -515,7 +729,9 @@ export function HubForm({
               title={
                 page.status !== "published" && !day0Open
                   ? "Day 0 is not archived. Tick the Day-0 step on the delivery checklist first."
-                  : undefined
+                  : page.status !== "published" && !run
+                    ? "The quality gate has not read this page yet. Press Check."
+                    : undefined
               }
               className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40 disabled:opacity-40"
             >
@@ -526,8 +742,88 @@ export function HubForm({
                   : "Publish"}
             </button>
             </div>
+
+            {/*
+              ‼️ THE VERDICT IS SHOWN, THE PUBLISH BUTTON IS NOT DISABLED BY IT, and that is
+              deliberate. Day 0 is knowable on the client row and disabling for it costs nothing.
+              A gate verdict is only about the body as it was when the check ran, so a button
+              greyed out from cached state would go on lying after somebody fixed the page in
+              another tab. The refusal happens on the server, against a fresh hash, every time.
+            */}
+            {openVerdict === page.id && run && (
+              <div className="w-full space-y-1 rounded border border-white/10 bg-black/20 p-2">
+                <div className="text-xs text-white/50">
+                  Checked {new Date(run.created_at).toLocaleString()}. A verdict only counts for
+                  the exact body it read; edit the page and it has to be checked again.
+                </div>
+                {[...run.checks]
+                  .sort((a, b) => {
+                    const rank = (c: GateCheckView) =>
+                      c.status === "fail" ? 0 : c.status === "skip" ? 1 : 2;
+                    return rank(a) - rank(b);
+                  })
+                  .map((c) => (
+                    <div key={c.key} className="text-xs">
+                      <span
+                        className={
+                          c.status === "fail"
+                            ? c.tier === "block"
+                              ? "text-[#FF6B6B]"
+                              : "text-[#F5A623]"
+                            : c.status === "skip"
+                              ? "text-white/40"
+                              : "text-[#5AD18D]"
+                        }
+                      >
+                        {c.status === "fail" ? "x" : c.status === "skip" ? "-" : "ok"}
+                      </span>{" "}
+                      <span className="font-mono text-white/70">{c.key}</span>
+                      {c.tier === "warn" && <span className="text-white/35"> (warning)</span>}
+                      <div className="whitespace-pre-wrap pl-6 text-white/55">{c.detail}</div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {gateWaiving === page.id && (
+              <div className="w-full space-y-2 rounded border border-[#F5A623]/40 p-3">
+                <div className="text-xs text-[#F5A623]">
+                  Publish over the gate. This is recorded against your name, posted to
+                  #alerts-infra with what it was refused for, and it goes stale the moment the
+                  page is edited.
+                </div>
+                <textarea
+                  value={gateWaiveReason}
+                  onChange={(e) => setGateWaiveReason(e.target.value)}
+                  rows={2}
+                  placeholder="Why this page goes live without satisfying the gate."
+                  className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => waiveGateFor(page.id)}
+                    disabled={busy !== null || gateWaiveReason.trim().length < 10}
+                    className="rounded border border-[#F5A623]/60 px-2 py-1 text-xs text-[#F5A623] disabled:opacity-40"
+                  >
+                    {busy === `gate-waive-${page.id}` ? "…" : "Waive the gate"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGateWaiving(null);
+                      setGateWaiveReason("");
+                    }}
+                    className="rounded border border-white/15 px-2 py-1 text-xs text-white/60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
 
         {/* ── The Day 0 wall, said before it is hit ───────────────────────── */}
         {pages.length > 0 && !day0Open && (
@@ -751,11 +1047,86 @@ export function HubForm({
               </button>
               <span className="text-xs text-[rgba(255,255,255,0.4)]">
                 {draft.question.trim()
-                  ? "Grounded in their own site. Read every line before you save it."
+                  ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}. Read every line before you save it.`
                   : "Pick a question first."}
               </span>
             </div>
             {draftError && <p className="mt-1 text-xs text-[#FF6B6B]">{draftError}</p>}
+
+            {/*
+              ‼️ THE CLAIM MAP, SHOWN RATHER THAN HIDDEN IN A COLUMN.
+              A claim with no source behind it refuses the publish, and finding that out at the
+              Publish button is one walk back too many. It is rendered the moment a draft
+              returns, before anything is saved.
+            */}
+            {claimMap.length > 0 && (
+              <div className="mt-2 space-y-1 rounded border border-white/10 bg-black/20 p-2">
+                <div className="text-xs text-white/50">
+                  What this draft says it is standing on. Claims with no source will be refused
+                  at Publish.
+                </div>
+                {claimMap.map((c, i) => (
+                  <div key={i} className="text-xs">
+                    <span className={c.sourceRef ? "text-[#5AD18D]" : "text-[#FF6B6B]"}>
+                      {c.sourceRef ?? "no source"}
+                    </span>{" "}
+                    <span className="text-white/60">{c.claim}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── The evidence behind this page ──────────────────────────────── */}
+          <div className="space-y-2 rounded border border-white/10 p-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="text-xs uppercase tracking-wider text-[rgba(255,255,255,0.4)]">
+                Evidence
+              </div>
+              <div className="text-xs text-white/40">
+                Dictate it in the page studio in Slack. `ask` walks the interview.
+              </div>
+            </div>
+
+            {visibleSources.length === 0 ? (
+              <p className="text-xs text-[#F5A623]">
+                Nothing on file. A page with no evidence behind it is refused at Publish, and it
+                is a page nobody can defend if the client is asked where it came from.
+              </p>
+            ) : (
+              visibleSources.map((s) => (
+                <div key={s.id} className="border-b border-white/5 pb-1.5 text-xs">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="text-white/70">
+                      {s.sourceType}
+                      {s.pageId ? "" : " · client library"}
+                      {s.topic ? ` · ${s.topic}` : ""}
+                    </span>
+                    {s.verifiedAt ? (
+                      <span className="text-[#5AD18D]">verified</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => verifySourceRow(s.id, s.pageId)}
+                        disabled={busy !== null}
+                        className="rounded border border-white/15 px-1.5 py-0.5 text-white/60 hover:border-white/40 disabled:opacity-40"
+                      >
+                        {busy === `verify-${s.id}` ? "…" : "Mark verified"}
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-0.5 line-clamp-3 whitespace-pre-wrap text-white/45">
+                    {s.sourceContent}
+                  </div>
+                </div>
+              ))
+            )}
+            {/*
+              Verifying is a claim about the world and is recorded as one. It is deliberately
+              NOT what Publish blocks on: an unverified source is still the client's own words,
+              and requiring a second human pass before anything could go live would turn the
+              gate into a queue.
+            */}
           </div>
 
           <button
@@ -778,11 +1149,17 @@ export function HubForm({
                   answerMd: draft.answerMd,
                   metaDescription: draft.metaDescription || null,
                   sourceReportId: draft.sourceReportId || null,
+                  // Sent ONLY when this save is carrying a fresh draft. An ordinary edit sends
+                  // nothing here and savePage leaves the stored map alone, or drops it if the
+                  // body actually changed. See SavePageInput.evidenceMap for why undefined and
+                  // null have to stay different.
+                  evidenceMap: claimMap.length ? claimMap : undefined,
                 },
                 "save"
               );
               if (ok) {
                 setDraft({ ...BLANK });
+                setClaimMap([]);
                 setOpen(false);
               }
             }}
