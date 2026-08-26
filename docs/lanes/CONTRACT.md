@@ -117,9 +117,14 @@ bunx tsx --env-file=.env.local scripts/_probe-step-verify.ts a11e0bda-46e9-4d90-
 
 `.env.local` carries `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and
 `SLACK_BOT_TOKEN`. `SLACK_CLIENT_ONBOARDING_CHANNEL` is **not** there (Vercel only);
-production is `C0BLK797PNU` and the scratch channel for `_probe-cascade.ts` is
-`C0AJXH7PTBM`, which is what that probe requires because it refuses to run against
-production.
+production is `C0BLK797PNU`.
+
+`_probe-cascade.ts` no longer reads `SLACK_CLIENT_ONBOARDING_CHANNEL` at all. It takes
+`PROBE_SCRATCH_CHANNEL`, and it refuses any id that is a real channel or that already appears
+in your env, so there is no id you can leave lying around that turns into a destination.
+**Create your own throwaway channel, invite the bot, and pass that id.** Do not reuse
+`C0AJXH7PTBM` (`#srt-sub`): this brief used to name it as "the scratch channel" and on
+2026-08-25 seven probe runs left seventy-two undeletable anchors in it.
 
 > **Probes without `--env-file=.env.local` silently return nothing.** Not an error. Nothing.
 
