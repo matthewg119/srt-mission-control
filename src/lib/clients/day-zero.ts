@@ -43,6 +43,14 @@ const DAY_ZERO_STEP_LABEL = "Day-0 scan archived, before any change lands";
  * each of these. Kept here so the set is visible in one place rather than inferred by
  * reading four routes.
  */
+/**
+ * ‼️ THIS IS NO LONGER THE ONLY RAIL. Since 2026-08-26 `page_publish` also runs
+ * `assertGatePassed` from `src/lib/hub/page-gate.ts`, immediately after this one and before
+ * `setPublished`. The two are deliberately separate modules with separate grep checks: Day 0 is
+ * about the measurement baseline and is a fact on the client row, the quality gate is about one
+ * page's body and goes stale when that body changes. Anything that gates on both has to name
+ * both, or a person fixes one and meets the other.
+ */
 export const GATED = [
   "POST /api/clients/[id]/hub  action=page_publish",
   // Not built yet. When they are, they gate here too:

@@ -1005,11 +1005,38 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         "client_pages with status published",
         total ? `${total} page${total === 1 ? "" : "s"} written, none published` : "no pages written yet",
-        "Publish from the client board. Publishing refuses while the Day-0 archive is unstamped, " +
-          "which is the one hard rail here and is working as intended if that is what stops you."
+        "Publish from the client board. Publishing refuses on two things and both are working as " +
+          "intended if they stop you: the Day-0 archive being unstamped, and the quality gate not " +
+          "having read this exact body without blocking. Press Check on the page, or type " +
+          "`check` in its page studio thread."
       );
     }
-    return verified(`${published} page${published === 1 ? "" : "s"} published on the client's hub`);
+
+    // ‼️ A PAGE THAT WENT OUT ON A WAIVER IS EVIDENCE OF A DIFFERENT THING THAN ONE THAT PASSED,
+    // and this line may only describe what was actually found. The step board's whole doctrine
+    // is that a tick describes the artifact, never the fact it stands for: "3 pages published"
+    // is true either way, and it is not the same sentence as "3 pages published, all of which
+    // were read against their evidence".
+    const { data: waived } = await supabaseAdmin
+      .from("page_gate_runs")
+      .select("page_id, checks")
+      .eq("client_id", ctx.clientId)
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    const waivedPages = new Set<string>();
+    for (const row of waived ?? []) {
+      const checks = (row.checks as Array<{ key?: string }> | null) ?? [];
+      if (checks.some((c) => c.key === "waived")) waivedPages.add(row.page_id as string);
+    }
+
+    const label = `${published} page${published === 1 ? "" : "s"} published on the client's hub`;
+    return waivedPages.size > 0
+      ? verified(
+          label,
+          `${waivedPages.size} page${waivedPages.size === 1 ? "" : "s"} carry a waived quality gate`
+        )
+      : verified(label);
   },
 
   cards_printed: async (ctx) =>
