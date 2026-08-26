@@ -65,7 +65,7 @@ const FAQ = [
   },
   {
     q: "How much does this cost?",
-    a: "Our audit is free, and so is the work at first: you start free and the monthly retainer only starts once we have brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $499/mo, month to month. Typical AEO retainers run well into the thousands per month, so this is built for local businesses.",
+    a: "Our audit is free, and so is the work at first: you start free and the monthly retainer only starts once we have brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $349/mo, month to month. Typical AEO retainers run well into the thousands per month, so this is built for local businesses.",
   },
   {
     q: "Why can't I just check my own phone?",
@@ -329,7 +329,7 @@ function Pricing() {
             <span className="v2-price-tag">The whole offer</span>
             <h3>AI Visibility</h3>
             <div className="v2-price-amount">
-              $499<small> /mo</small>
+              $349<small> /mo</small>
             </div>
             <div className="v2-price-note">Free until your first 5 AI-sourced inquiries</div>
             <ul>

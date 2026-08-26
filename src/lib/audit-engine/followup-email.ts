@@ -119,7 +119,7 @@ const FOLLOWUP_EXAMPLE_POST_PITCH = `One thing I owe you in writing before you d
 
 There's no discount clock on this. What there is, is 5 founding seats, and they're given in exchange for a case study when we hit the results.
 
-You start free. The monthly retainer only starts once we've brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it's $499/mo, month to month.
+You start free. The monthly retainer only starts once we've brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $349/mo, month to month.
 
 What that covers, every month:
 · We re-write your current pages

@@ -63,7 +63,7 @@ export const VIDEO_LENGTH_LABEL = "4 min";
  * in OFFER_INCLUDES are a SEPARATE closed list and the two may never be mixed or netted against
  * each other — see the note over it.
  */
-export const PRICE_RETAINER = "$499 / month";
+export const PRICE_RETAINER = "$349 / month";
 
 /**
  * The same figure with no period attached, for sentences that already say one.
