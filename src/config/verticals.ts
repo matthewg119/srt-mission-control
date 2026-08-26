@@ -94,6 +94,11 @@ export interface Vertical {
   // Appended to the FINAL assembled prompt string. The rules above steer the model writing
   // the scene; this reaches the image model itself, so it is the last guard.
   image_negative?: string;
+  // WHERE every image for this avatar is allowed to be photographed, in one sentence, also
+  // appended to the final assembled prompt. Set it when a drop is only recognisable inside
+  // one kind of building - the clinic drop was shipping gym lots and kitchen islands until
+  // this existed. Left unset, the setting is whatever the subject implies.
+  setting_law?: string;
   // The ONLY statistics copy for this avatar may use. Every entry must be real and carry its
   // source inline. A generator that wants a number and finds this empty uses none.
   approved_numbers?: string[];
@@ -761,15 +766,33 @@ const MEDSPA_OWNER_AI: Vertical = {
   // Subject law. This used to be an absolute "no people, ever", which is what produced a
   // back catalogue of empty, perfectly composed rooms - both sad and the clearest tell that
   // an image was generated. Anonymous partial presence is now allowed and dealt by the
-  // PRESENCE axis; identifiable faces stay banned.
+  // PRESENCE axis; identifiable faces stay banned everywhere except the hook.
+  //
+  // ‼️ THE HOOK IS A DELIBERATE REVERSAL, SCOPED TO SCENE 1 (2026-08-26, Matthew's call with
+  // the conflict stated). This list used to read "Never default to injection or treatment-chair
+  // footage", which is right about every shot and wrong about the first one: the hook's entire
+  // job is to say WHO the video is for before a word of copy is read, and a metaphor cannot do
+  // that. He supplied eight gpt-image-2 references as the target - full face, eyes closed, head
+  // turned three-quarter, the practitioner as gloved hands, cinematic and clean. The subject is
+  // dealt by shot-grammar.ts, which is also where the face ban and the realism guards are
+  // lifted for that one frame. Do not restore the blanket ban or the realism tail on the hook.
   visual_rules: [
-    "No identifiable faces, ever. People may appear only as anonymous fragments: a cropped hand, the back of a head, a motion-blurred body crossing frame, legs at the frame edge, a silhouette behind frosted glass, a reflection. Never a portrait, never eye contact, never a posed subject.",
+    "EVERY image is photographed inside this med spa: the treatment rooms, the hallway, the front desk, the lobby, the back office, the retail wall, the back room, or its own doorway and parking lot. Never a home, a generic office, a gym, a car interior, a shop or a street that is not directly outside the clinic.",
+    "Someone is ALWAYS in the frame and always mid-task: the owner working, an injector or front-desk staff working, or a client being seen to. An empty room is not an option - it says nothing about who this video is for, which is the whole job of the frame.",
+    "After the hook nobody performs for the camera: no eye contact with the lens, no posing, no smiling for it, no stock-photo models, no staged team portrait. A working face may be turned away, in profile, three-quarter, or cut by the frame edge. Being visible is fine; being camera-aware is not.",
     "Real places and real objects only, with wear on them. Clutter, scuffs, fingerprints, cables, a crooked stack. A spotless room reads as a render.",
     "Paper and screens are welcome as props, but never ask for readable words on them: describe lettering as out of focus, too small to read, or turned away. The headline overlay is the only text anyone should be able to read, and generated lettering comes out garbled anyway.",
-    "Never default to injection or treatment-chair footage. It reads as consumer advertising and misses the owner entirely. Use the treatment room only when the idea needs identity resonance or a direct their-chair-is-full contrast.",
+    "The HOOK (scene 1 of a Hook Studio video) IS a treatment in progress: botox, HIFU, filler or laser hair removal, shot from an angle and never graphic. It is the one shot where a real patient and practitioner may be identifiable, and the one shot that is clean and cinematic rather than documentary. Its subject is dealt in code, not chosen here.",
+    "After the hook, either side of the clinic is fair game, chosen for the idea and never defaulted to: the owner's side (front desk, lobby, back office, retail wall, back room) or the treatment room. What is still banned is injection footage in EVERY shot, which reads as consumer advertising and misses the owner entirely.",
     "Every shot must leave clear space for the timed headline overlays.",
   ],
-  image_negative: "No identifiable faces. No posed or smiling subjects. No stock-photo models.",
+  image_negative: "No empty rooms. No posing, smiling or eye contact with the camera. No stock-photo models.",
+  // The location contract, appended to the finished prompt so it reaches gpt-image-2 itself
+  // and not only the model writing the scene. Added 2026-08-26 after a run of drops set in a
+  // gym parking lot, a gas station and a kitchen island: all correct against the old rules,
+  // all unrecognisable to a med spa owner.
+  setting_law:
+    "Every frame is photographed inside this med spa or at its own door: treatment room, hallway, front desk, lobby, back office, retail wall, back room, or its own parking lot. Never a home, a generic office, a gym, a car interior or an unrelated street.",
   // The ONLY statistics this avatar's copy may use. Platform-level and sourced; the
   // TRT-specific figures ($99 telehealth, Ro's raise) were dropped with that avatar.
   // Med-spa industry numbers (AmSpa, SOCi verticals) are NOT here because none has been
@@ -886,6 +909,7 @@ function mergeRowOverSeed(seed: Vertical, row: VerticalRow): Vertical {
     style_version: seed.style_version,
     visual_rules: seed.visual_rules,
     image_negative: seed.image_negative,
+    setting_law: seed.setting_law,
     approved_numbers: seed.approved_numbers,
   };
 }

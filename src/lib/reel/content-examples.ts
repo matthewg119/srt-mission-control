@@ -279,6 +279,11 @@ interface FrameRow {
   labels: string[] | null;
 }
 
+/** Where the Hook Studio scene-1 references live. Declared here rather than in reference-ask.ts
+ *  because both the writer (that file) and the reader (loadHookFrames) need it, and the import
+ *  only runs one way: reference-ask imports this module, never the reverse. */
+export const HOOK_SECTION = "broll/hook";
+
 async function fetchFrame(url: string): Promise<ClaudeImageInput | null> {
   try {
     const res = await fetch(url);
@@ -458,6 +463,42 @@ export async function loadSceneReferenceFrames(
     return frames.filter((f): f is ClaudeImageInput => f !== null);
   } catch (e) {
     console.error("[content-examples] loadSceneReferenceFrames fell back to empty:", (e as Error).message);
+    return [];
+  }
+}
+
+/**
+ * The HOOK look references for an avatar: the real treatment-in-progress photos filed under
+ * section `broll/hook` by the reference ask. STRICT like loadSceneReferenceFrames and for a
+ * sharper reason than continuity: these are clean, cinematic, face-forward clinic portraits,
+ * i.e. exactly what the B-roll lane's realism guards forbid. They must never leak into the
+ * vertical-wide realism pool loadReferenceFrames reads, so there is NO fallback here and the
+ * reference ask does not label them `realism_reference`. Empty until the operator drops some.
+ */
+export async function loadHookFrames(verticalId: string, limit = 4): Promise<ClaudeImageInput[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("content_examples")
+      .select("frame_urls,labels")
+      .eq("vertical_id", verticalId)
+      .eq("section", HOOK_SECTION)
+      .order("created_at", { ascending: false })
+      .limit(limit * 2);
+    if (error || !Array.isArray(data)) return [];
+    const urls: string[] = [];
+    for (const r of data as FrameRow[]) {
+      if ((r.labels ?? []).includes("generated")) continue;
+      for (const u of r.frame_urls ?? []) {
+        if (typeof u === "string" && u && !urls.includes(u)) urls.push(u);
+        if (urls.length >= limit) break;
+      }
+      if (urls.length >= limit) break;
+    }
+    if (urls.length === 0) return [];
+    const frames = await Promise.all(urls.map((u) => fetchFrame(u)));
+    return frames.filter((f): f is ClaudeImageInput => f !== null);
+  } catch (e) {
+    console.error("[content-examples] loadHookFrames fell back to empty:", (e as Error).message);
     return [];
   }
 }

@@ -13,9 +13,20 @@
 // subject) and never repeats a value inside one deal.
 //
 // Realism is the second job. Generated B-roll reads as AI because it is too clean:
-// perfect symmetry, dust motes in a god ray, teal-and-orange, nobody in frame ever.
-// REALISM_TAIL and AI_TELL_BAN ship on every prompt to fight exactly that, and the
-// PRESENCE axis puts anonymous partial people back in the shot (never a face).
+// perfect symmetry, dust motes in a god ray, teal-and-orange. REALISM_TAIL and
+// AI_TELL_BAN ship on every prompt to fight exactly that.
+//
+// RECOGNITION is the third, and it is the one this file got wrong until 2026-08-26.
+// Every drop was a technically excellent photograph of a place the viewer did not
+// recognise: a gym parking lot at dawn, a floor scale against a wall, magazines on a
+// lobby table, and nobody in any of them. A med spa owner scrolling past learns nothing
+// about who the video is for. Two rules now hold, and they hold on every prompt:
+//   1. The location is the avatar's own business (owner-lane SUBJECTS are all inside the
+//      clinic now, and shotGuards takes the avatar's setting law).
+//   2. Someone is always in frame and always mid-task (the PRESENCE axis lost its
+//      "Nobody in frame" value, and PERSON_LAW says it again in words).
+// What is still banned is performing for the camera, not being visible - see
+// CAMERA_AWARE_BAN.
 
 export type ShotLane = "owner" | "treatment";
 
@@ -63,11 +74,11 @@ export const CAPTURE: AxisEntry[] = [
   { key: "phone_handheld", text: "Shot handheld on a phone, slight tilt, nothing straightened" },
   { key: "phone_flash", text: "Shot on a phone with the on-camera flash, harsh foreground falloff" },
   { key: "security_cam", text: "A security-camera still, wide angle, mild barrel distortion, slightly soft" },
-  { key: "dashcam", text: "A dashcam frame through a windshield, fixed and slightly low" },
+  { key: "counter_edge", text: "Shot from behind the reception counter, the counter edge cutting the bottom of the frame" },
   { key: "doc_photo", text: "A printed page photographed on a desk at a slight angle, one corner lifting" },
   { key: "screen_offshot", text: "A monitor photographed off the screen, faint moire and a reflection in the glass" },
   { key: "reflection", text: "Shot through glass so the reflection doubles over what is behind it" },
-  { key: "long_lens", text: "Shot on a long lens from across the street, compressed and slightly grainy" },
+  { key: "long_lens", text: "Shot on a long lens from the far end of the room, compressed and slightly grainy" },
   { key: "overhead_phone", text: "A phone held straight down over the surface, flat lay, hand shadow at the edge" },
   { key: "disposable", text: "A disposable-camera frame, heavy grain, blown highlights" },
   { key: "tripod_wide", text: "A locked-off wide on a tripod, level and patient" },
@@ -79,14 +90,14 @@ export const CAPTURE: AxisEntry[] = [
 export const LIGHT: AxisEntry[] = [
   { key: "overcast", text: "Flat overcast daylight, no visible shadow direction" },
   { key: "hard_noon", text: "Hard midday sun, black-edged shadows, blown highlights" },
-  { key: "sodium_lot", text: "Orange sodium parking-lot light after dark" },
+  { key: "sodium_lot", text: "Orange parking-lot light coming through the front glass after dark" },
   { key: "one_tube", text: "A single fluorescent tube overhead, everything else falling off" },
   { key: "screen_only", text: "Lit only by a screen, the rest of the room unlit" },
-  { key: "headlights", text: "Headlights raking through glass, moving highlights" },
+  { key: "headlights", text: "Headlights raking through the front glass, moving highlights" },
   { key: "blue_hour_blinds", text: "Blue-hour light through half-closed blinds" },
   { key: "mixed_wb", text: "A warm lamp fighting cool daylight, two color temperatures in one frame" },
   { key: "direct_flash", text: "Direct flash, flat and unflattering, hard shadow on the wall behind" },
-  { key: "windshield_sun", text: "Low sun through a windshield, glare across the glass" },
+  { key: "windshield_sun", text: "Low sun through the front window, glare across the glass" },
   { key: "led_panel", text: "A clinical LED panel directly overhead, even and shadowless" },
   { key: "backlit_window", text: "Backlit by a window that blows out completely behind the subject" },
 ];
@@ -116,16 +127,22 @@ export const FRAMING: AxisEntry[] = [
   { key: "low_waist", text: "Low angle from about waist height" },
 ];
 
-// Anonymous partial presence. A photograph reads as taken, not generated, when a
-// person is incidentally in it. Identifiable faces stay banned everywhere.
+// WHO is working in the frame. This axis USED to carry "Nobody in frame" at triple weight,
+// and that one value is what produced the back catalogue Matthew rejected on 2026-08-26:
+// well-composed empty parking lots and lobby tables that say nothing about who the video is
+// for. There is no empty option any more - every frame has a person in it and that person is
+// always mid-task. Roles are written role-neutral ("the owner", "a staff member") because
+// Hook Studio deals these looks for every avatar, not only the clinic.
 export const PRESENCE: AxisEntry[] = [
-  { key: "nobody", text: "Nobody in frame", weight: 3 },
-  { key: "hand_cropped", text: "One hand only, cropped at the wrist by the frame edge" },
-  { key: "back_of_head", text: "The back of someone's head, out of focus in the foreground" },
-  { key: "blur_cross", text: "A body crossing the frame, motion-blurred past recognition" },
-  { key: "legs_edge", text: "Legs and shoes at the very edge of frame, the rest cut off" },
-  { key: "frosted_silhouette", text: "A silhouette behind frosted glass, no features readable" },
-  { key: "reflected_person", text: "An unidentifiable person reflected in glass or a screen" },
+  { key: "owner_back", text: "The owner is in frame working, seen from behind or over her shoulder", weight: 2 },
+  { key: "owner_profile", text: "The owner is in frame in three-quarter profile, mid-task, unaware of the camera", weight: 2 },
+  { key: "owner_hands", text: "The owner's hands only, mid-task, cropped at the wrist by the frame edge" },
+  { key: "staff_edge", text: "A staff member working at the edge of frame, face turned away" },
+  { key: "gloved_hands", text: "Gloved hands working at the edge of frame, the rest of the person cut off" },
+  { key: "staff_cross", text: "A staff member crossing the frame mid-stride, motion-blurred past recognition" },
+  { key: "client_leaving", text: "A client being walked toward the door, seen from behind" },
+  { key: "reflected_worker", text: "Someone working, seen only as a reflection in glass or a screen" },
+  { key: "silhouette_work", text: "A silhouette working behind frosted glass or a half-open door" },
 ];
 
 // ---- the subject library ----------------------------------------------------------------
@@ -136,70 +153,82 @@ function lane(seeds: SubjectSeed[], laneId: ShotLane): SubjectEntry[] {
   return seeds.map(([key, text]) => ({ key, text, lane: laneId }));
 }
 
-// `owner` - the B2B avatar's own world. The metaphors that carry "you are not in the
-// answer" without a single empty-waiting-room cliche.
+// `owner` - the avatar's own side of HER OWN CLINIC. Every subject here is inside the med spa
+// or standing at its own door: front desk, lobby, back office, retail wall, back room,
+// hallway, its own lot. That is the whole change of 2026-08-26. The old library wandered to
+// kitchen islands, gas pumps, school pickup lines and a gym parking lot at dawn - technically
+// "the owner's world", and the drops it produced were unrecognisable to a med spa owner, which
+// is the only test that matters. If a subject could be photographed at any small business in
+// America, it does not belong in this list.
+//
+// This lane feeds the daily b-roll drop only (dealShots is called from broll-suggestions.ts,
+// which runs for drop_mode "broll_suggestions" - the clinic channel). Adding a second
+// broll_suggestions avatar means splitting this lane by vertical first.
 const OWNER_SUBJECTS: SubjectEntry[] = lane(
   [
-    ["laptop_kitchen", "a laptop open on a kitchen island late at night, dishes still in the sink"],
-    ["invoices", "a stack of unopened agency invoices on a counter, the top one half torn"],
-    ["calendar_wiped", "a dry-erase appointment calendar wiped blank, ghost marker streaks left behind"],
-    ["pos_quiet", "a card terminal on a reception counter, its screen asleep"],
-    ["banner_faded", "a sun-faded grand opening banner zip-tied to a fence"],
-    ["suite_sign", "a strip-mall suite sign listing six tenants"],
-    ["rival_billboard", "a competitor billboard seen through a moving car window"],
-    ["loan_statement", "a printed loan statement on a desk, the numbers too small to read"],
-    ["product_lockbox", "a small lockbox holding unopened product cartons"],
-    ["phone_facedown", "a phone face down beside a cold half-finished coffee"],
-    ["stool_alone", "a rolling stool alone in the middle of a lit room"],
-    ["price_list", "a laminated price list taped to a wall, curling at one corner"],
-    ["storefront_night", "a storefront at night, sign still lit, the interior dark"],
-    ["lot_early", "an empty business parking lot at seven in the morning with one car in it"],
-    ["lockscreen_review", "a phone lock screen face up on a table showing a review notification"],
-    ["ai_answer_rivals", "a laptop screen showing an AI answer that lists three other clinics"],
-    ["keys_counter", "a ring of keys dropped on a front counter"],
-    ["open_sign", "an OPEN sign flipped to CLOSED, shot through the glass from outside"],
-    ["mail_pile", "a pile of mail wedged under a glass front door"],
-    ["whiteboard_goals", "a whiteboard of monthly goals half erased"],
-    ["folding_chairs", "stacked folding chairs against a back-room wall"],
-    ["breakroom", "a break room table with one chair pulled out"],
-    ["supply_closet", "a supply closet shelf with boxes stacked unevenly"],
-    ["receipt_tape", "a curl of receipt tape left on a counter"],
-    ["clipboard_blank", "a clipboard of blank intake forms on a reception desk"],
-    ["water_cooler", "a water cooler and a sleeve of paper cups in a lobby"],
-    ["magazines", "magazines fanned on a lobby table, one cover curled"],
-    ["door_hours", "vinyl business-hours lettering on a glass door, shot from the sidewalk"],
-    ["wifi_router", "a router and tangled cables on a shelf"],
-    ["pen_cup", "a cup of pens on a counter, one missing its cap"],
-    ["monitor_dashboard", "a monitor showing a marketing dashboard, every number out of focus"],
-    ["headset", "a headset resting across a keyboard"],
-    ["lobby_chairs", "two lobby chairs and a small table seen from the doorway"],
-    ["plant_dry", "a potted plant going dry in a lobby corner"],
-    ["diploma_wall", "framed certificates on a wall, the glass reflecting a window"],
-    ["badge_lanyard", "a clinic badge on a lanyard hanging from a coat hook"],
-    ["scrubs_hook", "folded scrubs on a hook behind a door"],
-    ["car_dash", "a car dashboard at a stoplight with a phone in the mount"],
-    ["gas_station", "a gas pump at night, the card reader lit"],
-    ["school_pickup", "a school pickup line seen through a windshield"],
-    ["gym_parking", "a gym parking lot at dawn"],
-    ["bank_envelope", "a bank envelope and a pen on a kitchen table"],
-    ["calculator", "a calculator sitting on a printed spreadsheet, digits out of focus"],
-    ["notebook_list", "a spiral notebook with a handwritten list, the writing illegible"],
-    ["sticky_notes", "a monitor bezel crowded with sticky notes"],
-    ["filing_drawer", "an open filing drawer with the folders leaning"],
-    ["printer_tray", "a printer mid-job, paper stacked in the tray"],
-    ["shredder", "a shredder bin full of paper strips"],
-    ["thermostat", "a wall thermostat early in the morning"],
-    ["light_switches", "a bank of light switches with only the first one flipped up"],
-    ["alarm_panel", "a security keypad beside a back door"],
-    ["trash_bags", "trash bags set by a back door at closing"],
-    ["sidewalk_sign", "an A-frame sidewalk sign on wet pavement"],
-    ["window_decal", "a window decal peeling at one corner"],
-    ["neighbor_line", "a line of customers outside the business next door"],
-    ["rival_storefront", "a competitor storefront across the street with a full parking lot"],
-    ["mall_directory", "a shopping-center directory board"],
-    ["review_printout", "a printed page of reviews with one circled in pen"],
-    ["checkin_tablet", "a check-in tablet on a stand, screen asleep"],
-    ["clock_wall", "a wall clock in an empty room in late afternoon light"],
+    // the front desk
+    ["front_desk_phone", "the reception phone on a med spa front desk, not ringing"],
+    ["booking_screen", "the booking calendar open on a med spa front-desk monitor, the day mostly white space"],
+    ["checkin_tablet", "the check-in tablet on its stand at a med spa reception counter"],
+    ["card_reader", "the card reader on a med spa checkout counter"],
+    ["receipt_tape", "a curl of receipt tape left on a med spa checkout counter"],
+    ["intake_clipboard", "a clipboard of blank intake forms on a med spa reception desk"],
+    ["treatment_menu", "a laminated treatment menu on a med spa reception counter, curling at one corner"],
+    ["gift_cards", "a rack of gift cards on a med spa reception counter"],
+    ["keys_counter", "a ring of keys dropped on a med spa front counter at close"],
+    ["headset_desk", "a headset resting across the keyboard at a med spa front desk"],
+    ["sticky_notes", "a med spa front-desk monitor, its bezel crowded with sticky notes"],
+    ["pen_cup", "a cup of pens on a med spa front counter, one missing its cap"],
+    ["reception_mirror", "the mirror behind a med spa reception desk"],
+    ["cancel_texts", "a phone on a med spa front desk showing a cancellation text thread, the words too small to read"],
+    // the lobby
+    ["lobby_chairs", "the waiting chairs in a med spa lobby, seen from the front desk"],
+    ["magazines", "magazines fanned on a med spa lobby table, one cover curled"],
+    ["water_station", "the water and cucumber station in a med spa lobby"],
+    ["plant_dry", "a potted plant going dry in a med spa lobby corner"],
+    ["clock_wall", "a wall clock in a med spa lobby in late afternoon light"],
+    ["diploma_wall", "framed injector certifications on a med spa lobby wall, the glass reflecting a window"],
+    ["retail_shelf_front", "the retail shelf of serums behind a med spa front desk, labels out of focus"],
+    ["before_after_wall", "a wall of framed clinic photography in a med spa lobby, the images out of focus"],
+    // the doors and the street directly outside
+    ["clinic_front_door", "the front door of a med spa seen from inside, the street beyond it"],
+    ["door_hours", "the vinyl business hours on a med spa glass front door, shot from inside"],
+    ["open_sign", "an OPEN sign hanging in a med spa front window"],
+    ["window_decal", "the clinic window decal peeling at one corner, shot from inside the med spa"],
+    ["suite_sign", "the strip-mall suite sign outside a med spa, six tenants listed"],
+    ["sidewalk_sign", "an A-frame sign on the sidewalk directly outside a med spa"],
+    ["clinic_lot_morning", "the med spa's own parking lot at seven in the morning with one car in it"],
+    ["rival_across", "a rival clinic storefront seen from inside the med spa front window, its lot full"],
+    ["mail_under_door", "a pile of mail wedged under a med spa glass front door"],
+    // the back office
+    ["back_office_desk", "the owner's back-office desk in a med spa, a laptop and paperwork on it"],
+    ["agency_invoices", "a stack of unopened marketing agency invoices on a med spa back-office desk"],
+    ["ai_answer_rivals", "a laptop on a med spa desk showing an AI answer that lists three other clinics"],
+    ["phone_search", "a phone held over a med spa reception counter with a search open on it"],
+    ["dashboard_monitor", "a marketing dashboard on a med spa back-office monitor, every number out of focus"],
+    ["review_printout", "a printed page of clinic reviews on a med spa desk, one circled in pen"],
+    ["whiteboard_goals", "a whiteboard of monthly goals in a med spa back office, half erased"],
+    ["calculator", "a calculator sitting on a printed spreadsheet on a med spa back-office desk"],
+    ["notebook_list", "a spiral notebook of handwritten to-dos on a med spa front desk, the writing illegible"],
+    ["filing_drawer", "an open filing drawer of client charts in a med spa back office"],
+    ["printer_tray", "a printer mid-job in a med spa back office, paper stacked in the tray"],
+    ["shredder", "a shredder bin full of paper strips in a med spa back office"],
+    ["wifi_router", "a router and tangled cables on a shelf in a med spa back office"],
+    ["loan_statement", "a printed equipment loan statement on a med spa desk, the numbers too small to read"],
+    // the back of house
+    ["product_cartons", "unopened product cartons stacked in a med spa back room"],
+    ["product_lockbox", "a small lockbox of injectable cartons in a med spa back room"],
+    ["vial_fridge", "a small refrigerator of product vials in a med spa back room"],
+    ["supply_shelf", "a med spa supply shelf, boxes of gloves and gauze stacked unevenly"],
+    ["breakroom", "the break room of a med spa, one chair pulled out"],
+    ["scrubs_hook", "folded scrubs on a hook behind a med spa back door"],
+    ["badge_lanyard", "a clinic badge on a lanyard hanging by a med spa back door"],
+    ["stool_alone", "a rolling stool in the middle of a lit med spa treatment room"],
+    ["hallway_doors", "the back hallway of a med spa, treatment room doors along it"],
+    ["light_switches", "the bank of light switches inside a med spa back door, only the first one flipped up"],
+    ["alarm_panel", "the security keypad beside a med spa back door"],
+    ["trash_bags", "trash bags set by a med spa back door at closing"],
+    ["consult_table", "a consult room table in a med spa with a brochure and a pen on it"],
   ],
   "owner"
 );
@@ -218,57 +247,57 @@ const TREATMENT_SUBJECTS: SubjectEntry[] = lane(
     ["hydrafacial_wand", "a hydrafacial wand and its coiled tubing"],
     ["vial_load", "a gloved hand drawing from a small vial"],
     ["mirror_check", "the aftercare mirror on a counter with the room reflected in it"],
-    ["checkout", "a front-desk checkout, a card going into a reader"],
-    ["robe_hook", "a robe on a hook in a changing corner"],
+    ["checkout", "a med spa front-desk checkout, a card going into a reader"],
+    ["robe_hook", "a robe on a hook in a med spa changing corner"],
     ["injectable_box", "a foil-wrapped carton on a counter beside a skin marker"],
-    ["sharps", "a sharps container mounted on a wall"],
+    ["sharps", "a sharps container mounted on a treatment room wall"],
     ["towel_warmer", "an open towel warmer with steam coming off the stack"],
     ["consult_clipboard", "a consult sheet on a clipboard, the handwriting illegible"],
     ["bed_repaper", "a treatment bed being re-papered, the roll pulled halfway"],
     ["gauze_tray", "gauze, alcohol pads and a marker laid out on a tray"],
     ["ice_roller", "an ice roller resting on a folded towel"],
     ["led_mask", "an LED face mask glowing on its stand"],
-    ["cryo_tank", "a small cryo tank standing in a corner"],
+    ["cryo_tank", "a small cryo tank standing in a treatment room corner"],
     ["wax_pot", "a wax pot warming with a spatula resting across it"],
     ["lash_tray", "a lash tray and tweezers under a task lamp"],
-    ["glove_box", "a glove box mounted by a door with one glove half pulled out"],
-    ["sanitizer", "a sanitizer pump on a counter catching the light"],
+    ["glove_box", "a glove box mounted by a treatment room door with one glove half pulled out"],
+    ["sanitizer", "a sanitizer pump on a treatment room counter catching the light"],
     ["skin_marker_dots", "marking dots drawn on a cheek, extreme macro, no full face in frame"],
     ["numbing_cream", "a tube of numbing cream and a wooden depressor"],
     ["chair_controls", "the foot pedal and chair controls under a treatment bed"],
     ["armrest", "a forearm resting on a treatment armrest, cropped at the elbow"],
-    ["hair_cap", "a disposable cap hanging on a hook"],
+    ["hair_cap", "a disposable cap hanging on a treatment room hook"],
     ["magnifier_lamp", "a magnifier lamp swung out over an empty bed"],
-    ["retail_shelf", "a retail shelf of serums with the labels out of focus"],
-    ["sample_jars", "small sample jars lined up on glass"],
+    ["retail_shelf", "a med spa retail shelf of serums with the labels out of focus"],
+    ["sample_jars", "small sample jars lined up on a med spa retail shelf"],
     ["tint_bowl", "a tint bowl and brush on a rolling cart"],
     ["steamer", "a facial steamer running toward an empty bed"],
     ["instrument_cart", "a rolling cart of instruments beside a treatment bed"],
     ["uv_cabinet", "a sterilizer cabinet with the door ajar"],
-    ["towel_cart", "a cart of folded white towels"],
-    ["laundry_bin", "a bin of used towels beside a back door"],
-    ["timer", "a timer counting down on a counter"],
-    ["speaker_phone", "a small speaker and a phone playing music on a shelf"],
-    ["candle", "a candle burning on a treatment-room windowsill"],
+    ["towel_cart", "a cart of folded white towels in a med spa hallway"],
+    ["laundry_bin", "a bin of used towels beside a med spa back door"],
+    ["timer", "a timer counting down on a treatment room counter"],
+    ["speaker_phone", "a small speaker and a phone playing music on a treatment room shelf"],
+    ["candle", "a candle burning on a treatment room windowsill"],
     ["privacy_curtain", "a privacy curtain drawn halfway"],
     ["blanket_fold", "a folded blanket at the foot of a treatment bed"],
     ["slippers", "disposable slippers on the floor beside a bed"],
-    ["water_glass", "a glass of water with a straw on a side table"],
-    ["photo_backdrop", "a photo light and a plain backdrop set up in a corner"],
-    ["ring_light", "a ring light on a stand facing an empty stool"],
+    ["water_glass", "a glass of water with a straw on a treatment room side table"],
+    ["photo_backdrop", "a photo light and a plain backdrop set up in a treatment room corner"],
+    ["ring_light", "a ring light on a stand in a treatment room, facing a stool"],
     ["tablet_consent", "a tablet showing a consent form with a stylus resting on it"],
-    ["appointment_card", "a printed appointment card left on a counter"],
+    ["appointment_card", "a printed appointment card left on a med spa counter"],
     ["aftercare_sheet", "an aftercare sheet folded on a pillow"],
     ["headband", "a spa headband on a folded towel"],
     ["cotton_rounds", "cotton rounds and a toner bottle on a tray"],
-    ["gua_sha", "a gua sha stone and an oil bottle on stone"],
-    ["contour_paddles", "body-contouring paddles laid out on a bed"],
-    ["compression_wrap", "a compression wrap coiled on a shelf"],
-    ["scale_tape", "a floor scale and a tape measure against a wall"],
-    ["iv_bag", "an IV bag hanging on a pole beside a lounge chair"],
+    ["gua_sha", "a gua sha stone and an oil bottle on a treatment room counter"],
+    ["contour_paddles", "body-contouring paddles laid out on a treatment bed"],
+    ["compression_wrap", "a compression wrap coiled on a treatment room shelf"],
+    ["scale_tape", "a body-composition scale and a tape measure in a med spa treatment room"],
+    ["iv_bag", "an IV bag hanging on a pole beside a med spa drip lounge chair"],
     ["iv_arm", "a taped IV line on a forearm, cropped above the elbow"],
-    ["drip_lounge", "a row of drip lounge chairs with one blanket left behind"],
-    ["back_hallway", "a back hallway of treatment-room doors with one standing open"],
+    ["drip_lounge", "a row of med spa drip lounge chairs with one blanket left behind"],
+    ["back_hallway", "a med spa back hallway of treatment room doors with one standing open"],
   ],
   "treatment"
 );
@@ -294,19 +323,35 @@ export const AI_TELL_BAN =
   "glowing UI panels floating in dark space, lens flares, glossy stock-photo polish, " +
   "cinematic haze, or a flawlessly tidy symmetrical room.";
 
-export const FACE_BAN =
-  "No identifiable faces. No posed or smiling subjects. No stock-photo models.";
+// What the frame may NOT do with the person in it. This used to be a blanket face ban, and
+// together with the "Nobody in frame" presence value it is what emptied every room. The line
+// that actually matters is not "no faces" but "nobody performing for a camera": a real worker
+// caught mid-task reads as photographed, a model looking down the lens reads as stock.
+export const CAMERA_AWARE_BAN =
+  "Nobody looks into the camera, poses for it, or smiles for it. No stock-photo models, no headshots, " +
+  "no staged team portrait. A working face may sit in frame turned away, in profile or three-quarter, " +
+  "or be cut by the frame edge; the work is the subject, never the person.";
+
+// The half of the 2026-08-26 correction that the presence axis cannot enforce on its own: a
+// dealt presence value can still come back as a beautifully composed room with a hand somewhere
+// in the corner. Stated as its own sentence so it survives a model that skims.
+export const PERSON_LAW =
+  "Someone is always in this frame and always mid-task, doing real work in this business. Never an empty room.";
 
 /**
- * The closing guards every image prompt ends with. The avatar's own `image_negative` is
- * folded in, but skipped when it just restates FACE_BAN - which is what the med-spa avatar's
- * negative is, and repeating it verbatim only spends tokens.
+ * The closing guards every image prompt ends with (scene 1 of a Hook Studio video excepted -
+ * see hookGuards). `settingLaw` is the avatar's own location contract, passed in rather than
+ * hardcoded because Hook Studio deals these guards for every vertical, and "the location is
+ * always the med spa" is true of exactly one of them. The avatar's `image_negative` is folded
+ * in, but skipped when it only restates CAMERA_AWARE_BAN.
  */
-export function shotGuards(extraNegative?: string): string {
+export function shotGuards(extraNegative?: string, settingLaw?: string | null): string {
   const trimmed = (extraNegative ?? "").trim().replace(/[.\s]+$/, "");
-  const duplicate = !trimmed || FACE_BAN.toLowerCase().includes(trimmed.toLowerCase());
+  const duplicate = !trimmed || CAMERA_AWARE_BAN.toLowerCase().includes(trimmed.toLowerCase());
   const extra = duplicate ? "" : `${trimmed}. `;
-  return `${REALISM_TAIL} ${AI_TELL_BAN} ${FACE_BAN} ${extra}No on-screen text, logos, or watermarks in the image. 9:16 vertical.`;
+  const setting = (settingLaw ?? "").trim();
+  const where = setting ? `${setting.replace(/[.\s]+$/, "")}. ` : "";
+  return `${where}${PERSON_LAW} ${REALISM_TAIL} ${AI_TELL_BAN} ${CAMERA_AWARE_BAN} ${extra}No on-screen text, logos, or watermarks in the image. 9:16 vertical.`;
 }
 
 // ---- rendering --------------------------------------------------------------------------
@@ -481,4 +526,106 @@ export function dealShots(opts: {
 export function grammarSize(laneId?: ShotLane): number {
   const subjects = laneId ? subjectsFor(laneId).length : SUBJECTS.length;
   return subjects * CAPTURE.length * LIGHT.length * GRADE.length * FRAMING.length * PRESENCE.length;
+}
+
+// ---- the hook shot (Hook Studio scene 1) -------------------------------------------------
+//
+// Scene 1 of a Hook Studio video is the one frame whose job is to say WHO the video is for
+// before a single word of copy is read. Everything above exists to make B-roll look
+// photographed rather than generated. The hook is the deliberate opposite, and BOTH reversals
+// are scoped to this one shot:
+//
+//   - CAMERA_AWARE_BAN is dropped. The patient's face IS the frame. Matthew's references are full
+//     face, eyes closed, head turned three-quarter, the practitioner entering as gloved hands.
+//   - REALISM_TAIL and AI_TELL_BAN are dropped. Those references read "Photorealistic
+//     cinematic vertical 9:16, muted desaturated warm-neutral color grade": clean, composed,
+//     aspirational, which is precisely what the documentary guards forbid.
+//
+// Do not "fix" a hook that looks too polished by putting the realism tail back on it, and do
+// not let the treatment subject leak past scene 1 - injection footage in every shot is the
+// consumer-advertising failure the avatar's visual rules still guard against everywhere else.
+
+/** The four treatment families Matthew named, four framings each so rotation is real. Written
+ *  the way his references read: the patient carries the frame, the practitioner is hands. */
+export const HOOK_TREATMENT_SUBJECTS: AxisEntry[] = [
+  // botox
+  { key: "botox_crowsfoot", text: "a gloved hand steadying the temple while a fine syringe sits at the crow's foot, the patient reclined with her eyes closed and her head turned three-quarter" },
+  { key: "botox_forehead", text: "a syringe angled above the brow and a second gloved hand flattening the forehead, the patient's eyes closed and her head tipped back on the headrest" },
+  { key: "botox_glabella", text: "a fine needle poised between the brows with gloved fingers bracketing the skin, the patient's face calm and turned slightly away" },
+  { key: "botox_masseter", text: "a syringe angled at the jaw below the ear and a gloved hand cupping the cheek, the patient's head turned to show the jawline" },
+  // filler
+  { key: "filler_lip", text: "a syringe at the lip border and a gloved hand cradling the chin, the patient's eyes closed and her chin lifted toward the light" },
+  { key: "filler_cheek", text: "a cannula pass along the cheekbone with pale marker dots still on the skin, the patient's head turned three-quarter" },
+  { key: "filler_jaw", text: "a gloved hand steadying the chin while a syringe traces the jawline, the patient's face lifted and still" },
+  { key: "filler_tear_trough", text: "a fine syringe held just below the eye, the patient's eyes closed and her head resting back against the chair" },
+  // hifu
+  { key: "hifu_jaw", text: "an ultrasound handpiece drawn along the jawline with clear gel catching the light, the patient's head tilted back on the headrest" },
+  { key: "hifu_cheek", text: "a HIFU handpiece pressed flat to the cheek and held by a gloved hand, the patient's eyes closed" },
+  { key: "hifu_neck", text: "a handpiece worked down the side of the neck through gleaming gel, the patient's chin lifted and her eyes closed" },
+  { key: "hifu_screen", text: "a HIFU handpiece at the temple with the treatment screen glowing out of focus behind, the patient reclined and still" },
+  // laser hair removal
+  { key: "lhr_underarm", text: "a laser handpiece over a raised underarm, the nurse in orange safety glasses leaning in, the patient's eyes under opaque shields" },
+  { key: "lhr_shin", text: "a laser handpiece drawn along a shin, the nurse in orange safety glasses, the room light dimmed around the treatment field" },
+  { key: "lhr_upper_lip", text: "a laser handpiece at the upper lip with gloved fingers holding the skin taut, both nurse and patient in protective eyewear" },
+  { key: "lhr_jawline", text: "a laser handpiece passing under the jaw, the nurse in orange safety glasses watching the tip, the patient's eyes shielded" },
+];
+
+/** The hook's craft, replacing the dealt look line entirely for scene 1. */
+export const HOOK_LOOK =
+  "Shot the way a med spa shoots its own campaign. A clean, styled treatment room: neutral walls, " +
+  "a leather treatment chair, a spa headband or robe where it fits. Shallow depth of field, soft " +
+  "directional light, the practitioner present only as gloved hands and forearms unless the subject names her.";
+
+/** The one axis that still rotates on the hook. Both values are his; his two reference rows
+ *  differ by exactly this and nothing else. Two entries, so the window below alternates them. */
+export const HOOK_GRADE: AxisEntry[] = [
+  { key: "warm_neutral", text: "muted desaturated warm-neutral color grade" },
+  { key: "cool_clinical", text: "muted desaturated cool clinical color grade" },
+];
+
+/** "Not graphic" as Matthew means it. The syringe, the needle and the handpiece are the POINT
+ *  and are never banned - every reference has one touching skin. What is banned is the
+ *  clinical-textbook register that turns an aspirational frame into a medical photograph. */
+export const NOT_GRAPHIC_BAN =
+  "Do not produce: blood, bruising, swelling, broken or wounded skin, a before-and-after split, " +
+  "a medical diagram, or clinical-textbook framing. The frame stays calm and aspirational.";
+
+/** The scene-1 sibling of shotGuards(). Deliberately carries neither CAMERA_AWARE_BAN, PERSON_LAW, REALISM_TAIL,
+ *  AI_TELL_BAN nor the avatar's image_negative (which restates the face ban). */
+export function hookGuards(): string {
+  return `${NOT_GRAPHIC_BAN} No on-screen text, logos, or watermarks in the image. 9:16 vertical.`;
+}
+
+export interface HookShot {
+  subject: AxisEntry;
+  grade: AxisEntry;
+}
+
+/** Recently-dealt hook keys, most-recent-first. */
+export interface RecentHooks {
+  subject?: string[];
+  grade?: string[];
+}
+
+// Subject remembers 8 back (half the library); grade has two values, so a window of 1 makes it
+// alternate, which is the most rotation two entries can honestly offer.
+const HOOK_WINDOW: Record<keyof RecentHooks, number> = { subject: 8, grade: 1 };
+
+/** Deal the hook: one treatment subject and one grade, neither repeating against `recent`. */
+export function dealHookShot(opts: { recent?: RecentHooks } = {}): HookShot {
+  const recent = opts.recent ?? {};
+  return {
+    subject: pickAxis(HOOK_TREATMENT_SUBJECTS, recent.subject, HOOK_WINDOW.subject, new Set()),
+    grade: pickAxis(HOOK_GRADE, recent.grade, HOOK_WINDOW.grade, new Set()),
+  };
+}
+
+/** The hook brief, opening the way his references open: format, grade, then craft and subject. */
+export function renderHookBrief(shot: HookShot): string {
+  return `Photorealistic cinematic vertical 9:16, ${shot.grade.text}. ${HOOK_LOOK} Subject: ${shot.subject.text}.`;
+}
+
+/** A short label for the Slack card, so the dealt treatment is visible at a glance. */
+export function hookLabel(shot: HookShot): string {
+  return `${shot.subject.key} / ${shot.grade.key}`;
 }

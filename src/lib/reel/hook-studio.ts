@@ -29,6 +29,7 @@ import {
   insertJob,
   getJobByPickerTs,
   getLatestJobByThread,
+  recentJobData,
   updateJob,
   type ContentJob,
 } from "@/lib/reel/jobs";
@@ -70,8 +71,18 @@ import {
   dropWorkflowLibraryId,
   type Vertical,
 } from "@/config/verticals";
-import { loadReferenceFrames } from "@/lib/reel/content-examples";
-import { dealLooks, renderLookLine, shotGuards } from "@/config/shot-grammar";
+import { loadHookFrames, loadReferenceFrames } from "@/lib/reel/content-examples";
+import {
+  dealLooks,
+  dealHookShot,
+  hookGuards,
+  hookLabel,
+  renderHookBrief,
+  renderLookLine,
+  shotGuards,
+  type HookShot,
+  type RecentHooks,
+} from "@/config/shot-grammar";
 
 const HOOK_FORMAT = "hook_studio";
 
@@ -114,6 +125,15 @@ function isHookJob(job: ContentJob | null): job is ContentJob {
 async function getHookJob(threadTs: string): Promise<ContentJob | null> {
   const job = await getLatestJobByThread(threadTs);
   return isHookJob(job) ? job : null;
+}
+
+/** What the last dozen hook sessions dealt for scene 1, newest first. There is no table for
+ *  this: the keys live on each job's `data`, which is why the read tolerates an empty answer. */
+async function recentHookShots(): Promise<RecentHooks> {
+  const rows = await recentJobData(HOOK_FORMAT, 12);
+  const col = (k: "hook_subject_key" | "hook_grade_key") =>
+    rows.map((d) => d[k]).filter((v): v is string => typeof v === "string" && v.length > 0);
+  return { subject: col("hook_subject_key"), grade: col("hook_grade_key") };
 }
 
 function slotImages(job: ContentJob): string[] {
@@ -390,6 +410,11 @@ async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow
   try {
     const drop = await loadVertical(job.vertical_id);
     const owner = await loadVertical(dropOwnerVerticalId(drop));
+    const hookShot = dealHookShot({ recent: await recentHookShots() });
+    // Read by the DROP vertical, not the owner: runReferenceAsk files every reference under the
+    // channel's vertical id, and the two ids differ whenever a channel sets owner_vertical_id.
+    // Reading the other one would be a reader with no writer, silently returning [] forever.
+    const hookFrames = await loadHookFrames(drop.id).catch(() => []);
     const [board] = await generateStoryboardOptions({
       owner,
       workflow,
@@ -398,6 +423,8 @@ async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow
       hookImage: null,
       scenes,
       optionCount: 1,
+      hookShot,
+      hookFrames,
     });
     if (!board?.prompts.length) throw new Error("no prompts returned");
 
@@ -410,6 +437,8 @@ async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow
         ...fresh.data,
         hs_image_prompt_options: board.prompts.map((p) => ({ kind: "bot_pick" as const, prompt: p })),
         hs_image_prompts_posted: true,
+        hook_subject_key: hookShot.subject.key,
+        hook_grade_key: hookShot.grade.key,
       },
     });
 
@@ -419,7 +448,10 @@ async function postSceneImagePromptsFromCopy(job: ContentJob, workflow: Workflow
       carded,
       [
         `Copy locked. *Image prompts for ${workflow.name}*, built from it${board.title ? ` (${board.title})` : ""}:`,
-        ...board.prompts.map((p, i) => `*Scene ${i + 1} — ${roleLabel(i + 1)}*\n${block(p)}`),
+        ...board.prompts.map(
+          (p, i) =>
+            `*Scene ${i + 1} — ${roleLabel(i + 1)}*${i === 0 ? `  ·  _hook: ${hookLabel(hookShot)}_` : ""}\n${block(p)}`
+        ),
         "",
         `React ✅ and I'll generate all ${board.prompts.length} with gpt-image-2 right here, then write the motion prompts.`,
         "Or generate them yourself and drop them in scene order (comment `scene N` to target a slot). `retry` rewrites the prompts.",
@@ -519,9 +551,18 @@ export async function generateStoryboardOptions(args: {
   hookImage: ClaudeImageInput | null;
   scenes: number[]; // 1-based scene indexes still needing an image
   optionCount?: number;
+  /** The dealt treatment shot to PIN scene 1 to. Only honored when this run is writing scene 1
+   *  from scratch (no hook image); the hook-image-first caller already has its scene 1. */
+  hookShot?: HookShot | null;
+  /** Reference photos of the hook look, if any are on file. */
+  hookFrames?: ClaudeImageInput[];
 }): Promise<Array<{ title: string; prompts: string[] }>> {
   const { workflow } = args;
   const optionCount = args.optionCount ?? 3;
+  // Scene 1 is the avatar declaration: a treatment in progress, dealt in code so the model
+  // cannot drift back to a metaphor. See the hook block in shot-grammar.ts for why it carries
+  // its own look and its own guards instead of the documentary ones.
+  const hookShot = !args.hookImage && args.scenes.includes(1) ? args.hookShot ?? null : null;
   // One dealt LOOK per OPTION, not per scene: scenes inside an option still have to read as
   // one continuous shoot, but the options themselves must not come back as the same photo in
   // three crops (which is exactly what one fixed `dna` string produced). When the workflow
@@ -552,6 +593,8 @@ export async function generateStoryboardOptions(args: {
   const frames = args.hookImage
     ? [args.hookImage]
     : await loadReferenceFrames(workflow.vertical_id, { workflowId: workflow.id, limit: 4 }).catch(() => []);
+  // The hook's own references ride LAST so the prompt can point at them by position.
+  const hookFrames = hookShot ? args.hookFrames ?? [] : [];
 
   interface Gen {
     options: Array<{ title: string; prompts: string[] }>;
@@ -569,11 +612,26 @@ export async function generateStoryboardOptions(args: {
         `No image exists yet. Return ${optionCount} storyboard option(s) covering scene(s)`,
         `${args.scenes.join(", ")} — the WHOLE video. Each option: a short title + exactly`,
         `${args.scenes.length} scene action(s), in that scene order.`,
-        "Scene 1 is the hook and has to earn the scroll-stop on its own. The scenes must read as one",
-        "continuous shoot: same location arc, lighting, lens, wardrobe, and time of day throughout,",
-        "each depicting the copy that lands on it.",
+        ...(hookShot
+          ? [
+              "Scene 1 is the hook and it stands ALONE: its subject is fixed below and its look is",
+              "clean and cinematic, so it does not have to match the rest. Scenes 2 onward are the",
+              "continuous run: same location arc, lighting, lens, wardrobe and time of day across",
+              "those, each depicting the copy that lands on it.",
+            ]
+          : [
+              "Scene 1 is the hook and has to earn the scroll-stop on its own. The scenes must read as one",
+              "continuous shoot: same location arc, lighting, lens, wardrobe, and time of day throughout,",
+              "each depicting the copy that lands on it.",
+            ]),
         ...(frames.length
           ? ["You are shown reference photo(s) of the exact look wanted. Ground materials, wear, lighting, and realism on them."]
+          : []),
+        ...(hookFrames.length
+          ? [
+              `The LAST ${hookFrames.length} reference photo(s) are the HOOK look for scene 1 only, and`,
+              "scene 1 is the only scene they apply to.",
+            ]
           : []),
       ];
   const system = [
@@ -590,6 +648,22 @@ export async function generateStoryboardOptions(args: {
           ...args.owner.visual_rules.map((r) => `- ${r}`),
         ]
       : []),
+    // The hook block goes LAST and wins over both rule sets, because it is a carve-out FROM
+    // them: without it the model is holding "no identifiable faces, ever" and "show a patient
+    // being treated" in the same prompt and resolves the conflict differently every run.
+    ...(hookShot
+      ? [
+          "",
+          "SCENE 1 IS THE EXCEPTION TO THE TWO RULES ABOVE, and only scene 1:",
+          `- Its subject is FIXED: ${hookShot.subject.text}. Write the action inside that subject.`,
+          "  Do not propose a different subject for scene 1 and do not restate the camera or grade.",
+          "- Faces are ALLOWED here. The patient's face carries the frame and the practitioner may be",
+          "  in shot. Anonymous fragments and the no-faces rule govern every OTHER scene.",
+          "- It is clean, styled and aspirational, not documentary. No clutter, no wear, no grain.",
+          "- Nothing graphic: no blood, bruising, swelling or broken skin. The syringe or handpiece",
+          "  in contact with the skin is wanted and is not graphic.",
+        ]
+      : []),
     "",
     avatarBlock(args.owner),
     "",
@@ -603,7 +677,7 @@ export async function generateStoryboardOptions(args: {
     model: model(),
     system,
     user: "Return the storyboard options as JSON.",
-    images: frames.length ? frames : undefined,
+    images: frames.length || hookFrames.length ? [...frames, ...hookFrames] : undefined,
     maxTokens: 1600,
     temperature: 0.9,
     schemaHint: '{ "options": [{ "title": string, "prompts": [string] }] }',
@@ -619,10 +693,19 @@ export async function generateStoryboardOptions(args: {
   // The rules above steer the sentence Claude writes; this tail is what the IMAGE model
   // reads, so the avatar's negative and the realism guards ride along on the finished prompt.
   const assemble = (look: string, action: string) =>
-    `${look.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. ${shotGuards(args.owner.image_negative)}`;
+    `${look.replace(/[.\s]+$/, "")}. ${stripEmDashes(action).replace(/[.\s]+$/, "")}. ${shotGuards(args.owner.image_negative, args.owner.setting_law)}`;
+  // Scene 1 is assembled from the hook brief and closed with hookGuards(): no face ban, no
+  // realism tail, no AI-tell ban, and NOT the avatar's image_negative (which restates the face
+  // ban). Every other scene is byte-identical to what it was before the hook existed.
+  const assembleHook = (shot: HookShot, action: string) =>
+    `${renderHookBrief(shot)} ${stripEmDashes(action).replace(/[.\s]+$/, "")}. ${hookGuards()}`;
   return data.options.slice(0, optionCount).map((o, i) => ({
     title: stripEmDashes(o.title).trim(),
-    prompts: o.prompts.slice(0, args.scenes.length).map((action) => assemble(lookFor(i), action)),
+    prompts: o.prompts
+      .slice(0, args.scenes.length)
+      .map((action, j) =>
+        hookShot && args.scenes[j] === 1 ? assembleHook(hookShot, action) : assemble(lookFor(i), action)
+      ),
   }));
 }
 

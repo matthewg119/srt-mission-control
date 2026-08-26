@@ -18,6 +18,7 @@ import {
   saveContentExample,
   countReferencesInSection,
   pruneReferencesToCap,
+  HOOK_SECTION,
 } from "@/lib/reel/content-examples";
 import { distillFeedbackToRules, savePendingRules } from "@/lib/reel/style-rules";
 import { stripEmDashes } from "@/lib/reel/text";
@@ -27,7 +28,11 @@ import { SUBJECTS, CAPTURE, type ShotLane } from "@/config/shot-grammar";
 /** How many references we want per lane before the ask goes quiet about it. */
 const TARGET_PER_LANE = 30;
 
-const LANES: Array<{ lane: ShotLane; label: string; wanted: string }> = [
+// A reference lane is a shot-grammar lane OR the hook, which is not a ShotLane: the hook is
+// one dealt shot with its own look, not a subject library to draw from.
+type ReferenceLane = ShotLane | "hook";
+
+const LANES: Array<{ lane: ReferenceLane; label: string; wanted: string }> = [
   {
     lane: "owner",
     label: "the owner's world",
@@ -40,10 +45,16 @@ const LANES: Array<{ lane: ShotLane; label: string; wanted: string }> = [
     wanted:
       "trays, handpieces, chairs, towels, carts, the room mid-work, shot the way you would actually shoot it",
   },
+  {
+    lane: "hook",
+    label: "the hook (scene 1)",
+    wanted:
+      "a treatment actually happening, botox, HIFU, filler or laser, the way a patient gets photographed: her face in frame, the injector as gloved hands, clean and cinematic",
+  },
 ];
 
-export function sectionFor(lane: ShotLane): string {
-  return `broll/${lane}`;
+export function sectionFor(lane: ReferenceLane): string {
+  return lane === "hook" ? HOOK_SECTION : `broll/${lane}`;
 }
 
 interface AskRow {
@@ -135,6 +146,11 @@ async function askForThread(channel: string, threadTs: string): Promise<AskRow |
  */
 function laneFromText(text: string, fallback: string): string {
   const t = text.toLowerCase();
+  // Hook words are tested FIRST: "botox in the treatment room" is a hook reference, and the
+  // treatment pattern below would otherwise claim it and file a face-forward clinic portrait
+  // as documentary B-roll realism.
+  if (/\bhook\b|\bbotox\b|\bhifu\b|\bfiller\b|\blaser\b|\binject(ing|ion|able)?\b|\bnurse\b/.test(t))
+    return sectionFor("hook");
   if (/\btreat(ment)?\b|\broom\b|\bchair\b|\bclinical\b/.test(t)) return sectionFor("treatment");
   if (/\bowner\b|\bbusiness\b|\bfront\b|\boffice\b/.test(t)) return sectionFor("owner");
   return fallback;
@@ -165,12 +181,20 @@ export async function handleReferenceAskFileDrop(args: {
 
   const section = laneFromText(args.text, ask.section);
   const note = stripEmDashes(args.text).slice(0, 200);
+  // ‼️ A hook reference is NOT a realism reference and must never carry that label. A clean,
+  // cinematic, face-forward clinic portrait is the exact opposite of what REALISM_TAIL asks
+  // for, and loadReferenceFrames feeds `realism_reference` rows to the B-roll lane as its
+  // answer to "what does real look like". Only loadHookFrames reads these, by section.
+  const isHook = section === HOOK_SECTION;
+  const labels = isHook
+    ? ["hook_reference", "operator_feedback", section]
+    : ["realism_reference", "operator_feedback", section];
   for (const m of media) {
     await saveContentExample({
       verticalId: ask.vertical_id,
       sourcePath: m.url,
       storyboard: { hook: note || section, shots: [] },
-      labels: ["realism_reference", "operator_feedback", section],
+      labels,
       difficulty: "medium",
       frameUrls: [m.url],
       section,

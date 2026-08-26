@@ -15,7 +15,19 @@ import {
   effectiveWindow,
   grammarSize,
   SUBJECTS,
+  dealHookShot,
+  hookGuards,
+  renderHookBrief,
+  shotGuards,
+  HOOK_TREATMENT_SUBJECTS,
+  HOOK_GRADE,
+  CAMERA_AWARE_BAN,
+  PERSON_LAW,
+  PRESENCE,
+  REALISM_TAIL,
+  AI_TELL_BAN,
   type RecentShots,
+  type RecentHooks,
 } from "../src/config/shot-grammar";
 
 const PER_DROP = 3;
@@ -117,3 +129,85 @@ if (failures.length) {
   process.exit(1);
 }
 console.log("PASS: no repeats inside any window, every look line distinct");
+
+// ---- the hook shot (Hook Studio scene 1) --------------------------------------------------
+//
+// Scene 1 is the deliberate exception to everything above: its subject is a treatment in
+// progress, its face ban is lifted and its realism guards are gone. Both directions are
+// asserted, because the expensive regression is not the hook losing its treatment - it is the
+// documentary guards quietly coming back onto it, or the face ban quietly leaving scene 2.
+
+const hookFailures: string[] = [];
+const HOOK_SESSIONS = 24;
+const HOOK_WINDOW_SUBJECT = 8;
+
+// What "not graphic" has to keep out of the frame. The syringe and the needle are deliberately
+// NOT on this list: every reference has one touching skin and that is the point of the shot.
+const GRAPHIC_WORDS = ["blood", "bruis", "wound", "swelling", "diagram"];
+
+const hookHistory: Required<RecentHooks> = { subject: [], grade: [] };
+const hookSubjectsUsed = new Set<string>();
+
+for (let s = 0; s < HOOK_SESSIONS; s++) {
+  const shot = dealHookShot({ recent: hookHistory });
+  const prompt = `${renderHookBrief(shot)} A nurse works. ${hookGuards()}`;
+
+  if (hookHistory.subject.slice(0, HOOK_WINDOW_SUBJECT).includes(shot.subject.key)) {
+    hookFailures.push(`session ${s}: hook subject "${shot.subject.key}" repeated inside its ${HOOK_WINDOW_SUBJECT}-deep window`);
+  }
+  if (hookHistory.grade[0] === shot.grade.key) {
+    hookFailures.push(`session ${s}: hook grade "${shot.grade.key}" repeated back to back`);
+  }
+  if (!prompt.includes(shot.subject.text)) {
+    hookFailures.push(`session ${s}: the dealt subject is missing from the assembled prompt`);
+  }
+  for (const w of GRAPHIC_WORDS) {
+    // The ban itself names these, so only the part BEFORE the guards may not contain them.
+    const body = prompt.slice(0, prompt.indexOf("Do not produce:"));
+    if (body.toLowerCase().includes(w)) hookFailures.push(`session ${s}: graphic word "${w}" in the hook body`);
+  }
+  // The two reversals, asserted as reversals.
+  if (prompt.includes(CAMERA_AWARE_BAN)) hookFailures.push(`session ${s}: the hook carries CAMERA_AWARE_BAN`);
+  if (prompt.includes(PERSON_LAW)) hookFailures.push(`session ${s}: the hook carries PERSON_LAW`);
+  if (prompt.includes(REALISM_TAIL)) hookFailures.push(`session ${s}: the hook carries REALISM_TAIL`);
+  if (prompt.includes(AI_TELL_BAN)) hookFailures.push(`session ${s}: the hook carries AI_TELL_BAN`);
+
+  hookHistory.subject.unshift(shot.subject.key);
+  hookHistory.grade.unshift(shot.grade.key);
+  hookSubjectsUsed.add(shot.subject.key);
+}
+
+// ...and scenes 2+ must still carry every one of them. This is the half that catches a "simplification"
+// that points every scene at hookGuards().
+const SETTING = "Every frame is photographed inside this med spa.";
+const laterScene = `A shot. ${shotGuards("No empty rooms.", SETTING)}`;
+for (const [name, guard] of [
+  ["CAMERA_AWARE_BAN", CAMERA_AWARE_BAN],
+  ["PERSON_LAW", PERSON_LAW],
+  ["REALISM_TAIL", REALISM_TAIL],
+  ["AI_TELL_BAN", AI_TELL_BAN],
+] as const) {
+  if (!laterScene.includes(guard)) hookFailures.push(`scene 2+ lost ${name}`);
+}
+// The avatar's location contract has to REACH the image model, not just the writer.
+if (!laterScene.includes(SETTING.replace(/[.]$/, ""))) hookFailures.push("scene 2+ dropped the setting law");
+
+// The 2026-08-26 correction, asserted where it can actually regress: an empty-frame value
+// coming back onto the presence axis would quietly restore the whole problem.
+const EMPTY_PRESENCE = /nobody|no one|empty|unoccupied|deserted/i;
+for (const e of PRESENCE) {
+  if (EMPTY_PRESENCE.test(e.text)) hookFailures.push(`presence "${e.key}" allows an empty frame: "${e.text}"`);
+}
+
+console.log("\n--------------------");
+console.log(`hook: ${HOOK_TREATMENT_SUBJECTS.length} treatment subjects x ${HOOK_GRADE.length} grades`);
+console.log(`hook: ${hookSubjectsUsed.size} distinct subjects across ${HOOK_SESSIONS} sessions`);
+console.log("\nsample hook prompt:");
+console.log(`  ${renderHookBrief(dealHookShot({ recent: hookHistory }))} ${hookGuards()}`);
+
+if (hookFailures.length) {
+  console.log(`\nHOOK FAIL (${hookFailures.length}):`);
+  for (const f of hookFailures.slice(0, 20)) console.log(`  ${f}`);
+  process.exit(1);
+}
+console.log("\nPASS: the hook rotates, stays non-graphic, and the guard reversal is scoped to scene 1");

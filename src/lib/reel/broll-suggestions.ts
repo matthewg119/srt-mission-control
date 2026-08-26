@@ -278,8 +278,11 @@ export function buildSystem(vertical: Vertical, avoid: string[]): string {
     "For CINEMATIC slots you return, per slot:",
     "- scene_detail: ONE sentence, under 30 words, adding concrete specifics to the given",
     "  subject so it carries the belief. Objects, wear, what is written or not written, what is",
-    "  missing. No camera or lighting language. Never ask for readable words on paper or",
-    "  screens: describe lettering as out of focus, too small to read, or turned away.",
+    "  missing, and WHAT THE PERSON IN THE FRAME IS DOING with her hands right now. No camera",
+    "  or lighting language. Never ask for readable words on paper or screens: describe",
+    "  lettering as out of focus, too small to read, or turned away.",
+    "- The location never leaves this business and the frame is never empty. Both are already",
+    "  in the dealt shot; your sentence has to be true inside them, not argue with them.",
     "- motion_prompt: ONE motion line for the animator, camera/subject motion only, under 20",
     "  words, no em dashes, no on-screen text.",
     "- voiceover_line: 12 to 22 words, spoken register, quiet threat not hype. Use [pause] where",
@@ -306,7 +309,9 @@ export function buildSystem(vertical: Vertical, avoid: string[]): string {
 function assemblePrompt(spec: ShotSpec, sceneDetail: string, vertical: Vertical): string {
   const detail = stripEmDashes(sceneDetail).trim();
   const withStop = detail && !/[.!?]$/.test(detail) ? `${detail}.` : detail;
-  return [renderShotBrief(spec), withStop, shotGuards(vertical.image_negative)].filter(Boolean).join(" ");
+  return [renderShotBrief(spec), withStop, shotGuards(vertical.image_negative, vertical.setting_law)]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function formatCard(vertical: Vertical, slot: string, ideas: BrollIdea[]): string {

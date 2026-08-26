@@ -135,6 +135,10 @@ export interface JobData {
   hs_chosen_storyboard?: number; // `set N` note (cosmetic, for the review card)
   authored_prompts_posted?: boolean; // authored-scene workflows: the per-scene image prompts were posted (after copy lock)
   hs_image_prompts_posted?: boolean; // legacy hook-first: the hook-image prompts were written from the locked copy
+  // The treatment shot dealt for scene 1 (shot-grammar.ts hook block). Kept on the job so the
+  // next session can avoid repeating it - this is the whole LRU history, there is no table.
+  hook_subject_key?: string;
+  hook_grade_key?: string;
 
   // --- #agent-wokrflow-creator (workflow-agent.ts) ---
   agent_media?: string[]; // uploaded still URLs (drop order)
@@ -310,6 +314,30 @@ export async function getLatestJobByChannelFormat(
     .limit(1)
     .maybeSingle();
   return normalize(data as Record<string, unknown> | null);
+}
+
+/**
+ * The `data` blobs of the most recent jobs of one format, newest first. This is how a lane
+ * reads its own rotation history without a table of its own (hook-studio's dealt hook shot).
+ * Best-effort: an unreachable DB returns [], so the dealer simply has nothing to avoid.
+ */
+export async function recentJobData(formatId: string, limit = 12): Promise<JobData[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("content_jobs")
+      .select("data")
+      .eq("format_id", formatId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error || !Array.isArray(data)) {
+      if (error) console.error("[content_jobs] recentJobData failed:", error.message);
+      return [];
+    }
+    return data.map((r) => ((r as { data?: JobData }).data ?? {}) as JobData);
+  } catch (e) {
+    console.error("[content_jobs] recentJobData threw:", (e as Error).message);
+    return [];
+  }
 }
 
 /** The most-recent job in a thread (for thread-reply remix / tuning feedback). */
