@@ -8,9 +8,9 @@ export default function DashboardError({
   reset: () => void;
 }) {
   return (
-    <div style={{ background: "#0B1426", color: "#fff", fontFamily: "monospace", padding: "2rem", minHeight: "100vh" }}>
+    <div style={{ background: "#0a0a0a", color: "#fff", fontFamily: "monospace", padding: "2rem", minHeight: "100vh" }}>
       <h1 style={{ color: "#ef4444" }}>Dashboard Error</h1>
-      <pre style={{ whiteSpace: "pre-wrap", background: "#1a1a2e", padding: "1rem", borderRadius: "8px", fontSize: "14px" }}>
+      <pre style={{ whiteSpace: "pre-wrap", background: "#171717", padding: "1rem", borderRadius: "8px", fontSize: "14px" }}>
         {error.message}
       </pre>
       {error.stack && (

@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 
 export default function OnboardingFreePage() {
   return (
-    <main className="min-h-screen bg-[#0B1426] px-4 py-10 text-white">
+    <main className="min-h-screen bg-[#0a0a0a] px-4 py-10 text-white">
       <div className="mx-auto w-full max-w-2xl">
         <div className="mb-8 text-center text-lg font-bold tracking-wide">SRT Agency</div>
         <OnboardingFreeFunnel />

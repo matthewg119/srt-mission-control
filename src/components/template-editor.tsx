@@ -69,7 +69,7 @@ export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProp
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#0F1A2E] border border-[rgba(255,255,255,0.08)] rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-[#111111] border border-[rgba(255,255,255,0.08)] rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.06)]">
           <h2 className="text-lg font-semibold text-white">
@@ -100,7 +100,7 @@ export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProp
                   onClick={() => setType("SMS")}
                   className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
                     type === "SMS"
-                      ? "bg-[#00C9A7] text-[#0B1426]"
+                      ? "bg-[#00C9A7] text-[#0a0a0a]"
                       : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"
                   }`}
                 >
@@ -110,7 +110,7 @@ export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProp
                   onClick={() => setType("Email")}
                   className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
                     type === "Email"
-                      ? "bg-[#1B65A7] text-white"
+                      ? "bg-[#0E8C77] text-white"
                       : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"
                   }`}
                 >
@@ -130,7 +130,7 @@ export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProp
                 className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]"
               >
                 {CATEGORIES.map((c) => (
-                  <option key={c} value={c} className="bg-[#0F1A2E]">{c}</option>
+                  <option key={c} value={c} className="bg-[#111111]">{c}</option>
                 ))}
               </select>
             </div>
@@ -225,7 +225,7 @@ export function TemplateEditor({ template, onSave, onClose }: TemplateEditorProp
           <button
             onClick={handleSave}
             disabled={!name || !body}
-            className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             <Send size={14} />
             {template?.id ? "Update Template" : "Create Template"}

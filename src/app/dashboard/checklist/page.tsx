@@ -290,7 +290,7 @@ export default function ChecklistPage() {
         <div className="w-full h-3 bg-[rgba(255,255,255,0.06)] rounded-full overflow-hidden">
           <div
             className="h-full rounded-full transition-all duration-500 ease-out"
-            style={{ width: `${percentage}%`, background: percentage === 100 ? "#00C9A7" : "linear-gradient(90deg, #1B65A7, #00C9A7)" }}
+            style={{ width: `${percentage}%`, background: percentage === 100 ? "#00C9A7" : "linear-gradient(90deg, #0E8C77, #00C9A7)" }}
           />
         </div>
       </div>

@@ -96,7 +96,7 @@ export default function SystemsPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-white">{tile.name}</span>
                       {tile.dynamic && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[rgba(27,101,167,0.2)] text-[#1B65A7]">Lender</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[rgba(27,101,167,0.2)] text-[#0E8C77]">Lender</span>
                       )}
                     </div>
                     <p className="text-xs text-[rgba(255,255,255,0.4)] mt-0.5 truncate">{tile.description}</p>

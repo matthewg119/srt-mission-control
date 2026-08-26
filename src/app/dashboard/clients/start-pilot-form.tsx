@@ -169,10 +169,10 @@ export function StartPilotForm() {
           onChange={(e) => set("tierScope", e.target.value)}
           className="w-full rounded-lg border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.03)] px-3 py-2 text-sm text-white outline-none sm:w-64"
         >
-          <option value="complete" className="bg-[#0B1426]">
+          <option value="complete" className="bg-[#0a0a0a]">
             Complete
           </option>
-          <option value="core" className="bg-[#0B1426]">
+          <option value="core" className="bg-[#0a0a0a]">
             Core
           </option>
         </select>

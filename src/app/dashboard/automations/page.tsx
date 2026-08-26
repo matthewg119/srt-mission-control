@@ -91,7 +91,7 @@ export default function AutomationsPage() {
             onClick={() => setActiveTab(tab)}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               activeTab === tab
-                ? "bg-[#00C9A7] text-[#0B1426]"
+                ? "bg-[#00C9A7] text-[#0a0a0a]"
                 : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white hover:bg-[rgba(255,255,255,0.08)]"
             }`}
           >
@@ -224,7 +224,7 @@ function AutomationRuleCard({
                   action.type === "send_sms"
                     ? "bg-[#00C9A7]/10 text-[#00C9A7]"
                     : action.type === "send_email"
-                    ? "bg-[#1B65A7]/10 text-[#1B65A7]"
+                    ? "bg-[#0E8C77]/10 text-[#0E8C77]"
                     : action.type === "notify_team"
                     ? "bg-[#F5A623]/10 text-[#F5A623]"
                     : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.4)]"

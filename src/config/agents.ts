@@ -16,7 +16,7 @@ export const AGENTS: Agent[] = [
     role: "CEO / Strategy",
     description: "Big-picture strategy, growth, positioning, and key decisions",
     icon: "🧭",
-    color: "#1B65A7",
+    color: "#0E8C77",
     tools: [],
     systemPrompt: `You are Alex, a world-class CEO strategist and business advisor for SRT Agency ("Search Retrieval Tactics") — an AEO agency.
 

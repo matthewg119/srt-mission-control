@@ -9,7 +9,7 @@ const PALETTE_ITEMS = [
     label: "Trigger",
     desc: "Event that starts the flow",
     icon: Zap,
-    color: "#1B65A7",
+    color: "#0E8C77",
   },
   {
     type: "condition",

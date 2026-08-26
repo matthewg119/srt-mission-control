@@ -38,7 +38,7 @@
 }
 
 /*
- * globals.css paints body #0B1426 (Mission Control midnight), which shows through on
+ * globals.css paints body #0a0a0a (Mission Control midnight), which shows through on
  * overscroll and anywhere past the end of the content. Same repaint scan.css does for
  * the dark pages, pointed the other way.
  */

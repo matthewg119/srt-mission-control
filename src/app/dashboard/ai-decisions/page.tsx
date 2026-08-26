@@ -107,7 +107,7 @@ export default function AIDecisionsPage() {
                 <td className="px-4 py-3 text-xs text-[rgba(255,255,255,0.5)]">{new Date(d.created_at).toLocaleString()}</td>
                 <td className="px-4 py-3 text-white">{(d.contacts?.business_name ?? (`${d.contacts?.first_name ?? ""} ${d.contacts?.last_name ?? ""}`.trim())) || "—"}</td>
                 <td className="px-4 py-3 text-xs text-[rgba(255,255,255,0.6)]">{d.trigger_type}</td>
-                <td className="px-4 py-3 text-xs"><span className="px-2 py-0.5 rounded bg-[rgba(27,101,167,0.15)] text-[#1B65A7]">{d.state_classified ?? "—"}</span></td>
+                <td className="px-4 py-3 text-xs"><span className="px-2 py-0.5 rounded bg-[rgba(27,101,167,0.15)] text-[#0E8C77]">{d.state_classified ?? "—"}</span></td>
                 <td className="px-4 py-3 text-xs">{d.action_taken ?? "—"}</td>
                 <td className="px-4 py-3 text-xs">{d.was_approved === true ? "✅" : d.was_approved === false ? "❌" : "—"}</td>
                 <td className="px-4 py-3 text-xs text-[rgba(255,255,255,0.5)] max-w-xs truncate">{d.reasoning ?? ""}</td>
@@ -119,7 +119,7 @@ export default function AIDecisionsPage() {
 
       {selected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelected(null)}>
-          <div className="bg-[#0f1d32] border border-[rgba(255,255,255,0.1)] rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="p-6">
               <h2 className="text-lg font-semibold text-white mb-2">AI Decision {selected.id.slice(0, 8)}</h2>
               <p className="text-xs text-[rgba(255,255,255,0.5)] mb-4">{new Date(selected.created_at).toLocaleString()}</p>

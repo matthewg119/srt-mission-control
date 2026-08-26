@@ -322,7 +322,7 @@ export default function PlannerPage() {
               <div
                 className={`max-w-[85%] px-3 py-2 rounded-xl text-sm ${
                   msg.role === "user"
-                    ? "bg-[#1B65A7] text-white"
+                    ? "bg-[#0E8C77] text-white"
                     : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.7)]"
                 }`}
               >
@@ -356,7 +356,7 @@ export default function PlannerPage() {
             <button
               type="submit"
               disabled={chatLoading || !chatInput.trim()}
-              className="px-3 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="px-3 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               <Send className="h-4 w-4" />
             </button>
@@ -413,7 +413,7 @@ export default function PlannerPage() {
               <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-xl p-4">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <Building2 className="h-5 w-5 text-[#1B65A7]" />
+                    <Building2 className="h-5 w-5 text-[#0E8C77]" />
                     <div>
                       <h3 className="text-base font-bold text-white">
                         {analysis.overview.businessName}

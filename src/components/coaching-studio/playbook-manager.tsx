@@ -202,7 +202,7 @@ export function PlaybookManager() {
           </button>
           <button
             onClick={openCreate}
-            className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90"
+            className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90"
           >
             <Plus size={16} />
             New Entry
@@ -234,7 +234,7 @@ export function PlaybookManager() {
               onClick={() => setActiveCategory(cat)}
               className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
                 activeCategory === cat
-                  ? "bg-[#00C9A7] text-[#0B1426]"
+                  ? "bg-[#00C9A7] text-[#0a0a0a]"
                   : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"
               }`}
             >
@@ -286,7 +286,7 @@ export function PlaybookManager() {
                   className="text-[10px] font-semibold px-2 py-0.5 rounded-full text-white"
                   style={{
                     backgroundColor:
-                      categoryColorMap[entry.category] || "#1B65A7",
+                      categoryColorMap[entry.category] || "#0E8C77",
                   }}
                 >
                   {entry.category}
@@ -352,7 +352,7 @@ export function PlaybookManager() {
       {/* Create/edit dialog */}
       {showDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-[#0f1d32] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">
                 {editingEntry ? "Edit Entry" : "New Playbook Entry"}
@@ -397,7 +397,7 @@ export function PlaybookManager() {
                     <option
                       key={cat.id}
                       value={cat.name}
-                      className="bg-[#0f1d32]"
+                      className="bg-[#111111]"
                     >
                       {cat.name}
                     </option>
@@ -450,7 +450,7 @@ export function PlaybookManager() {
                   disabled={
                     saving || !formData.trigger.trim() || !formData.category
                   }
-                  className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
+                  className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : editingEntry ? "Update" : "Create"}
                 </button>
@@ -463,7 +463,7 @@ export function PlaybookManager() {
       {/* Import dialog */}
       {showImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-[#0f1d32] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">
                 Import Playbook JSON
@@ -496,7 +496,7 @@ export function PlaybookManager() {
               <button
                 onClick={handleImport}
                 disabled={importing || !importText.trim()}
-                className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
+                className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
               >
                 {importing ? "Importing..." : "Import"}
               </button>

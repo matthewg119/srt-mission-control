@@ -11,7 +11,7 @@
 // does not remove you from today's answers.
 //
 // The palette is validated, not chosen by eye: OKLCH lightness band for a dark surface,
-// chroma floor, protan/deutan separation and WCAG contrast against #0B1426 all pass. Do
+// chroma floor, protan/deutan separation and WCAG contrast against #0a0a0a all pass. Do
 // not "brighten" a series -- the reef #00C9A7 used everywhere else in this app sits above
 // the dark-mode lightness band and fails. Re-run the validator if these ever change.
 //
@@ -170,7 +170,7 @@ export function MetricsView(props: MetricsViewProps) {
               />
               <Tooltip
                 contentStyle={{
-                  background: "#0B1426",
+                  background: "#0a0a0a",
                   border: "1px solid rgba(255,255,255,0.1)",
                   borderRadius: 8,
                   fontSize: 12,
@@ -196,7 +196,7 @@ export function MetricsView(props: MetricsViewProps) {
                   stroke={s.color}
                   strokeWidth={2}
                   dot={false}
-                  activeDot={{ r: 4, fill: s.color, stroke: "#0B1426", strokeWidth: 2 }}
+                  activeDot={{ r: 4, fill: s.color, stroke: "#0a0a0a", strokeWidth: 2 }}
                 />
               ))}
             </LineChart>

@@ -66,7 +66,7 @@ export default async function ContactPage({
   // MC_VCARD_PUBLIC defaults to true — set to "false" in Vercel to require auth
   if (process.env.MC_VCARD_PUBLIC === "false") {
     return (
-      <div className="min-h-screen bg-[#0A1F44] flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#111111] flex items-center justify-center p-4">
         <p className="text-white text-sm">Contact cards are not publicly accessible.</p>
       </div>
     );
@@ -76,7 +76,7 @@ export default async function ContactPage({
 
   if (!contact) {
     return (
-      <div className="min-h-screen bg-[#0A1F44] flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#111111] flex items-center justify-center p-4">
         <div className="text-center">
           <p className="text-white text-xl font-semibold mb-2">Lead not found</p>
           <p className="text-[rgba(255,255,255,0.5)] text-sm">This contact doesn&apos;t exist in Mission Control.</p>
@@ -98,7 +98,7 @@ export default async function ContactPage({
   const location = [contact.city, contact.state].filter(Boolean).join(", ");
 
   return (
-    <div className="min-h-screen bg-[#0A1F44] flex flex-col items-center justify-start px-4 py-10 font-sans">
+    <div className="min-h-screen bg-[#111111] flex flex-col items-center justify-start px-4 py-10 font-sans">
       {/* Header badge */}
       <div className="text-xs font-semibold tracking-widest text-[#00B4B4] uppercase mb-6">
         SRT Agency — Lead Contact
@@ -176,7 +176,7 @@ export default async function ContactPage({
       <a
         href={vCardUrl}
         download
-        className="w-full max-w-sm flex items-center justify-center gap-2 px-6 py-4 rounded-xl bg-[#00B4B4] text-[#0A1F44] font-bold text-base hover:bg-[#00cccc] transition-colors mb-3"
+        className="w-full max-w-sm flex items-center justify-center gap-2 px-6 py-4 rounded-xl bg-[#00B4B4] text-[#111111] font-bold text-base hover:bg-[#00cccc] transition-colors mb-3"
       >
         📱 Save to iPhone Contacts
       </a>

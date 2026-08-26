@@ -34,8 +34,8 @@ function getInitials(name?: string | null): string {
 function SrtLogo() {
   return (
     <div className="flex items-end gap-[3px]">
-      <div className="w-[5px] h-[12px] rounded-t-sm bg-[#1B65A7]" />
-      <div className="w-[5px] h-[18px] rounded-t-sm bg-[#1B65A7]" />
+      <div className="w-[5px] h-[12px] rounded-t-sm bg-[#0E8C77]" />
+      <div className="w-[5px] h-[18px] rounded-t-sm bg-[#0E8C77]" />
       <div className="w-[5px] h-[26px] rounded-t-sm bg-[#00C9A7]" />
     </div>
   );
@@ -45,7 +45,7 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
 
   const sidebarContent = (
-    <div className="flex h-full flex-col bg-[#0B1426] border-r border-[rgba(255,255,255,0.06)]">
+    <div className="flex h-full flex-col bg-[#0a0a0a] border-r border-[rgba(255,255,255,0.06)]">
       {/* Logo section */}
       <div className="flex h-16 items-center gap-3 px-6 shrink-0">
         <SrtLogo />

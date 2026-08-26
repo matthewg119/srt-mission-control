@@ -18,7 +18,7 @@ import {
 import type { MockCall, LeadMagnetIdea } from "@/config/mock-calls";
 
 const TYPE_COLORS: Record<string, string> = {
-  ebook: "#1B65A7",
+  ebook: "#0E8C77",
   checklist: "#00C9A7",
   calculator: "#F5A623",
   webinar: "#9B59B6",
@@ -223,7 +223,7 @@ export default function LeadMagnetsPage() {
               <div
                 className={`max-w-[85%] px-3 py-2 rounded-xl text-sm whitespace-pre-wrap ${
                   msg.role === "user"
-                    ? "bg-[#1B65A7] text-white"
+                    ? "bg-[#0E8C77] text-white"
                     : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.7)]"
                 }`}
               >
@@ -257,7 +257,7 @@ export default function LeadMagnetsPage() {
             <button
               type="submit"
               disabled={chatLoading || !chatInput.trim()}
-              className="px-3 py-2 bg-[#F5A623] text-[#0B1426] rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="px-3 py-2 bg-[#F5A623] text-[#0a0a0a] rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               <Send className="h-4 w-4" />
             </button>
@@ -270,7 +270,7 @@ export default function LeadMagnetsPage() {
         {/* Call Highlights */}
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <Phone className="h-4 w-4 text-[#1B65A7]" />
+            <Phone className="h-4 w-4 text-[#0E8C77]" />
             <h3 className="text-sm font-semibold text-white">
               Recent Call Highlights
             </h3>
@@ -320,7 +320,7 @@ export default function LeadMagnetsPage() {
           </div>
           <div className="space-y-2">
             {ideas.map((idea) => {
-              const color = TYPE_COLORS[idea.type] || "#1B65A7";
+              const color = TYPE_COLORS[idea.type] || "#0E8C77";
               return (
                 <div
                   key={idea.id}

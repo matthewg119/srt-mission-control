@@ -98,7 +98,7 @@ function WorkflowCardNode({ data }: { data: CardData }) {
 
 const nodeTypes = { workflowCard: WorkflowCardNode, groupLabel: GroupLabel };
 
-const AVATAR_COLORS = ["#8b5cf6", "#1B65A7", "#00C9A7", "#f59e0b", "#ef4444"];
+const AVATAR_COLORS = ["#8b5cf6", "#0E8C77", "#00C9A7", "#f59e0b", "#ef4444"];
 
 interface BoardProps {
   workflows: WorkflowCard[];
@@ -155,7 +155,7 @@ export function ContentWorkflowBoard({ workflows, liveWorkflowIds, onSelect }: B
   }, [workflows, liveWorkflowIds]);
 
   return (
-    <div className="h-[calc(100vh-180px)] w-full rounded-2xl border border-white/10 bg-[#0b0f17]">
+    <div className="h-[calc(100vh-180px)] w-full rounded-2xl border border-white/10 bg-[#0a0a0a]">
       <ReactFlow
         nodes={nodes}
         edges={[]}

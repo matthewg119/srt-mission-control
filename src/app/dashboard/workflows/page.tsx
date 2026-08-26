@@ -117,7 +117,7 @@ export default function WorkflowsPage() {
           </button>
           <button
             onClick={() => router.push("/dashboard/workflows/builder")}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-[#00C9A7] text-[#0B1426] rounded-lg hover:bg-[#00ddb8] transition-colors"
+            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-[#00C9A7] text-[#0a0a0a] rounded-lg hover:bg-[#00ddb8] transition-colors"
           >
             <Plus size={14} />
             New Workflow
@@ -128,7 +128,7 @@ export default function WorkflowsPage() {
       {/* Summary chips */}
       <div className="flex items-center gap-3 px-6 py-2 border-b border-[rgba(255,255,255,0.04)] shrink-0 overflow-x-auto">
         {[
-          { label: "Leads (7d)", value: stats.totalLeads, color: "#1B65A7" },
+          { label: "Leads (7d)", value: stats.totalLeads, color: "#0E8C77" },
           { label: "Applications (7d)", value: stats.totalApps, color: "#8b5cf6" },
           { label: "Enrolled", value: stats.totalEnrollments, color: "#00C9A7" },
           { label: "SMS sent (7d)", value: stats.smsSent, color: "#0ea5e9" },

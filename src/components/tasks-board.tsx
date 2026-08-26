@@ -15,7 +15,7 @@ import {
 const PRIORITY_COLORS: Record<string, string> = {
   urgent: "#E74C3C",
   high: "#F5A623",
-  medium: "#1B65A7",
+  medium: "#0E8C77",
   low: "rgba(255,255,255,0.3)",
 };
 

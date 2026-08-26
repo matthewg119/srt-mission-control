@@ -197,7 +197,7 @@ export function LogCallForm({
         <button
           onClick={submit}
           disabled={!canSave}
-          className="rounded-lg bg-[#1B65A7] px-4 py-1.5 text-xs font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg bg-[#0E8C77] px-4 py-1.5 text-xs font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
           {saving ? "Saving…" : takeOff ? "Log call + take off list" : "Log call"}
         </button>

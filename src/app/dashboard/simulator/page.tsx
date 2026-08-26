@@ -207,7 +207,7 @@ function PhoneCard({
           className="ml-auto bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-2 py-1 text-[11px] text-[rgba(255,255,255,0.7)] focus:outline-none focus:border-[#00C9A7]"
         >
           {Object.entries(STAGE_LABELS).map(([val, label]) => (
-            <option key={val} value={val} className="bg-[#0B1426]">
+            <option key={val} value={val} className="bg-[#0a0a0a]">
               {label}
             </option>
           ))}
@@ -241,10 +241,10 @@ function FlipSwitch({ mode, onToggle }: { mode: "test" | "train"; onToggle: () =
           background: isTrain ? "#F5A623" : teal,
         }}
       />
-      <span className="relative z-10 flex-1 text-[9px] font-bold text-[#0B1426]" style={{ opacity: isTrain ? 0.4 : 1 }}>
+      <span className="relative z-10 flex-1 text-[9px] font-bold text-[#0a0a0a]" style={{ opacity: isTrain ? 0.4 : 1 }}>
         TEST
       </span>
-      <span className="relative z-10 flex-1 text-[9px] font-bold text-[#0B1426]" style={{ opacity: isTrain ? 1 : 0.4 }}>
+      <span className="relative z-10 flex-1 text-[9px] font-bold text-[#0a0a0a]" style={{ opacity: isTrain ? 1 : 0.4 }}>
         TRAIN
       </span>
     </button>
@@ -315,7 +315,7 @@ function TestMode({ phone, onChange }: { phone: Phone; onChange: (patch: Partial
                 style={{
                   maxWidth: "82%",
                   background: m.direction === "outbound" ? teal : "rgba(255,255,255,0.08)",
-                  color: m.direction === "outbound" ? "#0B1426" : "#fff",
+                  color: m.direction === "outbound" ? "#0a0a0a" : "#fff",
                 }}
               >
                 {m.body}
@@ -382,7 +382,7 @@ function TestMode({ phone, onChange }: { phone: Phone; onChange: (patch: Partial
         <button
           onClick={send}
           disabled={!input.trim() || sending}
-          className="p-2 bg-[#00C9A7] text-[#0B1426] rounded-lg hover:opacity-90 disabled:opacity-40"
+          className="p-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg hover:opacity-90 disabled:opacity-40"
         >
           <Send size={14} />
         </button>
@@ -491,7 +491,7 @@ function TeachTab({ phone, onReloadVoiceCount }: { phone: Phone; onReloadVoiceCo
       <button
         onClick={teach}
         disabled={!draft.trim()}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] bg-[#F5A623] text-[#0B1426] rounded-lg font-semibold hover:opacity-90 disabled:opacity-40"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] bg-[#F5A623] text-[#0a0a0a] rounded-lg font-semibold hover:opacity-90 disabled:opacity-40"
       >
         <Star size={12} /> Save as golden example
       </button>
@@ -648,7 +648,7 @@ function PersonaTab({ stage }: { stage: Stage }) {
             <button
               onClick={save}
               disabled={!prompt.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] bg-[#F5A623] text-[#0B1426] rounded-lg font-semibold hover:opacity-90 disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] bg-[#F5A623] text-[#0a0a0a] rounded-lg font-semibold hover:opacity-90 disabled:opacity-40"
             >
               <Save size={12} /> Save persona
             </button>
@@ -757,7 +757,7 @@ function TuneTab({ stage }: { stage: Stage }) {
               style={{
                 maxWidth: "88%",
                 background: m.role === "user" ? teal : "rgba(255,255,255,0.06)",
-                color: m.role === "user" ? "#0B1426" : "#fff",
+                color: m.role === "user" ? "#0a0a0a" : "#fff",
               }}
             >
               {m.content}
@@ -767,7 +767,7 @@ function TuneTab({ stage }: { stage: Stage }) {
                   <p className="text-[10px] leading-snug opacity-90 max-h-24 overflow-y-auto">{m.proposal.prompt}</p>
                   <button
                     onClick={() => applyProposal(m.proposal!)}
-                    className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-[10px] bg-[#0B1426] text-white rounded-md hover:opacity-90"
+                    className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-[10px] bg-[#0a0a0a] text-white rounded-md hover:opacity-90"
                   >
                     <Check size={11} /> Apply live
                   </button>
@@ -808,7 +808,7 @@ function TuneTab({ stage }: { stage: Stage }) {
           <button
             onClick={send}
             disabled={busy || (!input.trim() && !image)}
-            className="p-2 bg-[#F5A623] text-[#0B1426] rounded-lg hover:opacity-90 disabled:opacity-40"
+            className="p-2 bg-[#F5A623] text-[#0a0a0a] rounded-lg hover:opacity-90 disabled:opacity-40"
           >
             <Send size={14} />
           </button>
@@ -1036,7 +1036,7 @@ function RealConversationCard({ conv }: { conv: RealConversation }) {
                   style={{
                     maxWidth: "82%",
                     background: m.direction === "outbound" ? teal : "rgba(255,255,255,0.08)",
-                    color: m.direction === "outbound" ? "#0B1426" : "#fff",
+                    color: m.direction === "outbound" ? "#0a0a0a" : "#fff",
                   }}
                 >
                   {m.body}
@@ -1047,7 +1047,7 @@ function RealConversationCard({ conv }: { conv: RealConversation }) {
               <div key={p.id} className="flex justify-start">
                 <div
                   className="rounded-xl px-3 py-2 text-[12px] whitespace-pre-wrap opacity-60"
-                  style={{ maxWidth: "82%", background: teal, color: "#0B1426" }}
+                  style={{ maxWidth: "82%", background: teal, color: "#0a0a0a" }}
                 >
                   {p.body}
                   <span className="block text-[9px] mt-0.5 opacity-70">sending…</span>
@@ -1084,7 +1084,7 @@ function RealConversationCard({ conv }: { conv: RealConversation }) {
             <button
               onClick={send}
               disabled={!input.trim() || sending}
-              className="p-2 bg-[#00C9A7] text-[#0B1426] rounded-lg hover:opacity-90 disabled:opacity-40"
+              className="p-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg hover:opacity-90 disabled:opacity-40"
             >
               <Send size={14} />
             </button>

@@ -97,7 +97,7 @@ export function ContactCard({
             {contact.tags.map((tag: string) => (
               <span
                 key={tag}
-                className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[rgba(27,101,167,0.15)] border border-[rgba(27,101,167,0.2)] text-[#1B65A7]"
+                className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[rgba(27,101,167,0.15)] border border-[rgba(27,101,167,0.2)] text-[#0E8C77]"
               >
                 <Tag className="h-2.5 w-2.5" /> {tag}
               </span>

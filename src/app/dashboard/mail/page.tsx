@@ -141,7 +141,7 @@ export default function MailPage() {
           <p className="text-[#E74C3C] mb-3">{error}</p>
           <a
             href="/dashboard/integrations"
-            className="text-xs px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 inline-block"
+            className="text-xs px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 inline-block"
           >
             Go to Integrations
           </a>
@@ -195,7 +195,7 @@ export default function MailPage() {
               <button
                 onClick={handleReply}
                 disabled={!replyText || replying}
-                className="mt-2 text-xs px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
+                className="mt-2 text-xs px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
               >
                 <Send className="h-3 w-3" />
                 {replying ? "Sending..." : "Reply"}
@@ -228,7 +228,7 @@ export default function MailPage() {
           </button>
           <button
             onClick={() => setShowCompose(true)}
-            className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 flex items-center gap-1"
+            className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 flex items-center gap-1"
           >
             <Send className="h-3 w-3" />
             Compose
@@ -266,7 +266,7 @@ export default function MailPage() {
               <button
                 onClick={handleSend}
                 disabled={sending || !composeTo || !composeSubject || !composeBody}
-                className="text-xs px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 disabled:opacity-50"
+                className="text-xs px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 disabled:opacity-50"
               >
                 {sending ? "Sending..." : "Send"}
               </button>

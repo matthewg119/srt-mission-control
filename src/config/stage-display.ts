@@ -59,7 +59,7 @@ export const AEO_PIPELINE: StagePipeline = {
   name: "Pipeline",
   stages: [
     { name: STAGE_UNTOUCHED, color: "#64748B" },
-    { name: STAGE_NO_CONTACT, color: "#1B65A7" },
+    { name: STAGE_NO_CONTACT, color: "#0E8C77" },
     { name: STAGE_WORKING, color: "#9C27B0" },
     { name: STAGE_EMAIL_PITCH, color: "#00BCD4" },
     { name: STAGE_NEGOTIATING, color: "#F5A623" },

@@ -23,7 +23,7 @@ const tools = [
     description: "100 verticals \u00D7 7 awareness layers. AI-powered campaign builder with ICP-specific language.",
     href: "/dashboard/marketing/ads",
     icon: Target,
-    color: "#1B65A7",
+    color: "#0E8C77",
   },
   {
     title: "Ad Intelligence",

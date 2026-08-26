@@ -99,7 +99,7 @@ export default function SequencesPage() {
   const SEQUENCE_META: Record<string, { description: string; color: string }> = {
     "website-lead-nurture": {
       description: "4-email nurture over 21 days — urgency with a light touch, no pressure tactics.",
-      color: "#1B65A7",
+      color: "#0E8C77",
     },
     "application-completed-nurture": {
       description: "4-email stewardship over 10 days — status updates and bank-statement nudge.",
@@ -137,7 +137,7 @@ export default function SequencesPage() {
           <button
             onClick={handleSeed}
             disabled={seeding}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-[#00C9A7] text-[#0B1426] hover:bg-[#00b598] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-[#00C9A7] text-[#0a0a0a] hover:bg-[#00b598] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Play className={`h-4 w-4 ${seeding ? "animate-spin" : ""}`} />
             {seeding ? "Seeding..." : isSeeded ? "Re-seed Sequences" : "Seed Sequences"}
@@ -147,7 +147,7 @@ export default function SequencesPage() {
 
       {/* How it works callout */}
       <div className="mb-6 p-4 rounded-xl border border-[rgba(27,101,167,0.3)] bg-[rgba(27,101,167,0.08)] flex gap-3">
-        <Info className="h-5 w-5 text-[#1B65A7] shrink-0 mt-0.5" />
+        <Info className="h-5 w-5 text-[#0E8C77] shrink-0 mt-0.5" />
         <div>
           <p className="text-sm text-[rgba(255,255,255,0.8)] font-medium mb-1">
             These are Mission Control email sequences
@@ -325,7 +325,7 @@ export default function SequencesPage() {
                 {/* Tags */}
                 <div className="flex flex-wrap gap-2">
                   {seq.trigger_tag && (
-                    <span className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-[rgba(27,101,167,0.15)] border border-[rgba(27,101,167,0.25)] text-[#1B65A7]">
+                    <span className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-[rgba(27,101,167,0.15)] border border-[rgba(27,101,167,0.25)] text-[#0E8C77]">
                       <Tag className="h-2.5 w-2.5" />
                       Trigger: <strong>{seq.trigger_tag}</strong>
                     </span>

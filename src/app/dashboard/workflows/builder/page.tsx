@@ -67,7 +67,7 @@ export default function NewWorkflowPage() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#00C9A7] text-[#0B1426] rounded-lg hover:bg-[#00ddb8] transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#00C9A7] text-[#0a0a0a] rounded-lg hover:bg-[#00ddb8] transition-colors disabled:opacity-50"
         >
           <Save size={14} />
           {saving ? "Saving..." : "Save Workflow"}

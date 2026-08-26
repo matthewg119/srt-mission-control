@@ -41,7 +41,7 @@ function escapeHtml(text: string): string {
 function buildBody(firstName: string, getNamedUrl: string): string {
   return `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#333333">
-  <div style="background:#0B1426;padding:28px 24px;text-align:center">
+  <div style="background:#0a0a0a;padding:28px 24px;text-align:center">
     <span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:0.5px">SRT Agency</span>
   </div>
   <div style="padding:32px 24px">

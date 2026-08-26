@@ -13,10 +13,14 @@
  */
 
 /*
- * globals.css sets `body { background: #0B1426 }` (Mission Control midnight).
- * .scan-root paints its own background, but anything outside it still shows
- * navy: overscroll/rubber-banding, and any gap past the end of the content.
- * Repaint the body itself on the pages that use this theme.
+ * This rule used to exist because globals.css painted the body navy (#0B1426)
+ * and anything outside .scan-root showed it through: overscroll rubber-banding,
+ * and any gap past the end of the content.
+ *
+ * As of 2026-08-26 the whole app is black and globals.css paints #0a0a0a, so
+ * body and .scan-root finally agree. Kept anyway, and cheap: it costs one
+ * selector, it is still correct, and it means this theme does not silently
+ * depend on globals.css never changing back.
  */
 body:has(.scan-root) {
   background: #0a0a0a;
@@ -261,7 +265,7 @@ body:has(.scan-root) {
   display: block;
   width: 3px;
   border-radius: 1px;
-  background: #1b65a7;
+  background: #0E8C77;
 }
 
 .scan-logo-mark i:nth-child(1) { height: 8px; }

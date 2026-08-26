@@ -171,7 +171,7 @@ export function BuilderCanvas({ initialNodes = [], initialEdges = [], onChange }
           fitViewOptions={{ padding: 0.3 }}
           minZoom={0.3}
           maxZoom={2}
-          style={{ background: "#0B1426" }}
+          style={{ background: "#0a0a0a" }}
           proOptions={{ hideAttribution: true }}
           deleteKeyCode="Delete"
         >

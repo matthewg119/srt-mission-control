@@ -31,7 +31,7 @@ const CATEGORY_ICONS: Record<string, typeof Phone> = {
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
-  call_highlight: "#1B65A7",
+  call_highlight: "#0E8C77",
   lead_magnet: "#F5A623",
   daily_recap: "#00C9A7",
   insight: "#9B59B6",
@@ -101,7 +101,7 @@ export default function CallRecapPage() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(27,101,167,0.15)]">
-            <Phone className="h-5 w-5 text-[#1B65A7]" />
+            <Phone className="h-5 w-5 text-[#0E8C77]" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-white">AI Call Recap</h1>
@@ -231,7 +231,7 @@ export default function CallRecapPage() {
 
         {filteredPosts.map((post) => {
           const Icon = CATEGORY_ICONS[post.category] || TrendingUp;
-          const color = CATEGORY_COLORS[post.category] || "#1B65A7";
+          const color = CATEGORY_COLORS[post.category] || "#0E8C77";
 
           return (
             <div

@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 
 export default function StartPage() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#0B1426] px-4 py-10 text-white">
+    <main className="flex min-h-screen items-center justify-center bg-[#0a0a0a] px-4 py-10 text-white">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center text-lg font-bold tracking-wide">SRT Agency</div>
         <StartForm />

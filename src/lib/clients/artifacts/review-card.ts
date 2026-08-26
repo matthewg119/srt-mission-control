@@ -87,7 +87,7 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
     errorCorrectionLevel: "M",
     margin: 1,
     width: 600,
-    color: { dark: "#0B1426", light: "#FFFFFF" },
+    color: { dark: "#0a0a0a", light: "#FFFFFF" },
   });
   const qrPng = Buffer.from(qrDataUrl.split(",")[1], "base64");
 

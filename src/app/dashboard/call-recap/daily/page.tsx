@@ -17,7 +17,7 @@ import {
 import type { MockCall, LeadMagnetIdea } from "@/config/mock-calls";
 
 const TYPE_COLORS: Record<string, string> = {
-  ebook: "#1B65A7",
+  ebook: "#0E8C77",
   checklist: "#00C9A7",
   calculator: "#F5A623",
   webinar: "#9B59B6",
@@ -89,7 +89,7 @@ export default function DailyRecapPage() {
             label: "Calls Made",
             value: calls.length,
             icon: Phone,
-            color: "#1B65A7",
+            color: "#0E8C77",
           },
           {
             label: "Hot Leads",
@@ -162,7 +162,7 @@ export default function DailyRecapPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {ideas.map((idea, idx) => {
-            const color = TYPE_COLORS[idea.type] || "#1B65A7";
+            const color = TYPE_COLORS[idea.type] || "#0E8C77";
             return (
               <div
                 key={idea.id}

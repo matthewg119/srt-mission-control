@@ -40,7 +40,7 @@ const BUCKET_META: Record<
   cadence: {
     title: "Going stale",
     blurb: "Past the touch cadence for their stage.",
-    tone: "#1B65A7",
+    tone: "#0E8C77",
     icon: Clock,
   },
 };
@@ -114,7 +114,7 @@ function LeadCard({ lead, queueIds }: { lead: WorklistItem; queueIds: string[] }
           )}
           <button
             onClick={() => setLogging((v) => !v)}
-            className="rounded-lg bg-[#1B65A7] px-3 py-1.5 text-xs font-medium text-white"
+            className="rounded-lg bg-[#0E8C77] px-3 py-1.5 text-xs font-medium text-white"
           >
             {logging ? "Cancel" : "Log call"}
           </button>

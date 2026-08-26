@@ -125,7 +125,7 @@ export default function AdIntelligencePage() {
         </div>
         <div className="bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)] rounded-xl p-4">
           <div className="flex items-center gap-2 mb-1">
-            <Calendar className="h-3.5 w-3.5 text-[#1B65A7]" />
+            <Calendar className="h-3.5 w-3.5 text-[#0E8C77]" />
             <span className="text-[10px] text-[rgba(255,255,255,0.35)]">This Week</span>
           </div>
           <p className="text-xl font-bold text-white">{thisWeekIdeas}</p>
@@ -186,7 +186,7 @@ export default function AdIntelligencePage() {
                         {idea.primaryText}
                       </p>
                       <div className="flex gap-2 mt-1.5">
-                        <span className="text-[9px] px-1.5 py-0.5 bg-[rgba(27,101,167,0.1)] text-[#1B65A7] rounded">
+                        <span className="text-[9px] px-1.5 py-0.5 bg-[rgba(27,101,167,0.1)] text-[#0E8C77] rounded">
                           {idea.vertical}
                         </span>
                         <span

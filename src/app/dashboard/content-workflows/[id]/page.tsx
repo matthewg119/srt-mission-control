@@ -88,7 +88,7 @@ interface WorkflowDetail {
 const inputCls =
   "w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]";
 const labelCls = "text-xs text-[rgba(255,255,255,0.5)] uppercase tracking-wide block mb-1";
-const sectionCls = "rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#0F1A2E] p-5";
+const sectionCls = "rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#111111] p-5";
 
 function mermaidInkUrl(mermaid: string): string {
   // unicode-safe base64url for mermaid.ink (same encoding workflow-map.ts uses server-side)
@@ -302,14 +302,14 @@ export default function WorkflowEditorPage() {
           <button
             onClick={launch}
             disabled={launching || !wf.configured}
-            className="flex items-center gap-2 rounded-lg bg-emerald-500/90 hover:bg-emerald-500 disabled:opacity-40 text-[#0B1426] text-sm font-semibold px-3 py-2"
+            className="flex items-center gap-2 rounded-lg bg-emerald-500/90 hover:bg-emerald-500 disabled:opacity-40 text-[#0a0a0a] text-sm font-semibold px-3 py-2"
           >
             <Play size={15} /> Run in Slack
           </button>
           <button
             onClick={() => save(false)}
             disabled={saving || !dirty}
-            className="flex items-center gap-2 rounded-lg bg-[#00C9A7] hover:opacity-90 disabled:opacity-40 text-[#0B1426] text-sm font-semibold px-3 py-2"
+            className="flex items-center gap-2 rounded-lg bg-[#00C9A7] hover:opacity-90 disabled:opacity-40 text-[#0a0a0a] text-sm font-semibold px-3 py-2"
           >
             <Save size={15} /> {saving ? "Saving…" : "Save"}
           </button>
@@ -656,7 +656,7 @@ export default function WorkflowEditorPage() {
               <button
                 onClick={testRender}
                 disabled={rendering}
-                className="flex items-center gap-1.5 text-xs font-semibold text-[#0B1426] bg-[#00C9A7] hover:opacity-90 disabled:opacity-40 px-2.5 py-1.5 rounded"
+                className="flex items-center gap-1.5 text-xs font-semibold text-[#0a0a0a] bg-[#00C9A7] hover:opacity-90 disabled:opacity-40 px-2.5 py-1.5 rounded"
                 title="Render the spec (own song + scene images + text timings) through render-spec"
               >
                 <Play size={12} /> {rendering ? "Rendering..." : "Test render"}

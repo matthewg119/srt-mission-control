@@ -82,7 +82,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={loading}
-        className="mt-2 flex h-11 w-full items-center justify-center rounded-lg bg-[#00C9A7] font-semibold text-[#0B1426] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-2 flex h-11 w-full items-center justify-center rounded-lg bg-[#00C9A7] font-semibold text-[#0a0a0a] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loading ? (
           <svg

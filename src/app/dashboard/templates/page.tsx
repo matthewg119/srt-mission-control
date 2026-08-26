@@ -135,7 +135,7 @@ export default function TemplatesPage() {
           )}
           <button
             onClick={() => { setEditingTemplate(null); setShowEditor(true); }}
-            className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+            className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
           >
             <Plus size={14} />
             New Template
@@ -192,7 +192,7 @@ export default function TemplatesPage() {
           <button
             onClick={handleSeed}
             disabled={seeding}
-            className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50"
+            className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50"
           >
             {seeding ? "Seeding..." : "Seed Default Templates"}
           </button>
@@ -219,7 +219,7 @@ export default function TemplatesPage() {
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
                             template.type === "SMS"
                               ? "bg-[#00C9A7]/10 text-[#00C9A7]"
-                              : "bg-[#1B65A7]/10 text-[#1B65A7]"
+                              : "bg-[#0E8C77]/10 text-[#0E8C77]"
                           }`}>
                             {template.type === "SMS" ? <MessageSquare size={16} /> : <Mail size={16} />}
                           </div>
@@ -229,7 +229,7 @@ export default function TemplatesPage() {
                               <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
                                 template.type === "SMS"
                                   ? "bg-[#00C9A7]/10 text-[#00C9A7]"
-                                  : "bg-[#1B65A7]/10 text-[#1B65A7]"
+                                  : "bg-[#0E8C77]/10 text-[#0E8C77]"
                               }`}>
                                 {template.type}
                               </span>

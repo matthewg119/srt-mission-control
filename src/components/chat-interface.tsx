@@ -130,13 +130,13 @@ const EVENT_DOT_COLORS: Record<string, string> = {
   email_sent: "#0ea5e9",
   stage_changed: "#f59e0b",
   cron_sequences: "#64748b",
-  ai_action: "#1B65A7",
+  ai_action: "#0E8C77",
   application_progress: "#8b5cf6",
   application_pdf: "#00C9A7",
   application_error: "#ef4444",
   error: "#ef4444",
   pipeline_deal_created: "#00C9A7",
-  pipeline_stage_moved: "#1B65A7",
+  pipeline_stage_moved: "#0E8C77",
   zoho_sync: "#64748b",
 };
 
@@ -363,7 +363,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
           </p>
           <a
             href="/dashboard/settings"
-            className="inline-block px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90"
+            className="inline-block px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90"
           >
             Go to Settings
           </a>
@@ -385,7 +385,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
             <h3 className="text-xs font-semibold text-[rgba(255,255,255,0.4)] uppercase tracking-wider">History</h3>
             <button
               onClick={startNewChat}
-              className="p-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md hover:opacity-90"
+              className="p-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md hover:opacity-90"
               title="New chat"
             >
               <Plus size={14} />
@@ -484,7 +484,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
                 <div
                   className={`rounded-xl px-4 py-3 ${
                     msg.role === "user"
-                      ? "bg-[#00C9A7] text-[#0B1426]"
+                      ? "bg-[#00C9A7] text-[#0a0a0a]"
                       : "bg-[rgba(255,255,255,0.05)] text-white"
                   }`}
                   style={{ maxWidth: msg.role === "user" ? "70%" : "88%" }}
@@ -563,7 +563,7 @@ export function ChatInterface({ userName, apiEndpoint = "/api/chat", agentId, re
             <button
               onClick={handleSend}
               disabled={!input.trim() || loading}
-              className="p-3 bg-[#00C9A7] text-[#0B1426] rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="p-3 bg-[#00C9A7] text-[#0a0a0a] rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               <Send size={16} />
             </button>

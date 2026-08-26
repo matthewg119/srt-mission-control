@@ -345,7 +345,7 @@ export function NodeConfigPanel({ node, onUpdate, onClose }: NodeConfigPanelProp
   };
 
   const TYPE_COLORS: Record<string, string> = {
-    trigger: "#1B65A7",
+    trigger: "#0E8C77",
     condition: "#f59e0b",
     action: "#00C9A7",
     delay: "#8b5cf6",

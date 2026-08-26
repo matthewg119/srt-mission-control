@@ -15,7 +15,7 @@ const EVENT_COLORS: Record<string, string> = {
   sms_sent: "#0ea5e9",
   email_sent: "#8b5cf6",
   stage_changed: "#f59e0b",
-  ai_action: "#1B65A7",
+  ai_action: "#0E8C77",
   error: "#ef4444",
 };
 

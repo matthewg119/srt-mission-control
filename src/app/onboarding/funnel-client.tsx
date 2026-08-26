@@ -234,7 +234,7 @@ function Field({
         >
           <option value="">Choose one</option>
           {def.options?.map((o) => (
-            <option key={o} value={o} className="bg-[#0B1426]">
+            <option key={o} value={o} className="bg-[#0a0a0a]">
               {o}
             </option>
           ))}

@@ -39,7 +39,7 @@ export default function EmailQueuePage() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(27,101,167,0.15)]">
-            <Mail className="h-5 w-5 text-[#1B65A7]" />
+            <Mail className="h-5 w-5 text-[#0E8C77]" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-white">Email Queue</h1>

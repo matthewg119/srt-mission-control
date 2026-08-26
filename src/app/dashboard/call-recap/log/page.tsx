@@ -18,7 +18,7 @@ import type { MockCall } from "@/config/mock-calls";
 
 const OUTCOME_COLORS: Record<string, string> = {
   interested: "#00C9A7",
-  applied: "#1B65A7",
+  applied: "#0E8C77",
   needs_docs: "#F5A623",
   callback: "#9B59B6",
   not_interested: "#E74C3C",
@@ -73,7 +73,7 @@ export default function CallLogPage() {
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(27,101,167,0.15)]">
-          <Phone className="h-5 w-5 text-[#1B65A7]" />
+          <Phone className="h-5 w-5 text-[#0E8C77]" />
         </div>
         <div>
           <h1 className="text-xl font-bold text-white">Call Log</h1>
@@ -143,7 +143,7 @@ export default function CallLogPage() {
 
         {filtered.map((call) => {
           const isExpanded = expandedId === call.id;
-          const color = OUTCOME_COLORS[call.outcome] || "#1B65A7";
+          const color = OUTCOME_COLORS[call.outcome] || "#0E8C77";
 
           return (
             <div

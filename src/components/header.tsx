@@ -114,7 +114,7 @@ export function Header({ user, onMenuClick }: HeaderProps) {
   }
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-[rgba(255,255,255,0.06)] bg-[#0B1426] px-6">
+    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-[rgba(255,255,255,0.06)] bg-[#0a0a0a] px-6">
       {/* Left side */}
       <div className="flex items-center gap-4">
         <button
@@ -142,7 +142,7 @@ export function Header({ user, onMenuClick }: HeaderProps) {
           </button>
 
           {bellOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-[#0F1E35] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-2xl overflow-hidden z-50">
+            <div className="absolute right-0 mt-2 w-80 bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-2xl overflow-hidden z-50">
               <div className="flex items-center justify-between px-4 py-3 border-b border-[rgba(255,255,255,0.06)]">
                 <span className="text-sm font-semibold text-white">
                   Alerts {unreadCount > 0 && <span className="text-[#ef4444]">({unreadCount})</span>}

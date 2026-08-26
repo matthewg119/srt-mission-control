@@ -37,7 +37,7 @@ export interface DelayNodeData {
 }
 
 const NODE_STYLES = {
-  trigger: { border: "#1B65A7", bg: "rgba(27,101,167,0.15)", icon: Zap },
+  trigger: { border: "#0E8C77", bg: "rgba(27,101,167,0.15)", icon: Zap },
   condition: { border: "#f59e0b", bg: "rgba(245,158,11,0.12)", icon: GitBranch },
   action: { border: "#00C9A7", bg: "rgba(0,201,167,0.12)", icon: Play },
   delay: { border: "#8b5cf6", bg: "rgba(139,92,246,0.12)", icon: Clock },

@@ -28,7 +28,7 @@ interface Update {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  planned: "#1B65A7",
+  planned: "#0E8C77",
   in_progress: "#F5A623",
   testing: "#9C27B0",
   deployed: "#4CAF50",
@@ -196,7 +196,7 @@ export function UpdatePlanner() {
               {selectedUpdate.tasks?.sort((a, b) => a.sort_order - b.sort_order).map((task) => (
                 <div key={task.id} className="flex items-start gap-3 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] rounded-lg p-3">
                   <button onClick={() => toggleTaskStatus(task)} className={`mt-0.5 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${task.status === "done" ? "bg-[#00C9A7] border-[#00C9A7]" : "border-[rgba(255,255,255,0.3)]"}`}>
-                    {task.status === "done" && <Check size={10} className="text-[#0B1426]" />}
+                    {task.status === "done" && <Check size={10} className="text-[#0a0a0a]" />}
                   </button>
                   <div className="flex-1 min-w-0">
                     <p className={`text-sm ${task.status === "done" ? "text-[rgba(255,255,255,0.3)] line-through" : "text-white"}`}>{task.task}</p>
@@ -213,7 +213,7 @@ export function UpdatePlanner() {
                 <input value={taskForm.task} onChange={(e) => setTaskForm({ ...taskForm, task: e.target.value })} placeholder="Task description" className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#00C9A7]" />
                 <input value={taskForm.file_path} onChange={(e) => setTaskForm({ ...taskForm, file_path: e.target.value })} placeholder="File path (optional)" className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-[#00C9A7]" />
                 <div className="flex gap-2">
-                  <button onClick={handleAddTask} disabled={saving || !taskForm.task} className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium disabled:opacity-50">{saving ? "Adding..." : "Add Task"}</button>
+                  <button onClick={handleAddTask} disabled={saving || !taskForm.task} className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium disabled:opacity-50">{saving ? "Adding..." : "Add Task"}</button>
                   <button onClick={() => setShowAddTask(false)} className="text-xs px-3 py-1.5 text-[rgba(255,255,255,0.5)]">Cancel</button>
                 </div>
               </div>
@@ -267,7 +267,7 @@ export function UpdatePlanner() {
             </span>
           )}
         </div>
-        <button onClick={() => setShowCreateDialog(true)} className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90">
+        <button onClick={() => setShowCreateDialog(true)} className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90">
           <Plus size={16} /> Plan New Update
         </button>
       </div>
@@ -275,7 +275,7 @@ export function UpdatePlanner() {
       {/* Filter tabs */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
         {FILTER_TABS.map((tab) => (
-          <button key={tab} onClick={() => setFilter(tab)} className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${filter === tab ? "bg-[#00C9A7] text-[#0B1426]" : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"}`}>
+          <button key={tab} onClick={() => setFilter(tab)} className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${filter === tab ? "bg-[#00C9A7] text-[#0a0a0a]" : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"}`}>
             {tab}
           </button>
         ))}
@@ -331,7 +331,7 @@ export function UpdatePlanner() {
       {/* Create Dialog */}
       {showCreateDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-[#0f1d32] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-lg">
+          <div className="bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-lg">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">Plan New Update</h2>
               <button onClick={() => setShowCreateDialog(false)} className="text-[rgba(255,255,255,0.4)] hover:text-white"><X size={20} /></button>
@@ -345,10 +345,10 @@ export function UpdatePlanner() {
                 <div>
                   <label className="text-xs text-[rgba(255,255,255,0.5)] block mb-1">Status</label>
                   <select value={createForm.status} onChange={(e) => setCreateForm({ ...createForm, status: e.target.value })} className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]">
-                    <option value="planned" className="bg-[#0f1d32]">Planned</option>
-                    <option value="in_progress" className="bg-[#0f1d32]">In Progress</option>
-                    <option value="testing" className="bg-[#0f1d32]">Testing</option>
-                    <option value="deployed" className="bg-[#0f1d32]">Deployed</option>
+                    <option value="planned" className="bg-[#111111]">Planned</option>
+                    <option value="in_progress" className="bg-[#111111]">In Progress</option>
+                    <option value="testing" className="bg-[#111111]">Testing</option>
+                    <option value="deployed" className="bg-[#111111]">Deployed</option>
                   </select>
                 </div>
               </div>
@@ -366,7 +366,7 @@ export function UpdatePlanner() {
               </div>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setShowCreateDialog(false)} className="px-4 py-2 text-sm text-[rgba(255,255,255,0.5)]">Cancel</button>
-                <button onClick={handleCreate} disabled={saving || !createForm.version || !createForm.title} className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50">{saving ? "Creating..." : "Create Update"}</button>
+                <button onClick={handleCreate} disabled={saving || !createForm.version || !createForm.title} className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50">{saving ? "Creating..." : "Create Update"}</button>
               </div>
             </div>
           </div>

@@ -32,7 +32,7 @@
 // element and not merely be imported:
 //   - the root layout hard-sets font-family INLINE on <body>, which beats any class, so
 //     .scan-root re-declares it;
-//   - globals.css paints body #0B1426, which shows through on overscroll, so
+//   - globals.css paints body #0a0a0a, which shows through on overscroll, so
 //     `body:has(.scan-root)` repaints it. The white page has the same problem and
 //     `body:has(.lhrw-root)` in training.css is the same fix.
 

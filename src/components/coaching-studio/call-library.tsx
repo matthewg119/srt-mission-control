@@ -17,7 +17,7 @@ const OUTCOMES = [
 
 const OUTCOME_COLORS: Record<string, string> = {
   interested: "#00C9A7",
-  applied: "#1B65A7",
+  applied: "#0E8C77",
   needs_docs: "#F5A623",
   callback: "#9C27B0",
   not_interested: "#E74C3C",
@@ -140,7 +140,7 @@ export function CallLibrary() {
             onClick={() => setOutcomeFilter(o.value)}
             className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
               outcomeFilter === o.value
-                ? "bg-[#00C9A7] text-[#0B1426]"
+                ? "bg-[#00C9A7] text-[#0a0a0a]"
                 : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"
             }`}
           >
@@ -219,7 +219,7 @@ export function CallLibrary() {
                         className="text-[10px] font-semibold px-2 py-0.5 rounded-full text-white"
                         style={{
                           backgroundColor:
-                            OUTCOME_COLORS[s.outcome] || "#1B65A7",
+                            OUTCOME_COLORS[s.outcome] || "#0E8C77",
                         }}
                       >
                         {s.outcome}
@@ -260,9 +260,9 @@ export function CallLibrary() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-[#0f1d32] border-l border-[rgba(255,255,255,0.1)] w-full max-w-3xl h-full overflow-y-auto"
+            className="bg-[#111111] border-l border-[rgba(255,255,255,0.1)] w-full max-w-3xl h-full overflow-y-auto"
           >
-            <div className="sticky top-0 bg-[#0f1d32] border-b border-[rgba(255,255,255,0.1)] p-5 flex items-center justify-between z-10">
+            <div className="sticky top-0 bg-[#111111] border-b border-[rgba(255,255,255,0.1)] p-5 flex items-center justify-between z-10">
               <div>
                 <h3 className="text-lg font-semibold text-white">
                   {detailSession?.title ||
@@ -341,14 +341,14 @@ export function CallLibrary() {
                         }
                         className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-2 py-1.5 text-sm text-white mt-1 focus:outline-none focus:border-[#00C9A7]"
                       >
-                        <option value="" className="bg-[#0f1d32]">
+                        <option value="" className="bg-[#111111]">
                           —
                         </option>
                         {OUTCOMES.filter((o) => o.value !== "all").map((o) => (
                           <option
                             key={o.value}
                             value={o.value}
-                            className="bg-[#0f1d32]"
+                            className="bg-[#111111]"
                           >
                             {o.label}
                           </option>

@@ -12,7 +12,7 @@ interface NodeData {
 }
 
 const TYPE_STYLES: Record<string, { border: string; bg: string; dot: string }> = {
-  trigger: { border: "#1B65A7", bg: "rgba(27,101,167,0.12)", dot: "#1B65A7" },
+  trigger: { border: "#0E8C77", bg: "rgba(27,101,167,0.12)", dot: "#0E8C77" },
   action: { border: "#00C9A7", bg: "rgba(0,201,167,0.08)", dot: "#00C9A7" },
   condition: { border: "#f59e0b", bg: "rgba(245,158,11,0.08)", dot: "#f59e0b" },
   outcome: { border: "#8b5cf6", bg: "rgba(139,92,246,0.08)", dot: "#8b5cf6" },

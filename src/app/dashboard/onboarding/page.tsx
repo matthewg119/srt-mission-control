@@ -192,7 +192,7 @@ export default function OnboardingPage() {
               background:
                 percentage === 100
                   ? "#00C9A7"
-                  : "linear-gradient(90deg, #1B65A7, #00C9A7)",
+                  : "linear-gradient(90deg, #0E8C77, #00C9A7)",
             }}
           />
         </div>

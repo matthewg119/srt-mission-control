@@ -7,7 +7,7 @@
 }
 
 body {
-  background: #0B1426;
+  background: #0a0a0a;
   color: #FFFFFF;
   font-family: var(--font-general-sans), system-ui, sans-serif;
 }
@@ -59,7 +59,7 @@ body {
 @media print {
   html,
   body {
-    background: #0B1426 !important;
+    background: #0a0a0a !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }

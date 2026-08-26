@@ -17,7 +17,7 @@ interface KnowledgeEntry {
 const CATEGORIES = ["All", "General", "Products", "SOPs", "Sales Scripts", "Marketing", "Strategy", "Pipeline"];
 
 const CATEGORY_COLORS: Record<string, string> = {
-  General: "#1B65A7",
+  General: "#0E8C77",
   Products: "#00C9A7",
   SOPs: "#F5A623",
   "Sales Scripts": "#9C27B0",
@@ -111,7 +111,7 @@ export function KnowledgeManager() {
         <h1 className="text-2xl font-bold text-white">Knowledge Base</h1>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 transition-opacity"
+          className="flex items-center gap-2 px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 transition-opacity"
         >
           <Plus size={16} />
           Add Entry
@@ -138,7 +138,7 @@ export function KnowledgeManager() {
             onClick={() => setActiveCategory(cat)}
             className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
               activeCategory === cat
-                ? "bg-[#00C9A7] text-[#0B1426]"
+                ? "bg-[#00C9A7] text-[#0a0a0a]"
                 : "bg-[rgba(255,255,255,0.05)] text-[rgba(255,255,255,0.5)] hover:text-white"
             }`}
           >
@@ -169,7 +169,7 @@ export function KnowledgeManager() {
               <div className="flex items-start justify-between mb-3">
                 <span
                   className="text-[10px] font-semibold px-2 py-0.5 rounded-full text-white"
-                  style={{ backgroundColor: CATEGORY_COLORS[entry.category] || "#1B65A7" }}
+                  style={{ backgroundColor: CATEGORY_COLORS[entry.category] || "#0E8C77" }}
                 >
                   {entry.category}
                 </span>
@@ -204,7 +204,7 @@ export function KnowledgeManager() {
       {/* Dialog */}
       {showDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-[#0f1d32] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+          <div className="bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">
                 {editingEntry ? "Edit Entry" : "New Entry"}
@@ -230,7 +230,7 @@ export function KnowledgeManager() {
                   className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]"
                 >
                   {CATEGORIES.filter((c) => c !== "All").map((cat) => (
-                    <option key={cat} value={cat} className="bg-[#0f1d32]">{cat}</option>
+                    <option key={cat} value={cat} className="bg-[#111111]">{cat}</option>
                   ))}
                 </select>
               </div>
@@ -262,7 +262,7 @@ export function KnowledgeManager() {
                 <button
                   onClick={handleSave}
                   disabled={saving || !formData.title || !formData.content}
-                  className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
+                  className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : "Save"}
                 </button>

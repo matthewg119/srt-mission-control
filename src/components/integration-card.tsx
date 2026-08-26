@@ -109,7 +109,7 @@ export function IntegrationCard({
               <div className="flex gap-2 flex-wrap">
                 <a
                   href="/dashboard/mail"
-                  className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
+                  className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 transition-opacity"
                 >
                   Open Inbox
                 </a>
@@ -134,7 +134,7 @@ export function IntegrationCard({
           ) : (
             <a
               href="/api/integrations/microsoft/auth"
-              className="inline-block text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 transition-opacity"
+              className="inline-block text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 transition-opacity"
             >
               Connect Outlook
             </a>
@@ -183,7 +183,7 @@ export function IntegrationCard({
           <button
             onClick={handleSave}
             disabled={saving}
-            className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium hover:opacity-90 disabled:opacity-50"
+            className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save Configuration"}
           </button>

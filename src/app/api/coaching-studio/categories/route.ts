@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       .insert({
         name: name.trim().toLowerCase().replace(/\s+/g, "_"),
         description: description || null,
-        color: color || "#1B65A7",
+        color: color || "#0E8C77",
         sort_order: typeof sort_order === "number" ? sort_order : 500,
       })
       .select()

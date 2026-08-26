@@ -146,7 +146,7 @@ export function PresenceSweepForm({
                   onChange={(e) => set(row.id, "confirmedStatus", e.target.value)}
                 >
                   {STATUS_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value} className="bg-[#0B1426]">
+                    <option key={o.value} value={o.value} className="bg-[#0a0a0a]">
                       {o.label}
                     </option>
                   ))}

@@ -246,7 +246,7 @@ export default function AdsPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-lg bg-[rgba(27,101,167,0.12)] flex items-center justify-center">
-          <Target className="h-4.5 w-4.5 text-[#1B65A7]" />
+          <Target className="h-4.5 w-4.5 text-[#0E8C77]" />
         </div>
         <div>
           <h1 className="text-lg font-bold text-white">Meta Ads Command Center</h1>
@@ -266,7 +266,7 @@ export default function AdsPage() {
               onClick={() => setTab(t.key)}
               className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
                 tab === t.key
-                  ? "border-[#1B65A7] text-[#1B65A7]"
+                  ? "border-[#0E8C77] text-[#0E8C77]"
                   : "border-transparent text-[rgba(255,255,255,0.35)] hover:text-[rgba(255,255,255,0.6)]"
               }`}
             >
@@ -293,7 +293,7 @@ export default function AdsPage() {
               value={campaignName}
               onChange={(e) => setCampaignName(e.target.value)}
               placeholder="Campaign name (optional)"
-              className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-3 py-2 text-sm text-white placeholder-[rgba(255,255,255,0.25)] focus:outline-none focus:border-[#1B65A7]"
+              className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-3 py-2 text-sm text-white placeholder-[rgba(255,255,255,0.25)] focus:outline-none focus:border-[#0E8C77]"
             />
 
             {/* Vertical selector */}
@@ -330,7 +330,7 @@ export default function AdsPage() {
                             onClick={() => setSelectedVertical(v)}
                             className={`w-full text-left px-2 py-1 text-xs rounded transition-colors ${
                               selectedVertical?.key === v.key
-                                ? "bg-[rgba(27,101,167,0.15)] text-[#1B65A7]"
+                                ? "bg-[rgba(27,101,167,0.15)] text-[#0E8C77]"
                                 : "text-[rgba(255,255,255,0.4)] hover:text-white"
                             }`}
                           >
@@ -381,9 +381,9 @@ export default function AdsPage() {
                   onChange={(e) => setLanguage(e.target.value as "en" | "es" | "both")}
                   className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-1.5 text-xs text-white"
                 >
-                  <option value="en" className="bg-[#0B1426]">English</option>
-                  <option value="es" className="bg-[#0B1426]">Espa&ntilde;ol</option>
-                  <option value="both" className="bg-[#0B1426]">Both</option>
+                  <option value="en" className="bg-[#0a0a0a]">English</option>
+                  <option value="es" className="bg-[#0a0a0a]">Espa&ntilde;ol</option>
+                  <option value="both" className="bg-[#0a0a0a]">Both</option>
                 </select>
               </div>
               <div className="flex-1">
@@ -396,7 +396,7 @@ export default function AdsPage() {
                   className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-1.5 text-xs text-white"
                 >
                   {[3, 5, 8, 10].map((n) => (
-                    <option key={n} value={n} className="bg-[#0B1426]">
+                    <option key={n} value={n} className="bg-[#0a0a0a]">
                       {n} ads
                     </option>
                   ))}
@@ -414,7 +414,7 @@ export default function AdsPage() {
                 onChange={(e) => setCrmIntel(e.target.value)}
                 rows={3}
                 placeholder="Paste call transcripts, objections, testimonials..."
-                className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-3 py-2 text-xs text-white placeholder-[rgba(255,255,255,0.2)] focus:outline-none focus:border-[#1B65A7] resize-none"
+                className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-lg px-3 py-2 text-xs text-white placeholder-[rgba(255,255,255,0.2)] focus:outline-none focus:border-[#0E8C77] resize-none"
               />
             </div>
 
@@ -437,7 +437,7 @@ export default function AdsPage() {
               <button
                 onClick={generateAds}
                 disabled={!selectedVertical || loading}
-                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 bg-[#1B65A7] text-white text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-40"
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 bg-[#0E8C77] text-white text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-40"
               >
                 {loading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -466,7 +466,7 @@ export default function AdsPage() {
             {/* Selected config summary */}
             {selectedVertical && (
               <div className="flex flex-wrap gap-2 text-[10px]">
-                <span className="px-2 py-1 bg-[rgba(27,101,167,0.1)] text-[#1B65A7] rounded-full">
+                <span className="px-2 py-1 bg-[rgba(27,101,167,0.1)] text-[#0E8C77] rounded-full">
                   {selectedVertical.icon} {selectedVertical.name}
                 </span>
                 <span
@@ -554,7 +554,7 @@ export default function AdsPage() {
             <button
               onClick={generateNightly}
               disabled={nightlyLoading}
-              className="flex items-center gap-2 px-4 py-2 bg-[#1B65A7] text-white text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-[#0E8C77] text-white text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
             >
               {nightlyLoading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -580,7 +580,7 @@ export default function AdsPage() {
                       {ad.primaryText}
                     </p>
                     <div className="flex gap-2 mt-1.5">
-                      <span className="text-[9px] px-1.5 py-0.5 bg-[rgba(27,101,167,0.1)] text-[#1B65A7] rounded">
+                      <span className="text-[9px] px-1.5 py-0.5 bg-[rgba(27,101,167,0.1)] text-[#0E8C77] rounded">
                         {ad.vertical}
                       </span>
                       <span className="text-[9px] px-1.5 py-0.5 bg-[rgba(255,255,255,0.04)] text-[rgba(255,255,255,0.3)] rounded">
@@ -619,12 +619,12 @@ export default function AdsPage() {
               onChange={(e) => setCrmText(e.target.value)}
               rows={12}
               placeholder="Paste CRM data here... call transcripts, text messages, customer testimonials, common objections..."
-              className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-xl px-4 py-3 text-xs text-white placeholder-[rgba(255,255,255,0.2)] focus:outline-none focus:border-[#1B65A7] resize-none"
+              className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-xl px-4 py-3 text-xs text-white placeholder-[rgba(255,255,255,0.2)] focus:outline-none focus:border-[#0E8C77] resize-none"
             />
             <button
               onClick={extractCRM}
               disabled={!crmText.trim() || crmLoading}
-              className="flex items-center gap-2 px-4 py-2 bg-[#1B65A7] text-white text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-40"
+              className="flex items-center gap-2 px-4 py-2 bg-[#0E8C77] text-white text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-40"
             >
               {crmLoading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

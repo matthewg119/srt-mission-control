@@ -7,7 +7,7 @@ import type { Indicators } from "@/lib/ta-analysis";
 const QUICKCHART_BASE = "https://quickchart.io/chart";
 const CHART_WIDTH = 800;
 const CHART_HEIGHT = 380;
-const BG_COLOR = "%230B1426"; // URL-encoded #0B1426
+const BG_COLOR = "%230B1426"; // URL-encoded #0a0a0a
 
 export function buildChartUrl(
   bars: SchwabBar[],
@@ -68,7 +68,7 @@ export function buildChartUrl(
         {
           label: "EMA21",
           data: ema21,
-          borderColor: "#1B65A7",
+          borderColor: "#0E8C77",
           borderWidth: 1.5,
           pointRadius: 0,
           tension: 0.1,
@@ -109,7 +109,7 @@ export function buildChartUrl(
           position: "right",
         },
       },
-      backgroundColor: "#0B1426",
+      backgroundColor: "#0a0a0a",
     },
   };
 

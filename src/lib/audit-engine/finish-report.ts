@@ -405,7 +405,7 @@ function guideCtaHtml(report: AuditReportRow): string {
     `<div style="margin:24px 0;padding:20px;background:#F7FAFC;border-left:4px solid #00C9A7;` +
     `font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5">` +
     `<p style="margin:0 0 12px">Here is the guide you asked for, alongside the report above.</p>` +
-    `<a href="${safe}" style="display:inline-block;padding:12px 24px;background:#1B65A7;color:#ffffff;` +
+    `<a href="${safe}" style="display:inline-block;padding:12px 24px;background:#0E8C77;color:#ffffff;` +
     `text-decoration:none;border-radius:8px;font-weight:600">Download the guide</a>` +
     `<p style="margin:12px 0 0;font-size:12px;color:#4A5568">Or paste this into your browser: ${safe}</p>` +
     `</div>`

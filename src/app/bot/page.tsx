@@ -210,7 +210,7 @@ export default function BotPage() {
   const todayPnl = todayStats?.total_pnl ?? null;
 
   return (
-    <div className="min-h-screen bg-[#0B1426] text-white p-6 space-y-6">
+    <div className="min-h-screen bg-[#0a0a0a] text-white p-6 space-y-6">
       {/* ── Status Bar ── */}
       <div className="flex flex-wrap items-center gap-4 bg-white/5 rounded-xl px-5 py-4 border border-white/10">
         <h1 className="text-lg font-semibold flex items-center gap-2">
@@ -255,12 +255,12 @@ export default function BotPage() {
         {/* Symbols */}
         <div className="flex gap-2 ml-auto items-center">
           {config?.spy_enabled === "true" && (
-            <span className="px-2 py-0.5 bg-[#1B65A7]/30 text-[#1B65A7] border border-[#1B65A7]/40 rounded text-xs font-mono">
+            <span className="px-2 py-0.5 bg-[#0E8C77]/30 text-[#0E8C77] border border-[#0E8C77]/40 rounded text-xs font-mono">
               SPY
             </span>
           )}
           {config?.qqq_enabled === "true" && (
-            <span className="px-2 py-0.5 bg-[#1B65A7]/30 text-[#1B65A7] border border-[#1B65A7]/40 rounded text-xs font-mono">
+            <span className="px-2 py-0.5 bg-[#0E8C77]/30 text-[#0E8C77] border border-[#0E8C77]/40 rounded text-xs font-mono">
               QQQ
             </span>
           )}
@@ -457,7 +457,7 @@ export default function BotPage() {
               />
               <Tooltip
                 contentStyle={{
-                  background: "#0B1426",
+                  background: "#0a0a0a",
                   border: "1px solid rgba(255,255,255,0.1)",
                   borderRadius: 8,
                   color: "#fff",
@@ -562,7 +562,7 @@ export default function BotPage() {
             <button
               onClick={saveConfig}
               disabled={saving}
-              className="px-5 py-2 bg-[#00C9A7] text-[#0B1426] font-semibold text-sm rounded-lg hover:bg-[#00C9A7]/90 disabled:opacity-50 transition-all"
+              className="px-5 py-2 bg-[#00C9A7] text-[#0a0a0a] font-semibold text-sm rounded-lg hover:bg-[#00C9A7]/90 disabled:opacity-50 transition-all"
             >
               {saving ? "Saving..." : "Save Configuration"}
             </button>

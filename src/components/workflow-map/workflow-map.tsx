@@ -41,7 +41,7 @@ export function WorkflowMap({ stats }: WorkflowMapProps) {
 
   const nodes: Node[] = useMemo(() => [
     // ── Track Labels ──────────────────────────────────────────────
-    { id: "lbl1", type: "groupLabel", position: { x: X1, y: 20 }, data: { label: "Contact Form", color: "#1B65A7" } },
+    { id: "lbl1", type: "groupLabel", position: { x: X1, y: 20 }, data: { label: "Contact Form", color: "#0E8C77" } },
     { id: "lbl2", type: "groupLabel", position: { x: X2, y: 20 }, data: { label: "Apply Form", color: "#8b5cf6" } },
     { id: "lbl3", type: "groupLabel", position: { x: X3, y: 20 }, data: { label: "Stage Automations", color: "#f59e0b" } },
     { id: "lbl4", type: "groupLabel", position: { x: X4, y: 20 }, data: { label: "Email Sequences", color: "#00C9A7" } },
@@ -84,7 +84,7 @@ export function WorkflowMap({ stats }: WorkflowMapProps) {
 
   const edges: Edge[] = useMemo(() => [
     // Track 1: Contact Form
-    { id: "e-cf1-2", source: "cf1", target: "cf2", animated: true, style: { stroke: "#1B65A7", strokeWidth: 2 } },
+    { id: "e-cf1-2", source: "cf1", target: "cf2", animated: true, style: { stroke: "#0E8C77", strokeWidth: 2 } },
     { id: "e-cf2-3", source: "cf2", target: "cf3", label: "FAIL", labelStyle: { fill: "#ef4444", fontSize: 9 }, style: { stroke: "#ef4444", strokeWidth: 1.5, strokeDasharray: "4 2" } },
     { id: "e-cf2-4", source: "cf2", target: "cf4", label: "PASS", labelStyle: { fill: "#00C9A7", fontSize: 9 }, style: { stroke: "#00C9A7", strokeWidth: 1.5 } },
     { id: "e-cf4-5", source: "cf4", target: "cf5", style: { stroke: "#00C9A7", strokeWidth: 1.5 } },
@@ -128,7 +128,7 @@ export function WorkflowMap({ stats }: WorkflowMapProps) {
         fitViewOptions={{ padding: 0.15 }}
         minZoom={0.3}
         maxZoom={2}
-        style={{ background: "#0B1426" }}
+        style={{ background: "#0a0a0a" }}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="rgba(255,255,255,0.04)" />

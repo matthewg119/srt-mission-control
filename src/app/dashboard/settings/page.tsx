@@ -114,7 +114,7 @@ function AccountTab() {
             onChange={(e) => setName(e.target.value)}
             className="flex-1 bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]"
           />
-          <button onClick={handleSaveName} disabled={saving} className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md text-sm font-semibold disabled:opacity-50">
+          <button onClick={handleSaveName} disabled={saving} className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md text-sm font-semibold disabled:opacity-50">
             Save
           </button>
         </div>
@@ -156,7 +156,7 @@ function AccountTab() {
           <button
             onClick={handleChangePassword}
             disabled={saving || !currentPassword || !newPassword}
-            className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md text-sm font-semibold disabled:opacity-50"
+            className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md text-sm font-semibold disabled:opacity-50"
           >
             Change Password
           </button>
@@ -220,7 +220,7 @@ function TeamTab({ isAdmin, currentUserId }: { isAdmin: boolean; currentUserId: 
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-white">Team Members</h3>
-        <button onClick={() => setShowAdd(true)} className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0B1426] rounded-md font-medium">
+        <button onClick={() => setShowAdd(true)} className="text-xs px-3 py-1.5 bg-[#00C9A7] text-[#0a0a0a] rounded-md font-medium">
           Add User
         </button>
       </div>
@@ -253,20 +253,20 @@ function TeamTab({ isAdmin, currentUserId }: { isAdmin: boolean; currentUserId: 
 
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-[#0f1d32] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-md">
+          <div className="bg-[#111111] border border-[rgba(255,255,255,0.1)] rounded-xl p-6 w-full max-w-md">
             <h2 className="text-lg font-semibold text-white mb-4">Add User</h2>
             <div className="space-y-3">
               <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]" />
               <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" type="email" className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]" />
               <input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" type="password" className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]" />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00C9A7]">
-                <option value="admin" className="bg-[#0f1d32]">Admin</option>
-                <option value="member" className="bg-[#0f1d32]">Member</option>
-                <option value="viewer" className="bg-[#0f1d32]">Viewer</option>
+                <option value="admin" className="bg-[#111111]">Admin</option>
+                <option value="member" className="bg-[#111111]">Member</option>
+                <option value="viewer" className="bg-[#111111]">Viewer</option>
               </select>
               <div className="flex gap-2 justify-end pt-2">
                 <button onClick={() => setShowAdd(false)} className="px-4 py-2 text-sm text-[rgba(255,255,255,0.5)]">Cancel</button>
-                <button onClick={handleAdd} disabled={saving || !form.name || !form.email || !form.password} className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-md text-sm font-semibold disabled:opacity-50">
+                <button onClick={handleAdd} disabled={saving || !form.name || !form.email || !form.password} className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-md text-sm font-semibold disabled:opacity-50">
                   {saving ? "Adding..." : "Add User"}
                 </button>
               </div>
@@ -376,7 +376,7 @@ function NotificationsTab() {
       <button
         onClick={handleSave}
         disabled={saving}
-        className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
+        className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
       >
         {saving ? "Saving..." : "Save Notifications"}
       </button>
@@ -474,7 +474,7 @@ function AIConfigTab() {
       <button
         onClick={handleSave}
         disabled={saving}
-        className="px-4 py-2 bg-[#00C9A7] text-[#0B1426] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
+        className="px-4 py-2 bg-[#00C9A7] text-[#0a0a0a] rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50"
       >
         {saving ? "Saving..." : "Save Configuration"}
       </button>

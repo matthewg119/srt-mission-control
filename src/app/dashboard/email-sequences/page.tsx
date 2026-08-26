@@ -50,7 +50,7 @@ const SEQUENCES = [
 ];
 
 const LIST_META: Record<string, { label: string; color: string; suggestedSequence: string }> = {
-  eligible_fu_new:               { label: "FU New",             color: "#1B65A7", suggestedSequence: "fu-new-inbound" },
+  eligible_fu_new:               { label: "FU New",             color: "#0E8C77", suggestedSequence: "fu-new-inbound" },
   eligible_app_started:          { label: "App Started",        color: "#8B5CF6", suggestedSequence: "fu-new-inbound" },
   eligible_awaiting_statements:  { label: "Awaiting Stmts",     color: "#F59E0B", suggestedSequence: "awaiting-statements" },
   eligible_post_call_followup:   { label: "Post-Call",          color: "#00C9A7", suggestedSequence: "post-call-followup" },
@@ -234,13 +234,13 @@ export default function EmailSequencesPage() {
             className="px-2 py-1 rounded-lg text-sm bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] text-white"
           >
             {SEQUENCES.map((s) => (
-              <option key={s.slug} value={s.slug} className="bg-[#0B1426] text-white">{s.label}</option>
+              <option key={s.slug} value={s.slug} className="bg-[#0a0a0a] text-white">{s.label}</option>
             ))}
           </select>
           <button
             onClick={handleBulkEnroll}
             disabled={bulkEnrolling}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#00C9A7] text-[#0B1426] hover:bg-[#00b598] transition-colors disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#00C9A7] text-[#0a0a0a] hover:bg-[#00b598] transition-colors disabled:opacity-40"
           >
             <Play className="h-3 w-3" />
             {bulkEnrolling ? "Enrolling..." : "Enroll Selected"}
@@ -366,7 +366,7 @@ export default function EmailSequencesPage() {
                         className="appearance-none pl-2 pr-6 py-1.5 rounded-lg text-xs bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.1)] text-[rgba(255,255,255,0.7)] cursor-pointer"
                       >
                         {SEQUENCES.map((s) => (
-                          <option key={s.slug} value={s.slug} className="bg-[#0B1426] text-white">{s.label}</option>
+                          <option key={s.slug} value={s.slug} className="bg-[#0a0a0a] text-white">{s.label}</option>
                         ))}
                       </select>
                       <ChevronDown className="h-3 w-3 text-[rgba(255,255,255,0.3)] absolute right-1.5 top-2 pointer-events-none" />
@@ -374,7 +374,7 @@ export default function EmailSequencesPage() {
                     <button
                       onClick={() => handleEnroll(row, sequenceSlug)}
                       disabled={isEnrolling}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#00C9A7] text-[#0B1426] hover:bg-[#00b598] transition-colors disabled:opacity-40"
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#00C9A7] text-[#0a0a0a] hover:bg-[#00b598] transition-colors disabled:opacity-40"
                     >
                       {isEnrolling ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
                       {isEnrolling ? "..." : "Enroll"}

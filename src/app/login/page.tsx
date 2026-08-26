@@ -7,7 +7,7 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <div className="grid-pattern relative flex min-h-screen items-center justify-center bg-[#0B1426]">
+    <div className="grid-pattern relative flex min-h-screen items-center justify-center bg-[#0a0a0a]">
       <div className="w-full max-w-[420px] px-4">
         <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-8">
           {/* Logo + Brand */}
@@ -15,8 +15,8 @@ export default function LoginPage() {
             <div className="flex items-center gap-3">
               {/* CSS 3-bar chart logo */}
               <div className="flex items-end gap-[3px]">
-                <div className="h-[12px] w-[5px] rounded-t-sm bg-[#1B65A7]" />
-                <div className="h-[18px] w-[5px] rounded-t-sm bg-[#1B65A7]" />
+                <div className="h-[12px] w-[5px] rounded-t-sm bg-[#0E8C77]" />
+                <div className="h-[18px] w-[5px] rounded-t-sm bg-[#0E8C77]" />
                 <div className="h-[26px] w-[5px] rounded-t-sm bg-[#00C9A7]" />
               </div>
               <span className="text-lg font-bold text-white">SRT Agency</span>
