@@ -109,41 +109,63 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return generatePresencePdf(clientId);
   },
 
-  // Both halves of the avatar harvest. The citations harvest runs itself; the brief is then
-  // WAITS for a person, which is why the step is auto_then_manual rather than auto.
+  // Both halves of the avatar harvest, and BOTH ARE AUTOMATIC NOW (2026-08-27). The citations
+  // harvest scrapes the pages the engines cited; the deep research then runs itself on Haiku with
+  // web search instead of emitting three messages for a person to paste into ChatGPT.
+  //
+  // The step stays `auto_then_manual` on purpose: it no longer waits for somebody to RUN the
+  // research, it waits for somebody to READ it. Step 11 stays shut until Matthew presses Done.
   avatar_harvest: async (clientId) => {
     const { runHarvest, formatHarvestSummary } = await import("../harvest");
-    const { generateDeepResearchBrief } = await import("./deep-research-brief");
+    const { runDeepResearch } = await import("./deep-research-run");
 
     const harvest = await runHarvest(clientId);
-    const brief = await generateDeepResearchBrief(clientId);
+    const research = await runDeepResearch(clientId);
 
-    if (!harvest.ok && !brief.ok) {
-      return { ok: false, error: harvest.error ?? brief.error };
+    if (!harvest.ok && !research.ok) {
+      return { ok: false, error: harvest.error ?? research.error };
     }
 
-    const { data } = await (await import("@/lib/db")).supabaseAdmin
-      .from("question_bank")
-      .select("phrase, objection_phrase")
-      .eq("source", "harvest")
-      .order("commercial_intent_score", { ascending: false })
-      .limit(8);
+    // ‼️ FILTERED BY VERTICAL AND AVATAR, AND IT WAS NOT BEFORE. question_bank is shared across
+    // every client in a vertical and has no client_id, so an unfiltered "top phrases" read prints
+    // another vertical's buyers back at this client's thread as though they were this market.
+    const { confirmedAvatarFor } = await import("../avatars");
+    const { verticalFor } = await import("../harvest");
+    const avatar = await confirmedAvatarFor(clientId);
+    const resolved = await verticalFor(clientId);
+
+    let sample: Array<{ phrase: string; objection_phrase: boolean | null }> = [];
+    if (avatar && resolved.ok) {
+      const { data } = await (await import("@/lib/db")).supabaseAdmin
+        .from("question_bank")
+        .select("phrase, objection_phrase")
+        .eq("vertical", resolved.vertical)
+        .eq("avatar", avatar.slug)
+        .eq("source", "harvest")
+        .order("commercial_intent_score", { ascending: false })
+        .limit(8);
+      sample = (data ?? []) as typeof sample;
+    }
+
+    const harvestNote = formatHarvestSummary({
+      phrases: harvest.phrases ?? 0,
+      pages: harvest.pages ?? 0,
+      topPhrases: sample.map((d) => ({
+        phrase: d.phrase,
+        normalized: "",
+        frequencyScore: 0,
+        commercialIntentScore: 0,
+        objectionPhrase: d.objection_phrase ?? false,
+        sourceUrl: "",
+      })),
+    });
 
     return {
       ok: true,
-      docId: brief.docId,
-      note: formatHarvestSummary({
-        phrases: harvest.phrases ?? 0,
-        pages: harvest.pages ?? 0,
-        topPhrases: (data ?? []).map((d) => ({
-          phrase: d.phrase as string,
-          normalized: "",
-          frequencyScore: 0,
-          commercialIntentScore: 0,
-          objectionPhrase: (d.objection_phrase as boolean) ?? false,
-          sourceUrl: "",
-        })),
-      }),
+      docId: research.docId,
+      note: [harvestNote, research.note ?? `:warning: Deep research failed: ${research.error}`]
+        .filter(Boolean)
+        .join("\n\n"),
     };
   },
 

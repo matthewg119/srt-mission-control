@@ -2,7 +2,11 @@
 //
 // ‼️ EMBEDDED AS CONSTANTS, NOT READ FROM DISK, AND THAT IS NOT A PREFERENCE.
 //
-// buildDeepResearchBrief has one hard contract: the same input produces the same bytes, and
+// REFERENCE, NOT PAYLOAD, since 2026-08-27. These transcripts are no longer pasted into any
+// prompt: deep-research-run.ts encodes the method as instructions in its SYSTEM constant instead,
+// because a first-person teaching transcript handed to a model gets summarised back rather than
+// followed. They stay here as the documented source of that method, and buildFullPrompt has the
+// same hard contract they were written for: the same input produces the same bytes, and
 // scripts/test-onboarding-artifacts.ts asserts it. A file read makes that a property of the
 // filesystem rather than of the function, and a file read inside a Vercel lambda is a deployment
 // concern on top of it. The method is words; words are what a constant holds.

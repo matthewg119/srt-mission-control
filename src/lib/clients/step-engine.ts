@@ -249,7 +249,7 @@ async function instructionsFor(
         .order("commercial_intent_score", { ascending: false })
         .limit(3);
 
-      const brief = docLink(c.id, row.outputRef, "the deep-research brief");
+      const report = docLink(c.id, row.outputRef, "the research PDF");
 
       // ‼️ THE REUSE OFFER IS THE HALF HE ASKED FOR BY NAME: "this way if another client has the
       // same LHR client, we can use the same prompt saved in the databse and make it optional to
@@ -263,7 +263,7 @@ async function instructionsFor(
                 ? `, reused by ${cached.timesReused} client${cached.timesReused === 1 ? "" : "s"} since.`
                 : "."),
             "Reuse it and the phrases are filed against this client without running anything, or",
-            "run it again and this waits for the paste. Buttons below.",
+            "run it again and a fresh report lands here. Buttons below.",
           ]
         : [];
 
@@ -290,10 +290,20 @@ async function instructionsFor(
           : []),
         ...reuse,
         "",
-        `*The half that needs you:* ${brief ?? "the deep-research brief (not generated yet)"}.`,
-        "It is three messages for one ChatGPT conversation, in order. Run them, then bring the",
-        "answer back into this thread: paste it with `research:` in front of it, or drop the PDF",
-        "the tool gave you straight in. Both file the phrases against this avatar.",
+        "*The deep research runs itself.* It used to hand you three messages to paste into",
+        "ChatGPT; it now researches the eight sections in parallel with web search and files the",
+        avatar
+          ? `report here as a PDF, aimed at *${avatar.label}* specifically.`
+          : "report here as a PDF.",
+        `${report ? `It is filed: ${report}.` : "It has not been generated yet."}`,
+        "",
+        "*What needs you: read it, then press Done.* Nothing advances to the next step until you",
+        "do — that is the point of the gate, not an accident of it. Sections that did not come",
+        "back whole say so in the PDF rather than being filled in, so a thin report reads as thin.",
+        "",
+        "Type `prompt` in this thread and it hands back the single prompt it ran, if you want to",
+        "run it yourself somewhere else. `research:` followed by a paste still works too, and so",
+        "does dropping a PDF straight in — both file phrases against this avatar.",
         "",
         "_[Skip] still works_, and what it costs is stated when you press it: the universal twenty",
         "still run, so the Day-0 measurement is intact, but the tracked set will not carry this",
@@ -1653,10 +1663,11 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
           ok: false,
           message:
             `Not yet — nothing has come back from the deep research for *${avatar.label}*. ` +
-            "Run the three messages in the brief above, then either paste the answer in here " +
-            "with `research:` in front of it or drop the PDF the tool gave you straight into " +
-            "this thread. Both file the phrases against this avatar. " +
-            "If you genuinely do not want to run it, [Skip] still works: the universal twenty " +
+            "The research runs itself on this step, so an empty question bank means the run " +
+            "failed rather than that it is waiting on you: check the thread above for what it " +
+            "said. Re-running the step retries it. You can also bring the answer in by hand — " +
+            "paste it with `research:` in front of it, or drop a PDF straight into this thread. " +
+            "If you genuinely do not want it, [Skip] still works: the universal twenty " +
             "still run so the Day-0 measurement is intact, but the tracked question set will " +
             "not carry this avatar's own wording, which is the half a client recognises as " +
             "their own market talking.",

@@ -142,7 +142,7 @@ const STEP_LIST = [
   // and no key needed. The deep-research brief is generated automatically too, but somebody
   // then has to RUN it and paste the result back, so the step waits on a person. Reddit is not
   // in either half: no credentials, and A2 section 9 records that commercial Data API use
-  // needs Reddit's approval. See src/lib/clients/artifacts/deep-research-brief.ts.
+  // needs Reddit's approval. See src/lib/clients/artifacts/deep-research-run.ts.
   //
   // ‼️ THE LABEL WAS RENAMED BECAUSE IT READ AS A DUPLICATE OF THE AUDIT, AND THE KEY WAS NOT.
   // Matthew asked whether this step repeats the AI visibility audit and burns tokens. It makes

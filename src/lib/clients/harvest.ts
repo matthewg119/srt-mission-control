@@ -17,7 +17,7 @@
 // use of the Data API needs Reddit's approval, unverified. A2 names this exact fallback:
 // "build 4c on RealSelf + citation_sources alone if Reddit says no." Nothing here scrapes
 // Reddit and nothing pretends to have read it. The gap is reported to Matthew in words rather
-// than papered over — see deep-research-brief.ts for the half a person runs instead.
+// than papered over — see deep-research-run.ts for the half that researches with a model.
 //
 // DOES NOT POST: anywhere, ever, to any forum, as anyone. That ban is canon and predates this
 // file. There is no posting code path here and one must not be added.
@@ -102,6 +102,33 @@ export function normalizePhrase(input: string): string {
     .trim();
 }
 
+/**
+ * Strip what Postgres will not store, and NOTHING else.
+ *
+ * ‼️ THIS IS WHY THE HARVEST STORED ZERO ROWS FOR MONTHS. Every run fetched its 40 pages, pulled
+ * real phrases out of them, and then lost the whole batch to
+ *
+ *     unsupported Unicode escape sequence
+ *
+ * on the question_bank upsert, which is Postgres refusing a NUL byte inside a text value. One null
+ * byte anywhere in one scraped page failed the entire insert, the error was written to
+ * harvest_runs.error where nobody reads it, and the step reported "0 phrases from 0 pages" as
+ * though the pages had simply not been worth reading. Found 2026-08-27 while checking why the
+ * deep-research ranker had no URLs to cite.
+ *
+ * Null bytes and lone surrogates go. Typos, casing, punctuation and every other bit of ugliness
+ * stay: this file exists to preserve how people actually write, and a "cleaner" than this one
+ * would be throwing away the finding.
+ */
+export function stripUnstorable(input: string): string {
+  return input
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u0000/g, "")
+    // A surrogate with no pair is not valid UTF-8 and fails the same write.
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "")
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
 export function commercialIntent(phrase: string): number {
   let score = 0;
   for (const [pattern, value] of INTENT_LADDER) {
@@ -157,7 +184,7 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
     seen.add(normalized);
 
     out.push({
-      phrase,
+      phrase: stripUnstorable(phrase),
       normalized,
       frequencyScore: 1,
       commercialIntentScore: commercialIntent(phrase),

@@ -125,6 +125,20 @@ export const slack = {
                   return hit?.count ?? 0;
         },
 
+        /**
+         * Delete a message.
+         *
+         * ‼️ THE BOT CAN ONLY DELETE ITS OWN MESSAGES with a bot token, which is the whole reason
+         * this is safe to expose. A human's message in a step thread comes back `cant_delete_message`
+         * rather than disappearing.
+         *
+         * Added 2026-08-27 for the step-10 repost: replacing a step's card means removing the old
+         * one first, and nothing in the app had ever deleted anything in Slack before.
+         */
+        async deleteMessage(channel: string, ts: string): Promise<Record<string, unknown>> {
+                  return slackFetch("chat.delete", { channel, ts });
+        },
+
         /** Update an existing message */
         async updateMessage(channel: string, ts: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
                   const body: Record<string, unknown> = { channel, ts, text };

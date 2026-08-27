@@ -262,7 +262,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   //    here makes a working verifier return `broken` about a report that is fine. That was the
   //    second fault, hiding behind the first.
   //
-  // 3. client_id ONLY, with no contact_id or domain fallback. deep-research-brief.ts:225-238
+  // 3. client_id ONLY, with no contact_id or domain fallback. deep-research-run.ts's measuredContext
   //    explains why: both of those can match a `prospect_audit`, the one-engine prospecting run
   //    the audit bot fires at a lead, and A2 D-P14 says such a run is never a photograph. This
   //    is the baseline the day 30, 60 and 90 numbers are measured against, so "a run fired FOR

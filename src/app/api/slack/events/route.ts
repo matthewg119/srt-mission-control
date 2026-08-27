@@ -8,6 +8,7 @@ import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt } from "@/lib/ai-intel/execute-action";
 import { microsoft } from "@/lib/microsoft";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
+import { handleScraperEvent, handleScraperReaction, scraperChannel } from "@/lib/scraper/lane";
 import {
   clientForThread,
   captureOnboardingFile,
@@ -304,6 +305,16 @@ export async function POST(request: NextRequest) {
         });
         if (povIdeasHandled) return NextResponse.json({ ok: true });
 
+        // #srt-scraper: ✅ on an over-cap card releases the MillionVerifier upload. Checked here
+        // because it is the only reaction in this app that SPENDS MONEY when it fires, so it must
+        // not be reachable by falling through into a handler that was looking for something else.
+        const scraperReactionHandled = await handleScraperReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+        });
+        if (scraperReactionHandled) return NextResponse.json({ ok: true });
+
         // POV daily drop: 1️⃣/2️⃣/3️⃣ to pick the best of 3 image options (self-routes by DB)
         const povPickHandled = await handlePovDropPick({
           reaction: event.reaction as string,
@@ -513,6 +524,27 @@ export async function POST(request: NextRequest) {
           }
         }
         return NextResponse.json({ ok: true });
+      }
+
+      // #srt-scraper (was #srt-sub) - the Apollo cold-list pre-filter. Drop a CSV, get clean.csv
+      // and junk.csv back in the thread and the survivors sent to MillionVerifier.
+      //
+      // It handles its own files rather than leaning on the file_shared path, same reason the page
+      // studio does: that event carries no message text and resolves through clientForThread, which
+      // knows nothing about this channel. `handleScraperEvent` returns false for anything that is
+      // not a CSV drop or `status`, so ordinary chat here still falls through to the assistant.
+      if (Boolean(channel) && channel === scraperChannel()) {
+        const handled = await handleScraperEvent({
+          channel,
+          text: userText,
+          messageTs: event.ts as string,
+          threadTs: parentThreadTs,
+          files: attachedFiles,
+        }).catch((e) => {
+          console.error("[slack/events] scraper error:", (e as Error).message);
+          return false;
+        });
+        if (handled) return NextResponse.json({ ok: true });
       }
 
       // #agent-wokrflow-creator — the Workflow Creator agent (workflow-agent.ts).
@@ -805,6 +837,37 @@ export async function POST(request: NextRequest) {
             }
             return NextResponse.json({ ok: true });
           }
+        }
+
+        // 1a. `prompt` in step 10's thread — hand back the deep-research prompt.
+        //
+        // Matthew, on the rewrite that made step 10 run itself: "only if i ask for it, give me the
+        // pdf only in step 10, not really necesarry but give me the option like comment prompt if
+        // you want me to hand you the prompt."
+        //
+        // So the step's deliverable is the PDF and this is the escape hatch. It is the SAME
+        // deterministic string the runner executed, rebuilt from the same context — not a fresh
+        // generation — so what he pastes elsewhere and what the report came from are one ask.
+        //
+        // Above the avatar branch and the assistant tail for the same reason 1b is: bare `prompt`
+        // is free text, and free text in a step thread gets answered by a model otherwise.
+        if (
+          client &&
+          parentThreadTs &&
+          client.stepKey === "avatar_harvest" &&
+          /^\s*prompt\s*$/i.test(userText)
+        ) {
+          const { buildContext, buildFullPrompt } = await import(
+            "@/lib/clients/artifacts/deep-research-run"
+          );
+          const built = await buildContext(client.id);
+          const reply = built.ok
+            ? `Here is the prompt this step ran. Paste it whole into any deep-research tool.\n\n\`\`\`\n${buildFullPrompt(built.ctx)}\n\`\`\``
+            : `:warning: Cannot build the prompt: ${built.error}`;
+
+          const posted = await slack.postThreadReply(channel, parentThreadTs, reply);
+          if (!slackOk(posted)) console.error("[slack/events] prompt reply failed");
+          return NextResponse.json({ ok: true });
         }
 
         // 1b. `avatar: laser hair removal` in step 8's thread, or in step 23's on the call.
@@ -1956,7 +2019,14 @@ async function handleFileShared(fileId: string): Promise<void> {
   // (drop-studio / workflow-agent); nothing in this handler may claim them. Drop lanes
   // are any channel wired via verticals.slack_drop_channel_id (cached lookup).
   for (const ch of allShareChannels) {
-    if (ch === VEKTOR_CHANNELS.agentWorkflowCreator || (await resolveDropVertical(ch))) {
+    if (
+      ch === VEKTOR_CHANNELS.agentWorkflowCreator ||
+      // #srt-scraper: a CSV drop fires BOTH this and a `message` with subtype file_share. The
+      // message path is the one that owns it, and claiming the file here too would start a second
+      // batch on the same upload, which is a second MillionVerifier bill for one file.
+      (Boolean(scraperChannel()) && ch === scraperChannel()) ||
+      (await resolveDropVertical(ch))
+    ) {
       return;
     }
   }

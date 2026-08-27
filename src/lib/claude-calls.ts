@@ -429,11 +429,36 @@ export async function callClaudeText(opts: {
   maxTokens?: number;
   temperature?: number;
   fallbackModels?: ClaudeModel[];
-}): Promise<{ text: string; usage: { input_tokens: number; output_tokens: number }; latencyMs: number }> {
+  /**
+   * Server-side tools, same shape and same rules as ClaudeJSONOptions.tools. Supplying any tool
+   * disables the automatic Haiku fallback — see resolveModels.
+   *
+   * ‼️ THE TOOL VERSION IS THE CALLER'S PROBLEM, NOT THIS FUNCTION'S. `web_search_20260209` needs
+   * Sonnet 4.6 or better; a Haiku caller must send `web_search_20250305` or the request 400s.
+   */
+  tools?: unknown[];
+  /**
+   * Wall-clock budget for a SINGLE request, in ms. NOT retried, for the reason spelled out on
+   * ClaudeJSONOptions.timeoutMs: retrying a timeout multiplies the budget the caller asked for.
+   */
+  timeoutMs?: number;
+}): Promise<{
+  text: string;
+  usage: { input_tokens: number; output_tokens: number };
+  latencyMs: number;
+  /**
+   * Surfaced so a caller can tell a finished answer from a truncated one. `max_tokens` means the
+   * text stops mid-thought and `pause_turn` means the server tool loop was cut short — both look
+   * like ordinary prose from the text alone, which is how a half-researched section gets filed as
+   * a whole one.
+   */
+  stopReason?: string;
+}> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
   const start = Date.now();
+  const hasTools = Array.isArray(opts.tools) && opts.tools.length > 0;
 
   const json = await fetchAnthropicWithRetry(
     apiKey,
@@ -442,8 +467,10 @@ export async function callClaudeText(opts: {
       temperature: opts.temperature ?? 0.3,
       system: opts.system,
       messages: [{ role: "user", content: opts.user }],
+      ...(hasTools ? { tools: opts.tools } : {}),
     },
-    resolveModels(opts.model, opts.fallbackModels)
+    resolveModels(opts.model, opts.fallbackModels, hasTools),
+    opts.timeoutMs
   );
 
   const text = json.content
@@ -452,7 +479,7 @@ export async function callClaudeText(opts: {
     .join("")
     .trim();
 
-  return { text, usage: json.usage, latencyMs: Date.now() - start };
+  return { text, usage: json.usage, latencyMs: Date.now() - start, stopReason: json.stop_reason };
 }
 
 export interface ClaudeChatMessage {

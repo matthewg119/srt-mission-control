@@ -34,8 +34,9 @@ import {
   commercialIntent,
   isObjection,
   textFromHtml,
+  stripUnstorable,
 } from "../src/lib/clients/harvest";
-import { buildDeepResearchBrief } from "../src/lib/clients/artifacts/deep-research-brief";
+import { buildFullPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
 import {
   AUTO_RUNNERS,
   unimplementedAutoSteps,
@@ -464,6 +465,10 @@ const briefInput = {
   clinicName: "Acme Med Spa",
   city: "Greensboro",
   state: "NC",
+  avatarLabel: "laser hair removal",
+  avatarSlug: "laser-hair-removal",
+  vertical: "med_spa",
+  trade: "med spa",
   primaryTreatment: "Morpheus8",
   services: ["Botox", "filler", "laser hair removal"],
   objections: "its too expensive, im scared itll look fake, i dont trust who does it",
@@ -474,11 +479,12 @@ const briefInput = {
   namedInstead: ["Bright Skin Clinic", "Elm Street Aesthetics"],
 };
 
-const brief = buildDeepResearchBrief(briefInput);
-const briefAgain = buildDeepResearchBrief(briefInput);
+const brief = buildFullPrompt(briefInput);
+const briefAgain = buildFullPrompt(briefInput);
 
-// ‼️ Deterministic. Same input, same brief, byte for byte. A model would not give this.
-eq("the brief is deterministic", brief === briefAgain, true);
+// ‼️ Deterministic. Same input, same prompt, byte for byte. A model would not give this, and the
+// `prompt` thread command depends on it: what Matthew pastes elsewhere has to be what ran here.
+eq("the prompt is deterministic", brief === briefAgain, true);
 
 ok("it names the clinic", brief.includes("Acme Med Spa"));
 ok("it names the city", brief.includes("Greensboro"));
@@ -487,34 +493,106 @@ ok("it names the money treatment", brief.includes("Morpheus8"));
 ok("the objections are verbatim", brief.includes("im scared itll look fake"));
 ok("the seed sites come from real citations", brief.includes("realself.com"));
 ok("the competitors are the ones actually named", brief.includes("Elm Street Aesthetics"));
-ok("it asks for six pages minimum", /minimum six pages/i.test(brief));
 ok("it asks for the exact words", /word for word/i.test(brief));
 ok("it forbids cleaning the phrasings up", /Do not clean these up/i.test(brief));
 ok("it ends on the ranked list", /ranked list/i.test(brief));
 ok("it asks about reading level", /reading level/i.test(brief));
-// The framework's own sections, so a change to the template is caught rather than silent.
-ok("part 1: who the customer is", /Who the customer is/i.test(brief));
-ok("part 2: what they already use", /What they are already using/i.test(brief));
-ok("part 3: curiosity and history", /Curiosity and history/i.test(brief));
-ok("external forces they blame", /external forces/i.test(brief));
-ok("prejudices", /prejudices/i.test(brief));
-ok("horror stories", /horror stories/i.test(brief));
 
-// A client with nothing recorded still produces a usable brief rather than a broken one.
-const bare = buildDeepResearchBrief({
+// ‼️ THE RULES THAT MAKE IT A PROMPT RATHER THAN A LECTURE. The old brief pasted two first-person
+// teaching transcripts and had none of these; a model handed that summarised the methodology back.
+ok("it gives the model a role", /market researcher/i.test(brief));
+ok("it requires a source per claim", /[Cc]ite a source/.test(brief));
+ok("it demands the gap be stated", /could not verify/i.test(brief));
+// The one that matters most: section 7 is worth nothing if the quotes are invented.
+ok("it forbids inventing quotes", /NEVER invent a quote/.test(brief));
+ok("it prefers forums over marketing pages", /forums/i.test(brief));
+
+// Matthew's eight sections, in his order, so a change to the spec is caught rather than silent.
+for (const heading of [
+  "Demografía del comprador",
+  "Qué soluciones ya está usando el mercado",
+  "Qué les gusta de esas soluciones",
+  "Qué problemas tienen con esas soluciones",
+  "Creencias del mercado",
+  "Fuerzas externas que culpan",
+  "Lenguaje literal del cliente",
+  "Ideas de titulares y asuntos",
+]) {
+  ok(`section: ${heading}`, brief.includes(heading));
+}
+ok("the sections are numbered in order",
+  brief.indexOf("1. Demografía") < brief.indexOf("7. Lenguaje literal"));
+// The buyer, not the sufferer — his correction, and the two are often different people.
+ok("it asks for the BUYER, not the sufferer", /who actually BUYS/i.test(brief));
+// Beliefs are reported whether or not they are true. Filtering by accuracy throws away the
+// most useful thing in the section.
+ok("beliefs are not filtered for truth", /whether they are true or false/i.test(brief));
+
+// A client with nothing recorded still produces a usable prompt rather than a broken one.
+const bare = buildFullPrompt({
   ...briefInput,
   primaryTreatment: null,
   objections: null,
   targetPatient: null,
   notWanted: null,
   triedBefore: null,
+  trade: null,
   services: [],
   citedDomains: [],
   namedInstead: [],
 });
-ok("a bare client still gets a brief", bare.length > 1000);
+ok("a bare client still gets a prompt", bare.length > 1000);
 ok("and missing values say so", bare.includes("not recorded"));
 ok("and it admits it has no seed sites", /no cited sources recorded yet/i.test(bare));
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The two deterministic rails under the research run
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Both exist because a model would not hold the line on its own. They are pure, so they are
+// cheap to assert and they are the parts that must never regress silently.
+
+{
+  // trimToList: the ranking pass is told its whole output is the list, and sometimes explains
+  // itself first anyway. That preamble lands at the top of a client-facing PDF.
+  const withPreamble = [
+    "I cannot complete this task as requested.",
+    "",
+    "The research contains no direct quotes.",
+    "",
+    '1. "how much does it cost"  ->  https://example.com',
+    "   Why: price is the first question.",
+  ].join("\n");
+
+  ok("the preamble is cut", trimToList(withPreamble).startsWith('1. "how much does it cost"'));
+  ok("and the list survives it", trimToList(withPreamble).includes("https://example.com"));
+
+  const clean = '1. "already clean"  ->  no url in the research';
+  eq("a clean list is untouched", trimToList(clean), clean);
+
+  // ‼️ NO LIST MEANS THE COMMENTARY IS THE FINDING. Cutting to a list that is not there would
+  // leave the section blank, which is worse than a stated failure.
+  const noList = "The ranking pass found nothing worth reporting.";
+  eq("prose with no list is left alone", trimToList(noList), noList);
+}
+
+{
+  // stripUnstorable: the reason the harvest wrote zero rows for months. One NUL byte in one
+  // scraped page failed the whole question_bank upsert with "unsupported Unicode escape
+  // sequence", and the error went to a column nobody reads.
+  const NUL = String.fromCharCode(0);
+
+  eq("a null byte is removed", stripUnstorable("how much" + NUL + " does it cost"), "how much does it cost");
+  ok("a lone high surrogate is removed", !/[\uD800-\uDBFF]/.test(stripUnstorable("bad \uD800 text")));
+  ok("a lone low surrogate is removed", !/[\uDC00-\uDFFF]/.test(stripUnstorable("bad \uDC00 text")));
+
+  // ‼️ IT MUST NOT TIDY ANYTHING ELSE. The typos and the casing ARE the finding; a sanitiser
+  // that also cleaned them up would quietly destroy what the harvest exists to collect.
+  const ugly = "im scared itll look fake... AND its TOO expensive?!";
+  eq("typos, casing and punctuation all survive", stripUnstorable(ugly), ugly);
+  eq("a real emoji survives", stripUnstorable("worth it \u{1F914}"), "worth it \u{1F914}");
+}
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1986,27 +2064,41 @@ import { pageSlug } from "../src/lib/hub/pages";
     RESEARCH_METHOD_DOCUMENTS.includes(RESEARCH_METHOD_PART_1) && RESEARCH_METHOD_DOCUMENTS.includes(RESEARCH_METHOD_PART_2));
   ok("no em dashes anywhere in the method", !RESEARCH_METHOD_DOCUMENTS.includes("—"));
 
-  // ── The brief is his three messages ────────────────────────────────────────
-  const framework = buildDeepResearchBrief({ ...briefInput, avatarLabel: "laser hair removal", vertical: "med spa" });
-  ok("message 1 sets the writer up", framework.includes("Eres mi redactor experto"));
-  ok("message 2 hands over the method", framework.includes("dos documentos que enseñan"));
-  ok("message 3 asks for the deep research prompt", framework.includes("llamada deep research"));
-  ok("the three are in order",
-    framework.indexOf("MENSAJE 1") < framework.indexOf("MENSAJE 2") &&
-      framework.indexOf("MENSAJE 2") < framework.indexOf("MENSAJE 3"));
-  // ‼️ [PRODUCTO] IS THE CONFIRMED AVATAR, WHICH IS THE WHOLE REASON THIS LANE EXISTS.
-  ok("the avatar fills [PRODUCTO]", framework.includes("investigación para laser hair removal"));
-  ok("and the slot itself is gone", !framework.includes("[PRODUCTO]"));
-  ok("the sales page instruction is there", /adjuntar la página de ventas/.test(framework));
-  ok("the method travels with it", framework.includes(RESEARCH_METHOD_PART_2));
-  ok("no em dashes in the brief", !framework.includes("—"));
-  // Absent says so rather than researching "the business", which is what every brief did while
-  // the column had no writer at all.
-  const noAvatar = buildDeepResearchBrief(briefInput);
-  ok("no avatar says so out loud", noAvatar.includes("NOT CONFIRMED YET"));
-  ok("and message 3 does not invent one", noAvatar.includes("[AVATAR NO CONFIRMADO]"));
-  eq("still deterministic with the avatar in it",
-    framework === buildDeepResearchBrief({ ...briefInput, avatarLabel: "laser hair removal", vertical: "med spa" }), true);
+  // ── The prompt transforms with the avatar ──────────────────────────────────
+  //
+  // ‼️ THIS IS THE WHOLE REASON THE AVATAR MOVED TO STEP 8. Matthew: "es importante que el prompt
+  // se transforme dependiendo de el avatar que estamos onboarding para que podamos hacer la
+  // investigacion correcta." Two avatars must not produce the same research ask.
+  const framework = buildFullPrompt(briefInput);
+  const otherAvatar = buildFullPrompt({
+    ...briefInput,
+    avatarLabel: "med spa owner",
+    avatarSlug: "med-spa-owner",
+  });
+
+  ok("the avatar is named in the ask", framework.includes("report about laser hair removal"));
+  ok("a different avatar gives a different prompt", framework !== otherAvatar);
+  ok("and the new avatar is the one named", otherAvatar.includes("report about med spa owner"));
+  ok("the avatar reaches the individual sections too",
+    framework.includes("laser hair removal BELIEVES") ||
+      framework.includes("What laser hair removal"));
+  ok("no em dashes in the prompt", !framework.includes("—"));
+
+  // ‼️ THE HAND-RUN PROMPT AND THE SECTION PROMPTS ARE ONE ASK, NOT TWO. If these drift, the PDF
+  // in the thread and whatever Matthew gets from pasting `prompt` elsewhere stop being comparable,
+  // which is the only reason the escape hatch is worth having.
+  ok("a section prompt carries the same facts",
+    buildSectionPrompt(briefInput, { key: "t", title: "T", instruction: () => "x" })
+      .includes("im scared itll look fake"));
+
+  eq("still deterministic with the avatar in it", framework === buildFullPrompt(briefInput), true);
+
+  // ── The method documents outlived the brief that pasted them ───────────────
+  //
+  // They are no longer interpolated into any prompt: SYSTEM in deep-research-run.ts encodes the
+  // method as instructions instead. The constants stay because they are the documented source of
+  // that method, so these assert the file's integrity, not a prompt's contents.
+  ok("the method is no longer pasted into the prompt", !framework.includes(RESEARCH_METHOD_PART_2));
 }
 
 
