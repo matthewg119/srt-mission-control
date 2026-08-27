@@ -9,10 +9,6 @@
       "schedule": "0 0 * * *"
     },
     {
-      "path": "/api/cron/ad-intelligence",
-      "schedule": "0 23 * * *"
-    },
-    {
       "path": "/api/cron/cron-health",
       "schedule": "0 * * * *"
     },

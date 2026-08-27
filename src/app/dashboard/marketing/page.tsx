@@ -1,36 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { Palette, Mail, Target, Brain, ArrowRight } from "lucide-react";
+import { Mail, ArrowRight } from "lucide-react";
 
+// Carousel Studio, the Meta Ads Command Center and Ad Intelligence were deleted on
+// 2026-08-27. All three were built for the MCA brokerage SRT closed in July 2026: the ads
+// prompt opened "SRT Agency, a business funding company (MCA - Merchant Cash Advance)" and
+// the carousel scripts pitched "Revenue-based funding. $5K-$500K." Nothing here was
+// crawlable, so none of it was why answer engines called SRT a lender, but a nightly cron
+// generating loan copy for a company that no longer lends is how a stale identity feeds
+// itself. Do not rebuild them for AEO - that content lives in the reel/drop lanes.
 const tools = [
-  {
-    title: "Carousel Studio",
-    description: "Generate Instagram carousels with AI-powered scripts, custom visuals, and one-click JPG download.",
-    href: "/dashboard/marketing/carousel",
-    icon: Palette,
-    color: "#F5A623",
-  },
   {
     title: "Email Signature",
     description: "Create professional SRT Agency email signatures and copy them straight into Outlook.",
     href: "/dashboard/marketing/signature",
     icon: Mail,
     color: "#00C9A7",
-  },
-  {
-    title: "Meta Ads Command Center",
-    description: "100 verticals \u00D7 7 awareness layers. AI-powered campaign builder with ICP-specific language.",
-    href: "/dashboard/marketing/ads",
-    icon: Target,
-    color: "#0E8C77",
-  },
-  {
-    title: "Ad Intelligence",
-    description: "AI-powered nightly ad ideas, pattern detection, and Telegram reports from CRM data.",
-    href: "/dashboard/marketing/ad-intelligence",
-    icon: Brain,
-    color: "#9B59B6",
   },
 ];
 

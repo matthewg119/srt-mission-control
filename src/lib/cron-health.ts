@@ -33,7 +33,6 @@ export interface CronWatch {
 export const WATCHED_CRONS: CronWatch[] = [
   { path: "/api/cron/crm-exclusion-sync", name: "crm-exclusion-sync", successEvent: "cron_crm_exclusion_sync", maxGapHours: 26 },
   { path: "/api/cron/daily-recap", name: "daily-recap", successEvent: "daily_recap", maxGapHours: 26 },
-  { path: "/api/cron/ad-intelligence", name: "ad-intelligence", successEvent: "ad_intelligence", maxGapHours: 26 },
   { path: "/api/cron/medspa-credit-reminder", name: "medspa-credit-reminder", successEvent: "cron_medspa_credit_reminder", maxGapHours: 26 },
   { path: "/api/cron/sms-followups", name: "sms-followups", successEvent: "cron_sms_followups", maxGapHours: 26 },
 ];
