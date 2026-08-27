@@ -17,7 +17,8 @@
     "trt:owners": "bun run scripts/enrich-trt-owners.ts",
     "migration:check": "bun run scripts/_probe-migration-state.ts",
     "test:artifacts": "bun run scripts/test-onboarding-artifacts.ts",
-    "notes:archive": "bun run scripts/export-funding-notes.ts"
+    "notes:archive": "bun run scripts/export-funding-notes.ts",
+    "scraper:disposable": "bun run scripts/refresh-disposable-domains.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

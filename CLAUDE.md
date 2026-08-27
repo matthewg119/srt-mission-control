@@ -3136,3 +3136,100 @@ INTERNAL_HOSTS=              # Optional. Extra hostnames that serve Mission Cont
 > production, a resolving `learn.{clientdomain}` would serve Mission Control's own app on a
 > hostname the client controls. Attaching alone is harmless — nothing resolves without the DNS
 > record — so attach early, and add the record after the deploy.
+
+## The scraper lane (2026-08-27) — `#srt-sub`, renaming to `#srt-scraper`
+`src/lib/scraper/*`, `src/app/api/cron/scraper-tick`. Migration:
+`docs/2026-08-27-scraper-lane.sql` (`scraper_batches`, `scraper_rows`).
+
+Drop an Apollo export in the channel and it comes back filtered: `clean.csv`, `junk.csv` with a
+`reason` column, the counts and the junk breakdown, and the survivors sent to MillionVerifier.
+It replaces running `apollo_prefilter.py` by hand on the Desktop. Same six checks in the same
+order, cheapest first, so the expensive DNS step only ever sees survivors:
+
+| # | reason | |
+|---|---|---|
+| 1 | `no_email` | blank cell |
+| 2 | `duplicate_in_file` | **new**, see below |
+| 3 | `already_in_crm` | `outreach_prospects.email` |
+| 4 | `bad_syntax` | |
+| 5 | `role_account` | `ROLE_PATTERN`, ported verbatim |
+| 6 | `disposable_domain` | `src/data/disposable-domains.ts` |
+| 7 | `no_mx` | resolved in its own pass |
+
+**`duplicate_in_file` is the one check the Python does not have.** Apollo repeats addresses across
+pages of one export and MillionVerifier bills per row, so paying twice for one address is a live
+cost rather than a tidiness point. The FIRST occurrence survives.
+
+**Dedup is a live query, not `crm_hashes.txt`.** The script's dedup source was a text file that had
+to be re-exported to stay honest and went stale the day it was written. `outreach_prospects` is the
+follow-up operator's own table, so "already contacted" is read rather than remembered.
+
+> ‼️ **THE STAGE MACHINE IS THE POINT, NOT DECORATION.** A batch walks
+> `parsing -> mx -> filtered -> verifying -> done`, and every stage is re-enterable, because the
+> two slow steps outlive a serverless invocation in opposite ways: the MX sweep is thousands of our
+> own DNS lookups, and MillionVerifier runs on somebody else's queue for minutes to hours. A
+> one-pass design fails by **silently truncating** — a smaller `clean.csv` and nothing saying which
+> leads were never asked about. `advanceBatch` is called from the drop, so a small file finishes in
+> one shot, and from the 5-minute cron, so a big one finishes at all.
+
+> ‼️ **"COULD NOT LOOK" AND "NOTHING IS THERE" ARE DIFFERENT ANSWERS, and the MX step is the one
+> place that can confuse them at scale.** The Python caught bare `Exception` and recorded every
+> failure as `no_mx`, so a resolver hiccup on a cold start junks a batch of good leads with no
+> trace. `MxVerdict` is tri-state: NXDOMAIN and NODATA are real noes; SERVFAIL, ETIMEOUT and
+> friends are a failure to ASK and go to Cloudflare DoH before anyone may say no. A domain neither
+> path could resolve stays `mx_ok = null` and the next tick asks again. Same doctrine as
+> `dns-records.ts`: an absent answer from a broken resolver is never stored.
+
+> ‼️ **COUNTING MX RECORDS IS NOT ENOUGH, AND `example.com` IS THE PROOF.** The Python asked
+> `len(answers) > 0`, and an RFC 7505 null MX (a single record whose exchange is the root) is one
+> answer — so the strongest "do not email us" signal on the internet read as "has a mail server".
+> Parked domains and holding companies publish these, which is exactly what an Apollo pull is full
+> of, and every one would have survived the filter and then been paid for. `isNullMx` in `mx.ts`,
+> checked on both the resolver and the DoH path.
+
+> ‼️ **MILLIONVERIFIER IS THE ONLY THING IN THIS LANE THAT SPENDS MONEY**, billed per address
+> UPLOADED, not per address that comes back OK. Three guards follow from that: no key degrades to
+> "here is clean.csv, upload it yourself" rather than throwing; `SCRAPER_MV_MAX_EMAILS` (default
+> 25,000) posts the count and waits for a ✅ instead of sending, because the expensive failure is a
+> mis-resolved email column producing a plausible-looking upload of the whole export; and the
+> upload is guarded by `mv_file_id` already being set, so a retried tick cannot buy the same list
+> twice. `filter=all` is downloaded before `ok`, so an `invalid` verdict is recorded too — that is
+> the most useful thing the lane learns.
+
+**Two Slack traps this lane sits on, both already documented elsewhere in this file and both live
+here:** a CSV drop fires BOTH `file_shared` and a `message` with subtype `file_share`, so the
+channel is in `handleFileShared`'s early-return list or one upload starts two batches and two
+bills; and `slack.uploadFile` returns `{ok:false}` rather than throwing, and its share silently
+no-ops when the bot is not a member, so `joinChannel` runs first and a failure is named in the
+thread rather than leaving a confident summary with no file under it.
+
+**The email column is resolved, not hardcoded.** The Python's constant was `"email"` and Apollo
+exports `Email`, so the script's own default was wrong for its own stated input. A miss NAMES THE
+HEADERS IT FOUND rather than throwing a message nobody can act on.
+
+**No IDNA.** A non-ASCII domain is rejected as `bad_syntax` rather than punycoded. Right for a US
+B2B pull, wrong for a list that is not, and stated in `rules.ts` rather than discovered. If that
+day comes the fix is a punycode pass, NOT loosening the label check.
+
+**The disposable list is CHECKED IN** (`src/data/disposable-domains.ts`, 8,368 domains), not
+fetched at runtime: a runtime fetch makes the verdict depend on GitHub being reachable from a
+lambda, and it fails SILENTLY, letting every disposable address through on the one step whose job
+is to reject them. Checked in it can only go stale, which is visible. `bun run scraper:disposable`
+refreshes it; monthly, same as the original note said.
+
+**`tip_index` was considered and dropped** (Matthew's call, 2026-08-27). The idea was to hash the
+company name to an integer in the pre-processing step so which email angle a company gets is
+reproducible across runs and models rather than trusted to an LLM. The reasoning is sound and the
+blocker is that no list of angles exists and nothing consumes the number. It is a pure function
+over the company column when it is wanted, and needs no schema change.
+
+Probe: `bunx tsx scripts/_probe-scraper.ts` (71 checks, no network, no DB, no Slack; `--mx` adds
+three real lookups). It is the file that answers "is the port faithful to the Python", which is
+why `filter.ts` and `rules.ts` are pure and stop before the resolver.
+
+### Env
+```
+SLACK_SCRAPER_CHANNEL=       # C0AJXH7PTBM. The ID survives the rename to #srt-scraper.
+MILLIONVERIFIER_API_KEY=     # Unset is HANDLED: it filters and posts clean.csv, it just does not verify.
+SCRAPER_MV_MAX_EMAILS=       # Optional, default 25000. Above it the lane asks before spending.
+```

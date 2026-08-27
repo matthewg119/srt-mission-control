@@ -36,6 +36,9 @@ export const VEKTOR_CHANNELS = {
   // audio + media + copy -> 3 render variations as Claude Code prompts -> keep N.
   // (workflow-agent.ts; channel name typo is Matthew's, keep it.)
   agentWorkflowCreator: process.env.SLACK_AGENT_WORKFLOW_CREATOR_CHANNEL || "",
+  // #srt-scraper (was #srt-sub) - drop an Apollo export, get clean.csv + junk.csv back and the
+  // survivors sent to MillionVerifier. src/lib/scraper/lane.ts.
+  scraper: process.env.SLACK_SCRAPER_CHANNEL || "",
 };
 
 export type VektorCategory =
