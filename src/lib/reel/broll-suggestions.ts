@@ -14,6 +14,14 @@
 // inside that dealt constraint, plus the hook. The final image_prompt is ASSEMBLED here,
 // so the axes cannot be flattened back into "cinematic muted 35mm" by a helpful model.
 //
+// IDEA 1 IS THE HERO (2026-08-27). The dealt subject used to come from the angle's lane, and six
+// of the eight angles are `owner`, so slot 1 was usually a prop: a badge on a back door, a router
+// on a shelf. Nothing in the frame said who the video was for. Slot 1 now deals a HOOK shot
+// instead - the ICP's own customer having something done to her face - assembled with
+// hookGuards() so it keeps the clean aspirational register rather than the documentary one. It
+// still carries a narrative angle: the image declares the avatar, the hook line and the VO carry
+// the belief. Ideas 2+ are unchanged documentary clinic shots.
+//
 // Everything is grounded in the vertical's avatar / beliefs / offer and obeys the
 // promise ban (never patients, appointments, or revenue; the mechanism is spoken as
 // "showing up in ChatGPT," never "AEO"). See docs/clinic-broll-library.md.
@@ -26,11 +34,18 @@ import type { Vertical } from "@/config/verticals";
 import { loadReferenceFrames } from "@/lib/reel/content-examples";
 import {
   dealShots,
+  dealHookShot,
+  hookGuards,
+  hookHistoryFrom,
+  hookKeys,
+  hookLabel,
+  renderHookBrief,
   renderShotBrief,
   shotGuards,
   shotKeys,
   shotLabel,
   grammarSize,
+  type HookShot,
   type RecentShots,
   type ShotLane,
   type ShotSpec,
@@ -115,6 +130,8 @@ export interface BrollIdea {
   sketch_script?: string;
   voiceover_line?: string;
   shot?: ShotSpec;
+  /** Set on the hero (idea 1) instead of `shot`: a dealt treatment, not a dealt ShotSpec. */
+  hook?: HookShot;
 }
 
 // What the model returns. It writes the words and ONE sentence of scene detail; it does
@@ -224,7 +241,10 @@ async function logIdeas(channel: string, slot: string, ideas: BrollIdea[]): Prom
     format: i.bucket === "napkin" ? "napkin" : "cinematic",
     on_screen_hook: i.on_screen_hook,
   }));
-  const withShots = base.map((row, n) => ({ ...row, ...(ideas[n].shot ? shotKeys(ideas[n].shot) : {}) }));
+  // The hero logs into the SAME subject/grade columns as a documentary shot - no migration for a
+  // lane that needed none. hookHistoryFrom() reads it back apart again by key membership.
+  const keysFor = (i: BrollIdea) => (i.shot ? shotKeys(i.shot) : i.hook ? hookKeys(i.hook) : {});
+  const withShots = base.map((row, n) => ({ ...row, ...keysFor(ideas[n]) }));
   try {
     const { error } = await supabaseAdmin.from("broll_drops").insert(withShots);
     if (!error) return;
@@ -275,6 +295,16 @@ export function buildSystem(vertical: Vertical, avoid: string[]): string {
     "cinematic. Do not write camera, lens, grade, mood or lighting words at all - they are",
     "already handled and repeating them is what made every past drop look identical.",
     "",
+    "SLOT 1 IS THE HERO, AND IT IS THE EXCEPTION TO THE DOCUMENTARY RULES BELOW. Its job is to say",
+    "WHO this video is for before a word of copy is read, so it is her CUSTOMER having something",
+    "done: a treatment or a spa ritual, clean, calm and aspirational. For that slot only:",
+    "- Write ONE quiet sentence that is true inside the treatment you are given. What the hands are",
+    "  doing right now, what is resting where, how still the room is.",
+    "- Do NOT add clutter, wear, scuffs, mess, a second worker, paperwork or anything documentary.",
+    "  Do not move it out of the treatment room. Do not make it graphic.",
+    "- The belief lives in the on-screen hook and the voiceover, not in the picture. The picture's",
+    "  only job is that a med spa owner recognises herself and her client in it instantly.",
+    "",
     "For CINEMATIC slots you return, per slot:",
     "- scene_detail: ONE sentence, under 30 words, adding concrete specifics to the given",
     "  subject so it carries the belief. Objects, wear, what is written or not written, what is",
@@ -305,6 +335,18 @@ export function buildSystem(vertical: Vertical, avoid: string[]): string {
     .join("\n");
 }
 
+/**
+ * The hero's assembly (idea 1). Deliberately closed with hookGuards(): no CAMERA_AWARE_BAN, no
+ * PERSON_LAW, no REALISM_TAIL, no AI_TELL_BAN, no setting law and not the avatar's image_negative.
+ * Those guards exist to make a room read as documentary, and they actively fight the clean
+ * aspirational frame this slot is for. This is the same reversal Hook Studio's scene 1 carries -
+ * see the hook block in shot-grammar.ts. Do not put the realism tail back on it.
+ */
+function assembleHero(shot: HookShot, sceneDetail: string): string {
+  const detail = stripEmDashes(sceneDetail).trim().replace(/[.\s]+$/, "");
+  return [renderHookBrief(shot), detail ? `${detail}.` : "", hookGuards()].filter(Boolean).join(" ");
+}
+
 /** Assemble the final prompt: dealt shot, then the model's detail, then the guards. */
 function assemblePrompt(spec: ShotSpec, sceneDetail: string, vertical: Vertical): string {
   const detail = stripEmDashes(sceneDetail).trim();
@@ -316,7 +358,8 @@ function assemblePrompt(spec: ShotSpec, sceneDetail: string, vertical: Vertical)
 
 function formatCard(vertical: Vertical, slot: string, ideas: BrollIdea[]): string {
   const lines: string[] = [
-    `*B-roll drop (${slot})* for *${vertical.name}* - 3 ready-to-shoot ideas.`,
+    `*B-roll drop (${slot})* for *${vertical.name}* - ${ideas.length} ready-to-shoot ideas.`,
+    "Idea 1 is the hero: her client, mid-treatment, bright and clean. The rest are the clinic itself.",
     "Generate the still from the prompt, then hand the motion line to the animator. The napkin one you shoot yourself: phone on a tripod pointing straight down, hands + a Sharpie.",
   ];
   ideas.forEach((idea, i) => {
@@ -331,6 +374,7 @@ function formatCard(vertical: Vertical, slot: string, ideas: BrollIdea[]): strin
       if (idea.image_prompt) lines.push("```\n" + idea.image_prompt + "\n```");
       if (idea.motion_prompt) lines.push(`Motion: ${idea.motion_prompt}`);
       if (idea.shot) lines.push(`_Shot: ${shotLabel(idea.shot)}_`);
+      else if (idea.hook) lines.push(`_Shot: ${hookLabel(idea.hook)}_`);
     }
     if (idea.voiceover_line) lines.push(`Say: "${idea.voiceover_line}"`);
   });
@@ -410,12 +454,16 @@ export async function buildIdeas(args: {
   const useNapkin = slot === "midday";
   const cinematicCount = useNapkin ? 2 : 3;
 
+  // Slot 1 is the hero and does not draw from the subject library at all; its angle survives for
+  // the copy only. The remaining slots deal documentary shots as before, one per angle after it.
   const angles = pickAngles(args.angleHistory ?? [], cinematicCount);
+  const hero = dealHookShot({ recent: hookHistoryFrom(shotHistory) });
+  const documentary = angles.slice(1);
   const specs = dealShots({
     lane: "owner",
-    count: cinematicCount,
+    count: documentary.length,
     recent: shotHistory,
-    lanes: angles.map((a) => a.lane),
+    lanes: documentary.map((a) => a.lane),
   });
 
   const system = buildSystem(vertical, avoid);
@@ -423,9 +471,15 @@ export async function buildIdeas(args: {
     `Return exactly ${cinematicCount + (useNapkin ? 1 : 0)} ideas, one per slot below, in this order.`,
     "Pick a different belief for each; make the hooks feel distinct.",
     "",
-    ...angles.map((a, i) =>
+    [
+      `Slot 1 - THE HERO - angle "${angles[0].key}" (${angles[0].name}): ${angles[0].brief}`,
+      `  The shot is fixed: ${renderHookBrief(hero)}`,
+      "  Write scene_detail as ONE calm sentence inside THIS treatment. No clutter, no second",
+      "  person, nothing documentary. The angle above is for the hook line and the voiceover.",
+    ].join("\n"),
+    ...documentary.map((a, i) =>
       [
-        `Slot ${i + 1} - angle "${a.key}" (${a.name}): ${a.brief}`,
+        `Slot ${i + 2} - angle "${a.key}" (${a.name}): ${a.brief}`,
         `  The shot is fixed: ${renderShotBrief(specs[i])}`,
         "  Write scene_detail for THIS subject only. Do not propose a different subject.",
       ].join("\n")
@@ -454,14 +508,17 @@ export async function buildIdeas(args: {
   for (let i = 0; i < cinematicCount; i++) {
     const raw = gen.ideas[i];
     if (!raw) continue;
+    const isHero = i === 0;
     ideas.push({
       bucket: angles[i].key,
       belief: OPENABLE_BELIEFS.includes(raw.belief) ? raw.belief : OPENABLE_BELIEFS[i % OPENABLE_BELIEFS.length],
       on_screen_hook: stripEmDashes(raw.on_screen_hook),
-      image_prompt: assemblePrompt(specs[i], raw.scene_detail ?? "", vertical),
+      image_prompt: isHero
+        ? assembleHero(hero, raw.scene_detail ?? "")
+        : assemblePrompt(specs[i - 1], raw.scene_detail ?? "", vertical),
       motion_prompt: raw.motion_prompt ? stripEmDashes(raw.motion_prompt) : undefined,
       voiceover_line: raw.voiceover_line ? stripEmDashes(raw.voiceover_line) : undefined,
-      shot: specs[i],
+      ...(isHero ? { hook: hero } : { shot: specs[i - 1] }),
     });
   }
   if (useNapkin) {

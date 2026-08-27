@@ -27,6 +27,15 @@
 //      "Nobody in frame" value, and PERSON_LAW says it again in words).
 // What is still banned is performing for the camera, not being visible - see
 // CAMERA_AWARE_BAN.
+//
+// ENERGY is the fourth, added 2026-08-27. The axes above were stocked with underlit values
+// (screen_only, one_tube, crushed_black, sodium_orange, disposable) and the realism tail asked
+// for "sensor noise in the shadows" and "fingerprints and scuffs". Every drop came back
+// technically on-brief and looking like a repossession photo of a failing business. A med spa
+// looks the way a Google image search for "med spa" looks: white, warm, bright, calm. The dark
+// values are GONE from LIGHT, GRADE and CAPTURE, and BRIGHT_LAW says it again in words on every
+// prompt so a model cannot drift back. Realism did not go with them - off-center framing, the
+// cut edge and fine grain all stay. Only the gloom left.
 
 export type ShotLane = "owner" | "treatment";
 
@@ -72,48 +81,49 @@ export interface RecentShots {
 // "everything is a cinematic 35mm still" sameness.
 export const CAPTURE: AxisEntry[] = [
   { key: "phone_handheld", text: "Shot handheld on a phone, slight tilt, nothing straightened" },
-  { key: "phone_flash", text: "Shot on a phone with the on-camera flash, harsh foreground falloff" },
-  { key: "security_cam", text: "A security-camera still, wide angle, mild barrel distortion, slightly soft" },
   { key: "counter_edge", text: "Shot from behind the reception counter, the counter edge cutting the bottom of the frame" },
-  { key: "doc_photo", text: "A printed page photographed on a desk at a slight angle, one corner lifting" },
-  { key: "screen_offshot", text: "A monitor photographed off the screen, faint moire and a reflection in the glass" },
+  { key: "doc_photo", text: "A printed page photographed on a bright desk at a slight angle, one corner lifting" },
+  { key: "screen_offshot", text: "A monitor photographed off the screen, faint moire and a window reflected in the glass" },
   { key: "reflection", text: "Shot through glass so the reflection doubles over what is behind it" },
-  { key: "long_lens", text: "Shot on a long lens from the far end of the room, compressed and slightly grainy" },
-  { key: "overhead_phone", text: "A phone held straight down over the surface, flat lay, hand shadow at the edge" },
-  { key: "disposable", text: "A disposable-camera frame, heavy grain, blown highlights" },
+  { key: "long_lens", text: "Shot on a long lens from the far end of the room, compressed and lightly grainy" },
+  { key: "overhead_phone", text: "A phone held straight down over the surface, flat lay, a hand at the edge" },
   { key: "tripod_wide", text: "A locked-off wide on a tripod, level and patient" },
   { key: "through_doorway", text: "Shot from a hallway through an open doorway, the door frame cutting the edges" },
-  { key: "over_shoulder", text: "An over-the-shoulder crop, the near shoulder out of focus and dark" },
-  { key: "photo_of_photo", text: "A photograph of a printed photograph pinned to a board, edges curling" },
+  { key: "over_shoulder", text: "An over-the-shoulder crop, the near shoulder soft in the foreground" },
+  { key: "mirror_catch", text: "Caught in a wall mirror, the bright room doubling behind" },
 ];
 
+// Every value is a lit room. The dark half of this axis (a single tube with everything else
+// falling off, lit only by a screen, orange lot light after dark, headlights, blue hour, direct
+// flash) is what produced the drops Matthew rejected on 2026-08-27.
 export const LIGHT: AxisEntry[] = [
-  { key: "overcast", text: "Flat overcast daylight, no visible shadow direction" },
-  { key: "hard_noon", text: "Hard midday sun, black-edged shadows, blown highlights" },
-  { key: "sodium_lot", text: "Orange parking-lot light coming through the front glass after dark" },
-  { key: "one_tube", text: "A single fluorescent tube overhead, everything else falling off" },
-  { key: "screen_only", text: "Lit only by a screen, the rest of the room unlit" },
-  { key: "headlights", text: "Headlights raking through the front glass, moving highlights" },
-  { key: "blue_hour_blinds", text: "Blue-hour light through half-closed blinds" },
-  { key: "mixed_wb", text: "A warm lamp fighting cool daylight, two color temperatures in one frame" },
-  { key: "direct_flash", text: "Direct flash, flat and unflattering, hard shadow on the wall behind" },
-  { key: "windshield_sun", text: "Low sun through the front window, glare across the glass" },
+  { key: "overcast", text: "Flat bright overcast daylight through the front glass, no strong shadow direction" },
+  { key: "hard_noon", text: "Midday sun through the window, bright, with hard-edged shadows across a white wall" },
+  { key: "window_wall", text: "Daylight flooding in from a window wall, the whole room open and bright" },
+  { key: "bounced_white", text: "Soft light bouncing off white walls, the shadows open and gentle" },
+  { key: "mirror_bulbs", text: "Warm bulbs around a mirror lifting the whole room" },
+  { key: "morning_sun", text: "Early sun laid across the floor in long soft highlights" },
+  { key: "mixed_wb", text: "A warm lamp and cool daylight together, both bright, two color temperatures in one frame" },
+  { key: "task_and_day", text: "A task lamp switched on with daylight still carrying the room" },
   { key: "led_panel", text: "A clinical LED panel directly overhead, even and shadowless" },
   { key: "backlit_window", text: "Backlit by a window that blows out completely behind the subject" },
+  { key: "low_sun_window", text: "Low sun through the front window, glare across the glass" },
 ];
 
-// Color treatment. The old locked look survives as ONE of ten, no longer the law.
+// Color treatment. The old locked look survives as ONE of nine, no longer the law. Every value
+// here is a bright one: the grades that made the back catalogue look grim (crushed blacks,
+// sodium orange, a green fluorescent cast, faded and washed out, cold blue-green office) are
+// gone on purpose, and `_probe-shot-variety.ts` fails if one of them comes back.
 export const GRADE: AxisEntry[] = [
   { key: "uncorrected", text: "Uncorrected phone color, not graded" },
   { key: "clinical_white", text: "Slightly overexposed clinical white, near-blown walls" },
   { key: "warm_domestic", text: "Warm domestic color, slightly yellow" },
-  { key: "cold_office", text: "Cold blue-green office color" },
-  { key: "flash_contrast", text: "High-contrast flash color, saturated and hard" },
-  { key: "faded", text: "Faded and washed out, low saturation, lifted blacks" },
-  { key: "sodium_orange", text: "Heavy sodium orange, almost monochrome" },
+  { key: "cool_clean", text: "Clean cool-neutral color, the whites staying white" },
+  { key: "airy_white", text: "Airy high-key color, bright whites and open shadows" },
+  { key: "soft_warm", text: "Soft warm-neutral color, creamy skin tones" },
+  { key: "daylight_neutral", text: "Neutral daylight color, accurate and bright" },
+  { key: "spa_pastel", text: "Gentle sand and cream tones, warm and low in contrast" },
   { key: "muted_film", text: "Muted 35mm film color, fine grain" },
-  { key: "green_fluoro", text: "A green fluorescent cast nobody corrected" },
-  { key: "crushed_black", text: "Crushed blacks, most of the frame reading as shadow" },
 ];
 
 export const FRAMING: AxisEntry[] = [
@@ -161,6 +171,12 @@ function lane(seeds: SubjectSeed[], laneId: ShotLane): SubjectEntry[] {
 // is the only test that matters. If a subject could be photographed at any small business in
 // America, it does not belong in this list.
 //
+// Pruned again 2026-08-27: eight subjects were objects of decay rather than of an invisible
+// business (a plant going dry, trash bags at closing, mail wedged under the door, a shredder bin,
+// a ring of keys dropped at close, receipt tape, an equipment loan statement, a cancellation text
+// thread). The belief is "nobody can find her", not "she has already failed", and four working
+// subjects took their place. Bright light on a shredder bin is still a shredder bin.
+//
 // This lane feeds the daily b-roll drop only (dealShots is called from broll-suggestions.ts,
 // which runs for drop_mode "broll_suggestions" - the clinic channel). Adding a second
 // broll_suggestions avatar means splitting this lane by vertical first.
@@ -171,25 +187,23 @@ const OWNER_SUBJECTS: SubjectEntry[] = lane(
     ["booking_screen", "the booking calendar open on a med spa front-desk monitor, the day mostly white space"],
     ["checkin_tablet", "the check-in tablet on its stand at a med spa reception counter"],
     ["card_reader", "the card reader on a med spa checkout counter"],
-    ["receipt_tape", "a curl of receipt tape left on a med spa checkout counter"],
     ["intake_clipboard", "a clipboard of blank intake forms on a med spa reception desk"],
+    ["checkin_moment", "a client checking in at a med spa front desk, the tablet turned toward her"],
     ["treatment_menu", "a laminated treatment menu on a med spa reception counter, curling at one corner"],
     ["gift_cards", "a rack of gift cards on a med spa reception counter"],
-    ["keys_counter", "a ring of keys dropped on a med spa front counter at close"],
     ["headset_desk", "a headset resting across the keyboard at a med spa front desk"],
     ["sticky_notes", "a med spa front-desk monitor, its bezel crowded with sticky notes"],
     ["pen_cup", "a cup of pens on a med spa front counter, one missing its cap"],
     ["reception_mirror", "the mirror behind a med spa reception desk"],
-    ["cancel_texts", "a phone on a med spa front desk showing a cancellation text thread, the words too small to read"],
     // the lobby
     ["lobby_chairs", "the waiting chairs in a med spa lobby, seen from the front desk"],
     ["magazines", "magazines fanned on a med spa lobby table, one cover curled"],
     ["water_station", "the water and cucumber station in a med spa lobby"],
-    ["plant_dry", "a potted plant going dry in a med spa lobby corner"],
     ["clock_wall", "a wall clock in a med spa lobby in late afternoon light"],
     ["diploma_wall", "framed injector certifications on a med spa lobby wall, the glass reflecting a window"],
     ["retail_shelf_front", "the retail shelf of serums behind a med spa front desk, labels out of focus"],
     ["before_after_wall", "a wall of framed clinic photography in a med spa lobby, the images out of focus"],
+    ["retail_restock", "the retail shelf behind a med spa front desk being restocked, open boxes on the counter"],
     // the doors and the street directly outside
     ["clinic_front_door", "the front door of a med spa seen from inside, the street beyond it"],
     ["door_hours", "the vinyl business hours on a med spa glass front door, shot from inside"],
@@ -199,7 +213,6 @@ const OWNER_SUBJECTS: SubjectEntry[] = lane(
     ["sidewalk_sign", "an A-frame sign on the sidewalk directly outside a med spa"],
     ["clinic_lot_morning", "the med spa's own parking lot at seven in the morning with one car in it"],
     ["rival_across", "a rival clinic storefront seen from inside the med spa front window, its lot full"],
-    ["mail_under_door", "a pile of mail wedged under a med spa glass front door"],
     // the back office
     ["back_office_desk", "the owner's back-office desk in a med spa, a laptop and paperwork on it"],
     ["agency_invoices", "a stack of unopened marketing agency invoices on a med spa back-office desk"],
@@ -212,9 +225,7 @@ const OWNER_SUBJECTS: SubjectEntry[] = lane(
     ["notebook_list", "a spiral notebook of handwritten to-dos on a med spa front desk, the writing illegible"],
     ["filing_drawer", "an open filing drawer of client charts in a med spa back office"],
     ["printer_tray", "a printer mid-job in a med spa back office, paper stacked in the tray"],
-    ["shredder", "a shredder bin full of paper strips in a med spa back office"],
     ["wifi_router", "a router and tangled cables on a shelf in a med spa back office"],
-    ["loan_statement", "a printed equipment loan statement on a med spa desk, the numbers too small to read"],
     // the back of house
     ["product_cartons", "unopened product cartons stacked in a med spa back room"],
     ["product_lockbox", "a small lockbox of injectable cartons in a med spa back room"],
@@ -227,8 +238,9 @@ const OWNER_SUBJECTS: SubjectEntry[] = lane(
     ["hallway_doors", "the back hallway of a med spa, treatment room doors along it"],
     ["light_switches", "the bank of light switches inside a med spa back door, only the first one flipped up"],
     ["alarm_panel", "the security keypad beside a med spa back door"],
-    ["trash_bags", "trash bags set by a med spa back door at closing"],
     ["consult_table", "a consult room table in a med spa with a brochure and a pen on it"],
+    ["linen_fold", "fresh towels being folded at the linen shelf in a med spa back room"],
+    ["room_reset", "a med spa treatment room being reset between clients, fresh linens going onto the bed"],
   ],
   "owner"
 );
@@ -310,11 +322,15 @@ export function subjectsFor(laneId: ShotLane): SubjectEntry[] {
 
 // ---- the guards -------------------------------------------------------------------------
 
-// What makes a frame read as photographed rather than rendered.
+// What makes a frame read as photographed rather than rendered. Rewritten 2026-08-27: this used
+// to ask for "real clutter, wear, fingerprints and scuffs" and "visible sensor noise in the
+// shadows", which is a request for a grimy underlit room dressed up as a realism note. The half
+// that actually earns its place is the FRAMING - off-center, something cut by the edge, no
+// symmetry. Lived-in detail replaces the grime; grain replaces the noise-in-shadows.
 export const REALISM_TAIL =
   "Imperfect framing: the subject slightly off-center and something cut off by the frame edge. " +
-  "Real clutter, wear, fingerprints and scuffs. Visible sensor noise in the shadows. " +
-  "Mixed white balance. No perfect symmetry.";
+  "Real lived-in detail: a towel not quite square, a cable, a bottle out of place. " +
+  "Fine grain, no plastic smoothing. No perfect symmetry.";
 
 // The tells in our own back catalogue. Named explicitly because a model will produce
 // every one of them by default when asked for "cinematic".
@@ -338,6 +354,14 @@ export const CAMERA_AWARE_BAN =
 export const PERSON_LAW =
   "Someone is always in this frame and always mid-task, doing real work in this business. Never an empty room.";
 
+// The 2026-08-27 correction, and the one that has to survive an axis drifting. Pruning the dark
+// values out of LIGHT and GRADE is necessary and not sufficient: asked for "a router on a
+// back-office shelf", a model lights it like a crime scene unless it is told not to. The
+// reference is a Google image search for "med spa" - white, warm, bright, calm.
+export const BRIGHT_LAW =
+  "The room is bright, clean and well lit the way a real med spa is: white or warm-neutral walls, " +
+  "daylight or clean clinical light, open shadows. Never dark, dim, underlit, gloomy or run-down.";
+
 /**
  * The closing guards every image prompt ends with (scene 1 of a Hook Studio video excepted -
  * see hookGuards). `settingLaw` is the avatar's own location contract, passed in rather than
@@ -351,7 +375,7 @@ export function shotGuards(extraNegative?: string, settingLaw?: string | null): 
   const extra = duplicate ? "" : `${trimmed}. `;
   const setting = (settingLaw ?? "").trim();
   const where = setting ? `${setting.replace(/[.\s]+$/, "")}. ` : "";
-  return `${where}${PERSON_LAW} ${REALISM_TAIL} ${AI_TELL_BAN} ${CAMERA_AWARE_BAN} ${extra}No on-screen text, logos, or watermarks in the image. 9:16 vertical.`;
+  return `${where}${PERSON_LAW} ${BRIGHT_LAW} ${REALISM_TAIL} ${AI_TELL_BAN} ${CAMERA_AWARE_BAN} ${extra}No on-screen text, logos, or watermarks in the image. 9:16 vertical.`;
 }
 
 // ---- rendering --------------------------------------------------------------------------
@@ -568,19 +592,39 @@ export const HOOK_TREATMENT_SUBJECTS: AxisEntry[] = [
   { key: "lhr_shin", text: "a laser handpiece drawn along a shin, the nurse in orange safety glasses, the room light dimmed around the treatment field" },
   { key: "lhr_upper_lip", text: "a laser handpiece at the upper lip with gloved fingers holding the skin taut, both nurse and patient in protective eyewear" },
   { key: "lhr_jawline", text: "a laser handpiece passing under the jaw, the nurse in orange safety glasses watching the tip, the patient's eyes shielded" },
+  // the spa rituals, added 2026-08-27. The four needle-and-laser families alone made every hook
+  // read clinical; these are the ones Matthew named by hand ("a facial mascarilla de yeso, a
+  // woman laid down with cucumber in her eyes, more examples of a woman in a spa"). Same rule as
+  // above: the patient carries the frame, the practitioner enters as gloved hands.
+  { key: "clay_mask_setting", text: "a white clay mask setting on the face, matte and even, a spa headband holding the hair back, the patient's eyes closed" },
+  { key: "cucumber_eyes", text: "cucumber slices resting over closed eyes, the hair wrapped in a white towel turban, the patient's face relaxed" },
+  { key: "sheet_mask", text: "gloved fingertips smoothing a sheet mask along the cheekbone, the patient reclined with her eyes closed" },
+  { key: "hot_towel", text: "a warm towel laid across the forehead with steam still coming off it, the patient's face calm below it" },
+  { key: "facial_massage", text: "gloved fingertips working up the temples in a slow lymphatic massage, the patient's eyes closed and her head resting back" },
+  { key: "led_mask_face", text: "an LED light mask lowered over the face, soft blue-white light across the skin, the patient still beneath it" },
+  { key: "hydrafacial_face", text: "a hydrafacial wand drawn along the cheek, the skin catching the light, the patient reclined with her eyes closed" },
+  { key: "gua_sha_jaw", text: "a gua sha stone drawn along the jaw through facial oil, a gloved hand steadying the chin, the patient's eyes closed" },
+  { key: "dermaplane_cheek", text: "a dermaplaning blade held flat to the cheek with gloved fingers holding the skin taut, the patient's face turned three-quarter" },
+  { key: "steam_facial", text: "a facial steamer drifting a fine mist over the face, the patient's eyes closed and her hair wrapped" },
+  { key: "mask_peel", text: "a mask being lifted away from the jawline in one piece, the skin bright underneath, the patient's eyes closed" },
+  { key: "robe_recline", text: "a patient in a spa robe reclined under a light blanket with tea on the side table, her eyes closed before the treatment starts" },
 ];
 
 /** The hook's craft, replacing the dealt look line entirely for scene 1. */
 export const HOOK_LOOK =
-  "Shot the way a med spa shoots its own campaign. A clean, styled treatment room: neutral walls, " +
-  "a leather treatment chair, a spa headband or robe where it fits. Shallow depth of field, soft " +
-  "directional light, the practitioner present only as gloved hands and forearms unless the subject names her.";
+  "Shot the way a med spa shoots its own campaign. A clean, styled, BRIGHT treatment room: white or " +
+  "warm-neutral walls, a leather treatment chair, a spa headband or robe where it fits. Daylight or soft " +
+  "directional key light, never a dim or underlit room. Shallow depth of field, the practitioner present " +
+  "only as gloved hands and forearms unless the subject names her.";
 
-/** The one axis that still rotates on the hook. Both values are his; his two reference rows
- *  differ by exactly this and nothing else. Two entries, so the window below alternates them. */
+/** The one axis that still rotates on the hook. The first two are his; his two reference rows
+ *  differ by exactly this and nothing else. The third was added 2026-08-27 for the same reason the
+ *  whole grammar got brighter - "muted desaturated" twice is a narrow read of a room that is
+ *  usually flooded with daylight. */
 export const HOOK_GRADE: AxisEntry[] = [
   { key: "warm_neutral", text: "muted desaturated warm-neutral color grade" },
   { key: "cool_clinical", text: "muted desaturated cool clinical color grade" },
+  { key: "bright_airy", text: "clean bright airy color grade, luminous skin and white walls" },
 ];
 
 /** "Not graphic" as Matthew means it. The syringe, the needle and the handpiece are the POINT
@@ -628,4 +672,27 @@ export function renderHookBrief(shot: HookShot): string {
 /** A short label for the Slack card, so the dealt treatment is visible at a glance. */
 export function hookLabel(shot: HookShot): string {
   return `${shot.subject.key} / ${shot.grade.key}`;
+}
+
+/** The hook lane's answer to shotKeys(): what the daily drop logs so the next hero avoids it.
+ *  `lane` stays a documentary value because the column is shared and the KEY is what identifies
+ *  a hero row - see hookHistoryFrom. */
+export function hookKeys(shot: HookShot): Record<string, string> {
+  return { subject_key: shot.subject.key, grade_key: shot.grade.key, lane: "treatment" };
+}
+
+/**
+ * The hook lane's slice of a shared b-roll history. The daily drop's hero shot logs into the
+ * SAME `subject_key` / `grade_key` columns as the documentary shots, so the lane needed no
+ * migration: the two key spaces do not overlap, and each side reads back only its own by
+ * membership. A stray key from the other lane in a blocked window is harmless - it just names
+ * something that is not in the pool being drawn from.
+ */
+export function hookHistoryFrom(recent: RecentShots): RecentHooks {
+  const subjects = new Set(HOOK_TREATMENT_SUBJECTS.map((e) => e.key));
+  const grades = new Set(HOOK_GRADE.map((e) => e.key));
+  return {
+    subject: (recent.subject ?? []).filter((k) => subjects.has(k)),
+    grade: (recent.grade ?? []).filter((k) => grades.has(k)),
+  };
 }

@@ -16,6 +16,12 @@
 // SCENE 1 IS EXEMPT (2026-08-26): the hook's whole job is to show a patient being treated, so
 // it is checked differently - it must carry the subject the code dealt, and nothing graphic.
 //
+// SO IS IDEA 1 OF THE DAILY DROP (2026-08-27), for the same reason and by the same rule: it is
+// now the hero frame, dealt from the hook library and closed with hookGuards(). What it owes is
+// a dealt treatment, nothing graphic, and NOT the documentary guards. What ideas 2+ owe on top of
+// the three checks above is BRIGHT_LAW - the axes were pruned of their dark values the same day
+// and the law is what holds when the writer reaches for gloom anyway.
+//
 // These failures are probabilistic, so run it more than once before believing a clean pass.
 import { loadVertical, dropOwnerVerticalId } from "../src/config/verticals";
 import { loadWorkflow } from "../src/config/workflows";
@@ -27,7 +33,9 @@ import {
   renderLookLine,
   dealHookShot,
   hookLabel,
+  BRIGHT_LAW,
   CAMERA_AWARE_BAN,
+  HOOK_TREATMENT_SUBJECTS,
   PERSON_LAW,
   REALISM_TAIL,
   AI_TELL_BAN,
@@ -107,20 +115,74 @@ async function main() {
     drop.setting_law ?? "",
     CAMERA_AWARE_BAN,
     PERSON_LAW,
+    BRIGHT_LAW,
     REALISM_TAIL,
     AI_TELL_BAN,
   ].filter(Boolean);
+  const GRAPHIC = ["blood", "bruis", "wound", "swelling", "diagram"];
 
   // --- lane 1: the 3x/day cron drop, through the exact production path ---
   console.log("\n=== LANE 1: daily b-roll drop ===");
   const ideas = await buildIdeas({ vertical: drop, slot: "morning" });
-  ideas.forEach((idea) => {
+  ideas.forEach((idea, i) => {
     if (!idea.image_prompt) return;
     const label = `${idea.bucket} | ${idea.on_screen_hook}`;
-    if (scan(label, idea.image_prompt, guards).length) failures.push(`daily/${idea.bucket}`);
+    const p = idea.image_prompt;
+
+    // Idea 1 is the hero: a patient's face IS the frame, so the person/performing scan would fail
+    // every correct run. It owes the dealt treatment, nothing graphic, and none of the four
+    // documentary guards - the reversal asserted as a reversal, exactly like lane 2's scene 1.
+    if (i === 0) {
+      console.log(`
+  [${label} — HERO]
+  ${p}`);
+      if (!idea.hook) {
+        console.log("  >>> FAIL: idea 1 was not dealt a hook shot");
+        failures.push("daily/hero-not-dealt");
+        return;
+      }
+      console.log(`  hook: ${hookLabel(idea.hook)}`);
+      if (!p.includes(idea.hook.subject.text)) {
+        console.log("  >>> FAIL: the dealt hero subject is missing");
+        failures.push("daily/hero-subject");
+      }
+      const body = p.slice(0, p.indexOf("Do not produce:"));
+      const graphic = GRAPHIC.filter((w) => body.toLowerCase().includes(w));
+      if (graphic.length) {
+        console.log(`  >>> FAIL: graphic (${graphic.join(", ")})`);
+        failures.push("daily/hero-graphic");
+      }
+      for (const [name, guard] of [
+        ["CAMERA_AWARE_BAN", CAMERA_AWARE_BAN],
+        ["PERSON_LAW", PERSON_LAW],
+        ["REALISM_TAIL", REALISM_TAIL],
+        ["AI_TELL_BAN", AI_TELL_BAN],
+      ] as const) {
+        if (p.includes(guard)) {
+          console.log(`  >>> FAIL: the hero carries ${name}`);
+          failures.push(`daily/hero-${name}`);
+        }
+      }
+      if (idea.voiceover_line) console.log(`  vo: ${idea.voiceover_line}`);
+      return;
+    }
+
+    if (scan(label, p, guards).length) failures.push(`daily/${idea.bucket}`);
+    // The brightness law has to REACH the image model on every documentary frame, not only the
+    // writer. Its absence is how the clinic went dark in the first place.
+    if (!p.includes(BRIGHT_LAW)) {
+      console.log("  >>> FAIL: no BRIGHT_LAW on the prompt");
+      failures.push(`daily/${idea.bucket}-dark`);
+    }
     if (idea.shot) console.log(`  look: ${renderLookLine(idea.shot)}`);
     if (idea.voiceover_line) console.log(`  vo: ${idea.voiceover_line}`);
   });
+
+  // Idea 1 must be a hero and it must come from the hook library, not from a subject that merely
+  // reads like one.
+  if (ideas[0] && !HOOK_TREATMENT_SUBJECTS.some((e) => e.key === ideas[0].hook?.subject.key)) {
+    failures.push("daily/hero-off-library");
+  }
 
   // Two prompts from one drop must not share a look - that is the whole point of the rebuild.
   const looks = ideas.filter((i) => i.shot).map((i) => renderLookLine(i.shot!));
@@ -157,7 +219,7 @@ async function main() {
           failures.push(`hook/o${b + 1}s1-subject`);
         }
         const body = p.slice(0, p.indexOf("Do not produce:"));
-        const graphic = ["blood", "bruis", "wound", "swelling", "diagram"].filter((w) => body.toLowerCase().includes(w));
+        const graphic = GRAPHIC.filter((w) => body.toLowerCase().includes(w));
         if (graphic.length) {
           console.log(`  >>> FAIL: graphic (${graphic.join(", ")})`);
           failures.push(`hook/o${b + 1}s1-graphic`);

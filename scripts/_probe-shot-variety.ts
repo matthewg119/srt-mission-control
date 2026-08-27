@@ -12,6 +12,8 @@ import {
   renderLookLine,
   renderShotBrief,
   shotKeys,
+  hookKeys,
+  hookHistoryFrom,
   effectiveWindow,
   grammarSize,
   SUBJECTS,
@@ -21,7 +23,11 @@ import {
   shotGuards,
   HOOK_TREATMENT_SUBJECTS,
   HOOK_GRADE,
+  BRIGHT_LAW,
   CAMERA_AWARE_BAN,
+  CAPTURE,
+  GRADE,
+  LIGHT,
   PERSON_LAW,
   PRESENCE,
   REALISM_TAIL,
@@ -30,7 +36,9 @@ import {
   type RecentHooks,
 } from "../src/config/shot-grammar";
 
-const PER_DROP = 3;
+// Documentary shots per drop. Idea 1 is the hero and does not draw from the subject library, so
+// a 3-idea drop deals TWO of these plus one hook shot - see broll-suggestions.ts.
+const PER_DROP = 2;
 const DROPS = Number(process.env.PROBE_DROPS ?? 40); // ~13 days at 3 drops/day
 
 // The windows the dealer contracts to, clamped to what each axis can actually honor at this
@@ -62,18 +70,30 @@ function checkWindow(axis: keyof typeof EXPECT, key: string, dropIndex: number):
   }
 }
 
+const HERO_WINDOW = 8;
+const heroSubjectsUsed = new Set<string>();
+
 for (let d = 0; d < DROPS; d++) {
-  // Same call shape production uses: two owner-lane angles and one treatment-lane angle.
+  // Same call shape production uses: the hero, then one owner-lane and one treatment-lane angle.
+  // The hero reads its own history back out of the SHARED columns, which is the thing that would
+  // break silently if the two key spaces ever overlapped.
+  const heroHistory = hookHistoryFrom(history);
+  const hero = dealHookShot({ recent: heroHistory });
+  if ((heroHistory.subject ?? []).slice(0, HERO_WINDOW).includes(hero.subject.key)) {
+    failures.push(`drop ${d}: hero subject "${hero.subject.key}" repeated inside its ${HERO_WINDOW}-deep window`);
+  }
+  heroSubjectsUsed.add(hero.subject.key);
+
   const specs = dealShots({
     lane: "owner",
     count: PER_DROP,
     recent: history,
-    lanes: ["owner", "owner", "treatment"],
+    lanes: ["owner", "treatment"],
   });
 
   if (specs.length !== PER_DROP) failures.push(`drop ${d}: dealt ${specs.length}, wanted ${PER_DROP}`);
-  if (specs[2] && specs[2].subject.lane !== "treatment") {
-    failures.push(`drop ${d}: lane override ignored, got ${specs[2].subject.lane}`);
+  if (specs[1] && specs[1].subject.lane !== "treatment") {
+    failures.push(`drop ${d}: lane override ignored, got ${specs[1].subject.lane}`);
   }
 
   // Nothing may repeat INSIDE one drop either - that is the three-identical-images case.
@@ -99,6 +119,10 @@ for (let d = 0; d < DROPS; d++) {
     seenSubjects.add(keys.subject_key);
     lookLines.push(renderLookLine(spec));
   }
+
+  const hk = hookKeys(hero);
+  history.subject.unshift(hk.subject_key);
+  history.grade.unshift(hk.grade_key);
 }
 
 // A look line repeating verbatim is the failure the operator actually sees.
@@ -118,8 +142,29 @@ console.log(`simulated: ${DROPS} drops x ${PER_DROP} shots = ${lookLines.length}
 console.log(`distinct subjects used: ${seenSubjects.size}`);
 console.log(`distinct look lines: ${new Set(lookLines).size}/${lookLines.length}`);
 console.log("\nsample of the first drop:");
-for (const spec of dealShots({ lane: "owner", count: 3, recent: history, lanes: ["owner", "owner", "treatment"] })) {
+console.log(`  - HERO: ${renderHookBrief(dealHookShot({ recent: hookHistoryFrom(history) }))}`);
+for (const spec of dealShots({ lane: "owner", count: PER_DROP, recent: history, lanes: ["owner", "treatment"] })) {
   console.log(`  - ${renderShotBrief(spec)}`);
+}
+
+// ---- the brightness rail (2026-08-27) ----------------------------------------------------
+//
+// Pruning the dark values out of the axes is a one-time edit; keeping them out is this. Any
+// future "just one moody option" lands here as a build failure, which is the only reason the
+// clinic drop stopped looking like a repossession photo.
+const DARK = /\b(dark|darkness|unlit|dim|dimly|gloom|gloomy|crushed|shadowy|after dark|sodium|at night|nighttime|underlit|falling off)\b/i;
+for (const [axis, entries] of [
+  ["LIGHT", LIGHT],
+  ["GRADE", GRADE],
+  ["CAPTURE", CAPTURE],
+] as const) {
+  for (const e of entries) {
+    if (DARK.test(e.text)) failures.push(`${axis} "${e.key}" is a dark value: "${e.text}"`);
+  }
+}
+// ...and the law that holds when a bright axis still gets lit like a crime scene.
+if (!shotGuards("No empty rooms.", "Inside this med spa.").includes(BRIGHT_LAW)) {
+  failures.push("shotGuards() dropped BRIGHT_LAW");
 }
 
 console.log("\n--------------------");
