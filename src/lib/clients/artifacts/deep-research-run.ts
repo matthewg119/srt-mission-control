@@ -372,12 +372,23 @@ async function harvestedPhrases(vertical: string, avatarSlug: string): Promise<H
     .eq("avatar", avatarSlug)
     .eq("source", "harvest")
     .order("commercial_intent_score", { ascending: false })
-    .limit(60);
+    .limit(80);
 
-  return (data ?? []).map((d) => ({
-    phrase: d.phrase as string,
-    sourceUrl: (d.source_url as string | null) ?? null,
-  }));
+  // ‼️ FILTERED ON READ AS WELL AS ON WRITE, AND THE READ SIDE IS NOT REDUNDANT. isPageChrome
+  // went into extractPhrases on 2026-08-27, but question_bank has no client_id and is never
+  // rebuilt: the 47 nav-bar rows harvested before that fix are in the shared corpus permanently
+  // unless somebody deletes them, and deleting from a corpus every client in the vertical reads
+  // from is not a thing to do quietly. Filtering here costs nothing and fixes the existing rows
+  // for every future run.
+  const { isPageChrome } = await import("../harvest");
+
+  return (data ?? [])
+    .map((d) => ({
+      phrase: d.phrase as string,
+      sourceUrl: (d.source_url as string | null) ?? null,
+    }))
+    .filter((r) => !isPageChrome(r.phrase))
+    .slice(0, 60);
 }
 
 interface SectionResult {

@@ -129,6 +129,54 @@ export function stripUnstorable(input: string): string {
     .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
+/**
+ * Navigation, breadcrumbs and menu runs, which textFromHtml flattens into sentence-shaped text.
+ *
+ * ‼️ ADDED AFTER THEY REACHED A CLIENT-FACING PDF. Once the NUL-byte bug above was fixed and the
+ * harvest actually stored rows, two of the top five ranked phrases for the first real client were
+ * "See a programme → Pricing Contact Get your score Home / Guides / Does ChatGPT recommend med
+ * spas" and "Brand Authority How much unique, authoritative detail does AI have?". Both are a nav
+ * bar with a heading stuck to it. They are question-shaped, so QUESTION_STARTERS let them through,
+ * and nothing downstream could tell them from something a buyer typed.
+ *
+ * The tests are shape-based rather than word-based on purpose: a blocklist of menu words would
+ * also eat "how much does botox cost", which contains "cost" the same way a pricing link does.
+ */
+export function isPageChrome(phrase: string): boolean {
+  // A breadcrumb or a menu separator. Real speech does not contain these.
+  if (/[→»|›]|\s\/\s/.test(phrase)) return true;
+
+  // Two or more nav labels in one line is a menu, not a sentence.
+  const navHits = (
+    phrase.match(
+      /\b(home|pricing|contact|about us|our team|blog|guides|resources|menu|log ?in|sign ?up|book now|get started|learn more|read more|free trial|get your score|see a demo)\b/gi
+    ) ?? []
+  ).length;
+  if (navHits >= 2) return true;
+
+  // A Title Case run with no lowercase connective tissue is a heading stack, e.g.
+  // "Brand Authority How Much Unique Authoritative Detail". Requires several words so that a
+  // genuine short question keeps its place.
+  const words = phrase.split(/\s+/).filter(Boolean);
+  const capitalised = words.filter((w) => /^[A-Z][a-z]/.test(w)).length;
+  if (words.length >= 6 && capitalised / words.length > 0.6) return true;
+
+  // ‼️ A HEADING WELDED ONTO A QUESTION, which is what textFromHtml makes of an <h3> sitting
+  // above a paragraph: "Brand Authority How much unique detail does AI have?". The question half
+  // is real English, so the ratio test above never fires. The signature is a Title Case noun
+  // phrase in front of a question word that is therefore NOT at the start of the sentence, and a
+  // real question does not have one: "How much does this cost?" opens on its question word.
+  if (
+    /^(?:[A-Z][a-z]+\s+){1,4}(?:How|What|Why|When|Where|Which|Who|Is|Are|Does|Do|Did|Can|Could|Should|Would|Will|Has|Have)\s/.test(
+      phrase
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function commercialIntent(phrase: string): number {
   let score = 0;
   for (const [pattern, value] of INTENT_LADDER) {
@@ -178,6 +226,7 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
     // Boilerplate filter. Cookie banners and nav text are question-shaped often enough to
     // pollute a bank that a human then has to read.
     if (/cookie|privacy policy|subscribe|newsletter|sign in|log in|javascript/i.test(phrase)) continue;
+    if (isPageChrome(phrase)) continue;
 
     const normalized = normalizePhrase(phrase);
     if (!normalized || seen.has(normalized)) continue;
@@ -443,7 +492,10 @@ export function formatHarvestSummary(args: {
     `*Avatar phrase harvest* — ${args.phrases} phrases from ${args.pages} pages the engines cited.`,
     "",
     "Reddit was NOT read: no credentials, and commercial Data API use needs Reddit's approval. Nothing was scraped.",
-    "The deep research brief posted alongside this is the other half, and it needs you to run it.",
+    // The line that used to sit here said the deep-research brief "needs you to run it". It does
+    // not any more: the research runs itself and posts its own PDF alongside this. See
+    // artifacts/deep-research-run.ts.
+    "These also become the candidate pool the deep research ranks, which is why they carry their source pages.",
   ];
 
   if (args.topPhrases.length) {

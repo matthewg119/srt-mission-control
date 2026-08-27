@@ -107,18 +107,27 @@ async function main() {
   });
   console.log("step reopened");
 
-  // ── 4. Repost and run ─────────────────────────────────────────────────────
+  // ── 4. Run, THEN repost ───────────────────────────────────────────────────
+  //
+  // ‼️ THIS ORDER IS LOAD-BEARING AND THE OBVIOUS ONE IS WRONG. postStep parks the row at
+  // `awaiting_me`, and runReadyAutoSteps only claims `pending`/`blocked`/`ready`. Posting the
+  // card first would therefore make this step's runner permanently unclaimable, which is exactly
+  // the starvation bug ac0b733 fixed and which _debug-post-all-steps.ts carries a warning about.
+  //
+  // Running first is also what makes the card useful: it renders a link to output_ref, which does
+  // not exist until the researcher has filed the PDF.
   const { refreshStepAnchor } = await import("../src/lib/clients/step-board");
   const { postStep, runReadyAutoSteps } = await import("../src/lib/clients/step-engine");
 
   await refreshStepAnchor(CLIENT_ID, STEP_KEY);
-  await postStep(CLIENT_ID, STEP_KEY);
-  console.log("card reposted");
 
-  console.log("running the researcher (this takes a couple of minutes)...");
+  console.log("running the harvest and the researcher (a minute or two)...");
   const started = Date.now();
   await runReadyAutoSteps(CLIENT_ID);
-  console.log(`done in ${Math.round((Date.now() - started) / 1000)}s`);
+  console.log(`runner done in ${Math.round((Date.now() - started) / 1000)}s`);
+
+  await postStep(CLIENT_ID, STEP_KEY);
+  console.log("card reposted");
 
   const { data: after } = await supabaseAdmin
     .from("client_delivery_steps")

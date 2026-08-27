@@ -35,6 +35,7 @@ import {
   isObjection,
   textFromHtml,
   stripUnstorable,
+  isPageChrome,
 } from "../src/lib/clients/harvest";
 import { buildFullPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
 import {
@@ -592,6 +593,34 @@ ok("and it admits it has no seed sites", /no cited sources recorded yet/i.test(b
   const ugly = "im scared itll look fake... AND its TOO expensive?!";
   eq("typos, casing and punctuation all survive", stripUnstorable(ugly), ugly);
   eq("a real emoji survives", stripUnstorable("worth it \u{1F914}"), "worth it \u{1F914}");
+}
+
+{
+  // isPageChrome: nav bars and heading stacks arrive sentence-shaped because textFromHtml
+  // flattens the markup that separated them. Two of these reached a client-facing PDF's top five
+  // on the first real run after the NUL-byte fix let the harvest store anything at all.
+  const chrome = [
+    "See a programme \u2192 Pricing Contact Get your score Home / Guides / Does ChatGPT recommend med spas",
+    "Brand Authority How much unique, authoritative detail does AI have?",
+    "Home / Guides / Does ChatGPT recommend med spas?",
+    "Pricing Contact Book Now Learn More",
+    "Local Visibility Are you showing up in the map pack?",
+  ];
+  for (const c of chrome) ok(`chrome is dropped: ${c.slice(0, 34)}`, isPageChrome(c));
+
+  // ‼️ AND THE OTHER HALF, WHICH MATTERS MORE. Over-filtering here silently deletes the market's
+  // own wording, which is the one thing in this file that could not have been invented at a desk.
+  const real = [
+    "How much does this cost?",
+    "Is a consultation required?",
+    "im scared itll look fake and its too expensive",
+    "What is included in the appointment?",
+    "Are AEO agencies legit or is this snake oil?",
+    "Anyone here own a med spa? Are they still profitable?",
+    "Do I have to switch everything?",
+    "I think I can find a physician whos going to be there 50% at the time",
+  ];
+  for (const r of real) ok(`kept: ${r.slice(0, 34)}`, !isPageChrome(r));
 }
 
 

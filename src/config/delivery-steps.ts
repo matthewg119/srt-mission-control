@@ -157,7 +157,7 @@ const STEP_LIST = [
   // time this runs, so every phrase this step writes is TAGGED with that avatar slug.
   //
   // Renaming the KEY would orphan every row already carrying it. Labels are free; keys are not.
-  { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest for the confirmed avatar, plus the deep-research brief to run", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan", "avatar_confirmed"] },
+  { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest and the deep research for the confirmed avatar", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan", "avatar_confirmed"] },
   { key: "findings_doc", phase: PHASE_BEFORE, label: "Findings written up and attached", auto: true, mode: "auto", blockedBy: ["presence_pdf", "review_audit"] },
 
   // ── BEFORE THE CALL: prepare. None of it touches their properties ─────────

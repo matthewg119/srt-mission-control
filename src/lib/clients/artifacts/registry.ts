@@ -143,8 +143,14 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
         .eq("avatar", avatar.slug)
         .eq("source", "harvest")
         .order("commercial_intent_score", { ascending: false })
-        .limit(8);
-      sample = (data ?? []) as typeof sample;
+        .limit(30);
+
+      // Chrome filtered on read, for the rows harvested before isPageChrome existed. Without it
+      // this list leads with a nav bar, which is what the thread showed on 2026-08-27. Same
+      // reasoning as harvestedPhrases() in deep-research-run.ts: the corpus is shared and is not
+      // rebuilt, so the read side has to defend itself.
+      const { isPageChrome } = await import("../harvest");
+      sample = ((data ?? []) as typeof sample).filter((d) => !isPageChrome(d.phrase)).slice(0, 8);
     }
 
     const harvestNote = formatHarvestSummary({
