@@ -47,7 +47,6 @@ import {
   downloadResult,
   fileInfo,
   isConfigured as mvConfigured,
-  maxEmails,
   parseResultLines,
   uploadEmails,
   type MvFileInfo,
@@ -333,22 +332,32 @@ async function publishResults(batch: BatchRow): Promise<boolean> {
     return false;
   }
 
-  const cap = maxEmails();
-  if (cleanCount > cap && !batch.mv_approval_ts) {
-    // The expensive failure is a file whose email column was mis-resolved: it produces a
-    // plausible-looking upload of every row in the export, billed per address. Above the cap a
-    // person looks at the number first.
+  // ‼️ EVERY BATCH STOPS HERE. THE UPLOAD IS NEVER AUTOMATIC, AT ANY SIZE.
+  //
+  // This was a size cap once (`SCRAPER_MV_MAX_EMAILS`, gate above N, send below it) and Matthew
+  // reversed it on 2026-08-27: the point of layer 1 is a list a person READS before layer 2 is
+  // paid for, and a threshold means the small runs, which is most of them, get spent before
+  // anyone has opened clean.csv. A gate that only fires on the unusual case is not a review step,
+  // it is a tripwire.
+  //
+  // So the card goes up with the count on it and nothing moves until a human reacts. The batch
+  // parks in `filtered` indefinitely, which is correct: approval can come days later, and the two
+  // guards below mean a cron re-entry every five minutes does nothing but re-read a row.
+  if (!batch.mv_approval_ts) {
     const ts = await say(
       batch,
-      cleanCount +
-        " clean addresses is over the " +
-        cap +
-        " cap, and MillionVerifier bills per address.\nReact :white_check_mark: on this message to send them."
+      "*" +
+        cleanCount +
+        " addresses passed the filter.* Read `clean.csv` above before this goes anywhere.\n" +
+        "MillionVerifier bills per address, so nothing is sent until you react " +
+        ":white_check_mark: on THIS message."
     );
     await updateBatch(batch.id, { mv_awaiting_approval: true, mv_approval_ts: ts });
     return false;
   }
-  if (cleanCount > cap && batch.mv_awaiting_approval) return false;
+
+  // The card is up and nobody has reacted yet.
+  if (batch.mv_awaiting_approval) return false;
 
   const cleanRows = await rowsByVerdict(batch.id, "clean");
   const emails = cleanRows.map((r) => r.email).filter((e): e is string => Boolean(e));

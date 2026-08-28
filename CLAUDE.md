@@ -3188,13 +3188,26 @@ follow-up operator's own table, so "already contacted" is read rather than remem
 > checked on both the resolver and the DoH path.
 
 > ‼️ **MILLIONVERIFIER IS THE ONLY THING IN THIS LANE THAT SPENDS MONEY**, billed per address
-> UPLOADED, not per address that comes back OK. Three guards follow from that: no key degrades to
-> "here is clean.csv, upload it yourself" rather than throwing; `SCRAPER_MV_MAX_EMAILS` (default
-> 25,000) posts the count and waits for a ✅ instead of sending, because the expensive failure is a
-> mis-resolved email column producing a plausible-looking upload of the whole export; and the
-> upload is guarded by `mv_file_id` already being set, so a retried tick cannot buy the same list
-> twice. `filter=all` is downloaded before `ok`, so an `invalid` verdict is recorded too — that is
-> the most useful thing the lane learns.
+> UPLOADED, not per address that comes back OK. So **THE UPLOAD IS NEVER AUTOMATIC, AT ANY SIZE.**
+> Layer 1 finishes, `clean.csv` and `junk.csv` go up, and the batch parks in `filtered` behind a
+> card carrying the count. Nothing is sent until a human reacts ✅ on that card.
+>
+> It was a size threshold for one day (`SCRAPER_MV_MAX_EMAILS`, default 25,000, gate above it and
+> send below it) and Matthew reversed it on 2026-08-27. The reasoning is worth keeping: the whole
+> point of layer 1 is a list somebody READS before layer 2 is paid for, and a threshold means the
+> small runs, which is most of them, get spent before anyone has opened the file. **A gate that
+> only fires on the unusual case is not a review step, it is a tripwire.** The env var is deleted
+> rather than left inert, because a knob that no longer does anything is the same "reader with no
+> writer" class of bug this file records five other instances of.
+>
+> Two guards sit underneath it: no key degrades to "here is clean.csv, upload it yourself" rather
+> than throwing, and the upload is guarded by `mv_file_id` already being set, so a retried tick
+> cannot buy the same list twice. `filter=all` is downloaded before `ok`, so an `invalid` verdict
+> is recorded too, which is the most useful thing the lane learns.
+>
+> A batch nobody approves parks forever, and that is correct rather than a leak: approval can come
+> days later, and the two guards in `publishResults` mean a cron re-entry every five minutes does
+> nothing but re-read one row.
 
 **Two Slack traps this lane sits on, both already documented elsewhere in this file and both live
 here:** a CSV drop fires BOTH `file_shared` and a `message` with subtype `file_share`, so the
@@ -3231,5 +3244,5 @@ why `filter.ts` and `rules.ts` are pure and stop before the resolver.
 ```
 SLACK_SCRAPER_CHANNEL=       # C0AJXH7PTBM. The ID survives the rename to #srt-scraper.
 MILLIONVERIFIER_API_KEY=     # Unset is HANDLED: it filters and posts clean.csv, it just does not verify.
-SCRAPER_MV_MAX_EMAILS=       # Optional, default 25000. Above it the lane asks before spending.
+# No size threshold exists. Every batch waits for a ✅ on its results card, at any size.
 ```

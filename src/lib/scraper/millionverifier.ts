@@ -7,9 +7,9 @@
 // ‼️ THIS IS THE ONLY THING IN THE SCRAPER LANE THAT SPENDS MONEY, and it is billed per address
 // uploaded, not per address that comes back OK. Everything defensive here follows from that:
 // `isConfigured()` so a missing key degrades to "here is clean.csv, upload it yourself" instead of
-// throwing; a hard cap so a mis-parsed 90k-row file cannot be sent without somebody looking at the
-// number first; and the upload happening ONCE, guarded by `mv_file_id` already being set on the
-// batch row, so a retried tick cannot buy the same list twice.
+// throwing; the upload happening ONCE, guarded by `mv_file_id` already being set on the batch row,
+// so a retried tick cannot buy the same list twice; and, in lane.ts, a human reacting on the
+// results card before any of this is reached. NOTHING HERE IS CALLED UNATTENDED.
 
 const BASE = "https://bulkapi.millionverifier.com/bulkapi/v2";
 
@@ -50,18 +50,6 @@ function apiKey(): string {
 /** No key means the lane still runs and still posts clean.csv. It just does not verify. */
 export function isConfigured(): boolean {
   return apiKey().length > 0;
-}
-
-/**
- * The ceiling above which the lane asks before spending. Default 25,000.
- *
- * Not a refusal: over the cap the batch parks and the thread asks for a ✅. The number exists
- * because the expensive failure is a file whose email column was mis-resolved, which produces a
- * plausible-looking upload of every row in the export.
- */
-export function maxEmails(): number {
-  const raw = Number(process.env.SCRAPER_MV_MAX_EMAILS);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 25000;
 }
 
 function requireKey(): string {
