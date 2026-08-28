@@ -3246,3 +3246,184 @@ SLACK_SCRAPER_CHANNEL=       # C0AJXH7PTBM. The ID survives the rename to #srt-s
 MILLIONVERIFIER_API_KEY=     # Unset is HANDLED: it filters and posts clean.csv, it just does not verify.
 # No size threshold exists. Every batch waits for a ✅ on its results card, at any size.
 ```
+
+## Two workflows in the scraper lane, and a picker in front of both (2026-08-28)
+`src/lib/scraper/{score,dataforseo}.ts`. Migration: `docs/2026-08-28-scraper-score-lane.sql`.
+
+The lane assumed every file dropped in `#srt-scraper` was a contact list. A company list with no
+contacts yet needs the opposite treatment first: score each business on how strong its presence
+already is, throw away the ones already winning, and only pay Apollo to reveal contacts for the
+invisible remainder. A CSV alone cannot tell you which of the two you have, so the drop stops
+deciding and asks.
+
+```
+awaiting_workflow
+  ├─1️⃣→ parsing → mx → filtered → [✅] → verifying → done
+  └─2️⃣→ scoring → scored → [1️⃣2️⃣3️⃣ or free text] → [✅ confirm] → awaiting_apollo_export
+            └─ Apollo export dropped in the thread → child batch → parsing → (rejoins above)
+```
+
+> ‼️ **THE PICKER IS UNCONDITIONAL AND IS NEVER AUTO-RESOLVED.** The card READS the headers and says
+> what it sees ("no email column in this file, so 2️⃣ is probably it"). It does not act on that.
+> Exactly the call Matthew made one day earlier when the MillionVerifier size threshold came out: a
+> gate that only fires on the ambiguous case is a tripwire, not a review step.
+
+**Column requirements are per workflow and are checked AFTER the pick.** Workflow A needs an email
+column, B needs a company column, and `city` / `website` are optional in B. Checking at the drop is
+what would kill a company list on "no email column" before anybody could choose 2️⃣.
+
+**The drop stores headers and a file id and nothing else.** `startBatch` no longer resolves a column
+or inserts a row; the pick re-reads the file through `slack.filesInfo`. One extra Slack download
+buys two things: 50k rows are not inserted for a workflow that may never be chosen, and workflow A's
+body is the old `startBatch` tail unchanged, so `_probe-scraper.ts`'s 71 checks still prove the port
+is faithful to the Python.
+
+> ‼️ **A TOP-LEVEL DROP IS NEW; A THREADED DROP BELONGS TO ITS BATCH.** A CSV replied into a thread
+> whose batch is at `awaiting_apollo_export` IS that batch's Apollo export: it stamps
+> `apollo_export_file_id`, and a **child batch** (`parent_batch_id`, same `slack_thread_ts`) goes
+> straight into workflow A with no picker. A thread at any other status is told so and nothing
+> happens. A child rather than a reuse because `scraper_rows` is keyed `(batch_id, row_index)` and
+> the export's indices collide with the scored companies', so reuse would either overwrite the score
+> audit trail or need an offset nobody could read later. Two rows in the table, one thread on screen.
+
+### DataForSEO: the standard queue, polled by the cron that already exists
+Verified against their docs on 2026-08-28 rather than assumed: **standard $0.0006/SERP, 100 tasks
+per POST, ~5 min**; priority $0.0012; **Live Advanced $0.002 and one task per call**. Standard was
+Matthew's call, and it fits: the lane already owns a resumable stage machine and a 5-minute cron.
+
+> ‼️ **CHARGED AT `task_post`, NEVER AT `task_get`.** Results are free to collect for 30 days. Three
+> guards follow and all three are load-bearing: `DATAFORSEO_MAX_QUERIES_PER_BATCH` (default 1000) is
+> checked BEFORE the first POST and **refuses with the count** rather than scoring half a file, since
+> a partially scored ranking is missing its bottom and the bottom is the pile that gets scraped; a
+> task is posted only for a row whose `dataforseo_task_id` is still null, the same shape as
+> `mv_file_id`, so a retried tick cannot buy the same list twice; and the per-task `cost` is summed
+> onto `score_cost_usd`, so spend is RECORDED rather than estimated.
+
+> ‼️ **`tasks_ready` IS DELIBERATELY NOT USED.** It is an account-wide collect-once queue, so a task
+> collected by anything else is a company that silently never scores with the money already gone.
+> `task_get` by the stored id is free, authoritative, and has no account-wide coupling. An unfinished
+> task answers `40602 Task In Queue`, which is a clean "not ready" rather than an error — and
+> "still queued" and "this task failed" must never collapse into one answer, or a pending SERP that
+> was already paid for gets abandoned.
+
+Every task carries `tag = scraper_rows.id` and DataForSEO echoes it, so `postTasks` matches results
+**by tag and never by array position**: position is not contractual and a silent off-by-one files
+every SERP against the wrong company. Retries are on **5xx and transport failures only** — a 4xx is
+our request being wrong and repeating it just burns the rate limit.
+
+### The score, and the denominator
+`score.ts` is **pure and network-free**, the same split that lets `rules.ts` and `filter.ts` be
+proved offline. It has to be: this number decides who gets deleted from a list.
+
+| component | weight | attempted when |
+|---|---|---|
+| `knowledge_graph` present | 20 | any SERP came back |
+| GBP review count, normalized to a 500 ceiling | 25 | a knowledge_graph or local_pack was found |
+| rating ≥ 4.0 | 10 | a rating value was found |
+| own domain is #1 organic for the brand name | 15 | `website` is on the row |
+| directory citations in the top 10, 3 each, capped at 30 | 30 | organic results came back |
+| Instagram in the top 5 with a parseable follower count | 15 | an instagram.com profile is in the top 5 |
+
+> ‼️ **A COMPONENT THAT COULD NOT BE MEASURED LEAVES THE DENOMINATOR. IT DOES NOT SCORE ZERO.** The
+> score is `earned / attempted` rescaled to 0-100, never `earned / 100`. If unmeasured weights simply
+> vanished from a fixed total, a business nobody could measure would rank as *less dominant* than one
+> that was, and the whole file is sorted by that number to decide who gets deleted. Same class as the
+> `MxVerdict` tri-state in `mx.ts` and `site_signals` in the audit engine.
+
+Three splits carry the rule and none may be collapsed:
+- **No website makes `own_domain` UNMEASURED, not failed.** Nobody entered that contest.
+- **No Instagram in the top 5 is a MEASURED absence** and earns zero, because that is a real finding
+  about their presence. **A profile that IS there whose follower count will not parse is UNMEASURED**,
+  because we know they have one and cannot say how big. The probe asserts the two produce different
+  scores off the same organic block. `parseFollowerCount` returns null rather than guessing, and it
+  is case-insensitive: Google writes "1,204 Followers" as often as "12.3K followers", and a capital
+  F silently returning null marked a real profile as unmeasured until the probe caught it.
+- **A profile block with no rating on it is a measured zero** (Google knows them and has nothing to
+  show); **no profile block at all is unmeasured**.
+
+`attempted === 0` leaves `dominance_score` NULL and the next tick asks again. A directory host seen
+twice counts **once**, or a business with three Yelp pages looks three times as established.
+
+> ‼️ **DO NOT HARDCODE A VERTICAL IN THE QUERY.** `"{company} med spa {city}"` bakes one vertical into
+> a lane that is otherwise vertical-agnostic and the next vertical scores silently wrong instead of
+> failing; the audit engine holds the same line. Resolution is the drop caption's `{company}`
+> template, then `SCRAPER_DEFAULT_SCORE_QUERY`, then `"{company} {city}"`. The neutral fallback is
+> not merely safe, it is **more correct**: four of the six components are brand-name signals, and a
+> category term is exactly what makes "ranks #1 for its own name" stop meaning anything.
+
+### One file, most popular first
+`scored.csv` is sorted **descending**. Rank 1 is the biggest operator; the barely-visible ones are at
+the bottom. Unmeasured rows sit last with a **blank rank**, never the next number.
+
+> ‼️ **THE SORT DIRECTION IS WHAT MAKES THE CUTOFF UNAMBIGUOUS AND IT IS NOT A PRESENTATION CHOICE.**
+> Ascending, "drop the first 10" and the file disagree about what "first" means, and getting that
+> backwards deletes exactly the invisible businesses this lane exists to find. Descending, the
+> instruction and the row order are the same thing. **Do not flip it for readability.**
+
+The cutoff card takes 1️⃣ / 2️⃣ / 3️⃣ (keep the bottom 30 / 50 / 70 percent) **and** free text, parsed
+by a pure grammar in `score.ts`: `drop the first 10`, `drop 10`, `top 20%`, `bottom 30%`,
+`score > 60`, `score < 40`, `keep 120`. Anything else is refused and the grammar is printed —
+mechanical for the same reason `looksLikeCallNotes` is, and no model decides which leads get deleted.
+`CUTOFF_GRAMMAR` is one string used by both the parser's help text and the refusal, so they cannot
+drift. `drop the top 20%` reads as a percentage and never as 20 rows.
+
+Then an echo card and one more ✅: *"Dropping rows 1 to 10: the 10 most dominant, scores 94 down to
+71. 240 remain, 6 of them not measured."* The descending sort already removed the ambiguity, so this
+survives as a **review** step rather than a disambiguation one: the count is the one number nobody
+can recover afterwards.
+
+> ‼️ **A PERCENTAGE IS A PERCENTAGE OF THE MEASURED ROWS**, or the cut depends on how many lookups
+> happened to fail, which is not a fact about any business on the list. **The unmeasured always land
+> in the KEPT pile** and an over-large drop is clamped to the measured head: scraping a company
+> unnecessarily costs one Apollo credit, discarding one loses a lead.
+
+### Two piles, and they are different shapes on purpose
+The confirm posts **both**, never just the survivors. The split is the product.
+
+| file | columns | for |
+|---|---|---|
+| `dominant.csv` | **the original headers verbatim**, plus `rank`, `dominance_score`, `score_measured` | the cold-email drafting project |
+| `apollo_targets.csv` | `company`, `website` | the Apollo contact reveal |
+
+> ‼️ **`dominant.csv` MUST NOT BE NARROWED TO company + website.** It is the INPUT to a separate
+> project whose own step 1 qualifies on first name, verified email, website, city and state, and
+> which of those the dropped file happens to carry is unknowable from inside this lane. It hands back
+> every column that came in and lets the downstream gate print its own `no_email` reasons. Narrowing
+> here is the failure `buildCleanCsv`'s header rule already documents, and downstream it would look
+> like a lead problem rather than the plumbing problem it is. `apollo_targets.csv` stays two columns
+> because it is a SEARCH INPUT, not a lead list; the two must not converge on one shape.
+
+### The gate router
+`handleScraperReaction` resolved a batch from `mv_approval_ts` alone. There are now **four** gate
+cards in one thread meaning four different things, one of which spends money, so each has its own
+`*_ts` column and `batchByGateTs` returns **which gate** was reacted to rather than letting the
+handler infer it. Reaction names are the repo's existing `one` / `two` / `three` and
+`white_check_mark`. **No reaction is pre-seeded**, matching the MillionVerifier card, so none of
+drop-studio's bot-reaction-count filtering is needed.
+
+`activeBatches` gains `awaiting_workflow`, `scoring` and `scored`. **`awaiting_apollo_export` is
+deliberately absent**: it waits on a human uploading a file, so there is nothing to poll and listing
+it would make the cron's worklist dishonest. The two gate statuses that ARE listed have their cards
+guarded by their own `*_ts`, so a re-entry re-reads one row — and a card whose Slack post failed at
+drop time gets posted on the next tick instead of the batch sitting silent forever. **The cron may
+poll external work. It may never advance past a gate.**
+
+**Not built: ReachInbox.** The endpoint is `POST api.reachinbox.ai/api/v1/campaigns/add-email` with a
+Bearer token and a 5/sec limit, but the request body is not publicly documented and Matthew's call
+was to skip it. The `reachinbox_*` columns and the `handed_off` / `awaiting_reachinbox` statuses were
+in the original spec and are **deliberately not created**: they would be three columns and two
+statuses with a reader and no writer, the same class this file records five other instances of, and
+the same reasoning that deleted `SCRAPER_MV_MAX_EMAILS` rather than leaving it inert. Adding them
+later is one `alter table`.
+
+Probe: `bunx tsx scripts/_probe-score.ts` (91 checks, no key, no network, no DB). It proves the
+weights, both unmeasured splits, the descending sort, every grammar row, the refusal, and that
+`dominant.csv` keeps every original column while `apollo_targets.csv` keeps exactly two.
+
+### Env
+```
+DATAFORSEO_LOGIN=                     # Unset is HANDLED: it still posts scored.csv, all rows "not measured".
+DATAFORSEO_PASSWORD=
+DATAFORSEO_MAX_QUERIES_PER_BATCH=     # Optional, default 1000 (~$0.60). Over it the batch REFUSES with the count.
+SCRAPER_DEFAULT_SCORE_QUERY=          # Optional. Falls back to "{company} {city}". Never put a vertical in the code default.
+```

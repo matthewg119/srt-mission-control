@@ -33,24 +33,55 @@ export const ROLE_PATTERN =
 const EMAIL_HEADER_CANDIDATES = ["email", "primary email", "email address", "work email"];
 
 /**
- * Which column holds the address.
+ * The company, city and website columns, for the scoring workflow.
+ *
+ * Company is REQUIRED there the way email is required for filtering: there is nothing to search for
+ * without it. City and website are OPTIONAL, and their absence is a *not measured* signal in
+ * `score.ts` rather than a zero, which is why a miss here is never an error on those two.
+ *
+ * `website` deliberately does NOT accept a bare `url`: an Apollo export uses that header for the
+ * LinkedIn profile URL, and scoring "does their own domain rank #1" against a linkedin.com address
+ * measures nothing while looking like it measured something.
+ */
+const COMPANY_HEADER_CANDIDATES = ["company", "company name", "business", "business name", "name", "organization", "account name"];
+const CITY_HEADER_CANDIDATES = ["city", "company city", "business city", "location", "town"];
+const WEBSITE_HEADER_CANDIDATES = ["website", "company website", "website url", "domain", "company domain", "web site"];
+
+/**
+ * Which column holds a given field.
  *
  * The Python hardcoded `"email"` and told you to edit the constant. Apollo exports it as `Email`,
  * so the script's own default was wrong for its own stated input and every first run died on
  * "Column 'email' not in CSV". Case-insensitive with fallbacks, and a miss returns null so the
  * caller can NAME THE HEADERS IT FOUND rather than throwing a message nobody can act on.
  */
-export function resolveEmailColumn(headers: string[]): string | null {
+function resolveColumn(headers: string[], candidates: string[]): string | null {
   const byLower = new Map<string, string>();
   for (const h of headers) {
     const key = h.trim().toLowerCase();
     if (!byLower.has(key)) byLower.set(key, h);
   }
-  for (const candidate of EMAIL_HEADER_CANDIDATES) {
+  for (const candidate of candidates) {
     const hit = byLower.get(candidate);
     if (hit) return hit;
   }
   return null;
+}
+
+export function resolveEmailColumn(headers: string[]): string | null {
+  return resolveColumn(headers, EMAIL_HEADER_CANDIDATES);
+}
+
+export function resolveCompanyColumn(headers: string[]): string | null {
+  return resolveColumn(headers, COMPANY_HEADER_CANDIDATES);
+}
+
+export function resolveCityColumn(headers: string[]): string | null {
+  return resolveColumn(headers, CITY_HEADER_CANDIDATES);
+}
+
+export function resolveWebsiteColumn(headers: string[]): string | null {
+  return resolveColumn(headers, WEBSITE_HEADER_CANDIDATES);
 }
 
 const LOCAL_PART = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;
