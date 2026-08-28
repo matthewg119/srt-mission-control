@@ -3311,6 +3311,21 @@ Every task carries `tag = scraper_rows.id` and DataForSEO echoes it, so `postTas
 every SERP against the wrong company. Retries are on **5xx and transport failures only** — a 4xx is
 our request being wrong and repeating it just burns the rate limit.
 
+> ‼️ **`task_post` ANSWERS `20100 "Task Created"`, NOT `20000`, AND THE ACCOUNT IS ALREADY CHARGED
+> WHEN IT DOES.** Found on the first live call after the account was verified: the task was created
+> correctly and billed, and the client threw the id away because it only accepted 20000. That is
+> exactly the failure the `tag` and the immediate id write exist to prevent, arriving through the
+> one door nobody had checked, and **it produces no error anywhere** — money leaves, no company ever
+> scores, and the batch cheerfully reports everything as *not measured*. `isTaskAccepted` is the one
+> definition and the probe pins all three accepted codes.
+
+> ‼️ **`depth: 20` COSTS TWO SERPs, SO A QUERY IS $0.0012 AND NOT $0.0006**, measured off the live
+> response's own `cost` field. Depth 20 is kept deliberately: the directories component counts
+> citations in the top TEN ORGANIC results, and a depth-10 request spends its ten slots on ads, a
+> local pack and a knowledge graph too, so it returns seven or eight organic rows. Scoring those as
+> "the top 10" undercounts citations and makes an established business look invisible. Real budget
+> is about **$1.20 per 1,000-company batch**; do not "correct" the figure back to $0.60.
+
 > ‼️ **AN ACCOUNT REFUSAL PARKS THE BATCH. IT DOES NOT KILL IT.** Found on the first live call, and
 > it would have been found by a user otherwise: a brand new DataForSEO account authenticates fine,
 > answers the free endpoints, reports a real balance, and then refuses `task_post` with
@@ -3345,6 +3360,21 @@ proved offline. It has to be: this number decides who gets deleted from a list.
 > vanished from a fixed total, a business nobody could measure would rank as *less dominant* than one
 > that was, and the whole file is sorted by that number to decide who gets deleted. Same class as the
 > `MxVerdict` tri-state in `mx.ts` and `site_signals` in the audit engine.
+
+> ‼️ **THE FIRST REAL SERP SCORED A NATIONAL CHAIN AT 23/100, AND THE DENOMINATOR RULE WAS NOT THE
+> BUG.** "Ideal Image Charlotte" came back with a `knowledge_graph` carrying no rating and a
+> SEPARATE `google_reviews` item carrying all of it. Reading only the knowledge_graph found a
+> profile with no numbers on it, which this lane correctly treats as a **measured zero** rather than
+> as unmeasured, so 35 points of review and rating weight were scored as real zeros instead of being
+> read, and one of the largest med spa chains in the country looked invisible and would have gone
+> straight into the scrape pile. Widening WHERE the rating is looked for (`RATING_TYPES`, in
+> priority order, preferring a block that actually has numbers) took it to 53. Loosening what counts
+> as measured would have been the wrong fix and is what to refuse if this comes up again: an empty
+> profile block IS still a measured zero, and the probe asserts it.
+>
+> `knowledge_graph` nests the count inside `rating.votes_count`; `google_reviews` puts it alongside
+> as `reviews_count`. Both spellings are read, because either one being the only one read is this
+> same bug with a different name.
 
 Three splits carry the rule and none may be collapsed:
 - **No website makes `own_domain` UNMEASURED, not failed.** Nobody entered that contest.
@@ -3432,7 +3462,7 @@ statuses with a reader and no writer, the same class this file records five othe
 the same reasoning that deleted `SCRAPER_MV_MAX_EMAILS` rather than leaving it inert. Adding them
 later is one `alter table`.
 
-Probe: `bunx tsx scripts/_probe-score.ts` (91 checks, no key, no network, no DB). It proves the
+Probe: `bunx tsx scripts/_probe-score.ts` (107 checks, no key, no network, no DB). It proves the
 weights, both unmeasured splits, the descending sort, every grammar row, the refusal, and that
 `dominant.csv` keeps every original column while `apollo_targets.csv` keeps exactly two.
 

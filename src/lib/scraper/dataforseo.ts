@@ -14,6 +14,17 @@
 // which is exactly the shape an async queue wants, and the 3.3x saving is real on a 1,000-company
 // cap.
 //
+// ‼️ ONE "SERP" IS 10 RESULTS, SO `depth: 20` COSTS TWO OF THEM: $0.0012 PER QUERY, NOT $0.0006.
+// Measured on the first live task_post, which returned `cost: 0.0012`. Depth 20 is kept anyway and
+// the reason is the denominator rule this lane is built on: the directories component counts
+// citations in the top TEN ORGANIC results, and a depth-10 request spends its ten slots on ads,
+// a local pack and a knowledge graph as well as organic, so it routinely returns seven or eight
+// organic rows. Scoring those as "the top 10" undercounts citations and makes an established
+// business look invisible, which pushes it into the scrape pile. Paying six hundredths of a cent
+// to actually see the ten results being counted is the cheap side of that trade.
+//
+// So the real budget is ~$1.20 per 1,000-company batch, and `maxQueriesPerBatch` counts QUERIES.
+//
 // ‼️ CHARGED AT task_post, NEVER AT task_get. Results are free to collect for 30 days. Three guards
 // follow from that and all three are load-bearing: the per-batch cap is checked BEFORE the first
 // POST; a task is only posted for a row whose `dataforseo_task_id` is still null, the same shape as
@@ -39,6 +50,23 @@ const OK = 20000;
 const TASK_IN_QUEUE = 40602;
 const TASK_HANDED = 40601; // "Task Handed" - accepted and running, same meaning to us as 40602.
 
+/**
+ * ‼️ `task_post` ANSWERS 20100 "Task Created", NOT 20000, AND THE ACCOUNT IS ALREADY CHARGED WHEN
+ * IT DOES. Measured on the first live call after the account was verified: the task was created
+ * correctly, billed, and this client threw the id away because it was only accepting 20000. That is
+ * precisely the failure the `tag` and the immediate id write exist to prevent, arriving through the
+ * one door nobody had checked. It produces NO error anywhere: money leaves, no company ever scores,
+ * and the batch just reports everything as not measured.
+ *
+ * 20000 is kept alongside it because it is the documented generic success and costs nothing to
+ * accept.
+ */
+const TASK_CREATED = 20100;
+
+export function isTaskAccepted(statusCode: number | undefined): boolean {
+  return statusCode === TASK_CREATED || statusCode === OK || statusCode === TASK_HANDED;
+}
+
 function login(): string {
   return (process.env.DATAFORSEO_LOGIN ?? "").trim();
 }
@@ -56,8 +84,9 @@ export function isConfigured(): boolean {
  * The per-batch spend ceiling, in QUERIES not dollars.
  *
  * Queries rather than dollars because the price is theirs to change and the count is the thing a
- * person can sanity-check against a file they just dropped. At the standard rate the default is
- * about $0.60.
+ * person can sanity-check against a file they just dropped. At depth 20 on the standard queue one
+ * query is $0.0012, so the default 1000 is about $1.20 per batch. See the depth note in the header
+ * before "correcting" that figure to $0.60.
  */
 export function maxQueriesPerBatch(): number {
   const raw = Number(process.env.DATAFORSEO_MAX_QUERIES_PER_BATCH);
@@ -214,7 +243,7 @@ export async function postTasks(inputs: PostTaskInput[]): Promise<PostedTask[]> 
     if (!task) {
       return { tag: input.tag, taskId: null, costUsd: 0, error: "no task came back for this row" };
     }
-    const ok = task.status_code === OK || task.status_code === TASK_HANDED;
+    const ok = isTaskAccepted(task.status_code);
     return {
       tag: input.tag,
       taskId: ok && task.id ? task.id : null,

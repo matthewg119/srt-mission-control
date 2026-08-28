@@ -25,7 +25,7 @@ import {
 } from "../src/lib/scraper/score";
 import { buildApolloTargetsCsv, buildScoredCsv } from "../src/lib/scraper/report";
 import { parseCsv } from "../src/lib/scraper/csv";
-import { accountRefusalHint } from "../src/lib/scraper/dataforseo";
+import { accountRefusalHint, isTaskAccepted } from "../src/lib/scraper/dataforseo";
 
 let passed = 0;
 const failures: string[] = [];
@@ -347,7 +347,57 @@ eq("apollo_targets.csv is exactly two columns", parsedApollo.headers, ["company"
 eq("a row with no company is dropped rather than exported blank", parsedApollo.rows.length, 2);
 eq("a missing website is an empty cell, not the word null", parsedApollo.rows[1].website, "");
 
-// ── 11. the account refusal ─────────────────────────────────────────────────────────────────────
+// ── 11. google_reviews, the live bug ────────────────────────────────────────────────────────────
+//
+// ‼️ THE FIRST REAL SERP SCORED A NATIONAL CHAIN AT 23/100. "Ideal Image Charlotte" returned a
+// knowledge_graph with NO rating on it plus a separate `google_reviews` item carrying all of it.
+// Reading only the knowledge_graph found a profile with no numbers, which is correctly a MEASURED
+// ZERO, so 35 points of review and rating weight were scored as real zeros rather than read. The
+// business looked invisible and would have gone into the scrape pile.
+
+const splitBlocks: SerpPayload = {
+  items: [
+    { type: "knowledge_graph", title: "Ideal Image" },
+    { type: "google_reviews", rating: { value: 4.4 }, reviews_count: 612 },
+    organic(1, "https://www.ownsite.com/"),
+  ],
+};
+const split = scoreSerp(splitBlocks, { company: "Ideal Image", website: WEBSITE });
+eq("a google_reviews block is read for the review count", split.components.reviews.earned, 25);
+eq("a google_reviews block is read for the rating", split.components.rating.earned, 10);
+check("the note names the real count", split.components.reviews.note.includes("612"));
+
+// The fallback must survive: a profile block with genuinely nothing on it is still a measured zero,
+// because Google knows this business and has nothing to show. Widening WHERE we look must not
+// loosen WHAT counts as measured.
+const emptyProfile = scoreSerp(
+  { items: [{ type: "knowledge_graph", title: "Nobody" }, organic(1, "https://www.ownsite.com/")] },
+  { company: "Nobody", website: WEBSITE }
+);
+eq("an empty profile block is still MEASURED", emptyProfile.components.reviews.attempted, true);
+eq("an empty profile block still earns zero", emptyProfile.components.reviews.earned, 0);
+
+// reviews_count as a string, which is how their JSON sometimes renders it.
+const stringCount = scoreSerp(
+  { items: [{ type: "google_reviews", rating: { value: "4.8" }, reviews_count: "1,020" }, organic(1, "https://x.com/")] },
+  { company: "x", website: null }
+);
+eq("a string reviews_count parses", stringCount.components.reviews.earned, 25);
+eq("a string rating parses", stringCount.components.rating.earned, 10);
+
+// ── 12. task_post accepts 20100 ─────────────────────────────────────────────────────────────────
+//
+// ‼️ `task_post` ANSWERS 20100 "Task Created", NOT 20000, AND THE ACCOUNT IS ALREADY CHARGED. The
+// first live call created and billed a task and the client threw the id away, which is money spent
+// on a company that never scores, with no error anywhere.
+
+check("20100 Task Created is accepted", isTaskAccepted(20100));
+check("20000 Ok is accepted", isTaskAccepted(20000));
+check("40601 Task Handed is accepted", isTaskAccepted(40601));
+check("40501 is NOT accepted", !isTaskAccepted(40501));
+check("undefined is NOT accepted", !isTaskAccepted(undefined));
+
+// ── 13. the account refusal ─────────────────────────────────────────────────────────────────────
 //
 // Found on the first live call: a new DataForSEO account authenticates, answers the free endpoints
 // with a real balance, and then refuses task_post with 40104 "verify your account". That is a

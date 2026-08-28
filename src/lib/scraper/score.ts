@@ -99,8 +99,26 @@ export interface SerpItem {
   description?: string;
   snippet?: string;
   rating?: { value?: number | string | null; votes_count?: number | string | null } | null;
+  /** `google_reviews` carries the count here rather than inside `rating`. */
+  reviews_count?: number | string | null;
   items?: SerpItem[] | null;
 }
+
+/**
+ * Where a Google rating can live, best first.
+ *
+ * ‼️ `google_reviews` IS ON THIS LIST BECAUSE LEAVING IT OFF SCORED A NATIONAL CHAIN AT 23/100.
+ * Measured on the first live SERP: "Ideal Image Charlotte" came back with a `knowledge_graph` that
+ * carried no rating and a separate `google_reviews` item that carried all of it. Reading only the
+ * knowledge_graph found a profile with no numbers on it, which this file correctly treats as a
+ * MEASURED ZERO, so 35 points of review and rating weight were scored as real zeros instead of
+ * being read. The business then looked invisible and would have gone straight into the scrape pile.
+ *
+ * That is the denominator rule failing from the inside: the tri-state was right, the data was
+ * there, and the lookup was too narrow. Widening WHERE we look is the fix; loosening what counts as
+ * measured would have been the bug.
+ */
+const RATING_TYPES = ["knowledge_graph", "google_reviews", "local_pack", "local_pack_element"];
 
 export interface SerpPayload {
   items?: SerpItem[] | null;
@@ -250,8 +268,22 @@ export function scoreSerp(payload: SerpPayload, input: ScoreInput): ScoreResult 
     .filter((item) => item.type === "organic")
     .sort((a, b) => (a.rank_group ?? 999) - (b.rank_group ?? 999));
   const knowledgeGraph = all.find((item) => item.type === "knowledge_graph") ?? null;
-  const localPack =
-    all.find((item) => item.type === "local_pack" || item.type === "local_pack_element") ?? null;
+
+  // The block carrying the numbers, preferring one that actually HAS numbers. A profile block with
+  // nothing on it is still a real answer (Google knows them and shows nothing), so it is kept as
+  // the fallback rather than discarded: that is a measured zero, not a failure to look.
+  const ratingHolder =
+    RATING_TYPES.map((t) =>
+      all.find(
+        (item) =>
+          item.type === t &&
+          (num(item.rating?.value) !== null ||
+            num(item.rating?.votes_count) !== null ||
+            num(item.reviews_count) !== null)
+      )
+    ).find(Boolean) ??
+    all.find((item) => RATING_TYPES.includes(item.type ?? "")) ??
+    null;
 
   // 1. Knowledge graph. Attempted whenever a SERP came back at all: present or absent is a real,
   //    readable answer, and absent is the strongest single invisibility signal Google hands over.
@@ -271,9 +303,10 @@ export function scoreSerp(payload: SerpPayload, input: ScoreInput): ScoreResult 
   // ‼️ THE SPLIT THAT MATTERS: a knowledge_graph or local_pack that EXISTS but carries no rating is
   // a MEASURED zero, because Google knows this business and has nothing to show for it. Neither
   // block appearing at all is a failure to look, so both components leave the denominator.
-  const ratingHolder: SerpItem | null = knowledgeGraph ?? localPack;
   const ratingBlock = ratingHolder ? ratingHolder.rating ?? null : null;
-  const votes = num(ratingBlock?.votes_count);
+  // `knowledge_graph` puts the count inside `rating`; `google_reviews` puts it alongside. Both are
+  // the same fact and neither spelling may be the only one read.
+  const votes = num(ratingBlock?.votes_count) ?? num(ratingHolder?.reviews_count);
   const ratingValue = num(ratingBlock?.value);
 
   const reviews = ratingHolder
