@@ -85,6 +85,8 @@ import {
   type MvFileInfo,
 } from "./millionverifier";
 import {
+  accountRefusalHint,
+  DataForSeoAccountError,
   getTask,
   isConfigured as dfsConfigured,
   maxQueriesPerBatch,
@@ -641,16 +643,39 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
   for (let i = 0; i < unposted.length; i += TASKS_PER_POST) {
     if (Date.now() > deadline) break;
     const slice = unposted.slice(i, i + TASKS_PER_POST);
-    const posted = await postTasks(
-      slice.map((row) => ({
-        tag: row.id,
-        keyword: buildScoreQuery(batch.score_query_template, {
-          company: row.company ?? "",
-          city: row.city,
-        }),
-        locationName: null,
-      }))
-    );
+
+    let posted;
+    try {
+      posted = await postTasks(
+        slice.map((row) => ({
+          tag: row.id,
+          keyword: buildScoreQuery(batch.score_query_template, {
+            company: row.company ?? "",
+            city: row.city,
+          }),
+          locationName: null,
+        }))
+      );
+    } catch (e) {
+      // ‼️ AN ACCOUNT REFUSAL PARKS THE BATCH, IT DOES NOT KILL IT. Measured on the first live
+      // call: a new DataForSEO account authenticates, answers the free endpoints, and then refuses
+      // task_post with "verify your account". Failing the batch would mean every file dropped
+      // before somebody clicked a link in their user panel has to be re-dropped afterwards.
+      // Staying at `scoring` means the cron resumes it by itself once the account clears, and
+      // nothing was spent, so nothing is lost by waiting.
+      if (e instanceof DataForSeoAccountError) {
+        const hint = accountRefusalHint(e.message);
+        // The note goes out ONCE. `error` is the impediment, `status` is where the batch is; the
+        // `status` command already prints both, and a card every five minutes is a card nobody
+        // reads. Cleared the moment scoring succeeds.
+        if (batch.error !== hint) {
+          await updateBatch(batch.id, { error: hint });
+          await say(batch, ":pause_button: " + hint);
+        }
+        return false;
+      }
+      throw e;
+    }
 
     // Written IMMEDIATELY. The account is already charged; an id that never lands is money spent on
     // a company that never scores and leaves no trace anywhere.
@@ -662,6 +687,8 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
     }
     await applyTaskIds(ids);
     await addScoreCost(batch.id, cost);
+    // Whatever was blocking has cleared, so the parked note stops being true.
+    if (batch.error) await updateBatch(batch.id, { error: null });
 
     const failures = posted.filter((p) => !p.taskId);
     if (failures.length) {

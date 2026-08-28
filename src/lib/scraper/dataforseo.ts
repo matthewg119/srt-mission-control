@@ -85,6 +85,28 @@ interface DfsTask {
 }
 
 /**
+ * The account itself cannot spend right now: unverified, suspended, or out of funds.
+ *
+ * ‼️ THIS IS A CONFIGURATION STATE, NOT A DATA FAULT, AND THE DIFFERENCE DECIDES WHETHER A BATCH
+ * SURVIVES. Measured on the first live call: a brand new DataForSEO account authenticates fine and
+ * answers the free endpoints, then refuses `task_post` with `40104 Please verify your account`.
+ * Treated as an ordinary failure that killed the batch, every file dropped before somebody clicked
+ * a link in their user panel would have to be re-dropped afterwards. Treated as a state, the batch
+ * parks at `scoring` and the next cron tick picks it up by itself the moment the account clears.
+ * Same family as `isConfigured()` returning false for a missing key.
+ */
+export class DataForSeoAccountError extends Error {}
+
+/** Their codes for "the account cannot spend", as opposed to "this request was malformed". */
+const ACCOUNT_CODES = new Set([40100, 40101, 40104, 40200, 40201, 40202, 40203]);
+
+function isAccountRefusal(status: number, body: string): boolean {
+  if (status === 401 || status === 402) return true;
+  const code = /"status_code"\s*:\s*(\d+)/.exec(body);
+  return code ? ACCOUNT_CODES.has(Number(code[1])) : false;
+}
+
+/**
  * One request, with retries on 5xx ONLY.
  *
  * ‼️ A 4xx IS OUR REQUEST BEING WRONG AND REPEATING IT JUST BURNS THE RATE LIMIT. Only a server
@@ -93,6 +115,7 @@ interface DfsTask {
 async function request<T>(url: string, init: RequestInit, what: string): Promise<DfsEnvelope<T>> {
   const MAX_ATTEMPTS = 3;
   let lastError = "";
+  let accountRefusal = false;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let res: Response;
@@ -113,12 +136,27 @@ async function request<T>(url: string, init: RequestInit, what: string): Promise
 
     const body = (await res.text().catch(() => "")).slice(0, 300);
     lastError = res.status + " " + body;
+    // 403 carries BOTH "your account is not verified" and ordinary refusals, so the body's
+    // status_code is what separates them rather than the HTTP status alone.
+    accountRefusal = isAccountRefusal(res.status, body);
     if (res.status < 500) break;
     if (attempt === MAX_ATTEMPTS) break;
     await new Promise((r) => setTimeout(r, 1000 * attempt));
   }
 
-  throw new Error("dataforseo " + what + " failed: " + lastError);
+  const message = "dataforseo " + what + " failed: " + lastError;
+  throw accountRefusal ? new DataForSeoAccountError(message) : new Error(message);
+}
+
+/** The human half of a `DataForSeoAccountError`, for the thread. */
+export function accountRefusalHint(message: string): string {
+  if (message.includes("40104")) {
+    return "The DataForSEO account is not verified yet. Verify it at https://app.dataforseo.com and this batch picks itself up on the next tick, nothing needs re-dropping.";
+  }
+  if (/402(0[0-3])?/.test(message)) {
+    return "The DataForSEO account is out of funds. Top it up and this batch picks itself up on the next tick.";
+  }
+  return "DataForSEO refused the account rather than the request. Nothing was spent and nothing was lost; fix it at https://app.dataforseo.com and this batch resumes on the next tick.";
 }
 
 export interface PostTaskInput {

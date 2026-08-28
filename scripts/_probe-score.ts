@@ -25,6 +25,7 @@ import {
 } from "../src/lib/scraper/score";
 import { buildApolloTargetsCsv, buildScoredCsv } from "../src/lib/scraper/report";
 import { parseCsv } from "../src/lib/scraper/csv";
+import { accountRefusalHint } from "../src/lib/scraper/dataforseo";
 
 let passed = 0;
 const failures: string[] = [];
@@ -345,6 +346,18 @@ const parsedApollo = parseCsv(apolloCsv);
 eq("apollo_targets.csv is exactly two columns", parsedApollo.headers, ["company", "website"]);
 eq("a row with no company is dropped rather than exported blank", parsedApollo.rows.length, 2);
 eq("a missing website is an empty cell, not the word null", parsedApollo.rows[1].website, "");
+
+// ── 11. the account refusal ─────────────────────────────────────────────────────────────────────
+//
+// Found on the first live call: a new DataForSEO account authenticates, answers the free endpoints
+// with a real balance, and then refuses task_post with 40104 "verify your account". That is a
+// CONFIGURATION state, not a data fault, so the batch parks at `scoring` and the cron resumes it
+// once the account clears rather than dying and needing the file re-dropped.
+
+check("an unverified account is named, with the place to fix it", accountRefusalHint("dataforseo task_post failed: 403 {\"status_code\":40104}").includes("app.dataforseo.com"));
+check("an unverified account says nothing needs re-dropping", accountRefusalHint("...40104...").includes("re-dropping"));
+check("an out-of-funds account is a different message", accountRefusalHint("...40200...").includes("out of funds"));
+check("an unknown account refusal still says nothing was spent", accountRefusalHint("...40101...").includes("Nothing was spent"));
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");
 if (failures.length) for (const f of failures) console.log("  FAIL " + f);

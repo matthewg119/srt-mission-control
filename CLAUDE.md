@@ -3311,6 +3311,22 @@ Every task carries `tag = scraper_rows.id` and DataForSEO echoes it, so `postTas
 every SERP against the wrong company. Retries are on **5xx and transport failures only** — a 4xx is
 our request being wrong and repeating it just burns the rate limit.
 
+> ‼️ **AN ACCOUNT REFUSAL PARKS THE BATCH. IT DOES NOT KILL IT.** Found on the first live call, and
+> it would have been found by a user otherwise: a brand new DataForSEO account authenticates fine,
+> answers the free endpoints, reports a real balance, and then refuses `task_post` with
+> **`40104 Please verify your account`**. That is a CONFIGURATION state, the same family as
+> `isConfigured()` returning false, not a data fault. Treated as an ordinary failure it called
+> `fail()` and killed the batch, so every file dropped before somebody clicked a link in the
+> DataForSEO user panel would have had to be re-dropped afterwards. `DataForSeoAccountError` now
+> splits it out and the batch stays at `scoring`, so the cron resumes it by itself once the account
+> clears. Nothing was spent, so nothing is lost by waiting.
+>
+> **403 carries both meanings**, so `isAccountRefusal` reads the body's `status_code` rather than
+> the HTTP status alone: 401/402 and the `401xx`/`402xx` codes are the account, everything else is
+> the request. The thread note goes out **once** (`error` holds the impediment while `status` holds
+> where the batch is, and `status` prints both) and is cleared the moment a POST succeeds. A card
+> every five minutes is a card nobody reads.
+
 ### The score, and the denominator
 `score.ts` is **pure and network-free**, the same split that lets `rules.ts` and `filter.ts` be
 proved offline. It has to be: this number decides who gets deleted from a list.
