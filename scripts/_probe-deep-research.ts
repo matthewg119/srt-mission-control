@@ -12,8 +12,10 @@
  *
  *   bun scripts/_probe-deep-research.ts <clientId> [--prompt-only]
  *
- * --prompt-only prints the prompt and exits without spending a token, which is also what the
- * `prompt` command in the step thread hands back.
+ * --prompt-only prints the prompt and its character count and exits without spending a token.
+ * That is the DEFAULT path since 2026-08-28: the step posts this prompt and runs nothing. The
+ * no-flag form below is the `run` keyword, which is now opt-in and is what the wall-clock and
+ * phrase-count notes above are about.
  */
 const CLIENT_ID = process.argv[2];
 const PROMPT_ONLY = process.argv.includes("--prompt-only");
@@ -24,7 +26,7 @@ if (!CLIENT_ID) {
 }
 
 async function main() {
-  const { buildContext, buildFullPrompt, runDeepResearch } = await import(
+  const { buildContext, buildCompactPrompt, runDeepResearch } = await import(
     "../src/lib/clients/artifacts/deep-research-run"
   );
 
@@ -43,7 +45,12 @@ async function main() {
   console.log("─".repeat(70));
 
   if (PROMPT_ONLY) {
-    console.log(buildFullPrompt(built.ctx));
+    const prompt = buildCompactPrompt(built.ctx);
+    console.log(prompt);
+    console.log();
+    console.log("─".repeat(70));
+    console.log(`${prompt.length} characters. Slack truncates a message over 4,000, and the step`);
+    console.log("posts this inside one, so anything near that ceiling is a bug not a preference.");
     return;
   }
 

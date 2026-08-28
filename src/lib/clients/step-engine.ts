@@ -1641,6 +1641,9 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
   // TWO WAYS TO SATISFY IT, because there are two ways the answer arrives: a `research:` paste
   // and a PDF dropped in the thread both end in question_bank under this avatar, and a document
   // filed against the step counts on its own for the case where the phrases came back thin.
+  //
+  // Both of those are a PERSON bringing the answer back, which is the whole shape of this step
+  // again since 2026-08-28. Nothing satisfies this by itself any more.
   if (step.key === "avatar_harvest") {
     const { confirmedAvatarFor } = await import("./avatars");
     const { verticalFor } = await import("./harvest");
@@ -1663,10 +1666,10 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
           ok: false,
           message:
             `Not yet — nothing has come back from the deep research for *${avatar.label}*. ` +
-            "The research runs itself on this step, so an empty question bank means the run " +
-            "failed rather than that it is waiting on you: check the thread above for what it " +
-            "said. Re-running the step retries it. You can also bring the answer in by hand — " +
-            "paste it with `research:` in front of it, or drop a PDF straight into this thread. " +
+            "This step hands you a prompt, it does not run the research: it is in the thread " +
+            "above. Paste it into claude.com deep research, then bring the answer back here " +
+            "with `research:` in front of it or as a PDF dropped straight in. Typing `run` in " +
+            "the thread has the step do a thinner pass on Haiku instead. " +
             "If you genuinely do not want it, [Skip] still works: the universal twenty " +
             "still run so the Day-0 measurement is intact, but the tracked question set will " +
             "not carry this avatar's own wording, which is the half a client recognises as " +

@@ -841,13 +841,8 @@ export async function POST(request: NextRequest) {
 
         // 1a. `prompt` in step 10's thread — hand back the deep-research prompt.
         //
-        // Matthew, on the rewrite that made step 10 run itself: "only if i ask for it, give me the
-        // pdf only in step 10, not really necesarry but give me the option like comment prompt if
-        // you want me to hand you the prompt."
-        //
-        // So the step's deliverable is the PDF and this is the escape hatch. It is the SAME
-        // deterministic string the runner executed, rebuilt from the same context — not a fresh
-        // generation — so what he pastes elsewhere and what the report came from are one ask.
+        // The step posts this by itself now (2026-08-28), so this is no longer an escape hatch,
+        // it is the same message again on demand. Same builder, so the two are byte-identical.
         //
         // Above the avatar branch and the assistant tail for the same reason 1b is: bare `prompt`
         // is free text, and free text in a step thread gets answered by a model otherwise.
@@ -857,16 +852,64 @@ export async function POST(request: NextRequest) {
           client.stepKey === "avatar_harvest" &&
           /^\s*prompt\s*$/i.test(userText)
         ) {
-          const { buildContext, buildFullPrompt } = await import(
+          const { buildContext, buildCompactPrompt } = await import(
             "@/lib/clients/artifacts/deep-research-run"
           );
           const built = await buildContext(client.id);
           const reply = built.ok
-            ? `Here is the prompt this step ran. Paste it whole into any deep-research tool.\n\n\`\`\`\n${buildFullPrompt(built.ctx)}\n\`\`\``
+            ? `Here is the prompt for this step. Paste it whole into claude.com deep research.\n\n\`\`\`\n${buildCompactPrompt(built.ctx)}\n\`\`\``
             : `:warning: Cannot build the prompt: ${built.error}`;
 
           const posted = await slack.postThreadReply(channel, parentThreadTs, reply);
           if (!slackOk(posted)) console.error("[slack/events] prompt reply failed");
+          return NextResponse.json({ ok: true });
+        }
+
+        // 1a-bis. `run` in step 10's thread — do the research here instead, on Haiku.
+        //
+        // This is the whole automatic researcher, demoted from the default to a keyword on
+        // 2026-08-28 because it cost around $0.60 to $1.00 a client and came back thinner than
+        // Matthew's own claude.com run. Still worth having on a day when nobody wants to paste
+        // anything, so it says what it is about to spend and then does it.
+        //
+        // ‼️ THE ACK GOES OUT BEFORE THE WORK STARTS, AND THAT IS NOT POLITENESS. runDeepResearch
+        // takes about two minutes. Slack re-delivers an event it has not heard back from within
+        // three seconds, so awaiting it here would fire the eight-section fan-out two or three
+        // times over on one typed word, and the retries look identical to the first delivery.
+        // waitUntil keeps the function alive past the response; maxDuration on this route is 300.
+        if (
+          client &&
+          parentThreadTs &&
+          client.stepKey === "avatar_harvest" &&
+          /^\s*run\s*$/i.test(userText)
+        ) {
+          const clientId = client.id;
+          const said = await slack.postThreadReply(
+            channel,
+            parentThreadTs,
+            ":hourglass_flowing_sand: Running the eight sections here instead, on Haiku with web " +
+              "search. About two minutes, and it costs roughly a dollar. The PDF lands in this " +
+              "thread when it is done."
+          );
+          if (!slackOk(said)) console.error("[slack/events] run ack failed");
+
+          waitUntil(
+            (async () => {
+              const { runDeepResearch } = await import(
+                "@/lib/clients/artifacts/deep-research-run"
+              );
+              const res = await runDeepResearch(clientId);
+              if (!res.ok) {
+                await slack.postThreadReply(
+                  channel,
+                  parentThreadTs,
+                  `:warning: The Haiku pass failed: ${res.error}. The prompt above still works.`
+                );
+              }
+            })().catch((e) =>
+              console.error("[slack/events] deep research run threw:", (e as Error).message)
+            )
+          );
           return NextResponse.json({ ok: true });
         }
 

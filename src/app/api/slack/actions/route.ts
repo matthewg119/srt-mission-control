@@ -1703,14 +1703,27 @@ async function avatarResearchAction(args: {
       }
 
       if (args.actionId === "avatar_rerun_research") {
+        // ‼️ THIS USED TO SAY "run the three messages in the brief above", which was copy from the
+        // design before last: there is no brief and there are no three messages. It re-posts the
+        // prompt now, which is the thing the step actually hands over.
         const cached = await avatarBriefFor(resolved.vertical, avatar.slug);
+        const { buildContext, buildCompactPrompt } = await import(
+          "@/lib/clients/artifacts/deep-research-run"
+        );
+        const built = await buildContext(args.clientId);
+
         await slack.postThreadReply(
           args.channel,
           args.slackTs,
           [
             `:arrows_counterclockwise: Running it again for *${avatar.label}*, asked by ${actor}.`,
-            "Run the three messages in the brief above and bring the answer back into this thread:",
-            "paste it with `research:` in front of it, or drop the PDF straight in.",
+            built.ok
+              ? "Paste this into claude.com deep research and bring the answer back into this " +
+                "thread, with `research:` in front of it or as a PDF dropped straight in."
+              : `:warning: The prompt could not be rebuilt: ${built.error}`,
+            built.ok ? "```" : "",
+            built.ok ? buildCompactPrompt(built.ctx) : "",
+            built.ok ? "```" : "",
             cached?.researchText
               ? "What is already stored is left alone until the new answer lands. It belongs to every client in this vertical, not just this one."
               : "",

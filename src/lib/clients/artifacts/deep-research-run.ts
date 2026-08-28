@@ -13,8 +13,24 @@
 // the methodology back at you. It was also two indirections from the deliverable: a prompt that
 // writes a prompt that a person runs.
 //
-// So the step runs the research itself now and files a PDF. The eight sections below are HIS
-// output spec, in his order, and the anti-fabrication rule in SYSTEM is his too.
+// So the step stopped emitting a brief for a person to reinterpret. The eight sections below
+// are HIS output spec, in his order, and the anti-fabrication rule in SYSTEM is his too.
+//
+// ─── AND THEN THE DEFAULT FLIPPED BACK, 2026-08-28 ──────────────────────────
+//
+// For one day this step ran the research itself on every client. It works, and it costs
+// roughly $0.60 to $1.00 a run between tokens and 43 web searches, and it comes back thinner
+// than what Matthew gets by pasting the same ask into claude.com. So the step hands something
+// back for a person to run again, but a PROMPT this time: one deterministic string built from
+// this client's own facts, not three Spanish messages that ask a model to write one.
+//
+// runDeepResearch and everything under it is untouched and unreachable by default. Typing
+// `run` in the step thread still fires it. postResearchPrompt is what the runner calls.
+//
+// ‼️ TWO PROMPTS LIVE IN THIS FILE AND THEY ARE NOT THE SAME ASK, ON PURPOSE.
+// buildCompactPrompt is for a person and a frontier deep-research agent, about 1,200
+// characters. The `instruction` strings are for Haiku with basic web search, which has to be
+// told where to look or it returns agency marketing pages. See `brief` on SectionSpec.
 //
 // ─── THE MODEL IS HAIKU BECAUSE HE ASKED FOR HAIKU ───────────────────────────
 //
@@ -127,6 +143,18 @@ export interface SectionSpec {
   /** What this section has to come back with. Interpolated with the avatar. */
   instruction: (ctx: ResearchContext) => string;
   /**
+   * The same ask in one line, for the prompt a person runs themselves.
+   *
+   * ‼️ IT IS NOT A SUMMARY OF `instruction` AND IT MUST NOT BECOME ONE. `instruction` is written
+   * for Haiku with basic web search, which has to be told WHERE to look or it comes back with
+   * agency marketing pages; a frontier deep-research agent does that hunting on its own, so the
+   * coaching is dead weight on this path and was cut. What survives here is only what changes the
+   * ANSWER rather than the search: who to ask about, what to refuse to correct, what to quote
+   * rather than paraphrase. Cutting one of those makes the report worse; cutting search advice
+   * does not.
+   */
+  brief: (ctx: ResearchContext) => string;
+  /**
    * Web searches this section may spend, overriding DEFAULT_SEARCHES.
    *
    * Not every section needs the same budget: the demographics are in the first result and the
@@ -140,6 +168,12 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "demographics",
     title: "Demografía del comprador",
+    // ‼️ NOT val(). This one is interpolated MID-SENTENCE, and val() renders "not recorded",
+    // which turns the first line of the prompt into "Who BUYS not recorded". A missing treatment
+    // has to degrade to a word the sentence survives, not to a status.
+    brief: (c) =>
+      `Who BUYS ${(c.primaryTreatment ?? "").trim() || "this"}, not who has the problem: age, `
+      + `income, work, and what happens in the week before they start looking.`,
     instruction: (c) =>
       `Who actually BUYS this, not who suffers the problem. The two are often different people ` +
       `and the buyer is the one the pages get written for. Age, gender split, income band, where ` +
@@ -150,6 +184,9 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "current_solutions",
     title: "Qué soluciones ya está usando el mercado",
+    brief: () =>
+      "What they use now, including the DIY version, the cheap substitute and doing nothing. "
+      + "Name real brands.",
     instruction: (c) =>
       `Everything ${c.avatarLabel} is already using for this, including the things that are not ` +
       `competitors: the home remedy, the cheaper substitute, the DIY version, and doing nothing ` +
@@ -158,6 +195,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "what_they_like",
     title: "Qué les gusta de esas soluciones",
+    brief: () => "What they like about those. Quote it.",
     instruction: () =>
       `What people say they LIKE about each of those solutions, in their words. This is what the ` +
       `new offer has to keep or match, so be specific: "it is fast", "I can do it at home", ` +
@@ -166,6 +204,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "what_they_hate",
     title: "Qué problemas tienen con esas soluciones",
+    brief: () => "What goes wrong and why they quit. Quote it.",
     instruction: () =>
       `What goes wrong with each one and why people stop. The complaints, the abandonment ` +
       `reasons, the horror stories as BUYERS tell them rather than as the trade answers them. ` +
@@ -174,6 +213,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "beliefs",
     title: "Creencias del mercado",
+    brief: () => "What they believe, true or false, uncorrected.",
     instruction: (c) =>
       `What ${c.avatarLabel} BELIEVES about this problem and its solutions. ` +
       `IMPORTANT: report these whether they are true or false and do not correct them. A widely held ` +
@@ -184,6 +224,9 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "external_forces",
     title: "Fuerzas externas que culpan",
+    // ‼️ NO EXAMPLES HERE ON PURPOSE. "their body, their age" was written for a patient avatar
+    // and this prompt also runs for B2B ones, where it steers the answer somewhere wrong.
+    brief: () => "Who or what they blame for being stuck on it.",
     instruction: (c) =>
       `Who or what ${c.avatarLabel} blames for not being able to live their best life on this ` +
       `problem. Their genetics, their age, their last provider, the industry, the cost, their ` +
@@ -193,6 +236,9 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "verbatim_language",
     title: "Lenguaje literal del cliente",
+    brief: () =>
+      "Their EXACT words: 30+ verbatim phrases and questions, each with a link. Typos kept. "
+      + "This is the point of the report.",
     // ‼️ THE SECTION THE WHOLE STEP EXISTS FOR, AND THE ONE THAT FAILS MOST. Everything else can
     // be answered from industry write-ups; this one needs pages where buyers talk to each other,
     // and a plain search for the topic returns agency marketing copy every time. So it gets a
@@ -222,6 +268,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "headline_ideas",
     title: "Ideas de titulares y asuntos",
+    brief: () => "Headlines and subject lines, each traceable to something above.",
     instruction: (c) =>
       `Headline and email-subject ideas built from the highest-interest topics you found for ` +
       `${c.avatarLabel}: the threads with the most views and the most replies, the questions ` +
@@ -318,29 +365,80 @@ export function buildSectionPrompt(ctx: ResearchContext, section: SectionSpec): 
 }
 
 /**
- * The single prompt, for running this by hand somewhere else.
- *
- * ‼️ IT IS THE SAME INSTRUCTIONS THE RUNNER EXECUTES, CONCATENATED. That is the point: what
- * Matthew pastes into ChatGPT deep research and what this file produced are the same ask, so the
- * two outputs are comparable. Surfaced by typing `prompt` in the step thread, never by default —
- * the step's deliverable is the PDF.
+ * The owner's intake answers are unbounded free text and one of them is sometimes a paragraph.
+ * Clipped rather than dropped: the first sentence carries the register, which is the whole reason
+ * these are quoted into the prompt instead of being summarised.
  */
-export function buildFullPrompt(ctx: ResearchContext): string {
+const FACT_CLIP = 110;
+
+/** Three characters, because "na" and "-" are declines and this prompt quotes what it is given. */
+function answered(v: string | null | undefined): boolean {
+  return (v ?? "").trim().length >= 3;
+}
+
+function clipFact(v: string | null | undefined): string {
+  const t = (v ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return NOT_RECORDED;
+  return t.length <= FACT_CLIP ? t : `${t.slice(0, FACT_CLIP - 1).trimEnd()}…`;
+}
+
+/** The rules that survived the cut. Every one of them changes the answer, not the search. */
+const RULES =
+  "Search the web. Cite a URL per claim. Never invent a quote, a review or a number: write " +
+  '"could not verify" instead. Quote word for word, typos kept. Prefer forums and reviews over ' +
+  "marketing pages. No em dashes.";
+
+/**
+ * The prompt a person runs, and the only prompt anybody is ever handed.
+ *
+ * ‼️ IT IS DELIBERATELY NOT THE PROMPT THE RUNNER EXECUTES, WHICH IS THE OPPOSITE OF WHAT THE
+ * function it replaced promised. `buildFullPrompt` concatenated all eight `instruction` strings
+ * and rendered about 8,000 characters, on the theory that the human path and the Haiku path
+ * should be one comparable ask. Two things killed that theory: it does not fit in a Slack message
+ * (4,000 characters), and most of its bulk is search coaching written for a model that needs to
+ * be told where to look. See `brief` on SectionSpec for which half went where.
+ *
+ * WHAT WAS KEPT, because each of these changes the ANSWER rather than the search:
+ *   - the anti-fabrication rule and "could not verify". Section 7 is worth nothing if the quotes
+ *     are invented, and an invented quote reads BETTER than a real one, so nobody downstream can
+ *     catch it.
+ *   - "quote word for word, typos kept". The register is the finding.
+ *   - "true or false, uncorrected" on beliefs.
+ *   - "who BUYS, not who has the problem".
+ *   - the ranked-25 close. extractPhrases keys off that list when the report is pasted back, so
+ *     cutting it would quietly break the intake rather than just shorten the prompt.
+ *   - the no-em-dash house rule.
+ */
+export function buildCompactPrompt(ctx: ResearchContext): string {
+  const where = [ctx.city, ctx.state].filter(Boolean).join(", ");
+
+  // ‼️ AN UNANSWERED FIELD IS DROPPED, NOT QUOTED AS "not recorded". SRT Agency's own intake
+  // has objections: "na", and rendering that as `buyers object to "na"` hands the researcher a
+  // finding that is really a shrug. Anything under three characters is a decline, not an answer,
+  // and a prompt is better with one fewer fact in it than with a fabricated one.
+  const owner: string[] = [];
+  if (answered(ctx.objections)) owner.push(`objections "${clipFact(ctx.objections)}"`);
+  if (answered(ctx.targetPatient)) owner.push(`wants more "${clipFact(ctx.targetPatient)}"`);
+  if (answered(ctx.triedBefore)) owner.push(`already tried "${clipFact(ctx.triedBefore)}"`);
+
+  const engines: string[] = [];
+  if (ctx.citedDomains.length) engines.push(`cite ${ctx.citedDomains.slice(0, 4).join(", ")}`);
+  if (ctx.namedInstead.length) {
+    engines.push(`name ${ctx.namedInstead.slice(0, 3).join(", ")} instead of us`);
+  }
+
   return [
-    SYSTEM,
+    `Deep market research on ${ctx.avatarLabel}.`,
+    `${ctx.clinicName}${where ? `, ${where}` : ""}. Sells: ${val(ctx.primaryTreatment)}.`,
+    ...(owner.length ? [`The owner's own words, do not tidy them: ${owner.join("; ")}.`] : []),
+    ...(engines.length ? [`AI engines ${engines.join(" and ")}.`] : []),
     "",
-    "────────────────────────────────────────────────────────────",
+    RULES,
     "",
-    `Write a deep market-research report about ${ctx.avatarLabel}.`,
+    ...SECTIONS.map((s, i) => `${i + 1}. ${s.brief(ctx)}`),
     "",
-    factsBlock(ctx),
-    "",
-    "SECTIONS, in this order. Use these exact headings:",
-    "",
-    ...SECTIONS.flatMap((s, i) => [`${i + 1}. ${s.title}`, `   ${s.instruction(ctx)}`, ""]),
-    "Finish with a ranked list of the twenty-five phrases you would build pages around, most",
-    "commercially urgent first, each with the source it came from and one line on why it earns",
-    "its place.",
+    "Finish with the 25 phrases worth building pages around, most urgent first, each with its " +
+      "source and one line on why.",
   ].join("\n");
 }
 
@@ -797,6 +895,73 @@ export async function runDeepResearch(clientId: string): Promise<AutoResult> {
   };
 }
 
+/**
+ * What step 10 does BY DEFAULT now: hand back the prompt and spend nothing.
+ *
+ * ‼️ THIS IS A REVERSAL OF THE 2026-08-27 DESIGN AND THE REASON IS A NUMBER. runDeepResearch
+ * fans out eight sections with 43 web searches and a ranking pass on every single run, which
+ * measured out at roughly $0.60 to $1.00 per client between tokens and searches, and it produced
+ * a thinner report than Matthew gets by pasting the same ask into claude.com himself. So the
+ * default became the prompt, and the Haiku pass stayed behind the `run` keyword for the days
+ * when nobody wants to do it by hand.
+ *
+ * ‼️ IT FILES NO ARTIFACT AND THEREFORE SETS NO output_ref, WHICH IS LOAD-BEARING TWO FILES
+ * AWAY. deliverArtifact was the only writer of output_ref for this step, and step-verify.ts used
+ * to refuse [Done] without one. That verifier now accepts the research COMING BACK instead. If
+ * this function ever starts filing a document again, read that verifier before changing it.
+ */
+export async function postResearchPrompt(clientId: string): Promise<AutoResult> {
+  const built = await buildContext(clientId);
+  if (!built.ok) return { ok: false, error: built.error };
+  const ctx = built.ctx;
+
+  const prompt = buildCompactPrompt(ctx);
+
+  // notifyStep rather than slack.postThreadReply: it creates the step's anchor if the runner got
+  // here before the card exists, and it refuses to fall back to the header thread. See its
+  // docstring — a message in the wrong place is harder to notice than a missing one.
+  const { notifyStep } = await import("../step-board");
+  const posted = await notifyStep(
+    clientId,
+    "avatar_harvest",
+    [
+      `:brain: Deep research prompt for *${ctx.avatarLabel}*. Copy the block and run it in ` +
+        "claude.com deep research.",
+      "",
+      "```",
+      prompt,
+      "```",
+      "",
+      "Bring the answer back into this thread: paste it with `research:` in front of it, or drop " +
+        "the PDF straight in. Then press Done.",
+      "`prompt` shows this again. `run` has this step do the pass itself on Haiku, which is " +
+        "cheaper than your time and thinner than your answer.",
+    ].join("\n")
+  );
+
+  // Filed against the AVATAR, not the client: the next client in this vertical aiming at the same
+  // buyer is handed the same prompt instead of it being re-derived. recordAvatarPrompt only fills
+  // prompt_text when it is empty and never touches research_text, so this is safe to repeat.
+  const { recordAvatarPrompt } = await import("../avatars");
+  await recordAvatarPrompt({
+    vertical: ctx.vertical,
+    avatarSlug: ctx.avatarSlug,
+    avatarLabel: ctx.avatarLabel,
+    promptText: prompt,
+    clientId,
+  });
+
+  if (!posted.ok) {
+    return { ok: false, error: `the prompt could not be posted to the thread: ${posted.error}` };
+  }
+
+  return {
+    ok: true,
+    note:
+      `The deep-research prompt for *${ctx.avatarLabel}* is in this thread, ${prompt.length} ` +
+      "characters. Nothing was spent on it: run it yourself and paste the answer back.",
+  };
+}
 /** The thread note. Says what ran, what did not, and what got filed. */
 export function formatRunSummary(a: {
   avatarLabel: string;

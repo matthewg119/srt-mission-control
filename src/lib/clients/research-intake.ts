@@ -256,7 +256,7 @@ export async function ingestResearchPdf(args: {
 }): Promise<ResearchIntakeResult & { filename?: string }> {
   const { data: doc } = await supabaseAdmin
     .from("client_docs")
-    .select("filename, content_type, storage_ref")
+    .select("id, filename, content_type, storage_ref")
     .eq("slack_file_id", args.slackFileId)
     .maybeSingle();
 
@@ -286,5 +286,21 @@ export async function ingestResearchPdf(args: {
   // The prefix is added HERE rather than relaxing the trigger, so ingestResearch keeps exactly
   // one rule about what counts as research and there is no second, looser door into it.
   const result = await ingestResearch({ clientId: args.clientId, text: `research: ${text}` });
+
+  // ‼️ THE PDF BECOMES THE STEP'S output_ref, WHICH NOTHING ELSE WRITES ANY MORE. Until
+  // 2026-08-28 the step generated its own PDF and deliverArtifact set this; the step posts a
+  // prompt now and files nothing, so the document that comes BACK is the deliverable. Written
+  // only on a successful intake: an output_ref pointing at a PDF that yielded no phrases would
+  // satisfy step-verify's [Done] gate on a file nobody could use.
+  //
+  // The row already exists (captureOnboardingFile stored it), so this is a pointer, not a copy.
+  if (result.ok && doc.id) {
+    await supabaseAdmin
+      .from("client_delivery_steps")
+      .update({ output_ref: doc.id as string, updated_at: new Date().toISOString() })
+      .eq("client_id", args.clientId)
+      .eq("step_key", "avatar_harvest");
+  }
+
   return { ...result, filename };
 }

@@ -37,7 +37,7 @@ import {
   stripUnstorable,
   isPageChrome,
 } from "../src/lib/clients/harvest";
-import { buildFullPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
+import { buildCompactPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
 import {
   AUTO_RUNNERS,
   unimplementedAutoSteps,
@@ -480,57 +480,75 @@ const briefInput = {
   namedInstead: ["Bright Skin Clinic", "Elm Street Aesthetics"],
 };
 
-const brief = buildFullPrompt(briefInput);
-const briefAgain = buildFullPrompt(briefInput);
+const brief = buildCompactPrompt(briefInput);
+const briefAgain = buildCompactPrompt(briefInput);
 
 // ‼️ Deterministic. Same input, same prompt, byte for byte. A model would not give this, and the
-// `prompt` thread command depends on it: what Matthew pastes elsewhere has to be what ran here.
+// `prompt` thread command depends on it: what the step posted and what `prompt` hands back later
+// have to be the same string.
 eq("the prompt is deterministic", brief === briefAgain, true);
+
+// ‼️ THE BUDGET IS THE FEATURE, NOT A TIDINESS PREFERENCE. This prompt is handed over inside a
+// Slack message and Slack truncates over 4,000 characters. buildFullPrompt rendered about 8,000
+// and therefore could not be posted at all, which is what this replaced. A `brief` that grows
+// back into a paragraph is caught here rather than by a truncated prompt in a live thread.
+ok(`the whole prompt fits in one Slack message (${brief.length} chars)`, brief.length < 2000);
 
 ok("it names the clinic", brief.includes("Acme Med Spa"));
 ok("it names the city", brief.includes("Greensboro"));
 ok("it names the money treatment", brief.includes("Morpheus8"));
+ok("it names the avatar", brief.includes("laser hair removal"));
 // ‼️ The owner's objections appear VERBATIM, typos included. Never summarised.
 ok("the objections are verbatim", brief.includes("im scared itll look fake"));
 ok("the seed sites come from real citations", brief.includes("realself.com"));
 ok("the competitors are the ones actually named", brief.includes("Elm Street Aesthetics"));
-ok("it asks for the exact words", /word for word/i.test(brief));
-ok("it forbids cleaning the phrasings up", /Do not clean these up/i.test(brief));
-ok("it ends on the ranked list", /ranked list/i.test(brief));
-ok("it asks about reading level", /reading level/i.test(brief));
 
-// ‼️ THE RULES THAT MAKE IT A PROMPT RATHER THAN A LECTURE. The old brief pasted two first-person
-// teaching transcripts and had none of these; a model handed that summarised the methodology back.
-ok("it gives the model a role", /market researcher/i.test(brief));
-ok("it requires a source per claim", /[Cc]ite a source/.test(brief));
+// ‼️ THE RULES THAT SURVIVED THE CUT, AND WHY THEY ARE ASSERTED ONE BY ONE. Compressing this
+// prompt from 8,000 characters to about 1,200 meant deleting most of it. Everything below
+// changes the ANSWER rather than the search, so losing one to a future trim is a silent quality
+// regression, not a shorter prompt. Search coaching was cut instead: a frontier deep-research
+// agent hunts forums on its own, which is the whole premise of the compression.
+ok("it requires a source per claim", /Cite a URL per claim/.test(brief));
 ok("it demands the gap be stated", /could not verify/i.test(brief));
-// The one that matters most: section 7 is worth nothing if the quotes are invented.
-ok("it forbids inventing quotes", /NEVER invent a quote/.test(brief));
+// The one that matters most: section 7 is worth nothing if the quotes are invented, and an
+// invented quote reads BETTER than a real one.
+ok("it forbids inventing quotes", /Never invent a quote/i.test(brief));
+ok("it asks for the exact words", /word for word/i.test(brief));
+ok("it forbids tidying the owner up", /do not tidy them/i.test(brief));
 ok("it prefers forums over marketing pages", /forums/i.test(brief));
-
-// Matthew's eight sections, in his order, so a change to the spec is caught rather than silent.
-for (const heading of [
-  "Demografía del comprador",
-  "Qué soluciones ya está usando el mercado",
-  "Qué les gusta de esas soluciones",
-  "Qué problemas tienen con esas soluciones",
-  "Creencias del mercado",
-  "Fuerzas externas que culpan",
-  "Lenguaje literal del cliente",
-  "Ideas de titulares y asuntos",
-]) {
-  ok(`section: ${heading}`, brief.includes(heading));
-}
-ok("the sections are numbered in order",
-  brief.indexOf("1. Demografía") < brief.indexOf("7. Lenguaje literal"));
 // The buyer, not the sufferer — his correction, and the two are often different people.
-ok("it asks for the BUYER, not the sufferer", /who actually BUYS/i.test(brief));
+ok("it asks for the BUYER, not the sufferer", /Who BUYS/.test(brief));
 // Beliefs are reported whether or not they are true. Filtering by accuracy throws away the
 // most useful thing in the section.
-ok("beliefs are not filtered for truth", /whether they are true or false/i.test(brief));
+ok("beliefs are not filtered for truth", /true or false, uncorrected/i.test(brief));
+// ‼️ extractPhrases keys off this list when the report is pasted back, so cutting the closing
+// ask would break the intake rather than just shorten the prompt.
+ok("it ends on the ranked 25", /25 phrases worth building pages around/.test(brief));
+ok("no em dashes in the prompt", !brief.includes("—"));
+
+// Matthew's eight sections, in his order, so a change to the spec is caught rather than silent.
+for (let i = 1; i <= 8; i += 1) {
+  ok(`section ${i} is present`, brief.includes(`\n${i}. `));
+}
+ok("the sections are numbered in order",
+  brief.indexOf("1. Who BUYS") < brief.indexOf("7. Their EXACT words"));
+
+// ‼️ THE HAIKU PATH KEEPS THE LONG INSTRUCTIONS AND THAT SEPARATION IS THE DESIGN. buildSectionPrompt
+// feeds a model that returns agency marketing pages unless it is told where to look; the compact
+// prompt feeds a person. If a future tidy-up collapses the two, `run` starts sending a prompt
+// written for the wrong reader.
+const oneSection = buildSectionPrompt(briefInput, {
+  key: "t",
+  title: "T",
+  instruction: () => "the long version",
+  brief: () => "the short version",
+});
+ok("a section prompt carries the same facts", oneSection.includes("im scared itll look fake"));
+ok("a section prompt uses instruction, never brief",
+  oneSection.includes("the long version") && !oneSection.includes("the short version"));
 
 // A client with nothing recorded still produces a usable prompt rather than a broken one.
-const bare = buildFullPrompt({
+const bare = buildCompactPrompt({
   ...briefInput,
   primaryTreatment: null,
   objections: null,
@@ -542,9 +560,28 @@ const bare = buildFullPrompt({
   citedDomains: [],
   namedInstead: [],
 });
-ok("a bare client still gets a prompt", bare.length > 1000);
-ok("and missing values say so", bare.includes("not recorded"));
-ok("and it admits it has no seed sites", /no cited sources recorded yet/i.test(bare));
+ok("a bare client still gets a prompt", bare.length > 600);
+ok("and it does not open on a broken sentence when no treatment is recorded",
+  bare.includes("Who BUYS this,") && !bare.includes("Who BUYS not recorded"));
+
+// ‼️ REGRESSION FROM REAL DATA. SRT Agency's own intake has objections: "na", and the first
+// version of this rendered `buyers object to "na"`, which hands the researcher a shrug dressed
+// as a market finding. A decline is dropped; the fields that were answered still go in.
+const shrugged = buildCompactPrompt({
+  ...briefInput,
+  objections: "na",
+  triedBefore: "  -  ",
+});
+ok("a declined field is dropped, not quoted", !shrugged.includes('"na"'));
+ok("and the fields that were answered survive it",
+  shrugged.includes("women 35 to 55 with disposable income"));
+ok("and it says what is missing rather than inventing it", bare.includes("not recorded"));
+// ‼️ IT DROPS THE LINE RATHER THAN SAYING "no cited sources recorded yet", WHICH IS WHAT THE
+// assertion here used to check. factsBlock (still live, still feeding the Haiku sections) spends
+// two sentences explaining an empty seed list. At this length that explanation costs more than
+// the absence does, and a deep-research agent handed no seed sites just searches.
+ok("and it drops the engines line entirely when there is nothing to cite",
+  !bare.includes("AI engines"));
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2098,29 +2135,21 @@ import { pageSlug } from "../src/lib/hub/pages";
   // ‼️ THIS IS THE WHOLE REASON THE AVATAR MOVED TO STEP 8. Matthew: "es importante que el prompt
   // se transforme dependiendo de el avatar que estamos onboarding para que podamos hacer la
   // investigacion correcta." Two avatars must not produce the same research ask.
-  const framework = buildFullPrompt(briefInput);
-  const otherAvatar = buildFullPrompt({
+  const framework = buildCompactPrompt(briefInput);
+  const otherAvatar = buildCompactPrompt({
     ...briefInput,
     avatarLabel: "med spa owner",
     avatarSlug: "med-spa-owner",
   });
 
-  ok("the avatar is named in the ask", framework.includes("report about laser hair removal"));
+  ok("the avatar is named in the ask",
+    framework.includes("Deep market research on laser hair removal"));
   ok("a different avatar gives a different prompt", framework !== otherAvatar);
-  ok("and the new avatar is the one named", otherAvatar.includes("report about med spa owner"));
-  ok("the avatar reaches the individual sections too",
-    framework.includes("laser hair removal BELIEVES") ||
-      framework.includes("What laser hair removal"));
+  ok("and the new avatar is the one named",
+    otherAvatar.includes("Deep market research on med spa owner"));
   ok("no em dashes in the prompt", !framework.includes("—"));
 
-  // ‼️ THE HAND-RUN PROMPT AND THE SECTION PROMPTS ARE ONE ASK, NOT TWO. If these drift, the PDF
-  // in the thread and whatever Matthew gets from pasting `prompt` elsewhere stop being comparable,
-  // which is the only reason the escape hatch is worth having.
-  ok("a section prompt carries the same facts",
-    buildSectionPrompt(briefInput, { key: "t", title: "T", instruction: () => "x" })
-      .includes("im scared itll look fake"));
-
-  eq("still deterministic with the avatar in it", framework === buildFullPrompt(briefInput), true);
+  eq("still deterministic with the avatar in it", framework === buildCompactPrompt(briefInput), true);
 
   // ── The method documents outlived the brief that pasted them ───────────────
   //

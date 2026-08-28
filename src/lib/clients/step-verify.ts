@@ -526,9 +526,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     // ‼️ question_bank HAS NO client_id. This count is per VERTICAL and it is SHARED: every med
     // spa ever harvested is in it, forever. It cannot say anything about this client's run and
-    // the wording below must not pretend it does. The per-client evidence is output_ref, which
-    // is the deep-research brief this step generated, and that is what the success line leads
-    // with.
+    // the wording below must not pretend it does.
     let verticalPhrases: number | null = 0;
     if (vertical) {
       const { count, error } = await supabaseAdmin
@@ -539,23 +537,58 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     }
     if (verticalPhrases === null) return dbUnreachable("question_bank");
 
-    if (!ctx.row.output_ref && verticalPhrases === 0) {
+    // ‼️ THE PER-CLIENT EVIDENCE CHANGED ON 2026-08-28 AND IT HAD TO. This used to require
+    // ctx.row.output_ref and nothing else. The only writer of output_ref for this step was
+    // deliverArtifact inside runDeepResearch, and that no longer runs by default — the step posts
+    // a prompt now and spends nothing. Left alone, this verifier would have refused [Done] on
+    // every client forever, with a message blaming a run that never happened.
+    //
+    // So the evidence moved from "we generated a brief" to "the research came back", which is
+    // what the step was always actually waiting for. Two shapes count, because there are two
+    // doors: a document filed against the step (a dropped PDF, or the Haiku pass when somebody
+    // types `run`), or deep_research phrases hanging off THIS CLIENT'S most recent harvest run.
+    //
+    // The harvest_run_id join is what keeps it per-client. Counting question_bank rows by
+    // vertical and avatar alone would let one med spa's research satisfy the next med spa's step,
+    // which is the exact mistake the block above warns about.
+    let ownResearchPhrases = 0;
+    const { data: lastRun } = await supabaseAdmin
+      .from("harvest_runs")
+      .select("id")
+      .eq("client_id", ctx.clientId)
+      .order("run_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastRun?.id) {
+      const { count, error } = await supabaseAdmin
+        .from("question_bank")
+        .select("id", { count: "exact", head: true })
+        .eq("harvest_run_id", lastRun.id)
+        .eq("source", "deep_research");
+      if (error) return dbUnreachable("question_bank");
+      ownResearchPhrases = count ?? 0;
+    }
+
+    const cameBack = Boolean(ctx.row.output_ref) || ownResearchPhrases > 0;
+
+    if (!cameBack) {
       return notYet(
-        "the deep-research brief for this step, and the shared question_bank corpus for this vertical",
-        "neither the harvest nor the brief has produced anything",
-        "Un-tick the step to re-run the harvest. The brief is generated for a person to RUN " +
-          "and paste back, so it is only half of this step."
+        "the deep research for this client, run and brought back into the thread",
+        verticalPhrases === 0
+          ? "neither the citation harvest nor the research has produced anything"
+          : `${verticalPhrases} phrases sit in the vertical-wide corpus, but none of them came ` +
+            "from this client's research",
+        "The prompt is in this step's thread. Run it in claude.com deep research, then paste " +
+          "the answer back with `research:` in front of it or drop the PDF straight into the " +
+          "thread. Typing `run` has the step do a thinner pass on Haiku instead."
       );
     }
-    if (!ctx.row.output_ref) {
-      return notYet(
-        "the deep-research brief for this step",
-        `${verticalPhrases} phrases in the vertical-wide corpus, but no brief was generated for this client`,
-        "The cited-source half is done. Un-tick to regenerate the brief."
-      );
-    }
+
     return verified(
-      "the deep-research brief for this client is generated and filed",
+      ctx.row.output_ref
+        ? "the deep research for this client is filed against this step"
+        : `${ownResearchPhrases} phrases from this client's own deep research are in the bank`,
       `${verticalPhrases} phrases sit in question_bank for ${vertical ?? "this vertical"}, which is ` +
         "the shared corpus for the whole vertical and not a count of this client's harvest"
     );

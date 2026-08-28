@@ -109,18 +109,23 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return generatePresencePdf(clientId);
   },
 
-  // Both halves of the avatar harvest, and BOTH ARE AUTOMATIC NOW (2026-08-27). The citations
-  // harvest scrapes the pages the engines cited; the deep research then runs itself on Haiku with
-  // web search instead of emitting three messages for a person to paste into ChatGPT.
+  // Both halves of the avatar harvest, and ONE OF THEM SPENDS NOTHING NOW (2026-08-28).
   //
-  // The step stays `auto_then_manual` on purpose: it no longer waits for somebody to RUN the
-  // research, it waits for somebody to READ it. Step 11 stays shut until Matthew presses Done.
+  // The citations harvest still runs on every pass: it is a scrape, no model touches it, and the
+  // domains it finds are what the prompt interpolates as seed sites. The research half no longer
+  // runs itself on Haiku. It posts the prompt for Matthew to run in claude.com, because the
+  // automatic version cost around $0.60 to $1.00 a client and came back thinner than his own run.
+  // deep-research-run.ts's header carries the numbers. `run` in the thread still fires the Haiku
+  // pass for anyone who wants it.
+  //
+  // The step stays `auto_then_manual`, and it is back to waiting for somebody to RUN the research
+  // rather than only to read it. Step 11 stays shut until Matthew presses Done either way.
   avatar_harvest: async (clientId) => {
     const { runHarvest, formatHarvestSummary } = await import("../harvest");
-    const { runDeepResearch } = await import("./deep-research-run");
+    const { postResearchPrompt } = await import("./deep-research-run");
 
     const harvest = await runHarvest(clientId);
-    const research = await runDeepResearch(clientId);
+    const research = await postResearchPrompt(clientId);
 
     if (!harvest.ok && !research.ok) {
       return { ok: false, error: harvest.error ?? research.error };
@@ -168,8 +173,14 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
 
     return {
       ok: true,
-      docId: research.docId,
-      note: [harvestNote, research.note ?? `:warning: Deep research failed: ${research.error}`]
+      // No docId, and that is the load-bearing consequence: postResearchPrompt files no artifact,
+      // so this step has no output_ref until the answer comes back. step-verify.ts's
+      // avatar_harvest verifier was rewritten for exactly that. Read it before filing a document
+      // here again.
+      note: [
+        harvestNote,
+        research.note ?? `:warning: The research prompt could not be posted: ${research.error}`,
+      ]
         .filter(Boolean)
         .join("\n\n"),
     };
