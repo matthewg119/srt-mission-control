@@ -101,6 +101,15 @@ export interface SerpItem {
   rating?: { value?: number | string | null; votes_count?: number | string | null } | null;
   /** `google_reviews` carries the count here rather than inside `rating`. */
   reviews_count?: number | string | null;
+  /**
+   * The three fields `gbp-audit.ts` reads off a knowledge_graph. Nothing in THIS file reads them:
+   * the dominance score is deliberately unchanged, and these ride along so the optimization audit
+   * costs no extra call. `subtitle` is "Medical spa in Matthews, North Carolina"; `cid` is the
+   * exact-profile key for my_business_info.
+   */
+  subtitle?: string | null;
+  cid?: string | null;
+  place_id?: string | null;
   items?: SerpItem[] | null;
 }
 
@@ -159,11 +168,11 @@ function isDirectoryHost(host: string): boolean {
  * tracked by TypeScript's control-flow analysis, so those variables narrow to `never` at the read
  * and the compiler stops checking the very fields this file exists to read.
  */
-function flatten(items: SerpItem[] | null | undefined): SerpItem[] {
+export function flattenSerpItems(items: SerpItem[] | null | undefined): SerpItem[] {
   const out: SerpItem[] = [];
   for (const item of items ?? []) {
     out.push(item);
-    if (item.items) out.push(...flatten(item.items));
+    if (item.items) out.push(...flattenSerpItems(item.items));
   }
   return out;
 }
@@ -262,7 +271,7 @@ function component(weight: number, attempted: boolean, earned: number, note: str
 export function scoreSerp(payload: SerpPayload, input: ScoreInput): ScoreResult {
   const items = payload.items ?? [];
   const sawAnySerp = items.length > 0;
-  const all = flatten(items);
+  const all = flattenSerpItems(items);
 
   const organic = all
     .filter((item) => item.type === "organic")
@@ -436,6 +445,17 @@ export interface ScoredRow {
   id: string;
   company: string | null;
   score: number | null;
+  /**
+   * The GBP optimization score, read only by the `optimization > 70` cuts.
+   *
+   * ‼️ OPTIONAL, AND undefined READS THE SAME AS null: unmeasured, and an unmeasured row is never
+   * dropped. Same rule the dominance axis already applies, and it means a caller that only ever
+   * cuts on dominance does not have to carry a field it does not use.
+   *
+   * ‼️ IT IS NEVER THE SORT KEY. `sortForCutoff` reads `score`, the rank column reads `score`, and
+   * an optimization cut takes the file in whatever order dominance already put it in.
+   */
+  optimization?: number | null;
 }
 
 export type CutoffIntent =
@@ -443,7 +463,9 @@ export type CutoffIntent =
   | { kind: "drop_top_pct"; pct: number }
   | { kind: "keep_bottom_pct"; pct: number }
   | { kind: "drop_above_score"; score: number }
-  | { kind: "keep_n"; n: number };
+  | { kind: "keep_n"; n: number }
+  | { kind: "drop_optimization_above"; score: number }
+  | { kind: "drop_optimization_below"; score: number };
 
 /**
  * The grammar, as it is printed back on a refusal. One string, so the parser and the help text
@@ -456,6 +478,8 @@ export const CUTOFF_GRAMMAR = [
   "`bottom 30%`          keep the 30 percent least dominant",
   "`score > 60`          drop everything scoring above 60",
   "`keep 120`            keep the 120 least dominant",
+  "`optimization > 70`   drop everything ABOVE 70 on optimization",
+  "`optimization < 40`   drop everything BELOW 40 on optimization",
 ].join("\n");
 
 /**
@@ -479,6 +503,21 @@ export function parseCutoff(input: string): CutoffIntent | null {
   // percentage is the more specific reading of it.
   if ((m = /\btop\s+(\d+)\s*%/.exec(text))) return { kind: "drop_top_pct", pct: Number(m[1]) };
   if ((m = /\bbottom\s+(\d+)\s*%/.exec(text))) return { kind: "keep_bottom_pct", pct: Number(m[1]) };
+
+  // ‼️ THE OPTIMIZATION AXIS IS READ FIRST, AND BOTH OF ITS FORMS ARE "DROP", WHICH IS THE OPPOSITE
+  // OF HOW THE DOMINANCE AXIS READS ITS `<` FORM. `score < 40` means KEEP below 40 (it is the same
+  // cut said from the other end, see just below). `optimization < 40` means DROP below 40. That is
+  // deliberate and it is Matthew's grammar: on dominance he is choosing who survives, and on
+  // optimization he is skimming off a band there is nothing to sell to, from either end. It is also
+  // exactly why the echo card has to NAME THE AXIS AND THE DIRECTION in words. Do not harmonize
+  // them and do not "correct" one to match the other: a reader who guesses wrong here deletes the
+  // wrong half of a list.
+  if ((m = /\boptimi[sz]ation\s*(?:>|above|over)\s*(\d+)/.exec(text))) {
+    return { kind: "drop_optimization_above", score: Number(m[1]) };
+  }
+  if ((m = /\boptimi[sz]ation\s*(?:<|under|below)\s*(\d+)/.exec(text))) {
+    return { kind: "drop_optimization_below", score: Number(m[1]) };
+  }
 
   // "score > 60", "score above 60", "score over 60"
   if ((m = /\bscore\s*(?:>|above|over)\s*(\d+)/.exec(text))) {
@@ -506,7 +545,16 @@ export function parseCutoff(input: string): CutoffIntent | null {
 }
 
 export interface CutoffPlan {
-  /** The most dominant rows, in file order. */
+  /**
+   * Which number this cut was made on.
+   *
+   * ‼️ THE ECHO CARD MUST PRINT IT. Two numbers now sit in one file and the thread is the only place
+   * a person sees which one is about to delete rows. "Dropping 34 rows" is the same sentence for
+   * both axes and means opposite things, so the axis is carried on the PLAN rather than re-derived
+   * from the spoken text, which a reword would break.
+   */
+  axis: "dominance" | "optimization";
+  /** The dropped rows, in file order. */
   dropped: ScoredRow[];
   /** Everything else, in file order, including every unmeasured row. */
   kept: ScoredRow[];
@@ -531,6 +579,35 @@ export interface CutoffPlan {
  * credit; discarding one loses a lead. The count is stated on the echo card rather than buried.
  */
 export function applyCutoff(rows: ScoredRow[], intent: CutoffIntent): CutoffPlan {
+  // ‼️ AN OPTIMIZATION CUT IS A PREDICATE, NOT A PREFIX, and it cannot be anything else. The file is
+  // sorted by DOMINANCE, so the rows scoring above 70 on optimization are scattered through it and
+  // `rows.slice(0, n)` would drop a contiguous block of the most dominant businesses instead. Both
+  // piles keep file order, so the survivor list still reads in the order he was looking at.
+  if (intent.kind === "drop_optimization_above" || intent.kind === "drop_optimization_below") {
+    const above = intent.kind === "drop_optimization_above";
+    const hits = (r: ScoredRow): boolean => {
+      const value = r.optimization ?? null;
+      // Unmeasured is never dropped, exactly as on the dominance axis. Nobody entered that contest.
+      if (value === null) return false;
+      return above ? value > intent.score : value < intent.score;
+    };
+    const dropped = rows.filter(hits);
+    const kept = rows.filter((r) => !hits(r));
+    const droppedScores = dropped
+      .map((r) => r.optimization ?? null)
+      .filter((s): s is number => s !== null);
+    return {
+      axis: "optimization",
+      dropped,
+      kept,
+      // Counted on the CUT axis, not on dominance: this echo is about optimization, so "not
+      // measured" has to mean the number the cut was made on.
+      keptUnmeasured: kept.filter((r) => (r.optimization ?? null) === null).length,
+      droppedHigh: droppedScores.length ? Math.max(...droppedScores) : null,
+      droppedLow: droppedScores.length ? Math.min(...droppedScores) : null,
+    };
+  }
+
   const measured = rows.filter((r) => r.score !== null);
 
   let dropCount: number;
@@ -561,6 +638,7 @@ export function applyCutoff(rows: ScoredRow[], intent: CutoffIntent): CutoffPlan
   const droppedScores = dropped.map((r) => r.score).filter((s): s is number => s !== null);
 
   return {
+    axis: "dominance",
     dropped,
     kept,
     keptUnmeasured: kept.filter((r) => r.score === null).length,

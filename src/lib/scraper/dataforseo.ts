@@ -23,7 +23,11 @@
 // business look invisible, which pushes it into the scrape pile. Paying six hundredths of a cent
 // to actually see the ten results being counted is the cheap side of that trade.
 //
-// So the real budget is ~$1.20 per 1,000-company batch, and `maxQueriesPerBatch` counts QUERIES.
+// ‼️ A BUSINESS COSTS UP TO $0.0027, NOT $0.0012, SINCE THE GBP OPTIMIZATION AUDIT WAS ADDED. One
+// SERP at depth 20 ($0.0012) plus one my_business_info profile lookup ($0.0015), so the real budget
+// is about $2.70 per 1,000-company batch and `maxQueriesPerBatch` counts BUSINESSES rather than
+// calls. Less than that in practice: the profile call only fires for a row whose SERP handed back a
+// cid, and a row with no knowledge_graph never gets one.
 //
 // ‼️ CHARGED AT task_post, NEVER AT task_get. Results are free to collect for 30 days. Three guards
 // follow from that and all three are load-bearing: the per-batch cap is checked BEFORE the first
@@ -39,8 +43,64 @@
 // rather than an error.
 
 import type { SerpPayload } from "./score";
+import type { GbpProfile } from "./gbp-audit";
 
-const BASE = "https://api.dataforseo.com/v3/serp/google/organic";
+/**
+ * The endpoints this lane uses. Same task_post/task_get shape, same queue, same billing rule, so
+ * they share one client rather than getting a second copy of the retry policy, the account-refusal
+ * split and the tag matching.
+ *
+ *   serp_organic  $0.0012 / query at depth 20   the dominance score
+ *   gbp_info      $0.0015 / profile             the optimization score
+ *
+ * So a business costs up to $0.0027 all in, and less in practice, because the profile call only
+ * fires for a row whose SERP handed back a cid.
+ */
+export type DfsEndpoint = "serp_organic" | "gbp_info";
+
+/**
+ * ‼️ THE COLLECT PATH IS PER ENDPOINT AND IT IS NOT `/advanced/` EVERYWHERE. The SERP API offers
+ * result levels, so it collects at `task_get/advanced/{id}`. business_data has ONE level and
+ * collects at `task_get/{id}`; asking it for `/advanced/` answers HTTP 404 `40400 Not Found`.
+ *
+ * Measured on the first live profile call, and it is the worst-shaped failure this client can have:
+ * the task was created and the account was CHARGED $0.0015, and then every collection 404'd. A 404
+ * is a 4xx, so `request` correctly does not retry it, `getTaskRaw` correctly reports `pending`
+ * rather than inventing a verdict, and the row would have been re-polled on every tick for thirty
+ * days while the money was already gone. Nothing errors anywhere. Same family as the 20100 bug: the
+ * only thing that finds these is a live call.
+ */
+const ENDPOINTS: Record<DfsEndpoint, { base: string; collect: string }> = {
+  serp_organic: {
+    base: "https://api.dataforseo.com/v3/serp/google/organic",
+    collect: "/task_get/advanced/",
+  },
+  gbp_info: {
+    base: "https://api.dataforseo.com/v3/business_data/google/my_business_info",
+    collect: "/task_get/",
+  },
+};
+
+/**
+ * Their list price for one profile lookup, for the ESTIMATE line only.
+ *
+ * What is RECORDED is always the `cost` the response itself carries, the same rule the SERP path
+ * follows. A constant is what we expected to pay; `task.cost` is what we were actually billed, and
+ * only one of those belongs in a spend column.
+ */
+export const GBP_INFO_COST_USD = 0.0015;
+
+/** One SERP at depth 20, which is two of their 10-result units. See the depth note in the header. */
+export const SERP_QUERY_COST_USD = 0.0012;
+
+/**
+ * What one business costs at most: one SERP plus one profile lookup.
+ *
+ * The ceiling, not the average. A row whose SERP returned no knowledge_graph has no cid, so no
+ * profile task is ever posted for it and it costs the SERP alone. Used for the estimate printed in
+ * a cap refusal, so the number a person sees is the same one the constants say.
+ */
+export const BUSINESS_COST_USD = SERP_QUERY_COST_USD + GBP_INFO_COST_USD;
 
 /** Their per-POST ceiling. Over it the whole call is rejected with 40006, not truncated. */
 export const TASKS_PER_POST = 100;
@@ -83,10 +143,14 @@ export function isConfigured(): boolean {
 /**
  * The per-batch spend ceiling, in QUERIES not dollars.
  *
- * Queries rather than dollars because the price is theirs to change and the count is the thing a
- * person can sanity-check against a file they just dropped. At depth 20 on the standard queue one
- * query is $0.0012, so the default 1000 is about $1.20 per batch. See the depth note in the header
- * before "correcting" that figure to $0.60.
+ * ‼️ IT COUNTS BUSINESSES, NOT CALLS, and it has done since the GBP audit was added. Each business
+ * costs one SERP ($0.0012 at depth 20) plus at most one profile lookup ($0.0015), so the default
+ * 1000 is about $2.70 per batch rather than $1.20. Businesses rather than dollars because the price
+ * is theirs to change and the count is the thing a person can sanity-check against a file they just
+ * dropped. See the depth note in the header before "correcting" any of these figures downward.
+ *
+ * The name is kept: renaming an env var Matthew already has set in Vercel to buy a more accurate
+ * word would silently reset the cap to its default on the next deploy.
  */
 export function maxQueriesPerBatch(): number {
   const raw = Number(process.env.DATAFORSEO_MAX_QUERIES_PER_BATCH);
@@ -215,20 +279,51 @@ export interface PostedTask {
  * tasks in one POST must not be lost to the hundredth being malformed.
  */
 export async function postTasks(inputs: PostTaskInput[]): Promise<PostedTask[]> {
+  return postTasksTo(
+    "serp_organic",
+    inputs.map((input) => ({
+      tag: input.tag,
+      body: {
+        keyword: input.keyword.slice(0, 700),
+        location_name: input.locationName || "United States",
+        language_code: "en",
+        depth: 20,
+      },
+    }))
+  );
+}
+
+export interface DfsPostInput {
+  /** Our `scraper_rows.id`. Rides along as `tag` so a task can be traced back without our id map. */
+  tag: string;
+  /** The per-endpoint half of the task object. `tag` is added here so no caller can forget it. */
+  body: Record<string, unknown>;
+}
+
+/**
+ * Queue up to 100 tasks against any of the endpoints above. Returns one row per input, in input order.
+ *
+ * This is `postTasks`'s old body with the SERP-specific fields lifted out into the caller. Nothing
+ * about the accounting changed: the ceiling, the tag matching, `isTaskAccepted` and the `cost` read
+ * are the same lines they were, which is the point of extending this file rather than writing a
+ * second client for business_data.
+ */
+export async function postTasksTo(
+  endpoint: DfsEndpoint,
+  inputs: DfsPostInput[]
+): Promise<PostedTask[]> {
   if (inputs.length === 0) return [];
   if (inputs.length > TASKS_PER_POST) {
-    throw new Error("postTasks: " + inputs.length + " tasks, the ceiling is " + TASKS_PER_POST);
+    throw new Error("postTasksTo: " + inputs.length + " tasks, the ceiling is " + TASKS_PER_POST);
   }
 
-  const body = inputs.map((input) => ({
-    keyword: input.keyword.slice(0, 700),
-    location_name: input.locationName || "United States",
-    language_code: "en",
-    depth: 20,
-    tag: input.tag,
-  }));
+  const body = inputs.map((input) => ({ ...input.body, tag: input.tag }));
 
-  const env = await request<DfsTask>(BASE + "/task_post", { method: "POST", body: JSON.stringify(body) }, "task_post");
+  const env = await request<DfsTask>(
+    ENDPOINTS[endpoint].base + "/task_post",
+    { method: "POST", body: JSON.stringify(body) },
+    endpoint + " task_post"
+  );
 
   // Match on the echoed tag, never on array position. Position is not contractual and a silent
   // off-by-one here files every SERP against the wrong company.
@@ -253,6 +348,42 @@ export async function postTasks(inputs: PostTaskInput[]): Promise<PostedTask[]> 
   });
 }
 
+export interface GbpPostInput {
+  tag: string;
+  /**
+   * ‼️ AN EXACT-PROFILE KEY, `cid:...` or `place_id:...`, AND NEVER A COMPANY NAME. Built by
+   * `buildProfileKeyword`. A name search silently returns a different business with a similar name
+   * in a nearby city and then scores somebody else's profile against this lead: nothing errors,
+   * every column fills in, and the card is about the wrong company.
+   */
+  keyword: string;
+}
+
+/**
+ * Queue up to 100 Google Business Profile lookups.
+ *
+ * ‼️ `language_name` AND `location_name` ARE BOTH REQUIRED, EVEN THOUGH THE KEYWORD IS AN EXACT cid.
+ * Measured on the first live call: omitting them answers `40501 Invalid Field: 'language_name'` and
+ * the whole POST is rejected. That failure is the SAFE kind, which is worth writing down: the task
+ * is refused before it is created, so `taskId` is null and `cost` is 0, and the null-id guard in the
+ * caller means nothing is stored and nothing is spent. Compare 20100, where the opposite is true.
+ *
+ * There is no `depth`: business_data does not take one, and it would be meaningless here anyway.
+ */
+export async function postGbpInfoTasks(inputs: GbpPostInput[]): Promise<PostedTask[]> {
+  return postTasksTo(
+    "gbp_info",
+    inputs.map((input) => ({
+      tag: input.tag,
+      body: {
+        keyword: input.keyword.slice(0, 700),
+        language_name: "English",
+        location_name: "United States",
+      },
+    }))
+  );
+}
+
 export type TaskState = "ready" | "pending" | "failed";
 
 export interface TaskResult {
@@ -272,28 +403,91 @@ export interface TaskResult {
  * genuinely came back with nothing, which `scoreSerp` turns into a null score rather than a zero.
  */
 export async function getTask(taskId: string): Promise<TaskResult> {
+  const raw = await getTaskRaw("serp_organic", taskId);
+  if (raw.state !== "ready") {
+    return { state: raw.state, payload: null, error: raw.error };
+  }
+  const first = (raw.result ?? [])[0] as { items?: unknown[] | null } | undefined;
+  return { state: "ready", payload: { items: (first?.items ?? []) as SerpPayload["items"] }, error: null };
+}
+
+export interface RawTaskResult {
+  state: TaskState;
+  /** `task.result` whole, undecoded. Each endpoint puts its payload somewhere different inside it. */
+  result: unknown[] | null;
+  error: string | null;
+}
+
+/**
+ * Collect one task from any endpoint. This is `getTask`'s old body with one change: it hands back
+ * `task.result` WHOLE instead of reaching into `result[0].items`.
+ *
+ * That matters because business_data does not nest its payload under `items` the way the SERP
+ * endpoint does, and a shared decoder that assumed it would return an empty profile for every row
+ * with no error anywhere. Each caller decodes its own shape, right above where it knows what it
+ * asked for.
+ */
+export async function getTaskRaw(endpoint: DfsEndpoint, taskId: string): Promise<RawTaskResult> {
   let env: DfsEnvelope<DfsTask>;
   try {
-    env = await request<DfsTask>(BASE + "/task_get/advanced/" + encodeURIComponent(taskId), { method: "GET" }, "task_get");
+    env = await request<DfsTask>(
+      ENDPOINTS[endpoint].base + ENDPOINTS[endpoint].collect + encodeURIComponent(taskId),
+      { method: "GET" },
+      endpoint + " task_get"
+    );
   } catch (e) {
     // A failure to ASK is not a verdict. Pending, so the next tick tries again.
-    return { state: "pending", payload: null, error: (e as Error).message };
+    return { state: "pending", result: null, error: (e as Error).message };
   }
 
   const task = (env.tasks ?? [])[0];
-  if (!task) return { state: "pending", payload: null, error: "no task in the response" };
+  if (!task) return { state: "pending", result: null, error: "no task in the response" };
 
   if (task.status_code === TASK_IN_QUEUE || task.status_code === TASK_HANDED) {
-    return { state: "pending", payload: null, error: null };
+    return { state: "pending", result: null, error: null };
   }
   if (task.status_code !== OK) {
     return {
       state: "failed",
-      payload: null,
+      result: null,
       error: (task.status_code ?? "?") + " " + (task.status_message ?? "unknown"),
     };
   }
 
-  const items = (task.result ?? [])[0]?.items ?? [];
-  return { state: "ready", payload: { items: items as SerpPayload["items"] }, error: null };
+  return { state: "ready", result: (task.result ?? []) as unknown[], error: null };
+}
+
+export interface GbpInfoResult {
+  state: TaskState;
+  /** The profile object, or null. Null with state `ready` means Google returned no profile. */
+  payload: GbpProfile | null;
+  error: string | null;
+}
+
+/**
+ * Collect one Google Business Profile lookup.
+ *
+ * ‼️ BOTH PLAUSIBLE SHAPES ARE ACCEPTED, and that is the cheapest insurance available on a response
+ * nobody in this repo has read yet. DataForSEO nests some business_data payloads at
+ * `result[0].items[0]` and returns others as `result[0]` itself. Reading only one of them would
+ * leave every profile component unmeasured on every row, with no error anywhere and a score quietly
+ * computed off the two things we could still see. That is the `google_reviews` failure exactly, one
+ * endpoint over, so it gets the `RATING_TYPES` treatment: widen WHERE we look, never loosen what
+ * counts as measured.
+ *
+ * A `ready` with no profile is `payload: null` and NOT an error. It means Google has no profile
+ * under that key, which is a real finding rather than a failure to look.
+ */
+export async function getGbpInfoTask(taskId: string): Promise<GbpInfoResult> {
+  const raw = await getTaskRaw("gbp_info", taskId);
+  if (raw.state !== "ready") return { state: raw.state, payload: null, error: raw.error };
+
+  const first = (raw.result ?? [])[0];
+  if (!first || typeof first !== "object") return { state: "ready", payload: null, error: null };
+
+  const wrapper = first as { items?: unknown[] | null };
+  const nested = Array.isArray(wrapper.items) ? wrapper.items[0] : null;
+  const profile = nested && typeof nested === "object" ? nested : first;
+
+  return { state: "ready", payload: profile as GbpProfile, error: null };
 }

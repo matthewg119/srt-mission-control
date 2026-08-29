@@ -11,6 +11,13 @@ import { toCsv } from "./csv";
 import { JUNK_REASON_ORDER, type JunkReason } from "./rules";
 import type { StoredRow } from "./store";
 import type { CutoffPlan, ScoreResult } from "./score";
+import {
+  OPTIMIZATION_KEY_ORDER,
+  OPTIMIZATION_LABEL,
+  UNVERIFIABLE,
+  type GapCount,
+  type OptimizationKey,
+} from "./gbp-audit";
 
 /** Plain-English gloss per reason, because "no_mx" means nothing to anyone reading it cold. */
 const REASON_LABEL: Record<JunkReason, string> = {
@@ -188,6 +195,13 @@ export interface ScoreSummaryInput {
   costUsd: number;
   high: number | null;
   low: number | null;
+  /** The GBP optimization audit, on the same rows in the same pass. */
+  optimized: number;
+  optimizationUnmeasured: number;
+  optimizationHigh: number | null;
+  optimizationLow: number | null;
+  /** Most common gap first. `countGaps` already sorted and tie-broke it. */
+  gaps: GapCount[];
 }
 
 export function formatScoreSummary(input: ScoreSummaryInput): string {
@@ -211,6 +225,64 @@ export function formatScoreSummary(input: ScoreSummaryInput): string {
         "with no rank, they are left out of any percentage, and they stay in the keep pile._"
     );
   }
+
+  lines.push("");
+  lines.push(formatOptimizationBlock(input));
+
+  return lines.join("\n");
+}
+
+/**
+ * The second score, printed under the first and never merged with it.
+ *
+ * ‼️ TWO NUMBERS, ONE RUN, AND THEY ANSWER DIFFERENT QUESTIONS. Dominance is "are they already
+ * winning", which is what the file is sorted and cut by. Optimization is "did anybody fill the
+ * profile in", which is what the call is about. A business can be high on one and low on the other
+ * in either direction, so anything that averaged them would answer neither question.
+ */
+function formatOptimizationBlock(input: ScoreSummaryInput): string {
+  const lines: string[] = [];
+  lines.push("*GBP optimization*, the second score. Sorted by nothing, it is a column.");
+  lines.push("");
+  lines.push("```");
+  lines.push("audited       " + input.optimized);
+  if (input.optimizationUnmeasured > 0) {
+    lines.push("not measured  " + input.optimizationUnmeasured);
+  }
+  if (input.optimizationHigh !== null) {
+    lines.push("range         " + input.optimizationLow + " to " + input.optimizationHigh);
+  }
+  lines.push("```");
+
+  // The most common gap is the line that writes the campaign, so it is said in words before the
+  // table rather than left to be spotted in it.
+  const measuredGaps = input.gaps.filter((g) => g.measured > 0 && g.missing > 0);
+  if (measuredGaps.length > 0) {
+    const top = measuredGaps[0];
+    lines.push("");
+    lines.push(
+      "*The most common gap: " + OPTIMIZATION_LABEL[top.key] + "*, on " + top.missing +
+        " of " + top.measured + " profiles that could be checked."
+    );
+    lines.push("```");
+    for (const gap of measuredGaps) {
+      lines.push(
+        (gap.missing + " of " + gap.measured).padEnd(12) + OPTIMIZATION_LABEL[gap.key]
+      );
+    }
+    lines.push("```");
+  }
+
+  // ‼️ PRINTED SO THEIR ABSENCE IS NEVER MISTAKEN FOR A LOW SCORE. These three cannot be observed
+  // from outside at all, they carry no weight and no denominator, and they are not components. They
+  // are work SRT does for the client, so they belong on the delivery checklist and on the call.
+  lines.push("");
+  lines.push("_Cannot be measured from outside. Verify on the call:_");
+  for (const item of UNVERIFIABLE) lines.push("_  - " + item + "_");
+  lines.push(
+    "_These three carry no weight, so a 100 means the six things a lookup CAN see are in order, " +
+      "not that the profile is finished._"
+  );
 
   return lines.join("\n");
 }
@@ -259,14 +331,34 @@ export function formatCutoffEcho(plan: CutoffPlan, spoken: string): string {
       ? ", scores " + plan.droppedHigh + " down to " + plan.droppedLow
       : "";
 
-  lines.push(
-    "*Dropping rows 1 to " + plan.dropped.length + ":* the " + plan.dropped.length +
-      " most dominant" + range + "."
-  );
-  lines.push(
-    plan.kept.length + " remain" +
-      (plan.keptUnmeasured > 0 ? ", " + plan.keptUnmeasured + " of them not measured" : "") + "."
-  );
+  // ‼️ THE AXIS IS NAMED, AND ON THE OPTIMIZATION AXIS THE DIRECTION IS NAMED TOO. Two numbers now
+  // live in one file, "dropping 34 rows" is the same sentence for both, and they mean opposite
+  // things. The optimization cut is also a PREDICATE rather than a prefix, so "rows 1 to N" would be
+  // a lie about which rows are going: they are scattered through a file sorted by dominance.
+  if (plan.axis === "optimization") {
+    lines.push(
+      "*Dropping " + plan.dropped.length + " rows on OPTIMIZATION" + range + ".* " +
+        "They are scattered through the file, not the top of it."
+    );
+    lines.push(
+      "_The file is still sorted by dominance, and dominance is untouched._"
+    );
+    lines.push(
+      plan.kept.length + " remain" +
+        (plan.keptUnmeasured > 0
+          ? ", " + plan.keptUnmeasured + " of them with no optimization score"
+          : "") + "."
+    );
+  } else {
+    lines.push(
+      "*Dropping rows 1 to " + plan.dropped.length + ":* the " + plan.dropped.length +
+        " most dominant" + range + "."
+    );
+    lines.push(
+      plan.kept.length + " remain" +
+        (plan.keptUnmeasured > 0 ? ", " + plan.keptUnmeasured + " of them not measured" : "") + "."
+    );
+  }
   lines.push("");
   lines.push("_Read as: " + spoken + "_");
   lines.push("");
@@ -287,10 +379,30 @@ export interface ScoredCsvRow {
   raw: Record<string, string>;
   score: number | null;
   measured: string;
+  /** The second score. Null is "not measured", the same as on dominance. */
+  optimization?: number | null;
+  optimizationMeasured?: string;
+  /** Per component, the short verdict that also lives in `optimization_components[key].note`. */
+  optNotes?: Partial<Record<OptimizationKey, string>>;
 }
 
 /**
- * scored.csv and dominant.csv: the original columns plus the three this lane added.
+ * The optimization columns, prefixed.
+ *
+ * ‼️ THE `opt_` PREFIX IS NOT DECORATION. `toCsv` is header-keyed and `buildScoredCsv` spreads
+ * `...r.raw` FIRST, so a source file carrying a column literally named `services` or `photos` would
+ * have its own value silently overwritten by ours, and the round trip would lose the client's data
+ * with nothing saying so. Apollo and Outscraper exports really do carry columns with those names.
+ */
+export const OPTIMIZATION_CSV_COLUMNS = OPTIMIZATION_KEY_ORDER.map((k) => "opt_" + k);
+
+/**
+ * scored.csv and dominant.csv: the original columns plus the ones this lane added.
+ *
+ * `columns: "both"` appends the GBP optimization audit as well, which is what the LANE always
+ * passes. The `"dominance"` default is not a live option and no caller in `src/` selects it: it
+ * exists so `_probe-score.ts` keeps pinning the narrow three-column shape without being edited,
+ * which is what proves this change was additive rather than a rewrite of the file everybody reads.
  *
  * ‼️ THE HEADERS COME FROM THE FILE, exactly as buildCleanCsv's note says, and it matters twice as
  * much here. `dominant.csv` is the INPUT to a separate cold-email project that qualifies on first
@@ -302,18 +414,43 @@ export interface ScoredCsvRow {
  * the array, so a re-sort inside this function would number a different file than the one the
  * cutoff then cuts.
  */
-export function buildScoredCsv(headers: string[], rows: ScoredCsvRow[]): string {
+export function buildScoredCsv(
+  headers: string[],
+  rows: ScoredCsvRow[],
+  columns: "dominance" | "both" = "dominance"
+): string {
+  const both = columns === "both";
+  const extra = both
+    ? ["optimization_score", "optimization_measured", ...OPTIMIZATION_CSV_COLUMNS]
+    : [];
+
   let rank = 0;
   return toCsv(
-    [...headers, "rank", "dominance_score", "score_measured"],
-    rows.map((r) => ({
-      ...r.raw,
-      // An unmeasured row gets a BLANK rank, never the next number. A rank is a claim about where a
-      // business sits against the others, and there is nothing here to compare it on.
-      rank: r.score === null ? "" : String(++rank),
-      dominance_score: r.score === null ? "not measured" : String(r.score),
-      score_measured: r.measured,
-    }))
+    [...headers, "rank", "dominance_score", "score_measured", ...extra],
+    rows.map((r) => {
+      const cells: Record<string, string> = {
+        ...r.raw,
+        // An unmeasured row gets a BLANK rank, never the next number. A rank is a claim about where
+        // a business sits against the others, and there is nothing here to compare it on.
+        rank: r.score === null ? "" : String(++rank),
+        dominance_score: r.score === null ? "not measured" : String(r.score),
+        score_measured: r.measured,
+      };
+      if (!both) return cells;
+
+      // ‼️ THE RANK ABOVE COUNTS DOMINANCE AND ONLY DOMINANCE. The file is sorted by it and cut by
+      // it; optimization rides along as a column and is never ranked, or the file would carry two
+      // orderings and a reader would have to work out which one the cutoff meant.
+      cells.optimization_score =
+        r.optimization === null || r.optimization === undefined
+          ? "not measured"
+          : String(r.optimization);
+      cells.optimization_measured = r.optimizationMeasured ?? "";
+      for (const key of OPTIMIZATION_KEY_ORDER) {
+        cells["opt_" + key] = r.optNotes?.[key] ?? "";
+      }
+      return cells;
+    })
   );
 }
 

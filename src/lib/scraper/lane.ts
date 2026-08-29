@@ -11,7 +11,7 @@
 //
 // ‼️ THE STAGE MACHINE IS THE POINT, NOT DECORATION. A batch walks
 // awaiting_workflow -> (parsing -> mx -> filtered -> verifying -> done)
-//                   or (scoring -> scored -> awaiting_apollo_export),
+//                   or (scoring -> auditing -> scored -> awaiting_apollo_export),
 // and every stage is re-enterable, because the slow steps outlive a serverless invocation in three
 // different ways: the MX sweep is thousands of our own DNS lookups, MillionVerifier runs on
 // somebody else's queue for minutes to hours, and DataForSEO's standard queue takes about five
@@ -39,8 +39,11 @@ import {
   allRows,
   applyMvResults,
   applyMx,
+  applyGbpTaskIds,
+  applyOptimizationScores,
   applyScores,
   applyTaskIds,
+  auditableRows,
   batchByGateTs,
   batchByThreadTs,
   countByVerdict,
@@ -53,12 +56,15 @@ import {
   junkBreakdown,
   knownProspectEmails,
   latestBatch,
+  markAuditExhausted,
   markQueuedForApollo,
   pendingDomains,
   rowsByVerdict,
   unscoredRows,
   updateBatch,
   type BatchRow,
+  type OptimizationWrite,
+  type ScoreWrite,
   type StoredRow,
   type Workflow,
 } from "./store";
@@ -74,6 +80,7 @@ import {
   formatMvSummary,
   formatCutoffCard,
   formatScoreSummary,
+  type ScoredCsvRow,
   formatWorkflowPicker,
 } from "./report";
 import {
@@ -87,12 +94,29 @@ import {
 import {
   accountRefusalHint,
   DataForSeoAccountError,
+  BUSINESS_COST_USD,
+  getGbpInfoTask,
   getTask,
   isConfigured as dfsConfigured,
   maxQueriesPerBatch,
+  postGbpInfoTasks,
   postTasks,
   TASKS_PER_POST,
 } from "./dataforseo";
+import {
+  buildProfileKeyword,
+  countGaps,
+  extractFirstH1,
+  extractGbpSerpFacts,
+  OPTIMIZATION_KEY_ORDER,
+  readProfileUrl,
+  readStoredComponents,
+  scoreOptimization,
+  type GbpSerpFacts,
+  type LandingPageFacts,
+  type OptimizationKey,
+} from "./gbp-audit";
+import { researchWebsite, SiteFetchError } from "@/lib/audit-engine/site-research";
 import {
   applyCutoff,
   buildScoreQuery,
@@ -544,6 +568,16 @@ export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_B
       batch = (await getBatch(batch.id)) ?? batch;
     }
 
+    // The GBP optimization audit, on the same rows in the same pass. It sits BETWEEN scoring and
+    // scored because its lookup key is the cid the SERP returns, so it cannot run any earlier, and
+    // `publishScores` has to run after it or the summary and scored.csv would go out carrying only
+    // half of what was measured.
+    if (batch.status === "auditing") {
+      const done = await sweepAudit(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
     if (batch.status === "scored") {
       await publishScores(batch);
       return;
@@ -612,8 +646,9 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
     await updateBatch(batch.id, { status: "scored" });
     await say(
       batch,
-      "`DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` are not set, so nothing was scored and nothing " +
-        "was spent. `scored.csv` will come out in file order with every row marked *not measured*."
+      "`DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` are not set, so nothing was scored, nothing was " +
+        "audited and nothing was spent. `scored.csv` will come out in file order with every row " +
+        "marked *not measured* on both scores."
     );
     return true;
   }
@@ -624,8 +659,10 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
     return (
       await fail(
         batch,
-        scorable + " companies is over the " + cap + " query cap, and DataForSEO bills per query " +
-          "on the way in. Raise `DATAFORSEO_MAX_QUERIES_PER_BATCH` or split the file."
+        scorable + " companies is over the " + cap + " cap, and DataForSEO bills on the way in. " +
+          "Each business costs one SERP plus at most one profile lookup, about $0.0027, so this " +
+          "file would be roughly $" + (scorable * BUSINESS_COST_USD).toFixed(2) + ". Raise " +
+          "`DATAFORSEO_MAX_QUERIES_PER_BATCH` or split the file."
       ),
       false
     );
@@ -633,7 +670,7 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
 
   const pending = await unscoredRows(batch.id);
   if (pending.length === 0) {
-    await updateBatch(batch.id, { status: "scored" });
+    await updateBatch(batch.id, { status: "auditing" });
     return true;
   }
 
@@ -699,7 +736,7 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
   // 2. Collect whatever is ready. Free, and a task stays fetchable for 30 days, so there is no
   //    hurry and no penalty for a tick that only gets through half of them.
   const collectable = (await unscoredRows(batch.id)).filter((r) => r.dataforseo_task_id);
-  const writes: Array<{ rowId: string; score: number; components: Record<string, unknown> }> = [];
+  const writes: ScoreWrite[] = [];
   let stillPending = 0;
 
   for (const row of collectable) {
@@ -717,16 +754,26 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
       console.error("[scraper]", batch.id, "task failed for", row.company, result.error);
       continue;
     }
-    const scored = scoreSerp(result.payload ?? {}, {
+    const payload = result.payload ?? {};
+    const scored = scoreSerp(payload, {
       company: row.company ?? "",
       website: row.website,
     });
     // ‼️ A NULL SCORE IS NOT WRITTEN. Nothing could be measured, so the next tick asks again.
     if (scored.score === null) continue;
+
+    // The free half of the GBP optimization audit, off the SERP we have already paid for and are
+    // already holding. No extra call, no extra cost, and it hands the `auditing` stage the cid it
+    // needs so that stage never has to re-collect this task.
+    const gbp = extractGbpSerpFacts(payload, { company: row.company, city: row.city });
+
     writes.push({
       rowId: row.id,
       score: scored.score,
       components: { ...scored.components, measured: scored.measured },
+      gbpCid: gbp.cid,
+      gbpPlaceId: gbp.placeId,
+      gbpSerp: gbp as unknown as Record<string, unknown>,
     });
   }
 
@@ -743,8 +790,252 @@ async function sweepScoring(batch: BatchRow, deadline: number): Promise<boolean>
     return false;
   }
 
+  // ‼️ SCORING HANDS OFF TO `auditing`, NOT TO `scored`, AND THE ORDER IS FORCED RATHER THAN CHOSEN.
+  // The profile lookup is keyed by the cid the SERP returns, so it cannot run until scoring has
+  // collected. `publishScores` then runs ONCE, after both, with everything on it.
+  await updateBatch(batch.id, { status: "auditing" });
+  return true;
+}
+
+/**
+ * How much wall clock a single landing-page crawl may be allowed to want.
+ *
+ * `researchWebsite` fetches the homepage on a 20s budget with one retry, then up to two inner pages,
+ * so one slow site can want most of a minute. A row is skipped untouched rather than started when
+ * less than this is left, which is what stops one site eating a whole tick.
+ */
+const CRAWL_BUDGET_MS = 60_000;
+
+/**
+ * The GBP optimization audit.
+ *
+ * Mirrors `sweepScoring` step for step, because it has the same shape of problem: it spends money at
+ * task_post, it waits on somebody else's queue, and it has to survive being killed halfway through.
+ * Post the profile lookups that have not been posted, collect the ones that are ready, crawl the
+ * landing page, score, park.
+ *
+ * Returns true when every auditable row is resolved and the batch has moved to `scored`.
+ */
+async function sweepAudit(batch: BatchRow, deadline: number): Promise<boolean> {
+  if (!dfsConfigured()) {
+    // Handled, not a bug. Same degrade the scoring sweep makes, and it cannot be reached in
+    // practice, because scoring would have said so first and moved straight to `scored`.
+    await updateBatch(batch.id, { status: "scored" });
+    return true;
+  }
+
+  // ‼️ THE CAP COUNTS BUSINESSES AND IS RE-CHECKED BEFORE THE FIRST POST. Scoring already checked
+  // this same number for these same rows, so reaching it here means something changed underneath.
+  // Cheap, and DataForSEO bills on the way in, so a redundant check is the correct kind of paranoia.
+  const auditable = await countScorable(batch.id);
+  const cap = maxQueriesPerBatch();
+  if (auditable > cap) {
+    return (
+      await fail(
+        batch,
+        auditable + " companies is over the " + cap + " cap, so the profile audit stopped before " +
+          "buying anything. The dominance scores already on the rows are unaffected. Raise " +
+          "`DATAFORSEO_MAX_QUERIES_PER_BATCH` or split the file."
+      ),
+      false
+    );
+  }
+
+  const pending = await auditableRows(batch.id);
+  if (pending.length === 0) {
+    await updateBatch(batch.id, { status: "scored" });
+    return true;
+  }
+
+  // 1. Queue every profile lookup that has never been queued.
+  //
+  //    ‼️ ONLY FOR A ROW THAT CARRIES A cid OR A place_id. A row with neither gets NO TASK AT ALL
+  //    and its three profile components stay unmeasured. Looking a business up by name silently
+  //    returns a different business with a similar name in a nearby city and then scores somebody
+  //    else's profile against this lead: nothing errors, every column fills in, and the card is
+  //    about the wrong company. That is the one failure in this feature that is invisible and wrong
+  //    at the same time.
+  const unposted = pending.filter((r) => !r.gbp_task_id && profileKeywordFor(r) !== null);
+  for (let i = 0; i < unposted.length; i += TASKS_PER_POST) {
+    if (Date.now() > deadline) break;
+    const slice = unposted.slice(i, i + TASKS_PER_POST);
+
+    let posted;
+    try {
+      posted = await postGbpInfoTasks(
+        slice.map((row) => ({ tag: row.id, keyword: profileKeywordFor(row) as string }))
+      );
+    } catch (e) {
+      // ‼️ AN ACCOUNT REFUSAL PARKS THE BATCH, IT DOES NOT KILL IT. Verbatim the rule sweepScoring
+      // holds, and it matters more here: the dominance scores are already written, so failing this
+      // batch would throw away work that was already paid for.
+      if (e instanceof DataForSeoAccountError) {
+        const hint = accountRefusalHint(e.message);
+        if (batch.error !== hint) {
+          await updateBatch(batch.id, { error: hint });
+          await say(batch, ":pause_button: " + hint);
+        }
+        return false;
+      }
+      throw e;
+    }
+
+    // Written IMMEDIATELY, before anything else. The account is already charged.
+    const ids = new Map<string, string>();
+    let cost = 0;
+    for (const p of posted) {
+      if (p.taskId) ids.set(p.tag, p.taskId);
+      cost += p.costUsd;
+    }
+    await applyGbpTaskIds(ids);
+    await addScoreCost(batch.id, cost);
+    if (batch.error) await updateBatch(batch.id, { error: null });
+
+    const failures = posted.filter((p) => !p.taskId);
+    if (failures.length) {
+      console.error("[scraper]", batch.id, failures.length, "profile tasks refused:", failures[0].error);
+    }
+  }
+
+  // 2. Collect, crawl and score.
+  const collectable = await auditableRows(batch.id);
+  const writes: OptimizationWrite[] = [];
+  let stillPending = 0;
+
+  for (const row of collectable) {
+    if (Date.now() > deadline) {
+      stillPending++;
+      continue;
+    }
+
+    let profile = null;
+    let profileResolved = true;
+    if (row.gbp_task_id) {
+      const result = await getGbpInfoTask(row.gbp_task_id);
+      if (result.state === "pending") {
+        stillPending++;
+        continue;
+      }
+      if (result.state === "failed") {
+        // A refused task is not an empty profile. The three profile components stay unmeasured.
+        console.error("[scraper]", batch.id, "profile task failed for", row.company, result.error);
+        profileResolved = false;
+      } else {
+        profile = result.payload;
+      }
+    } else if (profileKeywordFor(row) !== null) {
+      // Posted this tick but the id write has not landed yet, or the POST ran out of deadline.
+      stillPending++;
+      continue;
+    }
+
+    const serp = storedSerpFacts(row);
+    const page = await auditLandingPage(serp, profile, deadline);
+    if (page === "no-time") {
+      // ‼️ NOTHING IS WRITTEN. Re-collecting a finished task next tick is FREE, whereas writing the
+      // row now would file `landing_page` as permanently unmeasured and turn a wall-clock accident
+      // into a finding somebody reads off a card.
+      stillPending++;
+      continue;
+    }
+
+    const result = scoreOptimization({ serp, profile, page, fallbackCity: row.city });
+
+    if (result.score === null) {
+      // Asked, and nothing was measurable. Write the components alone so the row leaves the
+      // worklist; the score stays null and prints as "not measured". See the tri-state on StoredRow.
+      await markAuditExhausted(row.id, {
+        ...result.components,
+        measured: result.measured,
+        profile_task: profileResolved ? "ready" : "failed",
+      });
+      continue;
+    }
+
+    writes.push({
+      rowId: row.id,
+      score: result.score,
+      components: { ...result.components, measured: result.measured },
+    });
+  }
+
+  if (writes.length) await applyOptimizationScores(writes);
+
+  const left = await auditableRows(batch.id);
+  if (left.length > 0 && stillPending > 0) {
+    console.log("[scraper]", batch.id, left.length, "rows still waiting on the profile lookup");
+    return false;
+  }
+  if (left.length > 0 && writes.length > 0) {
+    // Progress was made and nothing is queued; go round again rather than declaring a partially
+    // audited file finished.
+    return false;
+  }
+
   await updateBatch(batch.id, { status: "scored" });
   return true;
+}
+
+/** The stored SERP facts, back as the shape `scoreOptimization` reads. */
+function storedSerpFacts(row: StoredRow): GbpSerpFacts | null {
+  const raw = row.gbp_serp;
+  if (!raw) return null;
+  return {
+    cid: row.gbp_cid ?? (typeof raw.cid === "string" ? raw.cid : null),
+    placeId: row.gbp_place_id ?? (typeof raw.placeId === "string" ? raw.placeId : null),
+    category: typeof raw.category === "string" ? raw.category : null,
+    city: typeof raw.city === "string" ? raw.city : null,
+    description: typeof raw.description === "string" ? raw.description : null,
+    url: typeof raw.url === "string" ? raw.url : null,
+    cidSource:
+      raw.cidSource === "knowledge_graph" || raw.cidSource === "local_pack" ? raw.cidSource : null,
+  };
+}
+
+function profileKeywordFor(row: StoredRow): string | null {
+  if (row.gbp_cid) return "cid:" + row.gbp_cid;
+  if (row.gbp_place_id) return "place_id:" + row.gbp_place_id;
+  return buildProfileKeyword(storedSerpFacts(row));
+}
+
+/**
+ * Crawl the landing page and read its title and first h1.
+ *
+ * ‼️ THE URL COMES FROM THE PROFILE OR THE KNOWLEDGE GRAPH, NEVER FROM `scraper_rows.website`. That
+ * column is whatever the dropped CSV happened to carry, and this component is a claim about the page
+ * GOOGLE points a searcher at. Crawling a different one would score a site the buyer never reaches.
+ *
+ * ‼️ A SITE THAT WILL NOT LOAD IS UNMEASURED, NEVER FAILED, the same line the audit engine holds
+ * with CRAWL_BLOCK_LINE. `researchWebsite` THROWS `SiteFetchError` rather than returning a blocked
+ * result, so the catch is the unmeasured path and not an error path.
+ *
+ * Returns "no-time" when there is not enough deadline left to start, which writes nothing at all.
+ */
+async function auditLandingPage(
+  serp: GbpSerpFacts | null,
+  profile: Record<string, unknown> | null,
+  deadline: number
+): Promise<LandingPageFacts | null | "no-time"> {
+  const url = readProfileUrl(profile) ?? serp?.url ?? null;
+  if (!url) return null;
+  if (Date.now() > deadline - CRAWL_BUDGET_MS) return "no-time";
+
+  try {
+    const research = await researchWebsite(url);
+    return {
+      crawled: true,
+      title: research.title,
+      // The h1 is re-extracted from the raw homepage HTML on purpose: `research.headings` has
+      // already merged h1/h2/h3 into one untagged array, and the h1 alone is what this measures.
+      // A page with no h1 at all is a real answer and scores zero; it is not a failure to look.
+      h1: extractFirstH1(research.homepageHtml),
+    };
+  } catch (e) {
+    if (e instanceof SiteFetchError) return { crawled: false, title: null, h1: null };
+    // Anything else is still a failure to LOOK. It must not read as a finding about their page.
+    console.error("[scraper] landing page crawl threw for", url, (e as Error).message);
+    return { crawled: false, title: null, h1: null };
+  }
 }
 
 /** The rows of a scored batch, in scored.csv order: most dominant first, unmeasured last. */
@@ -770,6 +1061,8 @@ async function publishScores(batch: BatchRow): Promise<void> {
 
   if (!batch.csv_posted_at) {
     const scores = measured.map((r) => r.dominance_score as number);
+    const optimized = rows.filter((r) => r.optimization_score !== null);
+    const optScores = optimized.map((r) => r.optimization_score as number);
     await say(
       batch,
       formatScoreSummary({
@@ -783,17 +1076,21 @@ async function publishScores(batch: BatchRow): Promise<void> {
         costUsd: Number(batch.score_cost_usd ?? 0),
         high: scores.length ? Math.max(...scores) : null,
         low: scores.length ? Math.min(...scores) : null,
+        optimized: optimized.length,
+        optimizationUnmeasured: rows.length - optimized.length,
+        optimizationHigh: optScores.length ? Math.max(...optScores) : null,
+        optimizationLow: optScores.length ? Math.min(...optScores) : null,
+        // Every row that was AUDITED, not only the ones that scored: a row whose components were
+        // written with a null score still measured something on the components that ran.
+        gaps: countGaps(
+          rows
+            .filter((r) => r.optimization_components)
+            .map((r) => ({ components: readStoredComponents(r.optimization_components) }))
+        ),
       })
     );
 
-    await uploadCsv(
-      batch,
-      "scored.csv",
-      buildScoredCsv(
-        headers,
-        rows.map((r) => ({ raw: r.raw, score: r.dominance_score, measured: readMeasured(r) }))
-      )
-    );
+    await uploadCsv(batch, "scored.csv", buildScoredCsv(headers, rows.map(toScoredCsvRow), "both"));
     await updateBatch(batch.id, { csv_posted_at: new Date().toISOString() });
   }
 
@@ -801,6 +1098,39 @@ async function publishScores(batch: BatchRow): Promise<void> {
     const ts = await say(batch, formatCutoffCard());
     await updateBatch(batch.id, { scoring_approval_ts: ts });
   }
+}
+
+/**
+ * One stored row as both CSVs see it.
+ *
+ * ONE function rather than two call sites building the object, so `scored.csv` and `dominant.csv`
+ * cannot start disagreeing about what a row says. `dominant.csv` is the input to a separate project
+ * and a column that means something different in the two files would be found there, not here.
+ */
+function toScoredCsvRow(row: StoredRow): ScoredCsvRow {
+  const components = readStoredComponents(row.optimization_components);
+  const notes: Partial<Record<OptimizationKey, string>> = {};
+  for (const key of OPTIMIZATION_KEY_ORDER) {
+    const c = components[key];
+    // A row that was never audited gets a blank cell rather than an invented verdict. "not
+    // measured: ..." is reserved for a component that was actually asked and could not answer.
+    if (c) notes[key] = c.note;
+  }
+  return {
+    raw: row.raw,
+    score: row.dominance_score,
+    measured: readMeasured(row),
+    optimization: row.optimization_score,
+    optimizationMeasured: readOptimizationMeasured(row),
+    optNotes: notes,
+  };
+}
+
+/** `optimization_components.measured` as written by sweepAudit, with an honest fallback. */
+function readOptimizationMeasured(row: StoredRow): string {
+  const m = row.optimization_components && (row.optimization_components as { measured?: unknown }).measured;
+  if (typeof m === "string") return m;
+  return row.optimization_score === null ? "not measured" : "";
 }
 
 /** `score_components.measured` as written by sweepScoring, with an honest fallback. */
@@ -839,6 +1169,7 @@ async function proposeCutoff(batch: BatchRow, intent: CutoffIntent, spoken: stri
     id: r.id,
     company: r.company,
     score: r.dominance_score,
+    optimization: r.optimization_score,
   }));
   const plan = applyCutoff(scored, intent);
 
@@ -862,7 +1193,12 @@ async function commitCutoff(batch: BatchRow): Promise<void> {
   const rows = await scoredRowsInOrder(batch.id);
   const byId = new Map(rows.map((r) => [r.id, r]));
   const plan = applyCutoff(
-    rows.map((r) => ({ id: r.id, company: r.company, score: r.dominance_score })),
+    rows.map((r) => ({
+      id: r.id,
+      company: r.company,
+      score: r.dominance_score,
+      optimization: r.optimization_score,
+    })),
     intent
   );
 
@@ -870,10 +1206,10 @@ async function commitCutoff(batch: BatchRow): Promise<void> {
     ids
       .map((s) => byId.get(s.id))
       .filter((r): r is StoredRow => Boolean(r))
-      .map((r) => ({ raw: r.raw, score: r.dominance_score, measured: readMeasured(r) }));
+      .map(toScoredCsvRow);
 
   if (plan.dropped.length > 0) {
-    await uploadCsv(batch, "dominant.csv", buildScoredCsv(headers, toCsvRows(plan.dropped)));
+    await uploadCsv(batch, "dominant.csv", buildScoredCsv(headers, toCsvRows(plan.dropped), "both"));
   }
 
   const keptRows = plan.kept.map((s) => byId.get(s.id)).filter((r): r is StoredRow => Boolean(r));

@@ -15,6 +15,7 @@ import type { JunkReason } from "./rules";
 export type BatchStatus =
   | "awaiting_workflow"
   | "scoring"
+  | "auditing"
   | "scored"
   | "awaiting_apollo_export"
   | "parsing"
@@ -90,6 +91,25 @@ export interface StoredRow {
   score_components: Record<string, unknown> | null;
   dataforseo_task_id: string | null;
   queued_for_apollo: boolean;
+  /**
+   * The GBP optimization audit. A SECOND score answering a different question, never blended into
+   * `dominance_score` and never the sort key.
+   *
+   * ‼️ THE TWO NULLABLE COLUMNS ARE ONE TRI-STATE AND THE PAIR IS THE STAGE'S EXIT CONDITION:
+   *   score null, components null  -> not asked yet, the next tick asks again
+   *   score null, components set   -> asked, nothing was measurable. Stop asking.
+   *   score set                    -> done
+   * Without the middle state a row whose profile task failed and whose site refuses the crawl is
+   * re-collected on every tick forever and the batch parks at `auditing` with nothing to show.
+   */
+  optimization_score: number | null;
+  optimization_components: Record<string, unknown> | null;
+  gbp_task_id: string | null;
+  /** The exact-profile key, read off the SERP the scoring pass already bought. Never a name. */
+  gbp_cid: string | null;
+  gbp_place_id: string | null;
+  /** Category, city, description and url off the knowledge_graph. Free, no extra call. */
+  gbp_serp: Record<string, unknown> | null;
 }
 
 const BATCH_COLUMNS =
@@ -99,9 +119,14 @@ const BATCH_COLUMNS =
   "mv_status, mv_counts, mv_awaiting_approval, mv_approval_ts, workflow_pick_ts, " +
   "scoring_approval_ts, cutoff_confirm_ts, csv_posted_at, error, created_at, updated_at";
 
+// ‼️ A COLUMN MISSING FROM THIS STRING IS SILENTLY `undefined`, NOT AN ERROR, and on this table that
+// costs money rather than correctness. `!row.gbp_task_id` would be true on every row forever, so
+// every tick would re-post and RE-BUY the whole batch. Adding a column to `StoredRow` without adding
+// it here is the single most expensive mistake available in this file.
 const ROW_COLUMNS =
   "id, row_index, email, domain, raw, verdict, reason, mx_ok, mv_result, company, city, " +
-  "website, dominance_score, score_components, dataforseo_task_id, queued_for_apollo";
+  "website, dominance_score, score_components, dataforseo_task_id, queued_for_apollo, " +
+  "optimization_score, optimization_components, gbp_task_id, gbp_cid, gbp_place_id, gbp_serp";
 
 /** Which gate a `*_ts` column belongs to. One list, so the router and the lookup cannot drift. */
 const GATE_COLUMNS: Array<{ gate: GateKind; column: string }> = [
@@ -188,6 +213,7 @@ export async function getBatch(id: string): Promise<BatchRow | null> {
 const ACTIVE_STATUSES: BatchStatus[] = [
   "awaiting_workflow",
   "scoring",
+  "auditing",
   "scored",
   "parsing",
   "mx",
@@ -563,6 +589,17 @@ export interface ScoreWrite {
   rowId: string;
   score: number;
   components: Record<string, unknown>;
+  /**
+   * What the SERP said about their Google Business Profile, extracted from the payload the scoring
+   * sweep is already holding.
+   *
+   * It rides on the score write rather than getting its own pass because it costs nothing and comes
+   * from the same response: one UPDATE, no second call, and the `auditing` stage that follows has
+   * its lookup key ready without re-collecting the SERP on every tick.
+   */
+  gbpCid?: string | null;
+  gbpPlaceId?: string | null;
+  gbpSerp?: Record<string, unknown> | null;
 }
 
 /**
@@ -577,10 +614,106 @@ export async function applyScores(scores: ScoreWrite[]): Promise<void> {
   for (const s of scores) {
     const { error } = await supabaseAdmin
       .from("scraper_rows")
-      .update({ dominance_score: s.score, score_components: s.components })
+      .update({
+        dominance_score: s.score,
+        score_components: s.components,
+        gbp_cid: s.gbpCid ?? null,
+        gbp_place_id: s.gbpPlaceId ?? null,
+        gbp_serp: s.gbpSerp ?? null,
+      })
       .eq("id", s.rowId);
     if (error) throw new Error("applyScores: " + error.message);
   }
+}
+
+/**
+ * The audit sweep's whole worklist: rows that have a company and have neither been scored on
+ * optimization nor written off as unmeasurable.
+ *
+ * The `optimization_components is null` half is what makes the stage terminate. See the tri-state
+ * note on `StoredRow`.
+ */
+export async function auditableRows(batchId: string): Promise<StoredRow[]> {
+  const out: StoredRow[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("scraper_rows")
+      .select(ROW_COLUMNS)
+      .eq("batch_id", batchId)
+      .is("optimization_score", null)
+      .is("optimization_components", null)
+      .not("company", "is", null)
+      .order("row_index", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error("auditableRows: " + error.message);
+    const rows = (data ?? []) as unknown as StoredRow[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+
+/**
+ * Write the my_business_info task ids back onto their rows.
+ *
+ * ‼️ THIS RUNS IMMEDIATELY AFTER THE POST RETURNS AND BEFORE ANYTHING ELSE, and the `.is(null)`
+ * guard is what stops a retried tick buying the same profile twice. Exactly the shape
+ * `applyTaskIds` has for the SERP half and `mv_file_id` has for MillionVerifier, for exactly the
+ * same reason: the account is charged at task_post, so an id that never lands is money spent on a
+ * profile that never audits and leaves no trace.
+ */
+export async function applyGbpTaskIds(taskIds: ReadonlyMap<string, string>): Promise<void> {
+  for (const [rowId, taskId] of taskIds) {
+    const { error } = await supabaseAdmin
+      .from("scraper_rows")
+      .update({ gbp_task_id: taskId })
+      .eq("id", rowId)
+      .is("gbp_task_id", null);
+    if (error) throw new Error("applyGbpTaskIds: " + error.message);
+  }
+}
+
+export interface OptimizationWrite {
+  rowId: string;
+  score: number;
+  components: Record<string, unknown>;
+}
+
+/**
+ * Write optimization scores back.
+ *
+ * ‼️ A NULL SCORE IS NEVER PASSED IN. `scoreOptimization` returns null for "not one component could
+ * be measured", and 0 is the worst possible optimization score, which is the most interesting
+ * business on the list. Those rows go through `markAuditExhausted` instead, or stay untouched for
+ * the next tick. Same doctrine as `applyScores` and `applyMx`.
+ */
+export async function applyOptimizationScores(writes: OptimizationWrite[]): Promise<void> {
+  for (const w of writes) {
+    const { error } = await supabaseAdmin
+      .from("scraper_rows")
+      .update({ optimization_score: w.score, optimization_components: w.components })
+      .eq("id", w.rowId);
+    if (error) throw new Error("applyOptimizationScores: " + error.message);
+  }
+}
+
+/**
+ * This row was asked and nothing could be measured. Stop asking.
+ *
+ * Writes ONLY the components, leaving the score null, which is the middle state of the tri-state on
+ * `StoredRow`. It is what takes a row whose profile task failed and whose site refuses the crawl
+ * out of `auditableRows` permanently. Without it the batch parks at `auditing` forever, re-polling
+ * the same dead task every five minutes with nothing to show for it.
+ */
+export async function markAuditExhausted(
+  rowId: string,
+  components: Record<string, unknown>
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("scraper_rows")
+    .update({ optimization_components: components })
+    .eq("id", rowId);
+  if (error) throw new Error("markAuditExhausted: " + error.message);
 }
 
 /** Add to the batch's recorded spend. Read-modify-write; the cron runs one batch at a time. */

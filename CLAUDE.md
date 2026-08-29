@@ -3470,6 +3470,194 @@ weights, both unmeasured splits, the descending sort, every grammar row, the ref
 ```
 DATAFORSEO_LOGIN=                     # Unset is HANDLED: it still posts scored.csv, all rows "not measured".
 DATAFORSEO_PASSWORD=
-DATAFORSEO_MAX_QUERIES_PER_BATCH=     # Optional, default 1000 (~$0.60). Over it the batch REFUSES with the count.
+DATAFORSEO_MAX_QUERIES_PER_BATCH=     # Optional, default 1000. Counts BUSINESSES, not calls: one SERP
+                                      # ($0.0012) plus at most one GBP profile lookup ($0.0015), so ~$2.70
+                                      # per batch. Over it the batch REFUSES with the count.
 SCRAPER_DEFAULT_SCORE_QUERY=          # Optional. Falls back to "{company} {city}". Never put a vertical in the code default.
 ```
+
+## A SECOND score on the same pass: the GBP optimization audit (2026-08-28)
+`src/lib/scraper/gbp-audit.ts`. Migration: `docs/2026-08-28-scraper-gbp-audit.sql`.
+
+`dominance_score` answers "are they already winning". It does not answer "have they done the Google
+Business Profile work", and that second question is the one the call is about. So workflow B now
+produces TWO numbers on one pass, in one thread, in one file.
+
+> ‼️ **TWO NUMBERS, NOT ONE BLEND.** They come apart constantly: a new clinic with a perfect profile
+> is optimized and invisible, and a fifteen-year-old spa with 2,000 reviews and an empty profile is
+> the reverse. A blend answers neither question.
+
+> ‼️ **THE SORT IS `dominance_score` ALONE, DESCENDING, UNCHANGED.** `optimization_score` is a
+> COLUMN. `sortForCutoff` reads `score`, `buildScoredCsv`'s rank counts `score`, and neither has
+> changed. The file is sorted to decide who gets DELETED, and that question is dominance.
+
+```
+awaiting_workflow -> 2️⃣ -> scoring -> auditing -> scored -> [cutoff] -> [✅] -> awaiting_apollo_export
+```
+
+`auditing` sits BETWEEN scoring and scored and **the order is forced, not chosen**: the profile
+lookup is keyed by the `cid` the SERP returns, so it cannot run until scoring has collected.
+`publishScores` then runs ONCE, after both, with everything on it. `commitCutoff` is unchanged.
+`sweepAudit` mirrors `sweepScoring` step for step: post waves, park, let the 5-minute cron collect.
+
+### Three components are FREE, three cost one call
+
+| # | component | weight | attempted when |
+|---|---|---|---|
+| 1 | primary category present | 15 | a knowledge_graph **or** the profile came back |
+| 2 | 4 or more `additional_categories` | 20 | the profile came back |
+| 3 | description names the category AND the city | 15 | a description was found, and a category and city are known |
+| 4 | 5 or more photos | 15 | the profile returned a numeric `total_photos` |
+| 5 | 3 or more services carrying a snippet | 15 | the profile returned a services array |
+| 6 | category AND city in the landing page `<title>` and `<h1>` | 20 | the page was crawled, and a category and city are known |
+
+`business_data/google/my_business_info/task_post` is **$0.0015**, so a business now costs at most
+`$0.0012 + $0.0015 = $0.0027` and `DATAFORSEO_MAX_QUERIES_PER_BATCH` counts **businesses, not
+calls**: the default 1000 is about **$2.70** a batch. Do not restore the `$1.20` figure anywhere.
+
+> ‼️ **THE SAME DENOMINATOR RULE AS `score.ts`, AND EACH SCORE KEEPS ITS OWN.** `earned / attempted`
+> rescaled to 0-100, never `earned / 100`. Nothing is merged across the two: a business whose profile
+> call failed has a null `optimization_score` and a completely untouched `dominance_score`.
+> `optimization_score` and `optimization_components` are **one tri-state and the pair is the stage's
+> exit condition** (both null = not asked; score null plus components set = asked and unmeasurable,
+> stop asking; score set = done). Without the middle state a row whose task failed is re-polled for
+> thirty days and the batch parks at `auditing` forever.
+
+> ‼️ **`containsCategory` IS THE LOOSE DIRECTION, AND THAT IS THE INVERSE OF `score.ts`.** One
+> non-generic category token is enough, because requiring all of them fails "Medical Spa" against a
+> description saying "med spa". Dominance decides who gets DELETED so it must never flatter; this
+> decides what gets SAID on a call, where a false negative costs a real gap being missed and a false
+> positive costs one skipped beat. Do not "fix" it to match.
+
+### What the first live call found, and all four were invisible offline
+
+Re-run it with `bunx tsx --env-file=<envfile> scripts/_probe-gbp-live.ts "<company>" "<city>"`. It
+prints the resolved cid and the profile it matched, and takes `--serp-task` / `--gbp-task` to
+re-collect ids already bought, because `task_get` is free for 30 days and a diagnostic that re-buys
+its own inputs is one nobody runs twice.
+
+> ‼️ **1. A BRAND-NAME QUERY OFTEN RETURNS NO `knowledge_graph` AT ALL.** "Skin Bar MedSpa
+> Charlotte, NC" came back with three `local_pack` items and no knowledge_graph, and the cid was
+> sitting on the first of them. Reading only the knowledge_graph left the entire optimization audit
+> unmeasured for a business whose key was right there. That is the `google_reviews` failure exactly,
+> one block type over: the tri-state was right, the data was there, the lookup was too narrow.
+
+> ‼️ **2. AND THE SAME RESPONSE CARRIED THE TRAP THIS FEATURE IS WRITTEN AGAINST.** `local_pack`
+> rank 1 was "The Skin Bar QC" in **Matthews NC**, the right business. Rank 2 was "Skin Bar MedSpa"
+> in **Westminster COLORADO**, a different company whose title is a *better* string match for the
+> name queried. So "pick the local pack whose title looks most like the company" picks the wrong
+> state, silently, on the exact query that motivated the cid rule.
+>
+> The rule is therefore **Google's own rank 1, never the best title match**: Google resolved a query
+> that carried the city, and we would be re-resolving it on the name alone and doing it worse.
+> `shareANameToken` is the only guard on top and it is deliberately weak (one shared non-city word),
+> because its job is to reject an unrelated pack rather than to re-rank. City tokens are stripped
+> from the company name first, or "Charlotte Med Spa" matches "Charlotte Dermatology".
+>
+> `GbpSerpFacts.cidSource` RECORDS which block answered, because the two are not equally strong: a
+> knowledge_graph is Google asserting an entity, a local_pack is a ranked list of candidates.
+> **A `local_pack` carries no category and its `description` is not a GBP description** (the live
+> value was "5+ years in business, Matthews, NC / Closed, Opens 9 AM Tue"), so both stay null and
+> `sawCategorySource` is false, which keeps component 1 unmeasured rather than a fabricated zero.
+
+> ‼️ **3. `my_business_info` REQUIRES `language_name` AND `location_name` EVEN WITH AN EXACT cid.**
+> Omitting them answers `40501 Invalid Field: 'language_name'`. That is the SAFE failure shape and is
+> worth knowing as the contrast: the task is refused before it is created, so `taskId` is null and
+> `cost` is 0, and the null-id guard means nothing is stored and nothing is spent.
+
+> ‼️ **4. business_data COLLECTS AT `task_get/{id}`, WITH NO `/advanced/` SEGMENT**, and this is the
+> worst-shaped failure this client can have. The SERP API offers result levels so it uses
+> `task_get/advanced/{id}`; business_data has one level and answers HTTP 404 `40400 Not Found` to
+> that shape. The task was created and the account was **CHARGED $0.0015**, and then every collection
+> 404'd. A 404 is a 4xx so `request` correctly does not retry it, and `getTaskRaw` correctly reports
+> `pending` rather than inventing a verdict, so the row would have been re-polled every five minutes
+> for thirty days with the money already gone and **no error anywhere**. Same family as the 20100
+> bug. `ENDPOINTS` now carries a per-endpoint `collect` path.
+
+> ‼️ **`snippet` AT THE PROFILE ROOT IS THE ADDRESS, NOT A DESCRIPTION**, and it was in
+> `readDescription`'s key list until the live call printed it: "101 E Matthews St #200, Matthews, NC
+> 28105". A profile with no `description` would have had its address scored as its GBP copy, and an
+> address always contains the city and never the category, so every one of them would have reported
+> "description names the city, not the category" as a finding about copy that does not exist.
+>
+> **This is the limit of the widen-where-you-look rule.** Widen across spellings of the SAME fact,
+> never into a field that means something else. A wrong key that returns nothing costs one unmeasured
+> component; a wrong key that returns the wrong thing MANUFACTURES a finding.
+
+Every other guessed field name was confirmed correct on that call: `category`,
+`additional_categories` (a plain string array), `description`, `total_photos`, `services` (objects
+carrying `category` / `title` / `snippet` / `price`), `url` and `address_info.city`. The business
+scored **65 (6 of 6)**, and both zeros are real pitch lines: 33 services listed and **none of them
+described**, and a homepage title naming neither the category nor the city.
+
+### What is NOT measured, and must not be
+
+> ‼️ **`knowledge_graph_images_item.count` IS NOT A PHOTO COUNT** and is read nowhere. It is how many
+> images the search card rendered. `total_photos` off the profile is the only source; without it,
+> component 4 is unmeasured.
+
+> ‼️ **THREE OF MATTHEW'S CRITERIA ARE NOT OBSERVABLE FROM OUTSIDE AND CARRY NO WEIGHT:** location
+> data embedded in the photos (Google **strips EXIF** on upload, so only the profile owner can see
+> it), photo "quality" (subjective), and whether anyone plans to keep posting (a plan, not a state).
+> `UNVERIFIABLE` prints them in the thread as a "verify on the call" block **so their absence is
+> never mistaken for a low score**, with a line saying a 100 means the six things a lookup can see
+> are in order rather than that the profile is finished. They are delivery-checklist items. **Do not
+> invent a proxy for any of them.** GBP post cadence IS observable, and `my_business_updates` was
+> dropped on cost (Matthew's call: $0.00225 for one boolean is the worst value in the set).
+
+> ‼️ **"KEYWORD RICH" IS MECHANICAL OR IT IS NOT A CHECK.** The description must contain the primary
+> category words AND the city. No model call, no judgement, the same rule `looksLikeCallNotes` and
+> the cutoff grammar are held to. If it proves crude the fix is a better mechanical rule, never an
+> LLM scoring the copy: a model grading marketing prose returns a different answer on the same
+> description twice in a row, and this number goes on a card somebody reads down the phone.
+
+**The title/h1 check reuses `researchWebsite`** and crawls **only** the url that came from the
+profile or the knowledge_graph, never `scraper_rows.website` (that column is whatever the dropped
+CSV carried; this component is about the page Google points a searcher at). It is deadline-bounded
+twice: `researchWebsite` fetches up to three pages on a 20s homepage budget, so a row is skipped
+**untouched** when less than `CRAWL_BUDGET_MS` remains, and a skip writes nothing at all, because
+re-collecting a finished task next tick is free while writing `landing_page` as permanently
+unmeasured would turn a wall-clock accident into a finding. `SiteFetchError` leaves it **UNMEASURED,
+never failed**, the `CRAWL_BLOCK_LINE` precedent. The `<h1>` is re-extracted from
+`research.homepageHtml`, because `headings` has already merged h1/h2/h3 into one untagged array.
+
+### One file, and one new axis on the cutoff
+`scored.csv` and `dominant.csv` keep the original headers verbatim, then append `rank`,
+`dominance_score`, `score_measured`, `optimization_score`, `optimization_measured` and one
+`opt_<component>` column carrying a short verdict. **There is no optimization.csv.**
+`apollo_targets.csv` is unchanged: company and website, it is a search input.
+
+> ‼️ **THE `opt_` PREFIX IS NOT DECORATION.** `toCsv` is header-keyed and `buildScoredCsv` spreads
+> `...r.raw` FIRST, so a source file carrying a column literally named `services` or `photos` would
+> have its own value silently overwritten by ours. Apollo and Outscraper exports carry both. The
+> probe asserts the collision case.
+
+`buildScoredCsv`'s third argument defaults to `"dominance"` and **no caller in `src/` selects it**:
+the lane always passes `"both"`. It exists so `_probe-score.ts` keeps pinning the narrow
+three-column shape without being edited, which is what proves this change was additive.
+
+The grammar gains `optimization > 70` and `optimization < 40`.
+
+> ‼️ **BOTH OPTIMIZATION FORMS ARE "DROP", WHICH IS THE OPPOSITE OF HOW THE DOMINANCE AXIS READS ITS
+> `<` FORM.** `score < 40` means KEEP below 40; `optimization < 40` means DROP below 40. That is
+> deliberate: on dominance he is choosing who survives, on optimization he is skimming off a band
+> there is nothing to sell to, from either end. It is exactly why `CutoffPlan.axis` exists and why
+> `formatCutoffEcho` names the axis and the direction in words. **Do not harmonize them.**
+>
+> An optimization cut is a **PREDICATE, not a prefix**: the file is sorted by dominance, so the rows
+> it drops are scattered through it and `rows.slice(0, n)` would take a block of the most dominant
+> businesses instead. An unmeasured `optimization_score` is never dropped, same as on dominance.
+
+The summary names the **most common gap** across the batch, which is the line that writes the
+campaign. `countGaps`'s denominator is **attempted rows, not batch size**, or "118 of 140" quietly
+becomes a statement about how many lookups failed rather than about the businesses.
+
+> ‼️ **`ROW_COLUMNS` IN `store.ts` IS THE FIRST THING TO CHECK IF THIS LANE STARTS OVERSPENDING.** A
+> column missing from that select string is silently `undefined` rather than an error, so
+> `!row.gbp_task_id` would be true on every row forever and every tick would re-post and RE-BUY the
+> whole batch.
+
+Probe: `bunx tsx scripts/_probe-gbp-audit.ts` (195 checks, no key, no network, no DB). It proves the
+weights, **both directions of the denominator rule**, the Westminster trap off the real payload, the
+three distinct unmeasured notes, the live profile shape, the `opt_` collision and both new grammar
+forms. `_probe-score.ts` (107) and `_probe-scraper.ts` (71) are untouched and still pass.
