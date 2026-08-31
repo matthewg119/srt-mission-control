@@ -17,6 +17,13 @@ export interface EngineOk {
   mentioned: boolean;
   raw: string;
   citations: string[];
+  /** The searches the model actually ran to answer this prompt (the "fanout").
+   *  Read off `web_search_call.action.query` — see the note above runOpenAI.
+   *  Empty is normal and never an error: a prompt the model answered from
+   *  memory has no fanout, and OpenAI documents the field as usually-but-not-
+   *  always present. Callers must treat [] as "nothing observed", never as a
+   *  claim that no search happened. */
+  fanoutQueries: string[];
   latencyMs: number;
 }
 
@@ -24,6 +31,7 @@ export interface EngineNoData {
   status: "no_data";
   raw: null;
   citations: [];
+  fanoutQueries: [];
   latencyMs: number;
   error: string;
 }
@@ -50,19 +58,21 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
  *  downstream as a CONFIRMED absence and scores as a miss — fabricating the exact finding
  *  this file's header rule exists to prevent. Retrying is also the right move: a blank
  *  Responses payload is usually a truncated or tool-only turn. */
-async function withOneRetry(call: () => Promise<{ raw: string; citations: string[] }>): Promise<EngineResult> {
+async function withOneRetry(
+  call: () => Promise<{ raw: string; citations: string[]; fanoutQueries: string[] }>
+): Promise<EngineResult> {
   const start = Date.now();
   let lastError = "unknown error";
   for (let attempt = 0; attempt <= RETRIES_PER_ENGINE; attempt++) {
     try {
-      const { raw, citations } = await call();
+      const { raw, citations, fanoutQueries } = await call();
       if (!raw.trim()) throw new Error("empty response body");
-      return { status: "ok", mentioned: false, raw, citations, latencyMs: Date.now() - start };
+      return { status: "ok", mentioned: false, raw, citations, fanoutQueries, latencyMs: Date.now() - start };
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
     }
   }
-  return { status: "no_data", raw: null, citations: [], latencyMs: Date.now() - start, error: lastError };
+  return { status: "no_data", raw: null, citations: [], fanoutQueries: [], latencyMs: Date.now() - start, error: lastError };
 }
 
 /** Fill in `mentioned` now that the caller knows the business's aliases. */
@@ -76,6 +86,18 @@ function model(envVar: string, fallback: string): string {
 }
 
 // --- OpenAI Responses API + web_search --------------------------------------
+//
+// FANOUT: the response carries `web_search_call` items alongside the `message`
+// item, and each one names the search the model actually ran. Until 2026-08-31
+// this function filtered the output down to `type === "message"` and dropped
+// them, so every audit ever run paid for that data and discarded it. It is the
+// only observed (rather than guessed) record of what the market's questions
+// translate into, and the whole colony lane is built on it.
+//
+// Deliberately NOT sending `include: ["web_search_call.action.sources"]`. The
+// queries come back without it, the sources duplicate what url_citation already
+// gives us, and an unsupported `include` value 400s the request — which would
+// take down the live audit engine for a field we do not need.
 
 interface OpenAIAnnotation {
   type?: string;
@@ -86,9 +108,17 @@ interface OpenAIContentItem {
   text?: string;
   annotations?: OpenAIAnnotation[];
 }
+/** The search the model ran. OpenAI documents `query` (singular) and, on some
+ *  models, `queries` (plural). Both are read; neither is required. */
+interface OpenAISearchAction {
+  type?: string;
+  query?: string;
+  queries?: string[];
+}
 interface OpenAIOutputItem {
   type?: string;
   content?: OpenAIContentItem[];
+  action?: OpenAISearchAction;
 }
 interface OpenAIResponsesBody {
   output?: OpenAIOutputItem[];
@@ -97,7 +127,9 @@ interface OpenAIResponsesBody {
 
 export async function runOpenAI(prompt: string, city: string | null): Promise<EngineResult> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { status: "no_data", raw: null, citations: [], latencyMs: 0, error: "OPENAI_API_KEY not set" };
+  if (!apiKey) {
+    return { status: "no_data", raw: null, citations: [], fanoutQueries: [], latencyMs: 0, error: "OPENAI_API_KEY not set" };
+  }
 
   return withOneRetry(async () => {
     const input = city ? `I'm in ${city}. ${prompt}` : prompt;
@@ -114,11 +146,21 @@ export async function runOpenAI(prompt: string, city: string | null): Promise<En
     const json = (await res.json()) as OpenAIResponsesBody;
     if (!res.ok) throw new Error(json.error?.message || `OpenAI API error (${res.status})`);
 
-    const messageItems = (json.output ?? []).filter((o) => o.type === "message");
+    const output = json.output ?? [];
     const textParts: string[] = [];
     const citations = new Set<string>();
+    // Insertion-ordered: the order the model searched is signal, so a Set keeps
+    // first-seen position while collapsing repeats within one answer.
+    const fanout = new Set<string>();
 
-    for (const item of messageItems) {
+    for (const item of output) {
+      if (item.type === "web_search_call") {
+        const action = item.action;
+        if (action?.query) fanout.add(action.query);
+        for (const q of action?.queries ?? []) if (q) fanout.add(q);
+        continue;
+      }
+      if (item.type !== "message") continue;
       for (const content of item.content ?? []) {
         if (content.text) textParts.push(content.text);
         for (const ann of content.annotations ?? []) {
@@ -127,6 +169,6 @@ export async function runOpenAI(prompt: string, city: string | null): Promise<En
       }
     }
 
-    return { raw: textParts.join("\n").trim(), citations: [...citations] };
+    return { raw: textParts.join("\n").trim(), citations: [...citations], fanoutQueries: [...fanout] };
   });
 }
