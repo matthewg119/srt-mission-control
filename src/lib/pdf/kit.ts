@@ -27,12 +27,24 @@ import { jsPDF } from "jspdf";
 
 export type RGB = [number, number, number];
 
-export const MIDNIGHT: RGB = [11, 20, 38];
-export const OCEAN: RGB = [27, 101, 167];
+/** The page background. #0a0a0a, the same black the dashboard and the print rule in
+ *  globals.css use, so an artifact and the app it came from are the same colour.
+ *  Was [11,20,38] (#0B1426), a near-black NAVY: dark enough to read as black on a
+ *  screenshot, blue enough to clash with everything else once you noticed it. */
+export const MIDNIGHT: RGB = [10, 10, 10];
+/** The two short bars of the 3-bar brand mark. A dimmed REEF, not the old blue
+ *  #1B65A7 — that blue was the last one left in the artifact system and it only
+ *  ever appeared here, in an icon 4mm tall. */
+export const BRAND_BAR: RGB = [0, 122, 102];
 export const REEF: RGB = [0, 201, 167];
 export const WHITE: RGB = [255, 255, 255];
-export const MUTED: RGB = [150, 162, 180]; // ~text-secondary
-export const CARD_BORDER: RGB = [45, 55, 78];
+/** Secondary text. Neutralised from [150,162,180], which was a grey-BLUE and the
+ *  reason these documents still read cool even after the background went black.
+ *  Same luminance, so nothing about the type hierarchy moves. */
+export const MUTED: RGB = [156, 156, 158];
+/** Card and table rules. [45,55,78] was navy; this is rgba(255,255,255,0.08)
+ *  composited over the new #0a0a0a background, i.e. the dashboard's own border. */
+export const CARD_BORDER: RGB = [30, 30, 30];
 export const RED: RGB = [231, 76, 60];
 export const AMBER: RGB = [230, 168, 58];
 
@@ -49,7 +61,7 @@ export function setColor(doc: jsPDF, kind: "fill" | "text" | "draw", c: RGB) {
   else doc.setDrawColor(c[0], c[1], c[2]);
 }
 
-/** The SRT 3-bar mark (2 ocean + 1 taller reef), matching the site's icon. */
+/** The SRT 3-bar mark (2 short + 1 taller reef), matching the site's icon. */
 export function drawBrandIcon(doc: jsPDF, x: number, y: number, scale: number) {
   const bw = 1.6 * scale;
   const gap = 0.8 * scale;
@@ -57,8 +69,8 @@ export function drawBrandIcon(doc: jsPDF, x: number, y: number, scale: number) {
     setColor(doc, "fill", color);
     doc.roundedRect(barX, y + (7 * scale - h), bw, h, 0.4, 0.4, "F");
   };
-  draw(x, 3.6 * scale, OCEAN);
-  draw(x + bw + gap, 5.2 * scale, OCEAN);
+  draw(x, 3.6 * scale, BRAND_BAR);
+  draw(x + bw + gap, 5.2 * scale, BRAND_BAR);
   draw(x + (bw + gap) * 2, 7 * scale, REEF);
 }
 
