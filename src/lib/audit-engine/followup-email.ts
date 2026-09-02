@@ -110,6 +110,12 @@ function situation(truth: ThreadTruth): string {
  * price is a literal. It went stale once already, quoting a two-tier ladder for four days after the
  * offer changed. If you edit config/pitch.ts, edit this string in the same commit.
  *
+ * ‼️ THE CLOSE NAMED TWO DEAD TIERS UNTIL 2026-09-03. It said 'reply "Core" or "Complete"',
+ * which were two of the four tiers deleted in the 2026-08-25 rebuild. A few-shot is training data,
+ * so this was teaching the model to offer a ladder that has not existed since August, in email
+ * that gets SENT. It is now a one-word yes, which is what the doc above already said the ask
+ * should be. Nothing else in this example changed.
+ *
  * ‼️ THE SCARCITY LINE IS NOW TRUE AND IT WAS NOT BEFORE. It used to say "we can only take 5
  * clients at a time and this month we already took 2", which was a slot count attached to nothing,
  * of exactly the kind FREE_FIRST_BUILD's doc comment bans. The founding cohort IS a real countable
@@ -119,7 +125,7 @@ const FOLLOWUP_EXAMPLE_POST_PITCH = `One thing I owe you in writing before you d
 
 There's no discount clock on this. What there is, is 5 founding seats, and they're given in exchange for a case study when we hit the results.
 
-You start free. The monthly retainer only starts once we've brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $349/mo, month to month.
+You start free. The monthly retainer only starts once we've brought you 5 qualified AI-sourced inquiries inside the first 30 days. After that it is $499/mo, month to month.
 
 What that covers, every month:
 · We re-write your current pages
@@ -132,7 +138,7 @@ pages, profiles, data.
 
 If it's a yes,
 
-reply "Core" or "Complete" and I'll send the start link today.
+just reply yes and I'll send the start link today.
 
 If it's a no, just say so and I'll stop the emails
 

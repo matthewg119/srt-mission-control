@@ -63,7 +63,18 @@ export const VIDEO_LENGTH_LABEL = "4 min";
  * in OFFER_INCLUDES are a SEPARATE closed list and the two may never be mixed or netted against
  * each other — see the note over it.
  */
-export const PRICE_RETAINER = "$349 / month";
+// ‼️ RAISED FROM $349 TO $499 ON 2026-08-31, ON THE FOUNDER'S CALL, AND IT MOVED EVERYWHERE IN
+// THE SAME COMMIT. The trigger was /chatgpt-ads quoting $499 in its FAQ while this said $349.
+// Both numbers reach the same prospect, so the choice was one price or a contradiction, and
+// the founder chose the higher one. What moved with it: src/app/v2/page.tsx (twice),
+// followup-email.ts, and in srt-agwb funnel.js, /pricing, /method and llms.txt.
+//
+// ‼️ THE VALUE STACK BELOW STILL SAYS $499 FOR ONE LINE ITEM AND THAT IS NOW EQUAL TO THE PRICE,
+// not above it. Value above price is the entire point of that table, so the review-management
+// line no longer does the job it is there to do. It is left alone rather than quietly re-priced
+// because these are the founder's figures and inventing a new one to preserve a gap is exactly
+// the fifth-figure move the note over OFFER_INCLUDES forbids. Worth a decision, not a patch.
+export const PRICE_RETAINER = "$499 / month";
 
 /**
  * The same figure with no period attached, for sentences that already say one.
