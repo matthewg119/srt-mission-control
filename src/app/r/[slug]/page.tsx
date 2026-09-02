@@ -76,7 +76,17 @@ export default async function ReportPage({ params }: { params: { slug: string } 
         </>
       )}
 
-      <PricingCta />
+      {/* Everything here is already in scope. The CTA turns it into the /chatgpt-ads link so
+          the funnel opens on their own score rather than a generic headline. */}
+      <PricingCta
+        score={row.score}
+        city={row.city}
+        business={row.client_name}
+        competitor={view.mostRecommended[0]?.name ?? null}
+        mentioned={view.totalMentioned}
+        totalPrompts={view.totalPrompts}
+        reportSlug={params.slug}
+      />
       <MethodologyFooter createdAt={row.created_at} />
     </main>
   );
