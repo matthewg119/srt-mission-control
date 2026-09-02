@@ -16,6 +16,21 @@ body:has(.hub-root) {
   background: #ffffff;
 }
 
+/*
+ * ── TOKENS ───────────────────────────────────────────────────────────────────
+ *
+ * ‼️ TWO WRITERS, AND THEY OWN DIFFERENT VARIABLES ON PURPOSE.
+ *   themeStyle() (src/lib/hub/theme.ts) writes --hub-accent, --hub-accent-soft and
+ *   font-family. That is the CLIENT's brand, read off their own homepage.
+ *   skinStyle()  (src/lib/hub/skin.ts)  writes everything else below. That is OUR format.
+ * The sets are disjoint, so neither can quietly beat the other. If you add a variable, decide
+ * which file owns it and put it in exactly one.
+ *
+ * ‼️ EVERY LAYOUT NUMBER A TEMPLATE MIGHT MOVE IS A VARIABLE, NOT A LITERAL. --hub-measure,
+ * --hub-base and --hub-radius were literals (44rem, 17px, 8px) and every template variant
+ * would have had to restate them in four places, including inside .rev-mirror where a 1px
+ * disagreement moves the review tool's highlight off the words it belongs to.
+ */
 .hub-root {
   --hub-bg: #ffffff;
   --hub-fg: #14181f;
@@ -25,19 +40,40 @@ body:has(.hub-root) {
   --hub-accent: #00705f;
   --hub-accent-soft: #e6f3f0;
 
+  /* Surfaces a template may or may not use. Defaulted so a template that does not use them
+     still has something valid to resolve to. */
+  --hub-card: #ffffff;
+  --hub-band: #101418;
+  --hub-band-fg: #ffffff;
+
+  --hub-heading-family: inherit;
+  --hub-measure: 44rem;
+  --hub-base: 17px;
+  --hub-radius: 8px;
+
   background: var(--hub-bg);
   color: var(--hub-fg);
   font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 17px;
+  font-size: var(--hub-base);
   line-height: 1.65;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
 
 .hub-wrap {
-  max-width: 44rem;
+  max-width: var(--hub-measure);
   margin: 0 auto;
   padding: 3rem 1.25rem 5rem;
+}
+
+/* The masthead: logo, eyebrow, h1, lede. A wrapper rather than four loose siblings, because
+   a template that wants a header band or a centred masthead has nothing to grab otherwise.
+   <header> and not <div>: it is one, and the hub is read by crawlers. */
+.hub-head {
+  margin: 0 0 1.5rem;
+}
+.hub-head > :last-child {
+  margin-bottom: 0;
 }
 
 .hub-root a { color: var(--hub-accent); text-underline-offset: 2px; }
@@ -59,6 +95,12 @@ body:has(.hub-root) {
   text-transform: uppercase;
   color: var(--hub-faint);
   margin: 0 0 0.75rem;
+}
+
+.hub-root h1,
+.hub-root h2,
+.hub-root h3 {
+  font-family: var(--hub-heading-family);
 }
 
 .hub-root h1 {
@@ -137,7 +179,7 @@ body:has(.hub-root) {
   color: var(--hub-fg);
   background: var(--hub-bg);
   border: 1px solid var(--hub-rule);
-  border-radius: 8px;
+  border-radius: var(--hub-radius);
   padding: 0.7rem 0.8rem;
   resize: vertical;
 }
@@ -155,7 +197,7 @@ body:has(.hub-root) {
   color: #ffffff;
   background: var(--hub-accent);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--hub-radius);
   padding: 0.75rem 1.4rem;
   cursor: pointer;
 }
@@ -169,7 +211,7 @@ body:has(.hub-root) {
   font-size: 0.9375rem;
   color: var(--hub-muted);
   background: var(--hub-accent-soft);
-  border-radius: 8px;
+  border-radius: var(--hub-radius);
   padding: 0.7rem 0.9rem;
 }
 .rev-out { margin-top: 0.5rem; }
@@ -215,7 +257,7 @@ body:has(.hub-root) {
   line-height: normal;
   padding: 0.7rem 0.8rem;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--hub-radius);
   background: var(--hub-bg);
   color: transparent;
   white-space: pre-wrap;
@@ -233,8 +275,127 @@ body:has(.hub-root) {
 .rev-dests { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
 .rev-dests a {
   border: 1px solid var(--hub-accent);
-  border-radius: 8px;
+  border-radius: var(--hub-radius);
   padding: 0.6rem 1.1rem;
   text-decoration: none;
   font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TEMPLATES
+   ───────────────────────────────────────────────────────────────────────────
+   One class per template, written by skinClass() in src/lib/hub/skin.ts and
+   applied to .hub-root by all three renderers.
+
+   THESE RULES MAY MOVE COLOUR, TYPE, SPACING AND SHAPE. THEY MAY NOT MOVE
+   MEANING. No template hides an element, reorders one, or inserts text through
+   a ::before. The JSON-LD, the heading order and the NAP block are what the hub
+   is FOR, so a template that hid the contact panel would look like a design
+   choice and would in fact be deleting the product.
+
+   Each template sets its own token values here rather than in skin.ts, so a
+   template is a stylesheet edit and a per-client tweak is a stored value. The
+   two compose: skinStyle() writes custom properties in a style attribute, which
+   beats these class rules, so a client override always wins over its template.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Document. The original, stated explicitly so it is a choice, not a gap ── */
+.hub-tpl-document {
+  /* Inherits every default declared on .hub-root above. Deliberately empty:
+     an empty ruleset here is the record that "no overrides" is this template's
+     definition, and it gives a per-client value somewhere to sit later. */
+}
+
+/* ── Clinic. Warm ground, answers as cards, contact details in a panel ─────── */
+.hub-tpl-clinic {
+  --hub-bg: #fbfaf8;
+  --hub-fg: #1b1a18;
+  --hub-muted: #5c574f;
+  --hub-faint: #8d8579;
+  --hub-rule: #e8e2da;
+  --hub-card: #ffffff;
+  --hub-measure: 46rem;
+  --hub-radius: 14px;
+}
+body:has(.hub-tpl-clinic) { background: #fbfaf8; }
+
+.hub-tpl-clinic .hub-logo { max-height: 64px; }
+
+/* The answer list stops being rows and becomes cards. Same <ul>, same <a>, same
+   order: only the border moves to the li and a surface goes underneath. */
+.hub-tpl-clinic .hub-list { display: grid; gap: 0.75rem; }
+.hub-tpl-clinic .hub-list li {
+  border: 1px solid var(--hub-rule);
+  border-radius: var(--hub-radius);
+  background: var(--hub-card);
+}
+.hub-tpl-clinic .hub-list a { padding: 1rem 1.15rem; }
+.hub-tpl-clinic .hub-list a:hover { color: var(--hub-accent); }
+
+.hub-tpl-clinic .hub-nap {
+  border: 1px solid var(--hub-rule);
+  border-radius: var(--hub-radius);
+  background: var(--hub-card);
+  padding: 1.25rem 1.35rem 1.5rem;
+}
+.hub-tpl-clinic .hub-nap dt:first-of-type { margin-top: 0; }
+
+/* ── Editorial. Serif headings, wide margins, a large lede ─────────────────── */
+.hub-tpl-editorial {
+  --hub-bg: #fffdf9;
+  --hub-fg: #1a1a18;
+  --hub-muted: #55524b;
+  --hub-faint: #8a867c;
+  --hub-rule: #e2ddd2;
+  --hub-heading-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --hub-measure: 40rem;
+  --hub-radius: 3px;
+  --hub-base: 18px;
+}
+body:has(.hub-tpl-editorial) { background: #fffdf9; }
+
+.hub-tpl-editorial .hub-head {
+  border-bottom: 1px solid var(--hub-rule);
+  padding-bottom: 1.75rem;
+  margin-bottom: 2rem;
+}
+.hub-tpl-editorial h1 { letter-spacing: -0.01em; }
+.hub-tpl-editorial .hub-lede { font-size: 1.25rem; line-height: 1.5; }
+.hub-tpl-editorial .hub-eyebrow { letter-spacing: 0.14em; }
+.hub-tpl-editorial .hub-list a { padding: 1.15rem 0; }
+
+/* ── Bold. Dark header band behind the masthead, oversized name, white body ── */
+.hub-tpl-bold {
+  --hub-bg: #ffffff;
+  --hub-fg: #101418;
+  --hub-muted: #4d5560;
+  --hub-faint: #7f8894;
+  --hub-rule: #e1e5ea;
+  --hub-band: #101418;
+  --hub-band-fg: #ffffff;
+  --hub-measure: 48rem;
+  --hub-radius: 10px;
+}
+
+/* ‼️ THE NEGATIVE MARGINS MUST MATCH .hub-wrap's PADDING (3rem 1.25rem) OR THE
+   BAND LEAVES A WHITE GUTTER DOWN BOTH SIDES ON A PHONE. The band is the header
+   escaping the measure; there is no full-bleed wrapper in the markup to use
+   instead, and adding one would change the DOM for every template. */
+.hub-tpl-bold .hub-head {
+  background: var(--hub-band);
+  color: var(--hub-band-fg);
+  margin: -3rem -1.25rem 2.5rem;
+  padding: 3rem 1.25rem 2.5rem;
+}
+.hub-tpl-bold .hub-head h1 { font-size: clamp(2rem, 6vw, 3rem); }
+/* The band's own foreground wins inside it: --hub-muted and --hub-faint are
+   tuned for a white page and are unreadable on near-black. */
+.hub-tpl-bold .hub-head .hub-eyebrow { color: rgba(255, 255, 255, 0.62); }
+.hub-tpl-bold .hub-head .hub-lede { color: rgba(255, 255, 255, 0.82); }
+.hub-tpl-bold .hub-head a { color: var(--hub-band-fg); }
+
+.hub-tpl-bold .hub-list a { padding: 1.15rem 0; font-weight: 500; }
+.hub-tpl-bold .hub-nap {
+  border-top-width: 2px;
+  border-top-color: var(--hub-fg);
 }

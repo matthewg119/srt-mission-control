@@ -494,12 +494,26 @@ async function instructionsFor(
       const themed = await themeConfirmed(c.id);
       const overrides = themed ? await themeOverrides(c.id) : [];
 
+      // The design half. Read here rather than described in prose so the card states the
+      // template this client is ACTUALLY on, the same reason themeLine reads the stored theme.
+      const { loadSkin, designPreviewUrl } = await import("./hub-skin");
+      const { skinLine, templateMenu } = await import("@/lib/hub/skin");
+      const skin = await loadSkin(c.id);
+
       return [
         "The hostnames are attached to Vercel already. What is left is the THEME.",
         "",
         ...hosts.map((h) => `  • \`${h.host}\` (${h.kind})`),
         "",
         ...formatDnsRecords(await loadDnsRows(c.id), domain),
+        "",
+        skinLine(skin),
+        "*Do not like how it looks?* Reply in this thread:",
+        templateMenu(),
+        "Or paste a screenshot of a page whose look you want and I will read the colours, the " +
+          "corner radius, the column width and the text size off it. Every change un-confirms " +
+          "the theme, so you can go round as many times as you like before signing it off.",
+        `*See a change before it is confirmed:* ${designPreviewUrl(c.id)}`,
         "",
         themeLine(themed, overrides),
         // Matthew asked for this one by name: "Step 15 needs to give me the link to confirm the

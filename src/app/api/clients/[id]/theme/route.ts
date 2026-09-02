@@ -143,6 +143,40 @@ export async function POST(
       return NextResponse.json({ ok: true, theme: next });
     }
 
+    // ── The template the hub is built on ────────────────────────────────────
+    //
+    // ‼️ IT WRITES `hub_skin`, NOT `theme`, AND IT GOES THROUGH writeSkin().
+    // The two columns are disjoint on purpose (see src/lib/hub/skin.ts), and writeSkin is
+    // where "changing the look un-confirms it" lives. Doing the update inline here would be a
+    // second writer of the same pair of columns, and the one that forgot the un-confirm would
+    // put an unreviewed design on a client's own domain.
+    //
+    // Naming a template DROPS the per-client overrides, exactly as the Slack path does, so the
+    // board and the thread cannot mean different things by the same word.
+    case "template": {
+      const { isTemplate, EMPTY_SKIN } = await import("@/lib/hub/skin");
+      const { writeSkin } = await import("@/lib/clients/hub-skin");
+
+      const wanted = typeof body.template === "string" ? body.template.trim().toLowerCase() : "";
+      if (!isTemplate(wanted)) {
+        return NextResponse.json({ ok: false, error: `Unknown template: ${wanted}` });
+      }
+
+      const res = await writeSkin(
+        clientId,
+        { ...EMPTY_SKIN, template: wanted, source: "template", sourceNote: null },
+        actor ?? "the dashboard"
+      );
+      if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 500 });
+
+      // The theme comes back un-confirmed, so the panel has to re-render its Confirm state.
+      return NextResponse.json({
+        ok: true,
+        skin: res.skin,
+        theme: { ...stored, confirmedAt: null, confirmedBy: null },
+      });
+    }
+
     // ── The two fields the hub renders as the business's identity ───────────
     case "name": {
       const legal = typeof body.legalName === "string" ? body.legalName.trim() : "";

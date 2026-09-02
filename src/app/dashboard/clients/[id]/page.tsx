@@ -34,6 +34,7 @@ import { loadReviewAudit, reviewPlatformLabel } from "@/lib/clients/review-audit
 import { loadSweep } from "@/lib/clients/presence-sweep";
 import { platformByKey } from "@/config/presence-platforms";
 import { readTheme } from "@/lib/hub/theme";
+import { readSkin } from "@/lib/hub/skin";
 import { listOnboardingDocs } from "@/lib/clients/onboarding-docs";
 import { stepByKey } from "@/lib/clients/delivery-checklist";
 import { hostsFor, vercelConfig } from "@/lib/hub/vercel-domains";
@@ -677,6 +678,7 @@ export default async function ClientDetailPage({
           dbaName={(client.dba_name as string | null) ?? null}
           hasWebsite={Boolean(client.website || client.domain)}
           theme={readTheme(client.theme) as ThemeView}
+          skin={readSkin(client.hub_skin)}
         />
       </div>
 

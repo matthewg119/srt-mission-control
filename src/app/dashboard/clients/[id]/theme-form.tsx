@@ -18,6 +18,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { TEMPLATE_CATALOGUE, type StoredSkin } from "@/lib/hub/skin";
 
 export interface ThemeView {
   logoUrl: string | null;
@@ -36,12 +37,14 @@ export function ThemeForm({
   dbaName,
   hasWebsite,
   theme,
+  skin,
 }: {
   clientId: string;
   legalName: string;
   dbaName: string | null;
   hasWebsite: boolean;
   theme: ThemeView;
+  skin: StoredSkin;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -139,6 +142,55 @@ export function ThemeForm({
         >
           {busy === "name" ? "…" : "Save the name"}
         </button>
+      </div>
+
+      <hr className="border-white/10" />
+
+      {/* ── The template ─────────────────────────────────────────────────── */}
+      {/*
+        ‼️ THIS IS THE SKIN, NOT THE THEME, AND THE TWO ARE DELIBERATELY DIFFERENT COLUMNS.
+        Theme is the CLIENT's brand: logo, accent, font, read off their own homepage. Template
+        is OUR format: which layout, how wide, how round, what it stands on. They sit in one
+        panel because they are one conversation on a call, and in two columns because they have
+        different provenance and only one of them is a fact about the client.
+
+        Picking one DROPS any per-client adjustments, the same as the Slack path, because
+        carrying a warm background into a dark-banded layout is neither template.
+      */}
+      <div className="space-y-2">
+        <p className="text-xs text-[rgba(255,255,255,0.4)]">
+          The layout the hub and the review tool are built on. Picking one un-confirms the
+          theme, so look at the preview before confirming again. To go further than these four,
+          paste a screenshot of a reference into this client&apos;s step 15 thread in Slack and
+          the colours, corners, column width and text size are read off it.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {TEMPLATE_CATALOGUE.map((t) => {
+            const active = skin.template === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                title={t.blurb}
+                onClick={() => post({ action: "template", template: t.key }, `tpl-${t.key}`)}
+                disabled={busy !== null || active}
+                className={`rounded border px-2 py-1 text-xs disabled:opacity-100 ${
+                  active
+                    ? "border-[#4ADE80] text-[#4ADE80]"
+                    : "border-white/15 text-white hover:border-white/40"
+                }`}
+              >
+                {busy === `tpl-${t.key}` ? "…" : t.name}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-[rgba(255,255,255,0.35)]">
+          {TEMPLATE_CATALOGUE.find((t) => t.key === skin.template)?.blurb}
+          {skin.source === "screenshot" && skin.sourceNote
+            ? ` Adjusted from a reference image: ${skin.sourceNote}`
+            : ""}
+        </p>
       </div>
 
       <hr className="border-white/10" />

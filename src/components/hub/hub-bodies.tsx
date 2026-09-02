@@ -97,13 +97,22 @@ export function HubIndexBody({
         dangerouslySetInnerHTML={{ __html: jsonLdScript(localBusinessJsonLd(client, host)) }}
       />
 
-      <HubLogo client={client} />
-      <p className="hub-eyebrow">{where || "Questions and answers"}</p>
-      <h1>{client.displayName}</h1>
-      <p className="hub-lede">
-        Straight answers to the questions people actually ask, written out in full so they
-        can be read and quoted.
-      </p>
+      {/*
+        ‼️ THE MASTHEAD IS WRAPPED, AND THE WRAPPER IS THE ONLY THING TEMPLATES ADDED TO THIS
+        FILE. A template that wants a header band or a centred masthead has nothing to grab
+        when the logo, eyebrow, h1 and lede are four loose siblings of the answer list.
+        <header> rather than <div> because it is one, and this page is read by crawlers.
+        Nothing inside it moved, so the heading order and the JSON-LD above are unchanged.
+      */}
+      <header className="hub-head">
+        <HubLogo client={client} />
+        <p className="hub-eyebrow">{where || "Questions and answers"}</p>
+        <h1>{client.displayName}</h1>
+        <p className="hub-lede">
+          Straight answers to the questions people actually ask, written out in full so they
+          can be read and quoted.
+        </p>
+      </header>
 
       {pages.length > 0 ? (
         <>
@@ -185,12 +194,15 @@ export function HubAnswerBody({
         }}
       />
 
-      <HubLogo client={client} />
-      <p className="hub-eyebrow">
-        <a href="/">{client.displayName}</a>
-      </p>
-      <h1>{page.title}</h1>
-      {page.question !== page.title && <p className="hub-lede">{page.question}</p>}
+      {/* Same wrapper as the index, for the same reason. See HubIndexBody. */}
+      <header className="hub-head">
+        <HubLogo client={client} />
+        <p className="hub-eyebrow">
+          <a href="/">{client.displayName}</a>
+        </p>
+        <h1>{page.title}</h1>
+        {page.question !== page.title && <p className="hub-lede">{page.question}</p>}
+      </header>
 
       <div className="hub-answer">
         {/*

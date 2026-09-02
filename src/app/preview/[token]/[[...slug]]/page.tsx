@@ -39,6 +39,7 @@ import { listAllForBoard } from "@/lib/hub/pages";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
+import { skinStyle, skinClass } from "@/lib/hub/skin";
 import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
 import "@/app/hub/[host]/hub.css";
 
@@ -87,7 +88,12 @@ export default async function TokenPreview({ params, searchParams }: Props) {
   const slug = params.slug?.[0];
 
   return (
-    <div className="hub-root" lang={client.language} style={themeStyle(client.theme)}>
+    <div
+      className={`hub-root ${skinClass(client.skin)}`}
+      lang={client.language}
+      // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
+      style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
+    >
       <PreviewRibbon host={host} slug={slug} />
       <div className="hub-wrap">
         {kind === "reviews" ? (

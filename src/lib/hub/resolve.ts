@@ -15,6 +15,7 @@
 import { unstable_cache, revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/db";
 import { readTheme, activeTheme, type HubTheme } from "@/lib/hub/theme";
+import { readSkin, activeSkin, type StoredSkin } from "@/lib/hub/skin";
 
 export type HubKind = "hub" | "reviews";
 
@@ -59,6 +60,15 @@ export interface HubClient {
    * renderer can never be the place a bad colour reaches a style attribute.
    */
   theme: HubTheme | null;
+  /**
+   * The template and ground colours the page is built on, or null.
+   *
+   * Gated on the SAME confirmation the theme is, because they are one decision — "the look is
+   * signed off" — and two independent gates would let a hub go live half-confirmed with no
+   * way to describe which half. Null renders the Document template, which is what every hub
+   * built before this existed already renders.
+   */
+  skin: StoredSkin | null;
 }
 
 export type HostResolution =
@@ -67,7 +77,7 @@ export type HostResolution =
 
 const SELECT =
   "id, legal_name, dba_name, domain, website, address_line1, address_line2, city, state, " +
-  "postal_code, phone, email, hours, language, review_destination_primary, review_workflow, theme";
+  "postal_code, phone, email, hours, language, review_destination_primary, review_workflow, theme, hub_skin";
 
 async function lookup(host: string): Promise<HostResolution> {
   const { data, error } = await supabaseAdmin
@@ -103,9 +113,25 @@ async function lookup(host: string): Promise<HostResolution> {
  * a second copy of this mapping is how a preview starts quietly disagreeing with the live
  * page about which name or which address it shows.
  */
-export function toHubClient(c: Record<string, unknown>): HubClient {
+export function toHubClient(
+  c: Record<string, unknown>,
+  opts?: { pending?: boolean }
+): HubClient {
   const legalName = (c.legal_name as string | null) ?? "";
   const dbaName = (c.dba_name as string | null) ?? null;
+
+  // ‼️ `pending` IS FOR THE INTERNAL PREVIEW AND FOR NOTHING ELSE.
+  //
+  // The confirmation gate exists so a colour scraped out of a cookie banner is never a thing a
+  // client discovers on a call. That is right for the live host and right for the tokenised
+  // preview link, which IS shown to clients. It is wrong for the dashboard preview, whose whole
+  // job is to show what has just been changed: without this, choosing a template and looking at
+  // it required confirming it first, so the only way to see a design was to sign it off unseen.
+  //
+  // Same split the two previews already make about DRAFT PAGES, for the same reason.
+  const storedTheme = readTheme(c.theme);
+  const storedSkin = readSkin(c.hub_skin);
+  const pending = opts?.pending === true;
 
   return {
     id: c.id as string,
@@ -126,7 +152,15 @@ export function toHubClient(c: Record<string, unknown>): HubClient {
     language: (c.language as string | null) ?? "en",
     reviewDestinationPrimary: (c.review_destination_primary as string | null) ?? null,
     reviewWorkflow: (c.review_workflow as Record<string, unknown> | null) ?? null,
-    theme: activeTheme(readTheme(c.theme)),
+    theme: pending
+      ? // Still through the same validators — `pending` relaxes the CONFIRMATION, never the
+        // validation. A colour that failed safeColor() has no business in a style attribute on
+        // an internal page either.
+        activeTheme({ ...storedTheme, confirmedAt: storedTheme.confirmedAt ?? "pending" })
+      : activeTheme(storedTheme),
+    skin: pending
+      ? storedSkin
+      : activeSkin(storedSkin, storedTheme.confirmedAt),
   };
 }
 
@@ -140,7 +174,10 @@ export function toHubClient(c: Record<string, unknown>): HubClient {
  * This never touches client_hosts, so a preview works before a single domain is attached
  * — which is the point: 5f wants the client to see the hub BEFORE the DNS conversation.
  */
-export async function loadClientForPreview(clientId: string): Promise<HubClient | null> {
+export async function loadClientForPreview(
+  clientId: string,
+  opts?: { pending?: boolean }
+): Promise<HubClient | null> {
   const { data, error } = await supabaseAdmin
     .from("clients")
     .select(SELECT)
@@ -150,7 +187,7 @@ export async function loadClientForPreview(clientId: string): Promise<HubClient 
   if (error) throw new Error(`[hub/resolve] preview load failed: ${error.message}`);
   if (!data) return null;
 
-  return toHubClient(data as unknown as Record<string, unknown>);
+  return toHubClient(data as unknown as Record<string, unknown>, opts);
 }
 
 const cached = unstable_cache(lookup, ["hub-host"], {

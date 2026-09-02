@@ -15,6 +15,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { themeStyle } from "@/lib/hub/theme";
+import { skinStyle, skinClass } from "@/lib/hub/skin";
 import "./hub.css";
 
 // Not force-dynamic. Every dashboard page and API route in this repo sets
@@ -68,10 +69,15 @@ export default async function HubLayout({ children, params }: Props) {
     // The theme is four CSS custom properties overriding what hub.css already declares
     // on .hub-root, so a themed hub and an unthemed one are the same markup. themeStyle
     // returns {} when there is no confirmed theme.
+    // ‼️ SKIN FIRST, THEME SECOND, IN THE SPREAD AND IN EVERY OTHER RENDERER.
+    // They write disjoint variables today, so the order is invisible — and the day one of them
+    // grows an accent, the CLIENT's brand has to beat a colour read off a reference image.
+    // skinClass() always returns a class, including for the default template, so the live page
+    // and both previews carry the same attribute.
     <div
-      className="hub-root"
+      className={`hub-root ${skinClass(resolved.client.skin)}`}
       lang={resolved.client.language}
-      style={themeStyle(resolved.client.theme)}
+      style={{ ...skinStyle(resolved.client.skin), ...themeStyle(resolved.client.theme) }}
     >
       <div className="hub-wrap">{children}</div>
     </div>

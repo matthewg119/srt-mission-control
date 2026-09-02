@@ -37,6 +37,7 @@ import { listAllForBoard } from "@/lib/hub/pages";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
+import { skinStyle, skinClass } from "@/lib/hub/skin";
 import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
 import "@/app/hub/[host]/hub.css";
 
@@ -62,7 +63,12 @@ export default async function HubPreview({ params, searchParams }: Props) {
   const session = await auth().catch(() => null);
   if (!session?.user) notFound();
 
-  const client = await loadClientForPreview(params.id);
+  // ‼️ `pending: true` IS THE SECOND THING THAT MAKES THIS PREVIEW THE INTERNAL ONE, and it is
+  // the same distinction it already draws about drafts. It renders the theme and the skin
+  // BEFORE they are confirmed, because otherwise the only way to see a design is to sign it off
+  // unseen — the deadlock themeConfirmed() was already untangled from once. The tokenised
+  // /preview/[token] link is shown to clients and deliberately does NOT pass this.
+  const client = await loadClientForPreview(params.id, { pending: true });
   if (!client) notFound();
 
   // The hostname the client WILL have. Composed, not resolved, so this works before the
@@ -88,7 +94,12 @@ export default async function HubPreview({ params, searchParams }: Props) {
   const slug = params.slug?.[0];
 
   return (
-    <div className="hub-root" lang={client.language} style={themeStyle(client.theme)}>
+    <div
+      className={`hub-root ${skinClass(client.skin)}`}
+      lang={client.language}
+      // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
+      style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
+    >
       <PreviewBanner clientId={params.id} kind={kind} host={host} slug={slug} />
       <div className="hub-wrap">
         {kind === "reviews" ? (

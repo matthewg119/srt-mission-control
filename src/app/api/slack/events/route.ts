@@ -913,6 +913,30 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: true });
         }
 
+        // 1a-ter. `template clinic` / `skin` / `skin reset` in step 15's or 16's thread.
+        //
+        // ‼️ ABOVE THE ASSISTANT BRANCH FOR THE SAME REASON THE AVATAR BRANCH BELOW IS.
+        // Free text in a step thread is answered by a model, so without this a typed template
+        // name gets a paragraph about templates instead of a page that changed.
+        //
+        // The prefixes are EXACT and the step is checked (isSkinStep), so "the editorial team"
+        // typed anywhere else in this channel is a sentence and stays one. handleSkinThreadReply
+        // returns null when it does not recognise the message, and the fall-through is the point.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleSkinThreadReply } = await import("@/lib/clients/hub-skin");
+          const said = await handleSkinThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (said) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
+            if (!slackOk(posted)) console.error("[slack/events] skin reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         // 1b. `avatar: laser hair removal` in step 8's thread, or in step 23's on the call.
         //
         // ‼️ IT SITS ABOVE THE ASSISTANT BRANCH, WHICH IS THE BRANCH IT WOULD OTHERWISE BE EATEN
@@ -933,6 +957,58 @@ export async function POST(request: NextRequest) {
           if (said) {
             const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
             if (!slackOk(posted)) console.error("[slack/events] avatar reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 1c. A design reference dropped in step 15's or 16's thread.
+        //
+        // ‼️ IT MUST SIT ABOVE captureOnboardingUploads, WHICH OWNS EVERY OTHER FILE IN THIS
+        // CHANNEL. A screenshot in a design thread is a reference to read a skin off, not a
+        // presence-sweep artifact to file against the client — and the capture below would take
+        // it, attribute it to a platform and tick nothing, with no sign anything was missed.
+        //
+        // Gated on the STEP, not on the picture, so a sweep screenshot in a sweep thread is
+        // untouched. handleSkinScreenshot returns null when the step is wrong or the files are
+        // not images, and the fall-through goes exactly where it used to.
+        //
+        // ‼️ THE ACK GOES OUT BEFORE THE VISION CALL. Slack re-delivers an event it has not
+        // heard back from within three seconds and a vision read is slower than that, so the
+        // work runs in waitUntil — the same shape step 10's `run` uses, and for the same reason:
+        // the retries look identical to the first delivery and would spend the call twice.
+        if (client && parentThreadTs && attachedFiles.length > 0) {
+          const { isSkinStep, hasSkinReference } = await import("@/lib/clients/hub-skin");
+          // ‼️ BOTH CONDITIONS, AND THE SECOND IS NOT BELT AND BRACES. Gating on the step
+          // alone would acknowledge a PDF dropped in step 15's thread with "reading the design
+          // out of that" and then post nothing, because the handler correctly declines it.
+          if (isSkinStep(client.stepKey) && hasSkinReference(attachedFiles)) {
+            const clientId = client.id;
+            const stepKey = client.stepKey;
+            const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+            const said = await slack.postThreadReply(
+              channel,
+              parentThreadTs,
+              ":hourglass_flowing_sand: Reading the design out of that. A few seconds."
+            );
+            if (!slackOk(said)) console.error("[slack/events] skin ack failed");
+
+            waitUntil(
+              (async () => {
+                const { handleSkinScreenshot } = await import("@/lib/clients/hub-skin");
+                const res = await handleSkinScreenshot({
+                  clientId,
+                  stepKey,
+                  files: attachedFiles,
+                  text: userText,
+                  by,
+                });
+                if (res) {
+                  await slack.postThreadReply(channel, parentThreadTs!, res.message);
+                }
+              })().catch((e) =>
+                console.error("[slack/events] skin screenshot threw:", (e as Error).message)
+              )
+            );
             return NextResponse.json({ ok: true });
           }
         }
@@ -2086,6 +2162,19 @@ async function handleFileShared(fileId: string): Promise<void> {
       const threadTs = share.thread_ts ?? share.ts;
       const client = await clientForThread(channelId, threadTs);
       if (!client || !threadTs) continue;
+
+      // ‼️ A DESIGN REFERENCE IS NOT EVIDENCE, AND THIS IS THE OTHER HALF OF THAT GUARD.
+      // An upload fires BOTH this event and a `message` with subtype file_share, in no
+      // guaranteed order — the trap this same function already documents for #srt-scraper. The
+      // message path owns a design step's files and reads a skin off them; filing the same
+      // picture here would put somebody else's homepage in this client's document record,
+      // attributed to no platform, where it would later be counted as a sweep artifact.
+      const { isSkinStep, hasSkinReference } = await import("@/lib/clients/hub-skin");
+      // ‼️ IT SKIPS THE IMAGE, NOT THE THREAD. Gating on the step alone would silently drop a
+      // PDF uploaded into step 15 with no comment: the message path declines it (not an image)
+      // and this path would have declined it too, so nothing would file it anywhere. The same
+      // predicate the message path uses, so exactly one of the two claims each file.
+      if (isSkinStep(client.stepKey) && hasSkinReference([file])) continue;
 
       const result = await captureOnboardingFile({
         clientId: client.id,

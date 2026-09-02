@@ -225,12 +225,22 @@ export function ReviewClient({
 
   return (
     <>
-      <p className="hub-eyebrow">{businessName}</p>
-      <h1>Four questions, in your own words</h1>
-      <p className="hub-lede">
-        About ninety seconds. Answer whichever you like and skip the rest. Nothing is posted
-        unless you post it yourself.
-      </p>
+      {/*
+        The same .hub-head wrapper the hub bodies use, so a template's masthead treatment
+        reaches this page too. Without it a banded template renders a band on learn.{domain}
+        and a bare heading on reviews.{domain}, which reads as two different sites for the
+        one business — the exact thing sharing a theme object exists to prevent.
+        The COPY is untouched: the four questions, the wording and the flow are identical for
+        every client and are not themable (Runner v3 5g).
+      */}
+      <header className="hub-head">
+        <p className="hub-eyebrow">{businessName}</p>
+        <h1>Four questions, in your own words</h1>
+        <p className="hub-lede">
+          About ninety seconds. Answer whichever you like and skip the rest. Nothing is posted
+          unless you post it yourself.
+        </p>
+      </header>
 
       {needsSpanish && (
         // Rendered rather than hidden, because a Spanish-speaking customer being handed

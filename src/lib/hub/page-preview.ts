@@ -22,6 +22,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { HubAnswerBody } from "@/components/hub/hub-bodies";
 import { activeTheme, readTheme, themeStyle } from "@/lib/hub/theme";
+import { activeSkin, readSkin, skinStyle, skinClass } from "@/lib/hub/skin";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import type { HubClient } from "@/lib/hub/resolve";
 
@@ -64,11 +65,32 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** The four theme custom properties, as an inline style string. */
-function styleAttr(theme: ReturnType<typeof activeTheme>): string {
-  const style = themeStyle(theme) as Record<string, string>;
-  const parts = Object.entries(style).map(([k, v]) => `${k}: ${v}`);
+/** The skin and theme custom properties, as an inline style string. */
+function styleAttr(client: HubClient): string {
+  // Skin first, theme second. Same order as every other renderer; see src/lib/hub/skin.ts.
+  const style = {
+    ...(skinStyle(client.skin) as Record<string, string>),
+    ...(themeStyle(client.theme) as Record<string, string>),
+  };
+
+  const parts = Object.entries(style).map(([k, v]) => `${cssName(k)}: ${v}`);
   return parts.length ? ` style="${escapeHtml(parts.join("; "))}"` : "";
+}
+
+/**
+ * A React style key as CSS writes it.
+ *
+ * ‼️ THIS IS A REAL DIFFERENCE FROM THE OTHER RENDERERS AND IT WAS SILENTLY WRONG.
+ * themeStyle() returns a React CSSProperties object, where the font key is `fontFamily`.
+ * React kebab-cases that on its way into the DOM; a raw style attribute does not, so this file
+ * has been emitting `style="fontFamily: ..."`, which every browser ignores — a client's font
+ * was applied on the live hub and on both previews and silently dropped in the one artifact
+ * that gets opened on a screen share in front of them.
+ *
+ * Custom properties are passed through untouched: `--hub-bg` must not become `--hub--bg`.
+ */
+function cssName(key: string): string {
+  return key.startsWith("--") ? key : key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 }
 
 interface Loaded {
@@ -86,7 +108,7 @@ async function load(clientId: string): Promise<Loaded | { error: string }> {
   const { data } = await supabaseAdmin
     .from("clients")
     .select(
-      "id, legal_name, dba_name, domain, subdomain, city, state, address_line1, address_line2, postal_code, phone, email, website, hours, language, theme, ops_thread_ts, review_destination_primary, review_workflow"
+      "id, legal_name, dba_name, domain, subdomain, city, state, address_line1, address_line2, postal_code, phone, email, website, hours, language, theme, hub_skin, ops_thread_ts, review_destination_primary, review_workflow"
     )
     .eq("id", clientId)
     .maybeSingle();
@@ -123,6 +145,10 @@ async function load(clientId: string): Promise<Loaded | { error: string }> {
     reviewDestinationPrimary: (data.review_destination_primary as string | null) ?? null,
     reviewWorkflow: (data.review_workflow as Record<string, unknown> | null) ?? null,
     theme,
+    // Gated on the same confirmation the theme is, so this file shows what the live page
+    // would show. A skin somebody set five minutes ago and has not confirmed is not what a
+    // client should be looking at on a screen share.
+    skin: activeSkin(readSkin(data.hub_skin), stored.confirmedAt),
   };
 
   return {
@@ -189,7 +215,7 @@ ${css}
 </head>
 <body>
 ${banner}
-<div class="hub-root" lang="${escapeHtml(loaded.client.language ?? "en")}"${styleAttr(loaded.client.theme)}>
+<div class="hub-root ${skinClass(loaded.client.skin)}" lang="${escapeHtml(loaded.client.language ?? "en")}"${styleAttr(loaded.client)}>
 <div class="hub-wrap">${body}</div>
 </div>
 </body>
