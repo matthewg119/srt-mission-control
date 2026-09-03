@@ -40,6 +40,8 @@ import {
   isResearchMeta,
 } from "../src/lib/clients/harvest";
 import { buildCompactPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
+import { scanRunningBody } from "../src/lib/audit-engine/scan-running-email";
+import { ALL_STAGES, STAGE_LOOM_SENT, normalizeStage } from "../src/config/stage-display";
 import {
   AUTO_RUNNERS,
   unimplementedAutoSteps,
@@ -542,6 +544,54 @@ ok("section 9 asks for 100 search phrases", /100 search phrases/.test(brief));
 ok("section 9 names the KEYWORDS block", /block titled KEYWORDS/.test(brief));
 ok("section 9 asks for the pipe shape", /phrase \| monthly volume/.test(brief));
 ok("section 9 asks for an intent word", /ready\|comparing\|researching\|price/.test(brief));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The funnel lead's first email
+//
+// ‼️ /aivisibility SENT THE LEAD NOTHING AT ALL BEFORE 2026-09-03. Its Vercel function sends one
+// email and it goes to OWNER_EMAIL. So these assertions are the only thing standing between the
+// copy Matthew wrote and a future edit, and the two substitutions are the whole reason the copy
+// is generated rather than pasted.
+// ─────────────────────────────────────────────────────────────────────────────
+// The Loom Sent stage, and the spellings that have to land on it.
+ok("Loom Sent is a real chip on the pipeline", ALL_STAGES.some((st) => st.name === STAGE_LOOM_SENT));
+ok("it sits between the pitch and the negotiation",
+  ALL_STAGES.findIndex((st) => st.name === "Email Pitch") <
+    ALL_STAGES.findIndex((st) => st.name === STAGE_LOOM_SENT) &&
+  ALL_STAGES.findIndex((st) => st.name === STAGE_LOOM_SENT) <
+    ALL_STAGES.findIndex((st) => st.name === "Negotiating / Follow-up"));
+// ‼️ Matthew calls it "loom emailed". A stage nothing normalizes to is a stage that silently
+// becomes a stray value on the leads page.
+for (const spelling of ["loom emailed", "Loom Sent", "video sent", "walkthrough sent"]) {
+  ok(`"${spelling}" normalizes onto the chip`, normalizeStage(spelling) === STAGE_LOOM_SENT);
+}
+
+const scanMail = scanRunningBody({ name: "matthew garcia", website: "https://www.acmemedspa.com/x" });
+
+ok("it greets them by first name only", scanMail.startsWith("Hey Matthew,"));
+// A lowercase or shouted entry is the common case in a funnel field.
+ok("a lowercase name is title cased", !scanMail.includes("Hey matthew"));
+// ‼️ THE LITERAL "your website" MUST NEVER SHIP. It is in the brief as a placeholder, and a
+// message that says "we are running the scan on your website" reads as a mailmerge that failed.
+ok("the domain replaces the placeholder", scanMail.includes("scan on acmemedspa.com"));
+ok('the placeholder itself never ships', !/your website/i.test(scanMail));
+ok("the path and www are stripped", !scanMail.includes("www.") && !scanMail.includes("/x"));
+
+ok("it promises the score", /score out of 100/.test(scanMail));
+ok("it promises every question", /Every question we tested/.test(scanMail));
+ok("it promises the rivals", /clinics ChatGPT named ahead of you/.test(scanMail));
+// The offer is the point of the email. It is an ASK for permission, not a promise of delivery.
+ok("it offers the walkthrough", /personal 3 min video/.test(scanMail));
+ok("it prices the effort in time", /15-20 minutes/.test(scanMail));
+ok("it says the report is theirs", /yours to keep/.test(scanMail));
+// Standing rule on every piece of outbound copy.
+ok("no em dashes in the lead email", !scanMail.includes("—"));
+// The signature is a constant because Graph does not append Outlook's block.
+ok("the body does not sign itself", !scanMail.includes("Matthew Garcia"));
+
+const bareMail = scanRunningBody({});
+ok("a missing name degrades to a greeting that reads", bareMail.startsWith("Hey there,"));
+ok("a missing website degrades to a phrase that reads", /scan on your clinic/.test(bareMail));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // isResearchMeta: the report talking about itself

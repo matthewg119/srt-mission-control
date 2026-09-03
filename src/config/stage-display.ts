@@ -1,4 +1,4 @@
-// The seven stages, and the only place they are defined.
+// The stages, and the only place they are defined. Eight as of 2026-09-03.
 //
 // This file used to be presentation metadata for Zoho's MCA picklist, which is
 // why the old version carried two pipelines and eighteen stages. SRT is off
@@ -38,6 +38,29 @@ export const STAGE_NEGOTIATING = "Negotiating / Follow-up";
 export const STAGE_CLOSED = "Closed";
 
 /**
+ * The walkthrough video has gone to them.
+ *
+ * ‼️ IT IS A STAGE BECAUSE THE SUPPRESSION HAS TO BE VISIBLE, and until now it was not.
+ * `audit_reports.loom_url` and `loom_state` already recorded the fact, and priorReportFor()
+ * reads them to stop the funnel offering a second walkthrough to somebody already holding one.
+ * But a brake nobody can see is a brake that looks like a bug: a lead who fills the funnel and
+ * gets no email is indistinguishable, on the leads page, from a lead the mail failed for.
+ *
+ * Matthew's framing: "if I run an audit and I got to them via email but after that the client is
+ * doing some research in our website we need to make sure this lead stage is loom emailed."
+ *
+ * It sits after Email Pitch and before Negotiating on purpose. The Loom is the heaviest thing we
+ * send before a conversation, so a lead here is warmer than one who has only had the pitch and
+ * colder than one who has replied about terms.
+ *
+ * ‼️ AND IT CARRIES NO TEETH, UNLIKE Take Off List. Landing here changes no flags: the lead stays
+ * on the call board, in the sequences and in the follow-up ladder, because a Loom is a reason to
+ * follow up rather than a reason to stop. The only behaviour attached to it is the one that
+ * already existed in priorReportFor().
+ */
+export const STAGE_LOOM_SENT = "Loom Sent";
+
+/**
  * Off the book. Never call, never email, never enroll again.
  *
  * "Closed" and "Take Off List" are both terminal, and the difference is what
@@ -62,6 +85,7 @@ export const AEO_PIPELINE: StagePipeline = {
     { name: STAGE_NO_CONTACT, color: "#0E8C77" },
     { name: STAGE_WORKING, color: "#9C27B0" },
     { name: STAGE_EMAIL_PITCH, color: "#00BCD4" },
+    { name: STAGE_LOOM_SENT, color: "#7C3AED" },
     { name: STAGE_NEGOTIATING, color: "#F5A623" },
     { name: STAGE_CLOSED, color: "#6B7280" },
     { name: STAGE_TAKE_OFF_LIST, color: "#C0392B" },
@@ -70,7 +94,7 @@ export const AEO_PIPELINE: StagePipeline = {
 
 export const STAGE_PIPELINES: readonly StagePipeline[] = [AEO_PIPELINE];
 
-/** All seven, flat. Filter chips, status pickers and the write allowlist. */
+/** All of them, flat. Filter chips, status pickers and the write allowlist. */
 export const ALL_STAGES: readonly StageMeta[] = AEO_PIPELINE.stages;
 
 export const STAGE_NAMES: readonly string[] = ALL_STAGES.map((s) => s.name);
@@ -83,15 +107,27 @@ export function stageColor(stage: string | null | undefined): string {
 }
 
 // ── Normalization ────────────────────────────────────────────────────
-// The migration collapsed contacts.application_stage to these five, but the
+// The migration collapsed contacts.application_stage to a handful, but the
 // column is free-form text with no CHECK constraint, and inbound webhooks,
 // the medspa/TRT syncs and any hand-edited row can still hand us something
 // else. Everything that accepts a stage from outside runs it through here, so
-// a stray value can never put an eighth chip on the leads page.
+// a stray value can never put an extra chip on the leads page.
+//
+// ‼️ THE COUNT IS DELIBERATELY NOT WRITTEN DOWN HERE ANY MORE. This comment said "these five"
+// while the list held seven, because two stages were added and the prose was not. AEO_PIPELINE
+// above is the count.
 
 /** Legacy value -> new stage. Mirrors the SQL migration exactly; if you change
  *  one, change the other. Keys are lowercase. */
 const STAGE_ALIASES: Record<string, string> = {
+  // The walkthrough went out. Several lanes and several people describe this one differently,
+  // and every spelling has to land on the same chip or the funnel's suppression looks random.
+  "loom sent": STAGE_LOOM_SENT,
+  "loom emailed": STAGE_LOOM_SENT,
+  "loom delivered": STAGE_LOOM_SENT,
+  "video sent": STAGE_LOOM_SENT,
+  "walkthrough sent": STAGE_LOOM_SENT,
+
   // Reached them.
   "working - contacted": STAGE_WORKING,
   "working - application out": STAGE_WORKING,

@@ -81,6 +81,7 @@ import {
 import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, selectBelief } from "./seed-ledger";
 import { runThreadAgent } from "./thread-agent";
 import type { AuditReportRow, AuditRunRow } from "./types";
+import { STAGE_LOOM_SENT } from "@/config/stage-display";
 
 /**
  * The command menu, printed under EVERY draft.
@@ -864,6 +865,28 @@ async function advanceLoomWizard(
     .from("audit_reports")
     .update({ loom_state: { ...state, stage: "done", ideas: undefined } })
     .eq("id", report.id);
+
+  // ‼️ THE CRM LEARNS IT AT THE SAME INSTANT, AND THAT SHARED MOMENT IS THE POINT.
+  // priorReportFor() treats stage === "done" as "this clinic has had the walkthrough" and uses it
+  // to suppress the funnel's Loom offer. If the stage were written anywhere else, the brake and
+  // the leads page could disagree, and a lead who quietly got no email would be indistinguishable
+  // from one the mail failed for. One fact, one write.
+  //
+  // Best-effort on purpose: a report with no contact_id (a hand-run audit on a business that was
+  // never a lead) has no stage to set, and failing the Loom handover over that would be absurd.
+  if (report.contact_id) {
+    try {
+      const { setLeadStatus } = await import("@/lib/crm");
+      await setLeadStatus({
+        contactId: report.contact_id,
+        status: STAGE_LOOM_SENT,
+        origin: "ai",
+        reason: `Loom walkthrough prepared for report ${report.slug ?? report.id}`,
+      });
+    } catch (err) {
+      console.error("[thread-assistant] could not stage the lead as Loom Sent:", err);
+    }
+  }
 
   await postLoomScript(report, channel, threadTs, view, runs, resolved, {
     price: state?.price,

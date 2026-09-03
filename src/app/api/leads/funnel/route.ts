@@ -15,6 +15,7 @@ import { normalizeLeadPhone } from "@/lib/phone";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { supabaseAdmin } from "@/lib/db";
+import { sendScanRunningEmail } from "@/lib/audit-engine/scan-running-email";
 
 /** The ONE pixel, since 2319215808600729 was retired on 2026-08-26. */
 const FUNNEL_PIXEL_ID = "2571789533326438";
@@ -160,6 +161,37 @@ export async function POST(req: NextRequest) {
         `Funnel: /${source}`,
       ],
     });
+
+    // ‼️ THE LEAD GETS AN EMAIL NOW, AND UNTIL TODAY NOBODY DID. This funnel sent exactly one
+    // message and it went to OWNER_EMAIL: the person who filled in nine screens got the
+    // thank-you screen and silence. The copy lives in scan-running-email.ts, and so does the
+    // reason it is sent from here rather than from the website: the send is gated on whether we
+    // have already made this clinic a Loom, and that question needs the database.
+    //
+    // ‼️ AWAITED, NOT FIRED AND FORGOTTEN. Vercel freezes the lambda the moment this handler
+    // returns, so a floating promise here is a coin flip on whether the mail leaves. It cannot
+    // fail the request: sendScanRunningEmail never throws, and the lead is already saved by the
+    // time it runs.
+    //
+    // Only the ones that promise a scan. `disqualified` is told on the page that we are not a
+    // fit, and mailing them "we are running the scan" contradicts that to their face.
+    if (stageLabel !== "disqualified") {
+      const mail = await sendScanRunningEmail({ email, name, website, contactId });
+      if (mail.outcome !== "sent" && mail.outcome !== "no_email") {
+        console.log(`[leads/funnel] scan email ${mail.outcome}: ${mail.detail ?? ""}`);
+      }
+      // Suppression is a real event in the funnel's history and belongs on the timeline, not
+      // only in a log line nobody reads: it is the answer to "why did they not get the email".
+      if (mail.outcome === "suppressed_loom" || mail.outcome === "error") {
+        try {
+          await supabaseAdmin.from("system_logs").insert({
+            event_type: "scan_email_" + mail.outcome,
+            description: `${source}: ${mail.detail ?? ""}`,
+            metadata: { email, website, source, contactId },
+          });
+        } catch { /* a logging failure must not fail the lead */ }
+      }
+    }
 
     // Meta CAPI, server side, paired with the browser pixel by eventId.
     //
