@@ -1,0 +1,141 @@
+// The widget frame. One tenant's conversation, in an iframe, on somebody else's page.
+//
+// ‼️ A ROUTE HANDLER RATHER THAN A PAGE, AND THE REASON IS ONE HEADER. frame-ancestors is the only
+// thing that stops one client embedding a competitor's widget and harvesting their leads, it is
+// per-tenant so next.config cannot hold it, it is explicitly IGNORED inside a <meta> tag by the CSP
+// spec, and middleware runs on the Edge with no database so it cannot look up allowed_origins. A
+// page component cannot set a response header. A route handler can, so this is a route handler.
+//
+// ‼️ NO REACT, NO BUNDLE, NO HYDRATION. This document loads inside a third party's page on a
+// stranger's phone. It is a few kB of hand-written markup that renders instantly, and it shares no
+// JavaScript with the dashboard, so nothing in the app can accidentally end up on a client's site.
+//
+// ‼️ THE FRAME IS SANDBOXED FROM ITS PARENT BY THE BROWSER, and that is a feature rather than a
+// limitation: a patient's answers, and later a patient's photo, never enter the client's own
+// analytics or session recording surface. That was one of the two reasons this lane chose an iframe.
+
+import { NextRequest, NextResponse } from "next/server";
+import { frameAncestorsFor, loadConciergeConfig } from "@/lib/concierge/config";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/** Anything interpolated into the document is escaped, including values that came from our own DB. */
+function esc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function notFound(): NextResponse {
+  return new NextResponse("Not found", {
+    status: 404,
+    headers: { "content-type": "text/plain", "x-robots-tag": "noindex, nofollow", "cache-control": "no-store" },
+  });
+}
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const config = await loadConciergeConfig(slug);
+  if (!config || !config.enabled) return notFound();
+
+  const ancestors = await frameAncestorsFor(config);
+  const q = new URL(req.url).searchParams;
+  const category = (q.get("category") ?? "").slice(0, 40);
+  const city = (q.get("city") ?? "").slice(0, 120);
+  const path = (q.get("path") ?? "").slice(0, 500);
+  const host = (q.get("host") ?? "").slice(0, 200);
+
+  const owner = config.audience === "owner";
+  const title = owner ? "AI visibility" : `${config.clientName}`;
+
+  const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>${esc(title)}</title>
+<style>
+:root{--bg:#fff;--fg:#111;--mut:#666;--line:#e5e5e5;--me:#111;--meFg:#fff;--acc:#111}
+@media(prefers-color-scheme:dark){:root{--bg:#141414;--fg:#f2f2f2;--mut:#9a9a9a;--line:#2c2c2c;--me:#f2f2f2;--meFg:#141414;--acc:#f2f2f2}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column}
+header{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
+#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.b{max-width:86%;padding:10px 13px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word}
+.a{background:transparent;border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+.u{background:var(--me);color:var(--meFg);align-self:flex-end;border-bottom-right-radius:4px}
+.cite{font-size:12px;color:var(--mut);align-self:flex-start;max-width:86%;padding-left:2px}
+a.att{display:inline-block;margin-top:8px;padding:9px 14px;background:var(--acc);color:var(--bg);border-radius:10px;text-decoration:none;font-weight:600;font-size:14px}
+form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
+input{flex:1;min-width:0;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--fg);font-size:16px}
+button{padding:11px 16px;border:0;border-radius:10px;background:var(--acc);color:var(--bg);font-weight:600;font-size:15px;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+.dots{color:var(--mut);font-size:13px;padding-left:4px}
+</style></head><body>
+<header>${esc(title)}</header>
+<div id="log" role="log" aria-live="polite"></div>
+<form id="f" autocomplete="off"><input id="i" placeholder="Type here" aria-label="Your message" maxlength="1200" disabled><button id="s" disabled>Send</button></form>
+<script>
+(function(){
+ var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
+ var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
+ var token=null,busy=false;
+
+ function el(cls,text){var d=document.createElement('div');d.className=cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
+ function bubble(who,text){return el('b '+who,text)}
+ function height(){try{parent.postMessage({srtConcierge:'height',value:document.body.scrollHeight},'*')}catch(e){}}
+
+ function attach(host,list){
+  (list||[]).forEach(function(a){
+   if(!a.url)return;
+   var link=document.createElement('a');
+   link.className='att';link.href=a.url;link.target='_blank';link.rel='noopener noreferrer';
+   link.textContent=a.title;
+   host.appendChild(document.createElement('br'));host.appendChild(link);
+  });
+ }
+
+ function lock(on){busy=on;input.disabled=on;send.disabled=on;if(!on){input.focus()}}
+
+ fetch('/api/concierge/start',{method:'POST',headers:{'content-type':'application/json'},
+  body:JSON.stringify({slug:CFG.slug,category:CFG.category,city:CFG.city,path:CFG.path,host:CFG.host})})
+ .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
+ .then(function(d){token=d.token;bubble('a',d.opening);lock(false);height()})
+ .catch(function(){bubble('a','This is not available right now.')});
+
+ form.addEventListener('submit',function(e){
+  e.preventDefault();
+  var text=input.value.trim();
+  if(!text||busy||!token)return;
+  input.value='';bubble('u',text);lock(true);
+  var wait=el('dots','...');
+  fetch('/api/concierge/turn',{method:'POST',headers:{'content-type':'application/json'},
+   body:JSON.stringify({token:token,message:text})})
+  .then(function(r){return r.json()})
+  .then(function(d){
+   wait.remove();
+   var b=bubble('a',d.reply||'');
+   (d.evidence||[]).forEach(function(line){el('cite',line)});
+   attach(b,d.attachments);
+   lock(false);height();
+  })
+  .catch(function(){wait.remove();bubble('a','That did not go through. Try once more.');lock(false)});
+ });
+})();
+</script></body></html>`;
+
+  return new NextResponse(html, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      // The whole reason this file is a route handler.
+      "content-security-policy": `frame-ancestors ${ancestors}`,
+      "x-robots-tag": "noindex, nofollow",
+      "cache-control": "no-store",
+    },
+  });
+}

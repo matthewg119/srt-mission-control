@@ -16,6 +16,7 @@ import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, skinClass } from "@/lib/hub/skin";
+import { ConciergeEmbed } from "@/lib/concierge/embed";
 import "./hub.css";
 
 // Not force-dynamic. Every dashboard page and API route in this repo sets
@@ -80,6 +81,19 @@ export default async function HubLayout({ children, params }: Props) {
       style={{ ...skinStyle(resolved.client.skin), ...themeStyle(resolved.client.theme) }}
     >
       <div className="hub-wrap">{children}</div>
+      {/*
+        The concierge, on every page we host for this client, from one place.
+
+        ‼️ IN THE LAYOUT RATHER THAN IN hub-bodies.tsx OR THE SKIN, AND THAT IS THE POINT.
+        Matthew asked for it on all of their pages, and the layout is the only file that is all of
+        their pages. skin.ts forbids markup in a skin ("a skin that could carry its own HTML would
+        be a skin that could silently delete the thing we sell") and draft-page.ts rejects any link
+        inside answer_md, so both of those rails stay intact and neither had to be loosened.
+
+        Renders null unless that client's concierge_configs.enabled is true, which only the
+        concierge_live delivery step sets.
+      */}
+      <ConciergeEmbed clientId={resolved.client.id} />
     </div>
   );
 }

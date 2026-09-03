@@ -1,5 +1,23 @@
 // The Follow-Up Operator's doctrine, as constants the drafters paste into prompts.
 //
+// ‼️ SCOPE. THIS FILE GOVERNS THE COLD FOLLOW-UP EMAIL LANE AND NOTHING ELSE. THE ONE-ASK RULE
+// BELOW DOES NOT APPLY TO THE ON-PAGE CONCIERGE. Matthew's call, 2026-09-03.
+//
+// The rules read as flat exported strings with no audience attached to them, so a session
+// building the owner concierge cited "One unspent finding per touch, one ask" at a warm visitor
+// and wrote a spec around obeying it. It does not apply, and the reason is inside the rule
+// itself: WRITING_RULES 1 says two findings in one email "burns tomorrow's material". That is an
+// argument about a FINITE SUPPLY OF TOUCHES spread over days on a cold list. Somebody reading a
+// page right now has no touch 2, so there is nothing to burn, and stacking two free things before
+// the ask is what makes the free thing read as a gift rather than as a gate.
+//
+// The doctrine's one STRUCTURAL half is nextAmmo() in ammo/spend.ts, which narrows the candidate
+// list to a single item. It stays exactly as it is. The concierge calls unspentAmmo() instead,
+// which was already exported and already returns the whole ordered list, so the two lanes never
+// collide and nothing in here had to be weakened to let the other one stack.
+//
+// If you are writing a lane that talks to somebody who came to US, this file is not yours.
+//
 // Same precedent as PARAGRAPH_RULES / VOICE_RULES / SIGNOFF_RULE in
 // email-assistant.ts: the rules live in code so every drafter shares one copy and
 // a change lands everywhere at once. Two of them are ALSO enforced structurally
