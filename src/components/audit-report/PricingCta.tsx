@@ -17,18 +17,19 @@
 // ‼️ config/pitch.ts IS STILL THE ONLY HOME FOR A FIGURE. Nothing changed about that rule. This
 // file simply no longer displays one. Do not read the missing import as an invitation.
 //
-// ── The ramp ────────────────────────────────────────────────────────────────
-// The report used to end on a bare booking link, which asks somebody who has just been told they
-// are invisible to commit to a meeting in one jump. /chatgpt-ads was added as the step in
-// between: it plays their score back on video, asks the five things a kickoff call would ask,
-// and only then offers the call.
+// ── One link, and the ramp is gone ───────────────────────────────────────────
+// The report used to end on a bare booking link, and /chatgpt-ads was added as a step in between
+// on the argument that asking somebody who has just been told they are invisible to commit in one
+// jump is too much. That second link was REMOVED on 2026-09-03, on the founder call, and the
+// report now offers exactly one way forward.
 //
-// That ramp is still here, it is just no longer first. "Get Started" goes straight to the signing
-// funnel for the person who has already decided, and everybody else takes the second link. High
-// intent goes through, the ramp catches the rest. THIS IS A DELIBERATE SHORTENING of the ramp and
-// not an oversight: /onboarding2 ends in a signature, which is a larger commitment than the
-// booking link the ramp was originally written about. It is justified by the button naming the
-// outcome rather than the mechanism, so it self-selects.
+// ‼️ THE COUNTER-ARGUMENT IS RECORDED HERE ON PURPOSE, because it was raised and overruled rather
+// than missed. /onboarding2 ends in a SIGNATURE, which is a larger commitment than the booking
+// link the ramp was originally built for, so on the original reasoning the ramp applies more here
+// and not less. What carries it is that nothing is charged at signing and the button names the
+// outcome rather than the mechanism, so it self-selects. If report-to-signing conversion falls,
+// restoring a second, softer link is the first thing to try, and buildAdsFunnelUrl() in
+// lib/onboarding2-link.ts is deliberately left in place for exactly that.
 //
 // BOOKING_LINK is tri-state and null is a real state. With none configured this renders WITHOUT
 // that button rather than a dead `href="#"`, for the same reason the Loom script prints a
@@ -38,7 +39,7 @@
 // report has no score, no competitor and no counts. A missing param renders the generic hero on
 // the destination, which is documented behaviour over there, so there is nothing to guard here.
 import { BOOKING_LINK } from "@/config/pitch";
-import { buildAdsFunnelUrl, buildOnboarding2Url, scaleToSample } from "@/lib/onboarding2-link";
+import { buildOnboarding2Url, scaleToSample } from "@/lib/onboarding2-link";
 
 export function PricingCta({
   score,
@@ -83,12 +84,6 @@ export function PricingCta({
         className="mb-3 block w-full rounded-lg bg-reef py-3 text-center text-sm font-semibold text-midnight transition hover:opacity-90"
       >
         Get Started
-      </a>
-      <a
-        href={buildAdsFunnelUrl(params)}
-        className="block w-full rounded-lg border border-surface-border py-3 text-center text-sm font-semibold text-text-primary transition hover:opacity-90"
-      >
-        See what to do about it
       </a>
       {BOOKING_LINK ? (
         <a

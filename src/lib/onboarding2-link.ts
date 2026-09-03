@@ -98,7 +98,12 @@ export function buildOnboarding2Url(
 }
 
 /**
- * The explainer funnel, the step between the report and any commitment.
+ * The explainer funnel.
+ *
+ * ‼️ NO CALLER AS OF 2026-09-03. The audit report dropped its second button that day and this is
+ * kept deliberately, not by oversight: it is the one-line undo if report-to-signing conversion
+ * falls and the softer step has to come back. See the note in PricingCta.tsx. Delete it only when
+ * that question is settled.
  *
  * snake_case counts, because that is what readReportParams() in chatgpt-ads/params.ts reads.
  */
