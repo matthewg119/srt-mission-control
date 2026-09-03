@@ -13,7 +13,9 @@ import {
   listUnconfirmedProspects,
   updateProspect,
 } from "./prospects";
-import { channelFor, hasOutboundTouchToday, stepLabel } from "./cadence";
+import { hasOutboundTouchToday } from "./cadence";
+import { loomChannelFor, loomStepLabel, loomLadderSpent } from "./loom-cadence";
+import { hasLoom } from "./loom-enrol";
 import type { OutreachProspectRow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -52,8 +54,8 @@ function reasonFor(p: OutreachProspectRow): string {
       return "asked a question";
     default:
       return silent === null
-        ? stepLabel(p.step)
-        : `${stepLabel(p.step)} landed, silent ${silent}d`;
+        ? loomStepLabel(p.step)
+        : `${loomStepLabel(p.step)}, silent ${silent}d since the Loom`;
   }
 }
 
@@ -77,7 +79,9 @@ export async function ensureProspectThread(
   const lines = bodyLines ?? [
     `*${displayName(p)}*${p.company && p.company !== p.name ? `, ${p.company}` : ""}${p.city ? `, ${p.city}` : ""}`,
     `📧 ${p.email}${p.phone ? ` · 📞 ${p.phone}` : ""}${p.website ? ` · ${p.website}` : ""}`,
-    p.first_sent_at ? `First pitch ${new Date(p.first_sent_at).toDateString()}, now at ${stepLabel(p.step)}` : "No pitch logged yet",
+    p.first_sent_at
+      ? `Loom sent ${new Date(p.first_sent_at).toDateString()}, now at ${loomStepLabel(p.step)}`
+      : "No Loom date on record",
     "",
     "_In this thread: *1/2/3* pick a draft · *call* mini pitch · *no answer* · *answered <notes>* · *snooze 3d* · *close*_",
   ];
@@ -114,6 +118,10 @@ export interface DigestResult {
   replySweep: ReplySweepResult | null;
   posted: boolean;
   skipped?: string;
+  /** Due rows that could not be shown to have had a Loom. Paused, never posted. */
+  withoutLoom?: number;
+  /** Rows that reached the end of the two-rung ladder and were unscheduled. */
+  spent?: number;
 }
 
 /**
@@ -174,6 +182,29 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
   const emails: OutreachProspectRow[] = [];
 
   for (const p of due) {
+    // ‼️ THE BOARD'S ONE PROMISE, RE-CHECKED RATHER THAN ASSUMED. Everybody here is supposed to
+    // have had the Loom. Enrolment is the only door that creates a prospect, so this should never
+    // fire, which is exactly why it is here: a sweep, a backfill or a hand-inserted row could put
+    // a stranger on a board Matthew reads as "people who have my video", and that failure would be
+    // silent. hasLoom() fails CLOSED, so an unreadable table quiets the board rather than
+    // populating it with people we cannot vouch for.
+    if (!(await hasLoom(p))) {
+      if (!dry) await updateProspect(p.id, { paused: true, next_touch_at: null });
+      result.withoutLoom = (result.withoutLoom ?? 0) + 1;
+      console.error(
+        `[followup] ${p.email} was due but has no Loom on record; paused rather than posted`
+      );
+      continue;
+    }
+
+    // The ladder is two rungs. Past the second there is nothing scheduled, and a row that keeps
+    // coming back with nothing to do is how a board stops being read.
+    if (loomLadderSpent(p.step) && p.state === "SENT_NO_REPLY") {
+      if (!dry) await updateProspect(p.id, { next_touch_at: null });
+      result.spent = (result.spent ?? 0) + 1;
+      continue;
+    }
+
     // Never two channels on one prospect in one day. An unanswered call does
     // not count, which is what lets the text and email follow it.
     if (await hasOutboundTouchToday(p.id)) {
@@ -185,7 +216,7 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
 
     if (p.state === "ASKED_PRICE_HOT" || p.state === "REPLIED_INTERESTED" || p.state === "OBJECTION") {
       hot.push(p);
-    } else if (channelFor(p) === "call") {
+    } else if (loomChannelFor(p) === "call") {
       calls.push(p);
     } else {
       emails.push(p);

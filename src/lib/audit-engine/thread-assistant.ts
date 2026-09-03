@@ -82,6 +82,7 @@ import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, 
 import { runThreadAgent } from "./thread-agent";
 import type { AuditReportRow, AuditRunRow } from "./types";
 import { STAGE_LOOM_SENT } from "@/config/stage-display";
+import { enrolLoomFollowup } from "@/lib/followup-operator/loom-enrol";
 
 /**
  * The command menu, printed under EVERY draft.
@@ -887,6 +888,26 @@ async function advanceLoomWizard(
       console.error("[thread-assistant] could not stage the lead as Loom Sent:", err);
     }
   }
+
+  // ‼️ AND THE FOLLOW-UP LADDER STARTS HERE, WHICH IS THE ONLY PLACE IT CAN START.
+  // Nothing else enrols a prospect any more. Matthew: "every message in follow ups channel should
+  // be from people we already sent the loom to", and the way that is made true is by making this
+  // the single door rather than by filtering the board afterwards. Two rungs: an email nudge at
+  // D+3 and a phone call at D+7, both anchored on this instant.
+  //
+  // Best-effort and reported in the thread either way. A scheduling failure must not cost somebody
+  // the script they are about to read on camera, and a ladder that silently did not start looks
+  // exactly like one that did until the follow-up never arrives.
+  const enrolled = await enrolLoomFollowup(report);
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    enrolled.outcome === "enrolled" || enrolled.outcome === "restarted"
+      ? `:calendar: Follow-up ladder ${enrolled.outcome === "restarted" ? "restarted" : "started"}: ` +
+          `${enrolled.detail}. Both land in the follow-ups board, nothing sends itself.`
+      : `:warning: The follow-up ladder did NOT start: ${enrolled.detail ?? enrolled.outcome}. ` +
+          "This lead will not appear in the follow-ups board until that is fixed."
+  );
 
   await postLoomScript(report, channel, threadTs, view, runs, resolved, {
     price: state?.price,

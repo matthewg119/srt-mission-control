@@ -1,7 +1,9 @@
 // Where a visitor who wants a call actually goes.
 //
-// ‼️ FOUR MODES AND EVERY ONE OF THEM IS A REAL ANSWER. Calendly ships unconfigured in this repo,
-// so `unconfigured` is the DEFAULT path and not an edge case. calendly.ts already refuses to
+// ‼️ FOUR MODES AND EVERY ONE OF THEM IS A REAL ANSWER. Calendly's API ships unconfigured, so
+// `unconfigured` is a normal path and not an edge case. As of 2026-09-03 it no longer means "no
+// calendar": with NEXT_PUBLIC_CALENDLY_15MIN_URL set, an owner is handed the real booking page,
+// and the API token only buys in-chat slot selection on top of that. calendly.ts already refuses to
 // conflate an error with an empty diary, and this file refuses to conflate either with "no
 // booking". A visitor is never shown a button that goes nowhere, which is the same doctrine as
 // BOOKING_LINK in config/pitch.ts and CALENDLY_URL in config/medspa-funnel.ts.
@@ -128,7 +130,22 @@ export async function resolveBooking(input: BookingInput): Promise<BookingOffer>
   // collapsing these into one branch would produce on the day it happens.
   if (result.slots === null) {
     if (result.reason === "error") {
-      console.error("[concierge] calendly errored, falling back to the onboarding link");
+      console.error("[concierge] calendly errored, falling back to the booking page");
+    }
+    // ‼️ THE REAL BOOKING PAGE BEATS THE ONBOARDING FUNNEL, AND IT USED TO LOSE TO IT.
+    //
+    // This branch sent every owner who asked to book to /onboarding2, even when a public Calendly
+    // page was configured, because it read `fallbackUrl` before `morePageUrl`. That is the wrong
+    // order for somebody who has just said "I want to book a time": the funnel is where an
+    // undecided visitor goes, and a decided one being handed a form instead of a calendar is the
+    // one moment in the conversation you cannot get back.
+    //
+    // It also makes the API token optional rather than required. With only
+    // NEXT_PUBLIC_CALENDLY_15MIN_URL set, booking works today through the public page; adding
+    // CALENDLY_API_TOKEN later upgrades the same path to in-chat slot selection with no code
+    // change, because that is the branch below this one.
+    if (morePageUrl) {
+      return { mode: "link", url: morePageUrl, label: "Pick a time" };
     }
     return { mode: "link", url: input.fallbackUrl, label: "Start here" };
   }

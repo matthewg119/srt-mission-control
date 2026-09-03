@@ -71,7 +71,15 @@ export interface OutreachProspectRow {
   slack_thread_ts: string | null;
 
   confirmed: boolean;
-  source: "audit" | "outlook_sweep" | "manual" | "reachinbox";
+  /**
+   * How this row got onto the board.
+   *
+   * ‼️ "loom" IS THE ONLY ONE THAT STILL ENROLS. Since 2026-09-03 a prospect is created at exactly
+   * one moment, the Loom handover, so the board can promise that everybody on it already has the
+   * video. The other three are history on rows that predate that, and on the sweeps that may fill
+   * blanks on an existing row without ever creating one.
+   */
+  source: "audit" | "outlook_sweep" | "manual" | "reachinbox" | "loom";
   paused: boolean;
 
   pending_drafts: PendingDraft[] | null;

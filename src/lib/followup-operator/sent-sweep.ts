@@ -77,8 +77,11 @@ async function writeSweepState(at: Date): Promise<void> {
 }
 
 /** Resolve a recipient address to a prospect, creating one when the audit
- *  engine already knows who they are. Returns null for addresses we should not
- *  enroll at all. */
+ *  engine already knows who they are.
+ *
+ *  ‼️ RETURNS null FOR ANYTHING IT DOES NOT ALREADY KNOW. It used to enroll: an auto-confirmed row
+ *  when audit_reports held the address, an unconfirmed one otherwise. Both were removed 2026-09-03
+ *  when the Loom handover became the only door onto the board. See the note in the body. */
 async function resolveProspect(
   address: string,
   msg: GraphMessage
@@ -91,54 +94,25 @@ async function resolveProspect(
   const byThread = msg.conversationId ? await getProspectByConversation(msg.conversationId) : null;
   if (byThread) return { prospect: byThread, created: false };
 
-  // The audit engine is the source of findings, and Matthew audits before he
-  // pitches, so a known prospect_email is an auto-confirmed enrollment.
-  const { data: report } = await supabaseAdmin
-    .from("audit_reports")
-    .select("id, client_name, website, city, prospect_name, prospect_email")
-    .eq("prospect_email", address)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (report) {
-    const created = await upsertProspect({
-      email: address,
-      name: (report.prospect_name as string | null) ?? null,
-      company: (report.client_name as string | null) ?? null,
-      website: (report.website as string | null) ?? null,
-      city: (report.city as string | null) ?? null,
-      audit_report_id: report.id as string,
-      source: "audit",
-      confirmed: true,
-    });
-
-    // Same carry as the send-time enrolment in lead-pitch.ts, because this is the OTHER door a
-    // prospect can arrive through and a prospect that came in here would otherwise never have
-    // scores. Best effort: this sweep must not fail over a convenience.
-    if (created?.contact_id) {
-      try {
-        const { attachScoresToProspect } = await import("@/lib/market/carry-scores");
-        await attachScoresToProspect(created.id, created.contact_id);
-      } catch (e) {
-        console.error("[sent-sweep] score carry failed:", (e as Error).message);
-      }
-    }
-
-    return created ? { prospect: created, created: true } : null;
-  }
-
-  // Nobody recognizes this address. Enroll it UNCONFIRMED so it shows up in the
-  // digest for one tap, and so it can never be drafted for or scheduled until
-  // Matthew says it is a prospect.
-  const unknown = await upsertProspect({
-    email: address,
-    name: null,
-    company: null,
-    source: "outlook_sweep",
-    confirmed: false,
-  });
-  return unknown ? { prospect: unknown, created: true } : null;
+  // ‼️ THE SWEEP NO LONGER CREATES PROSPECTS. IT ONLY RECOGNISES THEM. (2026-09-03)
+  //
+  // Everything above this line still runs: an existing prospect is matched by address or by
+  // Outlook conversation, and recordOutbound() advances their ladder exactly as before. That is
+  // the sweep's real job, keeping the board honest about what was actually sent.
+  //
+  // What is switched off is enrolment. Matthew: "every message in follow ups channel should be
+  // from people we already sent the loom to." Wiping outreach_prospects would not have achieved
+  // that on its own: this function was minting a row for every address in Sent Items, 86 of the
+  // 104 rows in the table came from here, and the board would have refilled itself from ordinary
+  // mail within a day of the reset. The Loom handover is the only door now.
+  //
+  // What was removed, so the day somebody wants a second door they know what used to be here:
+  //   - an `audit_reports.prospect_email` match enrolled auto-confirmed, source "audit"
+  //   - anything else enrolled unconfirmed, source "outlook_sweep", awaiting one tap in the digest
+  // Both are in git at a9dc805. Restoring either means deciding what it does to the board's
+  // promise that everybody on it has already had the Loom.
+  //
+  return null;
 }
 
 /** Advance the ladder for an outbound email that actually went out. */
