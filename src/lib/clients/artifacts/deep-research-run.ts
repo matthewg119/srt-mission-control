@@ -172,13 +172,13 @@ const SECTIONS: SectionSpec[] = [
     // which turns the first line of the prompt into "Who BUYS not recorded". A missing treatment
     // has to degrade to a word the sentence survives, not to a status.
     brief: (c) =>
-      `Who BUYS ${(c.primaryTreatment ?? "").trim() || "this"}, not who has the problem: age, `
+      `Who BUYS ${spoken(c.primaryTreatment) ?? "this"}, not who has the problem: age, `
       + `income, work, and what happens in the week before they start looking.`,
     instruction: (c) =>
       `Who actually BUYS this, not who suffers the problem. The two are often different people ` +
       `and the buyer is the one the pages get written for. Age, gender split, income band, where ` +
       `they live, marital and family situation, what they do for a living. What is happening in ` +
-      `their life in the week before they start looking for ${val(c.primaryTreatment)}. What they ` +
+      `their life in the week before they start looking for ${val(spoken(c.primaryTreatment))}. What they ` +
       `call themselves, and what they would never let anybody call them.`,
   },
   {
@@ -275,6 +275,35 @@ const SECTIONS: SectionSpec[] = [
       `that keep coming back. Each one should be traceable to something you actually read. Say ` +
       `which finding each headline came from.`,
   },
+  // ‼️ APPENDED AS THE NINTH, NEVER INSERTED. test-onboarding-artifacts asserts one numbered
+  // line per section for 1..9, and that "1. Who BUYS" sorts before "7. Their EXACT words", so
+  // reordering the eight above breaks the suite. Appending does not.
+  //
+  // ‼️ AND THE KEYWORDS ARE ASKED FOR IN A PARSEABLE SHAPE ON PURPOSE. A bare keyword list is
+  // dropped in silence by the intake: extractPhrases keeps only 4-to-22-word strings that are
+  // question-shaped or objection-shaped, so "lip filler near me" fails on both counts. The
+  // pipe-delimited block below is what parseKeywordBlock in research-intake.ts reads, which is
+  // the only path that gets these into question_bank with a real commercial_intent_score.
+  {
+    key: "keywords",
+    title: "Las 100 frases de busqueda del comprador",
+    brief: (c) =>
+      `The 100 search phrases this buyer types or dictates when they are ready to book `
+      + `${spoken(c.primaryTreatment) ?? "this"}${c.city ? ` in ${c.city}` : ""}, ranked `
+      + `most commercial first. Return them as a block titled KEYWORDS, one per line, as `
+      + `phrase | monthly volume or unknown | ready|comparing|researching|price | source URL.`,
+    instruction: (c) =>
+      `The search phrases ${c.avatarLabel} actually uses on the way to buying ` +
+      `${val(spoken(c.primaryTreatment))}${c.city ? ` in ${c.city}` : ""}. Aim for 100. Include the ` +
+      `voice-shaped ones people dictate to an assistant, the "near me" ones, the brand-versus- ` +
+      `brand comparisons, the "is it worth it" and "how much does it cost" ones, and the ` +
+      `after-the-fact worries. Look at autocomplete suggestions, People Also Ask boxes, the ` +
+      `related-searches strip, and the question titles on forums and review sites. Do not invent ` +
+      `volumes: write "unknown" where you cannot source one. Return them as a block titled ` +
+      `KEYWORDS, one per line, as: phrase | monthly volume or unknown | ` +
+      `ready|comparing|researching|price | source URL.`,
+    searches: 8,
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -324,7 +353,7 @@ function factsBlock(c: ResearchContext): string {
     `Business: ${c.clinicName}${c.trade ? ` (${c.trade})` : ""}`,
     `Where: ${where}`,
     `The customer this research is about: ${c.avatarLabel}`,
-    `The service the money is in: ${val(c.primaryTreatment)}`,
+    `The service the money is in: ${val(spoken(c.primaryTreatment))}`,
     "Services offered:",
     list(c.services, NOT_RECORDED),
     "",
@@ -373,7 +402,61 @@ const FACT_CLIP = 110;
 
 /** Three characters, because "na" and "-" are declines and this prompt quotes what it is given. */
 function answered(v: string | null | undefined): boolean {
-  return (v ?? "").trim().length >= 3;
+  return (v ?? "").trim().length >= 3 && !isShrug(v);
+}
+
+/**
+ * Words a person types to mean "I did not answer this".
+ *
+ * ‼️ A SHRUG IS WORSE THAN A BLANK HERE, WHICH IS WHY IT GETS ITS OWN CHECK. A null degrades to
+ * a sentence that still reads: "Who BUYS this". A shrug is interpolated as though it named a
+ * product, and the whole prompt then hunts for it. Measured on SRT Agency's own intake, whose
+ * highest-margin answer is the string "any": the prompt came back saying "Sells: any", "Who BUYS
+ * any", and "ready to book any in Greensboro", and a research agent handed that would go looking
+ * for buyers of a thing called any.
+ *
+ * The length check alone could not catch it. "na" is two characters and was already dropped;
+ * "any" is three and was not.
+ */
+const SHRUGS = new Set([
+  "na",
+  "n/a",
+  "none",
+  "no",
+  "nope",
+  "nil",
+  "any",
+  "anything",
+  "all",
+  "all of them",
+  "everything",
+  "various",
+  "misc",
+  "other",
+  "tbd",
+  "unknown",
+  "idk",
+  "-",
+  "--",
+  ".",
+  "?",
+]);
+
+function isShrug(v: string | null | undefined): boolean {
+  return SHRUGS.has((v ?? "").trim().toLowerCase().replace(/[.!]+$/, ""));
+}
+
+/**
+ * The treatment as a thing you can say in a sentence, or null.
+ *
+ * ‼️ EVERY READ OF ctx.primaryTreatment GOES THROUGH THIS, NOT JUST buildContext'S WRITE. The
+ * shrug filter started life on the write side only, and the test that caught it built a context
+ * by hand and put "any" straight into the prompt: three sentences came back naming a product
+ * called any. buildContext is one caller today, `run` and the PDF path construct their own, and
+ * the next one will too. Filtering where the value is USED cannot be bypassed by a new caller.
+ */
+function spoken(v: string | null | undefined): string | null {
+  return answered(v) ? (v ?? "").trim() : null;
 }
 
 function clipFact(v: string | null | undefined): string {
@@ -429,7 +512,7 @@ export function buildCompactPrompt(ctx: ResearchContext): string {
 
   return [
     `Deep market research on ${ctx.avatarLabel}.`,
-    `${ctx.clinicName}${where ? `, ${where}` : ""}. Sells: ${val(ctx.primaryTreatment)}.`,
+    `${ctx.clinicName}${where ? `, ${where}` : ""}. Sells: ${val(spoken(ctx.primaryTreatment))}.`,
     ...(owner.length ? [`The owner's own words, do not tidy them: ${owner.join("; ")}.`] : []),
     ...(engines.length ? [`AI engines ${engines.join(" and ")}.`] : []),
     "",
@@ -1043,6 +1126,13 @@ export async function buildContext(clientId: string): Promise<BuildResult> {
     return s.length > 0 ? s : null;
   };
 
+  // Same as str(), minus the shrugs. Used where the value is interpolated mid-sentence as though
+  // it were the name of a service, so "any" has to fall through to the next candidate.
+  const real = (v: unknown): string | null => {
+    const s = str(v);
+    return s && !isShrug(s) ? s : null;
+  };
+
   const serviceList = Array.isArray(services.services)
     ? (services.services as unknown[]).map((s) => String(s)).filter(Boolean)
     : str(services.services)
@@ -1069,7 +1159,17 @@ export async function buildContext(clientId: string): Promise<BuildResult> {
       // a slug in the middle of one tells the model less than the phrase the classifier wrote.
       // verticalFor() is still what KEYS everything.
       trade: ((client.business_type as string | null) ?? "").trim() || null,
-      primaryTreatment: str(services.primary_treatment) ?? str(services.primaryTreatment),
+      // ‼️ THREE KEYS, BECAUSE THE FIRST TWO HAVE NO WRITER AND THIS READ HAD NO FALLBACK. Measured
+    // 2026-09-03: `services.primary_treatment` is set by nothing in the repo, so every live client
+    // rendered `Sells: not recorded.` and section 1 degraded to "Who BUYS this". The onboarding
+    // question that DOES get answered is "which service is your highest margin", which both
+    // funnels write to ideal_patient.highest_margin, and buildContext already loads that bag.
+    // Intake now also asks for primary_treatment directly, so the chain is: the explicit answer,
+    // the camelCase spelling some older rows carry, then the margin answer.
+    primaryTreatment:
+      real(services.primary_treatment) ??
+      real(services.primaryTreatment) ??
+      real(ideal.highest_margin),
       services: serviceList,
       objections: str(ideal.objections),
       targetPatient: str(ideal.target),

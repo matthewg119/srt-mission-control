@@ -15,7 +15,7 @@
 //
 // Screen one collects the whole identity: full name, company, title, website, email, phone. The
 // signature screen therefore collects a signature, a date and a business address, and shows the
-// rest back read-only. The assistant asks six questions, none of which is a field anybody has
+// rest back read-only. The assistant asks a handful of questions, none of which is a field anybody has
 // already typed, and it never asks a clarifying follow-up.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -129,9 +129,9 @@ export const SIGNED_UI = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The six qualifying questions, asked AFTER signing.
+// The qualifying questions, asked AFTER signing. Seven as of 2026-09-03.
 //
-// ‼️ SIX, AND NOT ONE OF THEM IS SOMETHING ALREADY ON THE ROW. Name, company, title, website,
+// ‼️ NOT ONE OF THEM IS SOMETHING ALREADY ON THE ROW. Name, company, title, website,
 // email, phone, address and date were all collected before the signature. Asking again for
 // something somebody just typed into a contract reads as a system that was not listening.
 //
@@ -179,6 +179,24 @@ export const QUALIFYING_QUESTIONS: QualifyingQuestion[] = [
     // substitution chain, so this string ends up inside generated pages: it wants their words.
     question: guard("q1", "Which service is your highest margin?"),
     help: guard("q1 help", "In your own words is fine."),
+    options: [],
+    freeText: true,
+  },
+  // ‼️ SECOND, RIGHT AFTER THE MARGIN QUESTION, BECAUSE THE PAIR IS ONE THOUGHT AND SPLITTING
+  // THEM WOULD MAKE BOTH READ AS A REPEAT. The two are genuinely different answers: the most
+  // profitable service and the one an owner wants more of are usually not the same, and it is
+  // THIS one the pages, the posts and the free offer get aimed at.
+  //
+  // It exists because `services.primary_treatment` had a reader and no writer. deep-research-run
+  // interpolates it into three sentences of the research prompt, and with nothing writing it
+  // every live client's prompt said "Sells: not recorded" and asked who buys "this".
+  //
+  // Open text for the same reason q1 is: a menu here would come back as "Something else", which
+  // is the one answer that cannot be interpolated into a sentence.
+  {
+    key: "primary_treatment",
+    question: guard("q1b", "And which one do you most want more appointments for?"),
+    help: guard("q1b help", "Often the same answer, often not. One service."),
     options: [],
     freeText: true,
   },
@@ -283,7 +301,7 @@ export const DAYPART_OPTIONS = {
  * The card that ends the conversation.
  *
  * ‼️ THE LAST THING THEY SEE IS WHAT THEY BOUGHT, NOT A CHAT LOG (Matthew, 2026-09-03). Somebody
- * who has just signed and answered six questions is at the highest point of their confidence in
+ * who has just signed and answered every question is at the highest point of their confidence in
  * this decision, and a thread that simply stops leaves them there with nothing to hold. A
  * headline, the offer restated, and the five things we start on now.
  *

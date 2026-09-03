@@ -23,7 +23,14 @@
 // frozen set, that is a build stop. freezeUniversalV1() remains the only writer.
 
 import { supabaseAdmin } from "@/lib/db";
-import { extractPhrases, mergePhrases, verticalFor, type HarvestedPhrase } from "./harvest";
+import {
+  extractKeywords,
+  extractPhrases,
+  KEYWORD_SOURCE,
+  mergePhrases,
+  verticalFor,
+  type HarvestedPhrase,
+} from "./harvest";
 
 /** What a message has to start with to be treated as research. Case-insensitive. */
 export const RESEARCH_PREFIX = /^\s*research\s*:/i;
@@ -60,6 +67,8 @@ export interface ResearchIntakeResult {
   stored?: number;
   /** Phrases found but already in the bank from a previous run. */
   seen?: number;
+  /** Rows written from the KEYWORDS block, which is section 9 and a different corpus. */
+  keywords?: number;
   runId?: string;
 }
 
@@ -117,6 +126,11 @@ export async function ingestResearch(args: {
   }
 
   const phrases: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
+
+  // ‼️ PARSED SEPARATELY AND STORED UNDER ITS OWN `source`. extractPhrases would drop all 100 of
+  // these without saying so: a keyword is rarely question-shaped and often under four words.
+  // Absent block returns [], which is every research document written before section 9 existed.
+  const keywords = extractKeywords(body);
 
   if (!phrases.length) {
     return {
@@ -195,12 +209,44 @@ export async function ingestResearch(args: {
 
   if (error) return { ok: false, error: error.message };
 
+  // The keyword rows. Same run, same avatar, same conflict target, different `source`, so
+  // anything reading buyer phrases keeps seeing exactly what it saw before section 9 existed.
+  //
+  // A failure here does NOT fail the intake: the eight sections are already filed at this point
+  // and returning an error would tell the operator nothing landed when most of it did.
+  let keywordsStored = 0;
+  if (keywords.length) {
+    const { error: kwError } = await supabaseAdmin.from("question_bank").upsert(
+      keywords.map((k) => ({
+        vertical,
+        phrase: k.phrase,
+        normalized: k.normalized,
+        source: KEYWORD_SOURCE,
+        harvest_run_id: runId,
+        source_url: k.sourceUrl || null,
+        frequency_score: k.frequencyScore,
+        commercial_intent_score: k.commercialIntentScore,
+        avatar: avatar.slug,
+        objection_phrase: false,
+      })),
+      { onConflict: "vertical,avatar,normalized", ignoreDuplicates: false }
+    );
+    if (kwError) console.error("[research-intake] keyword upsert failed:", kwError.message);
+    else keywordsStored = keywords.length;
+  }
+
   await supabaseAdmin
     .from("harvest_runs")
-    .update({ results_count: phrases.length })
+    .update({ results_count: phrases.length + keywordsStored })
     .eq("id", runId);
 
-  return { ok: true, stored: fresh.length, seen: phrases.length - fresh.length, runId };
+  return {
+    ok: true,
+    stored: fresh.length,
+    seen: phrases.length - fresh.length,
+    keywords: keywordsStored,
+    runId,
+  };
 }
 
 /** The thread reply. Says what landed and what it did NOT do. */
@@ -210,6 +256,11 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
   const lines = [
     `:books: Research filed. *${r.stored} new phrases*, ${r.seen} already in the bank.`,
     "Tagged `deep_research`, so they stay distinguishable from the cited-source harvest.",
+    // Named either way. A keyword block that silently did not arrive looks identical to one
+    // that did, and section 9 is the half the page candidates rank on.
+    r.keywords
+      ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.`
+      : ":mag: No KEYWORDS block found. Section 9 asks for 100 search phrases as `phrase | volume | intent | source`; paste that block and this reply will count them.",
   ];
 
   if (topPhrases.length) {

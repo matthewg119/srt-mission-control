@@ -121,6 +121,24 @@ export const INTAKE_STEPS: StepDef[] = [
         required: true,
         help: "Not marketing copy. The words you would use with a customer.",
       },
+      // ‼️ THIS IS THE ONE FIELD THE WHOLE BUILD IS AIMED AT, AND IT DID NOT EXIST UNTIL NOW.
+      // deep-research-run.ts has read `services.primary_treatment` since it was written and
+      // nothing in the repo ever wrote it, so every live client's research prompt said
+      // "Sells: not recorded" and hunted for the buyer of an unnamed thing. It is deliberately
+      // NOT the same question as step 3's highest margin: the most profitable service and the
+      // one an owner wants more of are often different, and the pages, the posts and the lead
+      // magnet all follow this one. Kept single-line and short because a paragraph here would
+      // come back as a menu again, and a menu cannot be interpolated into a sentence.
+      {
+        key: "primary_treatment",
+        label: "Which one service do you most want more appointments for?",
+        kind: "text",
+        required: true,
+        help:
+          "One service, not your whole menu. This is what we aim the pages, the posts and the " +
+          "free offer at, so pick the one you would grow first.",
+        placeholder: "Lip filler",
+      },
       {
         key: "service_area",
         label: "Service area",

@@ -103,7 +103,7 @@ export const QUALIFYING_TOOLS = [
         question_key: {
           type: "string",
           enum: QUALIFYING_QUESTIONS.map((q) => q.key),
-          description: "Which of the six questions this answers.",
+          description: "Which of the qualifying questions this answers.",
         },
         answer: { type: "string", description: "Their answer, verbatim." },
       },
@@ -112,13 +112,13 @@ export const QUALIFYING_TOOLS = [
   },
   {
     name: "get_progress",
-    description: "Which of the six questions are answered and which are still outstanding.",
+    description: "Which qualifying questions are answered and which are still outstanding.",
     input_schema: { type: "object" as const, properties: {} },
   },
   {
     name: "offer_booking",
     description:
-      "Hand the conversation over to scheduling. Only works once all six questions are answered.",
+      "Hand the conversation over to scheduling. Only works once every question is answered.",
     input_schema: { type: "object" as const, properties: {} },
   },
 ];

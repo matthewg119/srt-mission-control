@@ -36,6 +36,8 @@ import {
   textFromHtml,
   stripUnstorable,
   isPageChrome,
+  extractKeywords,
+  isResearchMeta,
 } from "../src/lib/clients/harvest";
 import { buildCompactPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
 import {
@@ -526,12 +528,110 @@ ok("beliefs are not filtered for truth", /true or false, uncorrected/i.test(brie
 ok("it ends on the ranked 25", /25 phrases worth building pages around/.test(brief));
 ok("no em dashes in the prompt", !brief.includes("—"));
 
-// Matthew's eight sections, in his order, so a change to the spec is caught rather than silent.
-for (let i = 1; i <= 8; i += 1) {
+// Matthew's sections, in his order, so a change to the spec is caught rather than silent.
+// ‼️ NINE SINCE 2026-09-03. Section 9 is the keyword block, and it was APPENDED rather than
+// inserted precisely so this loop and the ordering assertion below keep holding.
+for (let i = 1; i <= 9; i += 1) {
   ok(`section ${i} is present`, brief.includes(`\n${i}. `));
 }
 ok("the sections are numbered in order",
   brief.indexOf("1. Who BUYS") < brief.indexOf("7. Their EXACT words"));
+
+// Section 9 has to ask for a SHAPE, not just for keywords, because extractKeywords parses it.
+ok("section 9 asks for 100 search phrases", /100 search phrases/.test(brief));
+ok("section 9 names the KEYWORDS block", /block titled KEYWORDS/.test(brief));
+ok("section 9 asks for the pipe shape", /phrase \| monthly volume/.test(brief));
+ok("section 9 asks for an intent word", /ready\|comparing\|researching\|price/.test(brief));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// isResearchMeta: the report talking about itself
+//
+// ‼️ EVERY STRING BELOW IS A REAL ROW FROM THE SHARED CORPUS, read out of question_bank on
+// 2026-09-03. 224 of 306 deep_research rows for the med-spa vertical were not buyer language,
+// and the reason is worth keeping: RULES in the research prompt REQUIRES "could not verify"
+// wherever a claim cannot be sourced, so the corpus was being polluted by the prompt working
+// correctly. The fix had to live in the intake, not the prompt.
+// ─────────────────────────────────────────────────────────────────────────────
+const META_ROWS = [
+  "Why: Shows pricing pressure from venture-backed competitors; independent owners need differentiation strategy.",
+  "Could not verify: Direct quotes from med spa owners in forums or review sites specifically attributing their struggles to external factors.",
+  '"When inconsistencies appear, Google may interpret them as duplicate businesses, fragmenting the trust signals that would otherwise accrue to one canonical record and diluting the authority of every listing involved."',
+  '"By Sumit Nautiyal, Founder · 5 min read · updated 5 August 2026 Does ChatGPT recommend me"',
+  '"or how all this works?" — http://medspa.squarespace.com/medspa-business-discussions/post/1084678',
+  "### Widely Believed: Regulatory compliance is complex and risky",
+  "What med spa owners say they like about marketing and visibility solutions:",
+  'Email subject: "What happens to your leads when you fire your agency?"',
+  "What they call themselves",
+];
+for (const row of META_ROWS) {
+  ok(`rejected as report scaffolding: ${row.slice(0, 44)}...`, isResearchMeta(row));
+}
+
+// ‼️ AND THE OTHER HALF, WHICH MATTERS MORE. A filter that rejects everything would pass every
+// assertion above and leave the corpus empty. These are real rows that MUST survive.
+const REAL_ROWS = [
+  "What if I couldn't pay rent or our health insurance bills?",
+  "What if I can't pay myself a living wage?",
+  "The worry that you're falling behind competitors.",
+  "When agencies are not law-literate, clinics inherit the risk.",
+  "How much does this cost?",
+  "What is included in the appointment?",
+  "Are AEO agencies legit or is this snake oil?",
+];
+for (const row of REAL_ROWS) {
+  ok(`kept as buyer language: ${row.slice(0, 44)}`, !isResearchMeta(row));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extractKeywords: the door section 9's answer comes back through
+//
+// ‼️ IT EXISTS BECAUSE extractPhrases DROPS KEYWORDS IN SILENCE. Asserting that here is the
+// point: a future tidy-up that routes keywords through extractPhrases would lose all 100 of
+// them and every test above would still pass.
+// ─────────────────────────────────────────────────────────────────────────────
+const kwDoc = [
+  "Some earlier prose about the market.",
+  "",
+  "## KEYWORDS",
+  "lip filler near me | 2400 | ready | https://example.com/a",
+  "how much is lip filler | 1300 | price | https://example.com/b",
+  "juvederm vs restylane | unknown | comparing | https://example.com/c",
+  "what is lip filler | 900 | researching | https://example.com/d",
+  "- botox near me | 5,000 | ready | https://example.com/e",
+  "phrase | monthly volume | intent | source",
+  "lip filler near me | 999 | price | https://example.com/dupe",
+  "",
+  "Finish with the 25 phrases worth building pages around, most urgent first.",
+].join(String.fromCharCode(10));
+
+const kws = extractKeywords(kwDoc);
+ok(`extractKeywords finds the rows (${kws.length})`, kws.length === 5);
+ok("the header row is not stored as a keyword", !kws.some((k) => /^phrase$/i.test(k.phrase)));
+ok("a duplicate phrase is kept once", kws.filter((k) => k.phrase === "lip filler near me").length === 1);
+ok("a bullet prefix is stripped", kws.some((k) => k.phrase === "botox near me"));
+ok("a comma in the volume is read", kws.find((k) => k.phrase === "botox near me")?.frequencyScore === 5000);
+// Intent is what page_candidates ranks on, so the mapping is the load-bearing part.
+ok("ready outranks comparing",
+  (kws.find((k) => k.phrase === "lip filler near me")?.commercialIntentScore ?? 0) >
+    (kws.find((k) => k.phrase === "juvederm vs restylane")?.commercialIntentScore ?? 0));
+ok("comparing outranks researching",
+  (kws.find((k) => k.phrase === "juvederm vs restylane")?.commercialIntentScore ?? 0) >
+    (kws.find((k) => k.phrase === "what is lip filler")?.commercialIntentScore ?? 0));
+// "unknown" must not score 0: the column sorts the list, and 0 would bury a real phrase under
+// one nobody has measured either.
+ok("an unsourced volume still scores",
+  (kws.find((k) => k.phrase === "juvederm vs restylane")?.frequencyScore ?? 0) > 0);
+// The close is prose, not a row. Eating it would file a sentence as a keyword.
+ok("the closing line is not eaten as a keyword",
+  !kws.some((k) => /25 phrases/.test(k.phrase)));
+ok("a document with no block yields nothing", extractKeywords("no keywords here at all").length === 0);
+
+// ‼️ AND THE PROOF THAT THE TWO DOORS ARE ACTUALLY DIFFERENT. If this ever passes, keywords are
+// being double-filed into the buyer-phrase corpus.
+ok("extractPhrases ignores the keyword rows",
+  !extractPhrases(kwDoc, "deep_research").some((phr) => phr.phrase.includes("lip filler near me")));
+
+
 
 // ‼️ THE HAIKU PATH KEEPS THE LONG INSTRUCTIONS AND THAT SEPARATION IS THE DESIGN. buildSectionPrompt
 // feeds a model that returns agency marketing pages unless it is told where to look; the compact
@@ -573,6 +673,20 @@ const shrugged = buildCompactPrompt({
   triedBefore: "  -  ",
 });
 ok("a declined field is dropped, not quoted", !shrugged.includes('"na"'));
+
+// ‼️ THE SAME FAULT ONE FIELD OVER, AND THE LENGTH CHECK COULD NOT SEE IT. answered() dropped
+// "na" at two characters; "any" is three and sailed through. Measured on SRT Agency once
+// primaryTreatment gained a fallback to ideal_patient.highest_margin, whose value on that row is
+// literally "any": the prompt rendered "Sells: any", "Who BUYS any" and "ready to book any in
+// Greensboro", which sends a research agent hunting for buyers of a thing called any. A blank is
+// better than a shrug here, because a blank degrades to a sentence that still reads.
+const shruggedTreatment = buildCompactPrompt({ ...briefInput, primaryTreatment: "any" });
+ok("a shrugged treatment does not become a product name",
+  !/Who BUYS any\b/.test(shruggedTreatment));
+ok("a shrugged treatment degrades to a word the sentence survives",
+  /Who BUYS this\b/.test(shruggedTreatment));
+ok("a shrugged treatment is reported as missing",
+  /Sells: not recorded/.test(shruggedTreatment));
 ok("and the fields that were answered survive it",
   shrugged.includes("women 35 to 55 with disposable income"));
 ok("and it says what is missing rather than inventing it", bare.includes("not recorded"));

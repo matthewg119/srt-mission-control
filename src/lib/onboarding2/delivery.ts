@@ -97,6 +97,12 @@ export function intakePatchFrom(
 
   const services: Record<string, unknown> = {};
   put(services, "services_list", a.highest_margin_service);
+  // ‼️ THE KEY deep-research-run.ts HAS ALWAYS READ AND NOTHING HAS EVER WRITTEN. Without this
+  // line the research prompt says "Sells: not recorded" and asks who buys "this", on every
+  // client, forever. It is a separate answer from highest_margin on purpose: the most profitable
+  // service and the one they want more of are usually different, and this is the one the pages,
+  // the posts and the free offer are aimed at.
+  put(services, "primary_treatment", a.primary_treatment);
 
   const idealPatient: Record<string, unknown> = {};
   put(idealPatient, "highest_margin", a.highest_margin_service);

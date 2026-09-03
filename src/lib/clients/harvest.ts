@@ -227,6 +227,7 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
     // pollute a bank that a human then has to read.
     if (/cookie|privacy policy|subscribe|newsletter|sign in|log in|javascript/i.test(phrase)) continue;
     if (isPageChrome(phrase)) continue;
+    if (isResearchMeta(phrase)) continue;
 
     const normalized = normalizePhrase(phrase);
     if (!normalized || seen.has(normalized)) continue;
@@ -243,6 +244,63 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
   }
 
   return out;
+}
+
+/**
+ * The research document talking about itself, rather than the market talking.
+ *
+ * ‼️ MEASURED, NOT GUESSED. On 2026-09-03 the shared corpus held 306 `deep_research` rows for the
+ * med-spa vertical and 224 of them were not buyer language. They came in three shapes, and all
+ * three are shapes the ORIGINAL filters were right to allow through in general:
+ *
+ *   "Why: Shows pricing pressure from venture-backed competitors..."   the report's own analysis
+ *   "Could not verify: Direct quotes from med spa owners in forums..." the report admitting a gap
+ *   "Inconsistent citations don't just hurt rankings, they trigger..." a 254-char blog paragraph
+ *
+ * The middle one is the sharpest lesson. RULES in deep-research-run.ts REQUIRES the phrase "could
+ * not verify" wherever a claim cannot be sourced, which is the single most valuable instruction in
+ * that prompt. So the corpus was being polluted by the research prompt working correctly, and the
+ * fix belongs here rather than there.
+ *
+ * The length ceiling does the rest of the work: buyer language is short, and anything past 120
+ * characters is a paragraph somebody wrote, not a sentence somebody said.
+ */
+const RESEARCH_META = [
+  /^why[:\s]/i,
+  /^could not verify/i,
+  /^source[s]?[:\s]/i,
+  /^note[:\s]/i,
+  /^summary[:\s]/i,
+  /^finding[:\s]/i,
+  /^evidence[:\s]/i,
+  /^section\s+\d/i,
+  /^headline\s*\d*[:\s]/i,
+  /^\d+\s*min read/i,
+  /min read/i,
+  /^by\s+[A-Z][a-z]+\s+[A-Z]/,
+  /updated\s+\d{1,2}\s+\w+\s+\d{4}/i,
+  // A markdown heading is the report's structure, not a sentence. "### Widely Believed: ..."
+  // is question-shaped enough to have survived every other filter.
+  /^#{1,6}\s/,
+  // Section 8 asks for headline and subject-line IDEAS. They are OUR words about the market, and
+  // filing them as things the market said is how a generated page ends up quoting our own draft.
+  /^(email )?subject\s*[:\s]/i,
+  /^headline\s*[:\s]/i,
+  // A line ending in a colon introduces the list under it. It is never the phrase itself:
+  // "What med spa owners say they like about marketing and visibility solutions:" is a lead-in.
+  /:\s*$/,
+  // The prompt's own section asks, echoed back as though somebody had said them.
+  /^what they (call|would never)/i,
+];
+
+/** Longest thing a person says in one breath. Past this it is prose, not a phrase. */
+const MAX_PHRASE_CHARS = 120;
+
+export function isResearchMeta(phrase: string): boolean {
+  if (phrase.length > MAX_PHRASE_CHARS) return true;
+  // A bare URL, or a line whose payload is a link, is a citation and not something anybody said.
+  if (/https?:\/\//i.test(phrase)) return true;
+  return RESEARCH_META.some((re) => re.test(phrase));
 }
 
 /** Merge sightings of the same phrase, raising frequency rather than duplicating. */
@@ -508,4 +566,98 @@ export function formatHarvestSummary(args: {
   }
 
   return lines.join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The keyword block
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The ranked keyword list section 9 of the research prompt asks for.
+ *
+ * ‼️ A SEPARATE PARSER, AND A SEPARATE `source`, BECAUSE extractPhrases WOULD DROP EVERY ONE OF
+ * THESE IN SILENCE. That function keeps only 4-to-22-word strings that are question-shaped or
+ * objection-shaped, which is correct for verbatim buyer language and exactly wrong for keywords:
+ * "lip filler near me" is four words and neither shape, "botox cost" is two. Lowering
+ * MIN_PHRASE_WORDS to let them through would change what every client in the vertical harvests,
+ * since question_bank has no client_id. So keywords come in through their own door, tagged
+ * `source: 'keywords'`, and anything reading buyer phrases can keep ignoring them.
+ *
+ * The intent word is the point of the exercise. It becomes commercial_intent_score, which is what
+ * page_candidates ranks on, so a keyword arrives already sorted by how close to booking it is.
+ */
+export const KEYWORD_SOURCE = "keywords" as const;
+
+const KEYWORD_INTENT_SCORE: Record<string, number> = {
+  ready: 5,
+  comparing: 4,
+  price: 3,
+  researching: 2,
+};
+
+/** Longest keyword worth storing. Past this it is a sentence somebody pasted into the wrong block. */
+const MAX_KEYWORD_CHARS = 90;
+
+/**
+ * Pull the KEYWORDS block out of a pasted research document.
+ *
+ * Returns [] when there is no such block, which is the normal case for research run before
+ * section 9 existed. Never throws: a malformed line is skipped, not fatal, because the same paste
+ * also carries the eight sections and refusing the whole document over one bad row would lose
+ * them too.
+ */
+export function extractKeywords(text: string): HarvestedPhrase[] {
+  // The heading, then everything until a blank-line-separated block that is not a keyword row.
+  const start = text.search(/^\s*#*\s*KEYWORDS\b.*$/im);
+  if (start === -1) return [];
+
+  const lines = text.slice(start).split(/\r?\n/).slice(1);
+  const out: HarvestedPhrase[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // A pipe is what makes a row a row. The first non-empty line without one ends the block,
+    // which is how the "Finish with the 25 phrases" close does not get eaten as keywords.
+    if (!line.includes("|")) {
+      if (out.length) break;
+      continue;
+    }
+
+    const cells = line
+      .replace(/^[-*\d.)\s]+/, "")
+      .split("|")
+      .map((c) => c.trim());
+
+    const phrase = cells[0]?.replace(/^["'`]|["'`]$/g, "").trim() ?? "";
+    if (!phrase || phrase.length > MAX_KEYWORD_CHARS) continue;
+    // A header row ("phrase | monthly volume | intent | source") arrives looking like data.
+    if (/^phrase$/i.test(phrase)) continue;
+    if (/^[-=\s|]+$/.test(line)) continue;
+
+    const normalized = normalizePhrase(phrase);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+
+    const volume = Number.parseInt((cells[1] ?? "").replace(/[^0-9]/g, ""), 10);
+    const intent = (cells[2] ?? "").toLowerCase();
+    const intentScore =
+      Object.entries(KEYWORD_INTENT_SCORE).find(([word]) => intent.includes(word))?.[1] ?? 1;
+    const sourceUrl = cells.slice(3).join(" ").trim();
+
+    out.push({
+      phrase,
+      normalized,
+      // The volume when one was sourced, 1 when it says "unknown". Never 0: the column is what
+      // ranks a keyword, and a 0 would sort a real phrase below one nobody has measured either.
+      frequencyScore: Number.isFinite(volume) && volume > 0 ? volume : 1,
+      commercialIntentScore: intentScore,
+      objectionPhrase: false,
+      sourceUrl: /^https?:\/\//i.test(sourceUrl) ? sourceUrl : "",
+    });
+  }
+
+  return out;
 }
