@@ -164,6 +164,20 @@ const SEEN_IN_CHUNK = 300;
 /** How many of those are in flight at once. Plain reads, no ordering, nothing to serialize. */
 const SEEN_CONCURRENCY = 6;
 
+/**
+ * The ledger's four key types.
+ *
+ * ‼️ ONE LIST, so the read and the write cannot drift on the camelCase/snake_case boundary. The
+ * `DedupeKeys` field is `companyCity`; the value stored in `scraper_seen.key_type` and printed in
+ * duplicates.csv is `company_city`, and the CHECK constraint only accepts the latter.
+ */
+const KEY_TYPES: Array<{ field: "domain" | "phone" | "email" | "companyCity"; stored: string }> = [
+  { field: "domain", stored: "domain" },
+  { field: "phone", stored: "phone" },
+  { field: "email", stored: "email" },
+  { field: "companyCity", stored: "company_city" },
+];
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -345,11 +359,17 @@ export async function loadKnownKeys(keys: {
   domain: string[];
   phone: string[];
   email: string[];
+  companyCity: string[];
 }): Promise<KnownKeys> {
-  const out = { domain: new Set<string>(), phone: new Set<string>(), email: new Set<string>() };
+  const out = {
+    domain: new Set<string>(),
+    phone: new Set<string>(),
+    email: new Set<string>(),
+    companyCity: new Set<string>(),
+  };
 
-  for (const keyType of ["domain", "phone", "email"] as const) {
-    const parts = chunk(keys[keyType], SEEN_IN_CHUNK).filter((p) => p.length > 0);
+  for (const keyType of KEY_TYPES) {
+    const parts = chunk(keys[keyType.field], SEEN_IN_CHUNK).filter((p) => p.length > 0);
 
     // ‼️ RUN IN WAVES, NOT ONE AT A TIME. At MAX_ROWS this asks about 150k keys, and a strictly
     // sequential sweep at IN_CHUNK would be 1,500 round trips — most of the 300s the drop shares
@@ -358,12 +378,16 @@ export async function loadKnownKeys(keys: {
     for (const wave of chunk(parts, SEEN_CONCURRENCY)) {
       const results = await Promise.all(
         wave.map((part) =>
-          supabaseAdmin.from("scraper_seen").select("key_value").eq("key_type", keyType).in("key_value", part)
+          supabaseAdmin
+            .from("scraper_seen")
+            .select("key_value")
+            .eq("key_type", keyType.stored)
+            .in("key_value", part)
         )
       );
       for (const { data, error } of results) {
-        if (error) throw new Error("loadKnownKeys(" + keyType + "): " + error.message);
-        for (const r of (data ?? []) as Array<{ key_value: string }>) out[keyType].add(r.key_value);
+        if (error) throw new Error("loadKnownKeys(" + keyType.stored + "): " + error.message);
+        for (const r of (data ?? []) as Array<{ key_value: string }>) out[keyType.field].add(r.key_value);
       }
     }
   }
@@ -390,9 +414,10 @@ export async function recordSeen(batchId: string, rows: DedupeRow[]): Promise<vo
       email: row.keys.email,
       phone: row.keys.phone,
     };
-    if (row.keys.domain) payload.push({ key_type: "domain", key_value: row.keys.domain, ...provenance });
-    if (row.keys.phone) payload.push({ key_type: "phone", key_value: row.keys.phone, ...provenance });
-    if (row.keys.email) payload.push({ key_type: "email", key_value: row.keys.email, ...provenance });
+    for (const { field, stored } of KEY_TYPES) {
+      const value = row.keys[field];
+      if (value) payload.push({ key_type: stored, key_value: value, ...provenance });
+    }
   }
 
   for (const part of chunk(payload, INSERT_CHUNK)) {

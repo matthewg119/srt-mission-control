@@ -399,7 +399,7 @@ async function runDedupe(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): 
 
   const cols = dedupeColumns(parsed.headers);
   const known = await loadKnownKeys(allKeys(parsed.rows, cols));
-  const { fresh, dupes } = splitDuplicates({ rows: parsed.rows, cols, known });
+  const { fresh, dupes, keyless } = splitDuplicates({ rows: parsed.rows, cols, known });
 
   await say(
     batch,
@@ -408,7 +408,14 @@ async function runDedupe(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): 
       total: parsed.rows.length,
       dupes,
       newCount: fresh.length,
-      keyColumns: { website: cols.website, phone: cols.phone, email: cols.email },
+      keyless,
+      keyColumns: {
+        website: cols.website,
+        phone: cols.phone,
+        email: cols.email,
+        company: cols.company,
+        city: cols.city,
+      },
     })
   );
 

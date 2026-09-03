@@ -109,6 +109,7 @@ const MATCH_LABEL: Record<DedupeMatch, string> = {
   domain: "same website as a business from an earlier drop",
   phone: "same phone as a business from an earlier drop",
   email: "same address as a contact from an earlier drop",
+  company_city: "same name and city as a business from an earlier drop",
 };
 
 /**
@@ -137,8 +138,16 @@ export function formatDedupeSplit(input: {
   total: number;
   dupes: DuplicateRow[];
   newCount: number;
+  /** New rows carrying no key of any kind. They can never be recorded, so they come back forever. */
+  keyless: number;
   /** Which columns the keys were read from, so the numbers can be argued with. */
-  keyColumns: { website: string | null; phone: string | null; email: string | null };
+  keyColumns: {
+    website: string | null;
+    phone: string | null;
+    email: string | null;
+    company: string | null;
+    city: string | null;
+  };
 }): string {
   const { total, dupes, newCount } = input;
   const lines: string[] = [];
@@ -154,7 +163,7 @@ export function formatDedupeSplit(input: {
   if (dupes.length > 0) {
     const counts = new Map<DedupeMatch, number>();
     for (const d of dupes) counts.set(d.matchedOn, (counts.get(d.matchedOn) ?? 0) + 1);
-    const order: DedupeMatch[] = ["in_file", "domain", "phone", "email"];
+    const order: DedupeMatch[] = ["in_file", "domain", "phone", "email", "company_city"];
     lines.push("");
     lines.push("Matched on:");
     lines.push("```");
@@ -172,12 +181,28 @@ export function formatDedupeSplit(input: {
   if (input.keyColumns.website) read.push("website `" + input.keyColumns.website + "`");
   if (input.keyColumns.phone) read.push("phone `" + input.keyColumns.phone + "`");
   if (input.keyColumns.email) read.push("email `" + input.keyColumns.email + "`");
+  if (input.keyColumns.company && input.keyColumns.city) {
+    read.push(
+      "and, only where a row has none of those, `" + input.keyColumns.company + "` + `" +
+        input.keyColumns.city + "`"
+    );
+  }
   lines.push("");
   lines.push(
     read.length > 0
       ? "_Keys read from " + read.join(", ") + "._"
-      : "_No website, phone or email column in this file, so nothing could be matched. Every row is new._"
+      : "_Nothing in this file could be matched: no website, phone, email, or company and city._"
   );
+
+  // ‼️ SAID OUT LOUD, because these rows are the one silent failure mode left. A row with no key of
+  // any kind cannot be recorded, so it is reported as new on this drop and on every drop after it,
+  // forever, and the count is the only place that would ever be visible.
+  if (input.keyless > 0) {
+    lines.push(
+      ":warning: " + input.keyless + " of the new rows carry no website, phone, email or city, so " +
+        "nothing identifies them. They could not be recorded and will come back as new next time."
+    );
+  }
 
   return lines.join("\n");
 }

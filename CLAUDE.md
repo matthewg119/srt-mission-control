@@ -4010,7 +4010,7 @@ SERP bought for it before anybody saw a number. Nothing downstream can un-spend 
 Now `startBatch` splits the file first: `duplicates.csv` + `new.csv` + a split card, then the
 picker, which prints the new count and says both workflows run on it only.
 
-**Match rule: domain OR phone OR email, any hit.** Three independent keys rather than one
+**Match rule: domain OR phone OR email, any hit, then company+city as a last resort.** Three independent keys rather than one
 composite, because a med-spa list carries a website and no email, an Apollo export carries an email
 and often no website, and an Outscraper pull carries a phone and both. Check order is
 `in_file -> domain -> phone -> email` and the first hit is what `duplicates.csv` reports: in-file
@@ -4058,6 +4058,35 @@ reading "all new" with an empty skip set.
 like the picker's column preview — a file carrying none of them reports "all new" and reaches the
 picker unchanged, and the split card says out loud that nothing COULD be matched. Column
 REQUIREMENTS still belong to the workflow that needs them, checked after the pick.
+
+### The fourth key, and why it is not optional (same day)
+
+`docs/2026-09-03-scraper-dedup-company-city.sql`. After the first migration the ledger seeded
+EMPTY, and the query says why:
+
+```
+select count(*), count(website) filter (where trim(coalesce(website,'')) <> '')
+from scraper_rows;   ->  613 rows, 0 with a website, 0 with an email, 0 with a phone
+```
+
+All 613 are three drops of the same `leads (1).csv` (226 / 161 / 226 rows, 226 distinct
+businesses), scored 2026-08-28 and 2026-08-29. That is an Outscraper company pull: company and city
+and nothing else. So domain/phone/email on its own would have reported all 226 as NEW on the next
+drop and re-bought every SERP, which is precisely the thing the feature was asked for.
+
+`companyCityKey` is therefore a fourth key type, and two properties keep it honest:
+
+- ‼️ **It is computed ONLY when the row has no domain, no phone and no email** — structurally, in
+  `rowKeys`, not by ordering it last. A name is the weakest evidence here: a chain with one domain
+  and ten locations would collide on it. It exists for rows whose alternative is never being
+  deduped at all.
+- ‼️ **It is NOT `normalizeCompanyName`.** That one strips spa / clinic / studio / LLC, because it
+  answers "same company under two names". Here those words are often the only thing separating two
+  businesses on one street, so "Glow Spa" and "Glow Clinic" in Charlotte stay two rows. Both halves
+  are required too: "Skin Bar" in Charlotte and in Miami are two businesses.
+
+A row with no key of ANY kind can never be recorded, so it comes back as new forever. The split
+card counts those out loud rather than leaving it to be discovered.
 
 `handleThreadedCsv` is untouched. An Apollo export is contacts for companies its thread already
 chose, not a new list, and deduping it against the ledger its own parent just wrote would delete

@@ -3,13 +3,16 @@
 //   bunx tsx scripts/_probe-scraper-dedup.ts     pure checks, no network, no DB, no Slack
 //
 // This lane deletes rows from a run before anybody sees them, so the question this file answers is
-// not "does it dedupe" but "does it ever delete a business that is not a duplicate". Two rails
-// carry that weight and both are asserted here by name:
+// not "does it dedupe" but "does it ever delete a business that is not a duplicate". Three rails
+// carry that weight and all three are asserted here by name:
 //
 //   1. A platform host is not an identity. Keyed on facebook.com, the SECOND clinic with a Facebook
 //      page vanishes forever, because the drop also writes the key to the ledger.
 //   2. A phone key is the last ten digits. A seven-digit local listing must not become a key at all,
 //      or every "555-01xx" row in the file collapses onto one lead.
+//   3. company+city is a LAST RESORT, computed only when a row has no domain, no phone and no
+//      email, and it does NOT strip "spa" / "clinic" the way normalizeCompanyName does, because on
+//      one street those words are the only thing separating two businesses.
 //
 // ‼️ THE SUMMARY AND THE process.exit MUST STAY THE LAST TWO STATEMENTS IN THIS FILE, same rule as
 // _probe-scraper.ts: checks written below them never run.
@@ -19,6 +22,7 @@ import {
   domainKey,
   emailKey,
   phoneKey,
+  companyCityKey,
   splitDuplicates,
   type DedupeColumns,
   type KnownKeys,
@@ -41,7 +45,22 @@ function eq(label: string, actual: unknown, expected: unknown): void {
   check(label, a === e, "got " + a + ", wanted " + e);
 }
 
-const NO_KEYS: KnownKeys = { domain: new Set(), phone: new Set(), email: new Set() };
+const NO_KEYS: KnownKeys = {
+  domain: new Set(),
+  phone: new Set(),
+  email: new Set(),
+  companyCity: new Set(),
+};
+
+/** A KnownKeys with just the one set filled, so a check says which key it is exercising. */
+function ledger(over: Partial<Record<keyof KnownKeys, string[]>>): KnownKeys {
+  return {
+    domain: new Set(over.domain ?? []),
+    phone: new Set(over.phone ?? []),
+    email: new Set(over.email ?? []),
+    companyCity: new Set(over.companyCity ?? []),
+  };
+}
 
 const COLS: DedupeColumns = {
   company: "company",
@@ -108,7 +127,7 @@ eq("email: blank", emailKey(""), null);
     row({ company: "Glow Bar", website: "https://www.glowbar.com" }),
     row({ company: "Derma Luxe", website: "dermaluxe.com" }),
   ];
-  const known: KnownKeys = { domain: new Set(["glowbar.com"]), phone: new Set(), email: new Set() };
+  const known = ledger({ domain: ["glowbar.com"] });
   const { fresh, dupes } = splitDuplicates({ rows, cols: COLS, known });
   eq("split: the known domain is caught", dupes.length, 1);
   eq("split: it reports the key that caught it", dupes[0].matchedOn, "domain");
@@ -153,17 +172,13 @@ eq("email: blank", emailKey(""), null);
   const rows = [row({ company: "Glow Bar" }), row({ company: "Derma Luxe" })];
   const { fresh, dupes } = splitDuplicates({ rows, cols: bare, known: NO_KEYS });
   eq("no key columns: all new", [fresh.length, dupes.length], [2, 0]);
-  eq("no key columns: nothing to ask the ledger", allKeys(rows, bare), { domain: [], phone: [], email: [] });
+  eq("no key columns: nothing to ask the ledger", allKeys(rows, bare), { domain: [], phone: [], email: [], companyCity: [] });
 }
 
 {
   // Precedence: a row that collides on domain AND phone AND email reports the domain.
   const rows = [row({ website: "glowbar.com", phone: "7045550134", email: "jane@glowbar.com" })];
-  const known: KnownKeys = {
-    domain: new Set(["glowbar.com"]),
-    phone: new Set(["7045550134"]),
-    email: new Set(["jane@glowbar.com"]),
-  };
+  const known = ledger({ domain: ["glowbar.com"], phone: ["7045550134"], email: ["jane@glowbar.com"] });
   const { dupes } = splitDuplicates({ rows, cols: COLS, known });
   eq("precedence: domain wins over phone and email", dupes[0].matchedOn, "domain");
 }
@@ -171,11 +186,7 @@ eq("email: blank", emailKey(""), null);
 {
   // Phone before email, when there is no domain to judge by.
   const rows = [row({ phone: "7045550134", email: "jane@glowbar.com" })];
-  const known: KnownKeys = {
-    domain: new Set(),
-    phone: new Set(["7045550134"]),
-    email: new Set(["jane@glowbar.com"]),
-  };
+  const known = ledger({ phone: ["7045550134"], email: ["jane@glowbar.com"] });
   const { dupes } = splitDuplicates({ rows, cols: COLS, known });
   eq("precedence: phone wins over email", dupes[0].matchedOn, "phone");
 }
@@ -199,6 +210,7 @@ eq("email: blank", emailKey(""), null);
     domain: ["glowbar.com"],
     phone: ["7045550134"],
     email: ["jane@glowbar.com"],
+    companyCity: [],
   });
 }
 
@@ -246,7 +258,7 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
   const { dupes } = splitDuplicates({
     rows,
     cols: COLS,
-    known: { domain: new Set(["glowbar.com"]), phone: new Set(), email: new Set() },
+    known: ledger({ domain: ["glowbar.com"] }),
   });
   const csv = buildDuplicatesCsv(["company", "website"], dupes);
   check("duplicates.csv: keeps the original headers and adds two",
@@ -258,7 +270,8 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     total: 226,
     dupes,
     newCount: 225,
-    keyColumns: { website: "website", phone: null, email: null },
+    keyless: 0,
+    keyColumns: { website: "website", phone: null, email: null, company: "company", city: "city" },
   });
   check("split card: names the file", card.includes("leads (1).csv"), card);
   check("split card: prints both counts", card.includes("already in  1") && card.includes("new         225"), card);
@@ -271,10 +284,13 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     total: 10,
     dupes: [],
     newCount: 10,
-    keyColumns: { website: null, phone: null, email: null },
+    keyless: 10,
+    keyColumns: { website: null, phone: null, email: null, company: null, city: null },
   });
   check("split card: says so when nothing COULD be matched",
-    card.includes("nothing could be matched"), card);
+    card.includes("Nothing in this file could be matched"), card);
+  check("split card: warns that keyless rows come back forever",
+    card.includes("10 of the new rows carry no website"), card);
 }
 
 {
@@ -320,6 +336,62 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
   });
   check("picker: a clean file says all new and adds no scope line",
     picker.includes("all new") && !picker.includes("new rows only"), picker);
+}
+
+
+// -- rail 3: company + city, the last resort ----------------------------------------------------
+//
+// This is the file that prompted the whole feature: an Outscraper pull with company and city and a
+// blank website column, dropped three times and re-scored three times.
+
+eq("company+city: normalized and joined", companyCityKey("5D Wellness", "Riga"), "5dwellness|riga");
+eq("company+city: punctuation and case come out", companyCityKey("ABClinic Art & Beauty", "Prague"), "abclinicartbeauty|prague");
+eq("company+city: no city is no key", companyCityKey("Skin Bar", ""), null);
+eq("company+city: no company is no key", companyCityKey("", "Charlotte"), null);
+eq("company+city: same name, two cities, two keys",
+  companyCityKey("Skin Bar", "Charlotte") === companyCityKey("Skin Bar", "Miami"), false);
+
+// The difference from normalizeCompanyName, asserted rather than described. Stripping the generic
+// suffix would fold these two into one business.
+eq("company+city: Spa and Clinic stay two businesses",
+  companyCityKey("Glow Spa", "Charlotte") === companyCityKey("Glow Clinic", "Charlotte"), false);
+eq("company+city: LLC is NOT stripped either", companyCityKey("Glow Spa LLC", "Charlotte"), "glowspallc|charlotte");
+
+{
+  // The re-drop. Exactly the shape of leads (1).csv: company and city, nothing else.
+  const rows = [row({ company: "5D Wellness", city: "Riga" }), row({ company: "8 West Clinic", city: "Vancouver" })];
+  const { fresh, dupes, keyless } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ companyCity: ["5dwellness|riga"] }),
+  });
+  eq("re-drop: the scored company is caught", dupes.map((d) => d.matchedOn), ["company_city"]);
+  eq("re-drop: reported with the snake_case key name", dupes[0].matchedValue, "5dwellness|riga");
+  eq("re-drop: the unseen one survives", fresh.map((f) => f.company), ["8 West Clinic"]);
+  eq("re-drop: and it is keyed, so the NEXT drop catches it",
+    [keyless, fresh[0].keys.companyCity], [0, "8westclinic|vancouver"]);
+}
+
+{
+  // THE LAST-RESORT RULE. A row with a website never takes a name key, so a chain with one domain
+  // and ten locations cannot collide on its own name.
+  const rows = [row({ company: "Ideal Image", city: "Charlotte", website: "idealimage.com" })];
+  const { fresh } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
+  eq("last resort: a website suppresses the name key", fresh[0].keys.companyCity, null);
+  eq("last resort: the domain is the key instead", fresh[0].keys.domain, "idealimage.com");
+}
+
+{
+  const rows = [row({ company: "Ideal Image", city: "Charlotte", phone: "(704) 555-0134" })];
+  const { fresh } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
+  eq("last resort: a phone suppresses the name key too", fresh[0].keys.companyCity, null);
+}
+
+{
+  // A file with a company and city column but no city VALUES: keyless, and the count says so.
+  const rows = [row({ company: "Glow Bar" }), row({ company: "Derma Luxe" })];
+  const { fresh, keyless } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
+  eq("keyless: counted, not hidden", [fresh.length, keyless], [2, 2]);
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");

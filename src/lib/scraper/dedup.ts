@@ -17,7 +17,7 @@ import { normalizeHost } from "@/lib/company-identity";
 import { emailDomain } from "./rules";
 
 /** Which key caught the row. Reported verbatim in duplicates.csv. */
-export type DedupeMatch = "in_file" | "domain" | "phone" | "email";
+export type DedupeMatch = "in_file" | "domain" | "phone" | "email" | "company_city";
 
 /**
  * Hosts that identify a PLATFORM rather than a business.
@@ -53,12 +53,15 @@ export interface DedupeKeys {
   domain: string | null;
   phone: string | null;
   email: string | null;
+  /** Only ever set when the other three are null. See `rowKeys`. */
+  companyCity: string | null;
 }
 
 export interface KnownKeys {
   domain: ReadonlySet<string>;
   phone: ReadonlySet<string>;
   email: ReadonlySet<string>;
+  companyCity: ReadonlySet<string>;
 }
 
 export interface DedupeRow {
@@ -117,15 +120,56 @@ export function emailKey(email: string | null | undefined): string | null {
   return emailDomain(addr) ? addr : null;
 }
 
-export function rowKeys(raw: Record<string, string>, cols: DedupeColumns): DedupeKeys {
-  return {
-    domain: domainKey(cols.website ? raw[cols.website] : null),
-    phone: phoneKey(cols.phone ? raw[cols.phone] : null),
-    email: emailKey(cols.email ? raw[cols.email] : null),
-  };
+/**
+ * The last-resort key: a normalized company name and its city.
+ *
+ * ‼️ THIS IS NOT `normalizeCompanyName`, AND THE DIFFERENCE IS DELIBERATE. That one strips generic
+ * suffixes — spa, clinic, studio, center — because it answers "is this the same company under two
+ * names". Here those words are often the ONLY thing separating two businesses on one street, so
+ * "Glow Spa" and "Glow Clinic" in Charlotte must stay two rows. Punctuation and case come out;
+ * nothing else does.
+ *
+ * ‼️ BOTH HALVES ARE REQUIRED. "Skin Bar" in Charlotte and "Skin Bar" in Miami are two businesses,
+ * so a row with no city gets no key at all rather than a key that collides across the country.
+ */
+export function companyCityKey(
+  company: string | null | undefined,
+  city: string | null | undefined
+): string | null {
+  const name = (company ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const where = (city ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!name || !where) return null;
+  return name + "|" + where;
 }
 
-const KEY_ORDER = ["domain", "phone", "email"] as const;
+/**
+ * ‼️ `companyCity` IS COMPUTED ONLY WHEN THE OTHER THREE ARE NULL, structurally, not by ordering it
+ * last. A name match is the weakest evidence this lane has: a chain with one domain and ten
+ * locations would collide on it, and a franchise would collide with its own franchisor. It exists
+ * for the rows that would otherwise carry NO key at all — an Outscraper company pull with a blank
+ * website column, which is exactly the file this whole feature was asked for — where the choice is
+ * not "name or something better", it is "name or never dedupe this list".
+ */
+export function rowKeys(raw: Record<string, string>, cols: DedupeColumns): DedupeKeys {
+  const domain = domainKey(cols.website ? raw[cols.website] : null);
+  const phone = phoneKey(cols.phone ? raw[cols.phone] : null);
+  const email = emailKey(cols.email ? raw[cols.email] : null);
+  const companyCity =
+    domain || phone || email
+      ? null
+      : companyCityKey(cols.company ? raw[cols.company] : null, cols.city ? raw[cols.city] : null);
+  return { domain, phone, email, companyCity };
+}
+
+const KEY_ORDER = ["domain", "phone", "email", "companyCity"] as const;
+
+/** The field name is camelCase; the ledger's key_type and the CSV's reason are snake_case. */
+const MATCH_OF: Record<(typeof KEY_ORDER)[number], DedupeMatch> = {
+  domain: "domain",
+  phone: "phone",
+  email: "email",
+  companyCity: "company_city",
+};
 
 function cell(raw: Record<string, string>, column: string | null): string | null {
   if (!column) return null;
@@ -147,17 +191,21 @@ export function splitDuplicates(input: {
   rows: Array<Record<string, string>>;
   cols: DedupeColumns;
   known: KnownKeys;
-}): { fresh: DedupeRow[]; dupes: DuplicateRow[] } {
+}): { fresh: DedupeRow[]; dupes: DuplicateRow[]; keyless: number } {
   const { rows, cols, known } = input;
 
   const claimed = {
     domain: new Set<string>(),
     phone: new Set<string>(),
     email: new Set<string>(),
+    companyCity: new Set<string>(),
   };
 
   const fresh: DedupeRow[] = [];
   const dupes: DuplicateRow[] = [];
+  // Rows carrying no key of any kind. They can never be a duplicate and can never be recorded, so
+  // they come back as new forever — which is worth SAYING rather than leaving to be discovered.
+  let keyless = 0;
 
   rows.forEach((raw, rowIndex) => {
     const keys = rowKeys(raw, cols);
@@ -178,17 +226,23 @@ export function splitDuplicates(input: {
 
     const prior = KEY_ORDER.find((k) => keys[k] !== null && known[k].has(keys[k] as string));
     if (prior) {
-      dupes.push({ ...row, matchedOn: prior, matchedValue: keys[prior] as string });
+      dupes.push({ ...row, matchedOn: MATCH_OF[prior], matchedValue: keys[prior] as string });
       return;
     }
 
-    if (keys.domain) claimed.domain.add(keys.domain);
-    if (keys.phone) claimed.phone.add(keys.phone);
-    if (keys.email) claimed.email.add(keys.email);
+    let keyed = false;
+    for (const k of KEY_ORDER) {
+      const value = keys[k];
+      if (value) {
+        claimed[k].add(value);
+        keyed = true;
+      }
+    }
+    if (!keyed) keyless++;
     fresh.push(row);
   });
 
-  return { fresh, dupes };
+  return { fresh, dupes, keyless };
 }
 
 /**
@@ -200,15 +254,21 @@ export function splitDuplicates(input: {
 export function allKeys(
   rows: Array<Record<string, string>>,
   cols: DedupeColumns
-): { domain: string[]; phone: string[]; email: string[] } {
-  const domain = new Set<string>();
-  const phone = new Set<string>();
-  const email = new Set<string>();
+): { domain: string[]; phone: string[]; email: string[]; companyCity: string[] } {
+  const sets = {
+    domain: new Set<string>(),
+    phone: new Set<string>(),
+    email: new Set<string>(),
+    companyCity: new Set<string>(),
+  };
   for (const raw of rows) {
     const k = rowKeys(raw, cols);
-    if (k.domain) domain.add(k.domain);
-    if (k.phone) phone.add(k.phone);
-    if (k.email) email.add(k.email);
+    for (const key of KEY_ORDER) if (k[key]) sets[key].add(k[key] as string);
   }
-  return { domain: [...domain], phone: [...phone], email: [...email] };
+  return {
+    domain: [...sets.domain],
+    phone: [...sets.phone],
+    email: [...sets.email],
+    companyCity: [...sets.companyCity],
+  };
 }
