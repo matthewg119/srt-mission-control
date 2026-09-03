@@ -69,6 +69,14 @@ export interface ResearchIntakeResult {
   seen?: number;
   /** Rows written from the KEYWORDS block, which is section 9 and a different corpus. */
   keywords?: number;
+  /**
+   * The block was there and the write refused it.
+   *
+   * ‼️ A SEPARATE FIELD FROM `keywords: 0`, BECAUSE THE TWO USED TO BE INDISTINGUISHABLE AND THAT
+   * SHIPPED A LIE. A failed upsert left keywordsStored at 0, and the reply then printed the
+   * message for a MISSING block to somebody who had just pasted a hundred keywords.
+   */
+  keywordsError?: string;
   runId?: string;
 }
 
@@ -215,6 +223,7 @@ export async function ingestResearch(args: {
   // A failure here does NOT fail the intake: the eight sections are already filed at this point
   // and returning an error would tell the operator nothing landed when most of it did.
   let keywordsStored = 0;
+  let keywordsFailed: string | undefined;
   if (keywords.length) {
     const { error: kwError } = await supabaseAdmin.from("question_bank").upsert(
       keywords.map((k) => ({
@@ -231,8 +240,12 @@ export async function ingestResearch(args: {
       })),
       { onConflict: "vertical,avatar,normalized", ignoreDuplicates: false }
     );
-    if (kwError) console.error("[research-intake] keyword upsert failed:", kwError.message);
-    else keywordsStored = keywords.length;
+    if (kwError) {
+      console.error("[research-intake] keyword upsert failed:", kwError.message);
+      keywordsFailed = kwError.message;
+    } else {
+      keywordsStored = keywords.length;
+    }
   }
 
   await supabaseAdmin
@@ -245,6 +258,7 @@ export async function ingestResearch(args: {
     stored: fresh.length,
     seen: phrases.length - fresh.length,
     keywords: keywordsStored,
+    keywordsError: keywordsFailed,
     runId,
   };
 }
@@ -260,7 +274,10 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
     // that did, and section 9 is the half the page candidates rank on.
     r.keywords
       ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.`
-      : ":mag: No KEYWORDS block found. Section 9 asks for 100 search phrases as `phrase | volume | intent | source`; paste that block and this reply will count them.",
+      : r.keywordsError
+        ? `:x: *The KEYWORDS block was there and the database refused it:* ${r.keywordsError}\n` +
+          "The phrases above still landed. This is a schema problem, not something you pasted wrong."
+        : ":mag: No KEYWORDS block found. Section 9 asks for 100 search phrases as `phrase | volume | intent | source`; paste that block and this reply will count them.",
   ];
 
   if (topPhrases.length) {

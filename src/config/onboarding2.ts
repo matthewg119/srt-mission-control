@@ -265,9 +265,13 @@ export const OTHER_PROMPT = {
   cancel: guard("other cancel", "Back"),
 };
 
+// ‼️ THE COUNT IS INTERPOLATED, NOT TYPED. This said "Six questions" while the array held seven,
+// because primary_treatment was added and the prose was not. A funnel that promises six and asks
+// seven is a small lie told at the exact moment somebody has just signed something, which is the
+// worst possible moment to look like a system that was not paying attention.
 export const QUALIFYING_INTRO = guard(
   "qual intro",
-  "Six questions, about a minute. They shape what we build first, and you never have to repeat anything you already put in the agreement."
+  `${QUALIFYING_QUESTIONS.length} questions, about a minute. They shape what we build first, and you never have to repeat anything you already put in the agreement.`
 );
 
 // ─────────────────────────────────────────────────────────────────────────────

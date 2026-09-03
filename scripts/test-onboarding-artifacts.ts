@@ -38,6 +38,7 @@ import {
   isPageChrome,
   extractKeywords,
   isResearchMeta,
+  MAX_INTENT_SCORE,
 } from "../src/lib/clients/harvest";
 import { buildCompactPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
 import { scanRunningBody } from "../src/lib/audit-engine/scan-running-email";
@@ -675,6 +676,29 @@ ok("an unsourced volume still scores",
 ok("the closing line is not eaten as a keyword",
   !kws.some((k) => /25 phrases/.test(k.phrase)));
 ok("a document with no block yields nothing", extractKeywords("no keywords here at all").length === 0);
+
+// ‼️ THE ASSERTION THAT WOULD HAVE CAUGHT THE OUTAGE. The parser shipped emitting 4 and 5 on a
+// column whose CHECK is `between 0 and 3`, so every keyword row was refused, the single-statement
+// upsert took the whole batch with it, and the Slack reply blamed the paste for a missing block.
+// commercial_intent_score is SHARED with commercialIntent()'s 0-to-3 ladder, so this is a
+// semantic bound as much as a schema one: a keyword scoring above 3 would outrank every real
+// buyer question in page_candidates purely for being measured with a different ruler.
+for (const k of kws) {
+  ok(
+    `"${k.phrase}" scores inside the shared ladder (${k.commercialIntentScore})`,
+    k.commercialIntentScore >= 0 && k.commercialIntentScore <= MAX_INTENT_SCORE
+  );
+}
+ok("the ceiling is the one the database enforces", MAX_INTENT_SCORE === 3);
+// And the mapping still has to mean something: ready must beat researching.
+ok("ready outranks researching on the shared ladder",
+  (kws.find((k) => k.phrase === "lip filler near me")?.commercialIntentScore ?? 0) >
+    (kws.find((k) => k.phrase === "what is lip filler")?.commercialIntentScore ?? 0));
+// ‼️ A keyword must be able to TIE a harvested phrase, not sit permanently above it. "near me"
+// and "how much" both score 3 through INTENT_LADDER, and a `ready` keyword is the same thing.
+ok("a ready keyword ties the top of the harvest ladder",
+  (kws.find((k) => k.phrase === "lip filler near me")?.commercialIntentScore ?? 0) ===
+    commercialIntent("book an appointment near me"));
 
 // ‼️ AND THE PROOF THAT THE TWO DOORS ARE ACTUALLY DIFFERENT. If this ever passes, keywords are
 // being double-filed into the buyer-phrase corpus.

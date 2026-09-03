@@ -588,12 +588,36 @@ export function formatHarvestSummary(args: {
  */
 export const KEYWORD_SOURCE = "keywords" as const;
 
+/**
+ * The intent word from the research, mapped onto the corpus's OWN 0-to-3 ladder.
+ *
+ * ‼️ IT USED TO BE A 2-TO-5 SCALE OF ITS OWN, AND THAT WAS WRONG TWICE OVER.
+ *
+ * The loud half: `question_bank_intent_check` is `between 0 and 3`, so every keyword row was
+ * rejected. The upsert is one statement, so a single row killed the whole batch, `keywordsStored`
+ * stayed 0, and the Slack reply told an operator who had just pasted a hundred keywords that no
+ * KEYWORDS block was found. That is the exact failure this file's doctrine forbids.
+ *
+ * The quiet half, which would have outlived the constraint fix: `commercial_intent_score` is what
+ * page_candidates ranks on, and it is SHARED with every phrase `commercialIntent()` scores. A
+ * keyword scoring 5 on a scale where the best harvested phrase scores 3 does not mean "more
+ * commercial", it means "measured with a different ruler", and every keyword would have sorted
+ * above every real buyer question forever.
+ *
+ * So the words map onto INTENT_LADDER's existing meanings rather than inventing a scale:
+ * `ready` and `price` are what that ladder already scores 3 (book, appointment, near me, cost,
+ * how much), `comparing` is its 2 (vs, compare, best, which clinic), and `researching` is its 1
+ * (safe, licensed, reviews).
+ */
 const KEYWORD_INTENT_SCORE: Record<string, number> = {
-  ready: 5,
-  comparing: 4,
+  ready: 3,
   price: 3,
-  researching: 2,
+  comparing: 2,
+  researching: 1,
 };
+
+/** The ceiling `question_bank_intent_check` enforces. Nothing here may emit above it. */
+export const MAX_INTENT_SCORE = 3;
 
 /** Longest keyword worth storing. Past this it is a sentence somebody pasted into the wrong block. */
 const MAX_KEYWORD_CHARS = 90;
@@ -643,8 +667,11 @@ export function extractKeywords(text: string): HarvestedPhrase[] {
 
     const volume = Number.parseInt((cells[1] ?? "").replace(/[^0-9]/g, ""), 10);
     const intent = (cells[2] ?? "").toLowerCase();
-    const intentScore =
+    // Clamped rather than trusted. The map is the contract, but a word added to it later with
+    // an out-of-range value would fail the whole batch again and report it as a missing block.
+    const mapped =
       Object.entries(KEYWORD_INTENT_SCORE).find(([word]) => intent.includes(word))?.[1] ?? 1;
+    const intentScore = Math.max(0, Math.min(MAX_INTENT_SCORE, mapped));
     const sourceUrl = cells.slice(3).join(" ").trim();
 
     out.push({
