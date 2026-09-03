@@ -9,6 +9,7 @@
 // only allowed to produce a CSV once nothing is pending.
 
 import { supabaseAdmin } from "@/lib/db";
+import type { DedupeRow, KnownKeys } from "./dedup";
 import type { FilteredRow } from "./filter";
 import type { JunkReason } from "./rules";
 
@@ -67,6 +68,18 @@ export interface BatchRow {
   workflow_pick_ts: string | null;
   scoring_approval_ts: string | null;
   cutoff_confirm_ts: string | null;
+  /**
+   * The 0-based indexes into the ORIGINAL parsed file that the drop's dedupe already matched.
+   *
+   * ‼️ INDEXES, NOT A REWRITTEN FILE. `scraper_rows.row_index` is the index into the file as
+   * dropped, so both workflows step over these in place rather than being handed a shortened array.
+   */
+  dedupe_dupe_indexes: number[] | null;
+  dedupe_dupe_count: number;
+  dedupe_new_count: number;
+  /** Guard, exactly like `csv_posted_at`: set once the split has been posted, so a re-entry
+   * re-reads one row and uploads nothing a second time. */
+  dedupe_ran_at: string | null;
   /** Stamped once clean.csv and junk.csv are in the thread, so a re-entry cannot post them twice. */
   csv_posted_at: string | null;
   error: string | null;
@@ -117,7 +130,8 @@ const BATCH_COLUMNS =
   "batch_label, parent_batch_id, apollo_export_file_id, score_query_template, score_cutoff, " +
   "score_cost_usd, email_column, headers, total_rows, clean_count, junk_count, mv_file_id, " +
   "mv_status, mv_counts, mv_awaiting_approval, mv_approval_ts, workflow_pick_ts, " +
-  "scoring_approval_ts, cutoff_confirm_ts, csv_posted_at, error, created_at, updated_at";
+  "scoring_approval_ts, cutoff_confirm_ts, csv_posted_at, dedupe_dupe_indexes, " +
+  "dedupe_dupe_count, dedupe_new_count, dedupe_ran_at, error, created_at, updated_at";
 
 // ‼️ A COLUMN MISSING FROM THIS STRING IS SILENTLY `undefined`, NOT AN ERROR, and on this table that
 // costs money rather than correctness. `!row.gbp_task_id` would be true on every row forever, so
@@ -142,6 +156,13 @@ const GATE_COLUMNS: Array<{ gate: GateKind; column: string }> = [
 const IN_CHUNK = 100;
 const INSERT_CHUNK = 500;
 const PAGE = 1000;
+
+// The dedupe's keys are shorter than a domain list is long — a phone key is 10 characters and an
+// address about 25 — so 300 of them keeps a chunk near 8KB, still well inside every proxy in the
+// path, and a 50k-row drop asks 500 questions instead of 1,500.
+const SEEN_IN_CHUNK = 300;
+/** How many of those are in flight at once. Plain reads, no ordering, nothing to serialize. */
+const SEEN_CONCURRENCY = 6;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -310,6 +331,78 @@ export async function knownProspectEmails(): Promise<Set<string>> {
     if (rows.length < PAGE) break;
   }
   return out;
+}
+
+/**
+ * Which of this file's keys the lane has seen before.
+ *
+ * ‼️ ASKED ABOUT THE FILE, NEVER PAGED WHOLE — the opposite call to `knownProspectEmails` above,
+ * and deliberately. That table is the follow-up operator's few thousand rows and stops growing;
+ * `scraper_seen` gains three keys per new lead on every drop, forever, so paging it would get
+ * slower every week while a chunked `.in()` stays proportional to the file that was dropped.
+ */
+export async function loadKnownKeys(keys: {
+  domain: string[];
+  phone: string[];
+  email: string[];
+}): Promise<KnownKeys> {
+  const out = { domain: new Set<string>(), phone: new Set<string>(), email: new Set<string>() };
+
+  for (const keyType of ["domain", "phone", "email"] as const) {
+    const parts = chunk(keys[keyType], SEEN_IN_CHUNK).filter((p) => p.length > 0);
+
+    // ‼️ RUN IN WAVES, NOT ONE AT A TIME. At MAX_ROWS this asks about 150k keys, and a strictly
+    // sequential sweep at IN_CHUNK would be 1,500 round trips — most of the 300s the drop shares
+    // with the CSV download, the parse and a 200s MX budget. The drop would time out on exactly
+    // the big file this lane exists for.
+    for (const wave of chunk(parts, SEEN_CONCURRENCY)) {
+      const results = await Promise.all(
+        wave.map((part) =>
+          supabaseAdmin.from("scraper_seen").select("key_value").eq("key_type", keyType).in("key_value", part)
+        )
+      );
+      for (const { data, error } of results) {
+        if (error) throw new Error("loadKnownKeys(" + keyType + "): " + error.message);
+        for (const r of (data ?? []) as Array<{ key_value: string }>) out[keyType].add(r.key_value);
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Record the rows nobody had seen, so the next drop of the same list reports them as duplicates.
+ *
+ * ‼️ CALLED AFTER THE CSVs ARE POSTED, NEVER BEFORE. A crash between the two leaves the ledger
+ * short and the rows come back as new next time, which is the direction this is allowed to fail in.
+ * Recording first and crashing would bury real leads that were never delivered anywhere.
+ */
+export async function recordSeen(batchId: string, rows: DedupeRow[]): Promise<void> {
+  const payload: Array<Record<string, unknown>> = [];
+
+  for (const row of rows) {
+    const provenance = {
+      first_batch_id: batchId,
+      company: row.company,
+      city: row.city,
+      website: row.website,
+      email: row.keys.email,
+      phone: row.keys.phone,
+    };
+    if (row.keys.domain) payload.push({ key_type: "domain", key_value: row.keys.domain, ...provenance });
+    if (row.keys.phone) payload.push({ key_type: "phone", key_value: row.keys.phone, ...provenance });
+    if (row.keys.email) payload.push({ key_type: "email", key_value: row.keys.email, ...provenance });
+  }
+
+  for (const part of chunk(payload, INSERT_CHUNK)) {
+    // ignoreDuplicates: the ledger keeps the FIRST sighting. A re-entry must not restamp a key
+    // onto a newer batch and lose which drop actually found it.
+    const { error } = await supabaseAdmin
+      .from("scraper_seen")
+      .upsert(part, { onConflict: "key_type,key_value", ignoreDuplicates: true });
+    if (error) throw new Error("recordSeen: " + error.message);
+  }
 }
 
 /** Insert the filtered rows. String-junk rows land final; survivors land pending on MX. */

@@ -29,11 +29,13 @@ import { parseCsv } from "./csv";
 import { filterRows } from "./filter";
 import {
   resolveCityColumn,
+  resolvePhoneColumn,
   resolveStateColumn,
   resolveCompanyColumn,
   resolveEmailColumn,
   resolveWebsiteColumn,
 } from "./rules";
+import { allKeys, splitDuplicates, type DedupeColumns } from "./dedup";
 import { resolveMxBatch } from "./mx";
 import {
   addScoreCost,
@@ -57,6 +59,8 @@ import {
   junkBreakdown,
   knownProspectEmails,
   latestBatch,
+  loadKnownKeys,
+  recordSeen,
   markAuditExhausted,
   markQueuedForApollo,
   pendingDomains,
@@ -72,10 +76,13 @@ import {
 import {
   buildApolloTargetsCsv,
   buildCleanCsv,
+  buildDuplicatesCsv,
   buildJunkCsv,
+  buildNewCsv,
   buildScoredCsv,
   buildVerifiedCsv,
   formatBreakdown,
+  formatDedupeSplit,
   formatCutoffEcho,
   formatCutoffRefusal,
   formatGeoDrop,
@@ -351,11 +358,90 @@ async function startBatch(event: ScraperEvent, file: SlackFile): Promise<void> {
 
     await updateBatch(batch.id, { total_rows: parsed.rows.length, headers: parsed.headers });
 
-    const fresh = (await getBatch(batch.id)) ?? batch;
+    const deduped = (await getBatch(batch.id)) ?? batch;
+    await runDedupe(deduped, parsed);
+
+    const fresh = (await getBatch(batch.id)) ?? deduped;
     await postWorkflowPicker(fresh, parsed.headers);
   } catch (e) {
     await fail(batch, (e as Error).message);
   }
+}
+
+/** Which columns the dedupe reads. All optional: a file with none of them is simply all new. */
+function dedupeColumns(headers: string[]): DedupeColumns {
+  return {
+    company: resolveCompanyColumn(headers),
+    city: resolveCityColumn(headers),
+    website: resolveWebsiteColumn(headers),
+    phone: resolvePhoneColumn(headers),
+    email: resolveEmailColumn(headers),
+  };
+}
+
+/**
+ * The split, before anybody picks anything.
+ *
+ * ‼️ THIS RUNS AT THE DROP AND NOT INSIDE A WORKFLOW, which is the whole point. Deduping after the
+ * pick meant workflow 1 caught repeats on email alone and workflow 2 caught none at all, so a
+ * company scored last week had a second DataForSEO SERP bought for it before anybody saw a number.
+ * Nothing downstream can un-spend that.
+ *
+ * ‼️ NO COLUMN IS A GATE HERE. Reading the website / phone / email headers is a READ, exactly like
+ * the picker's column preview: a file carrying none of them reports "all new" and reaches the
+ * picker unchanged. Column REQUIREMENTS still belong to the workflow that needs them.
+ *
+ * Guarded on `dedupe_ran_at` the way every other post in this lane is guarded on its own column, so
+ * a cron re-entry on `awaiting_workflow` re-reads one row and uploads nothing twice.
+ */
+async function runDedupe(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): Promise<void> {
+  if (batch.dedupe_ran_at) return;
+
+  const cols = dedupeColumns(parsed.headers);
+  const known = await loadKnownKeys(allKeys(parsed.rows, cols));
+  const { fresh, dupes } = splitDuplicates({ rows: parsed.rows, cols, known });
+
+  await say(
+    batch,
+    formatDedupeSplit({
+      fileName: batch.file_name,
+      total: parsed.rows.length,
+      dupes,
+      newCount: fresh.length,
+      keyColumns: { website: cols.website, phone: cols.phone, email: cols.email },
+    })
+  );
+
+  if (dupes.length > 0) {
+    await uploadCsv(batch, "duplicates.csv", buildDuplicatesCsv(parsed.headers, dupes));
+  }
+  if (fresh.length > 0) {
+    await uploadCsv(batch, "new.csv", buildNewCsv(parsed.headers, fresh));
+  }
+
+  // ‼️ RECORDED AFTER THE UPLOAD, NEVER BEFORE. A crash between the two leaves the ledger short and
+  // these rows come back as new on the next drop, which is the direction this is allowed to fail
+  // in. Recording first and then failing to post would bury leads that were never delivered
+  // anywhere at all.
+  await recordSeen(batch.id, fresh);
+
+  await updateBatch(batch.id, {
+    dedupe_dupe_indexes: dupes.map((d) => d.rowIndex),
+    dedupe_dupe_count: dupes.length,
+    dedupe_new_count: fresh.length,
+    dedupe_ran_at: new Date().toISOString(),
+  });
+}
+
+/**
+ * The rows the drop already matched, as indexes into the original file.
+ *
+ * ‼️ INDEXES, NOT A SHORTENED ARRAY. `scraper_rows.row_index` is documented as the index into the
+ * file as dropped, and re-slicing `parsed.rows` would renumber every row and quietly break the one
+ * property that lets a row be found in the original file weeks later.
+ */
+function skipIndexesOf(batch: BatchRow): ReadonlySet<number> {
+  return new Set(batch.dedupe_dupe_indexes ?? []);
 }
 
 /** Guarded on `workflow_pick_ts`, so a cron re-entry re-reads one row and posts nothing. */
@@ -370,6 +456,8 @@ async function postWorkflowPicker(batch: BatchRow, headers: string[]): Promise<v
       companyColumn: resolveCompanyColumn(headers),
       cityColumn: resolveCityColumn(headers),
       websiteColumn: resolveWebsiteColumn(headers),
+      duplicateCount: batch.dedupe_dupe_count,
+      newCount: batch.dedupe_new_count,
     })
   );
   await updateBatch(batch.id, { workflow_pick_ts: ts });
@@ -467,7 +555,15 @@ async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof pa
   }
 
   const knownEmails = await knownProspectEmails();
-  const filtered = filterRows({ rows: parsed.rows, emailColumn, knownEmails });
+  // The drop's verdicts, carried in by index. `already_in_crm` still runs underneath: that one asks
+  // outreach_prospects, this one asks what this lane has pulled before, and they are not the same
+  // question.
+  const filtered = filterRows({
+    rows: parsed.rows,
+    emailColumn,
+    knownEmails,
+    skipIndexes: skipIndexesOf(batch),
+  });
 
   await insertRows(batch.id, filtered.rows);
   await updateBatch(batch.id, {
@@ -517,22 +613,29 @@ async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof par
     state: stateColumn ? raw[stateColumn] : null,
     city: cityColumn ? raw[cityColumn] : null,
   });
-  const located = parsed.rows.map((raw, rowIndex) => ({
-    raw,
-    rowIndex,
-    verdict: locationVerdict(cellsOf(raw)),
-  }));
+  // ‼️ THE DROP'S DUPLICATES COME OUT BEFORE THE GEO FILTER AND BEFORE THE INSERT, for exactly the
+  // reason stated above about Riga: a row that never enters `scraper_rows` never gets a SERP posted
+  // for it, and DataForSEO bills at task_post. Skipping at publish time would report the same
+  // numbers having already spent the money.
+  const skip = skipIndexesOf(batch);
+  const located = parsed.rows
+    .map((raw, rowIndex) => ({ raw, rowIndex, verdict: locationVerdict(cellsOf(raw)) }))
+    .filter((r) => !skip.has(r.rowIndex));
 
   const foreign = located.filter((r) => r.verdict === "not_us");
   const unlocated = located.filter((r) => r.verdict === "unknown");
   const keep = located.filter((r) => r.verdict !== "not_us");
 
   if (keep.length === 0) {
-    return fail(
-      batch,
-      "Every one of those " + parsed.rows.length + " rows names a place outside the United " +
-        "States, so there is nothing left to score. Nothing was queued and nothing was spent."
-    );
+    // Which of the two emptied it, named. "Nothing to score" with the wrong reason attached sends
+    // somebody to check the geo filter over a file that was simply a re-drop.
+    const why =
+      located.length === 0
+        ? "Every one of those " + parsed.rows.length + " rows has been through this lane before, " +
+          "so there is nothing new to score."
+        : "Every one of those " + located.length + " new rows names a place outside the United " +
+          "States, so there is nothing left to score.";
+    return fail(batch, why + " Nothing was queued and nothing was spent.");
   }
 
   await insertCompanyRows(
@@ -599,7 +702,15 @@ async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof par
 export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_BUDGET_MS): Promise<void> {
   try {
     if (batch.status === "awaiting_workflow") {
-      // The picker card is guarded, so this only does work when the drop-time post failed.
+      // ‼️ THE DEDUPE HAS TO BE CAUGHT UP BEFORE THE PICKER GOES OUT. A drop that died between the
+      // parse and the split would otherwise get a picker reading "all new" with an empty skip set,
+      // and workflow 2 would then buy a SERP for every row the ledger already knew. Guarded on
+      // `dedupe_ran_at`, so this re-downloads the file only when the split genuinely never ran.
+      if (!batch.dedupe_ran_at && batch.slack_file_id) {
+        await runDedupe(batch, await reloadCsv(batch));
+        batch = (await getBatch(batch.id)) ?? batch;
+      }
+      // The picker card is guarded too, so this only does work when the drop-time post failed.
       if (batch.headers) await postWorkflowPicker(batch, batch.headers);
       return;
     }

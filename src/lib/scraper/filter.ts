@@ -1,13 +1,14 @@
 // The pipeline, in the Python's order: cheapest checks first, so the expensive DNS step only ever
 // sees survivors.
 //
-//   1 no_email           blank cell
-//   2 duplicate_in_file  the same address twice in one export
-//   3 already_in_crm     already in outreach_prospects
-//   4 bad_syntax
-//   5 role_account
-//   6 disposable_domain
-//   7 no_mx              <- resolved separately, see below
+//   1 no_email               blank cell
+//   2 duplicate_in_file      the same address twice in one export
+//   3 duplicate_prior_batch  the drop's dedupe already matched it against scraper_seen
+//   4 already_in_crm         already in outreach_prospects
+//   5 bad_syntax
+//   6 role_account
+//   7 disposable_domain
+//   8 no_mx                  <- resolved separately, see below
 //
 // ‼️ THIS FUNCTION IS PURE AND STOPS AT STEP 6. It takes the CRM's addresses as a Set rather than
 // querying, and it does not resolve anything. MX is a separate pass because it is the only step
@@ -42,10 +43,18 @@ export interface FilterInput {
   emailColumn: string;
   /** Lowercased addresses already in outreach_prospects. */
   knownEmails: ReadonlySet<string>;
+  /**
+   * Row indexes the drop's dedupe already matched against `scraper_seen`.
+   *
+   * ‼️ INDEXES, NOT A SHORTENED ARRAY. `rowIndex` is documented as the index into the ORIGINAL
+   * file, and handing this function a pre-filtered array would renumber every row and silently
+   * break that. The rows stay in place and land in junk.csv with a reason of their own.
+   */
+  skipIndexes?: ReadonlySet<number>;
 }
 
 export function filterRows(input: FilterInput): FilterResult {
-  const { rows, emailColumn, knownEmails } = input;
+  const { rows, emailColumn, knownEmails, skipIndexes } = input;
   const seen = new Set<string>();
   const out: FilteredRow[] = [];
   const pending = new Set<string>();
@@ -60,6 +69,10 @@ export function filterRows(input: FilterInput): FilterResult {
     if (!email) return push("no_email");
     if (seen.has(email)) return push("duplicate_in_file");
     seen.add(email);
+
+    // The drop already matched this row on domain, phone or address. It is junk here for the same
+    // reason `already_in_crm` is, and it is named separately so junk.csv says which pass caught it.
+    if (skipIndexes?.has(rowIndex)) return push("duplicate_prior_batch");
 
     if (knownEmails.has(email)) return push("already_in_crm");
 

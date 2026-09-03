@@ -8,6 +8,7 @@
 // Pure. No Slack, no database, no network, so `_probe-scraper.ts` can assert the wording.
 
 import { toCsv } from "./csv";
+import type { DedupeMatch, DuplicateRow } from "./dedup";
 import { JUNK_REASON_ORDER, type JunkReason } from "./rules";
 import type { StoredRow } from "./store";
 import type { CutoffPlan, ScoreResult } from "./score";
@@ -23,6 +24,7 @@ import {
 const REASON_LABEL: Record<JunkReason, string> = {
   no_email: "no email on the row",
   duplicate_in_file: "same address twice in this file",
+  duplicate_prior_batch: "already seen on an earlier drop",
   already_in_crm: "already in outreach_prospects",
   bad_syntax: "not a valid address",
   role_account: "role account (info@, sales@)",
@@ -99,6 +101,87 @@ export function buildJunkCsv(headers: string[], rows: StoredRow[]): string {
   );
 }
 
+// ── the drop's dedupe split ─────────────────────────────────────────────────────────────────────
+
+/** Plain-English gloss per match key, on the card and in the file. */
+const MATCH_LABEL: Record<DedupeMatch, string> = {
+  in_file: "the same business twice in this file",
+  domain: "same website as a business from an earlier drop",
+  phone: "same phone as a business from an earlier drop",
+  email: "same address as a contact from an earlier drop",
+};
+
+/**
+ * duplicates.csv: the original columns plus WHAT matched and WHICH value did it.
+ *
+ * ‼️ THE VALUE, NOT JUST THE KEY NAME. These rows are removed from the run before anything is
+ * filtered, scored or bought, so this file is the only place they are ever seen again. The one way
+ * the dedupe can be wrong is a shared front-desk phone or a platform host slipping past
+ * NON_IDENTIFYING_HOSTS, and `matched_value` is what makes that visible in one glance rather than
+ * requiring somebody to reconstruct the key by hand.
+ */
+export function buildDuplicatesCsv(headers: string[], rows: DuplicateRow[]): string {
+  return toCsv(
+    [...headers, "duplicate_reason", "matched_value"],
+    rows.map((r) => ({ ...r.raw, duplicate_reason: r.matchedOn, matched_value: r.matchedValue }))
+  );
+}
+
+/** new.csv: the original columns, original order, the rows nobody had seen. */
+export function buildNewCsv(headers: string[], rows: Array<{ raw: Record<string, string> }>): string {
+  return toCsv(headers, rows.map((r) => r.raw));
+}
+
+export function formatDedupeSplit(input: {
+  fileName: string | null;
+  total: number;
+  dupes: DuplicateRow[];
+  newCount: number;
+  /** Which columns the keys were read from, so the numbers can be argued with. */
+  keyColumns: { website: string | null; phone: string | null; email: string | null };
+}): string {
+  const { total, dupes, newCount } = input;
+  const lines: string[] = [];
+
+  lines.push("*" + (input.fileName ?? "the file") + "* checked against every earlier drop.");
+  lines.push("");
+  lines.push("```");
+  lines.push("rows        " + total);
+  lines.push("already in  " + dupes.length + "  (" + pct(dupes.length, total) + ")");
+  lines.push("new         " + newCount + "  (" + pct(newCount, total) + ")");
+  lines.push("```");
+
+  if (dupes.length > 0) {
+    const counts = new Map<DedupeMatch, number>();
+    for (const d of dupes) counts.set(d.matchedOn, (counts.get(d.matchedOn) ?? 0) + 1);
+    const order: DedupeMatch[] = ["in_file", "domain", "phone", "email"];
+    lines.push("");
+    lines.push("Matched on:");
+    lines.push("```");
+    for (const key of order) {
+      const n = counts.get(key);
+      if (n) lines.push(key.padEnd(10) + String(n).padStart(6) + "   " + MATCH_LABEL[key]);
+    }
+    lines.push("```");
+  }
+
+  // Which columns were read, stated rather than assumed. A file whose phone lives under a header
+  // this lane does not know reports fewer duplicates than it has, and this line is the only place
+  // that would ever be visible.
+  const read: string[] = [];
+  if (input.keyColumns.website) read.push("website `" + input.keyColumns.website + "`");
+  if (input.keyColumns.phone) read.push("phone `" + input.keyColumns.phone + "`");
+  if (input.keyColumns.email) read.push("email `" + input.keyColumns.email + "`");
+  lines.push("");
+  lines.push(
+    read.length > 0
+      ? "_Keys read from " + read.join(", ") + "._"
+      : "_No website, phone or email column in this file, so nothing could be matched. Every row is new._"
+  );
+
+  return lines.join("\n");
+}
+
 /** verified-ok.csv: the clean rows MillionVerifier came back OK on, original columns. */
 export function buildVerifiedCsv(headers: string[], rows: StoredRow[]): string {
   return toCsv(
@@ -146,9 +229,18 @@ export function formatWorkflowPicker(input: {
   companyColumn: string | null;
   cityColumn: string | null;
   websiteColumn: string | null;
+  /** From the drop's dedupe. Both workflows run on the new rows only. */
+  duplicateCount: number;
+  newCount: number;
 }): string {
   const lines: string[] = [];
-  lines.push("*" + (input.fileName ?? "the file") + "*, " + input.totalRows + " rows. Which workflow?");
+  lines.push(
+    "*" + (input.fileName ?? "the file") + "*, " + input.totalRows + " rows" +
+      (input.duplicateCount > 0
+        ? ", " + input.duplicateCount + " already seen, *" + input.newCount + " new*"
+        : ", all new") +
+      ". Which workflow?"
+  );
   lines.push("");
   lines.push(
     ":one:  *Filter and verify.* The seven checks, then `clean.csv` and `junk.csv`, then " +
@@ -179,6 +271,17 @@ export function formatWorkflowPicker(input: {
     lines.push(
       "_There is an email column and no company column, so :one: is probably it. Your call either " +
         "way, nothing starts until you react._"
+    );
+  }
+
+  if (input.duplicateCount > 0) {
+    lines.push("");
+    lines.push(
+      input.newCount === 0
+        ? "_Every row in that file has been through here before, so whichever you pick has nothing " +
+          "to work on. `duplicates.csv` above is the whole file._"
+        : "_Either workflow runs on the " + input.newCount + " new rows only. The " +
+          input.duplicateCount + " in `duplicates.csv` are not filtered, not scored and not paid for._"
     );
   }
 

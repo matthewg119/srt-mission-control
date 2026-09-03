@@ -3996,3 +3996,69 @@ REACHINBOX_REPLY_MAILBOX=    # The forwarding target. UNSET IS HANDLED: the lane
                              # reply-sweep behaves exactly as it did. It must receive NOTHING else.
 OUTREACH_MAILBOXES=          # Append the same address with a :0 cap so it is swept, never sent from.
 ```
+
+## The drop dedupes before it asks which workflow (2026-09-03)
+
+`src/lib/scraper/dedup.ts`, `docs/2026-09-03-scraper-dedup.sql`, probe
+`scripts/_probe-scraper-dedup.ts` (69 checks, offline).
+
+A CSV dropped in `#srt-scraper` used to go straight to the picker. Nothing was deduped until AFTER
+a workflow was chosen, and then only on email, against `outreach_prospects`, and only for workflow
+1. **Workflow 2 deduped on nothing at all**, so a company scored last week had a second DataForSEO
+SERP bought for it before anybody saw a number. Nothing downstream can un-spend that.
+
+Now `startBatch` splits the file first: `duplicates.csv` + `new.csv` + a split card, then the
+picker, which prints the new count and says both workflows run on it only.
+
+**Match rule: domain OR phone OR email, any hit.** Three independent keys rather than one
+composite, because a med-spa list carries a website and no email, an Apollo export carries an email
+and often no website, and an Outscraper pull carries a phone and both. Check order is
+`in_file -> domain -> phone -> email` and the first hit is what `duplicates.csv` reports: in-file
+because it is free, domain before phone because a domain identifies one business while a phone can
+be a shared front desk.
+
+**Scope is this lane's own history, deliberately.** `scraper_seen` is one row per KEY, not per
+lead — set membership is the question being asked, and three narrow rows make the read one `.in()`
+per key type and the write an `ignoreDuplicates` upsert. The CRM `contacts` table is NOT consulted:
+its `website` is populated on 45 of 8,420 rows, so a domain join there matches nothing, and its
+phone join needs the two-guard treatment `docs/2026-09-02-identity-spine-backfill.sql` documents.
+Widening scope is one more Set to fill, not a redesign.
+
+**Two rails, and both are the whole feature:**
+
+1. ‼️ **A platform host is not an identity.** Exports write `facebook.com` / `instagram.com` /
+   `business.site` into the website cell for every business with no site of its own. Keyed on
+   those, the SECOND clinic on Facebook is deleted as a duplicate of the first and never comes
+   back, because the drop also writes the key to the ledger. `NON_IDENTIFYING_HOSTS` makes the key
+   null so the row falls through to phone and email. **Only the bare apex is listed** — on a
+   builder host the subdomain IS the identity, so `wixsite.com` is rejected and
+   `glowbar.wixsite.com` is kept. Turning it into a suffix match would delete every Wix clinic
+   after the first.
+2. ‼️ **A phone key is the last ten digits**, same doctrine as `contacts.phone_last10`. Fewer than
+   ten digits is not a phone number: a bare `555-0134` would collide every seven-digit local
+   listing in the file onto one lead. Repdigits (`5555555555`, `0000000000`) are placeholder cells
+   and are not keys.
+
+**Duplicate row INDEXES are carried; `parsed.rows` is never re-sliced.** `scraper_rows.row_index`
+is the index into the file as dropped, and handing a workflow a shortened array renumbers every row
+and silently breaks the one property that lets a row be found in the original file weeks later. So
+workflow 1 takes `skipIndexes` and pushes a new junk reason `duplicate_prior_batch` (check 3, right
+after `duplicate_in_file`, before `already_in_crm` — those two ask different questions and both
+still run), and workflow 2 drops the indexes before the geo filter and before `insertCompanyRows`,
+so no SERP is ever posted for a known company.
+
+**Order of operations at the drop, and it is not arbitrary:** post the CSVs, THEN `recordSeen`. A
+crash between the two leaves the ledger short and the rows come back as new next time, which is the
+direction this is allowed to fail in. Recording first and then failing to post would bury leads
+that were never delivered anywhere. Guarded on `dedupe_ran_at`, and `advanceBatch`'s
+`awaiting_workflow` arm catches up a drop that died before the split, or the picker would go out
+reading "all new" with an empty skip set.
+
+**No column is a gate at the drop.** Reading the website / phone / email headers is a READ, exactly
+like the picker's column preview — a file carrying none of them reports "all new" and reaches the
+picker unchanged, and the split card says out loud that nothing COULD be matched. Column
+REQUIREMENTS still belong to the workflow that needs them, checked after the pick.
+
+`handleThreadedCsv` is untouched. An Apollo export is contacts for companies its thread already
+chose, not a new list, and deduping it against the ledger its own parent just wrote would delete
+all of it.

@@ -14,6 +14,9 @@ import { DISPOSABLE_DOMAINS } from "@/data/disposable-domains";
 export type JunkReason =
   | "no_email"
   | "duplicate_in_file"
+  // Caught by the drop's dedupe (dedup.ts) against `scraper_seen`, before the picker. The row is
+  // carried into the workflow rather than sliced out of the file so its row_index stays honest.
+  | "duplicate_prior_batch"
   | "already_in_crm"
   | "bad_syntax"
   | "role_account"
@@ -54,6 +57,18 @@ const WEBSITE_HEADER_CANDIDATES = ["website", "company website", "website url", 
  * required state column would refuse those files outright.
  */
 const STATE_HEADER_CANDIDATES = ["state", "company state", "business state", "region", "province", "state/province", "state or province"];
+/**
+ * The phone column, for the drop's dedupe key.
+ *
+ * A miss is never an error: plenty of exports carry no phone at all, and a row with no phone simply
+ * dedupes on its domain or its address instead. The business line comes before the personal one,
+ * because two contacts at one clinic share the clinic's number and that is exactly the collision
+ * worth catching.
+ */
+const PHONE_HEADER_CANDIDATES = [
+  "phone", "phone number", "company phone", "business phone", "primary phone",
+  "work direct phone", "corporate phone", "telephone", "tel", "mobile phone", "mobile",
+];
 
 /**
  * Which column holds a given field.
@@ -94,6 +109,10 @@ export function resolveWebsiteColumn(headers: string[]): string | null {
 
 export function resolveStateColumn(headers: string[]): string | null {
   return resolveColumn(headers, STATE_HEADER_CANDIDATES);
+}
+
+export function resolvePhoneColumn(headers: string[]): string | null {
+  return resolveColumn(headers, PHONE_HEADER_CANDIDATES);
 }
 
 const LOCAL_PART = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;
@@ -151,6 +170,7 @@ export function isDisposableDomain(domain: string): boolean {
 export const JUNK_REASON_ORDER: JunkReason[] = [
   "no_email",
   "duplicate_in_file",
+  "duplicate_prior_batch",
   "already_in_crm",
   "bad_syntax",
   "role_account",
