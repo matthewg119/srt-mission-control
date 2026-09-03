@@ -140,6 +140,8 @@ export function formatDedupeSplit(input: {
   newCount: number;
   /** New rows carrying no key of any kind. They can never be recorded, so they come back forever. */
   keyless: number;
+  /** Company cells ending in "...", i.e. cut off before export. See looksTruncated. */
+  truncatedNames: number;
   /** Which columns the keys were read from, so the numbers can be argued with. */
   keyColumns: {
     website: string | null;
@@ -151,6 +153,22 @@ export function formatDedupeSplit(input: {
 }): string {
   const { total, dupes, newCount } = input;
   const lines: string[] = [];
+
+  // ‼️ FIRST, ABOVE THE NUMBERS, because it decides whether the numbers below mean anything. A
+  // truncated export under-reports duplicates and looks exactly like a fresh pull while doing it.
+  if (input.truncatedNames > 0) {
+    lines.push(
+      ":rotating_light: *" + input.truncatedNames + " of the " + total + " company names in this " +
+        "file end in `...`* — they were cut off before the file was made, most likely captured " +
+        "from a screenshot of a results grid rather than exported."
+    );
+    lines.push(
+      "`Aloe Vera Medical Cente...` cannot match the `Aloe Vera Medical Center` already on file, " +
+        "so *the duplicate count below is too low* and real repeats will be sitting in `new.csv`. " +
+        "Re-export this list properly before spending anything on it."
+    );
+    lines.push("");
+  }
 
   lines.push("*" + (input.fileName ?? "the file") + "* checked against every earlier drop.");
   lines.push("");
@@ -259,13 +277,24 @@ export function formatWorkflowPicker(input: {
   newCount: number;
 }): string {
   const lines: string[] = [];
+  // ‼️ THE HEADLINE IS THE NEW COUNT, NOT THE FILE'S. Leading with "leads (2).csv, 218 rows" read
+  // as a question about the list that was just dropped — the one the split had already cleaned —
+  // and left it ambiguous whether the pick would re-process the duplicates. The subject of this
+  // question is new.csv.
   lines.push(
-    "*" + (input.fileName ?? "the file") + "*, " + input.totalRows + " rows" +
-      (input.duplicateCount > 0
-        ? ", " + input.duplicateCount + " already seen, *" + input.newCount + " new*"
-        : ", all new") +
-      ". Which workflow?"
+    input.duplicateCount > 0
+      ? "*" + input.newCount + " new leads* to work — `new.csv` above, not the file you dropped. " +
+        "Which workflow?"
+      : "*" + (input.fileName ?? "the file") + "*, " + input.totalRows +
+        " rows, none seen before. Which workflow?"
   );
+  if (input.duplicateCount > 0) {
+    lines.push(
+      "_" + (input.fileName ?? "The file") + " had " + input.totalRows + " rows. " +
+        input.duplicateCount + " are in `duplicates.csv` and take no further part: not filtered, " +
+        "not scored, not paid for._"
+    );
+  }
   lines.push("");
   lines.push(
     ":one:  *Filter and verify.* The seven checks, then `clean.csv` and `junk.csv`, then " +
@@ -299,14 +328,11 @@ export function formatWorkflowPicker(input: {
     );
   }
 
-  if (input.duplicateCount > 0) {
+  if (input.newCount === 0) {
     lines.push("");
     lines.push(
-      input.newCount === 0
-        ? "_Every row in that file has been through here before, so whichever you pick has nothing " +
-          "to work on. `duplicates.csv` above is the whole file._"
-        : "_Either workflow runs on the " + input.newCount + " new rows only. The " +
-          input.duplicateCount + " in `duplicates.csv` are not filtered, not scored and not paid for._"
+      "_Every row in that file has been through here before, so whichever you pick has nothing to " +
+        "work on. `duplicates.csv` above is the whole file._"
     );
   }
 

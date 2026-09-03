@@ -4088,6 +4088,40 @@ drop and re-bought every SERP, which is precisely the thing the feature was aske
 A row with no key of ANY kind can never be recorded, so it comes back as new forever. The split
 card counts those out loud rather than leaving it to be discovered.
 
+### The truncated-export guard, and the run that produced it (2026-09-03)
+
+`leads (2).csv` reported 85 of 218 already seen and Matthew asked how that was possible on a list
+he had just pulled with the previous export unselected. The 85 were real: every one traced to
+`leads (1).csv` from 2026-08-28, matched on an exact name AND an exact city. The interesting half
+was the other direction.
+
+```
+select count(*) filter (where company like '%...%') from scraper_seen ...
+  leads (2).csv   71 of 115
+  leads (1).csv    0 of 205
+```
+
+‼️ **THE ELLIPSIS WAS IN THE DATA.** The file was built from a screenshot of an Apollo results
+grid, so the grid's visual truncation was captured as literal text. `Aloe Vera Medical Cente...`
+can never match the `Aloe Vera Medical Center` already on file, so **54 real repeats were reported
+as new** and the duplicate count was too LOW, not too high. A truncated list is not a list this
+lane can dedupe, and the failure is silent and looks exactly like a fresh pull.
+
+`looksTruncated` / `countTruncatedNames` now count those at the drop and the split card leads with
+a 🚨 above the numbers, because it decides whether the numbers below mean anything. The run was
+purged — batch, its 115 ledger keys, and the five bot messages in its thread — and re-uploaded
+clean. **Deleting the ledger keys is the part that matters:** left in place, a correct re-export
+would have matched against the corrupted names.
+
+The instinct this disproves, recorded so it does not come back: *"it must be matching on city, drop
+the city."* Zero cities were truncated, every match was exact on both halves, and dropping the city
+would have recovered none of the 54 while collapsing "Skin Bar" Charlotte into "Skin Bar" Miami.
+The failing field was the company name.
+
+The picker headline changed at the same time. `*leads (2).csv*, 218 rows, 85 already seen…` read as
+a question about the file that had just been cleaned; it now leads with `*133 new leads*` and names
+`new.csv` explicitly, with the original total demoted to a subline.
+
 `handleThreadedCsv` is untouched. An Apollo export is contacts for companies its thread already
 chose, not a new list, and deduping it against the ledger its own parent just wrote would delete
 all of it.

@@ -23,6 +23,8 @@ import {
   emailKey,
   phoneKey,
   companyCityKey,
+  countTruncatedNames,
+  looksTruncated,
   splitDuplicates,
   type DedupeColumns,
   type KnownKeys,
@@ -271,6 +273,7 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     dupes,
     newCount: 225,
     keyless: 0,
+    truncatedNames: 0,
     keyColumns: { website: "website", phone: null, email: null, company: "company", city: "city" },
   });
   check("split card: names the file", card.includes("leads (1).csv"), card);
@@ -285,6 +288,7 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     dupes: [],
     newCount: 10,
     keyless: 10,
+    truncatedNames: 0,
     keyColumns: { website: null, phone: null, email: null, company: null, city: null },
   });
   check("split card: says so when nothing COULD be matched",
@@ -304,8 +308,9 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     duplicateCount: 41,
     newCount: 185,
   });
-  check("picker: the headline carries the split", picker.includes("41 already seen") && picker.includes("185 new"), picker);
-  check("picker: says the workflow runs on the new rows only", picker.includes("185 new rows only"), picker);
+  check("picker: the headline IS the new count, not the file's", picker.startsWith("*185 new leads*"), picker);
+  check("picker: points at new.csv, not the dropped file", picker.includes("`new.csv` above, not the file you dropped"), picker);
+  check("picker: the original total is demoted to a subline", picker.includes("had 226 rows") && picker.includes("41 are in `duplicates.csv`"), picker);
 }
 
 {
@@ -334,8 +339,8 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     duplicateCount: 0,
     newCount: 12,
   });
-  check("picker: a clean file says all new and adds no scope line",
-    picker.includes("all new") && !picker.includes("new rows only"), picker);
+  check("picker: a clean file names the file and says none were seen",
+    picker.includes("*first.csv*, 12 rows, none seen before"), picker);
 }
 
 
@@ -392,6 +397,65 @@ eq("company+city: LLC is NOT stripped either", companyCityKey("Glow Spa LLC", "C
   const rows = [row({ company: "Glow Bar" }), row({ company: "Derma Luxe" })];
   const { fresh, keyless } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
   eq("keyless: counted, not hidden", [fresh.length, keyless], [2, 2]);
+}
+
+
+// -- the truncated-export guard -----------------------------------------------------------------
+//
+// Real strings out of leads (2).csv, which was captured from a screenshot of an Apollo grid: the
+// ellipsis is IN THE DATA. 71 of its 115 company names looked like this and leads (1).csv had none.
+
+eq("truncated: an ASCII ellipsis", looksTruncated("Aloe Vera Medical Cente..."), true);
+eq("truncated: a unicode ellipsis", looksTruncated("Adara Longevity & Aesth…"), true);
+eq("truncated: trailing space does not hide it", looksTruncated("ALRAYA MEDICAL CENTE...  "), true);
+eq("truncated: a complete name is not", looksTruncated("Aloe Vera Medical Center"), false);
+eq("truncated: blank is not", looksTruncated(""), false);
+eq("truncated: null is not", looksTruncated(null), false);
+
+{
+  const rows = [
+    row({ company: "Aloe Vera Medical Cente...", city: "Baltimore" }),
+    row({ company: "Aloe Vera Medical Center", city: "Baltimore" }),
+    row({ company: "8 West Clinic", city: "Vancouver" }),
+  ];
+  eq("truncated: counted across the file", countTruncatedNames(rows, "company"), 1);
+  eq("truncated: no company column, nothing to count", countTruncatedNames(rows, null), 0);
+
+  // The miss this guard exists to explain: these two ARE one business and the keys cannot see it.
+  const { dupes } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
+  eq("truncated: a cut-off name does NOT match its full self", dupes.length, 0);
+}
+
+{
+  const card = formatDedupeSplit({
+    fileName: "leads (2).csv",
+    total: 218,
+    dupes: [],
+    newCount: 218,
+    keyless: 0,
+    truncatedNames: 71,
+    keyColumns: { website: null, phone: null, email: null, company: "company", city: "city" },
+  });
+  check("truncation card: leads with the alarm, above the numbers",
+    card.startsWith(":rotating_light:"), card.slice(0, 60));
+  check("truncation card: names the count", card.includes("71 of the 218 company names"), card);
+  check("truncation card: says the duplicate count is TOO LOW",
+    card.includes("the duplicate count below is too low"), card);
+  check("truncation card: says what to do about it", card.includes("Re-export this list properly"), card);
+}
+
+{
+  const card = formatDedupeSplit({
+    fileName: "clean.csv",
+    total: 218,
+    dupes: [],
+    newCount: 218,
+    keyless: 0,
+    truncatedNames: 0,
+    keyColumns: { website: null, phone: null, email: null, company: "company", city: "city" },
+  });
+  check("truncation card: a clean file gets no alarm at all",
+    !card.includes("rotating_light"), card.slice(0, 60));
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");

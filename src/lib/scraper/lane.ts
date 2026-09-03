@@ -35,7 +35,7 @@ import {
   resolveEmailColumn,
   resolveWebsiteColumn,
 } from "./rules";
-import { allKeys, splitDuplicates, type DedupeColumns } from "./dedup";
+import { allKeys, countTruncatedNames, splitDuplicates, type DedupeColumns } from "./dedup";
 import { resolveMxBatch } from "./mx";
 import {
   addScoreCost,
@@ -409,6 +409,7 @@ async function runDedupe(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): 
       dupes,
       newCount: fresh.length,
       keyless,
+      truncatedNames: countTruncatedNames(parsed.rows, cols.company),
       keyColumns: {
         website: cols.website,
         phone: cols.phone,

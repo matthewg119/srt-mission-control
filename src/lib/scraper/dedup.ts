@@ -150,6 +150,34 @@ export function companyCityKey(
  * website column, which is exactly the file this whole feature was asked for — where the choice is
  * not "name or something better", it is "name or never dedupe this list".
  */
+/**
+ * Is this cell a name that was cut off before it was exported?
+ *
+ * ‼️ THE ELLIPSIS IS IN THE DATA, NOT IN A DISPLAY. `leads (2).csv` was built from a screenshot of
+ * an Apollo result grid, so the grid's visual truncation was captured as literal text: 71 of its
+ * 115 company names ended in "..." while `leads (1).csv` had none. The dedupe still worked on the
+ * short names and matched 85, but "Aloe Vera Medical Cente..." can never match the
+ * "Aloe Vera Medical Center" already in the ledger, so 54 real repeats were reported as new.
+ *
+ * A truncated list is not a list this lane can dedupe, and the failure is SILENT and looks exactly
+ * like a genuinely fresh pull. Naming it at the drop is the only place it is cheap to fix.
+ */
+export function looksTruncated(value: string | null | undefined): boolean {
+  const s = (value ?? "").trimEnd();
+  return s.endsWith("...") || s.endsWith("…");
+}
+
+/** How many of the file's company cells were cut off. Zero on a real export. */
+export function countTruncatedNames(
+  rows: Array<Record<string, string>>,
+  companyColumn: string | null
+): number {
+  if (!companyColumn) return 0;
+  let n = 0;
+  for (const raw of rows) if (looksTruncated(raw[companyColumn])) n++;
+  return n;
+}
+
 export function rowKeys(raw: Record<string, string>, cols: DedupeColumns): DedupeKeys {
   const domain = domainKey(cols.website ? raw[cols.website] : null);
   const phone = phoneKey(cols.phone ? raw[cols.phone] : null);
