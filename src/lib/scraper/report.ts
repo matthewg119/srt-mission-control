@@ -110,6 +110,8 @@ const MATCH_LABEL: Record<DedupeMatch, string> = {
   phone: "same phone as a business from an earlier drop",
   email: "same address as a contact from an earlier drop",
   company_city: "same name and city as a business from an earlier drop",
+  company_city_prefix: "one name contains the other, same city",
+  company_city_typo: "one character different, same city",
 };
 
 /**
@@ -181,7 +183,10 @@ export function formatDedupeSplit(input: {
   if (dupes.length > 0) {
     const counts = new Map<DedupeMatch, number>();
     for (const d of dupes) counts.set(d.matchedOn, (counts.get(d.matchedOn) ?? 0) + 1);
-    const order: DedupeMatch[] = ["in_file", "domain", "phone", "email", "company_city"];
+    const order: DedupeMatch[] = [
+      "in_file", "domain", "phone", "email",
+      "company_city", "company_city_prefix", "company_city_typo",
+    ];
     lines.push("");
     lines.push("Matched on:");
     lines.push("```");
@@ -202,7 +207,7 @@ export function formatDedupeSplit(input: {
   if (input.keyColumns.company && input.keyColumns.city) {
     read.push(
       "and, only where a row has none of those, `" + input.keyColumns.company + "` + `" +
-        input.keyColumns.city + "`"
+        input.keyColumns.city + "` (exact city, name allowed to differ by one character)"
     );
   }
   lines.push("");

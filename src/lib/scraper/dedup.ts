@@ -17,7 +17,86 @@ import { normalizeHost } from "@/lib/company-identity";
 import { emailDomain } from "./rules";
 
 /** Which key caught the row. Reported verbatim in duplicates.csv. */
-export type DedupeMatch = "in_file" | "domain" | "phone" | "email" | "company_city";
+export type DedupeMatch =
+  | "in_file"
+  | "domain"
+  | "phone"
+  | "email"
+  | "company_city"
+  | "company_city_prefix"
+  | "company_city_typo";
+
+/**
+ * Levenshtein distance, abandoned as soon as it exceeds `cap`.
+ *
+ * ‼️ EDIT DISTANCE, NOT TRIGRAM SIMILARITY, and that was decided against the real data rather than
+ * by taste. `bclinic` / `bcinic` are the same business and score 0.50 on pg_trgm, while
+ * `proxoaesthetics` / `nwmeaesthetics` are different businesses and score 0.41 — no single
+ * threshold separates them, because trigram similarity collapses on short strings. The noise in
+ * these files is single-character, so the measure that reads it directly is the number of
+ * characters that differ. Do not "upgrade" this back to pg_trgm.
+ *
+ * The cap is what makes it cheap: two unrelated names diverge immediately and the row is abandoned
+ * long before the full matrix is built, so this runs over a city bucket without a budget.
+ */
+export function editDistanceWithin(a: string, b: string, cap: number): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const v = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost);
+      row.push(v);
+      if (v < best) best = v;
+    }
+    // Nothing later can bring the distance back under the cap once the whole row is over it.
+    if (best > cap) return cap + 1;
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+/**
+ * The shortest name that may be matched by containment.
+ *
+ * ‼️ A FALSE-POSITIVE GUARD, NOT DECORATION. Without it `bmed` swallows
+ * `bmedicalspawellnesscenter`, and every short generic prefix in the file takes the first business
+ * that happens to start with it.
+ */
+const PREFIX_MIN = 10;
+
+/** The shortest name a single-character difference may be forgiven on. Same reasoning. */
+const TYPO_MIN = 5;
+
+/**
+ * Does `name` describe the same business as one already recorded in this city?
+ *
+ * The city is the bucket and is matched EXACTLY by the caller; it is never the fuzzy part. Returns
+ * which rule fired, so duplicates.csv can name it and a wrong call can be argued with rather than
+ * being invisible.
+ */
+export function matchInCity(
+  name: string,
+  candidates: readonly string[]
+): { match: DedupeMatch; value: string } | null {
+  for (const c of candidates) if (c === name) return { match: "company_city", value: c };
+
+  for (const c of candidates) {
+    if (Math.min(c.length, name.length) < PREFIX_MIN) continue;
+    if (name.startsWith(c) || c.startsWith(name)) return { match: "company_city_prefix", value: c };
+  }
+
+  for (const c of candidates) {
+    if (Math.min(c.length, name.length) < TYPO_MIN) continue;
+    if (editDistanceWithin(name, c, 1) <= 1) return { match: "company_city_typo", value: c };
+  }
+
+  return null;
+}
 
 /**
  * Hosts that identify a PLATFORM rather than a business.
@@ -61,7 +140,15 @@ export interface KnownKeys {
   domain: ReadonlySet<string>;
   phone: ReadonlySet<string>;
   email: ReadonlySet<string>;
-  companyCity: ReadonlySet<string>;
+  /**
+   * Every recorded company name, bucketed by its city.
+   *
+   * ‼️ DELIBERATELY NOT A SET OF `name|city` KEYS. Exact key equality misses
+   * `annexusdermatology` against `annexusdermatologyaesthetics`, and no Set lookup ever can — a
+   * near-miss has to be COMPARED against the candidates sharing its city. One structure rather than
+   * a Set plus a Map, so there is no second copy to fall out of step with this one.
+   */
+  companyCityByCity: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface DedupeRow {
@@ -191,6 +278,9 @@ export function rowKeys(raw: Record<string, string>, cols: DedupeColumns): Dedup
 
 const KEY_ORDER = ["domain", "phone", "email", "companyCity"] as const;
 
+/** The three keys that are matched by exact equality. companyCity is compared, not looked up. */
+const EXACT_KEYS = ["domain", "phone", "email"] as const;
+
 /** The field name is camelCase; the ledger's key_type and the CSV's reason are snake_case. */
 const MATCH_OF: Record<(typeof KEY_ORDER)[number], DedupeMatch> = {
   domain: "domain",
@@ -198,6 +288,20 @@ const MATCH_OF: Record<(typeof KEY_ORDER)[number], DedupeMatch> = {
   email: "email",
   companyCity: "company_city",
 };
+
+/** `name|city` back into its halves. Both are already stripped to a-z0-9, so there is exactly one. */
+export function splitCompanyCity(key: string): { name: string; city: string } {
+  const bar = key.indexOf("|");
+  return bar < 0
+    ? { name: key, city: "" }
+    : { name: key.slice(0, bar), city: key.slice(bar + 1) };
+}
+
+function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
 
 function cell(raw: Record<string, string>, column: string | null): string | null {
   if (!column) return null;
@@ -228,6 +332,10 @@ export function splitDuplicates(input: {
     email: new Set<string>(),
     companyCity: new Set<string>(),
   };
+  // The same city bucket the ledger is read through, but for rows earlier in THIS file, so a
+  // truncated and a full spelling of one business inside one export collapse the same way they
+  // would across two.
+  const claimedByCity = new Map<string, string[]>();
 
   const fresh: DedupeRow[] = [];
   const dupes: DuplicateRow[] = [];
@@ -246,16 +354,37 @@ export function splitDuplicates(input: {
       website: cell(raw, cols.website),
     };
 
-    const inFile = KEY_ORDER.find((k) => keys[k] !== null && claimed[k].has(keys[k] as string));
+    const inFile = EXACT_KEYS.find((k) => keys[k] !== null && claimed[k].has(keys[k] as string));
     if (inFile) {
       dupes.push({ ...row, matchedOn: "in_file", matchedValue: keys[inFile] as string });
       return;
     }
 
-    const prior = KEY_ORDER.find((k) => keys[k] !== null && known[k].has(keys[k] as string));
+    const prior = EXACT_KEYS.find((k) => keys[k] !== null && known[k].has(keys[k] as string));
     if (prior) {
       dupes.push({ ...row, matchedOn: MATCH_OF[prior], matchedValue: keys[prior] as string });
       return;
+    }
+
+    // ‼️ THE NAME KEY IS COMPARED, NOT LOOKED UP. Exact equality is only the first of three rules,
+    // because the same business is spelled differently in two exports off the same screen. The city
+    // is the bucket and is still matched EXACTLY; only the name is allowed to differ.
+    if (keys.companyCity) {
+      const { name, city } = splitCompanyCity(keys.companyCity);
+
+      const here = matchInCity(name, claimedByCity.get(city) ?? []);
+      if (here) {
+        dupes.push({ ...row, matchedOn: "in_file", matchedValue: here.value + "|" + city });
+        return;
+      }
+
+      const before = matchInCity(name, known.companyCityByCity.get(city) ?? []);
+      if (before) {
+        dupes.push({ ...row, matchedOn: before.match, matchedValue: before.value + "|" + city });
+        return;
+      }
+
+      push(claimedByCity, city, name);
     }
 
     let keyed = false;
@@ -282,21 +411,22 @@ export function splitDuplicates(input: {
 export function allKeys(
   rows: Array<Record<string, string>>,
   cols: DedupeColumns
-): { domain: string[]; phone: string[]; email: string[]; companyCity: string[] } {
-  const sets = {
-    domain: new Set<string>(),
-    phone: new Set<string>(),
-    email: new Set<string>(),
-    companyCity: new Set<string>(),
-  };
+): { domain: string[]; phone: string[]; email: string[]; cities: string[] } {
+  const domain = new Set<string>();
+  const phone = new Set<string>();
+  const email = new Set<string>();
+  // ‼️ CITIES, NOT name|city KEYS. The ledger is asked for every company it has ever recorded in
+  // the cities this file mentions, because the names are then COMPARED. Asking for the exact keys
+  // would return only the ones that already match, which is the case that needed no help.
+  const cities = new Set<string>();
+
   for (const raw of rows) {
     const k = rowKeys(raw, cols);
-    for (const key of KEY_ORDER) if (k[key]) sets[key].add(k[key] as string);
+    if (k.domain) domain.add(k.domain);
+    if (k.phone) phone.add(k.phone);
+    if (k.email) email.add(k.email);
+    if (k.companyCity) cities.add(splitCompanyCity(k.companyCity).city);
   }
-  return {
-    domain: [...sets.domain],
-    phone: [...sets.phone],
-    email: [...sets.email],
-    companyCity: [...sets.companyCity],
-  };
+
+  return { domain: [...domain], phone: [...phone], email: [...email], cities: [...cities] };
 }

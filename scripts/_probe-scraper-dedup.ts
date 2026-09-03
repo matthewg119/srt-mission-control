@@ -24,7 +24,9 @@ import {
   phoneKey,
   companyCityKey,
   countTruncatedNames,
+  editDistanceWithin,
   looksTruncated,
+  matchInCity,
   splitDuplicates,
   type DedupeColumns,
   type KnownKeys,
@@ -51,16 +53,23 @@ const NO_KEYS: KnownKeys = {
   domain: new Set(),
   phone: new Set(),
   email: new Set(),
-  companyCity: new Set(),
+  companyCityByCity: new Map(),
 };
 
-/** A KnownKeys with just the one set filled, so a check says which key it is exercising. */
-function ledger(over: Partial<Record<keyof KnownKeys, string[]>>): KnownKeys {
+/** A KnownKeys with just the keys under test. `companyCity` entries are "name|city" strings. */
+function ledger(over: Partial<Record<"domain" | "phone" | "email" | "companyCity", string[]>>): KnownKeys {
+  const byCity = new Map<string, string[]>();
+  for (const key of over.companyCity ?? []) {
+    const bar = key.indexOf("|");
+    const name = key.slice(0, bar);
+    const city = key.slice(bar + 1);
+    byCity.set(city, [...(byCity.get(city) ?? []), name]);
+  }
   return {
     domain: new Set(over.domain ?? []),
     phone: new Set(over.phone ?? []),
     email: new Set(over.email ?? []),
-    companyCity: new Set(over.companyCity ?? []),
+    companyCityByCity: byCity,
   };
 }
 
@@ -174,7 +183,7 @@ eq("email: blank", emailKey(""), null);
   const rows = [row({ company: "Glow Bar" }), row({ company: "Derma Luxe" })];
   const { fresh, dupes } = splitDuplicates({ rows, cols: bare, known: NO_KEYS });
   eq("no key columns: all new", [fresh.length, dupes.length], [2, 0]);
-  eq("no key columns: nothing to ask the ledger", allKeys(rows, bare), { domain: [], phone: [], email: [], companyCity: [] });
+  eq("no key columns: nothing to ask the ledger", allKeys(rows, bare), { domain: [], phone: [], email: [], cities: [] });
 }
 
 {
@@ -212,7 +221,7 @@ eq("email: blank", emailKey(""), null);
     domain: ["glowbar.com"],
     phone: ["7045550134"],
     email: ["jane@glowbar.com"],
-    companyCity: [],
+    cities: [],
   });
 }
 
@@ -421,9 +430,12 @@ eq("truncated: null is not", looksTruncated(null), false);
   eq("truncated: counted across the file", countTruncatedNames(rows, "company"), 1);
   eq("truncated: no company column, nothing to count", countTruncatedNames(rows, null), 0);
 
-  // The miss this guard exists to explain: these two ARE one business and the keys cannot see it.
+  // ‼️ THE PREFIX TIER NOW RESCUES THIS, and this assertion is the proof. Before it, a cut-off name
+  // could not match its full self and the pair was reported as two businesses; that is the exact
+  // 24-row miss the tier was built for. The 🚨 still fires, because a file this damaged is under-
+  // matching in ways no rule recovers — a name cut mid-word to `Aloe Vera Med...` matches nothing.
   const { dupes } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
-  eq("truncated: a cut-off name does NOT match its full self", dupes.length, 0);
+  eq("truncated: a cut-off name now matches its full self", dupes.map((d) => d.matchedOn), ["in_file"]);
 }
 
 {
@@ -456,6 +468,126 @@ eq("truncated: null is not", looksTruncated(null), false);
   });
   check("truncation card: a clean file gets no alarm at all",
     !card.includes("rotating_light"), card.slice(0, 60));
+}
+
+
+// -- rail 4: OCR noise, the three tiers inside a city bucket ------------------------------------
+//
+// FIXTURES ARE REAL PAIRS out of leads (1).csv and leads (3).csv, two screenshot-derived pulls of
+// the same Apollo search. 39 of the 90 rows recorded as new on 2026-09-03 were repeats hidden by
+// differences this small. If any of these stops matching, the lane has silently gone back to
+// re-buying SERPs for businesses it already scored.
+
+eq("edit distance: identical", editDistanceWithin("glowbar", "glowbar", 1), 0);
+eq("edit distance: one substitution", editDistanceWithin("grayaesthetics", "greyaesthetics", 1), 1);
+eq("edit distance: one insertion", editDistanceWithin("bcinic", "bclinic", 1), 1);
+eq("edit distance: length gap alone exceeds the cap", editDistanceWithin("abc", "abcdef", 1), 2);
+check("edit distance: over the cap returns cap+1, not the true distance",
+  editDistanceWithin("proxoaesthetics", "nwmeaesthetics", 1) === 2);
+eq("edit distance: empty against empty", editDistanceWithin("", "", 1), 0);
+
+{
+  // The 24-row tier: one name contains the other.
+  const seen = ["annexusdermatology", "comprehensivehealth", "auriaestheticsmedspa"];
+  eq("prefix: the longer name matches the shorter on file",
+    matchInCity("annexusdermatologyaesthetics", seen)?.match, "company_city_prefix");
+  eq("prefix: and the shorter matches the longer",
+    matchInCity("comprehensivehealthandwellnesscenter", seen)?.match, "company_city_prefix");
+  eq("prefix: it reports WHICH recorded name it hit",
+    matchInCity("auriaestheticsmedspawellness", seen)?.value, "auriaestheticsmedspa");
+}
+
+{
+  // ‼️ THE LENGTH FLOOR. Without it a four-letter prefix swallows a whole clinic.
+  eq("prefix: a short prefix does NOT swallow a long name",
+    matchInCity("bmed", ["bmedicalspawellnesscenter"]), null);
+  eq("prefix: exactly at the floor still matches",
+    matchInCity("dermaluxes", ["dermaluxe12"])?.match ?? null, null);
+}
+
+{
+  // The 13-row tier: one character. Every pair here is real.
+  const seen = [
+    "drsophieshatterteam", "grayaesthetics", "alletteaesthetics",
+    "medigomedicalspa", "rejuviwelsuites", "bastuhealthboutique",
+  ];
+  for (const [typo, on] of [
+    ["drsophieshotterteam", "drsophieshatterteam"],
+    ["greyaesthetics", "grayaesthetics"],
+    ["alleteaesthetics", "alletteaesthetics"],
+    ["medigiomedicalspa", "medigomedicalspa"],
+    ["rejuviwellsuites", "rejuviwelsuites"],
+    ["bestuhealthboutique", "bastuhealthboutique"],
+  ] as Array<[string, string]>) {
+    const hit = matchInCity(typo, seen);
+    eq("typo: " + typo + " is " + on, [hit?.match, hit?.value], ["company_city_typo", on]);
+  }
+}
+
+{
+  // ‼️ THE PAIR THAT MUST NOT MATCH. Two different Dallas businesses, 4 edits apart. pg_trgm scores
+  // them 0.41 while scoring the genuine bclinic/bcinic pair 0.50, which is why this is edit
+  // distance and not similarity.
+  eq("typo: two different businesses stay two", matchInCity("proxoaesthetics", ["nwmeaesthetics"]), null);
+  eq("typo: a short name is below the floor", matchInCity("gebu", ["geblu"]), null);
+  eq("typo: two edits is not one", matchInCity("bioconnectmedicalcentre", ["bioconnectmedicalcenter"]), null);
+}
+
+{
+  // Exact still wins, and is still reported as the plain key.
+  eq("tiers: exact beats prefix", matchInCity("annexusdermatology",
+    ["annexusdermatologyaesthetics", "annexusdermatology"])?.match, "company_city");
+}
+
+{
+  // ‼️ THE CITY IS THE BUCKET AND IS NEVER FUZZY. matchInCity is only ever handed one city's names.
+  const rows = [row({ company: "CLEO Skin + Laser", city: "Chanhassen" })];
+  const { dupes, fresh } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ companyCity: ["cleoskinlaser|newyork"] }),
+  });
+  eq("city: the same name in another city is NOT a duplicate", [dupes.length, fresh.length], [0, 1]);
+}
+
+{
+  // End to end, through splitDuplicates rather than matchInCity directly.
+  const rows = [
+    row({ company: "Annexus Dermatology Aesthetics", city: "Orange City" }),
+    row({ company: "Dr Sophie Shotter & Team", city: "London" }),
+    row({ company: "Brand New Clinic", city: "Orange City" }),
+  ];
+  const { dupes, fresh } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ companyCity: ["annexusdermatology|orangecity", "drsophieshatterteam|london"] }),
+  });
+  eq("end to end: both OCR variants caught",
+    dupes.map((d) => d.matchedOn), ["company_city_prefix", "company_city_typo"]);
+  eq("end to end: the genuinely new row survives", fresh.map((f) => f.company), ["Brand New Clinic"]);
+  eq("end to end: matched_value names the recorded key",
+    dupes[0].matchedValue, "annexusdermatology|orangecity");
+}
+
+{
+  // The same OCR pair INSIDE one file collapses too, and is reported as in_file.
+  const rows = [
+    row({ company: "Grey Aesthetics", city: "Newport Beach" }),
+    row({ company: "Gray Aesthetics", city: "Newport Beach" }),
+  ];
+  const { dupes, fresh } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
+  eq("in-file: a typo variant of an earlier row in the SAME file", dupes.map((d) => d.matchedOn), ["in_file"]);
+  eq("in-file: the first spelling survives", fresh.map((f) => f.rowIndex), [0]);
+}
+
+{
+  // allKeys hands the store CITIES, not name|city keys, or the fetch returns only exact matches.
+  const rows = [
+    row({ company: "Glow Bar", city: "Charlotte" }),
+    row({ company: "Derma Luxe", city: "Charlotte" }),
+    row({ company: "Skin Bar", city: "Miami" }),
+  ];
+  eq("allKeys: distinct cities for the name lookup", allKeys(rows, COLS).cities.sort(), ["charlotte", "miami"]);
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");

@@ -9,7 +9,7 @@
 // only allowed to produce a CSV once nothing is pending.
 
 import { supabaseAdmin } from "@/lib/db";
-import type { DedupeRow, KnownKeys } from "./dedup";
+import { splitCompanyCity, type DedupeRow, type KnownKeys } from "./dedup";
 import type { FilteredRow } from "./filter";
 import type { JunkReason } from "./rules";
 
@@ -170,11 +170,19 @@ const SEEN_CONCURRENCY = 6;
  * ‼️ ONE LIST, so the read and the write cannot drift on the camelCase/snake_case boundary. The
  * `DedupeKeys` field is `companyCity`; the value stored in `scraper_seen.key_type` and printed in
  * duplicates.csv is `company_city`, and the CHECK constraint only accepts the latter.
+ *
+ * The two lists differ on purpose: all four are WRITTEN, but only three are read back by exact
+ * value. company_city is read back by `city_key` because its names are compared, not looked up.
  */
-const KEY_TYPES: Array<{ field: "domain" | "phone" | "email" | "companyCity"; stored: string }> = [
+const EXACT_KEY_TYPES: Array<{ field: "domain" | "phone" | "email"; stored: string }> = [
   { field: "domain", stored: "domain" },
   { field: "phone", stored: "phone" },
   { field: "email", stored: "email" },
+];
+
+/** Every key type recordSeen writes, including the one that is read back by city rather than value. */
+const WRITE_KEY_TYPES: Array<{ field: "domain" | "phone" | "email" | "companyCity"; stored: string }> = [
+  ...EXACT_KEY_TYPES,
   { field: "companyCity", stored: "company_city" },
 ];
 
@@ -359,16 +367,15 @@ export async function loadKnownKeys(keys: {
   domain: string[];
   phone: string[];
   email: string[];
-  companyCity: string[];
+  cities: string[];
 }): Promise<KnownKeys> {
   const out = {
     domain: new Set<string>(),
     phone: new Set<string>(),
     email: new Set<string>(),
-    companyCity: new Set<string>(),
   };
 
-  for (const keyType of KEY_TYPES) {
+  for (const keyType of EXACT_KEY_TYPES) {
     const parts = chunk(keys[keyType.field], SEEN_IN_CHUNK).filter((p) => p.length > 0);
 
     // ‼️ RUN IN WAVES, NOT ONE AT A TIME. At MAX_ROWS this asks about 150k keys, and a strictly
@@ -392,7 +399,36 @@ export async function loadKnownKeys(keys: {
     }
   }
 
-  return out;
+  // ‼️ THE NAME KEYS ARE FETCHED BY CITY, NOT BY KEY. Asking for the exact `name|city` values in
+  // the file would return only the ones that already match — the case that never needed help. The
+  // comparison in `matchInCity` needs the whole city bucket, near-misses included, which is what
+  // the generated `city_key` column and its partial index exist for.
+  const companyCityByCity = new Map<string, string[]>();
+  const cityParts = chunk(keys.cities, SEEN_IN_CHUNK).filter((p) => p.length > 0);
+
+  for (const wave of chunk(cityParts, SEEN_CONCURRENCY)) {
+    const results = await Promise.all(
+      wave.map((part) =>
+        supabaseAdmin
+          .from("scraper_seen")
+          .select("key_value")
+          .eq("key_type", "company_city")
+          .in("city_key", part)
+      )
+    );
+    for (const { data, error } of results) {
+      if (error) throw new Error("loadKnownKeys(company_city): " + error.message);
+      for (const r of (data ?? []) as Array<{ key_value: string }>) {
+        const { name, city } = splitCompanyCity(r.key_value);
+        if (!name) continue;
+        const list = companyCityByCity.get(city);
+        if (list) list.push(name);
+        else companyCityByCity.set(city, [name]);
+      }
+    }
+  }
+
+  return { ...out, companyCityByCity };
 }
 
 /**
@@ -414,7 +450,7 @@ export async function recordSeen(batchId: string, rows: DedupeRow[]): Promise<vo
       email: row.keys.email,
       phone: row.keys.phone,
     };
-    for (const { field, stored } of KEY_TYPES) {
+    for (const { field, stored } of WRITE_KEY_TYPES) {
       const value = row.keys[field];
       if (value) payload.push({ key_type: stored, key_value: value, ...provenance });
     }

@@ -4122,6 +4122,51 @@ The picker headline changed at the same time. `*leads (2).csv*, 218 rows, 85 alr
 a question about the file that had just been cleaned; it now leads with `*133 new leads*` and names
 `new.csv` explicitly, with the original total demoted to a subline.
 
+### The name key survives OCR noise (2026-09-03)
+
+`docs/2026-09-03-scraper-seen-city-key.sql`, `matchInCity` / `editDistanceWithin` in `dedup.ts`.
+
+`leads (3).csv` reported 123 of 232 already seen, up from 85 of 218, and the question was whether
+the purged `leads (2)` run was leaking. It was not — `scraper_seen` held only `leads (1).csv`'s 205
+keys and `scraper_batches` had no `leads (2)` row at all. The number went UP because it had been
+SUPPRESSED: `leads (2)` was truncated, `leads (3)` is not, so the same businesses match again.
+
+‼️ **123 was still too low.** Comparing the two files' keys directly, 39 more of the 90 rows
+recorded as new were the same businesses, separated by one character:
+
+```
+annexusdermatologyaesthetics / annexusdermatology      one contains the other   24
+drsophieshotterteam          / drsophieshatterteam     one character            13
+bioconnectmedicalcentre      / bioconnectmedicalcenter two characters            2
+```
+
+`grey`/`gray`, `allete`/`allette`, `bclinic`/`bcinic`, `medigio`/`medigo`. That is OCR: BOTH files
+were captured from a screenshot of an Apollo grid, so each pull spells a name slightly differently.
+True overlap is ~162 of 232, and ~79% of the August list came back in one week — the Apollo query
+is returning the same companies, and the screenshot is corrupting the names on the way in. **The
+upstream fix costs no code: export from Apollo as CSV.**
+
+So the name key is now COMPARED, not looked up, in three tiers inside an exact city bucket: exact →
+one name contains the other (`min length 10`) → one character different (`min length 5`). Verified
+against the live ledger with the real matcher: 36 recovered, 24 prefix + 12 typo. The 3 the
+analysis found but the code does not take are the safety margin working — 2 at edit distance 2, and
+`gebu`/`geblu` under the length floor.
+
+‼️ **EDIT DISTANCE, NOT pg_trgm, decided against the data.** `bclinic`/`bcinic` are one business and
+score 0.50; `proxoaesthetics`/`nwmeaesthetics` are two businesses and score 0.41. No threshold
+separates them, because trigram similarity collapses on short strings. The noise is
+single-character, so the measure that reads it is the count of characters that differ.
+
+‼️ **THE CITY IS THE BUCKET AND IS NEVER FUZZY.** `cleoskinlaser|chanhassen` and
+`cleoskinlaser|newyork` stay two businesses. This is also why `scraper_seen.city_key` exists as a
+STORED GENERATED column: the ledger has to be read by city rather than by key, because asking for
+the exact `name|city` values in a file returns only the rows that already matched — the case that
+never needed help.
+
+`scripts/purge-scraper-batch.ts` is permanent now, having been needed twice in a day. Its warning
+is the same both times: **delete the ledger keys, not just the batch**, or the next upload of that
+list matches against the run you were taking back.
+
 `handleThreadedCsv` is untouched. An Apollo export is contacts for companies its thread already
 chose, not a new list, and deduping it against the ledger its own parent just wrote would delete
 all of it.
