@@ -21,6 +21,7 @@ import {
   recordSource,
   type SourceType,
 } from "@/lib/clients/page-evidence";
+import { magnetsForClient } from "@/lib/concierge/for-client";
 
 export const dynamic = "force-dynamic";
 // Attaching two domains means up to four Vercel calls plus the DNS writeback.
@@ -88,6 +89,9 @@ export async function POST(
         // The page id, when the board is drafting into an existing row, so the drafter reads
         // that page's own evidence and not just the client library.
         pageId: typeof body.pageId === "string" ? body.pageId : null,
+        // The offer chosen before the page is written. It never lands in the body; it tells the
+        // drafter where to stop. See draftPage's header.
+        magnetKey: typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : null,
       });
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
 
@@ -127,6 +131,9 @@ export async function POST(
         // "written by hand", and the difference is what stops a title edit erasing a drafted
         // page's claim map. See SavePageInput.evidenceMap.
         evidenceMap: Array.isArray(body.evidenceMap) ? (body.evidenceMap as unknown[]) : undefined,
+        // Same undefined/null discipline as evidenceMap directly above: a form that says nothing
+        // about the magnet leaves the stored key alone, and an empty string clears it.
+        leadMagnetKey: typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : undefined,
       });
 
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
@@ -403,5 +410,6 @@ export async function GET(
     pages,
     gateRuns: latestByPage,
     sources: await loadEvidenceFor(params.id, null),
+    magnets: await magnetsForClient(params.id),
   });
 }

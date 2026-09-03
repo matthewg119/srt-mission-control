@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
 import { openingFor } from "@/lib/concierge/engine";
 import { conciergeAmmo } from "@/lib/concierge/ammo";
-import { resolveMagnet } from "@/lib/concierge/magnets";
+import { magnetByKey, resolveMagnet } from "@/lib/concierge/magnets";
 import { appendMessage, startConciergeSession } from "@/lib/concierge/session";
 import { clientIpFrom, hashIp } from "@/lib/scan/session";
 import { supabaseAdmin } from "@/lib/db";
@@ -79,6 +79,7 @@ export async function POST(req: NextRequest) {
     entryPath: str(body.path, 500),
     entryPageId: null,
     pageCategory: str(body.category, 40),
+    pageMagnetKey: str(body.magnet, 60)?.toLowerCase() ?? null,
     embedOrigin: req.headers.get("origin"),
     ipHash,
     userAgent: str(req.headers.get("user-agent"), 400),
@@ -102,13 +103,20 @@ export async function POST(req: NextRequest) {
       : null;
 
   const evidence = ammo?.candidates[0] ?? null;
-  const magnet = await resolveMagnet({
-    audience: config.audience,
-    clientId: config.clientId,
-    vertical: config.vertical,
-    treatment: null,
-    category: session.pageCategory,
-  });
+
+  // ‼️ THE PAGE'S OWN CHOICE WINS, AND IT DOES NOT FALL BACK WHEN IT FAILS. Same rule as
+  // offerForPage() in concierge/for-client.ts: a named key that no longer resolves means the
+  // decision somebody made no longer holds, and quietly opening on a different offer under it
+  // would hide that. The opener degrades to its no-magnet shape, which openingFor already has.
+  const magnet = session.pageMagnetKey
+    ? await magnetByKey(session.pageMagnetKey, config.audience)
+    : await resolveMagnet({
+        audience: config.audience,
+        clientId: config.clientId,
+        vertical: config.vertical,
+        treatment: null,
+        category: session.pageCategory,
+      });
 
   const opening = openingFor({
     audience: config.audience,

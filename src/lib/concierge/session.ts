@@ -28,6 +28,16 @@ export interface ConciergeSession {
   clientId: string;
   sessionToken: string;
   pageCategory: string | null;
+  /**
+   * The magnet the PAGE named, carried for the life of the conversation.
+   *
+   * ‼️ ON THE SESSION RATHER THAN RE-READ PER TURN, because the page is only in front of us once.
+   * The frame document holds the key from the loader, /start writes it here, and every later turn
+   * arrives with nothing but a token. Looking it up again from entry_path would mean parsing a URL
+   * back into a page row on every turn, and would silently change the offer mid-conversation if
+   * somebody re-pointed the page while a visitor was reading it.
+   */
+  pageMagnetKey: string | null;
   entryPageId: string | null;
   entryPath: string | null;
   contactId: string | null;
@@ -42,8 +52,9 @@ export interface ConciergeSession {
 }
 
 const SESSION_COLUMNS =
-  "id, client_id, session_token, page_category, entry_page_id, entry_path, contact_id, " +
-  "first_name, email, phone, ammo_used, magnets_delivered, turns, outcome, booking_clicked_at";
+  "id, client_id, session_token, page_category, page_magnet_key, entry_page_id, entry_path, " +
+  "contact_id, first_name, email, phone, ammo_used, magnets_delivered, turns, outcome, " +
+  "booking_clicked_at";
 
 function toSession(row: Record<string, unknown>): ConciergeSession {
   const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
@@ -52,6 +63,7 @@ function toSession(row: Record<string, unknown>): ConciergeSession {
     clientId: String(row.client_id),
     sessionToken: String(row.session_token),
     pageCategory: str(row.page_category),
+    pageMagnetKey: str(row.page_magnet_key),
     entryPageId: str(row.entry_page_id),
     entryPath: str(row.entry_path),
     contactId: str(row.contact_id),
@@ -94,6 +106,7 @@ export interface StartSessionArgs {
   entryPath: string | null;
   entryPageId: string | null;
   pageCategory: string | null;
+  pageMagnetKey: string | null;
   embedOrigin: string | null;
   ipHash: string | null;
   userAgent: string | null;
@@ -113,6 +126,7 @@ export async function startConciergeSession(args: StartSessionArgs): Promise<Con
       entry_path: args.entryPath,
       entry_page_id: args.entryPageId,
       page_category: args.pageCategory,
+      page_magnet_key: args.pageMagnetKey,
       embed_origin: args.embedOrigin,
       ip_hash: args.ipHash,
       user_agent: args.userAgent,

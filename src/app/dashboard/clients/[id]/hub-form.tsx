@@ -37,6 +37,23 @@ export interface HubPageView {
   publishedAt: string | null;
 }
 
+/**
+ * One lead magnet, as the drafting picker offers it.
+ *
+ * ‼️ THE PICKER IS THE POINT OF THIS WHOLE CONTROL AND IT SITS BEFORE "Draft it" DELIBERATELY.
+ * Matthew's instruction (2026-09-03): the magnet is chosen before the page is written, not
+ * inferred after it exists. draftPage() reads it and writes the answer to stop where that offer
+ * begins, and the publish gate's no_magnet check is what notices when nobody chose.
+ */
+export interface MagnetChoiceView {
+  magnetKey: string;
+  title: string;
+  promise: string;
+  ctaLabel: string | null;
+  scope: string;
+  deliverable: boolean;
+}
+
 export interface AuditPromptView {
   text: string;
   block: string | null;
@@ -81,6 +98,7 @@ const BLANK = {
   answerMd: "",
   metaDescription: "",
   sourceReportId: "",
+  leadMagnetKey: "",
 };
 
 /**
@@ -146,6 +164,7 @@ export function HubForm({
   hosts,
   pages,
   prompts,
+  magnets,
   day0ArchivedAt,
   day0Source,
   vercelConfigured,
@@ -159,6 +178,8 @@ export function HubForm({
   hosts: HubHostView[];
   pages: HubPageView[];
   prompts: AuditPromptView[];
+  /** Empty when this client has no concierge_configs row, which the panel says out loud. */
+  magnets: MagnetChoiceView[];
   /** NULL means the Day 0 wall is shut and Publish will be refused. */
   day0ArchivedAt: string | null;
   day0Source: string | null;
@@ -187,6 +208,8 @@ export function HubForm({
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(true);
+  /** The row behind the chosen key, so the panel can say what the pill will read. */
+  const chosenMagnet = magnets.find((m) => m.magnetKey === draft.leadMagnetKey) ?? null;
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ‼️ THE GATE STATE IS FETCHED, NOT PASSED AS A PROP, for the same reason the page body is.
@@ -276,6 +299,7 @@ export function HubForm({
           question: string;
           answerMd?: string;
           metaDescription?: string | null;
+          leadMagnetKey?: string | null;
         }>;
       };
       const found = json.pages?.find((x) => x.id === pageId);
@@ -290,6 +314,7 @@ export function HubForm({
         answerMd: found.answerMd ?? "",
         metaDescription: found.metaDescription ?? "",
         sourceReportId: "",
+        leadMagnetKey: found.leadMagnetKey ?? "",
       });
       // A saved page's map lives in the database and is not re-sent on an ordinary save. See
       // SavePageInput.evidenceMap: an undefined map leaves the stored one alone, which is what
@@ -377,6 +402,9 @@ export function HubForm({
           question: draft.question,
           // So the drafter reads this page's own evidence, not only the client library.
           pageId: draft.id || null,
+          // The offer chosen above. It never lands in the body; it tells the drafter where the
+          // answer should stop so the free thing is still worth asking for. See draftPage().
+          leadMagnetKey: draft.leadMagnetKey || null,
         }),
       });
       const json = (await res.json()) as {
@@ -924,6 +952,48 @@ export function HubForm({
             </div>
           )}
 
+          {/* ── The offer, chosen before the page is written ─────────────── */}
+          <div>
+            <label className="mb-1 block text-xs text-[rgba(255,255,255,0.5)]">
+              What this page earns: the lead magnet the concierge will offer on it
+            </label>
+            {magnets.length === 0 ? (
+              <p className="rounded border border-white/10 px-2 py-1.5 text-xs text-[rgba(255,255,255,0.45)]">
+                This client has no concierge widget provisioned, so there is no offer to write
+                toward. The concierge_preview delivery step creates it.
+              </p>
+            ) : (
+              <>
+                <select
+                  className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                  value={draft.leadMagnetKey}
+                  onChange={(e) => setDraft((d) => ({ ...d, leadMagnetKey: e.target.value }))}
+                >
+                  <option value="">Let the ladder decide (generic, same on every page)</option>
+                  {magnets.map((m) => (
+                    <option key={m.magnetKey} value={m.magnetKey}>
+                      {m.title} · {m.scope}
+                      {m.deliverable ? "" : " · asset missing"}
+                    </option>
+                  ))}
+                </select>
+                {chosenMagnet && (
+                  <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
+                    Pill reads &ldquo;{chosenMagnet.ctaLabel || chosenMagnet.title}&rdquo;.{" "}
+                    {chosenMagnet.promise}
+                    {chosenMagnet.deliverable ? null : (
+                      <span className="text-[#FF6B6B]">
+                        {" "}
+                        Its asset is not configured, so the widget will not offer it and Publish
+                        will refuse this page.
+                      </span>
+                    )}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
           <Field
             label="Title"
             value={draft.title}
@@ -1047,7 +1117,9 @@ export function HubForm({
               </button>
               <span className="text-xs text-[rgba(255,255,255,0.4)]">
                 {draft.question.trim()
-                  ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}. Read every line before you save it.`
+                  ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}` +
+                    (chosenMagnet ? `, toward "${chosenMagnet.title}"` : ", toward no particular offer") +
+                    ". Read every line before you save it."
                   : "Pick a question first."}
               </span>
             </div>
@@ -1149,6 +1221,10 @@ export function HubForm({
                   answerMd: draft.answerMd,
                   metaDescription: draft.metaDescription || null,
                   sourceReportId: draft.sourceReportId || null,
+                  // Always sent, because this form always knows the answer. An empty string
+                  // clears the key, which is a real thing to want: it hands the page back to
+                  // the ladder. See SavePageInput.leadMagnetKey.
+                  leadMagnetKey: draft.leadMagnetKey,
                   // Sent ONLY when this save is carrying a fresh draft. An ordinary edit sends
                   // nothing here and savePage leaves the stored map alone, or drops it if the
                   // body actually changed. See SavePageInput.evidenceMap for why undefined and

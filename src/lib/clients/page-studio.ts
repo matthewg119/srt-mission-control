@@ -325,9 +325,9 @@ async function startSession(text: string, messageTs: string): Promise<void> {
 
   lines.push("");
   lines.push("Reply with a number to claim one. Then `ask` to walk the interview, or just talk");
-  lines.push("and your words go into the page exactly as you said them. `draft` writes it from");
-  lines.push("the evidence, `polish` tidies what you wrote, `check` runs the quality gate,");
-  lines.push("`done` when you are finished, `cancel` to drop this.");
+  lines.push("and your words go into the page exactly as you said them. `magnet` picks what this");
+  lines.push("page offers, `draft` writes it from the evidence, `polish` tidies what you wrote,");
+  lines.push("`check` runs the quality gate, `done` when you are finished, `cancel` to drop this.");
 
   const posted = (await slack.postThreadReply(channel, messageTs, lines.join("\n"))) as {
     ok?: boolean;
@@ -409,6 +409,7 @@ async function claim(session: Session, n: number): Promise<void> {
       "\n*`ask`* walks the interview: what only they know, filed as evidence rather than as page " +
       "copy, and the drafter is then held to it.\n" +
       "Or just talk, and everything you send lands in the body word for word.\n" +
+      "*`magnet`* lists what this page can offer and `magnet <key>` picks one, before you draft.\n" +
       "`draft` writes it from the evidence, `polish` tidies what you wrote, `check` runs the " +
       "quality gate, `done` finishes."
   );
@@ -616,7 +617,7 @@ async function draft(session: Session): Promise<void> {
 
   const { data: page } = await supabaseAdmin
     .from("client_pages")
-    .select("question, slug")
+    .select("question, slug, lead_magnet_key")
     .eq("id", session.pageId)
     .eq("client_id", session.clientId)
     .maybeSingle();
@@ -636,6 +637,9 @@ async function draft(session: Session): Promise<void> {
   const { draftPage } = await import("@/lib/hub/draft-page");
   const res = await draftPage(session.clientId, (page?.question as string) ?? "", {
     pageId: session.pageId,
+    // Whatever `magnet` set on this page, so the Slack lane writes toward the same offer the
+    // board would. Null when nobody chose, which the gate reports as a warn on `check`.
+    magnetKey: (page?.lead_magnet_key as string | null) ?? null,
   });
 
   if (!res.ok) {
@@ -686,6 +690,99 @@ async function check(session: Session): Promise<void> {
     .maybeSingle();
 
   await say(session.threadTs, renderVerdict(res.run, (page?.slug as string) ?? ""));
+}
+
+/**
+ * `magnet` — what this page is written to earn, named before it is drafted.
+ *
+ * ‼️ IT IS A COMMAND HERE FOR THE SAME REASON IT IS A DROPDOWN ON THE BOARD: the Slack lane is a
+ * whole drafting path, and a decision that can only be made on one of two surfaces is a decision
+ * half the pages skip. `draft` reads whatever this set, so choosing it after drafting means the
+ * body was written toward nothing and has to be redrafted to benefit.
+ *
+ * Bare `magnet` lists. `magnet <key>` sets. `magnet none` clears it back to the ladder.
+ */
+async function magnet(session: Session, arg: string): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `magnet` sets what that page offers.");
+    return;
+  }
+
+  const { magnetsForClient } = await import("@/lib/concierge/for-client");
+  const choices = await magnetsForClient(session.clientId);
+
+  if (choices.length === 0) {
+    await say(
+      session.threadTs,
+      "This client has no concierge widget provisioned, so there is no offer to write toward. " +
+        "The `concierge_preview` delivery step creates it."
+    );
+    return;
+  }
+
+  const wanted = arg.trim().toLowerCase();
+
+  if (!wanted) {
+    const { data: page } = await supabaseAdmin
+      .from("client_pages")
+      .select("lead_magnet_key")
+      .eq("id", session.pageId)
+      .eq("client_id", session.clientId)
+      .maybeSingle();
+
+    const current = (page?.lead_magnet_key as string | null) ?? null;
+    const lines = [
+      current
+        ? `This page is written toward \`${current}\`.`
+        : "This page names no magnet, so the widget falls back to whatever the ladder picks.",
+      "",
+      ...choices.map(
+        (c) =>
+          `\`${c.magnetKey}\` is ${c.title} (${c.scope})${c.deliverable ? "" : " · asset missing"}`
+      ),
+      "",
+      "`magnet <key>` to pick one, `magnet none` to hand it back to the ladder.",
+    ];
+    await say(session.threadTs, lines.join("\n"));
+    return;
+  }
+
+  if (wanted === "none") {
+    const { setPageMagnet } = await import("@/lib/hub/pages");
+    const res = await setPageMagnet(session.clientId, session.pageId, null);
+    await say(
+      session.threadTs,
+      res.ok
+        ? "Cleared. The ladder decides what this page offers, which is the same thing on every page."
+        : `That did not save: ${res.error}`
+    );
+    return;
+  }
+
+  const picked = choices.find((c) => c.magnetKey.toLowerCase() === wanted);
+  if (!picked) {
+    await say(
+      session.threadTs,
+      `There is no \`${wanted}\` for this client. Say \`magnet\` on its own to see the list.`
+    );
+    return;
+  }
+
+  const { setPageMagnet } = await import("@/lib/hub/pages");
+  const res = await setPageMagnet(session.clientId, session.pageId, picked.magnetKey);
+  if (!res.ok) {
+    await say(session.threadTs, `That did not save: ${res.error}`);
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    `This page now earns *${picked.title}*. The pill will read "${picked.ctaLabel || picked.title}".
+` +
+      (picked.deliverable
+        ? "`draft` will write the answer to stop where that offer begins."
+        : "‼️ Its asset is not configured, so the widget cannot hand it over and Publish will refuse this page.")
+  );
 }
 
 /**
@@ -915,6 +1012,15 @@ export async function handlePageStudioEvent(args: {
 
   if (/^polish$/i.test(text)) {
     await polish(session);
+    return true;
+  }
+
+  // ‼️ IT TAKES AN ARGUMENT, WHICH NO OTHER COMMAND HERE DOES, so the pattern is anchored and the
+  // rest of the line is the key rather than dictation. A bare `magnet` lists rather than clearing,
+  // because a command that silently erased the offer would be the one mistake nobody would notice.
+  const magnetCmd = /^magnet(?:\s+(.+))?$/i.exec(text);
+  if (magnetCmd) {
+    await magnet(session, magnetCmd[1] ?? "");
     return true;
   }
 

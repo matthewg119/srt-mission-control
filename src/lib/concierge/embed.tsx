@@ -41,6 +41,15 @@ export interface ConciergeEmbedProps {
   clientId: string;
   /** The theme of the page they are reading, so the magnet matches the post. */
   category?: string | null;
+  /**
+   * The magnet this page was written toward, from `client_pages.lead_magnet_key`.
+   *
+   * ‼️ IT OUTRANKS `category` RATHER THAN REFINING IT. A category is a hint the ladder ranks over;
+   * a key is a decision made before the page was drafted, and draft-page.ts wrote the copy to earn
+   * that specific offer. A page whose body ends where one magnet begins must not be answered with
+   * a different one because a ranking preferred it.
+   */
+  magnetKey?: string | null;
 }
 
 /**
@@ -52,7 +61,7 @@ export interface ConciergeEmbedProps {
  * executes normally and document.currentScript is set for it, which is how embed.js reads its own
  * data attributes.
  */
-export async function ConciergeEmbed({ clientId, category }: ConciergeEmbedProps) {
+export async function ConciergeEmbed({ clientId, category, magnetKey }: ConciergeEmbedProps) {
   const client = await embeddableClient(clientId);
   if (!client) return null;
 
@@ -62,6 +71,7 @@ export async function ConciergeEmbed({ clientId, category }: ConciergeEmbedProps
       src={`${conciergeOrigin()}/embed.js`}
       data-client={client.slug}
       {...(category ? { "data-category": category } : {})}
+      {...(magnetKey ? { "data-magnet": magnetKey } : {})}
     />
   );
 }

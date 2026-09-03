@@ -35,6 +35,17 @@ export interface LeadMagnet {
   category: string | null;
   title: string;
   promise: string;
+  /**
+   * The short line that goes on the launcher pill, when the row carries one.
+   *
+   * ‼️ A SEPARATE COLUMN RATHER THAN A TRUNCATED title, because the two are read in different
+   * places by different people. `title` is the thing itself, spelled out inside the conversation
+   * ("The 20 Questions Your Patients Ask ChatGPT Before They Book"); this is what a stranger sees
+   * on a pill in the corner of a page before they have agreed to anything, where anything past a
+   * few words is not read at all. Truncating the title would produce "The 20 Questions Your
+   * Patients..." which promises nothing.
+   */
+  ctaLabel: string | null;
   assetUrl: string | null;
   conciergeEntry: string;
   sortOrder: number;
@@ -51,7 +62,7 @@ export interface MagnetQuery {
 
 const COLUMNS =
   "id, magnet_key, chains_to_key, audience, client_id, vertical, treatment, category, " +
-  "title, promise, asset_url, concierge_entry, sort_order";
+  "title, promise, cta_label, asset_url, concierge_entry, sort_order";
 
 /**
  * Magnets whose asset lives behind an env var rather than in the row.
@@ -172,6 +183,7 @@ function toMagnet(row: Record<string, unknown>): LeadMagnet | null {
     category: str(row.category),
     title,
     promise,
+    ctaLabel: str(row.cta_label),
     assetUrl: str(row.asset_url),
     conciergeEntry: entry,
     sortOrder: typeof row.sort_order === "number" ? row.sort_order : 100,
@@ -230,7 +242,11 @@ export async function magnetByKey(key: string, audience: Audience): Promise<Lead
     .eq("magnet_key", key)
     .eq("audience", audience)
     .eq("active", true)
+    // ‼️ id BEHIND sort_order FOR THE SAME REASON rankMagnets HAS A THIRD KEY. `city_rivals` is
+    // seeded twice at sort_order 20, and an unordered pick between them changes the cached CTA
+    // between renders. The two rows carry identical copy, so this is about stability, not choice.
     .order("sort_order", { ascending: true })
+    .order("id", { ascending: true })
     .limit(1)
     .maybeSingle();
 
@@ -247,4 +263,83 @@ export async function nextInChain(
   if (!magnet.chainsToKey) return null;
   if (opts.exclude?.includes(magnet.chainsToKey)) return null;
   return magnetByKey(magnet.chainsToKey, magnet.audience);
+}
+
+/**
+ * What the launcher pill says for this magnet.
+ *
+ * ‼️ THE FALLBACK IS THE TITLE AND NOT A GENERIC STRING. A row with no cta_label is a row somebody
+ * has not finished, and showing its title too long on a pill is a visible prompt to go and fill the
+ * column in. A neutral "Chat" would hide the omission, which is how the hardcoded per-audience
+ * label survived as long as it did.
+ */
+export function pillLabel(magnet: LeadMagnet): string {
+  return magnet.ctaLabel?.trim() || magnet.title.trim();
+}
+
+/** One magnet as the drafting picker needs to see it. */
+export interface MagnetChoice {
+  magnetKey: string;
+  title: string;
+  promise: string;
+  ctaLabel: string | null;
+  /** Scope, spelled out for a human reading a dropdown: "med spa · Comparison", "this client". */
+  scope: string;
+  /** False when the row names an env-backed asset and that var is unset. Still offered, flagged. */
+  deliverable: boolean;
+}
+
+/** How a row's placement reads to somebody choosing from a list. */
+function scopeOf(m: LeadMagnet, clientId: string | null): string {
+  const parts: string[] = [];
+  if (m.clientId) parts.push(m.clientId === clientId ? "this client" : "another client");
+  if (m.vertical) parts.push(m.vertical);
+  if (m.treatment) parts.push(m.treatment);
+  if (m.category) parts.push(m.category);
+  return parts.length > 0 ? parts.join(" · ") : "any page";
+}
+
+/**
+ * Every magnet a page for this client could be drafted toward, one row per magnet_key.
+ *
+ * ‼️ KEYED, NOT RANKED, AND THAT IS THE WHOLE POINT OF THE PICKER. resolveMagnet answers "what
+ * would the ladder pick for a visitor standing here", which is a guess made after the page exists.
+ * This answers "what could this page be written toward", which is a decision made before it does.
+ * So the placement axes become description rather than filter: a category-scoped row is offered
+ * even though the ladder could never reach it on a page with no category, because naming the key
+ * on the page is exactly what makes it reachable.
+ *
+ * ‼️ ONE ROW PER KEY. `city_rivals` is seeded twice, once for Comparison and once for
+ * Neighbourhood, and two identical dropdown entries is a choice nobody can make correctly. The
+ * widest scope wins the description, since that is the row a keyed lookup will find.
+ */
+export async function listMagnetsFor(
+  audience: Audience,
+  clientId: string | null
+): Promise<MagnetChoice[]> {
+  const candidates = await candidatesFor({
+    audience,
+    clientId,
+    vertical: null,
+    treatment: null,
+    category: null,
+  });
+
+  const byKey = new Map<string, LeadMagnet>();
+  for (const m of candidates) {
+    if (!m.magnetKey) continue; // an unkeyed row cannot be named on a page
+    const held = byKey.get(m.magnetKey);
+    if (!held || m.sortOrder < held.sortOrder) byKey.set(m.magnetKey, m);
+  }
+
+  return [...byKey.values()]
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.magnetKey!.localeCompare(b.magnetKey!))
+    .map((m) => ({
+      magnetKey: m.magnetKey!,
+      title: m.title,
+      promise: m.promise,
+      ctaLabel: m.ctaLabel,
+      scope: scopeOf(m, clientId),
+      deliverable: isDeliverable(m),
+    }));
 }

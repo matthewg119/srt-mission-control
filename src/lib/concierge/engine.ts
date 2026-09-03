@@ -398,13 +398,24 @@ export function makeExecutor(ctx: ExecutorContext) {
 /**
  * The one magnet the executor will hand over next.
  *
- * Nothing delivered yet, so resolve for where they are standing. Something delivered, so follow
- * that magnet's own chain. Either way the answer comes off a row and never off the model.
+ * Nothing delivered yet, so hand over the one the PAGE was written toward, or resolve for where
+ * they are standing when the page named none. Something delivered, so follow that magnet's own
+ * chain. Either way the answer comes off a row and never off the model.
+ *
+ * ‼️ THE PAGE'S KEY ONLY GOVERNS THE FIRST ONE. It is a statement about what this page earns, and
+ * the second magnet is by definition no longer about the page: the chain and then the ladder take
+ * over, both still excluding everything already delivered. Re-applying the key after delivery
+ * would offer the same thing twice, which `exclude` exists to prevent.
  */
 async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
   const delivered = ctx.session.magnetsDelivered;
 
   if (delivered.length === 0) {
+    if (ctx.session.pageMagnetKey) {
+      // No fallback when it fails to resolve, for the reason /start gives: a decision that
+      // silently becomes a different decision is worse than a decision that visibly stopped.
+      return magnetByKey(ctx.session.pageMagnetKey, ctx.config.audience);
+    }
     return resolveMagnet(
       {
         audience: ctx.config.audience,

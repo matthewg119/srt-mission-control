@@ -12,9 +12,30 @@
 // is identical in all three, and if it ever needs to differ that is a sign it belongs in a shared
 // constant rather than that this should import a provisioner.
 
-/** The concierge hostname, lowercased, no scheme. */
+/**
+ * The concierge hostname, lowercased, no scheme.
+ *
+ * ‼️ OFF PRODUCTION IT IS THIS DEPLOYMENT, NOT THE CONSTANT, AND THAT IS NOT A CONVENIENCE.
+ * `concierge.srtagency.com` is a real hostname only on the production project. On a preview or a
+ * branch deployment the constant resolves to nothing, so the tracked booking link built by
+ * engine.ts would point at a host that does not exist: the pill opens, the conversation runs, and
+ * the one button that matters is dead. That is the exact failure a preview is built to catch and
+ * the exact failure it would instead cause.
+ *
+ * Production is unchanged. `VERCEL_ENV` is set by the platform and is `production` only on the
+ * production deployment, so an explicit CONCIERGE_HOST still wins everywhere and nothing here can
+ * make a live client's page point at a preview.
+ */
 export function conciergeHostname(): string {
-  return (process.env.CONCIERGE_HOST || "concierge.srtagency.com").trim().toLowerCase();
+  const explicit = (process.env.CONCIERGE_HOST || "").trim().toLowerCase();
+  if (explicit) return explicit;
+
+  if (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== "production") {
+    const deployment = (process.env.VERCEL_URL || "").trim().toLowerCase();
+    if (deployment) return deployment;
+  }
+
+  return "concierge.srtagency.com";
 }
 
 /** The concierge origin, scheme included. */

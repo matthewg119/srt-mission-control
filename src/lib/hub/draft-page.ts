@@ -25,6 +25,8 @@ import {
   recordWebsiteSnapshot,
   type EvidenceRef,
 } from "@/lib/clients/page-evidence";
+import { magnetByKey, type LeadMagnet } from "@/lib/concierge/magnets";
+import { audienceForClient } from "@/lib/concierge/for-client";
 
 /**
  * One assertion the page makes, and what it rests on.
@@ -65,6 +67,16 @@ interface Grounding {
   alreadyPublished: string[];
   /** The evidence layer, numbered S1..Sn in the order the prompt prints them. */
   evidence: EvidenceRef[];
+  /**
+   * The free thing the concierge will offer on this page, when one was named before drafting.
+   *
+   * ‼️ IT IS CONTEXT, NOT A CALL TO ACTION, AND THE PROMPT SAYS SO IN THOSE WORDS. The magnet is
+   * delivered by the widget, never by the body: `answerMd` already refuses markdown links and the
+   * brief above already says a page that answers in one line and sells for six paragraphs is
+   * worth nothing. What knowing the magnet buys is the opposite of a pitch, which is knowing
+   * which question to leave standing at the end.
+   */
+  magnet: LeadMagnet | null;
 }
 
 const SYSTEM = `You write one answer page for a local business's own website.
@@ -209,11 +221,29 @@ function whyInvalid(v: unknown, valid: Set<string>): string {
   return "The payload did not match the shape.";
 }
 
+/**
+ * The magnet this page is being written toward, resolved by key.
+ *
+ * ‼️ THE AUDIENCE COMES OFF THE TENANT ROW AND IS NOT ASSUMED. `magnetByKey` is audience-scoped
+ * precisely so a chain cannot hop the firewall between the owner and patient catalogues, and
+ * passing a guessed audience here would open the hole the scoping closes. A client with no
+ * concierge row has no widget, so there is nothing to write toward and null is correct.
+ */
+async function magnetFor(clientId: string, magnetKey: string | null): Promise<LeadMagnet | null> {
+  if (!magnetKey?.trim()) return null;
+
+  const audience = await audienceForClient(clientId);
+  if (!audience) return null;
+
+  return magnetByKey(magnetKey.trim(), audience);
+}
+
 async function gather(
   clientId: string,
   question: string,
   existingBody: string | null,
-  pageId: string | null
+  pageId: string | null,
+  magnetKey: string | null
 ): Promise<Grounding | { error: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -280,6 +310,7 @@ async function gather(
     question,
     existingBody,
     evidence,
+    magnet: await magnetFor(clientId, magnetKey),
     city: (client.city as string | null) ?? (report?.city as string | null) ?? null,
     state: (client.state as string | null) ?? null,
     phone: (client.phone as string | null) ?? null,
@@ -400,6 +431,26 @@ function userPrompt(g: Grounding): string {
     lines.push(g.existingBody.slice(0, 12000));
   }
 
+  // ‼️ LAST, SO IT CANNOT BECOME THE BRIEF. Everything above decides what the page says; this
+  // only decides what it deliberately leaves open. Placed before the evidence it would read as
+  // the goal, and a model given a goal writes toward it.
+  if (g.magnet) {
+    lines.push("");
+    lines.push("WHAT THE READER IS OFFERED AFTERWARDS, and it is NOT written on this page.");
+    lines.push(`A chat widget on this page offers them: ${g.magnet.title}`);
+    lines.push(`What that gives them: ${g.magnet.promise}`);
+    lines.push("");
+    lines.push("‼️ DO NOT MENTION IT, DO NOT LINK TO IT, DO NOT WRITE A CALL TO ACTION AND DO NOT");
+    lines.push("WRITE A CLOSING PARAGRAPH ABOUT GETTING IN TOUCH. The widget does that, and a page");
+    lines.push("that sells is worth nothing to the engine that has to cite it.");
+    lines.push("");
+    lines.push("What this is for: answer the question fully and honestly, and let it end at the");
+    lines.push("point where the offer above is the obvious next thing a reader would want. Answer");
+    lines.push("the general question completely; do not do for THIS reader the specific piece of");
+    lines.push("work the offer is. If the page can only be finished by inventing something you");
+    lines.push("were not given, stop there instead. Nothing about this changes the rules above.");
+  }
+
   if (g.alreadyPublished.length) {
     lines.push("");
     lines.push("ALREADY PUBLISHED for this business, so do not answer these again:");
@@ -415,11 +466,14 @@ function userPrompt(g: Grounding): string {
  * `existingBody` is the page studio's `polish`. Without it this is unchanged and writes a page
  * from the audit and the website, which is what the board's Draft it button does. With it, the
  * model is tidying HIS draft under a prompt that forbids adding anything he did not say.
+ *
+ * `magnetKey` is the offer chosen BEFORE the page is written. It never appears in the body: it
+ * tells the model where to stop, so the thing the widget hands over is still worth having.
  */
 export async function draftPage(
   clientId: string,
   question: string,
-  opts?: { existingBody?: string | null; pageId?: string | null }
+  opts?: { existingBody?: string | null; pageId?: string | null; magnetKey?: string | null }
 ): Promise<{ ok: true; page: DraftedPage } | { ok: false; error: string }> {
   if (!question.trim()) return { ok: false, error: "No question was given." };
 
@@ -427,7 +481,8 @@ export async function draftPage(
     clientId,
     question.trim(),
     opts?.existingBody?.trim() || null,
-    opts?.pageId ?? null
+    opts?.pageId ?? null,
+    opts?.magnetKey ?? null
   );
   if ("error" in g) return { ok: false, error: g.error };
 

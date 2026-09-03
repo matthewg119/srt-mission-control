@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { listPublished } from "@/lib/hub/pages";
 import { HubIndexBody } from "@/components/hub/hub-bodies";
+import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { ReviewTool } from "./reviews/review-tool";
 
 export const revalidate = 300;
@@ -51,12 +52,21 @@ export default async function HubIndex({ params }: Props) {
 
   const { client, kind } = resolved;
 
+  // ‼️ NO CONCIERGE ON THE REVIEW TOOL, AND THAT IS WHY THIS RETURNS EARLY RATHER THAN SETTING A
+  // FLAG. The tool is regulated separately (NOT_GATED in hub/page-gate.ts) and no model may go
+  // near it. Mounting the widget in the shared layout used to put one on this page.
   if (kind === "reviews") {
     return <ReviewTool client={client} />;
   }
 
   const pages = await listPublished(client.id);
 
-  return <HubIndexBody client={client} host={host} pages={pages} />;
+  return (
+    <>
+      <HubIndexBody client={client} host={host} pages={pages} />
+      {/* The index is not one answer, so it names no magnet and the ladder decides. */}
+      <ConciergeEmbed clientId={client.id} />
+    </>
+  );
 }
 
