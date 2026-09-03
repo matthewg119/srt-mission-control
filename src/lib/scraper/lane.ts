@@ -29,13 +29,12 @@ import { parseCsv } from "./csv";
 import { filterRows } from "./filter";
 import {
   resolveCityColumn,
-  resolvePhoneColumn,
   resolveStateColumn,
   resolveCompanyColumn,
   resolveEmailColumn,
   resolveWebsiteColumn,
 } from "./rules";
-import { allKeys, countTruncatedNames, isKeyActive, splitDuplicates, type DedupeColumns } from "./dedup";
+import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
 import { resolveMxBatch } from "./mx";
 import {
   addScoreCost,
@@ -366,17 +365,6 @@ async function startBatch(event: ScraperEvent, file: SlackFile): Promise<void> {
   } catch (e) {
     await fail(batch, (e as Error).message);
   }
-}
-
-/** Which columns the dedupe reads. All optional: a file with none of them is simply all new. */
-function dedupeColumns(headers: string[]): DedupeColumns {
-  return {
-    company: resolveCompanyColumn(headers),
-    city: resolveCityColumn(headers),
-    website: resolveWebsiteColumn(headers),
-    phone: resolvePhoneColumn(headers),
-    email: resolveEmailColumn(headers),
-  };
 }
 
 /**

@@ -14,7 +14,14 @@
 // email and often no website, and an Outscraper pull carries a phone and both.
 
 import { normalizeHost } from "@/lib/company-identity";
-import { emailDomain } from "./rules";
+import {
+  emailDomain,
+  resolveCityColumn,
+  resolveCompanyColumn,
+  resolveEmailColumn,
+  resolvePhoneColumn,
+  resolveWebsiteColumn,
+} from "./rules";
 
 /** Which key caught the row. Reported verbatim in duplicates.csv. */
 export type DedupeMatch =
@@ -290,6 +297,25 @@ export const ACTIVE_KEYS: readonly KeyField[] = ["domain"];
 
 export function isKeyActive(field: KeyField): boolean {
   return ACTIVE_KEYS.includes(field);
+}
+
+/**
+ * Which columns the dedupe reads. All optional: a file with none of them is simply all new.
+ *
+ * ‼️ LIVES HERE, NEXT TO THE RULE IT FEEDS, AND NOT IN lane.ts. It was private to the lane until
+ * `seed-scraper-seen.ts` needed it, and a script cannot import lane.ts without dragging in the
+ * Slack client. Anything that derives keys off-Slack — a seed, a probe, a backfill — has to resolve
+ * columns EXACTLY the way the drop does or the keys it writes never match the ones a drop derives,
+ * and that failure is silent: the ledger fills up and every count stays zero.
+ */
+export function dedupeColumns(headers: string[]): DedupeColumns {
+  return {
+    company: resolveCompanyColumn(headers),
+    city: resolveCityColumn(headers),
+    website: resolveWebsiteColumn(headers),
+    phone: resolvePhoneColumn(headers),
+    email: resolveEmailColumn(headers),
+  };
 }
 
 export function rowKeys(raw: Record<string, string>, cols: DedupeColumns): DedupeKeys {

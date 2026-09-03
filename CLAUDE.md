@@ -4203,3 +4203,34 @@ nothing else changes.
 `handleThreadedCsv` is untouched. An Apollo export is contacts for companies its thread already
 chose, not a new list, and deduping it against the ledger its own parent just wrote would delete
 all of it.
+
+#### The ledger was seeded, so the "first drop reports ~0" line above no longer applies
+
+Wiping to zero left the next drop reporting ~0 duplicates by design — correct, and useless as a
+first test, because **a count of zero is also exactly what a broken ledger reports**. So on
+2026-09-03 the list Matthew had already pulled was seeded in:
+
+```
+bun run scripts/seed-scraper-seen.ts "C:\Users\matth\Downloads\apollo-contacts-export (2).csv" --commit
+```
+
+25 rows, 24 domain keys (`joinlineage.com` twice — Diana Ding and Sydney Lehman, one business, two
+contacts), 0 keyless. Batch `2b43c4bb-8862-442e-87da-aae2353c25d4`, labeled `seed`. Undo with
+`purge-scraper-batch.ts 2b43c4bb-8862-442e-87da-aae2353c25d4 --commit`, which is the only reason the
+keys hang off a synthetic batch row at all: purge finds keys by `first_batch_id` and nothing else.
+
+‼️ **THE SEED RUNS THE DROP'S OWN CODE.** `parseCsv → dedupeColumns → allKeys → loadKnownKeys →
+splitDuplicates → recordSeen` is `runDedupe` minus Slack. Normalizing hosts in SQL instead is the
+one mistake this lane cannot survive: a `regexp_replace` chain 99% faithful to `domainKey` writes
+keys no drop can ever match, and it fails silently, as a ledger that fills while every count stays
+zero. There is no drift to review because there is no second implementation. Anything that writes to
+`scraper_seen` from now on goes through this script or through the lane.
+
+`dedupeColumns` moved from `lane.ts` into `dedup.ts` to make that possible — a script cannot import
+`lane.ts` without dragging in the Slack client. It sits next to `rowKeys`, which is where anything
+deriving a key off-Slack will look for it.
+
+The seed batch is `status: "done"` and `slack_thread_ts: null`, both load-bearing:
+`awaiting_workflow` is in the cron's `ACTIVE_STATUSES` and the next tick would post a workflow
+picker for a file nobody dropped; a null thread is what makes purge skip its Slack step rather than
+calling `conversationsReplies` on a thread that never existed.

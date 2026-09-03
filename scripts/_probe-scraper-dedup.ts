@@ -25,6 +25,7 @@ import {
   ACTIVE_KEYS,
   companyCityKey,
   countTruncatedNames,
+  dedupeColumns,
   isKeyActive,
   editDistanceWithin,
   looksTruncated,
@@ -630,6 +631,74 @@ eq("edit distance: empty against empty", editDistanceWithin("", "", 1), 0);
   ];
   // Cities are only asked for when the name key is on; under the active rule there is nothing to ask.
   eq("allKeys: no cities asked for while the name key is off", allKeys(rows, COLS).cities, []);
+}
+
+// ── the seed path (scripts/seed-scraper-seen.ts) ────────────────────────────────────────────────
+//
+// A seed writes ledger keys off-Slack, so the thing worth asserting is that it derives them the
+// SAME WAY A DROP DOES. If it ever stops, the failure is silent — the ledger fills with keys no
+// drop can match and every duplicate count stays at zero, which is indistinguishable from a
+// correctly empty ledger. These run against the real header row and the real website strings of
+// the file that seeded it: Downloads/apollo-contacts-export (2).csv.
+
+{
+  // The resolver the seed and the drop now share, against Apollo's actual header spelling.
+  const APOLLO_HEADERS = [
+    "First Name", "Last Name", "Title", "Company Name", "Email", "Corporate Phone",
+    "Person Linkedin Url", "Website", "City", "State", "Company City", "Company Phone",
+  ];
+  const cols = dedupeColumns(APOLLO_HEADERS);
+  eq("apollo: the website column resolves to 'Website'", cols.website, "Website");
+  // ‼️ NEVER "Person Linkedin Url". `url` is deliberately absent from the candidates, and keying an
+  // Apollo export on it would make every contact a linkedin.com row, i.e. no key at all.
+  check("apollo: the LinkedIn column is not mistaken for the website", cols.website !== "Person Linkedin Url");
+  eq("apollo: company resolves", cols.company, "Company Name");
+  eq("apollo: a file with no website column reports it", dedupeColumns(["First Name", "Email"]).website, null);
+}
+
+{
+  // The real strings out of that export. Apollo writes a bare https:// origin, no www, no path.
+  eq("seed: plain origin", domainKey("https://renewyoumedical.com"), "renewyoumedical.com");
+  eq("seed: a country TLD is not truncated", domainKey("https://sculptaesthetics.ca"), "sculptaesthetics.ca");
+  eq("seed: a .clinic gTLD survives", domainKey("https://dermasmooth.clinic"), "dermasmooth.clinic");
+  eq("seed: a hyphenated host survives", domainKey("https://demma-medspa.com"), "demma-medspa.com");
+  eq("seed: a two-label ccTLD host stays whole", domainKey("https://cronosmed.ro"), "cronosmed.ro");
+  // The seeded key and the key a later drop derives must be one string, whatever the drop's file
+  // does to the spelling. This is the assertion the whole seed rests on.
+  check("seed: a seeded key matches the same site dropped later, however written",
+    new Set([
+      domainKey("https://renewyoumedical.com"),
+      domainKey("http://www.RenewYouMedical.com/"),
+      domainKey("renewyoumedical.com/contact?utm_source=apollo"),
+    ]).size === 1);
+}
+
+{
+  // Two contacts at one business is the ordinary shape of an Apollo CONTACT export — Lineage
+  // shipped Diana Ding and Sydney Lehman. One business, one key, and the second row is reported
+  // rather than written.
+  const rows = [
+    row({ company: "Lineage", website: "https://joinlineage.com" }),
+    row({ company: "Lineage", website: "https://joinlineage.com" }),
+    row({ company: "Renew You Medical Spa", website: "https://renewyoumedical.com" }),
+  ];
+  const { fresh, dupes } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
+  eq("seed: two contacts at one business write one key", fresh.length, 2);
+  eq("seed: the second contact is reported in_file", dupes.map((d) => d.matchedOn), ["in_file"]);
+  eq("seed: and it names the domain it collided on", dupes[0].matchedValue, "joinlineage.com");
+}
+
+{
+  // Re-running the seed must be a no-op, not a second write. This is the same read the script's
+  // own dry run does after a commit.
+  const rows = [row({ company: "Renew You Medical Spa", website: "https://renewyoumedical.com" })];
+  const { fresh, dupes } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ domain: ["renewyoumedical.com"] }),
+  });
+  eq("seed: a second run writes nothing", [fresh.length, dupes.length], [0, 1]);
+  eq("seed: and reports the ledger hit as a domain match", dupes[0].matchedOn, "domain");
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");
