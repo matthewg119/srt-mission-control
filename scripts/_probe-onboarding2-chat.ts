@@ -278,11 +278,20 @@ async function main(): Promise<void> {
     ((recordTool?.input_schema.properties as Record<string, { enum?: string[] }>)?.question_key
       ?.enum ?? []);
   check(
-    "record_answer's enum matches the six question keys exactly",
+    "record_answer's enum matches the question keys exactly",
     enumKeys.join(",") === QUALIFYING_QUESTIONS.map((q) => q.key).join(","),
     `tool: ${enumKeys.join(",")}`
   );
-  check("there are exactly six questions", QUALIFYING_QUESTIONS.length === 6, `got ${QUALIFYING_QUESTIONS.length}`);
+  // ‼️ THE COUNT COMES FROM THE ARRAY, NOT FROM A LITERAL. This said `=== 6` and broke the day
+  // primary_treatment was added as the seventh, along with two checks below that also counted by
+  // hand. The walk probe's header already carries this lesson for the agreement template; it
+  // applies just as much here. What is worth asserting is that the tool enum and the array agree,
+  // which the check above does, and that nothing DELETED came back, which the check below does.
+  check(
+    "there is at least one question and the tool enum matches it",
+    QUALIFYING_QUESTIONS.length > 0,
+    `${QUALIFYING_QUESTIONS.length} questions: ${QUALIFYING_QUESTIONS.map((q) => q.key).join(",")}`
+  );
   check(
     "the three deleted questions are gone",
     !QUALIFYING_QUESTIONS.some((q) => ["website", "top_objection", "top_competitor"].includes(q.key)),
@@ -295,10 +304,16 @@ async function main(): Promise<void> {
       QUALIFYING_QUESTIONS[0].options.length === 0,
     JSON.stringify(QUALIFYING_QUESTIONS[0])
   );
+  // ‼️ TWO OPEN-TEXT QUESTIONS NOW, NOT ONE. highest_margin_service and primary_treatment are both
+  // free text on purpose: each one ends up interpolated into generated copy, so a menu would put
+  // "Something else" inside a page. Everything that is NOT free text still has to offer real
+  // buttons, because a question with one option is a question with no answer.
   check(
-    "the other five offer buttons",
-    QUALIFYING_QUESTIONS.slice(1).every((q) => q.options.length >= 2),
-    JSON.stringify(QUALIFYING_QUESTIONS.slice(1).map((q) => q.options.length))
+    "every question either offers buttons or is explicitly free text",
+    QUALIFYING_QUESTIONS.every((q) => q.freeText === true || q.options.length >= 2),
+    JSON.stringify(
+      QUALIFYING_QUESTIONS.map((q) => `${q.key}:${q.freeText ? "free" : q.options.length}`)
+    )
   );
   check(
     "the booking-software question has an Other option, which the client turns into a popup",
@@ -334,15 +349,17 @@ async function main(): Promise<void> {
   );
 
   // ── THE GATE THAT MATTERS: scheduling is refused below 6 of 6 ──
+  // One short of complete, derived rather than typed, so adding a question moves the gate with it.
+  const oneShort = QUALIFYING_QUESTIONS.length - 1;
   const ctx5: ExecutorContext = {
-    row: signed, lead: fakeLead(5), ordinal: 0, bookingOffered: false, justCompleted: false, priceFlagged: false,
+    row: signed, lead: fakeLead(oneShort), ordinal: 0, bookingOffered: false, justCompleted: false, priceFlagged: false,
   };
   const at5 = JSON.parse(
     (await makeExecutor(ctx5)("offer_booking", {})).content
   ) as { offered: boolean; outstanding?: string[] };
 
   check(
-    "offer_booking is REFUSED at 5 of 6, by the executor and not by the prompt",
+    "offer_booking is REFUSED one question short, by the executor and not by the prompt",
     at5.offered === false,
     at5.offered ? "The gate is open early. A prompt-level gate is one the model argues past." : ""
   );
@@ -351,7 +368,7 @@ async function main(): Promise<void> {
     Array.isArray(at5.outstanding) && at5.outstanding.length === 1,
     JSON.stringify(at5.outstanding)
   );
-  check("ctx.bookingOffered stays false at 5 of 6", ctx5.bookingOffered === false);
+  check("ctx.bookingOffered stays false one question short", ctx5.bookingOffered === false);
 
   // ── THE NO-CLARIFYING GATE, in the executor ──
   //
@@ -769,7 +786,7 @@ async function main(): Promise<void> {
     ""
   );
   check(
-    "answeredCount refuses to call six answers complete when one is blank",
+    "answeredCount counts only the answers that were actually given",
     answeredCount(fakeLead(5)) === 5 && answeredCount(lead6) === 6,
     ""
   );
