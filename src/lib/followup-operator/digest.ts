@@ -180,6 +180,7 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
   const hot: OutreachProspectRow[] = [];
   const calls: OutreachProspectRow[] = [];
   const emails: OutreachProspectRow[] = [];
+  const withoutLoomNames: string[] = [];
 
   for (const p of due) {
     // ‼️ THE BOARD'S ONE PROMISE, RE-CHECKED RATHER THAN ASSUMED. Everybody here is supposed to
@@ -191,6 +192,11 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
     if (!(await hasLoom(p))) {
       if (!dry) await updateProspect(p.id, { paused: true, next_touch_at: null });
       result.withoutLoom = (result.withoutLoom ?? 0) + 1;
+      // ‼️ NAMED IN THE CHANNEL, NOT JUST IN A LOG. Pausing somebody is a real decision about a
+      // real person, and a console line is invisible to the person who has to live with it. If
+      // this ever fires it means a row got scheduled that should not have been, and Matthew
+      // finding out from the board beats him finding out from the silence.
+      withoutLoomNames.push(p.email);
       console.error(
         `[followup] ${p.email} was due but has no Loom on record; paused rather than posted`
       );
@@ -289,6 +295,23 @@ export async function runFollowupDigest(opts?: { dry?: boolean }): Promise<Diges
     const more = waiting.length > 12 ? `, +${waiting.length - 12} more` : "";
     blocks.push(
       ...sectionLines(`⏳ WAITING (${waiting.length})`, [`${preview}${more}`])
+    );
+  }
+
+  // A row that was due and could not be shown to have had a Loom. Should always be empty: the
+  // Loom handover is the only thing that schedules anybody. If it is not empty, something else
+  // put a row on the ladder and this is the only place that says so.
+  if (withoutLoomNames.length) {
+    blocks.push(
+      ...sectionLines(
+        `:no_entry: PAUSED, NO LOOM ON RECORD (${withoutLoomNames.length})`,
+        [
+          withoutLoomNames.slice(0, 10).join(" · ") +
+            (withoutLoomNames.length > 10 ? `, +${withoutLoomNames.length - 10} more` : ""),
+          "_This board only carries people who have had the walkthrough. These were scheduled by " +
+            "something else and have been unscheduled rather than shown._",
+        ]
+      )
     );
   }
 

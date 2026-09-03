@@ -1095,6 +1095,33 @@ async function followupTrackAction(args: {
     return NextResponse.json({ ok: true });
   }
 
+  // ‼️ CONFIRMING SOMEBODY WITH NO LOOM WOULD SEND THEM STRAIGHT INTO A HOLE. (2026-09-03)
+  //
+  // The follow-ups board carries one kind of person now: somebody who has had the walkthrough.
+  // The digest enforces that by pausing any due row it cannot prove has a Loom, and that check
+  // fails closed. So a tap here on a prospect with no Loom would mark them tracked, schedule
+  // them, and then have them silently disappear on the next run, with nothing but a console line
+  // to say why. Refusing out loud is the only honest answer.
+  //
+  // This matters most for ReachInbox campaign replies. They are the only rows that reach the
+  // unconfirmed section now that the Outlook sweep no longer enrols, and they belong to the
+  // campaign digest, which is a different card with a different job.
+  const { hasLoom } = await import("@/lib/followup-operator/loom-enrol");
+  if (!(await hasLoom(p))) {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      `:no_entry: Not tracking *${p.email}*: no Loom on record for them.\n` +
+        "The follow-ups board only carries people who have had the walkthrough, so tracking them " +
+        "here would schedule them and then drop them silently on the next run.\n" +
+        (p.source === "reachinbox"
+          ? "This is a campaign reply. Work it from the campaign card, or record a Loom for them " +
+            "and the ladder starts itself."
+          : "Record a Loom for them and the D+3 nudge and D+7 call schedule themselves.")
+    );
+    return NextResponse.json({ ok: true });
+  }
+
   // Start the ladder from the pitch that was actually sent, not from now.
   const anchor = p.first_sent_at ? new Date(p.first_sent_at) : new Date();
   const due = nextTouchAt(p.step, anchor) ?? snapTo9amET(new Date(Date.now() + 24 * 60 * 60 * 1000));
