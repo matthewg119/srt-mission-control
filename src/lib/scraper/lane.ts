@@ -29,6 +29,7 @@ import { parseCsv } from "./csv";
 import { filterRows } from "./filter";
 import {
   resolveCityColumn,
+  resolveStateColumn,
   resolveCompanyColumn,
   resolveEmailColumn,
   resolveWebsiteColumn,
@@ -77,6 +78,7 @@ import {
   formatBreakdown,
   formatCutoffEcho,
   formatCutoffRefusal,
+  formatGeoDrop,
   formatMvSummary,
   formatCutoffCard,
   formatScoreSummary,
@@ -109,14 +111,17 @@ import {
   extractFirstH1,
   extractGbpSerpFacts,
   OPTIMIZATION_KEY_ORDER,
+  presenceScore,
   readProfileUrl,
   readStoredComponents,
+  sortByPresence,
   scoreOptimization,
   type GbpSerpFacts,
   type LandingPageFacts,
   type OptimizationKey,
 } from "./gbp-audit";
 import { researchWebsite, SiteFetchError } from "@/lib/audit-engine/site-research";
+import { describeLocation, locationVerdict } from "./geo";
 import {
   applyCutoff,
   buildScoreQuery,
@@ -124,7 +129,6 @@ import {
   CUTOFF_GRAMMAR,
   parseCutoff,
   scoreSerp,
-  sortForCutoff,
   type CutoffIntent,
   type ScoredRow,
 } from "./score";
@@ -497,24 +501,75 @@ async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof par
 
   const cityColumn = resolveCityColumn(parsed.headers);
   const websiteColumn = resolveWebsiteColumn(parsed.headers);
+  const stateColumn = resolveStateColumn(parsed.headers);
+
+  // ‼️ THE UNITED STATES FILTER RUNS HERE, AT THE INSERT, NOT AT PUBLISH TIME. SRT does not sell
+  // outside the US, so a clinic in Riga is not a low-priority lead, it is not a lead, and sending it
+  // to the bottom of the file sends it to the APOLLO PILE - paying to reveal contacts at exactly the
+  // businesses that must never be called. Filtering at the insert also means no SERP and no profile
+  // lookup is ever BOUGHT for a row that was always going to be deleted, which is the same reasoning
+  // that puts the MillionVerifier gate before the upload rather than after it.
+  //
+  // ‼️ DECIDED ON THE `state` / `city` CELLS OF THIS FILE, NEVER ON THE SEARCH RESULT. Those are
+  // different questions and swapping them gets both wrong: a business with no Google profile at all
+  // can still be in Florida, and a business with a perfect profile can be in Prague. See `geo.ts`.
+  const cellsOf = (raw: Record<string, string>) => ({
+    state: stateColumn ? raw[stateColumn] : null,
+    city: cityColumn ? raw[cityColumn] : null,
+  });
+  const located = parsed.rows.map((raw, rowIndex) => ({
+    raw,
+    rowIndex,
+    verdict: locationVerdict(cellsOf(raw)),
+  }));
+
+  const foreign = located.filter((r) => r.verdict === "not_us");
+  const unlocated = located.filter((r) => r.verdict === "unknown");
+  const keep = located.filter((r) => r.verdict !== "not_us");
+
+  if (keep.length === 0) {
+    return fail(
+      batch,
+      "Every one of those " + parsed.rows.length + " rows names a place outside the United " +
+        "States, so there is nothing left to score. Nothing was queued and nothing was spent."
+    );
+  }
 
   await insertCompanyRows(
     batch.id,
-    parsed.rows.map((raw, rowIndex) => ({
-      rowIndex,
-      raw,
-      company: (raw[companyColumn] ?? "").trim() || null,
-      city: cityColumn ? (raw[cityColumn] ?? "").trim() || null : null,
-      website: websiteColumn ? (raw[websiteColumn] ?? "").trim() || null : null,
+    keep.map((r) => ({
+      rowIndex: r.rowIndex,
+      raw: r.raw,
+      company: (r.raw[companyColumn] ?? "").trim() || null,
+      city: cityColumn ? (r.raw[cityColumn] ?? "").trim() || null : null,
+      website: websiteColumn ? (r.raw[websiteColumn] ?? "").trim() || null : null,
     }))
   );
 
   await updateBatch(batch.id, {
     status: "scoring",
     workflow: "score",
-    total_rows: parsed.rows.length,
+    total_rows: keep.length,
     headers: parsed.headers,
   });
+
+  // ‼️ THE NAMES GO IN THE THREAD, NOT JUST THE COUNT, exactly as `junk.csv` prints its reasons.
+  // The one way this filter can be wrong is a genuinely American row whose export left the state
+  // cell blank and wrote a bare city, and a bare count would hide that behind a plausible number.
+  // The list is the mitigation; do not reduce it to a total.
+  if (foreign.length > 0 || unlocated.length > 0) {
+    await say(
+      batch,
+      formatGeoDrop(
+        foreign.map((r) => ({
+          company: (r.raw[companyColumn] ?? "").trim() || "(no company)",
+          where: describeLocation(cellsOf(r.raw)),
+        })),
+        unlocated.length,
+        keep.length
+      )
+    );
+  }
 
   const missing: string[] = [];
   if (!cityColumn) missing.push("city");
@@ -1038,9 +1093,45 @@ async function auditLandingPage(
   }
 }
 
-/** The rows of a scored batch, in scored.csv order: most dominant first, unmeasured last. */
+/**
+ * The rows of a scored batch, in scored.csv order: MOST PRESENCE FIRST, unmeasured last.
+ *
+ * ‼️ THE SORT KEY IS PRESENCE AS OF 2026-08-28, AND IT USED TO BE DOMINANCE. Matthew's call, and
+ * the reason is that he wanted ONE number: take the top off, leave the bottom for Apollo. The rule
+ * this replaces said the second score must never be averaged in and never be the sort key, and the
+ * reason that rule no longer bites is that presence is NOT an average of the two scores - it is one
+ * `earned / attempted` over all twelve components, so a row measured on half of them needs no
+ * invented value for the other half. See `presenceScore`.
+ *
+ * `dominance_score` and `optimization_score` are still written, still columns, and still cuttable
+ * by name. They simply no longer decide the order.
+ */
 async function scoredRowsInOrder(batchId: string): Promise<StoredRow[]> {
-  return sortForCutoff(await allRows(batchId), (r) => r.dominance_score);
+  return sortByPresence(await allRows(batchId), (r) => {
+    const presence = presenceScore(r.score_components, r.optimization_components);
+    return {
+      presence: presence.score,
+      reviewsEarned: presence.reviewsEarned,
+      dominance: r.dominance_score,
+    };
+  });
+}
+
+/** One row as every axis sees it. ONE definition, so the sort, the cutoff and the CSV agree. */
+function presenceOf(row: StoredRow) {
+  return presenceScore(row.score_components, row.optimization_components);
+}
+
+/** The cutoff's view of a stored row. Built in one place so the echo and the commit cannot drift. */
+function toCutoffRow(row: StoredRow): ScoredRow {
+  const presence = presenceOf(row);
+  return {
+    id: row.id,
+    company: row.company,
+    score: row.dominance_score,
+    optimization: row.optimization_score,
+    presence: presence.score,
+  };
 }
 
 /**
@@ -1063,6 +1154,9 @@ async function publishScores(batch: BatchRow): Promise<void> {
     const scores = measured.map((r) => r.dominance_score as number);
     const optimized = rows.filter((r) => r.optimization_score !== null);
     const optScores = optimized.map((r) => r.optimization_score as number);
+    const presences = rows
+      .map((r) => presenceOf(r).score)
+      .filter((v): v is number => v !== null);
     await say(
       batch,
       formatScoreSummary({
@@ -1073,6 +1167,10 @@ async function publishScores(batch: BatchRow): Promise<void> {
         }),
         scored: measured.length,
         unmeasured: rows.length - measured.length,
+        presenceScored: presences.length,
+        presenceUnmeasured: rows.length - presences.length,
+        presenceHigh: presences.length ? Math.max(...presences) : null,
+        presenceLow: presences.length ? Math.min(...presences) : null,
         costUsd: Number(batch.score_cost_usd ?? 0),
         high: scores.length ? Math.max(...scores) : null,
         low: scores.length ? Math.min(...scores) : null,
@@ -1116,12 +1214,17 @@ function toScoredCsvRow(row: StoredRow): ScoredCsvRow {
     // measured: ..." is reserved for a component that was actually asked and could not answer.
     if (c) notes[key] = c.note;
   }
+  const presence = presenceOf(row);
   return {
     raw: row.raw,
     score: row.dominance_score,
     measured: readMeasured(row),
     optimization: row.optimization_score,
     optimizationMeasured: readOptimizationMeasured(row),
+    // Computed from the same two blobs the sort read, in the same function, so the rank and the
+    // number the rank claims to count cannot come apart.
+    presence: presence.score,
+    presenceMeasured: presence.score === null ? "not measured" : presence.measured,
     optNotes: notes,
   };
 }
@@ -1165,13 +1268,7 @@ async function handleThreadText(event: ScraperEvent): Promise<boolean> {
  */
 async function proposeCutoff(batch: BatchRow, intent: CutoffIntent, spoken: string): Promise<void> {
   const rows = await scoredRowsInOrder(batch.id);
-  const scored: ScoredRow[] = rows.map((r) => ({
-    id: r.id,
-    company: r.company,
-    score: r.dominance_score,
-    optimization: r.optimization_score,
-  }));
-  const plan = applyCutoff(scored, intent);
+  const plan = applyCutoff(rows.map(toCutoffRow), intent);
 
   const ts = await say(batch, formatCutoffEcho(plan, spoken));
   await updateBatch(batch.id, { score_cutoff: spoken, cutoff_confirm_ts: ts });
@@ -1192,15 +1289,7 @@ async function commitCutoff(batch: BatchRow): Promise<void> {
   const headers = batch.headers ?? [];
   const rows = await scoredRowsInOrder(batch.id);
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const plan = applyCutoff(
-    rows.map((r) => ({
-      id: r.id,
-      company: r.company,
-      score: r.dominance_score,
-      optimization: r.optimization_score,
-    })),
-    intent
-  );
+  const plan = applyCutoff(rows.map(toCutoffRow), intent);
 
   const toCsvRows = (ids: ScoredRow[]) =>
     ids

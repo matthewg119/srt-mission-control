@@ -20,7 +20,22 @@ import { supabaseAdmin } from "../src/lib/db";
 import { runGate, hashBody } from "../src/lib/hub/page-gate";
 import { recordSource } from "../src/lib/clients/page-evidence";
 
-const DEFAULT_CLIENT = "a11e0bda-46e9-4d90-94ff-54e47c244f23"; // SRT Agency LLC
+// ‼️ RESOLVED BY SLUG, NOT PINNED TO AN ID. This used to hold the literal
+// a11e0bda-46e9-4d90-94ff-54e47c244f23, and that row does not exist any more: SRT Agency was
+// re-onboarded and `clients.slug` is the unique provisioning claim, so a re-onboard produces a
+// NEW id under the SAME slug. A pinned id therefore rots silently and every check in this probe
+// reports missing data rather than a wrong id.
+const DEFAULT_SLUG = "srt-agency-llc";
+
+async function defaultClientId(): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("id")
+    .eq("slug", DEFAULT_SLUG)
+    .maybeSingle();
+  if (!data) throw new Error(`no clients row with slug ${DEFAULT_SLUG}; pass a client id instead`);
+  return data.id as string;
+}
 const WITH_MODEL = process.argv.includes("--model");
 
 let failures = 0;
@@ -93,7 +108,8 @@ const CASES: Case[] = [
 ];
 
 async function main(): Promise<void> {
-  const clientId = process.argv.find((a) => a.includes("-") && a.length === 36) ?? DEFAULT_CLIENT;
+  const passed = process.argv.find((a) => a.includes("-") && a.length === 36);
+  const clientId = passed ?? (await defaultClientId());
 
   const { data: client } = await supabaseAdmin
     .from("clients")

@@ -198,14 +198,14 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
 
   // ‼️ TWO DOCUMENTS, ONE RUNNER, AND THE SECOND ONE IS FILED AGAINST A DIFFERENT STEP.
   //
-  // The call sheet is step 18. generateCallQuestions writes step 20's closing questions and files
+  // This runner is `call_sheet`. generateCallQuestions writes `call_held`'s closing questions and files
   // them against `call_held`, because they are built from the SAME reports and there is no point
   // spending a second pass over them. No AUTO_RUNNERS key is added: `call_held` is a manual step
   // and giving it a runner would put it in unreachableAutoSteps()'s sights for no reason.
   //
   // ‼️ A FAILURE IN THE SECOND HALF NEVER FAILS THE FIRST. The call sheet is what the call
   // cannot happen without; the questions are what makes it a better call. generateCallQuestions
-  // posts nothing to Slack on purpose (it would create step 20's anchor two steps early and break
+  // posts nothing to Slack on purpose (it would create `call_held`'s anchor two steps early and break
   // one-anchor-at-a-time), so the only place its outcome can be reported is this note.
   call_sheet: async (clientId) => {
     const { generateCallSheet } = await import("./call-sheet");
@@ -219,7 +219,7 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
 
     const note = questions.ok
       ? questions.note
-      : `:warning: The closing questions for step 20 were not generated: ${questions.error}`;
+      : `:warning: The closing questions for \`call_held\` were not generated: ${questions.error}`;
 
     return { ...sheet, note };
   },
@@ -267,12 +267,33 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return checkHubResolving(clientId);
   },
 
+  // Creates concierge_configs and posts the demo link. Produces no bytes, like
+  // review_tool_preview. Idempotent: a re-run re-seeds the embed allowlist and deliberately
+  // touches neither `enabled` nor the booking config, so re-running it on a LIVE client cannot
+  // take their widget down. See the header of concierge-setup.ts.
+  concierge_preview: async (clientId) => {
+    const { provisionConcierge } = await import("../concierge-setup");
+    return provisionConcierge(clientId);
+  },
+
   review_tool_preview: async (clientId) => {
     // Produces no bytes. It verifies that the preview is genuinely themed and posts the URL,
     // and refuses when the theme is unconfirmed — which is the only way "themed to match" can
     // be false. See review-preview.ts.
     const { verifyReviewToolPreview } = await import("../review-preview");
     return verifyReviewToolPreview(clientId);
+  },
+
+  // ‼️ THE AUTO HALF MINTS A KEY AND NOTHING ELSE. It deliberately does NOT try to install the
+  // tag: the site belongs to the client, and a step that claimed to have installed something on
+  // somebody else's server would be the worst kind of false green. The manual half is a person
+  // pasting it, and the verifier waits for a real session to arrive rather than for a claim.
+  //
+  // There is no runner for `self_report_field` and there must not be one. That work happens
+  // inside Vagaro or Boulevard or whatever the clinic runs, which nothing here can reach.
+  tracking_installed: async (clientId) => {
+    const { provisionPixelKey } = await import("../tracking-setup");
+    return provisionPixelKey(clientId);
   },
 };
 

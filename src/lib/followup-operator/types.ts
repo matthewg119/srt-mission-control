@@ -71,7 +71,7 @@ export interface OutreachProspectRow {
   slack_thread_ts: string | null;
 
   confirmed: boolean;
-  source: "audit" | "outlook_sweep" | "manual";
+  source: "audit" | "outlook_sweep" | "manual" | "reachinbox";
   paused: boolean;
 
   pending_drafts: PendingDraft[] | null;

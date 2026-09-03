@@ -42,7 +42,21 @@ export const COMPONENT_WEIGHTS: Record<ScoreComponentKey, number> = {
   instagram: 15,
 };
 
-export const COMPONENT_COUNT = Object.keys(COMPONENT_WEIGHTS).length;
+/**
+ * Fixed order. `presenceScore` reads it to walk a stored `score_components` blob, the same job
+ * `OPTIMIZATION_KEY_ORDER` does on the other side, so the two halves of the presence denominator
+ * are enumerated from one list each rather than from `Object.keys` of whatever was stored.
+ */
+export const SCORE_KEY_ORDER: ScoreComponentKey[] = [
+  "knowledge_graph",
+  "reviews",
+  "rating",
+  "own_domain",
+  "directories",
+  "instagram",
+];
+
+export const COMPONENT_COUNT = SCORE_KEY_ORDER.length;
 
 /** Reviews normalize against this. 500 or more is as dominant as this one signal gets. */
 const REVIEW_CEILING = 500;
@@ -444,26 +458,42 @@ export function scoreSerp(payload: SerpPayload, input: ScoreInput): ScoreResult 
 export interface ScoredRow {
   id: string;
   company: string | null;
+  /**
+   * The dominance score. Still a real axis (`score > 60` cuts on it) and still a visible column, it
+   * is simply no longer what the file is SORTED by. See `presence`.
+   */
   score: number | null;
   /**
-   * The GBP optimization score, read only by the `optimization > 70` cuts.
+   * The GBP optimization score, read only by the `optimization > 70` cuts. A visible column, never
+   * the sort key.
    *
    * ‼️ OPTIONAL, AND undefined READS THE SAME AS null: unmeasured, and an unmeasured row is never
-   * dropped. Same rule the dominance axis already applies, and it means a caller that only ever
-   * cuts on dominance does not have to carry a field it does not use.
-   *
-   * ‼️ IT IS NEVER THE SORT KEY. `sortForCutoff` reads `score`, the rank column reads `score`, and
-   * an optimization cut takes the file in whatever order dominance already put it in.
+   * dropped. Same rule every axis here applies, and it means a caller that only ever cuts on one
+   * axis does not have to carry the fields it does not use.
    */
   optimization?: number | null;
+  /**
+   * ONE number over both scores, and THE SORT KEY as of 2026-08-28.
+   *
+   * ‼️ IT IS NOT AN AVERAGE OF THE OTHER TWO, and that distinction is the only reason it is
+   * allowed to exist. It is a single `earned / attempted` over all TWELVE components, so a row
+   * measured on six of them is scored out of six and no value has to be invented for the half that
+   * could not be looked at. Averaging two scores would force exactly that invention.
+   * `presenceScore` in `gbp-audit.ts` computes it from the two stored component blobs, so the
+   * number can never contradict its own parts. Same optional/undefined rule as `optimization`.
+   */
+  presence?: number | null;
 }
 
 export type CutoffIntent =
+  // The prefix forms. They cut the TOP OF THE FILE, and the top of the file is presence.
   | { kind: "drop_first"; n: number }
   | { kind: "drop_top_pct"; pct: number }
   | { kind: "keep_bottom_pct"; pct: number }
-  | { kind: "drop_above_score"; score: number }
   | { kind: "keep_n"; n: number }
+  // The predicate forms. Each NAMES its own column and cuts on that column alone.
+  | { kind: "drop_presence_above"; score: number }
+  | { kind: "drop_above_score"; score: number }
   | { kind: "drop_optimization_above"; score: number }
   | { kind: "drop_optimization_below"; score: number };
 
@@ -472,12 +502,18 @@ export type CutoffIntent =
  * cannot drift apart the way a prose list beside a regex always eventually does.
  */
 export const CUTOFF_GRAMMAR = [
-  "`drop the first 10`   drop the top 10 rows of the file, the 10 most dominant",
+  "the file is sorted by PRESENCE, most first, so these four cut off the top of it:",
+  "`drop the first 10`   drop the top 10 rows, the 10 with the most presence",
   "`drop 10`             the same thing",
-  "`top 20%`             drop the 20 percent most dominant",
-  "`bottom 30%`          keep the 30 percent least dominant",
-  "`score > 60`          drop everything scoring above 60",
-  "`keep 120`            keep the 120 least dominant",
+  "`top 20%`             drop the 20 percent with the most presence",
+  "`bottom 30%`          keep the 30 percent with the least presence",
+  "`keep 120`            keep the 120 with the least presence",
+  "",
+  "and these name their own column, wherever those rows sit in the file:",
+  "`presence > 70`       drop everything ABOVE 70 on presence",
+  "`presence < 40`       KEEP everything below 40 on presence",
+  "`score > 60`          drop everything ABOVE 60 on dominance",
+  "`score < 40`          KEEP everything below 40 on dominance",
   "`optimization > 70`   drop everything ABOVE 70 on optimization",
   "`optimization < 40`   drop everything BELOW 40 on optimization",
 ].join("\n");
@@ -503,6 +539,16 @@ export function parseCutoff(input: string): CutoffIntent | null {
   // percentage is the more specific reading of it.
   if ((m = /\btop\s+(\d+)\s*%/.exec(text))) return { kind: "drop_top_pct", pct: Number(m[1]) };
   if ((m = /\bbottom\s+(\d+)\s*%/.exec(text))) return { kind: "keep_bottom_pct", pct: Number(m[1]) };
+
+  // The PRESENCE axis, which is the one the file is sorted by. Its two forms read the same way the
+  // dominance forms always have: `>` drops above, `<` keeps below. That pairing is deliberate -
+  // presence took over dominance's job as the survive/delete axis, so it inherits its grammar too.
+  if ((m = /\b(?:presence|visibility)\s*(?:>|above|over)\s*(\d+)/.exec(text))) {
+    return { kind: "drop_presence_above", score: Number(m[1]) };
+  }
+  if ((m = /\b(?:presence|visibility)\s*(?:<|under|below)\s*(\d+)/.exec(text))) {
+    return { kind: "drop_presence_above", score: Number(m[1]) - 1 };
+  }
 
   // ‼️ THE OPTIMIZATION AXIS IS READ FIRST, AND BOTH OF ITS FORMS ARE "DROP", WHICH IS THE OPPOSITE
   // OF HOW THE DOMINANCE AXIS READS ITS `<` FORM. `score < 40` means KEEP below 40 (it is the same
@@ -548,67 +594,124 @@ export interface CutoffPlan {
   /**
    * Which number this cut was made on.
    *
-   * ‼️ THE ECHO CARD MUST PRINT IT. Two numbers now sit in one file and the thread is the only place
-   * a person sees which one is about to delete rows. "Dropping 34 rows" is the same sentence for
-   * both axes and means opposite things, so the axis is carried on the PLAN rather than re-derived
-   * from the spoken text, which a reword would break.
+   * ‼️ THE ECHO CARD MUST PRINT IT, ON EVERY FORM INCLUDING THE PREFIX ONES. THREE numbers now sit
+   * in one file. "Dropping 34 rows" is the same sentence for all three and means three different
+   * things, so the axis is carried on the PLAN rather than re-derived from the spoken text, which a
+   * reword would break.
    */
-  axis: "dominance" | "optimization";
+  axis: "presence" | "dominance" | "optimization";
+  /**
+   * Whether the dropped pile is the HEAD of the file or rows scattered through it.
+   *
+   * ‼️ CARRIED, NOT RE-DERIVED. The echo card says "rows 1 to N" for one shape and "scattered
+   * through the file" for the other, and those two sentences are a lie about each other. Working it
+   * out again in the formatter, from the spoken text or by comparing the piles, is a second place
+   * for the answer to live and therefore a place for it to disagree.
+   */
+  shape: "prefix" | "predicate";
   /** The dropped rows, in file order. */
   dropped: ScoredRow[];
   /** Everything else, in file order, including every unmeasured row. */
   kept: ScoredRow[];
-  /** How many kept rows carry no score. Printed on the echo card, never hidden. */
+  /**
+   * How many kept rows carry no score ON THE CUT AXIS. Printed on the echo card, never hidden.
+   * Counted on the axis the cut was made on, or "not measured" would name a different column from
+   * the one that just deleted rows.
+   */
   keptUnmeasured: number;
   /** The score range of the dropped pile, for the echo. Null when nothing measured was dropped. */
   droppedHigh: number | null;
   droppedLow: number | null;
 }
 
+/** Which column each intent reads. One list, so the plan and the echo cannot disagree. */
+function axisOf(intent: CutoffIntent): CutoffPlan["axis"] {
+  switch (intent.kind) {
+    case "drop_above_score":
+      return "dominance";
+    case "drop_optimization_above":
+    case "drop_optimization_below":
+      return "optimization";
+    default:
+      return "presence";
+  }
+}
+
+/**
+ * The value an intent cuts on, for one row.
+ *
+ * ‼️ ON `presence`, AND ONLY ON `presence`, `undefined` AND `null` MEAN DIFFERENT THINGS. `null` is
+ * "presence was computed and not one of the twelve components could be measured", which is
+ * unmeasured and is never dropped. `undefined` is "this caller does not carry presence at all",
+ * which is a caller written before the axis existed, and for it the top of the file is still
+ * dominance - so it falls back to `score` rather than reading every row as unmeasured and cutting
+ * nothing. `optimization` keeps the simpler rule, where both read as unmeasured, because no caller
+ * ever sorted by it.
+ *
+ * The lane always passes `presence` explicitly, as `number | null`, so it never takes the fallback.
+ */
+function valueOn(row: ScoredRow, axis: CutoffPlan["axis"]): number | null {
+  if (axis === "dominance") return row.score;
+  if (axis === "optimization") return row.optimization ?? null;
+  return row.presence === undefined ? row.score : row.presence;
+}
+
 /**
  * Turn an intent into an exact split of an already-sorted list.
  *
- * ‼️ `rows` MUST ALREADY BE IN scored.csv ORDER (`sortForCutoff`). This takes the order as given
+ * ‼️ `rows` MUST ALREADY BE IN scored.csv ORDER (`sortByPresence`). This takes the order as given
  * rather than re-sorting, so the pile it describes is byte for byte the pile he read.
  *
  * ‼️ A PERCENTAGE IS A PERCENTAGE OF THE MEASURED ROWS. Counting the unmeasured into a "top 20%"
  * would make the cut depend on how many lookups happened to fail, which is not a fact about any
  * business on the list.
  *
- * ‼️ THE UNMEASURED ALWAYS LAND IN THE KEPT PILE. Scraping a company unnecessarily costs one Apollo
- * credit; discarding one loses a lead. The count is stated on the echo card rather than buried.
+ * ‼️ THE UNMEASURED ALWAYS LAND IN THE KEPT PILE, ON EVERY AXIS. Scraping a company unnecessarily
+ * costs one Apollo credit; discarding one loses a lead. The count is stated on the echo card rather
+ * than buried.
  */
 export function applyCutoff(rows: ScoredRow[], intent: CutoffIntent): CutoffPlan {
-  // ‼️ AN OPTIMIZATION CUT IS A PREDICATE, NOT A PREFIX, and it cannot be anything else. The file is
-  // sorted by DOMINANCE, so the rows scoring above 70 on optimization are scattered through it and
-  // `rows.slice(0, n)` would drop a contiguous block of the most dominant businesses instead. Both
-  // piles keep file order, so the survivor list still reads in the order he was looking at.
-  if (intent.kind === "drop_optimization_above" || intent.kind === "drop_optimization_below") {
-    const above = intent.kind === "drop_optimization_above";
+  const axis = axisOf(intent);
+
+  // ‼️ EVERY `>` / `<` FORM IS A PREDICATE, NOT A PREFIX, AND `score > 60` HAD TO JOIN THEM WHEN
+  // PRESENCE BECAME THE SORT KEY. It used to count the matching rows and slice that many off the
+  // front, which was correct only because the file was sorted by the very column it named. The file
+  // is now sorted by PRESENCE, so the rows scoring above 60 on dominance are scattered through it
+  // and a slice would have silently deleted a contiguous block of the wrong businesses - the same
+  // failure shape the optimization axis was written against, arriving through a form that used to
+  // be safe. Both piles keep file order, so the survivor list still reads in the order he saw.
+  if (
+    intent.kind === "drop_presence_above" ||
+    intent.kind === "drop_above_score" ||
+    intent.kind === "drop_optimization_above" ||
+    intent.kind === "drop_optimization_below"
+  ) {
+    const below = intent.kind === "drop_optimization_below";
     const hits = (r: ScoredRow): boolean => {
-      const value = r.optimization ?? null;
-      // Unmeasured is never dropped, exactly as on the dominance axis. Nobody entered that contest.
+      const value = valueOn(r, axis);
+      // Unmeasured is never dropped, on any axis. Nobody entered that contest.
       if (value === null) return false;
-      return above ? value > intent.score : value < intent.score;
+      return below ? value < intent.score : value > intent.score;
     };
     const dropped = rows.filter(hits);
     const kept = rows.filter((r) => !hits(r));
     const droppedScores = dropped
-      .map((r) => r.optimization ?? null)
+      .map((r) => valueOn(r, axis))
       .filter((s): s is number => s !== null);
     return {
-      axis: "optimization",
+      axis,
+      shape: "predicate",
       dropped,
       kept,
-      // Counted on the CUT axis, not on dominance: this echo is about optimization, so "not
-      // measured" has to mean the number the cut was made on.
-      keptUnmeasured: kept.filter((r) => (r.optimization ?? null) === null).length,
+      keptUnmeasured: kept.filter((r) => valueOn(r, axis) === null).length,
       droppedHigh: droppedScores.length ? Math.max(...droppedScores) : null,
       droppedLow: droppedScores.length ? Math.min(...droppedScores) : null,
     };
   }
 
-  const measured = rows.filter((r) => r.score !== null);
+  // The prefix forms, which cut the top of the file. That is the presence axis, because that is
+  // what the file is sorted by; see `sortByPresence`.
+  const measured = rows.filter((r) => valueOn(r, axis) !== null);
 
   let dropCount: number;
   switch (intent.kind) {
@@ -624,9 +727,6 @@ export function applyCutoff(rows: ScoredRow[], intent: CutoffIntent): CutoffPlan
     case "keep_n":
       dropCount = rows.length - intent.n;
       break;
-    case "drop_above_score":
-      dropCount = measured.filter((r) => (r.score as number) > intent.score).length;
-      break;
   }
 
   // Only ever cut into the measured head of the file. Clamping here is what stops "drop 5000" on a
@@ -635,13 +735,16 @@ export function applyCutoff(rows: ScoredRow[], intent: CutoffIntent): CutoffPlan
 
   const dropped = rows.slice(0, dropCount);
   const kept = rows.slice(dropCount);
-  const droppedScores = dropped.map((r) => r.score).filter((s): s is number => s !== null);
+  const droppedScores = dropped
+    .map((r) => valueOn(r, axis))
+    .filter((s): s is number => s !== null);
 
   return {
-    axis: "dominance",
+    axis,
+    shape: "prefix",
     dropped,
     kept,
-    keptUnmeasured: kept.filter((r) => r.score === null).length,
+    keptUnmeasured: kept.filter((r) => valueOn(r, axis) === null).length,
     droppedHigh: droppedScores.length ? Math.max(...droppedScores) : null,
     droppedLow: droppedScores.length ? Math.min(...droppedScores) : null,
   };

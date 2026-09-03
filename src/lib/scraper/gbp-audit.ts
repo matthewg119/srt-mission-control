@@ -17,7 +17,7 @@
 // already winning", which is dominance alone. This one is a COLUMN beside it.
 
 import type { SerpPayload } from "./score";
-import { flattenSerpItems } from "./score";
+import { flattenSerpItems, SCORE_KEY_ORDER, sortForCutoff } from "./score";
 
 // ── the components ──────────────────────────────────────────────────────────────────────────────
 
@@ -69,16 +69,48 @@ export const OPTIMIZATION_COMPONENT_COUNT = OPTIMIZATION_KEY_ORDER.length;
 /** Plain English gaps, for the summary. "additional_categories" means nothing to anyone reading it cold. */
 export const OPTIMIZATION_LABEL: Record<OptimizationKey, string> = {
   primary_category: "no primary category set",
-  additional_categories: "fewer than 4 additional categories",
-  description_keywords: "description does not name the category and the city",
-  photos: "fewer than 5 photos",
-  services: "fewer than 3 services with a description",
-  landing_page: "landing page does not name the category and city",
+  additional_categories: "too few additional categories",
+  description_keywords: "description is thin on the category and the city",
+  photos: "too few photos",
+  services: "too few services described with their keywords",
+  landing_page: "landing page title and h1 are thin on the category and city",
 };
 
-const MIN_ADDITIONAL_CATEGORIES = 4;
-const MIN_PHOTOS = 5;
-const MIN_DESCRIBED_SERVICES = 3;
+// -- the ceilings, where a component stops paying ------------------------------------------------
+//
+// ‼️ THESE ARE CEILINGS, NOT THRESHOLDS, AND THE DIFFERENCE IS THE WHOLE POINT OF THIS REWRITE.
+// Every one of them used to be a pass mark: 4 additional categories earned the full 20 and 3 earned
+// zero, 5 photos earned the full 15 and 4 earned zero. Matthew's rule is "the more they have, the
+// higher they score", so a component now pays `min(1, have / ceiling)` of its weight and a business
+// with 9 photos is no longer indistinguishable from one with none.
+//
+// The numbers he named are the TARGETS and they sit inside these ceilings: 4-5 secondary categories,
+// 5-10 photos, 3 described services. Full marks land at the top of each range, so hitting the target
+// is most of the points and beating it is the rest.
+const FULL_ADDITIONAL_CATEGORIES = 5;
+const FULL_PHOTOS = 10;
+const FULL_SERVICE_POINTS = 5;
+
+/**
+ * A described service with the category in its text is worth a full point; one with a description
+ * that never names what it is is worth half.
+ *
+ * "3 service descriptions with proper keywords, the more descriptions with more keywords the higher
+ * score" is two axes in one sentence, and this is how they combine without needing two components.
+ */
+const SERVICE_KEYWORD_POINT = 1;
+const SERVICE_BARE_POINT = 0.5;
+
+/**
+ * How far below full a component has to fall before the batch summary calls it a GAP.
+ *
+ * ‼️ A GRADUATED SCORE NEEDS THIS AND A PASS/FAIL ONE DID NOT. `countGaps` used to ask
+ * `earned < weight`, which was exactly "did they fail the threshold". Asked of a graduated
+ * component the same question means "is this anything short of perfect", so 9-photos-out-of-10
+ * would be reported down the phone as a photo gap. The line this feeds writes the campaign, so it
+ * has to mean a real hole.
+ */
+const GAP_FRACTION = 0.6;
 
 /**
  * Three things a task_get cannot see, printed in the thread so their absence is never mistaken for
@@ -271,6 +303,37 @@ export function containsCategory(text: string | null | undefined, category: stri
   const specific = category.filter((t) => !GENERIC_CATEGORY_TOKENS.has(t));
   const needles = specific.length > 0 ? specific : category;
   return needles.some((t) => words.has(t));
+}
+
+/**
+ * HOW MUCH of the category this text carries, rather than whether it carries any.
+ *
+ * ‼️ THE BOOLEAN `containsCategory` STAYS AND IS STILL THE LOOSE DIRECTION. This is the graduated
+ * reading of the same question, for the components Matthew asked to grade by richness: "the more
+ * keywords the higher score". One token still earns something, all of them earn everything, and the
+ * two functions agree at the edges — `hit > 0` is exactly `containsCategory`, which is what stops
+ * them drifting into two different opinions about the same copy.
+ *
+ * Generic tokens are excluded the same way and for the same reason, with the same fallback when a
+ * category is generic all the way through ("Service Center"), or such a business would be scored
+ * against a needle list of length zero.
+ */
+export function categoryCoverage(
+  text: string | null | undefined,
+  category: string[]
+): { hit: number; total: number } {
+  if (category.length === 0) return { hit: 0, total: 0 };
+  const specific = category.filter((t) => !GENERIC_CATEGORY_TOKENS.has(t));
+  const needles = specific.length > 0 ? specific : category;
+  const words = new Set(tokenize(text));
+  if (words.size === 0) return { hit: 0, total: needles.length };
+  return { hit: needles.filter((t) => words.has(t)).length, total: needles.length };
+}
+
+/** `min(1, have / ceiling)` of a weight, rounded. The one curve every graduated component uses. */
+function graded(weight: number, have: number, ceiling: number): number {
+  if (ceiling <= 0) return 0;
+  return Math.round(weight * Math.min(1, Math.max(0, have) / ceiling));
 }
 
 /**
@@ -613,6 +676,15 @@ function clip(text: string, max: number): string {
  *
  * ‼️ EACH SCORE KEEPS ITS OWN DENOMINATOR. Nothing here is merged with dominance. A business whose
  * profile call failed has a null optimization_score and a completely untouched dominance_score.
+ * `presenceScore` combines the two AFTERWARDS, over one denominator, without either of them
+ * changing.
+ *
+ * ‼️ FIVE OF THE SIX ARE GRADUATED AS OF 2026-08-29, AND THEY USED TO BE PASS MARKS. Matthew's
+ * rule, in his words: more categories, more keywords, more photos, more described services, more of
+ * the title and h1 filled in, all score higher. A threshold answers "did they clear the bar" and he
+ * is not sorting a list to find who cleared a bar, he is skimming the best-configured profiles off
+ * the top. `primary_category` is the one that stays boolean, because a business has one primary
+ * category or it has none and there is no "more" to have.
  */
 export function scoreOptimization(input: OptimizationInput): OptimizationResult {
   const W = OPTIMIZATION_WEIGHTS;
@@ -657,10 +729,13 @@ export function scoreOptimization(input: OptimizationInput): OptimizationResult 
         return component(
           W.additional_categories,
           true,
-          list.length >= MIN_ADDITIONAL_CATEGORIES ? W.additional_categories : 0,
+          graded(W.additional_categories, list.length, FULL_ADDITIONAL_CATEGORIES),
           list.length === 0
             ? "no additional categories"
-            : list.length + " additional categor" + (list.length === 1 ? "y" : "ies")
+            : list.length + " additional categor" + (list.length === 1 ? "y" : "ies") +
+              (list.length >= FULL_ADDITIONAL_CATEGORIES
+                ? ", full marks"
+                : ", " + FULL_ADDITIONAL_CATEGORIES + " for full marks")
         );
       })();
 
@@ -680,19 +755,25 @@ export function scoreOptimization(input: OptimizationInput): OptimizationResult 
       : cityToks.length === 0
         ? unmeasured(W.description_keywords, "no city to look for")
         : (() => {
-            const hasCategory = containsCategory(description, catTokens);
+            // ‼️ GRADUATED ON HOW MUCH OF THE CATEGORY IT CARRIES, PLUS THE CITY AS ONE MORE
+            // KEYWORD. "Keyword rich, the more keywords the higher score" cannot be a boolean, and
+            // the old one was: a description saying "medical spa in Ashland" and one saying "spa"
+            // scored the same 15. The city stays worth exactly one keyword rather than half the
+            // component, because a category is usually two or three words and pricing the city at
+            // half would make naming the town worth more than describing the business.
+            const cover = categoryCoverage(description, catTokens);
             const hasCity = containsCity(description, cityToks);
+            const hit = cover.hit + (hasCity ? 1 : 0);
+            const total = cover.total + 1;
             return component(
               W.description_keywords,
               true,
-              hasCategory && hasCity ? W.description_keywords : 0,
-              hasCategory && hasCity
-                ? "description names the category and city"
-                : hasCategory
-                  ? "description names the category, not the city"
-                  : hasCity
-                    ? "description names the city, not the category"
-                    : "description names neither category nor city"
+              graded(W.description_keywords, hit, total),
+              hit === 0
+                ? "description names neither category nor city"
+                : hit + " of " + total + " keywords: " +
+                  (cover.hit > 0 ? cover.hit + " category" : "no category") +
+                  ", " + (hasCity ? "city" : "no city")
             );
           })();
 
@@ -709,8 +790,9 @@ export function scoreOptimization(input: OptimizationInput): OptimizationResult 
       : component(
           W.photos,
           true,
-          totalPhotos >= MIN_PHOTOS ? W.photos : 0,
-          totalPhotos + (totalPhotos === 1 ? " photo" : " photos")
+          graded(W.photos, totalPhotos, FULL_PHOTOS),
+          totalPhotos + (totalPhotos === 1 ? " photo" : " photos") +
+            (totalPhotos >= FULL_PHOTOS ? ", full marks" : ", " + FULL_PHOTOS + " for full marks")
         );
 
   // 5. Services carrying a description. An empty array IS a measured zero: the profile came back and
@@ -720,14 +802,32 @@ export function scoreOptimization(input: OptimizationInput): OptimizationResult 
     serviceList === null
       ? unmeasured(W.services, sawProfile ? "no services field on the profile" : "no profile match")
       : (() => {
-          const described = serviceList.filter((s) => (s.snippet ?? "").trim().length > 0).length;
+          // ‼️ TWO AXES IN ONE COMPONENT, WHICH IS WHAT WAS ASKED FOR: how many services carry a
+          // description, and whether those descriptions say what the service IS. A described
+          // service naming the category is worth a full point and a bare one is worth half, so
+          // "33 services listed and none described" and "3 described with the keywords in them"
+          // stop landing on the same number.
+          //
+          // ‼️ WITH NO CATEGORY KNOWN, EVERY DESCRIBED SERVICE IS WORTH A FULL POINT. Halving them
+          // would charge the business for a lookup WE could not make, which is the denominator rule
+          // arriving one level down: we cannot read the keywords, so we do not grade the keywords.
+          const describedList = serviceList.filter((x) => (x.snippet ?? "").trim().length > 0);
+          const canReadKeywords = catTokens.length > 0;
+          const keyworded = canReadKeywords
+            ? describedList.filter((x) => containsCategory(x.snippet, catTokens)).length
+            : 0;
+          const points = canReadKeywords
+            ? keyworded * SERVICE_KEYWORD_POINT +
+              (describedList.length - keyworded) * SERVICE_BARE_POINT
+            : describedList.length * SERVICE_KEYWORD_POINT;
           return component(
             W.services,
             true,
-            described >= MIN_DESCRIBED_SERVICES ? W.services : 0,
+            graded(W.services, points, FULL_SERVICE_POINTS),
             serviceList.length === 0
               ? "no services listed"
-              : described + " of " + serviceList.length + " services described"
+              : describedList.length + " of " + serviceList.length + " described" +
+                (canReadKeywords ? ", " + keyworded + " with the category in them" : "")
           );
         })();
 
@@ -744,22 +844,31 @@ export function scoreOptimization(input: OptimizationInput): OptimizationResult 
         : cityToks.length === 0
           ? unmeasured(W.landing_page, "no city to look for")
           : (() => {
-              const titleOk =
-                containsCategory(input.page.title, catTokens) &&
-                containsCity(input.page.title, cityToks);
-              const h1Ok =
-                containsCategory(input.page.h1, catTokens) && containsCity(input.page.h1, cityToks);
+              // ‼️ FOUR CHECKS, GRADUATED, RATHER THAN ONE ALL-OR-NOTHING. Matthew asked for this
+              // to be "extra score" for having the category and city in the title tag AND the h1,
+              // and the four are what that sentence actually contains. A page whose title is right
+              // and whose h1 forgot the city used to score zero, identically to a page that names
+              // neither anywhere — which reported a business that had done three quarters of the
+              // work as having done none of it.
+              const checks = [
+                containsCategory(input.page.title, catTokens),
+                containsCity(input.page.title, cityToks),
+                containsCategory(input.page.h1, catTokens),
+                containsCity(input.page.h1, cityToks),
+              ];
+              const hit = checks.filter(Boolean).length;
+              // Short labels, because the whole note goes in a spreadsheet cell beside five others
+              // and "category in title, city in title, category in h1, city in h1" is 62 characters
+              // on its own. The probe caps a note at 60.
+              const LABELS = ["title cat", "title city", "h1 cat", "h1 city"];
+              const present = LABELS.filter((_, i) => checks[i]);
               return component(
                 W.landing_page,
                 true,
-                titleOk && h1Ok ? W.landing_page : 0,
-                titleOk && h1Ok
-                  ? "title and h1 name the category and city"
-                  : titleOk
-                    ? "title is right, h1 is not"
-                    : h1Ok
-                      ? "h1 is right, title is not"
-                      : "neither title nor h1 names both"
+                graded(W.landing_page, hit, checks.length),
+                hit === 0
+                  ? "neither title nor h1 names the category or city"
+                  : hit + " of 4: " + present.join(", ")
               );
             })();
 
@@ -823,7 +932,11 @@ export function countGaps(
       const c = result.components[key];
       if (!c || !c.attempted) continue;
       measured++;
-      if (c.earned < c.weight) missing++;
+      // ‼️ A GAP IS A REAL HOLE, NOT "ANYTHING SHORT OF PERFECT". `earned < weight` was exactly the
+      // right question while these were pass marks and is the wrong one now they are graduated: it
+      // would report a business with 9 photos out of a 10 ceiling as having a photo gap, on the one
+      // line of the summary that gets read down a phone.
+      if (c.earned < c.weight * GAP_FRACTION) missing++;
     }
     out.push({ key, missing, measured });
   }
@@ -843,9 +956,31 @@ export function countGaps(
 export function readStoredComponents(
   stored: Record<string, unknown> | null | undefined
 ): Record<string, OptimizationComponent> {
+  return readComponentBlob(stored, OPTIMIZATION_KEY_ORDER);
+}
+
+/** The same read over `score_components`, whose keys are the six dominance ones. */
+export function readStoredScoreComponents(
+  stored: Record<string, unknown> | null | undefined
+): Record<string, OptimizationComponent> {
+  return readComponentBlob(stored, SCORE_KEY_ORDER);
+}
+
+/**
+ * Walk a stored components blob by an EXPLICIT key list.
+ *
+ * The list is not optional and `Object.keys` is not used, for two reasons that both cost money:
+ * both blobs are written with an extra `measured` STRING alongside the components, which is not a
+ * component and would be counted as one; and a key invented at read time would enter the presence
+ * denominator as if something had been measured.
+ */
+function readComponentBlob(
+  stored: Record<string, unknown> | null | undefined,
+  keys: readonly string[]
+): Record<string, OptimizationComponent> {
   const out: Record<string, OptimizationComponent> = {};
   if (!stored) return out;
-  for (const key of OPTIMIZATION_KEY_ORDER) {
+  for (const key of keys) {
     const raw = stored[key];
     if (!raw || typeof raw !== "object") continue;
     const c = raw as Record<string, unknown>;
@@ -855,4 +990,118 @@ export function readStoredComponents(
     out[key] = { weight, attempted: c.attempted, earned, note: str(c.note) ?? "" };
   }
   return out;
+}
+
+// -- presence: ONE number, over both scores ------------------------------------------------------
+
+/** Six dominance components plus six optimization ones. */
+export const PRESENCE_COMPONENT_COUNT = SCORE_KEY_ORDER.length + OPTIMIZATION_KEY_ORDER.length;
+
+export interface PresenceResult {
+  /** 0-100, or null when NOT ONE of the twelve could be measured. */
+  score: number | null;
+  /** e.g. "9 of 12". Printed in the CSV so the number can be read with its own confidence. */
+  measured: string;
+  /** How many of the twelve ran. Zero is exactly the null case. */
+  attempted: number;
+  /**
+   * `score_components.reviews.earned`, 0 to 25, carried out for the sort tie-break.
+   *
+   * ‼️ IT SATURATES AT 500 REVIEWS, which is where the `reviews` component itself tops out. Two
+   * businesses with 600 and 6,000 Google reviews tie-break identically, and that is a ceiling this
+   * proxy INHERITS rather than a bug in the sort. If a finer tie-break is ever wanted the fix is to
+   * carry the raw review count out of `scoreSerp`, never to raise the ceiling on a component whose
+   * weight was chosen for scoring rather than for ordering.
+   */
+  reviewsEarned: number;
+}
+
+/**
+ * ONE presence score across both audits, computed from the two stored component blobs.
+ *
+ * ‼️ IT IS ONE `earned / attempted` OVER TWELVE COMPONENTS. IT IS NOT THE AVERAGE OF THE TWO
+ * SCORES, and that difference is the entire reason it is allowed to exist beside a file that spends
+ * four sections saying the two numbers must not be blended. An average needs a value for BOTH
+ * halves, so every row whose profile lookup failed would need one INVENTED: as a zero, which says
+ * "their profile is empty" about a profile nobody read, or as the other score, which says nothing
+ * at all. A single denominator needs no such value. A row that could be measured on twelve
+ * components is scored out of twelve, a row that could be measured on six is scored out of six, and
+ * neither is flattered nor punished for what could not be looked at. It is the SAME denominator
+ * rule `scoreSerp` and `scoreOptimization` each already apply, applied ONCE over the union instead
+ * of twice over the halves.
+ *
+ * ‼️ COMPUTED IN MEMORY, WITH NO COLUMN OF ITS OWN AND NO MIGRATION. There is nowhere for a stored
+ * presence value to drift away from the parts it claims to summarise, because there is no stored
+ * value. Do not add one.
+ */
+export function presenceScore(
+  dominance: Record<string, unknown> | null | undefined,
+  optimization: Record<string, unknown> | null | undefined
+): PresenceResult {
+  const dom = readComponentBlob(dominance, SCORE_KEY_ORDER);
+  const opt = readComponentBlob(optimization, OPTIMIZATION_KEY_ORDER);
+
+  let attemptedWeight = 0;
+  let earned = 0;
+  let ran = 0;
+  for (const c of [...Object.values(dom), ...Object.values(opt)]) {
+    if (!c.attempted) continue;
+    ran++;
+    attemptedWeight += c.weight;
+    earned += c.earned;
+  }
+
+  const reviews = dom.reviews;
+  const reviewsEarned = reviews && reviews.attempted ? reviews.earned : 0;
+
+  // Not one of the twelve could be measured. Null, never zero: the row gets a BLANK rank, sits at
+  // the end of the file, is left out of every percentage, and STAYS IN THE KEPT PILE.
+  if (attemptedWeight === 0) {
+    return {
+      score: null,
+      measured: "0 of " + PRESENCE_COMPONENT_COUNT,
+      attempted: 0,
+      reviewsEarned,
+    };
+  }
+
+  return {
+    score: Math.round((earned / attemptedWeight) * 100),
+    measured: ran + " of " + PRESENCE_COMPONENT_COUNT,
+    attempted: ran,
+    reviewsEarned,
+  };
+}
+
+/** What the sort needs off a row: the key, then the two tie-breaks, in that order. */
+export interface PresenceRank {
+  presence: number | null;
+  /** `score_components.reviews.earned`. Google reviews, the first tie-break. */
+  reviewsEarned: number;
+  /** Dominance, the second. */
+  dominance: number | null;
+}
+
+/**
+ * scored.csv order: most presence FIRST, unmeasured last.
+ *
+ * ‼️ THE DIRECTION RULE IS STILL `sortForCutoff` AND IS NOT RE-IMPLEMENTED HERE. This only
+ * PRE-SORTS by the tie-breaks and hands the array over. `Array.prototype.sort` is required to be
+ * stable, so rows that tie on presence come out in tie-break order and there is still exactly one
+ * place in the lane that decides descending-with-unmeasured-last. Do not inline it.
+ *
+ * ‼️ THE TIE-BREAK IS GOOGLE REVIEWS FIRST, DOMINANCE SECOND. Presence is a ratio over a variable
+ * denominator, so a row measured on two components lands on a round number constantly and ties are
+ * ordinary rather than exotic. Reviews are the closest thing on the row to "how big is this
+ * business really", which is the question the top of the file is being read to answer.
+ */
+export function sortByPresence<T>(rows: T[], read: (row: T) => PresenceRank): T[] {
+  const tied = [...rows].sort((a, b) => {
+    const x = read(a);
+    const y = read(b);
+    if (x.reviewsEarned !== y.reviewsEarned) return y.reviewsEarned - x.reviewsEarned;
+    // An unmeasured dominance sorts below any measured one, the same direction as everything else.
+    return (y.dominance ?? -1) - (x.dominance ?? -1);
+  });
+  return sortForCutoff(tied, (row) => read(row).presence);
 }

@@ -1,4 +1,8 @@
-// The 33 delivery steps. One constant, one file — Runner v3 section 1.
+// The 37 delivery steps. One constant, one file — Runner v3 section 1.
+//
+// Was 33 until the AI Skin Concierge added `concierge_preview` and `concierge_live`, and 35
+// until the attribution stack added `tracking_installed` and `self_report_field`. The count is
+// written down in prose here and in step-verify.ts; if you add another step, both say so.
 //
 // ‼️ THIS LIVES IN config/ RATHER THAN NEXT TO THE CODE THAT RENDERS IT, AND THE REASON IS A
 // BUILD FAILURE, NOT TIDINESS.
@@ -173,6 +177,11 @@ const STEP_LIST = [
   // auto_then_manual and why [Done] refuses until somebody has confirmed it.
   { key: "hub_preview", phase: PHASE_BEFORE, label: "Hub built, themed, preview live, theme confirmed by me", auto: true, mode: "auto_then_manual", blockedBy: ["intake_received"] },
   { key: "review_tool_preview", phase: PHASE_BEFORE, label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
+  // The conversion engine, staged the same way the hub is: a working preview BEFORE the call,
+  // and a separate human decision to go live AFTER it. Auto because the system really does
+  // create the config row and seed the embed allowlist; auto_then_manual because the half that
+  // matters is somebody walking the scan on the call, which no runner can assert happened.
+  { key: "concierge_preview", phase: PHASE_BEFORE, label: "AI Skin Concierge preview live, ready to demo on the call", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview"] },
   { key: "review_card_pdf", phase: PHASE_BEFORE, label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   { key: "call_sheet", phase: PHASE_BEFORE, label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },
 
@@ -217,6 +226,30 @@ const STEP_LIST = [
   { key: "cards_printed", phase: PHASE_AFTER, label: "Cards printed and handed to the clinic", mode: "manual", blockedBy: ["review_card_pdf"] },
   { key: "review_request_configured", phase: PHASE_AFTER, label: "Automated request configured in their booking system, or card_only recorded", mode: "manual", blockedBy: ["call_held"] },
   { key: "review_tool_handed", phase: PHASE_AFTER, label: "Review tool handed to the named person", mode: "manual", blockedBy: ["subdomain_live"] },
+  // ‼️ MANUAL, AND IT MUST NOT BECOME AUTO. This is the step that puts a camera in front of a
+  // clinic's patients and starts storing photographs of their faces for 24 hours. Nothing about
+  // that should happen because a sweep decided the prerequisites looked satisfied. blockedBy
+  // call_held because the consent conversation happens on the call, and subdomain_live because
+  // a widget with nowhere to be embedded is not live, it is just enabled.
+  { key: "concierge_live", phase: PHASE_AFTER, label: "AI Skin Concierge enabled: booking destination set, consent copy approved", mode: "manual", blockedBy: ["subdomain_live", "call_held"] },
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE ATTRIBUTION STACK. These two are the delivery half of section 3 of the agreement, and
+  // section 3 is the only reason SRT ever gets paid: the guarantee counts an appointment where
+  // the patient TELLS them they came from AI, and nothing about that is automatic.
+  //
+  // ‼️ `self_report_field` IS THE ONE THAT DECIDES WHETHER WE GET PAID, AND `tracking_installed`
+  // IS THE ONE THAT LOOKS MORE IMPRESSIVE. They are in this order deliberately. A pixel that
+  // never fires costs a nicer monthly report; a booking form that never asks the question means
+  // real appointments this work produced cannot be counted toward the five, and that costs the
+  // client money and costs SRT the engagement. If only one of these ever gets done, it is the
+  // second one.
+  //
+  // Both are blockedBy call_held because the call is where the person who can edit the website
+  // is named and the confirmation-page URLs are collected. Neither is gated on Day 0: they are
+  // measurement, not publishing, and the wall exists to protect the baseline from PAGES.
+  // ─────────────────────────────────────────────────────────────────────────
+  { key: "tracking_installed", phase: PHASE_AFTER, label: "SRT pixel live on the client site, first real session seen", auto: true, mode: "auto_then_manual", blockedBy: ["call_held"] },
+  { key: "self_report_field", phase: PHASE_AFTER, label: "How did you hear about us: six options live on their own booking form", mode: "manual", blockedBy: ["call_held"] },
   { key: "time_log_entries", phase: PHASE_AFTER, label: "Time log has entries from day 0", auto: true, mode: "auto", blockedBy: [DAY_ZERO_STEP_KEY] },
   { key: "weekly_report", phase: PHASE_AFTER, label: "Weekly report firing", auto: true, mode: "auto", blockedBy: ["first_page"] },
   { key: "day_30_date", phase: PHASE_AFTER, label: "Day-30 report date set", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY] },
@@ -225,7 +258,7 @@ const STEP_LIST = [
 export const DELIVERY_STEPS: readonly DeliveryStep[] = STEP_LIST;
 
 /**
- * The 33 keys as a union. Consumed by step-verify.ts's exhaustive verifier map.
+ * Every key as a union. Consumed by step-verify.ts's exhaustive verifier map.
  *
  * Anything that stores a step key still stores plain text — `client_delivery_steps.step_key`
  * has no enum and must not get one, because renaming a key orphans every row already carrying
@@ -236,4 +269,19 @@ export type StepKey = (typeof STEP_LIST)[number]["key"];
 /** Runtime companion to `StepKey`, for narrowing a key that arrived as text. */
 export function isStepKey(key: string): key is StepKey {
   return STEP_LIST.some((s) => s.key === key);
+}
+
+/**
+ * The 1-based board position of a step, computed from the list instead of written down.
+ *
+ * ‼️ ANY COPY THAT NAMES A STEP NUMBER MUST CALL THIS. A position is an array index, so
+ * inserting a step renumbers every step after it. `concierge_preview` landing at 17 moved ten
+ * hardcoded numbers in card copy without touching a single one of them, and each then pointed at
+ * the wrong card: "Retry step 18 on the board" sent people to `review_card_pdf`, and "read your
+ * notes on step 21" sent them to `access_granted`. Naming the KEY is better still where the
+ * sentence allows it. Where a number reads more naturally to a person working the board, it comes
+ * from here and cannot go stale.
+ */
+export function stepNumber(key: StepKey): number {
+  return STEP_LIST.findIndex((s) => s.key === key) + 1;
 }

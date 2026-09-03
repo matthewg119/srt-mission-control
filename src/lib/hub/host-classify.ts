@@ -9,7 +9,26 @@
 // serving the CRM on a hostname somebody else's registrar controls. That asymmetry is the
 // entire design and it must not be inverted into an allowlist of hub hosts.
 
-export type HostClass = "internal" | "external";
+export type HostClass = "internal" | "external" | "concierge";
+
+/**
+ * The one hostname that serves the AI Skin Concierge widget, and nothing else.
+ *
+ * ‼️ IT IS NOT INTERNAL AND IT MUST NEVER BE ADDED TO INTERNAL_HOSTS. Classifying it internal
+ * would publish the whole application on it — /api/leads/funnel, /api/scan/*, /api/clients/start,
+ * every future public-by-design route — on a brand new hostname that is pasted into third-party
+ * web pages for a living. That is the exact failure the header of middleware.ts describes.
+ *
+ * It is not external either. External means "somebody else's registrar points this at us" and
+ * gets the hub allowlist: the index, one level of slugs, and a single named API route. The
+ * concierge needs /w/*, /embed.js and a real /api/concierge/* prefix, which would be reckless to
+ * grant on a client-controlled name and is fine on one we own.
+ *
+ * So: its own class, its own allowlist, still deny-by-default.
+ */
+function conciergeHost(): string {
+  return (process.env.CONCIERGE_HOST || "concierge.srtagency.com").trim().toLowerCase();
+}
 
 /**
  * The hosts that serve Mission Control itself.
@@ -55,6 +74,15 @@ export function classifyHost(rawHost: string | null | undefined): HostClass {
   // No Host header at all. Fails closed: an external classification can only ever reach
   // the hub tree, which then finds no client and 404s.
   if (!host) return "external";
+
+  // ‼️ CHECKED BEFORE INTERNAL, AND THE ORDER IS LOAD-BEARING. If somebody ever adds the
+  // concierge hostname to INTERNAL_HOSTS — the obvious thing to try when the widget 404s — this
+  // ordering means it stays on the narrow allowlist instead of quietly serving the CRM. The
+  // classifier refusing to be overridden is the point.
+  //
+  // localhost is deliberately NOT special-cased into this class: in dev it classifies internal,
+  // which allows everything, so /w/[slug] and /api/concierge/* work with no extra configuration.
+  if (host === conciergeHost()) return "concierge";
 
   if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return "internal";
 

@@ -10,23 +10,9 @@
 // not a script that fetches and then removes itself.
 
 import { supabaseAdmin } from "@/lib/db";
+import { conciergeOrigin } from "./origin";
 
-/**
- * Where the widget answers from. Its own host, never an internal one.
- *
- * ‼️ THE ENV IS READ HERE RATHER THAN IMPORTED FROM clients/concierge-setup.ts, AND THAT IS
- * DELIBERATE. This function is called during a CLIENT HUB PAGE render. Importing it from the
- * provisioning module would pull that module, and everything it reaches, into the bundle for a
- * public page whose whole job is to be crawled. host-classify.ts already keeps its own copy of
- * this two-line read for the same reason, so this is the established shape rather than a new one.
- *
- * The default matches both of the other copies. If it ever needs to differ, that is a sign the
- * value belongs in a shared constant, not that this should import a provisioner.
- */
-export function conciergeOrigin(): string {
-  const host = (process.env.CONCIERGE_HOST || "concierge.srtagency.com").trim().toLowerCase();
-  return `https://${host}`;
-}
+export { conciergeOrigin };
 
 interface Embeddable {
   slug: string;

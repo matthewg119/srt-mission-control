@@ -725,6 +725,32 @@ export async function addScoreCost(batchId: string, costUsd: number): Promise<vo
   await updateBatch(batchId, { score_cost_usd: Math.round(next * 10000) / 10000 });
 }
 
+/**
+ * Delete rows outright.
+ *
+ * ‼️ THE ONLY DELETE IN THIS FILE, AND IT EXISTS FOR ONE CALLER: the United States filter, cleaning
+ * up a batch that was inserted before that filter existed. New batches never reach it, because they
+ * are filtered BEFORE the insert and a row that is never written never needs removing. A verdict
+ * column would have been the softer design and is deliberately not used here: these rows are not a
+ * pile with a reason, they are rows this lane should never have been holding.
+ *
+ * Chunked on the same URL-length limit as `applyMx`: supabase-js puts an `.in()` list in the query
+ * string, so the bound is the URL rather than anything Postgres cares about.
+ */
+export async function deleteRows(batchId: string, rowIds: string[]): Promise<number> {
+  let removed = 0;
+  for (const part of chunk(rowIds, IN_CHUNK)) {
+    const { error } = await supabaseAdmin
+      .from("scraper_rows")
+      .delete()
+      .eq("batch_id", batchId)
+      .in("id", part);
+    if (error) throw new Error("deleteRows: " + error.message);
+    removed += part.length;
+  }
+  return removed;
+}
+
 /** Flag the kept pile after the cutoff is confirmed. Chunked, same URL-length limit as applyMx. */
 export async function markQueuedForApollo(batchId: string, rowIds: string[]): Promise<void> {
   for (const part of chunk(rowIds, IN_CHUNK)) {

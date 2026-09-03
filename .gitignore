@@ -42,3 +42,7 @@ next-env.d.ts
 package-lock.json
 
 .vercel
+
+# Probe output. _probe-onboarding2-pdf.ts writes a real signed PDF here to check the
+# generator; it is a test artifact, not a document anybody should be reading from git.
+.probe-onboarding2.pdf

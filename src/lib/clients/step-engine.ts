@@ -23,7 +23,7 @@ import {
   SWEEP_GATE_COUNT,
   platformByKey,
 } from "@/config/presence-platforms";
-import { DAY_ZERO_STEP_KEY } from "@/config/delivery-steps";
+import { DAY_ZERO_STEP_KEY, stepNumber } from "@/config/delivery-steps";
 // The channel surface. Everything this module says about a step goes through these, never
 // through notifyThread: a step's output belongs in that step's thread.
 import {
@@ -334,7 +334,7 @@ async function instructionsFor(
         // OBVIOUS. Three steps have "review" in the label and they own three different things.
         "*This is the competitor review-COUNT grid.* It is internal and no customer ever sees it.",
         "It feeds findings section 3. The tool a customer uses is the review tool preview; handing",
-        "it over is step 30.",
+        `it over is step ${stepNumber("review_tool_handed")}.`,
         "",
         ...formatReviewAuditCard({
           clientName: c.name,
@@ -359,7 +359,7 @@ async function instructionsFor(
 
       return [
         "*This step owns whether the tool RENDERS and is themed.* It is not the review audit",
-        "(the review audit, an internal competitor grid) and not the handover (step 30).",
+        `(the review audit, an internal competitor grid) and not the handover (step ${stepNumber("review_tool_handed")}).`,
         "",
         `Internal preview: ${reviewPreviewUrl(c.id)}`,
         ":lock: *That URL cannot be sent to a client.* It is a `/dashboard/` path and the page",
@@ -780,7 +780,7 @@ async function instructionsFor(
 
     case "cards_printed": {
       const refs = await outputRefsFor(c.id);
-      const pdf = docLink(c.id, refs.get("review_card_pdf"), "step 17's review card PDF");
+      const pdf = docLink(c.id, refs.get("review_card_pdf"), `step ${stepNumber("review_card_pdf")}'s review card PDF`);
 
       const { data: host } = await supabaseAdmin
         .from("client_hosts")
@@ -919,7 +919,7 @@ async function instructionsFor(
     case "call_held": {
       const refs = await outputRefsFor(c.id);
       const sheet = docLink(c.id, refs.get("call_sheet"), "the call sheet PDF");
-      // ‼️ STEP 20's OWN output_ref, WRITTEN AT STEP 18. generateCallQuestions files the
+      // ‼️ THIS STEP'S OWN output_ref, WRITTEN BY THE call_sheet RUNNER. generateCallQuestions files the
       // closing questions here rather than posting them, because deliverArtifact would have
       // created THIS anchor two steps early and put a second thing on the board while the call
       // sheet was still the one to work on. This line is where they surface.
@@ -929,19 +929,212 @@ async function instructionsFor(
         sheet ? `*Read off this:* ${sheet}` : "*The call sheet has not been generated yet.*",
         closing
           ? `*Run the conversation off this:* ${closing} — CLOSER order, tick the ones you want, and everything below the divider waits for the card.`
-          : "*The closing questions were not generated.* Retry step 18 on the board; they are built from the same reports as the call sheet.",
+          : `*The closing questions were not generated.* Retry step ${stepNumber("call_sheet")} on the board; they are built from the same reports as the call sheet.`,
         "",
-        "Five things have to happen on the call, and the label lists them because each one",
+        "Six things have to happen on the call, and the label lists them because each one",
         "unblocks something later:",
         "  • *NAP read aloud* — the canonical record is what every listing is corrected to.",
         "  • *Question set approved* — step 12's set is what day 30/60/90 is measured on.",
         "  • *Consent confirmed* — named or anonymized results. It defaults to anonymized.",
-        "  • *Preview walked* — the hub and the review tool, on their own screen.",
+        "  • *Preview walked* — the hub, the review tool and the Concierge, on their own screen.",
         "  • *Pages picked* — which of the candidates gets written first.",
+        "  • *Tracking agreed* — the four answers below. This is the one that decides whether",
+        "    we ever get paid, and it is the one that gets skipped.",
+        "",
+        // ‼️ THIS BLOCK IS ON THE CALL CARD RATHER THAN ON STEPS 36 AND 37, AND THAT IS THE
+        // WHOLE POINT OF PUTTING IT HERE. Both of those steps are blocked until this call
+        // happens, and every one of the four answers below has to come from a person who is on
+        // the phone right now. Discovering after the call that nobody knows who edits the
+        // website means another call to ask one question.
+        "*TRACKING. Read this part out. Section 3 of the agreement is the reason.*",
+        "",
+        "Say it like this, in your words:",
+        '  "You do not pay us until five patients book AND tell you they found you through AI.',
+        '   So the only thing that can cost you money here is us not being able to COUNT one.',
+        '   Two small things on your side make that impossible to miss."',
+        "",
+        "Then get these four answers and *put them in your notes*:",
+        "  1. *Who can edit the website?* Name and email. One tag goes in the <head>, once. It",
+        "     is the same access the Concierge needs, so this is one ask and not two.",
+        "  2. *Which booking system do you run?* Vagaro, Boulevard, Mindbody, Zenoti or their",
+        "     own page. This sets the Concierge's booking destination as well.",
+        "  3. *What is the URL after somebody books?* The thank-you or confirmation page. Nobody",
+        "     can guess this and the pixel cannot see a booking without it.",
+        "  4. *Who can add a question to your booking form?* Often a different person from 1.",
+        "",
+        // ‼ THE ONE CONDITION ON THE GUARANTEE, AND IT IS ASKED HERE BECAUSE THIS IS THE ONLY
+        // MOMENT SOMEBODY WHO CAN SAY YES IS ON THE PHONE. The guarantee counts an appointment the
+        // patient attributes to AI, so it cannot exist without the bot taking the appointment and
+        // the dropdown recording the reason. A clinic that declines both is a perfectly good
+        // client on flat monthly terms, and that has to be said out loud on this call rather than
+        // discovered by them at the first invoice.
+        "*THE BOOKING BOT. Ask this straight after you demo the Concierge, never before it.*",
+        "",
+        "Say it like this:",
+        '  "What you just watched is the front half. The back half takes the appointment inside',
+        '   that same chat and records that AI is what sent them. Do you want it turned on?"',
+        "",
+        "  • *Yes* — they are on the guarantee. Nothing until five patients book and say AI sent",
+        "    them. concierge_live, tracking_installed and self_report_field are the three steps",
+        "    on this board that turn that promise into something countable.",
+        "  • *No* — the guarantee is off the table and it is $499/month flat from day one. Say",
+        "    why, because it is not a penalty: with no bot and no dropdown there is no way to",
+        "    count an appointment we earned, so there is nothing for a guarantee to measure.",
+        "",
+        "Write the answer down either way. It sets the terms, and nothing else on this board can",
+        "work it out on its own.",
+        "",
+        "And tell them what is being added, because they will be asked by their own front desk:",
+        '  "One dropdown on your booking form: How did you hear about us. Six options, and one',
+        '   of them is ChatGPT or another AI. That single answer is what the guarantee counts.',
+        '   Nothing changes about how you take bookings. Your system keeps running exactly as',
+        '   it does today."',
+        "",
+        "‼️ If they push back on the dropdown, the honest answer is that it is theirs and it is",
+        "the cheapest thing in this engagement: without it, an appointment we EARNED arrives and",
+        "cannot be counted toward the five, which costs them, not us.",
         "",
         "*[Done] reads your call notes in this thread.* Paste them: it needs real notes, not a",
         "one-liner, and a message that @mentions the bot is treated as a question instead.",
         "The notes are also what the post-call email and the CRM note are written from.",
+      ];
+    }
+
+    case "tracking_installed": {
+      const { snippetFacts, snippetFor } = await import("./tracking-setup");
+      const f = await snippetFacts(c.id);
+
+      if (!f.pixelKey) {
+        return [
+          ":warning: *No site key yet.* The auto half of this step mints one. Hit Retry on the",
+          "board. If it keeps failing, docs/2026-09-03-attribution.sql has not been run against",
+          "this database.",
+        ];
+      }
+
+      // ‼️ THE CONFIRM PATHS ARE PRINTED AS AN EXAMPLE AND MARKED AS ONE. They come off the
+      // call notes and nothing here can know them: every booking system uses a different
+      // confirmation URL. Printing a plausible-looking default would get pasted verbatim and
+      // then never fire, which is silent, because the collector answers 204 to everything.
+      const tag = snippetFor(f.pixelKey, ["/thank-you", "/booking-confirmed"]);
+
+      return [
+        "*One tag, in the <head>, on every page.* Same site access the Concierge needs, so if",
+        "you are doing both, do them in one message to whoever edits the site.",
+        "",
+        "```",
+        tag,
+        "```",
+        "",
+        "‼️ *Replace `data-confirm` with THEIR confirmation path*, off your call notes. Those two",
+        "are examples. It is a comma-separated list of path prefixes that mean a booking just",
+        "finished. Wrong or missing, everything still records visits and no booking ever fires,",
+        "and nothing errors, because the collector answers 204 to everything by design.",
+        "",
+        "*To watch it land before you trust it:* add `?srt_test=check1` to any URL of their site",
+        "and load it. Test events ride the same endpoint and the same writer as real traffic and",
+        "are flagged `is_test`, so they prove the whole path without touching a single number.",
+        "",
+        `*State right now:* ${f.sessions === null ? "could not read" : f.sessions} real session(s), ` +
+          `${f.pixelBookings === null ? "?" : f.pixelBookings} pixel booking(s), ` +
+          `${f.answeredBookings === null ? "?" : f.answeredBookings} answered booking(s).`,
+        "",
+        "*[Done] waits for a real session to arrive.* Not for you to say you pasted it. A tag in",
+        "the wrong template, on a staging site, or stripped by a caching plugin all look",
+        "identical to the person who pasted it.",
+        "",
+        "‼️ *This step does NOT make appointments countable.* A pixel booking never counts toward",
+        "the five. It corroborates and it feeds the monthly report. The count comes from the",
+        "Concierge and from the how-did-you-hear answer, which is the NEXT step.",
+        "",
+        "*If they declined the booking bot on the call, this step does not apply* and the",
+        "engagement is $499/month flat. Skip it and say that in the thread, rather than leaving it",
+        "open against a guarantee nobody is on.",
+      ];
+    }
+
+    case "self_report_field": {
+      const { selfReportFieldSpec, snippetFacts } = await import("./tracking-setup");
+      const f = await snippetFacts(c.id);
+
+      return [
+        "*This is the step that decides whether SRT gets paid.* The guarantee counts an",
+        "appointment where the patient TELLS them they came from AI. If their booking form never",
+        "asks, an appointment this work produced arrives and cannot be counted.",
+        "",
+        "*Add this to their own booking form, exactly:*",
+        "```",
+        ...selfReportFieldSpec(),
+        "```",
+        "",
+        "‼️ *The wording of the AI option may not be changed or merged.* A clinic that renames it",
+        "to `Online` has broken the only question the guarantee turns on, and it will look fine",
+        "on their screen. The other five exist so that one does not stand alone and prompt the",
+        "answer.",
+        "",
+        "Where it goes depends on what they run: Vagaro, Boulevard, Mindbody and Zenoti all take",
+        "a custom intake question. Their own page needs their web person. Both answers came off",
+        `the call, so read your notes on step ${stepNumber("call_held")} rather than asking again.`,
+        "",
+        `*State right now:* ${f.answeredBookings === null ? "could not read" : f.answeredBookings} booking(s) carrying an answer.`,
+        "",
+        "*[Done] takes the first answered booking as proof*, because that is somebody actually",
+        "reaching the field and filling it in. Failing that, drop a screenshot of the live field",
+        "in this thread and it confirms at the weaker tier: a picture proves the field was on a",
+        "page once, not that anybody ever answers it.",
+        "",
+        "*This step and the booking bot are the whole condition on the guarantee.* A clinic that",
+        "said no to both on the call is on $499/month flat, and this step should be skipped with",
+        "that reason rather than chased.",
+      ];
+    }
+
+    // ‼️ THE PREVIEW STEP'S CARD SAYS WHAT TO DO WITH THE LINK, NOT HOW THE WIDGET WORKS. The
+    // auto half already posted the URL, the seeded origins and the mock-provider warning into
+    // this thread from concierge-setup.ts. Repeating them here would put two versions of the
+    // same facts on one board, and the one that goes stale is always the copy.
+    case "concierge_preview": {
+      const refs = await outputRefsFor(c.id);
+      const url = refs.get("concierge_preview");
+
+      return [
+        url ? `*Demo link:* ${url}` : "*The preview link is not on the row yet.* Hit Retry on the board.",
+        ":lock: Not live on their site. `enabled` stays false until the concierge_live step.",
+        "",
+        "*Walk it on the call. The scan is the demo, not a slide.* Open it on your screen, run one",
+        "scan, and let them watch a patient's version of it rather than describing it.",
+        "",
+        "‼️ *The moment it finishes is when you ask about the booking bot*, because that is the",
+        "only point in the call where they have just seen what it does. The wording is on the",
+        "call_held card, under THE BOOKING BOT. Their answer sets the terms: yes puts them on the",
+        "guarantee, no makes it $499/month flat.",
+        "",
+        "*[Done] verifies the config row and the embed allowlist, not the demo.* No query can",
+        "prove you walked it, which is why this step waits for you.",
+      ];
+    }
+
+    case "concierge_live": {
+      return [
+        "*This is the switch.* It flips `concierge_configs.enabled` to true and the widget starts",
+        "answering on every page we host for them.",
+        "",
+        "Three things have to be true first, and none of them is a button:",
+        "  • *Booking destination set* — `calendly` takes appointments in the chat, `link` sends",
+        "    them to their own page, `none` is capture only and a human calls back. `none` is a",
+        "    legitimate choice somebody makes, not a default to arrive at by forgetting.",
+        "  • *Consent copy approved* — they have read what the visitor is told before a photo is",
+        "    taken. Photos are deleted after 24 hours and that promise is enforced in code.",
+        "  • *Subdomain live* — a widget with nowhere to be embedded is not live, it is enabled.",
+        "",
+        "‼️ *This step is manual and must stay manual.* It puts a camera in front of their",
+        "patients. Nothing about that should happen because a sweep decided the prerequisites",
+        "looked satisfied.",
+        "",
+        "*If they said no to the booking bot on the call*, set the booking destination to `none`",
+        "or skip this step outright, and note that they are on $499/month flat.",
+        "",
+        "*[Done] reads the config row:* enabled true, plus a booking destination that exists.",
       ];
     }
 

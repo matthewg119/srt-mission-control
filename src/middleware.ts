@@ -74,6 +74,15 @@ const HUB_API = "/api/hub/reviews/submit";
 const HIT_ENDPOINT = "/api/internal/hub-hit";
 
 /**
+ * The concierge frame document: /w/{client-slug}, one segment, same shape rule as HUB_SLUG.
+ *
+ * No dot, no slash, no encoded traversal, so /w/../api/anything cannot match and neither can
+ * /w/foo.php. The slug is `clients.slug`, which is already unique-constrained, so the embed
+ * snippet a clinic pastes into their site carries a name they recognise rather than a uuid.
+ */
+const CONCIERGE_FRAME = /^\/w\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
+
+/**
  * Record one hub request, out of band.
  *
  * WHY HERE. The hub pages are ISR (revalidate = 300), so a server component runs on
@@ -163,9 +172,31 @@ function isCountable(req: NextRequest): boolean {
 export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   const host = normalizeHost(req.headers.get("host"));
   const path = req.nextUrl.pathname;
+  const hostClass = classifyHost(host);
+
+  // ── CONCIERGE: the widget hostname, ours, pasted into third-party pages ─────
+  //
+  // An allowlist of three shapes and a 404 for everything else, the same deny-by-default
+  // posture as the hub branch and for a sharper reason: this hostname's whole job is to be
+  // embedded in web pages we do not control, so its URL is public by design and will be
+  // crawled, shared and probed. It must expose the widget and nothing adjacent to it.
+  //
+  // ‼️ /api/concierge/ IS A PREFIX HERE, AND THAT IS ONLY SAFE BECAUSE THIS HOST IS OURS.
+  // The identical relaxation on the external branch is forbidden (see HUB_API above) because
+  // there the hostname belongs to a client's registrar. Do not read this as permission to
+  // loosen that one.
+  if (hostClass === "concierge") {
+    const ok =
+      path === "/embed.js" ||
+      CONCIERGE_FRAME.test(path) ||
+      path === "/api/concierge" ||
+      path.startsWith("/api/concierge/");
+    if (!ok) return notFound(path.startsWith("/api/"));
+    return NextResponse.next();
+  }
 
   // ── EXTERNAL: a hostname somebody else's registrar points at us ─────────────
-  if (classifyHost(host) === "external") {
+  if (hostClass === "external") {
     // The hub's internal path is not a public route. It is reachable only by the rewrite
     // below, so asking for it directly is a miss like any other.
     if (path === "/hub" || path.startsWith("/hub/")) return notFound(false);

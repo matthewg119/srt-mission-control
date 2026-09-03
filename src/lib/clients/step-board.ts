@@ -27,7 +27,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack, slackThreadLink, type SlackBlock } from "@/lib/slack-bot";
-import { DELIVERY_STEPS, type DeliveryStep } from "@/config/delivery-steps";
+import { DELIVERY_STEPS, stepNumber, type DeliveryStep } from "@/config/delivery-steps";
 
 /**
  * The two marks, and they are never interchangeable.
@@ -122,7 +122,7 @@ async function loadAllRows(clientId: string): Promise<BoardRow[]> {
 
 /** 1-based position, which is what the channel shows. Zero means the key is not a step. */
 function positionOf(stepKey: string): number {
-  return DELIVERY_STEPS.findIndex((s) => s.key === stepKey) + 1;
+  return stepNumber(stepKey as Parameters<typeof stepNumber>[0]);
 }
 
 function stepFor(stepKey: string): DeliveryStep | undefined {

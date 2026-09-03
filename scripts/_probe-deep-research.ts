@@ -25,6 +25,14 @@ if (!CLIENT_ID) {
   process.exit(1);
 }
 
+// ‼️ THIS `export {}` IS LOAD-BEARING AND MUST NOT BE TIDIED AWAY. Every import in this file is a
+// dynamic `await import()` inside main(), so without a top-level import or export TypeScript treats
+// the file as a GLOBAL SCRIPT rather than a module. Its `main` then shares one scope with every
+// other global-script probe in scripts/, and the second one to exist makes `next build` fail
+// repo-wide with "Duplicate function implementation" pointing here, at a file that did not change.
+// Making this one a module means a new probe can never break the build by picking the same name.
+export {};
+
 async function main() {
   const { buildContext, buildCompactPrompt, runDeepResearch } = await import(
     "../src/lib/clients/artifacts/deep-research-run"

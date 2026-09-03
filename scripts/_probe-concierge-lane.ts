@@ -26,6 +26,8 @@ import { fromCityState } from "@/lib/market/place";
 import { conciergeAmmo } from "@/lib/concierge/ammo";
 import { rankMagnets, rungOf, type LeadMagnet } from "@/lib/concierge/magnets";
 import { bookingGate, asksToBook, openingFor } from "@/lib/concierge/engine";
+import { resolveBooking } from "@/lib/concierge/booking";
+import type { ConciergeConfig } from "@/lib/concierge/config";
 import { systemPrompt, OWNER_TOOLS, PATIENT_TOOLS } from "@/lib/concierge/tools";
 import { hasBannedDash } from "@/lib/copy-guard";
 import type { AmmoSpent } from "@/lib/followup-operator/types";
@@ -465,6 +467,95 @@ async function mockRail(): Promise<void> {
   check("srt-agency-llc is the owner tenant", srt?.audience === "owner", String(srt?.audience));
 }
 
+// ── 11. Booking: the tri-state, and the redirect guard ──────────────────────
+async function booking(): Promise<void> {
+  console.log("\n11. booking falls back rather than showing a dead button");
+
+  const owner: ConciergeConfig = {
+    clientId: "c1", slug: "srt-agency-llc", enabled: true, audience: "owner",
+    vertical: "aeo-agency-med-spa", greeting: null, allowedOrigins: [],
+    bookingMode: "none", bookingUrl: null, bookingPhone: null,
+    analysisProvider: "mock", dailyScanCap: 200, consentVersion: "v1",
+    clientName: "SRT Agency LLC", clientCity: null, clientState: null, clientWebsite: null,
+  };
+
+  const fallback = "https://srtagency.com/onboarding2?utm_source=concierge";
+  const offer = await resolveBooking({
+    config: owner, timeZone: "America/New_York", window: "today_tomorrow", fallbackUrl: fallback,
+  });
+
+  // ‼️ CALENDLY SHIPS UNCONFIGURED, SO THIS IS THE DEFAULT PATH AND NOT AN EDGE CASE. With no token
+  // the owner lane MUST come back with the onboarding link. Anything else is a dead button on a
+  // live page, which is the failure the whole tri-state exists to prevent.
+  if (!process.env.CALENDLY_API_TOKEN) {
+    check("with no Calendly token the owner lane falls back to a link", offer.mode === "link", offer.mode);
+    if (offer.mode === "link") check("and the link is the onboarding handoff", offer.url === fallback);
+  } else {
+    check(
+      "with a token the owner lane returns slots, an empty diary, or a link",
+      ["slots", "no_slots", "link"].includes(offer.mode),
+      offer.mode
+    );
+    if (offer.mode === "slots") {
+      check("every offered slot carries its own booking link", offer.slots.every((s) => s.url.startsWith("https://")));
+      check("no slot label is blank", offer.slots.every((s) => s.label.trim().length > 0));
+      check("slot labels carry no banned dash", offer.slots.every((s) => !hasBannedDash(s.label)));
+    }
+  }
+
+  // ‼️ THE PATIENT LANE NEVER REACHES SRT'S CALENDAR. booking_mode is a clinic's own setting, and
+  // an owner booking always goes to SRT, so a patient config must resolve from its own columns.
+  const patient: ConciergeConfig = { ...owner, audience: "patient", vertical: "medspa" };
+  const pNone = await resolveBooking({ config: patient, timeZone: "America/New_York", window: "today_tomorrow", fallbackUrl: fallback });
+  check("a clinic with no destination falls back to a callback", pNone.mode === "callback", pNone.mode);
+
+  const pPhone = await resolveBooking({
+    config: { ...patient, bookingPhone: "336-833-2303" },
+    timeZone: "America/New_York", window: "today_tomorrow", fallbackUrl: fallback,
+  });
+  check("a clinic with a phone books by phone", pPhone.mode === "phone", pPhone.mode);
+
+  const pLink = await resolveBooking({
+    config: { ...patient, bookingMode: "link", bookingUrl: "https://clinic.example/book" },
+    timeZone: "America/New_York", window: "today_tomorrow", fallbackUrl: fallback,
+  });
+  check("a clinic with a link uses its own link", pLink.mode === "link" && pLink.url === "https://clinic.example/book");
+
+  // ‼️ THE OPEN REDIRECT GUARD. /api/concierge/booked is a public GET that forwards a browser to a
+  // URL from the query string. Without a host allowlist it is a redirector on our own domain that
+  // anybody can aim anywhere, which borrows our reputation for somebody else's phishing page.
+  const allow = (raw: string, extra: Array<string | null>): boolean => {
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      return false;
+    }
+    if (u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    if (host === "calendly.com" || host.endsWith(".calendly.com")) return true;
+    for (const c of extra) {
+      if (!c) continue;
+      try {
+        if (host === new URL(c).hostname.toLowerCase()) return true;
+      } catch {
+        /* a malformed configured URL allows nothing */
+      }
+    }
+    return false;
+  };
+  const extra = ["https://srtagency.com/onboarding2", null];
+  check("calendly.com is allowed", allow("https://calendly.com/x/y", extra));
+  check("a calendly subdomain is allowed", allow("https://api.calendly.com/x", extra));
+  check("the configured onboarding host is allowed", allow("https://srtagency.com/onboarding2?a=1", extra));
+  check("an unrelated host is refused", !allow("https://evil.example/steal", extra));
+  check("a lookalike suffix host is refused", !allow("https://evilcalendly.com/x", extra));
+  check("a lookalike of the configured host is refused", !allow("https://evil-srtagency.com/x", extra));
+  check("http is refused even on an allowed host", !allow("http://calendly.com/x", extra));
+  check("a javascript scheme is refused", !allow("javascript:alert(1)", extra));
+  check("garbage is refused", !allow("not a url", extra));
+}
+
 async function main(): Promise<void> {
   console.log("\nconcierge lane: two audiences, one engine\n");
   synonyms();
@@ -477,6 +568,7 @@ async function main(): Promise<void> {
   noPersona();
   await catalogue();
   await mockRail();
+  await booking();
 
   console.log(failures === 0 ? "\nall checks passed\n" : `\n${failures} CHECK(S) FAILED\n`);
   process.exit(failures === 0 ? 0 : 1);

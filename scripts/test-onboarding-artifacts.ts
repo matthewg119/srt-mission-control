@@ -2066,7 +2066,13 @@ import { pageSlug } from "../src/lib/hub/pages";
   // waits for a person, and that break is what stops the harvest being anchored before the avatar
   // it researches has been chosen.
   eq("and it still waits for a person", STEPS.find((s) => s.key === "avatar_confirmed")?.mode ?? "none", "manual");
-  eq("the step count is unchanged", STEPS.length, 33);
+  // ‼️ THE SECOND HARDCODED STEP COUNT IN THE REPO, AND IT WENT STALE THE SAME WAY THE ONE IN
+  // _probe-step-verify.ts DID. Both sat at 33 through the concierge lane's two additions, so
+  // both suites were red and each one read as somebody else's problem. Keeping the literal is
+  // deliberate: the check exists to make a person ACKNOWLEDGE a change to the step list, and
+  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge) -> 37
+  // (tracking_installed, self_report_field).
+  eq("the step count is what the last person to change it said", STEPS.length, 37);
 
   {
     const seenPhases = new Set<string>();

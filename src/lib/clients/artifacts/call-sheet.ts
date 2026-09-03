@@ -1,4 +1,6 @@
-// The call sheet — delivery step 18, Runner v3 section 13. INTERNAL.
+// The call sheet — the `call_sheet` delivery step, Runner v3 section 13. INTERNAL.
+// No step NUMBER here on purpose: positions are an array index and this one has already
+// moved twice. config/delivery-steps.ts stepNumber() is where a number comes from.
 //
 // This is the only document in the folder that is not for the client. It is what Matthew has in
 // front of him for sixty minutes, and it is the difference between a call that ends with three
@@ -363,9 +365,17 @@ function preview(state: PageState, d: CallSheetData) {
   bulletList(state, [
     `Hub preview, themed. Their pages, their colours, on our domain, not live yet.`,
     "Review tool preview, same theme. Type a demo answer live. Never show pre-filled sample answers.",
+    "The AI Concierge preview. Run one real scan on your screen and let them watch it.",
+    "Straight after the scan finishes, ask whether they want the appointment booking bot.",
     "The printed card.",
     "Then the page candidates — mark which they want first.",
   ]);
+  // ‼️ THE BOOKING-BOT ANSWER SETS THE TERMS, SO IT IS A BOX ON THE SHEET AND NOT A BULLET.
+  // It is asked here because the scan they just watched is the only thing that makes the
+  // question concrete, and it has to be written down before the call ends: yes puts them on
+  // the five-patient guarantee, no makes the engagement $499/month flat from day one, and
+  // nothing on the delivery board can work that out on its own afterwards.
+  correctionBox(state, "Booking bot: yes puts them on the guarantee, no is $499/mo flat", { lines: 1 });
   correctionBox(state, "Pages they picked", { lines: 3 });
 }
 
@@ -395,6 +405,8 @@ function capturePage(state: PageState) {
   correctionBox(state, "Access granted, per platform", { lines: 3 });
   correctionBox(state, "Blockers hit", { lines: 2 });
   correctionBox(state, "Pages selected", { lines: 3 });
+  correctionBox(state, "Booking bot agreed (Y/N) and the terms that follow from it", { lines: 1 });
+  correctionBox(state, "Who can edit the website, and the confirmation-page URL", { lines: 2 });
   correctionBox(state, "Day-30 date", { lines: 1 });
 
 }

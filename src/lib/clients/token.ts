@@ -55,7 +55,14 @@ export function hashToken(token: string): string {
  * open the onboarding funnel and its business data. Verification takes the scope it EXPECTS and
  * refuses anything else with its own reason, so the two surfaces cannot be crossed by pasting.
  */
-export type TokenScope = "onboarding" | "preview";
+// ‼️ `chatgpt_ads` DOES NOT ADDRESS A `clients` ROW, and that is the point of it being its
+// own scope rather than reusing `onboarding`. The id it carries is a chatgpt_ads_leads id: a
+// person who picked "start me myself" on the funnel has not been sold anything yet, so
+// startPilot() must not run for them. That call takes one of six pilot seats, sets
+// billing_status, and can be refused outright by the seat cap, none of which should happen
+// because somebody tapped a button on an ad page. The scope check is what stops a lead link
+// being pasted into /onboarding and reaching a real client's business data, and vice versa.
+export type TokenScope = "onboarding" | "preview" | "chatgpt_ads";
 
 /**
  * The signed body for a scope.

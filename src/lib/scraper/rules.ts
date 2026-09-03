@@ -46,6 +46,14 @@ const EMAIL_HEADER_CANDIDATES = ["email", "primary email", "email address", "wor
 const COMPANY_HEADER_CANDIDATES = ["company", "company name", "business", "business name", "name", "organization", "account name"];
 const CITY_HEADER_CANDIDATES = ["city", "company city", "business city", "location", "town"];
 const WEBSITE_HEADER_CANDIDATES = ["website", "company website", "website url", "domain", "company domain", "web site"];
+/**
+ * The state column, for the United States filter in `geo.ts`.
+ *
+ * A miss is NOT an error and must never become one. Plenty of exports carry the state inside the
+ * city cell ("Charlotte, NC") and nothing else, which `locationVerdict` reads perfectly well; a
+ * required state column would refuse those files outright.
+ */
+const STATE_HEADER_CANDIDATES = ["state", "company state", "business state", "region", "province", "state/province", "state or province"];
 
 /**
  * Which column holds a given field.
@@ -82,6 +90,10 @@ export function resolveCityColumn(headers: string[]): string | null {
 
 export function resolveWebsiteColumn(headers: string[]): string | null {
   return resolveColumn(headers, WEBSITE_HEADER_CANDIDATES);
+}
+
+export function resolveStateColumn(headers: string[]): string | null {
+  return resolveColumn(headers, STATE_HEADER_CANDIDATES);
 }
 
 const LOCAL_PART = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;

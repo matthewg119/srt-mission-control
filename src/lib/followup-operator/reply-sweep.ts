@@ -26,6 +26,7 @@ import { applyReply } from "./cadence";
 import { excludedDomains, isExcluded } from "./sent-sweep";
 import { classifyReply, isAutomated, isBounce } from "./classify-reply";
 import { outreachMailboxes, toGraphMailbox } from "@/config/outreach-mailboxes";
+import { isCampaignMailbox, createCampaignProspect, announceCampaignReply } from "./campaign-replies";
 import type { OutreachProspectRow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -40,6 +41,10 @@ export interface ReplySweepResult {
   bounced: number;
   unmatched: number;
   skippedDuplicate: number;
+  /** Prospects minted from a ReachInbox reply that matched nothing. */
+  campaignCreated: number;
+  /** Campaign replies posted to Slack + pushed to the CRM. */
+  campaignAnnounced: number;
   windowStart: string;
   error?: string;
 }
@@ -118,7 +123,7 @@ export async function runReplyMailSweep(opts?: {
   if (opts?.minIntervalMinutes && last) {
     const age = now.getTime() - new Date(last).getTime();
     if (age < opts.minIntervalMinutes * 60_000) {
-      return { scanned: 0, replies: 0, automated: 0, bounced: 0, unmatched: 0, skippedDuplicate: 0, windowStart: last };
+      return { scanned: 0, replies: 0, automated: 0, bounced: 0, unmatched: 0, skippedDuplicate: 0, campaignCreated: 0, campaignAnnounced: 0, windowStart: last };
     }
   }
 
@@ -127,7 +132,8 @@ export async function runReplyMailSweep(opts?: {
     new Date(last ? new Date(last).getTime() - OVERLAP_MS : now.getTime() - FIRST_RUN_LOOKBACK_MS).toISOString();
 
   const result: ReplySweepResult = {
-    scanned: 0, replies: 0, automated: 0, bounced: 0, unmatched: 0, skippedDuplicate: 0, windowStart,
+    scanned: 0, replies: 0, automated: 0, bounced: 0, unmatched: 0, skippedDuplicate: 0,
+    campaignCreated: 0, campaignAnnounced: 0, windowStart,
   };
 
   try {
@@ -154,6 +160,10 @@ export async function runReplyMailSweep(opts?: {
         // from reading Matthew's own outbound as a reply to himself.
         if (!from || isExcluded(from, domains)) continue;
 
+        // Hoisted above the match block: a campaign reply has to stamp first_sent_at at creation
+        // time, and the older-than-first-send guard below reads the same value.
+        const receivedAt = new Date(msg.receivedDateTime ?? now.toISOString());
+
         // Match in descending order of trust, mirroring reply-anchor.ts.
         let prospect: OutreachProspectRow | null = null;
         let matchedBy = "conversation";
@@ -170,14 +180,38 @@ export async function runReplyMailSweep(opts?: {
             matchedBy = "domain";
           }
         }
+        // ReachInbox sends from mailboxes we do not own, so a campaign reply matches nothing by
+        // conversation, address or domain and lands here every single time. Minting a prospect is
+        // therefore allowed ONLY in the dedicated forwarding mailbox -- anywhere else this would
+        // turn ordinary mail to Matthew into prospects and CRM leads. See campaign-replies.ts.
+        //
+        // ‼️ AUTOMATED MAIL IS EXCLUDED, and a bounce is the reason. A bounce forwarded out of a
+        // ReachInbox mailbox arrives FROM mailer-daemon, not from the person who never received it,
+        // so minting on it would create a prospect called "postmaster" and put it in the CRM, while
+        // the address that actually bounced stays unknown -- it is only named inside the body, which
+        // nothing here parses. An automated message we cannot tie to a known prospect teaches us
+        // nothing, so it stays `unmatched` exactly as it always did.
+        let fromCampaign = false;
+        if (!prospect && isCampaignMailbox(mailbox) && !isAutomated(from, msg.subject ?? null)) {
+          prospect = await createCampaignProspect({
+            email: from,
+            displayName: msg.from?.emailAddress?.name ?? null,
+            receivedAt,
+          });
+          if (prospect) {
+            fromCampaign = true;
+            matchedBy = "reachinbox_mailbox";
+            result.campaignCreated++;
+          }
+        }
         if (!prospect) {
           result.unmatched++;
           continue;
         }
 
         // Never attach mail older than the first thing we sent them. An existing thread with
-        // the same person is not a reply to a pitch.
-        const receivedAt = new Date(msg.receivedDateTime ?? now.toISOString());
+        // the same person is not a reply to a pitch. (A prospect just created above stamped
+        // first_sent_at to THIS message's time, so it passes.)
         if (prospect.first_sent_at && receivedAt < new Date(prospect.first_sent_at)) continue;
 
         const automated = isAutomated(from, msg.subject ?? null);
@@ -227,12 +261,34 @@ export async function runReplyMailSweep(opts?: {
         }
 
         result.replies++;
-        const patch = applyReply(prospect, classifyReply(msg.subject ?? null, msg.bodyPreview ?? null), receivedAt);
-        await updateProspect(prospect.id, {
+        const classification = classifyReply(msg.subject ?? null, msg.bodyPreview ?? null);
+        const patch = applyReply(prospect, classification, receivedAt);
+        const updated = await updateProspect(prospect.id, {
           ...patch,
           conversation_id: prospect.conversation_id ?? msg.conversationId ?? null,
           thread_subject: prospect.thread_subject ?? msg.subject ?? null,
         });
+
+        // Only the campaign lane announces. The follow-up ladder stays silent here and reports
+        // through the 09:00 digest exactly as it always has -- this must not become a second
+        // notification stream for prospects that already have one.
+        if (fromCampaign || prospect.source === "reachinbox") {
+          try {
+            await announceCampaignReply({
+              prospect: updated ?? prospect,
+              classification,
+              subject: msg.subject ?? null,
+              bodyPreview: msg.bodyPreview ?? null,
+              receivedAt,
+            });
+            result.campaignAnnounced++;
+          } catch (err) {
+            // A Slack or CRM failure must not abort the sweep: the watermark would go unwritten
+            // and every other mailbox would be re-scanned. The touch is already durable in
+            // outreach_touches, so the reply is recorded either way and only the card is lost.
+            console.error(`[reachinbox] announce failed for ${prospect.email}:`, err);
+          }
+        }
       }
     }
 

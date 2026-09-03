@@ -83,13 +83,22 @@ const BOOKING_TOOL = {
   name: "offer_booking",
   description:
     "Ask for the call, or answer a request to book. Call this whenever booking comes up, from " +
-    "either side. It may refuse, and if it does you carry on with what it tells you instead.",
+    "either side. It returns the real open times on the calendar when there are any, and it may " +
+    "refuse, and if it refuses you carry on with what it tells you instead. Never write a time or " +
+    "a date that did not come back from this tool.",
   input_schema: {
     type: "object" as const,
     properties: {
       requested_by_visitor: {
         type: "boolean",
         description: "True only if the visitor asked to book. Never true because you want to ask.",
+      },
+      window: {
+        type: "string",
+        enum: ["today_tomorrow", "extended"],
+        description:
+          "Leave empty for the next two days, which is the default. Pass extended only when the " +
+          "tool told you the next two days are full, or when the visitor asked for other times.",
       },
     },
     required: [],
@@ -125,6 +134,7 @@ const OWNER_HARD_LINES: readonly string[] = [
   guard("o7", "One question per message. Never stack two."),
   guard("o8", "Never use an em dash or an en dash. Use commas, periods and single hyphens."),
   guard("o9", "Never write a URL yourself. Links are attached by the system when a tool returns one."),
+  guard("o10", "Never state a date or a time for the call. Times come back from offer_booking as buttons the visitor taps, and inventing one books nothing and burns the appointment."),
 ];
 
 const PATIENT_HARD_LINES: readonly string[] = [

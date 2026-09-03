@@ -409,6 +409,16 @@ async function enrollSentPitch(
     });
     if (!prospect) return;
 
+    // Bring whatever the scraper already measured about this business onto the prospect, so a
+    // later touch has signal ammo without buying a second SERP. Best effort: most prospects have
+    // never been scraped, that returns false, and it must never fail a send that already happened.
+    try {
+      const { attachScoresToProspect } = await import("@/lib/market/carry-scores");
+      await attachScoresToProspect(prospect.id, (report.contact_id as string | null) ?? null);
+    } catch (e) {
+      console.error("[lead-pitch] score carry failed:", (e as Error).message);
+    }
+
     const now = new Date();
     const { connectedMailbox } = await import("@/config/outreach-mailboxes");
 

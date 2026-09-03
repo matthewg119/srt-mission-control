@@ -187,11 +187,72 @@ export function formatWorkflowPicker(input: {
   return lines.join("\n");
 }
 
+/** How many names the drop card prints in full before it starts counting instead. */
+const GEO_NAMES_SHOWN = 60;
+
+/**
+ * What the United States filter removed, by name.
+ *
+ * ‼️ THE NAMES, NOT JUST THE COUNT, and this is the same rule `junk.csv` follows by carrying a
+ * `reason` column. These rows are DELETED from the run rather than sorted to the bottom, so the
+ * thread is the only place they are ever seen again. The one way the filter can be wrong is a
+ * genuinely American business whose export left the state cell blank and wrote a bare city, and a
+ * bare number would hide exactly that behind a plausible-looking total.
+ *
+ * ‼️ `unlocated` ARE KEPT AND ARE SAID OUT LOUD ANYWAY. A row with no city and no state was not
+ * judged to be foreign, it could not be judged at all, which is a fact about the export rather than
+ * about the business. Same tri-state as `MxVerdict` and every "not measured" note in this lane:
+ * "could not look" and "nothing is there" are different answers and the safe direction is to keep.
+ */
+export function formatGeoDrop(
+  dropped: Array<{ company: string; where: string }>,
+  unlocated: number,
+  kept: number
+): string {
+  const lines: string[] = [];
+
+  if (dropped.length > 0) {
+    lines.push(
+      "*" + dropped.length + " row" + (dropped.length === 1 ? "" : "s") + " removed: not in the " +
+        "United States.* " + kept + " left to score."
+    );
+    lines.push(
+      "_Read off the `state` and `city` cells of your file, never off the search. Deleted before " +
+        "anything was queued, so none of them cost a lookup._"
+    );
+    lines.push("```");
+    const width = Math.max(...dropped.slice(0, GEO_NAMES_SHOWN).map((d) => d.company.length));
+    for (const d of dropped.slice(0, GEO_NAMES_SHOWN)) {
+      lines.push(d.company.padEnd(Math.min(width, 44)) + "  " + d.where);
+    }
+    if (dropped.length > GEO_NAMES_SHOWN) {
+      lines.push("... and " + (dropped.length - GEO_NAMES_SHOWN) + " more");
+    }
+    lines.push("```");
+  }
+
+  if (unlocated > 0) {
+    if (dropped.length > 0) lines.push("");
+    lines.push(
+      "_" + unlocated + " row" + (unlocated === 1 ? "" : "s") + " carried no city and no state at " +
+        "all, so nothing could say where they are. Those were KEPT: an empty cell is a fact about " +
+        "the export, not about the business._"
+    );
+  }
+
+  return lines.join("\n");
+}
+
 export interface ScoreSummaryInput {
   fileName: string | null;
   queryTemplate: string;
   scored: number;
   unmeasured: number;
+  /** Presence, the one number the file is sorted and ranked by. */
+  presenceScored: number;
+  presenceUnmeasured: number;
+  presenceHigh: number | null;
+  presenceLow: number | null;
   costUsd: number;
   high: number | null;
   low: number | null;
@@ -208,23 +269,40 @@ export function formatScoreSummary(input: ScoreSummaryInput): string {
   const lines: string[] = [];
   lines.push("*" + (input.fileName ?? "the file") + "* scored.");
   lines.push("");
+  lines.push("*Presence*, the one number. The file is sorted and ranked by it, highest first.");
+  lines.push("```");
+  lines.push("scored        " + input.presenceScored);
+  if (input.presenceUnmeasured > 0) lines.push("not measured  " + input.presenceUnmeasured);
+  if (input.presenceHigh !== null) {
+    lines.push("range         " + input.presenceLow + " to " + input.presenceHigh);
+  }
+  lines.push("spent         $" + input.costUsd.toFixed(4));
+  lines.push("```");
+  lines.push(
+    "_Everything of the twelve components that could be measured, dominance and GBP optimization " +
+      "in one denominator. A row measured on six is scored out of six, so nothing is invented for " +
+      "the half that could not be looked at._"
+  );
+
+  if (input.presenceUnmeasured > 0) {
+    // Said out loud rather than left to be noticed, because these rows are about to be swept into
+    // whichever pile the cutoff leaves them in.
+    lines.push(
+      "_" + input.presenceUnmeasured + " could not be measured on a single component. They sit at " +
+        "the bottom of the file with no rank, they are left out of any percentage, and they stay " +
+        "in the keep pile._"
+    );
+  }
+
+  lines.push("");
+  lines.push("*Dominance*, the first of the two halves. A column now, not the sort key.");
   lines.push("```");
   lines.push("scored        " + input.scored);
   if (input.unmeasured > 0) lines.push("not measured  " + input.unmeasured);
   if (input.high !== null) lines.push("range         " + input.low + " to " + input.high);
-  lines.push("spent         $" + input.costUsd.toFixed(4));
   lines.push("```");
   lines.push("");
   lines.push("_Query: `" + input.queryTemplate + "`_");
-
-  if (input.unmeasured > 0) {
-    // Said out loud rather than left to be noticed, because these rows are about to be swept into
-    // whichever pile the cutoff leaves them in.
-    lines.push(
-      "_" + input.unmeasured + " could not be measured at all. They sit at the bottom of the file " +
-        "with no rank, they are left out of any percentage, and they stay in the keep pile._"
-    );
-  }
 
   lines.push("");
   lines.push(formatOptimizationBlock(input));
@@ -242,7 +320,7 @@ export function formatScoreSummary(input: ScoreSummaryInput): string {
  */
 function formatOptimizationBlock(input: ScoreSummaryInput): string {
   const lines: string[] = [];
-  lines.push("*GBP optimization*, the second score. Sorted by nothing, it is a column.");
+  lines.push("*GBP optimization*, the other half. A column too.");
   lines.push("");
   lines.push("```");
   lines.push("audited       " + input.optimized);
@@ -296,13 +374,16 @@ function formatOptimizationBlock(input: ScoreSummaryInput): string {
  */
 export function formatCutoffCard(): string {
   return [
-    "`scored.csv` is sorted *most dominant FIRST*, so row 1 is the biggest operator on the list " +
-      "and the bottom is the barely visible ones.",
+    "`scored.csv` is sorted by *presence, most FIRST*, so row 1 is the business that is already " +
+      "most visible and the bottom is the ones nobody can find.",
+    "",
+    "`presence_score` is one number over both audits: everything that could be measured of the " +
+      "twelve, dominance and GBP optimization together. Both still have their own column.",
     "",
     "How much comes off the top?",
     "",
     "React :one: keep the bottom 30%  ·  :two: bottom 50%  ·  :three: bottom 70%",
-    "Or say it in the thread: `drop the first 10`, `top 20%`, `score > 60`, `keep 120`.",
+    "Or say it in the thread: `drop the first 10`, `top 20%`, `presence > 70`, `keep 120`.",
     "",
     "Nothing is deleted on this message. Whatever you pick gets echoed back for one more " +
       ":white_check_mark: first.",
@@ -326,39 +407,40 @@ export function formatCutoffEcho(plan: CutoffPlan, spoken: string): string {
     return lines.join("\n");
   }
 
+  // The range NAMES ITS AXIS too. "scores 94 down to 71" is the one phrase on this card that reads
+  // as a fact about a column without ever saying which column it came from.
   const range =
     plan.droppedHigh !== null && plan.droppedLow !== null
-      ? ", scores " + plan.droppedHigh + " down to " + plan.droppedLow
+      ? ", " + plan.axis + " " + plan.droppedHigh + " down to " + plan.droppedLow
       : "";
 
-  // ‼️ THE AXIS IS NAMED, AND ON THE OPTIMIZATION AXIS THE DIRECTION IS NAMED TOO. Two numbers now
-  // live in one file, "dropping 34 rows" is the same sentence for both, and they mean opposite
-  // things. The optimization cut is also a PREDICATE rather than a prefix, so "rows 1 to N" would be
-  // a lie about which rows are going: they are scattered through a file sorted by dominance.
-  if (plan.axis === "optimization") {
+  // ‼️ THE AXIS IS NAMED ON EVERY FORM, THE PREFIX ONES INCLUDED, AND THAT IS NOT OPTIONAL. THREE
+  // numbers live in one file now, "dropping 34 rows" is the same sentence for all three, and they
+  // mean three different things. The sort key has already moved once: a card that names the axis
+  // only when it is not the default reads correctly right up until the default moves again, and
+  // then it reads confidently and wrongly. `plan.axis` and `plan.shape` are carried for this line.
+  const axis = plan.axis.toUpperCase();
+
+  if (plan.shape === "prefix") {
     lines.push(
-      "*Dropping " + plan.dropped.length + " rows on OPTIMIZATION" + range + ".* " +
-        "They are scattered through the file, not the top of it."
-    );
-    lines.push(
-      "_The file is still sorted by dominance, and dominance is untouched._"
-    );
-    lines.push(
-      plan.kept.length + " remain" +
-        (plan.keptUnmeasured > 0
-          ? ", " + plan.keptUnmeasured + " of them with no optimization score"
-          : "") + "."
+      "*Dropping rows 1 to " + plan.dropped.length + ", on " + axis + ":* the " +
+        plan.dropped.length + " with the most presence" + range + "."
     );
   } else {
     lines.push(
-      "*Dropping rows 1 to " + plan.dropped.length + ":* the " + plan.dropped.length +
-        " most dominant" + range + "."
+      "*Dropping " + plan.dropped.length + " rows on " + axis + range + ".* " +
+        "They are scattered through the file, not the top of it."
     );
-    lines.push(
-      plan.kept.length + " remain" +
-        (plan.keptUnmeasured > 0 ? ", " + plan.keptUnmeasured + " of them not measured" : "") + "."
-    );
+    if (plan.axis !== "presence") {
+      lines.push("_The file is still sorted by presence, and presence is untouched._");
+    }
   }
+  lines.push(
+    plan.kept.length + " remain" +
+      (plan.keptUnmeasured > 0
+        ? ", " + plan.keptUnmeasured + " of them with no " + plan.axis + " score"
+        : "") + "."
+  );
   lines.push("");
   lines.push("_Read as: " + spoken + "_");
   lines.push("");
@@ -382,6 +464,17 @@ export interface ScoredCsvRow {
   /** The second score. Null is "not measured", the same as on dominance. */
   optimization?: number | null;
   optimizationMeasured?: string;
+  /**
+   * The presence score, and in `"both"` mode THE COLUMN THE RANK COUNTS.
+   *
+   * ‼️ ONLY READ IN `"both"` MODE. In the `"dominance"` default it is ignored entirely and the
+   * rank counts `score`, which is what keeps `_probe-score.ts` pinning the original narrow shape
+   * without being edited. Two rank rules in one function is not ideal; one rank rule that silently
+   * changed which column it counted, under a probe that could not see the difference, would be
+   * worse.
+   */
+  presence?: number | null;
+  presenceMeasured?: string;
   /** Per component, the short verdict that also lives in `optimization_components[key].note`. */
   optNotes?: Partial<Record<OptimizationKey, string>>;
 }
@@ -420,27 +513,38 @@ export function buildScoredCsv(
   columns: "dominance" | "both" = "dominance"
 ): string {
   const both = columns === "both";
+  // Presence sits directly after the rank, because it is what the rank counts. The two axes that
+  // are now columns rather than the sort key follow it, each still carrying its own `measured`.
+  const lead = both ? ["presence_score", "presence_measured"] : [];
   const extra = both
     ? ["optimization_score", "optimization_measured", ...OPTIMIZATION_CSV_COLUMNS]
     : [];
 
   let rank = 0;
   return toCsv(
-    [...headers, "rank", "dominance_score", "score_measured", ...extra],
+    [...headers, "rank", ...lead, "dominance_score", "score_measured", ...extra],
     rows.map((r) => {
+      // ‼️ THE RANK COUNTS THE COLUMN THE FILE IS SORTED BY, WHICH IS PRESENCE IN `"both"` MODE.
+      // A rank counted on one column while the rows were ordered by another would number the file
+      // out of sequence, and a reader would take the ordering on trust: it is the one error on this
+      // sheet that looks like data rather than like a bug.
+      // The same undefined-is-not-null rule `valueOn` draws in score.ts, and for the same reason: a
+      // caller that hands over no presence at all is one written before the axis existed, and
+      // blanking every rank on it would be a silently empty column rather than an error.
+      const ranked = both ? (r.presence === undefined ? r.score : r.presence) : r.score;
       const cells: Record<string, string> = {
         ...r.raw,
         // An unmeasured row gets a BLANK rank, never the next number. A rank is a claim about where
         // a business sits against the others, and there is nothing here to compare it on.
-        rank: r.score === null ? "" : String(++rank),
+        rank: ranked === null ? "" : String(++rank),
         dominance_score: r.score === null ? "not measured" : String(r.score),
         score_measured: r.measured,
       };
       if (!both) return cells;
 
-      // ‼️ THE RANK ABOVE COUNTS DOMINANCE AND ONLY DOMINANCE. The file is sorted by it and cut by
-      // it; optimization rides along as a column and is never ranked, or the file would carry two
-      // orderings and a reader would have to work out which one the cutoff meant.
+      cells.presence_score =
+        r.presence === null || r.presence === undefined ? "not measured" : String(r.presence);
+      cells.presence_measured = r.presenceMeasured ?? "";
       cells.optimization_score =
         r.optimization === null || r.optimization === undefined
           ? "not measured"

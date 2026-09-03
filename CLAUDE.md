@@ -3399,7 +3399,8 @@ twice counts **once**, or a business with three Yelp pages looks three times as 
 
 ### One file, most popular first
 `scored.csv` is sorted **descending**. Rank 1 is the biggest operator; the barely-visible ones are at
-the bottom. Unmeasured rows sit last with a **blank rank**, never the next number.
+the bottom. Unmeasured rows sit last with a **blank rank**, never the next number. (The KEY became
+`presence_score` on 2026-08-28; the direction rule below is unchanged and is what that key inherited.)
 
 > ‼️ **THE SORT DIRECTION IS WHAT MAKES THE CUTOFF UNAMBIGUOUS AND IT IS NOT A PRESENTATION CHOICE.**
 > Ascending, "drop the first 10" and the file disagree about what "first" means, and getting that
@@ -3408,7 +3409,8 @@ the bottom. Unmeasured rows sit last with a **blank rank**, never the next numbe
 
 The cutoff card takes 1️⃣ / 2️⃣ / 3️⃣ (keep the bottom 30 / 50 / 70 percent) **and** free text, parsed
 by a pure grammar in `score.ts`: `drop the first 10`, `drop 10`, `top 20%`, `bottom 30%`,
-`score > 60`, `score < 40`, `keep 120`. Anything else is refused and the grammar is printed —
+`presence > 70`, `score > 60`, `score < 40`, `keep 120`. Anything else is refused and the grammar is
+printed —
 mechanical for the same reason `looksLikeCallNotes` is, and no model decides which leads get deleted.
 `CUTOFF_GRAMMAR` is one string used by both the parser's help text and the refusal, so they cannot
 drift. `drop the top 20%` reads as a percentage and never as 20 rows.
@@ -3462,6 +3464,12 @@ statuses with a reader and no writer, the same class this file records five othe
 the same reasoning that deleted `SCRAPER_MV_MAX_EMAILS` rather than leaving it inert. Adding them
 later is one `alter table`.
 
+> ‼️ **AND IT CANNOT BE BUILT ON THE CURRENT PLAN, verified 2026-08-28.** ReachInbox gates
+> **webhooks AND the REST API** behind Tier 4 -- their own support answer, and the lock on every
+> card of the integrations page. So `campaigns/add-email` is not merely undocumented, it is
+> unreachable, and the decision above is no longer a judgement call. See the ReachInbox campaign
+> lane below for what IS reachable without it.
+
 Probe: `bunx tsx scripts/_probe-score.ts` (107 checks, no key, no network, no DB). It proves the
 weights, both unmeasured splits, the descending sort, every grammar row, the refusal, and that
 `dominant.csv` keeps every original column while `apollo_targets.csv` keeps exactly two.
@@ -3487,9 +3495,12 @@ produces TWO numbers on one pass, in one thread, in one file.
 > is optimized and invisible, and a fifteen-year-old spa with 2,000 reviews and an empty profile is
 > the reverse. A blend answers neither question.
 
-> ‼️ **THE SORT IS `dominance_score` ALONE, DESCENDING, UNCHANGED.** `optimization_score` is a
+> ‼️ **THIS RULE WAS REVERSED ON 2026-08-28 AND IS KEPT HERE BECAUSE THE REVERSAL NEEDS IT.** It
+> read: *"THE SORT IS `dominance_score` ALONE, DESCENDING, UNCHANGED. `optimization_score` is a
 > COLUMN. `sortForCutoff` reads `score`, `buildScoredCsv`'s rank counts `score`, and neither has
-> changed. The file is sorted to decide who gets DELETED, and that question is dominance.
+> changed."* The file is now sorted by **`presence_score`**, and both of the old numbers are
+> columns. See "ONE number, and the file sorts by it" below for what changed and why the objection
+> that produced this rule does not apply to what replaced it.
 
 ```
 awaiting_workflow -> 2️⃣ -> scoring -> auditing -> scored -> [cutoff] -> [✅] -> awaiting_apollo_export
@@ -3502,14 +3513,49 @@ lookup is keyed by the `cid` the SERP returns, so it cannot run until scoring ha
 
 ### Three components are FREE, three cost one call
 
-| # | component | weight | attempted when |
-|---|---|---|---|
-| 1 | primary category present | 15 | a knowledge_graph **or** the profile came back |
-| 2 | 4 or more `additional_categories` | 20 | the profile came back |
-| 3 | description names the category AND the city | 15 | a description was found, and a category and city are known |
-| 4 | 5 or more photos | 15 | the profile returned a numeric `total_photos` |
-| 5 | 3 or more services carrying a snippet | 15 | the profile returned a services array |
-| 6 | category AND city in the landing page `<title>` and `<h1>` | 20 | the page was crawled, and a category and city are known |
+**Five of the six are GRADUATED as of 2026-08-29.** Matthew's rule, in his words: more categories,
+more keywords, more photos, more described services, more of the title and h1 filled in, all score
+higher. Each pays `min(1, have / ceiling)` of its weight. The numbers he named are the targets and
+they sit inside the ceilings.
+
+| # | component | weight | scored | attempted when |
+|---|---|---|---|---|
+| 1 | primary category present | 15 | present or not | a knowledge_graph **or** the profile came back |
+| 2 | `additional_categories` | 20 | graduated, **5 = full** | the profile came back |
+| 3 | category tokens + city in the description | 15 | graduated over `cat tokens + 1` | a description was found, and a category and city are known |
+| 4 | photos | 15 | graduated, **10 = full** | the profile returned a numeric `total_photos` |
+| 5 | services described, keyworded ones worth double | 15 | graduated, **5 points = full** | the profile returned a services array |
+| 6 | category and city in the landing page `<title>` and `<h1>` | 20 | graduated over **4 checks** | the page was crawled, and a category and city are known |
+
+> ‼️ **A THRESHOLD ANSWERS "DID THEY CLEAR THE BAR" AND THAT IS NOT THE QUESTION BEING ASKED.** The
+> file is skimmed from the top for the best-configured profiles, so the score has to ORDER them. Under
+> the old pass marks a business with 9 photos scored identically to one with none, a description
+> reading "medical spa" scored identically to one naming nothing, and a page whose title was right
+> and whose h1 forgot the city scored zero exactly like a page naming neither anywhere. Every one of
+> those reported real work as no work.
+>
+> `primary_category` is the one that stays boolean: a business has one primary category or it has
+> none, and there is no "more" to have.
+
+> ‼️ **`GAP_FRACTION` EXISTS BECAUSE GRADUATION BROKE `countGaps`.** It asked `earned < weight`,
+> which was exactly "did they fail the threshold" and is now "is this anything short of perfect" —
+> so 9 photos of a 10 ceiling would be reported as a photo gap on the one line of the summary that
+> gets read down a phone. A gap is `earned < weight * 0.6`.
+
+> ‼️ **THE SERVICES COMPONENT CARRIES TWO AXES AND MUST NOT BE SPLIT INTO TWO.** "3 service
+> descriptions with proper keywords, the more descriptions with more keywords the higher score" is
+> how many are described AND whether the descriptions say what the service is. A described service
+> naming the category is worth a full point, a bare one is worth half. **With no category known
+> every described service is worth a full point**, because halving them would charge the business
+> for a lookup WE could not make — the denominator rule arriving one level down.
+
+> ‼️ **TWO OF MATTHEW'S SIX CRITERIA ARE NOT OBSERVABLE AND CARRY NO WEIGHT, and he was told before
+> the build.** *"5-10 photos with location data embedded"* — Google **strips EXIF** on upload, so
+> only the profile owner can see it; the count is scored and the geotagging is a call item.
+> *"At least 4 GBP posts to go out in the next month"* — a plan is not a state and nothing can
+> observe a future post. Posting CADENCE is observable and costs $0.00225 a business through
+> `my_business_updates`; **he chose to skip it on cost, twice** (2026-08-28 and again 2026-08-29).
+> Both print in the `UNVERIFIABLE` block so their absence is never mistaken for a low score.
 
 `business_data/google/my_business_info/task_post` is **$0.0015**, so a business now costs at most
 `$0.0012 + $0.0015 = $0.0027` and `DATAFORSEO_MAX_QUERIES_PER_BATCH` counts **businesses, not
@@ -3657,7 +3703,296 @@ becomes a statement about how many lookups failed rather than about the business
 > `!row.gbp_task_id` would be true on every row forever and every tick would re-post and RE-BUY the
 > whole batch.
 
-Probe: `bunx tsx scripts/_probe-gbp-audit.ts` (195 checks, no key, no network, no DB). It proves the
-weights, **both directions of the denominator rule**, the Westminster trap off the real payload, the
-three distinct unmeasured notes, the live profile shape, the `opt_` collision and both new grammar
-forms. `_probe-score.ts` (107) and `_probe-scraper.ts` (71) are untouched and still pass.
+Probe: `bunx tsx scripts/_probe-gbp-audit.ts` (249 checks, no key, no network, no DB). It proves the
+weights, **both directions of the denominator rule** on each score AND on their union, **every
+graduated curve and that more always scores strictly higher than less**, the `GAP_FRACTION` bar, the
+Westminster trap off the real payload, the three distinct unmeasured notes, the live profile shape,
+the `opt_` collision, every grammar form, the presence tie-break and the United States filter.
+`_probe-score.ts` (107) and `_probe-scraper.ts` (71) are untouched and still pass.
+
+## ONE number, and the file sorts by it: `presence_score` (2026-08-28)
+`presenceScore` / `sortByPresence` in `gbp-audit.ts`, `geo.ts`. **No migration and no new column.**
+
+Two scores in one file meant reading two numbers and deciding. Matthew wanted one: highest at the
+top, take the top off, leave the bottom for Apollo. His call, made on 2026-08-28 with the objection
+below stated.
+
+```
+presence_score = (earned_dominance + earned_optimization)
+               / (attempted_dominance + attempted_optimization)   rescaled to 0-100
+```
+
+> ‼️ **IT IS ONE `earned / attempted` OVER TWELVE COMPONENTS. IT IS NOT THE AVERAGE OF THE TWO
+> SCORES, AND THAT IS THE ENTIRE REASON THE OLD RULE NO LONGER BITES.** The rule this replaced said
+> the two numbers must never be blended, and the argument was right: a blend needs a value for BOTH
+> halves, so a business whose profile lookup failed would need one INVENTED — as a zero, which says
+> "their profile is empty" about a profile nobody read, or as the other score, which says nothing.
+> **A single denominator needs no such value.** A row measured on twelve components is scored out of
+> twelve; a row measured on six is scored out of six. It is the SAME denominator rule `scoreSerp`
+> and `scoreOptimization` each already apply, applied ONCE over the union instead of twice over the
+> halves, so the objection has nothing left to be about.
+>
+> What the old rule was ALSO protecting is untouched: **`dominance_score` and `optimization_score`
+> are still written, still columns, still visible in the file, and still cuttable by name.** "Are
+> they already winning" and "did anybody fill the profile in" remain two questions with two answers.
+> Only the ORDER changed.
+
+> ‼️ **NO COLUMN, NO MIGRATION, AND DO NOT ADD ONE.** It is computed in memory from
+> `score_components` and `optimization_components`, which already store `{weight, attempted, earned,
+> note}` per component. There is nowhere for a stored presence value to drift away from the parts it
+> claims to summarise, because there is no stored value. That is also why it can be recomputed for
+> every batch scored before it existed, with no backfill.
+
+> ‼️ **THE SPLIT IS EVEN AND THAT WAS ASKED AND ANSWERED** (2026-08-29). Matthew was offered three
+> mixes — GBP settings leading at roughly 70/30, an even split, or GBP settings plus reviews with the
+> other five visibility components dropped — and chose the even split, which is what the weights
+> already give: 115 of dominance against 100 of optimization. So the ratio is deliberate rather than
+> inherited, and changing it is a decision somebody makes on purpose. His words: *"its not one or the
+> other, is both combined."*
+
+**The tie-break is Google reviews, then dominance.** Presence is a ratio over a variable
+denominator, so a row measured on two components lands on a round number constantly and ties are
+ordinary rather than exotic. The proxy is `score_components.reviews.earned`, which **saturates at
+500 reviews** because that is where the `reviews` component itself tops out: 600 and 6,000 tie
+identically. If a finer tie-break is ever wanted, carry the raw count out of `scoreSerp`; do not
+raise a ceiling that was chosen for scoring rather than for ordering.
+
+`sortByPresence` **pre-sorts by the tie-breaks and then calls `sortForCutoff`**, which is unchanged
+and still the one definition of descending-with-unmeasured-last. `Array.prototype.sort` is required
+to be stable, so the tie order survives. Do not inline the direction rule into a second place.
+
+> ‼️ **A ROW MEASURED ON NOT ONE OF THE TWELVE KEEPS A NULL presence, A BLANK RANK, AND ITS PLACE IN
+> THE KEPT PILE.** Unchanged doctrine, one level up: it sits at the end of the file, is left out of
+> every percentage, and is never dropped by any cut on any axis.
+
+### `score > 60` had to become a predicate, and that was not optional
+`CutoffPlan` gains `axis: "presence"` and a `shape: "prefix" | "predicate"`. The prefix forms
+(`drop the first 10`, `top 20%`, `bottom 30%`, `keep 120`) cut the top of the file, which is now
+presence. `presence > 70` and `presence < 40` are new and read the way the dominance forms always
+have (`>` drops above, `<` keeps below), because presence inherited dominance's job as the
+survive-or-delete axis. `optimization > 70` / `< 40` are unchanged and **both still mean DROP** —
+the asymmetry documented above is deliberate and stays.
+
+> ‼️ **`score > 60` USED TO COUNT THE MATCHING ROWS AND SLICE THAT MANY OFF THE FRONT**, which was
+> correct only because the file was sorted by the very column it names. Sorted by presence, the rows
+> scoring above 60 on dominance are scattered through it and the slice would have deleted a
+> contiguous block of the WRONG businesses — with the right COUNT, and no error anywhere. It is a
+> predicate now, exactly like the optimization forms. This is the same failure the optimization axis
+> was written against, arriving through the one form that used to be safe.
+
+**The echo names the axis on EVERY form, prefix ones included.** Three numbers live in one file,
+"dropping 34 rows" is the same sentence for all three, and the sort key has already moved once: a
+card that names the axis only when it is not the default reads correctly right up until the default
+moves again, and then it reads confidently and wrongly. `shape` is CARRIED on the plan rather than
+re-derived in the formatter, because "rows 1 to N" and "scattered through the file" are a lie about
+each other.
+
+`scored.csv` and `dominant.csv` now append `rank`, then **`presence_score` / `presence_measured`**,
+then `dominance_score` / `score_measured`, then the optimization columns. **The rank counts
+presence**, since that is what the rows are ordered by.
+
+> ‼️ **ON `ScoredRow.presence`, AND ONLY THERE, `undefined` AND `null` MEAN DIFFERENT THINGS.**
+> `null` is "computed, and not one of the twelve could be measured" — unmeasured, never dropped.
+> `undefined` is "this caller does not carry presence at all", which is a caller written before the
+> axis existed, and it falls back to `score`. That is what lets `_probe-score.ts` keep pinning the
+> original three-column shape and the original prefix behaviour **without being edited**, which is
+> what proves this change was additive. `buildScoredCsv` draws the same distinction for the rank.
+> `optimization` keeps the simpler rule where both read as unmeasured, because nothing ever sorted
+> by it.
+
+### The United States filter — deleted from the file, not sent to the bottom
+`geo.ts`, applied in `beginScoreWorkflow` **at the INSERT**.
+
+> ‼️ **SENDING A FOREIGN ROW TO THE BOTTOM SENDS IT TO THE APOLLO PILE.** The bottom of this file is
+> not the discard pile, it is the pile SRT pays to reveal contacts for. A clinic in Riga scored low
+> is a clinic in Riga that gets bought. SRT does not sell outside the US, so those rows are not
+> low-priority leads, they are not leads.
+
+> ‼️ **DECIDED ON THE `state` / `city` CELLS OF THE DROPPED FILE, NEVER ON THE SEARCH RESULT.** Two
+> different questions: a business with no Google profile at all can still be in Florida, and a
+> business with a perfect profile can be in Prague. A mechanical list of the 50 states plus DC, by
+> name and by postal code, no model — same rule the cutoff grammar and `looksLikeCallNotes` are held
+> to, and a wrong answer here does not produce a bad score, it produces a MISSING ROW.
+
+> ‼️ **THE POSTAL CODE IS READ STRICTLY, AND "Al Ain" IS WHY.** A loose "is any two-letter token a
+> state code" pass read the Abu Dhabi city as **ALABAMA** and kept a UAE clinic in the American pile.
+> A code counts only when it is two uppercase letters that are either the whole cell or the segment
+> after the last comma. State NAMES are matched on word boundaries, so "Indianapolis" does not name
+> Indiana.
+
+> ‼️ **THREE VERDICTS, NOT TWO, AND `unknown` IS KEPT.** `not_us` is "the file said where they are
+> and it is not a state". `unknown` is "no city and no state at all", which is a fact about the
+> EXPORT, not about the business — deleting on an empty cell is the failure `MxVerdict` and every
+> "not measured" note in this lane exist to prevent. An `unknown` row stays, and the count is stated
+> in the thread rather than left to be noticed.
+
+> ‼️ **THE NAMES GO IN THE THREAD, NOT JUST THE COUNT**, the same rule `junk.csv` follows by carrying
+> a `reason` column. These rows are DELETED rather than sorted, so the thread is the only place they
+> are ever seen again — and the one way this filter can be wrong is a genuinely American row whose
+> export left the state cell blank and wrote a bare city, which a bare number would hide behind a
+> plausible total. **The list is the mitigation. Do not reduce it to a total.**
+
+It runs at the insert and not at publish so **no SERP and no profile lookup is ever bought for a row
+that was always going to be deleted** — the same reasoning that puts the MillionVerifier gate before
+the upload. `resolveStateColumn` may miss and that is not an error: plenty of exports write
+"Charlotte, NC" into `city` and carry no state column at all.
+
+**Measured on the live 226-row batch** (`leads (1).csv`): 141 `us`, 65 `not_us`, 20 `unknown`. Every
+one of the 65 was genuinely foreign — Riga, Prague, Dubai, Toronto, Bangalore — and no American row
+was caught. **It does not promise zero unmeasured rows afterwards**: Alpha Aesthetics Partners is a
+real Charlotte holding company with no local profile, and it survives the filter and still cannot be
+audited.
+
+### `scripts/_backfill-gbp-serp.ts` — the free recovery
+For batches scored before `extractGbpSerpFacts` existed: `dominance_score` set,
+`dataforseo_task_id` set, `gbp_serp` NULL, so the audit had no key and every row read *not measured*.
+
+**`task_get` is free and a result stays fetchable for 30 days**, so the SERP carrying the cid was
+already paid for and is still there. The script re-collects it, writes `gbp_cid` / `gbp_place_id` /
+`gbp_serp`, and returns the batch to `auditing` for the 5-minute cron.
+
+- **The US filter runs FIRST, before the recovery.** Every cid recovered on a row about to be deleted
+  becomes a $0.0015 profile lookup bought for a business in Prague.
+- **It spends nothing itself, and it says what it will cause to be spent**, before and after: one
+  `my_business_info` lookup per recovered cid, at $0.0015. That is the only consequence of running it
+  that is invisible from inside it.
+- **A SERP that came back with no cid is still WRITTEN.** It is a measured absence — Google has no
+  profile to point at — and leaving `gbp_serp` null would leave the row looking un-asked and get the
+  same task re-collected forever.
+- Dry run by default, `--write` to act, `--no-repost` to audit without clearing `csv_posted_at` /
+  `scoring_approval_ts` (for a thread somebody has already acted on, or a deployment older than the
+  code that would produce the new file).
+- **A task past 30 days is reported as gone and is NEVER re-posted.** Re-buying a SERP to recover a
+  cid costs more than the lookup it enables.
+
+**Live result on `leads (1).csv`:** 65 foreign rows deleted, 161 survive; of 53 recoverable rows
+44 had a cid waiting (36 knowledge_graph, 8 local_pack) and 9 genuinely had no profile on the SERP.
+0 expired. $0.066 of profile lookups followed.
+
+### `scripts/_rescore-optimization.ts` — a scoring change applied backwards, for free
+The graduated rewrite made every stored `optimization_score` a number produced by rules that no
+longer exist. `optimization_components` stores `{weight, attempted, earned, note}` and **not the raw
+counts**, so nothing in the table says a profile had 28 photos rather than 6 and the new curves
+cannot be applied to what is stored.
+
+**`task_get` is free for 30 days**, so the script re-reads the profiles the batch already paid for.
+That property is the only reason a scoring change can be retroactive at all instead of a re-run at
+full price. Measured: 144 profiles re-collected, 0 uncollectable, **$0 spent**, 128 of 161 rows
+changed (115 up, 13 down — up, because graduated scoring pays for work that a pass mark scored as
+nothing).
+
+> ‼️ **THE LANDING PAGE IS RE-CRAWLED AND THE STORED NOTE IS DELIBERATELY NOT PARSED.** The old note
+> collapses three different pages into one string: `neither title nor h1 names both` is true of a
+> page carrying the category in its title and true of a page carrying nothing at all, and under the
+> four-check rule those score 5 and 0. Mapping the old note onto the new scale would INVENT the
+> difference. Crawling costs bandwidth and no money.
+
+> ‼️ **A ROW WHOSE PROFILE COULD NOT BE RE-COLLECTED KEEPS ITS EXISTING SCORE.** A re-score that
+> cannot see the profile is not a lower score, it is no score, and overwriting a real number with one
+> derived from an empty payload is the denominator rule failing at the top level.
+
+## The ReachInbox campaign lane (2026-08-28) — replies come back as MAIL
+`src/lib/followup-operator/campaign-replies.ts`, `campaign-digest.ts`, the new branch in
+`reply-sweep.ts`, `/api/cron/campaign-digest`. **No migration and no new table.**
+
+Cold email volume moved to ReachInbox. Two things followed and they point opposite ways:
+`#vektor-email-director` had to stop talking, and it had to start listening.
+
+**It had to stop talking** because the pace card counts `outreach_touches` written by the Outlook
+Sent Items sweep. Once ReachInbox owns the sending, that count is structurally 0 forever — the
+channel really did read *"0 of 60 sent today, behind by 60"* three times a day for days. It was
+nagging about work it cannot see. `/api/cron/outreach-pacing` is **out of `vercel.json`**; the
+route and `outreach-sender/pacing.ts` are KEPT, unscheduled and callable by hand.
+
+> The other three posters in that channel were already inert and were verified rather than assumed:
+> `slack-approval.ts:27` hard-blocks `send_marketing_email` at the source, `/api/cron/email-director`
+> is a disabled stub, `/api/cron/process-sequences` is a disabled stub, and neither is in
+> `vercel.json`. `runEmailDirector` has no caller anywhere under `src/app`. The dialer compose card
+> and the ⚡ Smart Follow-up card STAY: they fire only when Matthew presses something, which is the
+> line — **nothing posts there unless a real prospect did something or he clicked a button.**
+
+### ‼️ There is no webhook and no API, and that decided the whole design
+ReachInbox gates **webhooks and the REST API** behind Tier 4 (their own support answer; it is the
+"Unlock Feature" lock on the integrations page). Matthew declined to upgrade. **And the sending
+mailboxes were PURCHASED INSIDE ReachInbox**, so they are not in this Microsoft 365 tenant and
+Graph cannot read them either. No API to poll, no mailbox to sweep.
+
+The one free channel left is the mail itself. The purchased mailboxes **forward their inbound** to
+a mailbox we do own (`REACHINBOX_REPLY_MAILBOX`, a free M365 shared mailbox), and from that point a
+campaign reply is an ordinary Outlook message that `reply-sweep.ts` already reads every 5 minutes
+inside `/api/cron/outreach-sender`. Sent, replied, bounced and auto-reply all come for free.
+**Opens and clicks never leave ReachInbox and are not recoverable.** Matthew chose to skip them.
+
+> Forwarding is preferred over a campaign Reply-To because it also catches bounces and
+> out-of-offices, which follow the envelope sender rather than Reply-To, and because it puts no
+> second domain in the header. With Reply-To only, bounce capture is lost and ReachInbox's internal
+> bounce handling is the only protection left.
+
+### ‼️ THE MAILBOX IS THE DISCRIMINATOR AND IT MUST STAY SINGLE-PURPOSE
+A campaign reply comes from someone we never sent to, so it matches no prospect by conversation,
+address or domain — **exactly the shape `reply-sweep` has always dropped as `unmatched`**, which is
+why every ReachInbox reply was being discarded. The only thing separating "a stranger replied to the
+campaign" from "a stranger emailed Matthew" is WHICH MAILBOX it landed in.
+
+So prospect creation is allowed in `REACHINBOX_REPLY_MAILBOX` **and nowhere else**, and every other
+mailbox keeps the old drop behaviour. Point a human's real inbox at that var and it starts minting
+prospects, CRM leads and Speed-to-Lead RingOuts out of ordinary mail. **Unset fails closed**, which
+is the single most valuable thing `scripts/_probe-reachinbox.ts` proves (32 checks, no network, no
+DB, no key): unset matches nothing, whitespace-only matches nothing, and a lookalike address
+(`no-replies@…`, `…srtagency.com.evil.com`) is not a prefix or suffix match.
+
+### The read-only mailbox is a `:0` cap, not new code
+`OUTREACH_MAILBOXES=…,replies@srtagency.com:0`. `outreachMailboxes()` already parsed `address:cap`
+and `chooseOutreachMailbox()` already skips a mailbox with zero headroom, so it is **swept for
+replies and never sent from**. Both sweeps loop that list, so nothing else was needed.
+
+- `first_sent_at` is stamped to the reply's OWN timestamp. The sweep refuses to attach mail older
+  than `first_sent_at`, so a null or later value would make it reject the very message that created
+  the row. We cannot know when ReachInbox actually sent, and this is the earliest time we can prove
+  contact existed.
+- `receivedAt` was **hoisted above the match block** so the creation branch and that guard read one
+  value.
+- **Only `outcome === "replied"` announces.** A bounce closes the prospect silently and an
+  out-of-office is not an answer; announcing either rebuilds the noise this lane removed.
+- **‼️ Automated mail may never MINT a prospect.** A bounce forwarded out of a ReachInbox mailbox
+  arrives FROM mailer-daemon, not from the person who never received it, so creating on it would
+  put a prospect called "postmaster" in the CRM while the address that actually bounced stays
+  unknown — it is named only inside the body, which nothing here parses. `isAutomated` gates the
+  creation branch, so it stays `unmatched` as it always did. A bounce that DOES match a known
+  prospect still closes it, unchanged.
+- **`contact_id` is the CRM idempotency key.** A second reply from the same person must not create a
+  second lead or re-fire a RingOut. `speedToLead` is true only for `REPLIED_INTERESTED` /
+  `ASKED_PRICE_HOT` — a RingOut on "take me off your list" is worse than no RingOut.
+- A Slack or CRM failure is **caught inside the loop**. The touch is already durable in
+  `outreach_touches`, and letting it throw would skip the watermark write and re-scan every mailbox.
+- `ensureProspectThread` gained an optional `bodyLines`. Its default header advertises the follow-up
+  operator's in-thread commands (`1/2/3`, `call`, `snooze`) — and **`getProspectByThread` has no
+  callers, so those were already dead copy**; this lane has no ladder and must not offer them.
+- `source: "reachinbox"` needed **no migration**: the column is free text with no CHECK constraint.
+  Both TS unions were widened.
+
+### ‼️ The digest prints no rate, and that is the point
+`/api/cron/campaign-digest`, `0 13 * * *` (09:00 ET), replacing the pacing entry. One daily UTC
+firing, so no DST slot claim is needed — `claimPacingSlot()` existed only because pacing fired at
+six candidate hours to hit three Eastern slots.
+
+**No send count, no open rate, no click rate, no reply rate.** The denominator is genuinely
+unobservable from here, and a rate is exactly the figure a spend decision gets made on. Same rule as
+the audit engine's coverage gate and `pacing.ts`'s "counts touches, not the queue": a denominator we
+did not measure is worse than none. The card reports replies, the verdict split from `classifyReply`,
+bounces and auto-replies as a filtered-out count, new CRM contacts, and every replier linked to their
+thread — then says the send numbers live in the ReachInbox dashboard.
+
+**A day with nothing in it posts nothing.** A daily "0 replies" card is the pace card wearing a new
+hat.
+
+Touches are read FIRST and prospects fetched by the ids they name. The obvious order — every
+reachinbox prospect, then their touches — grows an `.in()` list with the campaign forever and
+eventually builds a URL too long to send.
+
+### Env
+```
+REACHINBOX_REPLY_MAILBOX=    # The forwarding target. UNSET IS HANDLED: the lane is off and
+                             # reply-sweep behaves exactly as it did. It must receive NOTHING else.
+OUTREACH_MAILBOXES=          # Append the same address with a :0 cap so it is swept, never sent from.
+```

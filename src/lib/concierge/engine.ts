@@ -31,11 +31,13 @@ import {
 import {
   captureLead,
   loadMessages,
-  markBookingClicked,
   recordDelivered,
   recordSessionAmmo,
   type ConciergeSession,
 } from "./session";
+import { resolveBooking } from "./booking";
+import { conciergeOrigin } from "./origin";
+import { safeTimeZone } from "@/lib/calendly";
 import { MAX_REPLY_WORDS, systemPrompt, toolsFor } from "./tools";
 
 /** How many free things before the bot may raise the call. Two, because double the value. */
@@ -87,6 +89,22 @@ function onboardingUrl(session: ConciergeSession, place: Place | null, business:
 }
 
 /**
+ * Wrap an outbound booking link so the click is recorded before the browser leaves.
+ *
+ * ‼️ THE HOP IS WHAT MAKES "SOMEBODY WENT TO BOOK" MEASURABLE. A slot button is a link to
+ * Calendly, so without this every session that reached the close looked exactly like every session
+ * that took a time. /api/concierge/booked validates the destination against a host allowlist
+ * before redirecting, because a public route that takes a URL and forwards a browser is an open
+ * redirect until it does.
+ */
+function trackedUrl(session: ConciergeSession, target: string): string {
+  const url = new URL("/api/concierge/booked", conciergeOrigin());
+  url.searchParams.set("t", session.sessionToken);
+  url.searchParams.set("u", target);
+  return url.toString();
+}
+
+/**
  * The first thing the visitor reads. Never a greeting.
  *
  * Three shapes, and which one it is depends entirely on what we actually know:
@@ -124,7 +142,7 @@ export function openingFor(args: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface TurnAttachment {
-  kind: "magnet" | "booking";
+  kind: "magnet" | "booking" | "slot";
   key: string;
   title: string;
   url: string | null;
@@ -135,6 +153,14 @@ export interface ExecutorContext {
   session: ConciergeSession;
   /** Computed from the visitor's own words before the model ran. Never set by the model. */
   visitorAskedToBook: boolean;
+  /**
+   * The visitor's IANA zone, from the frame.
+   *
+   * ‼️ THEIR ZONE, NOT THE SERVER'S. calendly.ts labours over this for the same reason: a clinic
+   * in Phoenix opening the widget at 9pm Eastern is still on today, and computing the boundary
+   * here would offer them tomorrow's slots under a heading that says today.
+   */
+  timeZone: string;
   /** What the visitor has told us so far this turn. */
   place: Place | null;
   business: string | null;
@@ -286,34 +312,76 @@ export function makeExecutor(ctx: ExecutorContext) {
         });
       }
 
-      if (ctx.config.audience === "owner") {
-        const url = onboardingUrl(ctx.session, ctx.place, ctx.business);
-        await markBookingClicked(ctx.session);
-        ctx.attachments.push({ kind: "booking", key: "onboarding2", title: "Start here", url });
+      // ‼️ NOTHING HERE MARKS THE SESSION BOOKED. Offering a time is not taking one, and the two
+      // were indistinguishable until /api/concierge/booked existed. That route records the click.
+      const offer = await resolveBooking({
+        config: ctx.config,
+        timeZone: ctx.timeZone,
+        window: input.window === "extended" ? "extended" : "today_tomorrow",
+        fallbackUrl: onboardingUrl(ctx.session, ctx.place, ctx.business),
+      });
+
+      if (offer.mode === "slots") {
+        for (const slot of offer.slots) {
+          ctx.attachments.push({
+            kind: "slot",
+            key: slot.startTime,
+            title: slot.label,
+            url: trackedUrl(ctx.session, slot.url),
+          });
+        }
+        return ok({
+          offered: true,
+          times: offer.slots.map((s) => s.label),
+          say:
+            "Say in one sentence that these are the real open times on Matthew's calendar and to " +
+            "pick one. The buttons are attached by the system. Do not list the times again in text.",
+        });
+      }
+
+      if (offer.mode === "no_slots") {
+        // ‼️ AN EMPTY DIARY IS NOT A BROKEN INTEGRATION, and calendly.ts goes to some trouble to
+        // keep them apart. This branch is the genuinely-full case, so it says so and widens.
+        const widened = offer.window === "today_tomorrow";
+        if (widened) {
+          return ok({
+            offered: false,
+            reason: "nothing open in the next two days",
+            say: "Tell them the next two days are full and call offer_booking again with window extended.",
+          });
+        }
+        if (offer.morePageUrl) {
+          ctx.attachments.push({
+            kind: "booking",
+            key: "calendar",
+            title: "See all times",
+            url: trackedUrl(ctx.session, offer.morePageUrl),
+          });
+        }
+        return ok({
+          offered: true,
+          say: "Tell them the week is full and the calendar has the next openings. One sentence.",
+        });
+      }
+
+      if (offer.mode === "link") {
+        ctx.attachments.push({
+          kind: "booking",
+          key: ctx.config.audience === "owner" ? "onboarding2" : "clinic",
+          title: offer.label,
+          url: trackedUrl(ctx.session, offer.url),
+        });
         return ok({
           offered: true,
           say: "Offer the call in one sentence. The link is attached by the system, do not write it.",
         });
       }
 
-      // Patient lane. bookingMode is tri-state and 'none' means a human calls back, so there is a
-      // real answer for a clinic that has not given us a booking URL rather than a dead button.
-      if (ctx.config.bookingMode === "link" && ctx.config.bookingUrl) {
-        await markBookingClicked(ctx.session);
-        ctx.attachments.push({
-          kind: "booking",
-          key: "clinic",
-          title: "Book a consultation",
-          url: ctx.config.bookingUrl,
-        });
-        return ok({ offered: true, say: "Offer the consultation in one sentence. Do not write the link." });
-      }
-
-      if (ctx.config.bookingPhone) {
+      if (offer.mode === "phone") {
         return ok({
           offered: true,
-          phone: ctx.config.bookingPhone,
-          say: `Tell them the clinic books by phone on ${ctx.config.bookingPhone}.`,
+          phone: offer.phone,
+          say: `Tell them the clinic books by phone on ${offer.phone}.`,
         });
       }
 
@@ -386,6 +454,8 @@ export interface RunTurnArgs {
   message: string;
   /** The business name the visitor gave, when they gave one. Never inferred. */
   business?: string | null;
+  /** The visitor's IANA time zone, as the frame reported it. Validated, never trusted raw. */
+  timeZone?: string | null;
 }
 
 /**
@@ -401,6 +471,10 @@ export async function runConciergeTurn(args: RunTurnArgs): Promise<TurnResult> {
     config: args.config,
     session: args.session,
     visitorAskedToBook: asksToBook(args.message),
+    // safeTimeZone throws nothing and falls back to the zone the calls are actually taken in.
+    // The value arrives from a query string on a public route, so it is untrusted input going
+    // into an Intl formatter.
+    timeZone: safeTimeZone(args.timeZone),
     place: null,
     business: args.business ?? null,
     attachments: [],

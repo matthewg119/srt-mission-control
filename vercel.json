@@ -65,12 +65,16 @@
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron/outreach-pacing",
-      "schedule": "0 16,17,19,20,22,23 * * *"
-    },
-    {
       "path": "/api/cron/scraper-tick",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/campaign-digest",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/concierge-purge",
+      "schedule": "17 * * * *"
     }
   ]
 }

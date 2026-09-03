@@ -45,7 +45,14 @@ console.log("\nCoverage");
 const stepKeys = DELIVERY_STEPS.map((s) => s.key);
 const verifierKeys = Object.keys(STEP_VERIFIERS);
 
-ok(`${stepKeys.length} steps defined`, stepKeys.length === 33, `found ${stepKeys.length}`);
+// ‼️ HARDCODED ON PURPOSE, AND IT HAD ALREADY GONE STALE ONCE. This number is not here to be
+// correct, it is here to make somebody ACKNOWLEDGE that the step list changed: deriving it from
+// DELIVERY_STEPS.length would assert nothing at all. It sat at 33 while the concierge lane
+// shipped two steps, so this probe was red for a whole session and read as somebody else's
+// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed,
+// self_report_field). If you are reading this because it failed: update the number here, the
+// prose count at the top of src/config/delivery-steps.ts, and the one in step-verify.ts.
+ok(`${stepKeys.length} steps defined`, stepKeys.length === 37, `found ${stepKeys.length}, expected 37`);
 
 const missing = stepKeys.filter((k) => !(k in STEP_VERIFIERS));
 ok("every step has a verifier", missing.length === 0, missing.join(", "));
@@ -116,7 +123,8 @@ const clientId = process.argv[2];
 
 async function live() {
   if (!clientId) {
-    console.log("\nNo client id given, skipping the live half. Pass one to run all 33.");
+    console.log(`
+No client id given, skipping the live half. Pass one to run all ${stepKeys.length}.`);
     return;
   }
 

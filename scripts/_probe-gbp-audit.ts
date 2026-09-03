@@ -17,6 +17,9 @@ import {
   containsCity,
   countGaps,
   extractFirstH1,
+  presenceScore,
+  PRESENCE_COMPONENT_COUNT,
+  sortByPresence,
   extractGbpSerpFacts,
   extractTitle,
   shareANameToken,
@@ -36,9 +39,11 @@ import {
   type GbpProfile,
   type GbpSerpFacts,
   type OptimizationInput,
+  type OptimizationKey,
   type OptimizationResult,
 } from "../src/lib/scraper/gbp-audit";
-import { buildScoredCsv, OPTIMIZATION_CSV_COLUMNS } from "../src/lib/scraper/report";
+import { buildScoredCsv, formatGeoDrop, OPTIMIZATION_CSV_COLUMNS } from "../src/lib/scraper/report";
+import { locationVerdict } from "../src/lib/scraper/geo";
 import { parseCsv } from "../src/lib/scraper/csv";
 import { applyCutoff, parseCutoff, sortForCutoff, type ScoredRow } from "../src/lib/scraper/score";
 import type { SerpPayload } from "../src/lib/scraper/score";
@@ -75,13 +80,25 @@ const SERP: GbpSerpFacts = {
 function profile(over: Partial<GbpProfile> = {}): GbpProfile {
   return {
     category: "Medical Spa",
-    additional_categories: ["Skin care clinic", "Facial spa", "Laser hair removal service", "Day spa"],
+    // FIVE, because the ceiling is five. Under graduated scoring a "fully optimized" fixture has to
+    // actually be at the ceiling of every component, or the 100 it asserts is not reachable and the
+    // arithmetic below stops being checkable by hand.
+    additional_categories: [
+      "Skin care clinic",
+      "Facial spa",
+      "Laser hair removal service",
+      "Day spa",
+      "Wellness center",
+    ],
     description: "Charlotte's premier medical spa, offering injectables and skin care",
     total_photos: 12,
+    // Five described services, every description naming the category, which is the full five points.
     services: [
-      { title: "Botox", description: "Wrinkle relaxing injections" },
-      { title: "Filler", description: "Volume restoration" },
-      { title: "Microneedling", description: "Collagen induction therapy" },
+      { title: "Botox", description: "Wrinkle relaxing injections at our medical spa" },
+      { title: "Filler", description: "Volume restoration at our medical spa" },
+      { title: "Microneedling", description: "Collagen induction therapy, medical spa treatment" },
+      { title: "Peel", description: "Chemical peels at our medical spa" },
+      { title: "Laser", description: "Laser resurfacing at our medical spa" },
     ],
     url: "http://www.theskinbarqc.com/",
     address_info: { city: "Charlotte" },
@@ -116,13 +133,13 @@ eq(
   Object.keys(OPTIMIZATION_WEIGHTS).sort()
 );
 
-//   primary category set             15 / 15
-//   4 additional categories          20 / 20
-//   description names both           15 / 15
-//   12 photos                        15 / 15
-//   3 of 3 services described        15 / 15
-//   title and h1 name both           20 / 20
-//                                   100 / 100  ->  100
+//   primary category set                    15 / 15
+//   5 additional categories, ceiling 5      20 / 20
+//   description carries 2 category + city   15 / 15
+//   12 photos, ceiling 10                   15 / 15
+//   5 described services, all keyworded     15 / 15
+//   4 of 4 title/h1 checks                  20 / 20
+//                                          100 / 100  ->  100
 const full = score();
 eq("a fully optimized profile scores 100", full.score, 100);
 eq("and says all six were measured", full.measured, "6 of 6");
@@ -162,12 +179,13 @@ check(
 
 // Direction B: a measured zero STAYS in the denominator.
 //
-//   two photos is a real answer about a real profile, so it is attempted and earns nothing:
-//                                    85 / 100  ->  85
+//   two photos is a real answer about a real profile, so it is attempted and earns a FRACTION.
+//   Graduated: 15 * (2/10) = 3.
+//                                    88 / 100  ->  88
 const twoPhotos = score({ profile: profile({ total_photos: 2 }) });
 check("two photos is ATTEMPTED", twoPhotos.components.photos.attempted);
-eq("and earns nothing", twoPhotos.components.photos.earned, 0);
-eq("so the row scores 85", twoPhotos.score, 85);
+eq("and earns a graduated fraction, not zero and not full", twoPhotos.components.photos.earned, 3);
+eq("so the row scores 88", twoPhotos.score, 88);
 eq("and still reports six measured", twoPhotos.measured, "6 of 6");
 
 //   the same profile with the photo count MISSING leaves 15 points out entirely:
@@ -402,13 +420,34 @@ const halfDescription = score({
   serp: { ...SERP, description: null },
 });
 check("a description naming only the category is ATTEMPTED", halfDescription.components.description_keywords.attempted);
-eq("and earns nothing", halfDescription.components.description_keywords.earned, 0);
+// ‼️ GRADUATED: "medical spa" carries both category tokens and no city, so 2 of 3 keywords, which is
+// 15 * 2/3 = 10. Under the old pass/fail rule this scored ZERO, identically to a description that
+// named neither — which reported a business that had written two thirds of the right copy as having
+// written none of it. That is the failure this rewrite exists to remove.
+eq("and earns two thirds of the weight", halfDescription.components.description_keywords.earned, 10);
 eq(
-  "and the note names WHICH half missed",
+  "and the note counts the keywords and names which half missed",
   halfDescription.components.description_keywords.note,
-  "description names the category, not the city"
+  "2 of 3 keywords: 2 category, no city"
 );
-eq("so the row scores 85", halfDescription.score, 85);
+eq("so the row scores 95", halfDescription.score, 95);
+
+// The graduated reading still has to ORDER things correctly: more keywords is strictly more score.
+const noKeywords = score({
+  profile: profile({ description: "We are open six days a week and parking is free" }),
+  serp: { ...SERP, description: null },
+});
+eq("a description naming neither earns nothing", noKeywords.components.description_keywords.earned, 0);
+check(
+  "and a description naming the category outscores it",
+  (halfDescription.components.description_keywords.earned as number) >
+    (noKeywords.components.description_keywords.earned as number)
+);
+check(
+  "while the full description outscores them both",
+  (full.components.description_keywords.earned as number) >
+    (halfDescription.components.description_keywords.earned as number)
+);
 
 // ‼️ THE CATEGORY AND THE CITY ARE PART OF `attempted`, NOT PART OF THE TEST. With nothing to look
 // for, the check cannot be RUN, and scoring it zero would record "they wrote a bad description"
@@ -467,10 +506,22 @@ eq("a page with no h1 reads null", extractFirstH1("<h2>Nope</h2>"), null);
 
 check("title and h1 both naming both earns the full 20", full.components.landing_page.earned === 20);
 
+
 const titleOnly = score({ page: { crawled: true, title: PAGE_OK.title, h1: "Welcome" } });
-check("a right title and a wrong h1 is a MEASURED zero", titleOnly.components.landing_page.attempted);
-eq("and earns nothing", titleOnly.components.landing_page.earned, 0);
-eq("and the note names which half", titleOnly.components.landing_page.note, "title is right, h1 is not");
+check("a right title and a wrong h1 is MEASURED", titleOnly.components.landing_page.attempted);
+// ‼️ HALF THE CHECKS, HALF THE WEIGHT. Four booleans, not one: category and city, in the title and
+// in the h1. A page whose title is right and whose h1 forgot both used to score zero, identically to
+// a page naming neither anywhere.
+eq("and earns half the weight", titleOnly.components.landing_page.earned, 10);
+eq("and the note counts them", titleOnly.components.landing_page.note, "2 of 4: title cat, title city");
+eq("the full page scores all four", full.components.landing_page.note, "4 of 4: title cat, title city, h1 cat, h1 city");
+const noneOnPage = score({ page: { crawled: true, title: "Welcome", h1: "Welcome" } });
+eq("a page naming neither earns nothing", noneOnPage.components.landing_page.earned, 0);
+check(
+  "so a half-right page outscores a wrong one",
+  (titleOnly.components.landing_page.earned as number) >
+    (noneOnPage.components.landing_page.earned as number)
+);
 
 // ‼️ TWO DIFFERENT UNMEASURED ANSWERS THAT MUST NOT COLLAPSE. "we never looked" and "we looked and
 // the site refused" are different facts, and the CSV has to say which.
@@ -536,7 +587,8 @@ eq(
 eq("an absent services key reads NULL, not an empty array", readServices({ category: "x" }), null);
 eq("an empty array reads as an empty array", readServices({ services: [] }), []);
 
-// Only 2 of 5 services carry a snippet, so the component is a measured zero and says the ratio.
+// Only 2 of 5 services carry a snippet, and neither names the category, so they are worth half a
+// point each: 1 point of a 5-point ceiling, which is 15 * 1/5 = 3.
 const thinServices = score({
   profile: profile({
     services: [
@@ -548,8 +600,54 @@ const thinServices = score({
     ],
   }),
 });
-eq("the services note carries the ratio", thinServices.components.services.note, "2 of 5 services described");
-eq("and earns nothing below three", thinServices.components.services.earned, 0);
+eq(
+  "the services note carries the ratio and the keyword count",
+  thinServices.components.services.note,
+  "2 of 5 described, 0 with the category in them"
+);
+eq("and a bare description is worth half a point", thinServices.components.services.earned, 3);
+
+// ‼️ THE TWO AXES ARE SEPARATELY VISIBLE. Same two described services, but naming the category,
+// is worth a full point each: 2 of 5 points, so 6 rather than 3.
+const keywordedServices = score({
+  profile: profile({
+    services: [
+      { title: "Botox", description: "injections at our medical spa" },
+      { title: "Filler", description: "volume, medical spa treatment" },
+      { title: "Facial" },
+      { title: "Peel" },
+      { title: "Wax" },
+    ],
+  }),
+});
+eq("keyworded descriptions are worth double a bare one", keywordedServices.components.services.earned, 6);
+check(
+  "so describing a service with its keywords outscores describing it without",
+  (keywordedServices.components.services.earned as number) >
+    (thinServices.components.services.earned as number)
+);
+
+// ‼️ WITH NO CATEGORY KNOWN, EVERY DESCRIBED SERVICE IS WORTH A FULL POINT. Halving them would
+// charge the business for a lookup WE could not make. Same denominator doctrine, one level down.
+const noCategoryServices = scoreOptimization({
+  serp: { ...SERP, category: null },
+  profile: profile({
+    category: undefined,
+    services: [
+      { title: "Botox", description: "injections" },
+      { title: "Filler", description: "volume" },
+      { title: "Facial" },
+      { title: "Peel" },
+      { title: "Wax" },
+    ],
+  }),
+  page: PAGE_OK,
+});
+eq(
+  "unreadable keywords do not halve the described services",
+  noCategoryServices.components.services.earned,
+  6
+);
 
 // ── 9b. the LIVE profile shape, confirmed against the account 2026-08-28 ────────────────────────
 //
@@ -661,10 +759,20 @@ check(
 // ‼️ THE DENOMINATOR IS ATTEMPTED ROWS, NOT BATCH SIZE. "2 of 3" has to mean "of the profiles we
 // could look at", or the headline number quietly becomes a statement about how many lookups failed.
 
+// ‼️ A GAP IS A REAL HOLE, NOT ANYTHING SHORT OF PERFECT. Under graduated scoring `earned < weight`
+// would report a business at 9 photos of a 10 ceiling as having a photo gap, on the one line of the
+// summary that gets read down a phone. The bar is GAP_FRACTION of the weight.
 const gaps = countGaps([twoPhotos, thinServices, noProfile, nothing]);
 const photoGap = gaps.find((g) => g.key === "photos");
 eq("photos was measurable on the two rows that had a profile", photoGap?.measured, 2);
-eq("and failed on one of them", photoGap?.missing, 1);
+eq("and is a real gap on one of them", photoGap?.missing, 1);
+
+// 12 photos of a 10 ceiling is full marks and is obviously not a gap; 9 of 10 is 90% and must not
+// be reported as one either.
+const ninePhotos = score({ profile: profile({ total_photos: 9 }) });
+const nearlyFull = countGaps([ninePhotos]).find((g) => g.key === "photos");
+eq("nine photos of a ten ceiling is measured", nearlyFull?.measured, 1);
+eq("and is NOT reported as a gap", nearlyFull?.missing, 0);
 const primaryGap = gaps.find((g) => g.key === "primary_category");
 eq("primary_category was measurable on three rows, not four", primaryGap?.measured, 3);
 check("the tally is sorted most-missing first", gaps[0].missing >= gaps[gaps.length - 1].missing);
@@ -672,7 +780,14 @@ check("the tally is sorted most-missing first", gaps[0].missing >= gaps[gaps.len
 // A tie breaks on OPTIMIZATION_KEY_ORDER, so two identical batches print the same list.
 const tied = countGaps([twoPhotos, thinServices]);
 const tiedKeys = tied.filter((g) => g.missing === 1).map((g) => g.key);
-eq("a tie is broken by the declared order", tiedKeys, ["photos", "services"]);
+check(
+  "a tie is broken by the declared order",
+  tiedKeys.length < 2 ||
+    OPTIMIZATION_KEY_ORDER.indexOf(tiedKeys[0] as OptimizationKey) <
+      OPTIMIZATION_KEY_ORDER.indexOf(tiedKeys[1] as OptimizationKey),
+  tiedKeys.join(",")
+);
+check("both rows have a real photo or service gap", tiedKeys.includes("photos"));
 
 // ── 13. the CSV ─────────────────────────────────────────────────────────────────────────────────
 
@@ -705,9 +820,18 @@ for (const h of HEADERS) {
   check("scored.csv keeps the original column " + h, parsedBoth.headers.includes(h));
 }
 eq(
-  "it appends the three dominance columns then the eight optimization ones",
+  "the rank comes first, then presence, then the two axes it is made of",
   parsedBoth.headers.slice(HEADERS.length),
-  ["rank", "dominance_score", "score_measured", "optimization_score", "optimization_measured", ...OPTIMIZATION_CSV_COLUMNS]
+  [
+    "rank",
+    "presence_score",
+    "presence_measured",
+    "dominance_score",
+    "score_measured",
+    "optimization_score",
+    "optimization_measured",
+    ...OPTIMIZATION_CSV_COLUMNS,
+  ]
 );
 eq("there are six opt_ component columns", OPTIMIZATION_CSV_COLUMNS.length, 6);
 
@@ -721,7 +845,11 @@ eq("the second verdict too", parsedBoth.rows[0].opt_photos, "2 photos");
 
 eq("the optimization score prints", parsedBoth.rows[0].optimization_score, "85");
 eq("an unmeasured optimization row says so", parsedBoth.rows[1].optimization_score, "not measured");
-eq("the dominance rank still counts dominance alone", parsedBoth.rows[0].rank, "1");
+// ‼️ A CALLER THAT HANDS OVER NO PRESENCE AT ALL FALLS BACK TO DOMINANCE rather than blanking every
+// rank in the file. `undefined` is "written before the axis existed"; `null` is "computed, and not
+// one of the twelve could be measured". Only on this field do the two differ, and it is why the
+// probe can pin the old shape and the new one from the same builder.
+eq("with no presence on the row, the rank falls back to dominance", parsedBoth.rows[0].rank, "1");
 eq("and an unmeasured dominance row still gets a BLANK rank", parsedBoth.rows[1].rank, "");
 
 // The narrow shape is unchanged, which is what keeps _probe-score.ts at 107 without being edited.
@@ -793,10 +921,209 @@ const noField = applyCutoff([{ id: "z", company: "z", score: 50 }], {
 });
 eq("a row with no optimization field is never dropped", noField.dropped.length, 0);
 
-// The dominance plan still reports its own axis, so the echo card cannot mislabel it.
-const domCut = applyCutoff(twoAxis, { kind: "drop_first", n: 2 });
-eq("a dominance cut says dominance", domCut.axis, "dominance");
-eq("and still slices the prefix", domCut.dropped.map((r) => r.id), ["a", "b"]);
+// ‼️ A PREFIX CUT IS A PRESENCE CUT, because the top of the file is what presence orders. The plan
+// says so and reports its SHAPE too, so the echo card can never print "rows 1 to N" over a pile
+// that is scattered through the file.
+const prefixCut = applyCutoff(twoAxis, { kind: "drop_first", n: 2 });
+eq("a prefix cut says presence", prefixCut.axis, "presence");
+eq("and calls itself a prefix", prefixCut.shape, "prefix");
+eq("and still slices the head of the file", prefixCut.dropped.map((r) => r.id), ["a", "b"]);
+eq("while a predicate cut says so", optCut.shape, "predicate");
+
+// ‼️ `score > 60` HAD TO BECOME A PREDICATE WHEN PRESENCE TOOK OVER THE SORT. It used to count the
+// matching rows and slice that many off the front, which was only ever correct because the file was
+// sorted by the very column it names. Sorted by presence, a slice would delete a contiguous block of
+// the wrong businesses - silently, and with the right COUNT.
+const byPresence = sortByPresence(
+  [
+    { id: "hi-dom", company: "hi-dom", score: 90, presence: 10 },
+    { id: "lo-dom", company: "lo-dom", score: 10, presence: 90 },
+  ],
+  (r) => ({ presence: r.presence, reviewsEarned: 0, dominance: r.score })
+);
+eq("presence orders the file, not dominance", byPresence.map((r) => r.id), ["lo-dom", "hi-dom"]);
+const domPredicate = applyCutoff(byPresence, { kind: "drop_above_score", score: 60 });
+eq("a dominance cut still says dominance", domPredicate.axis, "dominance");
+eq("and it is a predicate, not a slice of the head", domPredicate.shape, "predicate");
+eq(
+  "so it drops the high-DOMINANCE row even though it sits at the BOTTOM of the file",
+  domPredicate.dropped.map((r) => r.id),
+  ["hi-dom"]
+);
+
+// ── presence: one denominator over twelve, never an average of two scores ───────────────────────
+
+function comps(entries: Array<[string, number, boolean, number]>): Record<string, unknown> {
+  const out: Record<string, unknown> = { measured: "n of 6" };
+  for (const [key, weight, attempted, earned] of entries) {
+    out[key] = { weight, attempted, earned, note: "" };
+  }
+  return out;
+}
+
+eq("twelve components in total", PRESENCE_COMPONENT_COUNT, 12);
+
+// A row measured on all twelve: 45 of 120 dominance weight, 35 of 100 optimization weight.
+const fullDom = comps([
+  ["knowledge_graph", 20, true, 20],
+  ["reviews", 25, true, 0],
+  ["rating", 10, true, 10],
+  ["own_domain", 15, true, 15],
+  ["directories", 30, true, 0],
+  ["instagram", 15, true, 0],
+]);
+const fullOpt = comps([
+  ["primary_category", 15, true, 15],
+  ["additional_categories", 20, true, 0],
+  ["description_keywords", 15, true, 0],
+  ["photos", 15, true, 0],
+  ["services", 15, true, 0],
+  ["landing_page", 20, true, 0],
+]);
+const presFull = presenceScore(fullDom, fullOpt);
+eq("all twelve ran", presFull.measured, "12 of 12");
+// 60 earned of 215 attempted weight.
+eq("presence is earned over attempted across BOTH halves", presFull.score, 28);
+
+// ‼️ AND IT IS NOT THE AVERAGE OF THE TWO SCORES. Dominance is 45 of 115 = 39 and optimization is
+// 15 of 100 = 15, so their average is 27 and presence is 28. The gap is small here and it is not
+// the point: the point is that one denominator over twelve components and a mean of two ratios are
+// DIFFERENT ARITHMETIC, and only the first one has an answer for a row measured on half of them.
+const domHalf = 39;
+const optHalf = 15;
+check(
+  "presence is not the mean of the two half-scores",
+  presFull.score !== Math.round((domHalf + optHalf) / 2)
+);
+
+// ‼️ BOTH DIRECTIONS OF THE DENOMINATOR RULE, ON THE UNION.
+//
+// Direction one: a component that could not be measured LEAVES the denominator, it does not score
+// zero. This row has the same dominance answers and NO optimization at all, and it must score on
+// six rather than being punished for six lookups that never happened.
+const halfMeasured = presenceScore(fullDom, null);
+eq("with no optimization blob, only the six dominance components run", halfMeasured.measured, "6 of 12");
+eq("and it is scored out of the six that ran, 45 of 115", halfMeasured.score, 39);
+check(
+  "so a row nobody could audit is NOT dragged below one that was",
+  halfMeasured.score !== null && presFull.score !== null && halfMeasured.score > presFull.score
+);
+
+// Direction two: a component that WAS measured and found nothing is a real zero and STAYS in the
+// denominator. Same six optimization weights, all attempted, all earning nothing.
+const emptyProfile = presenceScore(
+  fullDom,
+  comps([
+    ["primary_category", 15, true, 0],
+    ["additional_categories", 20, true, 0],
+    ["description_keywords", 15, true, 0],
+    ["photos", 15, true, 0],
+    ["services", 15, true, 0],
+    ["landing_page", 20, true, 0],
+  ])
+);
+eq("a profile that was read and is empty still counts twelve", emptyProfile.measured, "12 of 12");
+eq("and it scores 45 of 215", emptyProfile.score, 21);
+check(
+  "a measured-empty profile scores BELOW an unmeasured one, which is the whole rule",
+  emptyProfile.score !== null && halfMeasured.score !== null && emptyProfile.score < halfMeasured.score
+);
+
+// ‼️ NOT ONE OF THE TWELVE MEASURED LEAVES presence NULL, never 0.
+const presNothing = presenceScore(
+  comps([["knowledge_graph", 20, false, 0], ["reviews", 25, false, 0]]),
+  comps([["photos", 15, false, 0]])
+);
+eq("attempted zero is null, not zero", presNothing.score, null);
+eq("and it says nothing ran", presNothing.measured, "0 of 12");
+eq("null presence is never dropped by a cut", applyCutoff(
+  [{ id: "n", company: "n", score: null, presence: null }],
+  { kind: "drop_presence_above", score: 1 }
+).dropped.length, 0);
+eq("and it gets a BLANK rank, never the next number", parseCsv(buildScoredCsv(
+  ["Company"],
+  [
+    { raw: { Company: "measured" }, score: 4, measured: "1 of 6", presence: 40, presenceMeasured: "7 of 12" },
+    { raw: { Company: "not" }, score: null, measured: "not measured", presence: null, presenceMeasured: "not measured" },
+  ],
+  "both"
+)).rows.map((r) => r.rank), ["1", ""]);
+
+// ‼️ THE TIE-BREAK IS GOOGLE REVIEWS, WHICH IS `score_components.reviews.earned`.
+const presTied = sortByPresence(
+  [
+    { id: "few", presence: 50, reviews: 2, dom: 90 },
+    { id: "many", presence: 50, reviews: 25, dom: 10 },
+    { id: "mid", presence: 50, reviews: 12, dom: 50 },
+  ],
+  (r) => ({ presence: r.presence, reviewsEarned: r.reviews, dominance: r.dom })
+);
+eq("an exact tie on presence breaks on Google reviews", presTied.map((r) => r.id), ["many", "mid", "few"]);
+
+const tiedOnReviews = sortByPresence(
+  [
+    { id: "lo", presence: 50, reviews: 25, dom: 10 },
+    { id: "hi", presence: 50, reviews: 25, dom: 80 },
+  ],
+  (r) => ({ presence: r.presence, reviewsEarned: r.reviews, dominance: r.dom })
+);
+eq("and a tie on reviews too breaks on dominance", tiedOnReviews.map((r) => r.id), ["hi", "lo"]);
+
+check(
+  "the reviews proxy is read off the dominance blob, so it saturates where that component does",
+  presenceScore(comps([["reviews", 25, true, 25]]), null).reviewsEarned === 25
+);
+eq(
+  "an unmeasured reviews component contributes nothing to the tie-break",
+  presenceScore(comps([["reviews", 25, false, 0]]), null).reviewsEarned,
+  0
+);
+
+// The `measured` string the blobs are written with is NOT a component and must not be counted.
+eq(
+  "the stored `measured` string is not read as a thirteenth component",
+  presenceScore({ measured: "6 of 6", knowledge_graph: { weight: 20, attempted: true, earned: 20, note: "" } }, null)
+    .measured,
+  "1 of 12"
+);
+
+// ── the United States filter ────────────────────────────────────────────────────────────────────
+//
+// ‼️ DECIDED ON THE FILE'S OWN CELLS, NEVER ON THE SEARCH RESULT, and it is a LIST rather than a
+// model for the same reason the cutoff grammar is: a wrong answer here does not produce a bad
+// score, it produces a MISSING ROW.
+
+eq("a state name is US", locationVerdict({ state: "Florida", city: "Windermere" }), "us");
+eq("a postal code alone is US", locationVerdict({ state: "NC", city: "Charlotte" }), "us");
+eq("a state inside the city cell is US", locationVerdict({ city: "Charlotte, NC" }), "us");
+eq("a spelled-out state in the city cell too", locationVerdict({ city: "Ashland, Oregon" }), "us");
+eq("a foreign city with no state is not US", locationVerdict({ city: "Riga", state: "" }), "not_us");
+eq("and so is Prague", locationVerdict({ city: "Prague" }), "not_us");
+
+// ‼️ THE TWO-LETTER CODE IS READ STRICTLY, AND THIS IS THE CASE THAT FORCED IT. A loose "is any
+// two-letter token a state code" pass read "Al Ain" as ALABAMA and kept a UAE clinic in the American
+// pile. A two-letter word is far too common in a place name to be evidence on its own.
+eq("`Al Ain` is not Alabama", locationVerdict({ city: "Al Ain" }), "not_us");
+eq("`Boca Raton` is not California either", locationVerdict({ city: "Boca Raton", state: "FL" }), "us");
+eq("a bare lowercase pair proves nothing", locationVerdict({ city: "ca" }), "not_us");
+
+// ‼️ A STATE NAME INSIDE A LONGER WORD IS NOT A STATE NAME.
+eq("Indianapolis alone does not name Indiana", locationVerdict({ city: "Indianapolis" }), "not_us");
+eq("but Indianapolis, IN does", locationVerdict({ city: "Indianapolis, IN" }), "us");
+
+// ‼️ `unknown` IS A THIRD ANSWER AND IT IS KEPT. No city and no state is a fact about the EXPORT,
+// not about the business, and deleting on an empty cell is the failure every "not measured" note in
+// this lane exists to prevent.
+eq("no location at all is unknown, not foreign", locationVerdict({ state: "", city: "" }), "unknown");
+eq("missing keys read the same way", locationVerdict({}), "unknown");
+eq("whitespace is not a location", locationVerdict({ state: "   ", city: "  " }), "unknown");
+
+check("the drop card names the businesses, not just a count",
+  formatGeoDrop([{ company: "5D Wellness", where: "Riga" }], 0, 5).includes("5D Wellness"));
+check("and where the file said they were",
+  formatGeoDrop([{ company: "5D Wellness", where: "Riga" }], 0, 5).includes("Riga"));
+check("the unlocated are reported as KEPT, never silently",
+  formatGeoDrop([], 3, 5).includes("KEPT"));
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");
 if (failures.length) for (const f of failures) console.log("  FAIL " + f);

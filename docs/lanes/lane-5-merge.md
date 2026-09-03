@@ -103,7 +103,7 @@ files on his machine; a file path is not a deliverable. Say which statements are
 
 ## 6. The end-to-end proof, on the live client
 
-`a11e0bda-46e9-4d90-94ff-54e47c244f23`. Four things, one per lane:
+`871f51be-26a1-4a85-a18a-6df0ce82395f`. Four things, one per lane:
 
 1. **Lane 1.** Re-run attribution over the **five unattributed screenshots still sitting in
    step 5's thread**. They resolve from their address bars with nobody typing anything. If
@@ -115,7 +115,7 @@ files on his machine; a file path is not a deliverable. Say which statements are
    it.
 
 ```
-bunx tsx --env-file=.env.local scripts/_probe-step-verify.ts a11e0bda-46e9-4d90-94ff-54e47c244f23
+bunx tsx --env-file=.env.local scripts/_probe-step-verify.ts 871f51be-26a1-4a85-a18a-6df0ce82395f
 ```
 
 ---

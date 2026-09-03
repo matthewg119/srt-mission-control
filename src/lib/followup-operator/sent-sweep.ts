@@ -112,6 +112,19 @@ async function resolveProspect(
       source: "audit",
       confirmed: true,
     });
+
+    // Same carry as the send-time enrolment in lead-pitch.ts, because this is the OTHER door a
+    // prospect can arrive through and a prospect that came in here would otherwise never have
+    // scores. Best effort: this sweep must not fail over a convenience.
+    if (created?.contact_id) {
+      try {
+        const { attachScoresToProspect } = await import("@/lib/market/carry-scores");
+        await attachScoresToProspect(created.id, created.contact_id);
+      } catch (e) {
+        console.error("[sent-sweep] score carry failed:", (e as Error).message);
+      }
+    }
+
     return created ? { prospect: created, created: true } : null;
   }
 

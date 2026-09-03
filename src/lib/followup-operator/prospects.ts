@@ -60,7 +60,7 @@ export interface CreateProspectInput {
   phone?: string | null;
   audit_report_id?: string | null;
   contact_id?: string | null;
-  source?: "audit" | "outlook_sweep" | "manual";
+  source?: "audit" | "outlook_sweep" | "manual" | "reachinbox";
   confirmed?: boolean;
 }
 

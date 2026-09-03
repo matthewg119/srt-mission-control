@@ -1229,6 +1229,26 @@ async function deliveryStepAction(args: {
       const step = stepByKey(stepKey);
       if (!step) return;
 
+      // ‼️ A STALE CARD IS DIAGNOSED HERE, BEFORE ANY HANDLER, BECAUSE NEITHER HANDLER CAN TELL
+      // THE DIFFERENCE BETWEEN WORK OWED AND A DEAD ID.
+      //
+      // A Slack button freezes `${clientId}:${stepKey}` into its value at post time, so a client
+      // that gets re-onboarded leaves every earlier card pointing at an id that no longer exists.
+      // `client_delivery_steps.client_id` cascades on delete, so that id has no step rows either,
+      // and both handlers then answer with something true and useless: [Done] hits the verifier's
+      // "no clients row with id ..." precondition, [Skip] matches zero rows and reports "no
+      // <step> row exists for this client". Neither names the cause.
+      //
+      // It happened to SRT Agency LLC. An August card for `gbp_buildout` refused both buttons
+      // while that step's row sat pending under a different id, so the step looked unskippable
+      // when the card was merely orphaned. Nothing is written on this path: it diagnoses and
+      // re-posts, it never rescues the old card.
+      const stale = await staleCardSuccessor(clientId, args);
+      if (stale) {
+        await tellActorEphemeral(args, stale.message);
+        return;
+      }
+
       // ── Done, and Re-check, which is Done without the write ─────────────
       if (args.actionId === "step_done" || args.actionId === "step_recheck") {
         // Stays open, on purpose. This is the one place the engine argues back, and the list
@@ -1429,6 +1449,111 @@ async function tellActor(
   await notifyThread(clientId, text).catch(() =>
     console.error("[slack/actions] could not reach the actor or the ops thread:", text)
   );
+}
+
+/**
+ * Is this card pointing at a client that no longer exists, and if so, which client replaced it?
+ *
+ * Returns null on the happy path, which is every press on a live client, at the cost of one
+ * primary-key lookup. When the row is gone it re-posts the step against the successor and returns
+ * the sentence to show the person who pressed.
+ *
+ * ‼️ THE SUCCESSOR IS READ OFF THE CARD'S OWN TEXT, NOT GUESSED. The dead id cascaded its rows
+ * away, so nothing in the database still remembers which business it was; the only surviving
+ * record of that is the name Slack already rendered onto the message. Every live client's legal
+ * name, DBA and slug is matched against the pressed message, and a re-post happens only when
+ * EXACTLY ONE matches. Two matches, or none, reports the candidates and writes nothing, because
+ * re-anchoring one clinic's step onto another clinic's board is a worse failure than the one
+ * being fixed here.
+ */
+async function staleCardSuccessor(
+  clientId: string,
+  args: { channel: string; messageTs: string; userId: string; value: string }
+): Promise<{ message: string } | null> {
+  const { data: alive } = await supabaseAdmin
+    .from("clients")
+    .select("id")
+    .eq("id", clientId)
+    .maybeSingle();
+  if (alive) return null;
+
+  const stepKey = args.value.split(":")[1] ?? "";
+  const { stepByKey } = await import("@/lib/clients/delivery-checklist");
+  const label = stepByKey(stepKey)?.label ?? stepKey;
+
+  const { data: clients } = await supabaseAdmin
+    .from("clients")
+    .select("id, slug, legal_name, dba_name")
+    .neq("id", clientId);
+
+  const roster = clients ?? [];
+  const head =
+    `:warning: *This card is stale, and that is why ${label} would not budge.*\n` +
+    `It was posted against client \`${clientId}\`, which is not a row in \`clients\` any ` +
+    `more, so both buttons on it have nothing to write to. The step itself is fine.\n`;
+
+  // The card as Slack holds it. Blocks carry the client name too, so the whole payload is read.
+  const msg = await slack.getMessage(args.channel, args.messageTs).catch(() => null);
+  const haystack = (msg ? JSON.stringify(msg) : "").toLowerCase();
+
+  const matches = roster.filter((c) => {
+    const names = [c.legal_name, c.dba_name, c.slug].filter(
+      (n): n is string => typeof n === "string" && n.trim().length > 2
+    );
+    return names.some((n) => haystack.includes(n.toLowerCase()));
+  });
+
+  if (matches.length !== 1) {
+    const list = roster.length
+      ? roster
+          .map((c) => `  • ${c.legal_name ?? c.slug} \`${c.slug}\` / \`${c.id}\``)
+          .join("\n")
+      : "  (no other client rows exist)";
+    return {
+      message:
+        head +
+        (matches.length > 1
+          ? `More than one live client is named on this card, so nothing was re-posted.\n`
+          : `This card does not name a live client, so nothing was re-posted.\n`) +
+        `Live clients:\n${list}\n` +
+        `Work the step from that client's own board, or re-anchor it with ` +
+        `\`scripts/_reanchor-board.ts <clientId>\`.`,
+    };
+  }
+
+  const live = matches[0];
+  const { postStepAnchor } = await import("@/lib/clients/step-board");
+  const { postStep } = await import("@/lib/clients/step-engine");
+  const anchored = await postStepAnchor(live.id, stepKey);
+  if (anchored.ok) await postStep(live.id, stepKey).catch(() => undefined);
+
+  return {
+    message:
+      head +
+      `The live record for this business is *${live.legal_name ?? live.slug}* ` +
+      `(\`${live.slug}\` / \`${live.id}\`).\n` +
+      (anchored.ok
+        ? `A fresh card for this step is now on that board. Use that one, this card is dead.`
+        : `A fresh card could not be posted (${anchored.error ?? "unknown"}). Re-anchor with ` +
+          `\`scripts/_reanchor-board.ts <clientId>\`.`),
+  };
+}
+
+/**
+ * Say something to the person who pressed, without touching the ops thread.
+ *
+ * ‼️ NOT tellActor(). That one falls back to notifyThread(clientId), which needs a live client
+ * row, so on a stale card the fallback would fail on its way to explaining that the client does
+ * not exist. Ephemeral or a console line.
+ */
+async function tellActorEphemeral(
+  args: { channel: string; messageTs: string; userId: string },
+  text: string
+): Promise<void> {
+  const res = await slack
+    .postEphemeral(args.channel, args.userId, text, args.messageTs)
+    .catch(() => null);
+  if (!slackOk(res)) console.error("[slack/actions] could not reach the actor:", text);
 }
 
 /** A button that did not do what it said. Names the step, the reason, and what is still true. */

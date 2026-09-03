@@ -88,6 +88,10 @@ export async function POST(req: NextRequest) {
       session,
       message,
       business: typeof body.business === "string" ? body.business.slice(0, 160) : null,
+      // The frame reports the visitor's own IANA zone so the calendar offers THEIR today.
+      // safeTimeZone validates it inside the engine; a missing or bogus value falls back rather
+      // than throwing inside a formatter.
+      timeZone: typeof body.tz === "string" ? body.tz.slice(0, 64) : null,
     });
   } catch (err) {
     console.error(`[concierge] turn failed: ${err instanceof Error ? err.message : String(err)}`);

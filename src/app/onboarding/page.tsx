@@ -102,9 +102,6 @@ export default async function OnboardingPage({
     );
   }
 
-  const done = Boolean(client.intake_completed_at);
-  const savedStep = (client.intake_step as number) ?? 0;
-
   // Prefill from what is already known. Step 1 starts populated from what was typed
   // when the pilot was started, so the first screen is a confirmation rather than a
   // retype, which is also what makes the NAP canonical rather than a second guess.
@@ -130,13 +127,45 @@ export default async function OnboardingPage({
     }
   }
 
+  // ‼️ "DONE" IS NOW WHAT IS ACTUALLY FILLED IN, NOT clients.intake_completed_at.
+  //
+  // It used to be `Boolean(client.intake_completed_at)`, which was true while that timestamp had
+  // exactly one writer: this form's own final step. /onboarding2 broke that assumption. It sets
+  // intake_completed_at from NINE funnel questions, because intake_received's verifier reads
+  // that column and nothing else and four delivery steps are blocked behind it. Keying the Done
+  // screen off the same timestamp meant every /onboarding2 client hit "you are all set" on this
+  // link, and the access inventory it exists to collect could never be collected.
+  //
+  // Two requirements were in direct conflict: the board must open at the ninth answer, and the
+  // GBP login, site backend, registrar, DNS, analytics and prior agencies must stay DEFERRED to
+  // this token-gated link after the call. Deriving completeness from the answers satisfies both.
+  //
+  // For a v1 client who filled this form in properly, nothing changes: every required field has
+  // a value, so firstIncomplete is null and they still see Done. For an /onboarding2 client it
+  // opens on the first step with something genuinely missing, which is step 1 (`hours` is not
+  // collected by the funnel) and then step 5, the access inventory.
+  const missingIn = (step: (typeof INTAKE_STEPS)[number]): boolean =>
+    step.fields.some((field) => {
+      if (!field.required) return false;
+      const value = initial[field.key];
+      return Array.isArray(value) ? value.length === 0 : !String(value ?? "").trim();
+    });
+
+  const firstIncomplete = INTAKE_STEPS.findIndex(missingIn);
+  const done = firstIncomplete === -1;
+
   return (
     <Shell>
       <OnboardingFunnel
         token={t as string}
         businessName={(client.dba_name as string) || (client.legal_name as string)}
         initialValues={initial}
-        startStep={done ? 0 : Math.min(savedStep + 1, INTAKE_STEPS.length)}
+        // ‼️ THE FIRST INCOMPLETE STEP, NOT savedStep + 1. For a v1 client the two are the same
+        // number: the form validates every required field before it will advance, so the first
+        // step with something missing IS the one after the last one they finished. For an
+        // /onboarding2 client they are not: intake_step is 1 while step 1 is still missing
+        // `hours`, and resuming forward would skip the only field on that screen we need.
+        startStep={done ? 0 : firstIncomplete + 1}
         alreadyComplete={done}
       />
     </Shell>

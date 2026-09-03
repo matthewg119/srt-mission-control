@@ -26,7 +26,7 @@ export function followupChannel(): string {
  *  this module's existing name keeps working. */
 export const threadLink = slackThreadLink;
 
-function displayName(p: OutreachProspectRow): string {
+export function displayName(p: OutreachProspectRow): string {
   return p.name?.trim() || p.company?.trim() || p.email;
 }
 
@@ -59,13 +59,22 @@ function reasonFor(p: OutreachProspectRow): string {
 
 /** Post the prospect's own thread once and remember it. The audit thread in
  *  #ai-visibility-audits keeps the report; this one keeps the follow-ups. */
+/*
+ * `bodyLines` overrides the header copy. The default text advertises the operator's in-thread
+ * commands, which belong to the follow-up ladder and to no other lane -- the ReachInbox campaign
+ * lane has no ladder and must not offer commands that do nothing. Everything else is identical,
+ * and the row persistence below is the point of sharing this: slack_thread_ts is unique-indexed,
+ * so this stays the ONE place a prospect's thread is opened and the second reply from the same
+ * person threads under the first instead of reposting.
+ */
 export async function ensureProspectThread(
   p: OutreachProspectRow,
-  channel: string
+  channel: string,
+  bodyLines?: string[]
 ): Promise<OutreachProspectRow> {
   if (p.slack_thread_ts && p.slack_channel_id) return p;
 
-  const lines = [
+  const lines = bodyLines ?? [
     `*${displayName(p)}*${p.company && p.company !== p.name ? `, ${p.company}` : ""}${p.city ? `, ${p.city}` : ""}`,
     `📧 ${p.email}${p.phone ? ` · 📞 ${p.phone}` : ""}${p.website ? ` · ${p.website}` : ""}`,
     p.first_sent_at ? `First pitch ${new Date(p.first_sent_at).toDateString()}, now at ${stepLabel(p.step)}` : "No pitch logged yet",

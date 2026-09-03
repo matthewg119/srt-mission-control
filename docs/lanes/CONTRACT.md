@@ -12,7 +12,13 @@ Read your own brief (`docs/lanes/lane-N-*.md`) and this file. Nothing else in he
 
 ## Ground truth, measured against production on 2026-08-25
 
-Client `a11e0bda-46e9-4d90-94ff-54e47c244f23`, slug `srt-agency-llc`, re-onboarded that day.
+Client `871f51be-26a1-4a85-a18a-6df0ce82395f`, slug `srt-agency-llc`.
+
+> ‼️ **Corrected 2026-09-03.** This said `a11e0bda-46e9-4d90-94ff-54e47c244f23`, and that row no longer exists: SRT Agency
+> was re-onboarded again and `clients.slug` is the unique provisioning claim, so a re-onboard
+> yields a NEW id under the SAME slug. Every `client_delivery_steps` row for the old id went
+> with it on cascade, which is what made `gbp_buildout` refuse both buttons from an August
+> card. **Resolve this client by slug, never by a pinned id.**
 Audit `92dd11c2-5822-4314-9089-ef6f6590f78b`, score 10, 20 runs, `status done`, linked.
 
 | Fact | Why it matters |
@@ -112,7 +118,7 @@ break them.
 bun run build
 bun scripts/test-onboarding-artifacts.ts
 bunx tsx scripts/_probe-step-verify.ts
-bunx tsx --env-file=.env.local scripts/_probe-step-verify.ts a11e0bda-46e9-4d90-94ff-54e47c244f23
+bunx tsx --env-file=.env.local scripts/_probe-step-verify.ts 871f51be-26a1-4a85-a18a-6df0ce82395f
 ```
 
 `.env.local` carries `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and

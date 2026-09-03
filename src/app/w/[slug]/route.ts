@@ -71,6 +71,8 @@ header{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;fon
 .u{background:var(--me);color:var(--meFg);align-self:flex-end;border-bottom-right-radius:4px}
 .cite{font-size:12px;color:var(--mut);align-self:flex-start;max-width:86%;padding-left:2px}
 a.att{display:inline-block;margin-top:8px;padding:9px 14px;background:var(--acc);color:var(--bg);border-radius:10px;text-decoration:none;font-weight:600;font-size:14px}
+.slots{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+a.slot{flex:1 1 44%;text-align:center;padding:11px 10px;border:1px solid var(--acc);border-radius:10px;text-decoration:none;color:var(--fg);font-weight:600;font-size:14px;white-space:nowrap}
 form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
 input{flex:1;min-width:0;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--fg);font-size:16px}
 button{padding:11px 16px;border:0;border-radius:10px;background:var(--acc);color:var(--bg);font-weight:600;font-size:15px;cursor:pointer}
@@ -85,14 +87,34 @@ button:disabled{opacity:.45;cursor:default}
  var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
  var token=null,busy=false;
+ // ‼️ THE VISITOR'S ZONE, READ IN THE VISITOR'S BROWSER. The calendar has to offer THEIR today.
+ // Resolving it here is the only place it is knowable; a server-side guess is wrong for anybody
+ // outside one time zone, and wrong in a way that shows tomorrow's slots under a "today" label.
+ var tz="";
+ try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||""}catch(e){}
 
  function el(cls,text){var d=document.createElement('div');d.className=cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
  function bubble(who,text){return el('b '+who,text)}
  function height(){try{parent.postMessage({srtConcierge:'height',value:document.body.scrollHeight},'*')}catch(e){}}
 
  function attach(host,list){
-  (list||[]).forEach(function(a){
-   if(!a.url)return;
+  var items=(list||[]).filter(function(a){return a.url});
+  if(!items.length)return;
+  var slots=items.filter(function(a){return a.kind==='slot'});
+  var rest=items.filter(function(a){return a.kind!=='slot'});
+
+  if(slots.length){
+   var row=document.createElement('div');row.className='slots';
+   slots.forEach(function(a){
+    var b=document.createElement('a');
+    b.className='slot';b.href=a.url;b.target='_blank';b.rel='noopener noreferrer';
+    b.textContent=a.title;
+    row.appendChild(b);
+   });
+   host.appendChild(row);
+  }
+
+  rest.forEach(function(a){
    var link=document.createElement('a');
    link.className='att';link.href=a.url;link.target='_blank';link.rel='noopener noreferrer';
    link.textContent=a.title;
@@ -115,7 +137,7 @@ button:disabled{opacity:.45;cursor:default}
   input.value='';bubble('u',text);lock(true);
   var wait=el('dots','...');
   fetch('/api/concierge/turn',{method:'POST',headers:{'content-type':'application/json'},
-   body:JSON.stringify({token:token,message:text})})
+   body:JSON.stringify({token:token,message:text,tz:tz})})
   .then(function(r){return r.json()})
   .then(function(d){
    wait.remove();

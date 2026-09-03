@@ -3,7 +3,7 @@
 // ‼️ THE WHOLE POINT IS THAT A STEP IS NOT DONE BECAUSE A BUTTON WAS PRESSED.
 //
 // [Done] used to write `status: complete` and post a tick. That is a record of somebody's
-// intention, not of the work, and thirty-three of them add up to a delivery log that cannot be
+// intention, not of the work, and thirty-seven of them add up to a delivery log that cannot be
 // audited by the person who most needs to audit it. Every step now has to answer "what would I
 // look at to know this happened", and the answer is written down here, per step, in code.
 //
@@ -719,6 +719,248 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
+  // ‼️ VERIFIES THE ROW, NOT THE DEMO. A config row and a seeded allowlist are real state and
+  // are checked here; whether somebody actually walked the scan on the call is not something
+  // any query can prove, which is exactly why the step is auto_then_manual and waits for a
+  // person. The evidence lines say what was found and nothing more.
+  concierge_preview: async (ctx) => {
+    const { data, error } = await supabaseAdmin
+      .from("concierge_configs")
+      .select("enabled, allowed_origins, analysis_provider")
+      .eq("client_id", ctx.clientId)
+      .maybeSingle();
+
+    if (error) {
+      // A missing table is a migration that has not been run, not work somebody owes.
+      return /relation|does not exist|schema cache/i.test(error.message)
+        ? broken(
+            "the concierge_configs row for this client",
+            `the table could not be read: ${error.message}`,
+            "docs/2026-09-01-concierge.sql has not been run against this database. Run it, then " +
+              "re-run this step."
+          )
+        : dbUnreachable("concierge_configs");
+    }
+
+    if (!data) {
+      return notYet(
+        "the concierge_configs row for this client",
+        "no row exists",
+        "Un-tick the step to re-run provisioning, which creates the row and posts the preview link."
+      );
+    }
+
+    const origins = (data.allowed_origins as string[] | null) ?? [];
+    if (origins.length === 0) {
+      // Not broken: a client with no domain on file and no attached host genuinely has nowhere
+      // to embed yet. It is work owed, and naming it here is what stops it being discovered by
+      // a clinic staring at a blank rectangle.
+      return notYet(
+        "the embed allowlist on this client's concierge config",
+        "the row exists but no origins are seeded, so the widget can only frame on its own hostname",
+        "Set clients.domain or attach the hub hosts, then re-run this step to re-seed."
+      );
+    }
+
+    return verified(
+      `concierge_configs row present, ${origins.length} embed origin${origins.length === 1 ? "" : "s"} seeded (${origins.join(", ")})`,
+      `analysis provider is \`${data.analysis_provider}\``,
+      data.enabled
+        ? "enabled is true, so this client's widget is already live"
+        : "enabled is false, which is correct before the concierge_live step"
+    );
+  },
+
+  // The go-live. Two facts, both real state: the widget is on, and it has somewhere to send a
+  // person who wants to book. Neither is asserted by a button.
+  concierge_live: async (ctx) => {
+    const { data, error } = await supabaseAdmin
+      .from("concierge_configs")
+      .select("enabled, booking_mode, booking_url, booking_phone, allowed_origins")
+      .eq("client_id", ctx.clientId)
+      .maybeSingle();
+
+    if (error) {
+      return /relation|does not exist|schema cache/i.test(error.message)
+        ? broken(
+            "the concierge_configs row for this client",
+            `the table could not be read: ${error.message}`,
+            "docs/2026-09-01-concierge.sql has not been run against this database."
+          )
+        : dbUnreachable("concierge_configs");
+    }
+
+    if (!data) {
+      return notYet(
+        "the concierge_configs row for this client",
+        "no row exists",
+        "Complete the concierge_preview step first: it creates the row."
+      );
+    }
+
+    if (!data.enabled) {
+      return notYet(
+        "concierge_configs.enabled for this client",
+        "the widget is provisioned but switched off",
+        "Enable it on the client board once the consent copy has been approved and the booking " +
+          "destination is set. It stays off until a person turns it on."
+      );
+    }
+
+    // ‼️ AN ENABLED WIDGET WITH NOWHERE TO BOOK IS THE FAILURE THIS CHECK EXISTS FOR. The
+    // concierge reaches the close, asks for the appointment, and has no answer. 'none' is a
+    // legitimate choice — capture only, a human calls back — but it is a choice somebody makes,
+    // not a default to arrive at by forgetting.
+    const mode = data.booking_mode as string;
+    if (mode === "link" && !data.booking_url) {
+      return broken(
+        "the booking destination on an enabled concierge",
+        "booking_mode is 'link' but booking_url is empty",
+        "The concierge_configs_booking_target constraint should have refused this row. If it is " +
+          "present, the constraint is missing from this database: re-run docs/2026-09-01-concierge.sql."
+      );
+    }
+
+    const destination =
+      mode === "link"
+        ? `bookings go to ${data.booking_url}`
+        : mode === "calendly"
+          ? "bookings are taken in the chat via Calendly"
+          : "capture only, no booking destination, so a human calls them back";
+
+    const origins = (data.allowed_origins as string[] | null) ?? [];
+    return verified(
+      "concierge_configs.enabled is true",
+      destination,
+      `${origins.length} embed origin${origins.length === 1 ? "" : "s"} allowed`
+    );
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE ATTRIBUTION STACK. Steps 36 and 37.
+  //
+  // ‼️ NEITHER OF THESE MAY BE CONFIRMED BY SOMEBODY SAYING THEY DID IT, AND BOTH ARE
+  // TEMPTING TO BUILD THAT WAY, BECAUSE THE WORK HAPPENS ON A WEBSITE WE DO NOT OWN.
+  // The honest evidence in both cases is a ROW ARRIVING: a real visit, or a real answered
+  // booking. A tag that was pasted into the wrong template, or pasted into a staging site, or
+  // pasted and then stripped by a caching plugin, all look identical to a person who pasted it.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  tracking_installed: async (ctx) => {
+    const key = (ctx.client.pixel_key as string | null) ?? null;
+    if (!key) {
+      return notYet(
+        "clients.pixel_key for this client",
+        "no site key has been provisioned",
+        "The auto half of this step mints it. Hit Retry on the board, or check that " +
+          "docs/2026-09-03-attribution.sql has been run against this database."
+      );
+    }
+
+    // ‼️ is_test = false, AND THAT IS THE WHOLE VALUE OF THIS CHECK. Test mode writes to this
+    // same table on purpose so a test proves the real path end to end. Counting a test event as
+    // proof of a live install would tick this step for every client whose pixel was never
+    // pasted, which is the exact false green this two-tier system exists to prevent.
+    const live = await countRows("attribution_sessions", ctx.clientId, {
+      col: "is_test",
+      eq: false,
+    });
+    if (live === null) return dbUnreachable("attribution_sessions");
+
+    if (live === 0) {
+      // A test event proves the SNIPPET AND THE COLLECTOR WORK. It does not prove the tag is on
+      // the live site. Reporting it separately is what turns "nothing is happening" into a
+      // diagnosis, so the todo names which half is missing.
+      const test = await countRows("attribution_sessions", ctx.clientId, {
+        col: "is_test",
+        eq: true,
+      });
+      return notYet(
+        "real, non-test sessions in attribution_sessions for this client",
+        test && test > 0
+          ? `none, though ${test} TEST session${test === 1 ? "" : "s"} arrived, so the snippet and the collector both work`
+          : "none, and no test events either",
+        test && test > 0
+          ? "The tag fires in test mode, so what is left is the live site: confirm it is on EVERY " +
+            "page and not just the one you tested, and that no caching plugin is stripping it."
+          : "Paste the snippet on this card into the site <head>, then load any page of their " +
+            "site once. Add ?srt_test=CODE to a URL first if you want to watch it arrive.",
+      );
+    }
+
+    const bookings = await countRows("attribution_bookings", ctx.clientId, {
+      col: "is_test",
+      eq: false,
+    });
+    return verified(
+      `${live} real session${live === 1 ? "" : "s"} recorded from this client's site`,
+      `${bookings ?? 0} booking event${bookings === 1 ? "" : "s"} seen`,
+      // ‼️ SAID ON THE GREEN TICK, NOT ONLY IN THE DOCS. This is the step most likely to be
+      // mistaken for "attribution is done", and the person reading this line is the person who
+      // will later be asked how many qualified appointments there are.
+      "Corroboration only: a pixel booking NEVER counts toward the five. That count comes from " +
+        "the Concierge and from the how-did-you-hear answer."
+    );
+  },
+
+  self_report_field: async (ctx) => {
+    // ‼️ THE STRONGEST EVIDENCE IS AN ANSWERED BOOKING, NOT A SCREENSHOT, and the order here
+    // reflects that. A screenshot proves the field was on a page once. A row proves somebody
+    // reached it, answered it, and the answer arrived in a shape this system can count.
+    const { count, error } = await supabaseAdmin
+      .from("attribution_bookings")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", ctx.clientId)
+      .eq("is_test", false)
+      .not("self_report", "is", null);
+
+    if (error) {
+      return /relation|does not exist|schema cache/i.test(error.message)
+        ? broken(
+            "answered bookings in attribution_bookings",
+            `the table could not be read: ${error.message}`,
+            "docs/2026-09-03-attribution.sql has not been run against this database."
+          )
+        : dbUnreachable("attribution_bookings");
+    }
+
+    if ((count ?? 0) > 0) {
+      const ai = await supabaseAdmin
+        .from("attribution_bookings")
+        .select("id", { count: "exact", head: true })
+        .eq("client_id", ctx.clientId)
+        .eq("is_test", false)
+        .eq("self_report", "ai");
+      return verified(
+        `${count} booking${count === 1 ? "" : "s"} carry an answer to how did you hear about us`,
+        `${ai.count ?? 0} of them said AI, which is what the guarantee counts`
+      );
+    }
+
+    // ── Thread tier. A screenshot of the field, filed against this step. ──
+    //
+    // ‼️ THE WORDING DESCRIBES THE ARTIFACT AND NEVER THE FACT. "the field is live on their
+    // booking form" is not something a picture proves; "1 screenshot in this thread" is.
+    const docs = await docsInThread(ctx);
+    if (docs === null) return threadUnreadable;
+    if (docs > 0) {
+      return confirmed(
+        `${docs} screenshot${docs === 1 ? "" : "s"} filed against this step`,
+        "No answered booking has arrived yet, so this is the field being SHOWN to us rather " +
+          "than the field being used."
+      );
+    }
+
+    return notYet(
+      "answered bookings, then screenshots in this thread",
+      "neither: nothing has answered the question and nothing has been filed here",
+      "Add the six options to their own booking form (the exact wording is on this card), then " +
+        "either drop a screenshot of it in this thread or wait for the first booking that " +
+        "carries an answer. Until this is live, an appointment this work produced can arrive " +
+        "and be impossible to count toward the five."
+    );
+  },
+
   review_tool_preview: async (ctx) => {
     const { data, error } = await supabaseAdmin
       .from("client_hosts")
@@ -1222,7 +1464,13 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 const CLIENT_COLUMNS =
   "id, legal_name, dba_name, slug, domain, subdomain, intake_completed_at, " +
   "site_intel, dns_nameservers, primary_avatar, primary_avatar_label, review_request_mode, " +
-  "review_owner_name, day_0_archived_at, day_0_source, vertical_slug, business_type";
+  "review_owner_name, day_0_archived_at, day_0_source, vertical_slug, business_type, " +
+  // ‼️ ADDED FOR tracking_installed, AND A NAME THAT DOES NOT EXIST HERE BREAKS EVERY VERIFIER
+  // AT ONCE. PostgREST fails the WHOLE select on one unknown column, which is how baseline_scan
+  // took steps 7 and 9 down with it by asking for `visibility_score`. pixel_key is created by
+  // docs/2026-09-03-attribution.sql; that migration is a prerequisite for the board, not just
+  // for the pixel.
+  "pixel_key";
 
 /**
  * Confirm one step, or say precisely why it cannot be confirmed.
