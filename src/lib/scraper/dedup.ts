@@ -265,14 +265,45 @@ export function countTruncatedNames(
   return n;
 }
 
+export type KeyField = "domain" | "phone" | "email" | "companyCity";
+
+/**
+ * Which keys decide identity. **Website only, decided 2026-09-03.**
+ *
+ * ‼️ THIS IS THE ONE PLACE THE MATCH RULE LIVES. It has changed four times in a day — city, then
+ * name+city, then name+city with prefix and typo tiers — and each change was a hunt through three
+ * files. One list, and the machinery for every key stays built, proven by the probe, and off.
+ *
+ * ‼️ WHY A NAME IS NOT AN IDENTITY HERE, recorded so it does not get re-litigated. Both source
+ * exports were captured from a screenshot of an Apollo grid, so the same business arrives spelled
+ * differently in every pull: `drsophieshotterteam` / `drsophieshatterteam`,
+ * `annexusdermatologyaesthetics` / `annexusdermatology`. Matching names on that data means guessing,
+ * and every rule that guessed produced a duplicate count Matthew did not believe and could not
+ * check. A website is the same business or it is not, and there is nothing to argue with.
+ *
+ * The cost is stated rather than hidden: with `email` off, one Apollo CONTACT export dropped twice
+ * is not caught here. Workflow 1 still catches it — `duplicate_in_file` within the file and
+ * `already_in_crm` against outreach_prospects — it just is not caught at the drop. Turn a key back
+ * on by adding it to this list; nothing else needs to change.
+ */
+export const ACTIVE_KEYS: readonly KeyField[] = ["domain"];
+
+export function isKeyActive(field: KeyField): boolean {
+  return ACTIVE_KEYS.includes(field);
+}
+
 export function rowKeys(raw: Record<string, string>, cols: DedupeColumns): DedupeKeys {
-  const domain = domainKey(cols.website ? raw[cols.website] : null);
-  const phone = phoneKey(cols.phone ? raw[cols.phone] : null);
-  const email = emailKey(cols.email ? raw[cols.email] : null);
+  const domain = isKeyActive("domain") ? domainKey(cols.website ? raw[cols.website] : null) : null;
+  const phone = isKeyActive("phone") ? phoneKey(cols.phone ? raw[cols.phone] : null) : null;
+  const email = isKeyActive("email") ? emailKey(cols.email ? raw[cols.email] : null) : null;
+
+  // Still the last resort even when it is on: a name is only consulted for a row that has no
+  // stronger key at all.
   const companyCity =
-    domain || phone || email
+    !isKeyActive("companyCity") || domain || phone || email
       ? null
       : companyCityKey(cols.company ? raw[cols.company] : null, cols.city ? raw[cols.city] : null);
+
   return { domain, phone, email, companyCity };
 }
 

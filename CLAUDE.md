@@ -4167,6 +4167,39 @@ never needed help.
 is the same both times: **delete the ledger keys, not just the batch**, or the next upload of that
 list matches against the run you were taking back.
 
+### Identity is the website, and nothing else (2026-09-03, Matthew's call)
+
+`ACTIVE_KEYS` in `dedup.ts` is `["domain"]`. **This is the one place the match rule lives.** It
+changed four times in a day — city, name+city, name+city with prefix and typo tiers — and each
+change was a hunt through three files. One list now; every other key's machinery stays built,
+stays proven by the probe, and stays off.
+
+‼️ **WHY A NAME IS NOT AN IDENTITY HERE.** Both source exports were captured from a screenshot of
+an Apollo grid, so the same business arrives spelled differently in every pull. Every name rule
+tried produced a duplicate count that was correct on inspection and that Matthew could not check
+without reading 160 rows by hand — 123 exact, +24 prefix, +12 one-character. A website is the same
+business or it is not, and there is nothing to argue with. The count being LOW is the point: it is
+a count he can trust.
+
+‼️ **DROPPING THE CITY WOULD HAVE MADE IT LOOSER, NOT TIGHTER**, and that was the instinct this
+replaced: name-only matching means "Skin Bar" Charlotte matches "Skin Bar" Miami, so the count goes
+UP. Recorded so it does not come back as a fix.
+
+The ledger was wiped to zero at the same time — all 205 keys were names seeded from `leads (1).csv`
+and would have matched nothing ever again. It rebuilds from websites on the next drop, which means
+**the first drop after this reports ~0 duplicates by design**; real dedupe starts on the drop after.
+
+Two things follow automatically from `ACTIVE_KEYS` and must stay that way:
+- The split card names only the columns the rule actually READ. Listing an inactive column claims
+  something was consulted when nothing looked at it.
+- The truncated-name 🚨 fires only when the name is a key. A cut-off company name cannot hurt a rule
+  that never reads company names, and the alarm would point at nothing.
+
+The cost, stated rather than hidden: with `email` off, one Apollo CONTACT export dropped twice is
+not caught at the drop. Workflow 1 still catches it — `duplicate_in_file` within the file,
+`already_in_crm` against `outreach_prospects`. Turn any key back on by adding it to `ACTIVE_KEYS`;
+nothing else changes.
+
 `handleThreadedCsv` is untouched. An Apollo export is contacts for companies its thread already
 chose, not a new list, and deduping it against the ledger its own parent just wrote would delete
 all of it.

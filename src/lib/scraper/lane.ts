@@ -35,7 +35,7 @@ import {
   resolveEmailColumn,
   resolveWebsiteColumn,
 } from "./rules";
-import { allKeys, countTruncatedNames, splitDuplicates, type DedupeColumns } from "./dedup";
+import { allKeys, countTruncatedNames, isKeyActive, splitDuplicates, type DedupeColumns } from "./dedup";
 import { resolveMxBatch } from "./mx";
 import {
   addScoreCost,
@@ -409,13 +409,18 @@ async function runDedupe(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): 
       dupes,
       newCount: fresh.length,
       keyless,
-      truncatedNames: countTruncatedNames(parsed.rows, cols.company),
+      // ‼️ ONLY WHEN THE NAME IS ACTUALLY A KEY. A cut-off company name cannot hurt a match rule
+      // that never reads the company name, and an alarm about it would be noise pointing at
+      // nothing.
+      truncatedNames: isKeyActive("companyCity") ? countTruncatedNames(parsed.rows, cols.company) : 0,
+      // The card names the columns the keys were READ FROM, so an inactive key must not appear
+      // there: it would claim a column was consulted when nothing looked at it.
       keyColumns: {
-        website: cols.website,
-        phone: cols.phone,
-        email: cols.email,
-        company: cols.company,
-        city: cols.city,
+        website: isKeyActive("domain") ? cols.website : null,
+        phone: isKeyActive("phone") ? cols.phone : null,
+        email: isKeyActive("email") ? cols.email : null,
+        company: isKeyActive("companyCity") ? cols.company : null,
+        city: isKeyActive("companyCity") ? cols.city : null,
       },
     })
   );

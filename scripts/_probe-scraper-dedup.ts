@@ -22,8 +22,10 @@ import {
   domainKey,
   emailKey,
   phoneKey,
+  ACTIVE_KEYS,
   companyCityKey,
   countTruncatedNames,
+  isKeyActive,
   editDistanceWithin,
   looksTruncated,
   matchInCity,
@@ -148,14 +150,14 @@ eq("email: blank", emailKey(""), null);
 }
 
 {
-  // Two rows, no website on either, sharing a front desk. One lead, first occurrence survives.
+  // Two rows, one site, written two ways. One lead, and the FIRST occurrence survives.
   const rows = [
-    row({ company: "Glow Bar", phone: "(704) 555-0134" }),
-    row({ company: "Glow Bar Uptown", phone: "+1 704 555 0134" }),
+    row({ company: "Glow Bar", website: "https://www.GlowBar.com/book" }),
+    row({ company: "Glow Bar Uptown", website: "glowbar.com" }),
   ];
   const { fresh, dupes } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
   eq("in-file: the second row is the duplicate", dupes.map((d) => d.rowIndex), [1]);
-  eq("in-file: reported as in_file, not phone", dupes[0].matchedOn, "in_file");
+  eq("in-file: reported as in_file", dupes[0].matchedOn, "in_file");
   eq("in-file: the FIRST occurrence survives", fresh.map((f) => f.rowIndex), [0]);
 }
 
@@ -187,19 +189,11 @@ eq("email: blank", emailKey(""), null);
 }
 
 {
-  // Precedence: a row that collides on domain AND phone AND email reports the domain.
+  // A row with everything on it still reports the website, which is the only active key.
   const rows = [row({ website: "glowbar.com", phone: "7045550134", email: "jane@glowbar.com" })];
   const known = ledger({ domain: ["glowbar.com"], phone: ["7045550134"], email: ["jane@glowbar.com"] });
   const { dupes } = splitDuplicates({ rows, cols: COLS, known });
-  eq("precedence: domain wins over phone and email", dupes[0].matchedOn, "domain");
-}
-
-{
-  // Phone before email, when there is no domain to judge by.
-  const rows = [row({ phone: "7045550134", email: "jane@glowbar.com" })];
-  const known = ledger({ phone: ["7045550134"], email: ["jane@glowbar.com"] });
-  const { dupes } = splitDuplicates({ rows, cols: COLS, known });
-  eq("precedence: phone wins over email", dupes[0].matchedOn, "phone");
+  eq("active rule: the website is what catches it", dupes[0].matchedOn, "domain");
 }
 
 {
@@ -217,10 +211,12 @@ eq("email: blank", emailKey(""), null);
     row({ website: "glowbar.com", phone: "704-555-0134", email: "jane@glowbar.com" }),
     row({ website: "facebook.com", phone: "555-0134", email: "not-an-address" }),
   ];
-  eq("allKeys: normalized and deduped, junk dropped", allKeys(rows, COLS), {
+  // Only the ACTIVE key is asked about. An inactive key must not put a value in the query either:
+  // asking the ledger about addresses it will never match on is a round trip for nothing.
+  eq("allKeys: normalized, deduped, and only the active key", allKeys(rows, COLS), {
     domain: ["glowbar.com"],
-    phone: ["7045550134"],
-    email: ["jane@glowbar.com"],
+    phone: [],
+    email: [],
     cities: [],
   });
 }
@@ -301,9 +297,13 @@ eq("phone column: a miss is null, never an error", resolvePhoneColumn(["company"
     keyColumns: { website: null, phone: null, email: null, company: null, city: null },
   });
   check("split card: says so when nothing COULD be matched",
-    card.includes("Nothing in this file could be matched"), card);
+    card.includes("carries none of the columns identity is decided on"), card);
   check("split card: warns that keyless rows come back forever",
-    card.includes("10 of the new rows carry no website"), card);
+    card.includes("10 of the new rows carry none of the columns above"), card);
+  // ‼️ The warning must never name a column the active rule does not read, or it sends somebody
+  // hunting for a phone column that was never going to be consulted.
+  check("split card: the warning does not name inactive columns",
+    !card.includes("no website, phone, email or city"), card);
 }
 
 {
@@ -371,39 +371,70 @@ eq("company+city: Spa and Clinic stay two businesses",
   companyCityKey("Glow Spa", "Charlotte") === companyCityKey("Glow Clinic", "Charlotte"), false);
 eq("company+city: LLC is NOT stripped either", companyCityKey("Glow Spa LLC", "Charlotte"), "glowspallc|charlotte");
 
+// -- ACTIVE_KEYS is ["domain"], and these prove the rest are genuinely inert ---------------------
+//
+// ‼️ THE NAME MACHINERY ABOVE IS ALL STILL CORRECT AND ALL STILL OFF. Matthew turned it off on
+// 2026-09-03 after three rules in a row produced a duplicate count he could not check: both source
+// exports are screenshot-derived, so the same business is spelled differently in every pull and any
+// name rule is guessing. These checks fail the moment a key switches on by accident.
+
+eq("ACTIVE_KEYS is website only", [...ACTIVE_KEYS], ["domain"]);
+eq("active: domain is on", isKeyActive("domain"), true);
+eq("active: phone is off", isKeyActive("phone"), false);
+eq("active: email is off", isKeyActive("email"), false);
+eq("active: company name is off", isKeyActive("companyCity"), false);
+
 {
-  // The re-drop. Exactly the shape of leads (1).csv: company and city, nothing else.
+  // The exact leads (1).csv shape — company and city, nothing else — is now ALL NEW, by design.
   const rows = [row({ company: "5D Wellness", city: "Riga" }), row({ company: "8 West Clinic", city: "Vancouver" })];
   const { fresh, dupes, keyless } = splitDuplicates({
     rows,
     cols: COLS,
-    known: ledger({ companyCity: ["5dwellness|riga"] }),
+    known: ledger({ companyCity: ["5dwellness|riga", "8westclinic|vancouver"] }),
   });
-  eq("re-drop: the scored company is caught", dupes.map((d) => d.matchedOn), ["company_city"]);
-  eq("re-drop: reported with the snake_case key name", dupes[0].matchedValue, "5dwellness|riga");
-  eq("re-drop: the unseen one survives", fresh.map((f) => f.company), ["8 West Clinic"]);
-  eq("re-drop: and it is keyed, so the NEXT drop catches it",
-    [keyless, fresh[0].keys.companyCity], [0, "8westclinic|vancouver"]);
+  eq("inert: a name on file no longer makes a duplicate", [dupes.length, fresh.length], [0, 2]);
+  eq("inert: and no name key is written back", fresh.map((f) => f.keys.companyCity), [null, null]);
+  eq("inert: both rows are keyless, and counted as such", keyless, 2);
 }
 
 {
-  // THE LAST-RESORT RULE. A row with a website never takes a name key, so a chain with one domain
-  // and ten locations cannot collide on its own name.
+  // A front desk shared by two businesses is no longer a collision.
+  const rows = [
+    row({ company: "Glow Bar", phone: "(704) 555-0134" }),
+    row({ company: "Derma Luxe", phone: "704-555-0134" }),
+  ];
+  const { dupes } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ phone: ["7045550134"] }),
+  });
+  eq("inert: a phone on file makes no duplicate", dupes.length, 0);
+}
+
+{
+  const rows = [row({ email: "jane@glowbar.com" })];
+  const { dupes, fresh } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ email: ["jane@glowbar.com"] }),
+  });
+  eq("inert: an address on file makes no duplicate", dupes.length, 0);
+  eq("inert: and no address key is written back", fresh[0].keys.email, null);
+}
+
+{
+  // The website still decides, and still writes itself back.
   const rows = [row({ company: "Ideal Image", city: "Charlotte", website: "idealimage.com" })];
   const { fresh } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
-  eq("last resort: a website suppresses the name key", fresh[0].keys.companyCity, null);
-  eq("last resort: the domain is the key instead", fresh[0].keys.domain, "idealimage.com");
+  eq("active: the website is the key", fresh[0].keys.domain, "idealimage.com");
+  eq("active: and it is the ONLY key", 
+    [fresh[0].keys.phone, fresh[0].keys.email, fresh[0].keys.companyCity], [null, null, null]);
 }
 
 {
-  const rows = [row({ company: "Ideal Image", city: "Charlotte", phone: "(704) 555-0134" })];
-  const { fresh } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
-  eq("last resort: a phone suppresses the name key too", fresh[0].keys.companyCity, null);
-}
-
-{
-  // A file with a company and city column but no city VALUES: keyless, and the count says so.
-  const rows = [row({ company: "Glow Bar" }), row({ company: "Derma Luxe" })];
+  // A row with no website cannot be a duplicate and cannot be recorded. Under a website-only rule
+  // that is most of a company list, which is why the card prints the count.
+  const rows = [row({ company: "Glow Bar", city: "Charlotte" }), row({ company: "Derma Luxe" })];
   const { fresh, keyless } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
   eq("keyless: counted, not hidden", [fresh.length, keyless], [2, 2]);
 }
@@ -430,12 +461,10 @@ eq("truncated: null is not", looksTruncated(null), false);
   eq("truncated: counted across the file", countTruncatedNames(rows, "company"), 1);
   eq("truncated: no company column, nothing to count", countTruncatedNames(rows, null), 0);
 
-  // ‼️ THE PREFIX TIER NOW RESCUES THIS, and this assertion is the proof. Before it, a cut-off name
-  // could not match its full self and the pair was reported as two businesses; that is the exact
-  // 24-row miss the tier was built for. The 🚨 still fires, because a file this damaged is under-
-  // matching in ways no rule recovers — a name cut mid-word to `Aloe Vera Med...` matches nothing.
+  // With the name key off, a cut-off name is simply not consulted, so the pair stays two rows and
+  // the counter above is the only thing that notices the file is damaged.
   const { dupes } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
-  eq("truncated: a cut-off name now matches its full self", dupes.map((d) => d.matchedOn), ["in_file"]);
+  eq("truncated: names are not matched at all under the active rule", dupes.length, 0);
 }
 
 {
@@ -540,18 +569,16 @@ eq("edit distance: empty against empty", editDistanceWithin("", "", 1), 0);
 }
 
 {
-  // ‼️ THE CITY IS THE BUCKET AND IS NEVER FUZZY. matchInCity is only ever handed one city's names.
-  const rows = [row({ company: "CLEO Skin + Laser", city: "Chanhassen" })];
-  const { dupes, fresh } = splitDuplicates({
-    rows,
-    cols: COLS,
-    known: ledger({ companyCity: ["cleoskinlaser|newyork"] }),
-  });
-  eq("city: the same name in another city is NOT a duplicate", [dupes.length, fresh.length], [0, 1]);
+  // ‼️ THE CITY IS THE BUCKET AND IS NEVER FUZZY. matchInCity is only ever handed one city's names,
+  // so this holds whenever the name key is switched back on.
+  eq("city: the same name in another city is NOT a match",
+    matchInCity("cleoskinlaser", []), null);
 }
 
 {
-  // End to end, through splitDuplicates rather than matchInCity directly.
+  // ‼️ END TO END WITH THE NAME KEY OFF. These are the two real OCR pairs, and under ACTIVE_KEYS =
+  // ["domain"] neither is a duplicate: no website, no key, nothing matched. This is the whole point
+  // of the 2026-09-03 decision, asserted rather than assumed.
   const rows = [
     row({ company: "Annexus Dermatology Aesthetics", city: "Orange City" }),
     row({ company: "Dr Sophie Shotter & Team", city: "London" }),
@@ -562,22 +589,36 @@ eq("edit distance: empty against empty", editDistanceWithin("", "", 1), 0);
     cols: COLS,
     known: ledger({ companyCity: ["annexusdermatology|orangecity", "drsophieshatterteam|london"] }),
   });
-  eq("end to end: both OCR variants caught",
-    dupes.map((d) => d.matchedOn), ["company_city_prefix", "company_city_typo"]);
-  eq("end to end: the genuinely new row survives", fresh.map((f) => f.company), ["Brand New Clinic"]);
-  eq("end to end: matched_value names the recorded key",
-    dupes[0].matchedValue, "annexusdermatology|orangecity");
+  eq("end to end: no name matching, so nothing is a duplicate", dupes.length, 0);
+  eq("end to end: every row survives", fresh.length, 3);
 }
 
 {
-  // The same OCR pair INSIDE one file collapses too, and is reported as in_file.
+  // The same three rows WITH websites: the two that share a site with the ledger are caught, and
+  // the name is never consulted either way.
+  const rows = [
+    row({ company: "Annexus Dermatology Aesthetics", city: "Orange City", website: "https://annexusderm.com/x" }),
+    row({ company: "Dr Sophie Shotter & Team", city: "London", website: "illuminateskinclinic.co.uk" }),
+    row({ company: "Brand New Clinic", city: "Orange City", website: "brandnewclinic.com" }),
+  ];
+  const { dupes, fresh } = splitDuplicates({
+    rows,
+    cols: COLS,
+    known: ledger({ domain: ["annexusderm.com", "illuminateskinclinic.co.uk"] }),
+  });
+  eq("end to end: the websites on file are caught", dupes.map((d) => d.matchedOn), ["domain", "domain"]);
+  eq("end to end: matched_value is the domain", dupes[0].matchedValue, "annexusderm.com");
+  eq("end to end: the unseen site survives", fresh.map((f) => f.company), ["Brand New Clinic"]);
+}
+
+{
+  // The same OCR pair inside one file: two rows now, because the name is not an identity.
   const rows = [
     row({ company: "Grey Aesthetics", city: "Newport Beach" }),
     row({ company: "Gray Aesthetics", city: "Newport Beach" }),
   ];
   const { dupes, fresh } = splitDuplicates({ rows, cols: COLS, known: NO_KEYS });
-  eq("in-file: a typo variant of an earlier row in the SAME file", dupes.map((d) => d.matchedOn), ["in_file"]);
-  eq("in-file: the first spelling survives", fresh.map((f) => f.rowIndex), [0]);
+  eq("in-file: a name variant is NOT collapsed", [dupes.length, fresh.length], [0, 2]);
 }
 
 {
@@ -587,7 +628,8 @@ eq("edit distance: empty against empty", editDistanceWithin("", "", 1), 0);
     row({ company: "Derma Luxe", city: "Charlotte" }),
     row({ company: "Skin Bar", city: "Miami" }),
   ];
-  eq("allKeys: distinct cities for the name lookup", allKeys(rows, COLS).cities.sort(), ["charlotte", "miami"]);
+  // Cities are only asked for when the name key is on; under the active rule there is nothing to ask.
+  eq("allKeys: no cities asked for while the name key is off", allKeys(rows, COLS).cities, []);
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");

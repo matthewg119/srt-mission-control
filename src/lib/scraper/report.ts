@@ -213,8 +213,9 @@ export function formatDedupeSplit(input: {
   lines.push("");
   lines.push(
     read.length > 0
-      ? "_Keys read from " + read.join(", ") + "._"
-      : "_Nothing in this file could be matched: no website, phone, email, or company and city._"
+      ? "_Keys read from " + read.join(", ") + ". Nothing else is used to decide identity._"
+      : "_This file carries none of the columns identity is decided on, so nothing could be " +
+        "matched and every row is new._"
   );
 
   // ‼️ SAID OUT LOUD, because these rows are the one silent failure mode left. A row with no key of
@@ -222,8 +223,8 @@ export function formatDedupeSplit(input: {
   // forever, and the count is the only place that would ever be visible.
   if (input.keyless > 0) {
     lines.push(
-      ":warning: " + input.keyless + " of the new rows carry no website, phone, email or city, so " +
-        "nothing identifies them. They could not be recorded and will come back as new next time."
+      ":warning: " + input.keyless + " of the new rows carry none of the columns above, so nothing " +
+        "identifies them. They could not be recorded and will come back as new next time."
     );
   }
 
