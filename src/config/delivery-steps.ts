@@ -192,6 +192,19 @@ const STEP_LIST = [
   // THREE records, and the phrasing is deliberate. "CNAME and TXT" read as two, which is
   // where the two-versus-three drift came from: there are two CNAMEs, not one.
   { key: "dns_records", phase: PHASE_DURING, label: "DNS: three records added by the client, two CNAMEs and one TXT", mode: "manual", blockedBy: ["call_held"] },
+  // ‼️ THE SIGNATURE MOVED OFF THE FUNNEL AND ONTO THE CALL (2026-09-04). /onboarding2 used to
+  // take a typed e-signature with per-page initials before it asked anything; it now books a call
+  // and asks the questions, and nothing is signed until this step. The unsigned counterpart comes
+  // from scripts/_render-agreement-blank.ts.
+  //
+  // ‼️ IT IS LAST IN THE PHASE, NOT LAST IN THE CALL BY ACCIDENT. A signature belongs after the
+  // preview has been walked and the pages picked, which is what call_held attests to, and after
+  // access and DNS have been discussed, because those are the obligations the document describes.
+  //
+  // ‼️ ADDING IT RENUMBERED THE AFTER-THE-CALL STEPS, 24-37 BECOMING 25-38. Nothing in code
+  // hardcodes a step number: stepNumber() computes from this array and every consumer keys on the
+  // KEY. Docs that quote numbers are stale and are the only thing to fix.
+  { key: "agreement_signed", phase: PHASE_DURING, label: "Agreement signed on the call", mode: "manual", blockedBy: ["call_held"] },
 
   // ── AFTER THE CALL: day 0 ─────────────────────────────────────────────────
   // ‼️ THE ONE STEP THAT BLOCKS RATHER THAN FLAGS. See src/lib/clients/day-zero.ts and

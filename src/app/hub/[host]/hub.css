@@ -399,3 +399,86 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
   border-top-width: 2px;
   border-top-color: var(--hub-fg);
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   The star rating, the attestation and the private note. Added 2026-09-04.
+
+   ‼️ THERE IS NO STYLE HERE THAT HIDES ANYTHING BASED ON THE RATING, and there must not be.
+   Gating is a rating that decides whether she reaches the public review link. If a future
+   change wants `.rev-dests { display: none }` under some condition, that condition is the
+   thing to argue about, not the CSS. See the header of review-client.tsx.
+   ───────────────────────────────────────────────────────────────────────────── */
+.rev-stars {
+  border: 0;
+  margin: 0 0 1.75rem;
+  padding: 0;
+}
+.rev-stars legend {
+  padding: 0;
+  font-size: 1.0625rem;
+  color: var(--hub-fg);
+  margin-bottom: 0.5rem;
+}
+.rev-stars-row { display: flex; gap: 0.25rem; }
+.rev-stars-row button {
+  font: inherit;
+  font-size: 2rem;
+  line-height: 1;
+  /* Big enough to tap accurately on a phone without aiming. */
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--hub-rule);
+}
+.rev-stars-row button.is-on { color: var(--hub-accent); }
+.rev-stars-row button:focus-visible {
+  outline: 2px solid var(--hub-accent);
+  outline-offset: 2px;
+  border-radius: var(--hub-radius);
+}
+
+.rev-attest {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 1.25rem 0;
+  font-size: 0.9375rem;
+  color: var(--hub-fg);
+  cursor: pointer;
+}
+.rev-attest input {
+  /* Nudged down so the box sits on the first line of text rather than above it. */
+  margin-top: 0.15rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--hub-accent);
+  flex: 0 0 auto;
+}
+
+/* Below the destination links in the DOM, and collapsed by default, so it reads as an
+   addition to the public path rather than an alternative to it. */
+.rev-private {
+  margin-top: 2rem;
+  border-top: 1px solid var(--hub-rule);
+  padding-top: 1rem;
+}
+.rev-private summary {
+  cursor: pointer;
+  font-size: 0.9375rem;
+  color: var(--hub-muted);
+}
+.rev-private textarea { margin-top: 0.5rem; }
+.rev-secondary {
+  margin-top: 0.6rem;
+  font: inherit;
+  font-size: 0.9375rem;
+  color: var(--hub-accent);
+  background: transparent;
+  border: 1px solid var(--hub-accent);
+  border-radius: var(--hub-radius);
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+}

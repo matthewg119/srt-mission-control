@@ -37,6 +37,7 @@ import {
   CHAT_FAQS,
   CHAT_HARD_LINES,
   CLOSING_MESSAGES,
+  SCHEDULING_INTRO,
   QUALIFYING_QUESTIONS,
   SCHEDULING_UI,
   TIMEZONE_OPTIONS,
@@ -92,12 +93,27 @@ function fakeInitial(pageNo: number, sections: number[], at: string): InitialRow
 async function main(): Promise<void> {
   const snapshot = await buildSnapshot();
 
-  const unsigned = { signed_at: null, agreement_snapshot: snapshot } as Onboarding2SigningRow;
-  const signed = { signed_at: "2026-09-01T00:00:00Z", agreement_snapshot: snapshot } as Onboarding2SigningRow;
+  // !! `unsigned` AND `signed` NOW MEAN "BEFORE AND AFTER SCREEN ONE", NOT BEFORE AND AFTER A
+  // SIGNATURE. modeFor() keys on `email` since 2026-09-04, because nothing sets signed_at any
+  // more and keying on it would pin every new session to grounded mode forever. The variable
+  // names are kept so the rest of this 500-line probe still reads, and signed_at is left on the
+  // fixture to prove it is no longer what decides.
+  const unsigned = { signed_at: null, email: null, agreement_snapshot: snapshot } as Onboarding2SigningRow;
+  const signed = {
+    signed_at: null,
+    email: "owner@example.com",
+    agreement_snapshot: snapshot,
+  } as Onboarding2SigningRow;
 
   // ── The mode gate ──
-  check("an unsigned session is grounded", modeFor(unsigned) === "grounded");
-  check("a signed session is qualifying", modeFor(signed) === "qualifying");
+  check("a session with no identity is grounded", modeFor(unsigned) === "grounded");
+  check("a session that has been through screen one is qualifying", modeFor(signed) === "qualifying");
+  check(
+    "signed_at no longer decides the mode",
+    modeFor({ signed_at: "2026-09-01T00:00:00Z", email: null, agreement_snapshot: snapshot } as Onboarding2SigningRow) ===
+      "grounded",
+    "a signature with no identity behind it is not a qualifying session"
+  );
 
   // ── Grounded mode has exactly one tool, and it cannot write anything ──
   check("grounded mode has exactly one tool", GROUNDED_TOOLS.length === 1, `got ${GROUNDED_TOOLS.length}`);
@@ -348,27 +364,38 @@ async function main(): Promise<void> {
     ""
   );
 
-  // ── THE GATE THAT MATTERS: scheduling is refused below 6 of 6 ──
-  // One short of complete, derived rather than typed, so adding a question moves the gate with it.
+  // ── THE GATE THAT MATTERS, INVERTED 2026-09-04 ──
+  //
+  // There is no longer an offer_booking tool to refuse. The call is booked BEFORE the questions
+  // are asked, by the deterministic state machine in app/api/onboarding2/chat/route.ts, so the
+  // thing worth asserting is that the model has NO tool that could reach scheduling at all.
+  // Absent beats refused, which is the same lesson GROUNDED_TOOLS records at the top of chat.ts.
+  const toolNames = QUALIFYING_TOOLS.map((t) => t.name);
+  check(
+    "the qualifying toolset cannot reach scheduling",
+    !toolNames.includes("offer_booking"),
+    `tools: ${toolNames.join(", ")}`
+  );
+
+  // One short of complete, derived rather than typed, so adding a question moves this with it.
   const oneShort = QUALIFYING_QUESTIONS.length - 1;
   const ctx5: ExecutorContext = {
-    row: signed, lead: fakeLead(oneShort), ordinal: 0, bookingOffered: false, justCompleted: false, priceFlagged: false,
+    row: signed, lead: fakeLead(oneShort), ordinal: 0, justCompleted: false, priceFlagged: false,
   };
-  const at5 = JSON.parse(
-    (await makeExecutor(ctx5)("offer_booking", {})).content
-  ) as { offered: boolean; outstanding?: string[] };
+  const progress = JSON.parse(
+    (await makeExecutor(ctx5)("get_progress", {})).content
+  ) as { outstanding?: string[]; total?: number };
 
   check(
-    "offer_booking is REFUSED one question short, by the executor and not by the prompt",
-    at5.offered === false,
-    at5.offered ? "The gate is open early. A prompt-level gate is one the model argues past." : ""
+    "get_progress reports exactly one question outstanding, one short of complete",
+    Array.isArray(progress.outstanding) && progress.outstanding.length === 1,
+    JSON.stringify(progress.outstanding)
   );
   check(
-    "the refusal names what is still outstanding",
-    Array.isArray(at5.outstanding) && at5.outstanding.length === 1,
-    JSON.stringify(at5.outstanding)
+    "get_progress counts against QUALIFYING_QUESTIONS, so adding a question moves it",
+    progress.total === QUALIFYING_QUESTIONS.length,
+    `total ${progress.total}, questions ${QUALIFYING_QUESTIONS.length}`
   );
-  check("ctx.bookingOffered stays false one question short", ctx5.bookingOffered === false);
 
   // ── THE NO-CLARIFYING GATE, in the executor ──
   //
@@ -384,10 +411,27 @@ async function main(): Promise<void> {
     /Ask NOTHING else\. Do not clarify, confirm, or repeat back/.test(executorSrc),
     "the no-follow-ups rule has to be a tool RESULT, not only a prompt line"
   );
+  // !! THE TOOL IS GONE, SO THE ASSERTION IS ABOUT ITS ABSENCE (2026-09-04). It used to be
+  // handed back "Say nothing at all. Return an empty reply", so the close could not come from the
+  // model. The call is now booked BEFORE the questions, by a state machine the model never sees,
+  // so there is no tool to instruct. Absent beats instructed.
+  //
+  // ‼️ IT STRIPS COMMENTS FIRST, AND THAT IS NOT A LOOPHOLE. chat.ts names offer_booking three
+  // times on purpose, recording what it was and why it must not come back, and a check that
+  // punished the file for documenting its own history would push somebody to delete the note
+  // rather than the tool. What must not exist is a BRANCH.
+  const executorCode = executorSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
   check(
-    "offer_booking tells the model to say nothing, so the close cannot come from it",
-    /Say nothing at all\. Return an empty reply/.test(executorSrc),
-    ""
+    "the executor has no offer_booking branch, so nothing can reach scheduling from a turn",
+    !/offer_booking/.test(executorCode),
+    "an offer_booking branch is back in makeExecutor"
+  );
+  check(
+    "no tool result tells the model to call a tool that does not exist",
+    !/Call offer_booking/.test(executorCode),
+    "record_answer is handing back an instruction naming a removed tool"
   );
   check(
     "record_answer's description tells it to record the first answer, vague or not",
@@ -499,7 +543,7 @@ async function main(): Promise<void> {
 
   // ── The price gate, in the executor rather than the prompt ──
   const ctxPrice: ExecutorContext = {
-    row: unsigned, lead: null, ordinal: 0, bookingOffered: false, justCompleted: false,
+    row: unsigned, lead: null, ordinal: 0, justCompleted: false,
     priceFlagged: false,
   };
   const flagged = JSON.parse(
@@ -531,11 +575,24 @@ async function main(): Promise<void> {
     CLOSING_MESSAGES.length === 3,
     `got ${CLOSING_MESSAGES.length}`
   );
+  // !! THE DAYPART QUESTION MOVED OUT OF THE CLOSE AND INTO THE OPENER (2026-09-04).
+  // CLOSING_MESSAGES used to end the questions by asking "mornings or afternoons?", because
+  // scheduling came last. Scheduling comes first now, so that line lives in SCHEDULING_INTRO and
+  // the close is the wrap-up after the last answer.
   check(
-    "the close asks mornings or afternoons and offers no link",
-    /mornings or afternoons/i.test(CLOSING_MESSAGES[2]) &&
-      !CLOSING_MESSAGES.some((m) => /http|calendly|calendar|link/i.test(m)),
-    CLOSING_MESSAGES.join(" | ")
+    "the opener asks mornings or afternoons",
+    SCHEDULING_INTRO.some((m) => /mornings or afternoons/i.test(m)),
+    SCHEDULING_INTRO.join(" | ")
+  );
+  // !! STILL NO LINK IN ANY MODEL-ADJACENT COPY, AND THIS IS THE ASSERTION WORTH KEEPING.
+  // There IS a calendar in the funnel now, but its URL is a field on a route response that the
+  // model never sees. Nothing in the fixed copy may carry one.
+  check(
+    "neither the opener nor the close carries a calendar link",
+    ![...CLOSING_MESSAGES, ...SCHEDULING_INTRO].some((m) =>
+      /http|calendly|calendar|link/i.test(m)
+    ),
+    [...CLOSING_MESSAGES, ...SCHEDULING_INTRO].join(" | ")
   );
 
   // 2026-09-03 is a Thursday. 08:00 local is before both cutoffs; 20:00 is after both.

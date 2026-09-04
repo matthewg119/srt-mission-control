@@ -20,9 +20,16 @@
 // rewrites or suggests review content. FTC 16 CFR Part 465 regulates a tool that GENERATES
 // review content its user did not write. This one prints four questions on card stock.
 //
-// WHAT IS DELIBERATELY ABSENT, each one a rule rather than an omission: no star rating, no
-// "if you loved your visit", no sentiment pre-screen, no staff names, no incentive, no gift,
-// no clinic tablet. Every patient gets the same card.
+// WHAT IS DELIBERATELY ABSENT, each one a rule rather than an omission: no "if you loved your
+// visit", no sentiment pre-screen, no staff names, no incentive, no gift, no clinic tablet.
+// EVERY PATIENT GETS THE SAME CARD, and that is the sentence the others all serve.
+//
+// ‼️ THE TOOL NOW OPENS ON A STAR RATING (2026-09-04) AND THIS CARD STILL HAS NONE. Not an
+// oversight and not a drift. A rating printed on card stock cannot be anything but a
+// pre-screen — a patient who ticks two stars on paper and hands it back has been sorted before
+// she ever reaches the tool, which is the exact gating this whole system refuses. On screen
+// the rating routes nothing and can be proven to route nothing; on paper there is nothing to
+// prove it with. So the stars stay where they can be audited. Do not add them here.
 //
 // The QR resolves through reviews.{domain}, which is live from the moment the domain is
 // attached to the Vercel project — so cards can be printed and handed out before the hub has a

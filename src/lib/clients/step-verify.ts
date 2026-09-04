@@ -1036,6 +1036,42 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
+  // ‼️ THE ONE STEP THAT IS NOW THE WHOLE SIGNATURE CEREMONY.
+  //
+  // /onboarding2 used to take a typed e-signature with a per-page initial and a document hash, and
+  // the record that produced was genuinely strong: onboarding2_signings carries the frozen text,
+  // the SHA-256, a hashed IP and a user agent. Those screens were removed on 2026-09-04 and the
+  // agreement is signed on the call instead, which means THE EVIDENCE FOR IT IS NOW A PERSON
+  // SAYING SO. That is a real reduction and it should be visible here rather than smoothed over.
+  //
+  // So this asks for the same thing call_held asks for: something in the thread. A countersigned
+  // PDF, a photo of the signed page, a note saying where it was filed. What it cannot do is
+  // reconstruct a signature that no longer happens in software.
+  //
+  // ‼️ IT IS `not_yet`, NEVER `broken`. There is real work owed and the step keeps its [Re-check]
+  // button; broken gets none, and a missing signature is not a code fault.
+  agreement_signed: async (ctx) => {
+    const replies = await humanReplies(ctx);
+    if (replies === null) return threadUnreadable;
+
+    if (!replies.length) {
+      return notYet(
+        "replies in this step's thread",
+        "nothing in the thread yet",
+        "Put the evidence in this thread, then press Done: the countersigned PDF, a photo of " +
+          "the signed page, or a note saying where it is filed. The blank counterpart comes " +
+          "from scripts/_render-agreement-blank.ts. Nothing in the funnel signs this any more."
+      );
+    }
+
+    return confirmed(
+      `${replies.length} ${replies.length === 1 ? "reply" : "replies"} in this step's thread`,
+      "That is evidence somebody recorded the signing, not a cryptographic record of it. The " +
+        "e-signature path (onboarding2_signings, per-page initials, document hash) still exists " +
+        "and is unreferenced by the funnel."
+    );
+  },
+
   // ‼️ THE PAYMENT GATE LIVES HERE, NOT ONLY IN stepPrecondition, AND THAT IS THE POINT.
   //
   // stepPrecondition is called from src/app/api/slack/actions/route.ts and NOWHERE ELSE, so a

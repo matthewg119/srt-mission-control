@@ -10,6 +10,15 @@
 //
 // NO MODEL IN THIS PATH. Nothing here imports @/lib/claude-calls or the Anthropic SDK, and
 // nothing may. See src/lib/hub/review-assemble.ts.
+//
+// ‼️ `rating`, `private_note` AND `attested_at` (2026-09-04) DO NOT BREAK THE NO-PII RULE ABOVE.
+// None of the three can identify her: a number 1 to 5, free text she chose to write, and a
+// timestamp. The rule is about holding a name, a contact or a device, and it still holds — this
+// route still refuses x-forwarded-for and still rate limits on a per-client daily count.
+//
+// The rating is STORED AND NEVER READ HERE. There is no branch in this file that behaves
+// differently for a 1 than for a 5, and there must not be one: routing by rating is review
+// gating. See the header of review-assemble.ts.
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
@@ -28,6 +37,18 @@ const DAILY_CAP = 500;
 
 /** One answer cannot be longer than a long answer. Guards the column, not the person. */
 const MAX_ANSWER = 4000;
+
+/**
+ * 1 to 5, or null. Anything else becomes null rather than an error.
+ *
+ * A rating that decides nothing is not worth failing a request over, and the CHECK constraint
+ * on the column would reject a bad value anyway — which would lose her words along with it,
+ * because the insert is what stores them.
+ */
+function readRating(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isInteger(raw)) return null;
+  return raw >= 1 && raw <= 5 ? raw : null;
+}
 
 export async function POST(req: Request): Promise<NextResponse> {
   // Set by middleware for external hosts and STRIPPED by middleware on the internal host,
@@ -54,6 +75,16 @@ export async function POST(req: Request): Promise<NextResponse> {
     answers?: ReviewAnswers;
     submissionId?: string | null;
     postedDestination?: string | null;
+    /**
+     * 1 to 5, and it decides NOTHING on the way in or on the way out. Stored for the client's
+     * own reporting. This route has no branch that reads it, and adding one would make the
+     * rating a router, which is the gating pattern the whole tool refuses.
+     */
+    rating?: unknown;
+    /** Optional, offered to every rating, never posted anywhere. */
+    privateNote?: unknown;
+    /** "I am a real customer and these are my own words." */
+    attested?: unknown;
   };
   try {
     body = await req.json();
@@ -116,6 +147,14 @@ export async function POST(req: Request): Promise<NextResponse> {
       answers,
       posted_destination:
         typeof body.postedDestination === "string" ? body.postedDestination.slice(0, 40) : null,
+      rating: readRating(body.rating),
+      private_note:
+        typeof body.privateNote === "string" && body.privateNote.trim()
+          ? body.privateNote.trim().slice(0, MAX_ANSWER)
+          : null,
+      // The timestamp, not the boolean. "She ticked it" and "she ticked it at 14:02 on the
+      // 4th" are different evidence, and the column costs the same either way.
+      attested_at: body.attested === true ? new Date().toISOString() : null,
     })
     .select("id")
     .maybeSingle();

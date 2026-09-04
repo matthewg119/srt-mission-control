@@ -12,10 +12,27 @@
 // client component previews the assembly as she types and the server stores from this same
 // function, so what she reads and what is kept cannot drift.
 
-export const QUESTION_SET_VERSION = "v2";
+// ‼️ v3 (2026-09-04) REPLACED QUESTION 3 AND THE REASON IS NOT A COPY PREFERENCE.
+//
+// It used to be "Had you had a bad experience somewhere before this one?", which invites a
+// customer to describe A NAMED COMPETITOR'S care in a review posted on a public profile. That is
+// the single review in this set most likely to draw a defamation complaint, and the clinic, not
+// SRT, is the one holding it. "What surprised you?" asks about THIS visit, is still
+// sentiment-neutral, and produces the specific detail that makes a review quotable.
+//
+// Old rows carry `before` and QUESTION_SET_VERSION "v2". They stay readable: assembleLabelled()
+// and assemblePlain() iterate REVIEW_QUESTIONS, so a v2 row simply contributes no bullet for a
+// key that is no longer asked. Nothing migrates and nothing is rewritten.
+export const QUESTION_SET_VERSION = "v3";
 
 export interface ReviewQuestion {
-  key: "worried" | "hoping" | "before" | "happened";
+  /**
+   * ‼️ `before` IS RETIRED, NOT DELETED. It is still in the union because
+   * review_tool_submissions rows written under v2 hold it, and page-candidates.ts and
+   * weekly-report.ts read those rows. Removing it from the type would make real stored data
+   * unassignable.
+   */
+  key: "worried" | "hoping" | "before" | "surprised" | "happened";
   /** What she is asked. */
   prompt: string;
   /** The label shown beside her sentence ON SCREEN only. Never copied. */
@@ -25,10 +42,20 @@ export interface ReviewQuestion {
 /**
  * Fixed, sentiment-neutral, identical for every business.
  *
- * NOT ASKED, EVER: who treated her, how she would rate it, whether she would recommend,
- * anything on a scale, anything that would sort her down one path or another. There is no
- * staff name field in this route and there must never be one — Google 2026 forbids a
- * merchant requesting specific content, staff names included.
+ * NOT ASKED, EVER: who treated her, whether she would recommend, anything that would SORT HER
+ * DOWN ONE PATH OR ANOTHER. There is no staff name field in this route and there must never be
+ * one — Google 2026 forbids a merchant requesting specific content, staff names included.
+ *
+ * ‼️ A STAR RATING IS NOW ASKED, AND THE RULE IT LOOKS LIKE IT BREAKS IS INTACT. Added
+ * 2026-09-04. The prohibition in this comment was never about a number, it was about ROUTING:
+ * a rating that decides whether she is shown the public review link is gating, which Google's
+ * policy and FTC 16 CFR Part 465 both reach. The rating collected here decides nothing. Every
+ * value 1 through 5 reaches these same four questions, the same assembly, the same editable
+ * box and the same destination links. scripts/_probe-review-gating.ts asserts that byte for
+ * byte, and it is the reason this paragraph is a description rather than a promise.
+ *
+ * The rating lives on the submission row and in the client's own reporting. It must never
+ * become an argument to any function in this file.
  *
  * Question 1 is doing double duty. It is the customer-side mirror of the objection-shaped
  * questions in the audit's twenty, which is why the reviews this produces get quoted: they
@@ -46,9 +73,9 @@ export const REVIEW_QUESTIONS: ReviewQuestion[] = [
     label: "What I was hoping for",
   },
   {
-    key: "before",
-    prompt: "Had you had a bad experience somewhere before this one?",
-    label: "Before this",
+    key: "surprised",
+    prompt: "What surprised you?",
+    label: "What surprised me",
   },
   {
     key: "happened",

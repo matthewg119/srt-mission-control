@@ -67,6 +67,65 @@ export function isCalendlyConfigured(kind: EventKind): boolean {
   return Boolean(token() && eventTypeUri(kind));
 }
 
+/**
+ * Does this scheduled-event URI actually exist, and when does it start?
+ *
+ * ‼️ THIS IS AN ANTI-FORGERY CHECK, NOT A CONVENIENCE LOOKUP. /api/onboarding2/booked provisions a
+ * client and takes one of six pilot seats, and its only other evidence is a postMessage from an
+ * iframe. An origin check in the browser stops nothing: anybody holding a session token can POST
+ * to that route directly. Asking Calendly whether the event is real is the guard that cannot be
+ * spoofed from the client.
+ *
+ * ‼️ THREE STATES, AND COLLAPSING THEM WOULD BE THE BUG. "Verified" and "we have no token, so
+ * nobody checked" are not the same answer, and a caller that treated `unverified` as failure
+ * would break every booking the moment CALENDLY_API_TOKEN went missing, while one that treated it
+ * as success would have no way to tell a checked booking from an unchecked one. The caller
+ * records which it got.
+ */
+export async function verifyScheduledEvent(uri: string | null | undefined): Promise<{
+  status: "verified" | "unverified" | "not_found";
+  verified: boolean;
+  startTime: string | null;
+}> {
+  const key = token();
+  // No token, or nothing to check: not a failure, and explicitly not a pass either.
+  if (!key || !uri) return { status: "unverified", verified: false, startTime: null };
+
+  // Only ever call Calendly's own host with something shaped like its own URI. A `uri` off a
+  // request body is attacker-controlled, and handing it to fetch() unchecked is an SSRF.
+  if (!/^https:\/\/api\.calendly\.com\/scheduled_events\/[A-Za-z0-9_-]+$/.test(uri)) {
+    return { status: "not_found", verified: false, startTime: null };
+  }
+
+  try {
+    const res = await fetch(uri, {
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(6_000),
+      cache: "no-store",
+    });
+    if (res.status === 404) return { status: "not_found", verified: false, startTime: null };
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[calendly] verify ${res.status}: ${body.slice(0, 200)}`);
+      // ‼️ A 500 OR A TIMEOUT IS `unverified`, NOT `not_found`. Calendly having a bad afternoon
+      // must not read as "this person forged a booking", which would refuse a real appointment.
+      return { status: "unverified", verified: false, startTime: null };
+    }
+    const json = (await res.json()) as {
+      resource?: { status?: string; start_time?: string };
+    };
+    const resource = json.resource;
+    // A cancelled event is not a booking. Calendly keeps the row and flips `status`.
+    if (!resource || resource.status !== "active") {
+      return { status: "not_found", verified: false, startTime: null };
+    }
+    return { status: "verified", verified: true, startTime: resource.start_time ?? null };
+  } catch (e) {
+    console.error("[calendly] verify failed:", (e as Error).message);
+    return { status: "unverified", verified: false, startTime: null };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Time zones, without a date library
 //

@@ -255,6 +255,34 @@ export const QUALIFYING_QUESTIONS: QualifyingQuestion[] = [
     question: guard("q6", "Do you have a Google Business Profile?"),
     options: [guard("q6 o1", "Yes"), guard("q6 o2", "No")],
   },
+  {
+    // ‼️ THIS ASKS FOR A PLATFORM, NOT A URL, AND THE DIFFERENCE IS THE WHOLE DESIGN.
+    //
+    // It answers "which of the six review destinations does this client want", which is what
+    // decides the order of the buttons in the review tool and which URL field the Review
+    // handover panel needs filled. It does NOT produce a link. A review URL typed by a client
+    // into a chat box, or worse constructed by us from a business name, is a link that can send
+    // a real patient to somebody else's profile. destinationsFor() in
+    // app/hub/[host]/reviews/review-tool.tsx renders a destination only where a human pasted the
+    // actual URL, and that stays true.
+    //
+    // The six names must match PLATFORMS in review-tool.tsx. A client picking a seventh option
+    // here would choose a destination nothing can ever render.
+    key: "review_destination",
+    question: guard("q7", "Where do you want your patient reviews to go?"),
+    options: [
+      guard("q7 o1", "Google"),
+      guard("q7 o2", "Yelp"),
+      guard("q7 o3", "Trustpilot"),
+      guard("q7 o4", "BBB"),
+      guard("q7 o5", "Facebook"),
+      guard("q7 o6", "RealSelf"),
+    ],
+    help: guard(
+      "q7 help",
+      "Wherever you pick is where the review tool sends your patients when they finish writing."
+    ),
+  },
 ];
 
 /** The popup behind the "Other" chip. Client-side, so it costs no model turn. */
@@ -271,29 +299,50 @@ export const OTHER_PROMPT = {
 // worst possible moment to look like a system that was not paying attention.
 export const QUALIFYING_INTRO = guard(
   "qual intro",
-  `${QUALIFYING_QUESTIONS.length} questions, about a minute. They shape what we build first, and you never have to repeat anything you already put in the agreement.`
+  `To make sure we have everything ready by the time of our call, answer these ${QUALIFYING_QUESTIONS.length} questions. About a minute, and nothing you have already told us gets asked twice.`
 );
 
+/**
+ * The opener, sent the moment the chat takes over from screen one.
+ *
+ * ‼️ THE CALL IS BOOKED BEFORE THE QUESTIONS ARE ASKED, REVERSED 2026-09-04. It used to be the
+ * other way round, gated in makeExecutor so offer_booking refused until every answer was in.
+ * Matthew's call: the booking is the commitment and the questions are preparation for it, so
+ * somebody who books and then abandons question four has still done the thing that matters. The
+ * gate did not move, it INVERTED: scheduling now runs before the model sees a turn at all.
+ */
+export const SCHEDULING_INTRO: string[] = [
+  guard("sched intro 1", "You are in. Let us get your onboarding call booked."),
+  guard("sched intro 2", "What works better for you, mornings or afternoons?"),
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
-// The close. NO CALENDAR LINK, ANYWHERE IN THIS FLOW.
+// The close, said once every question is answered.
 //
-// ‼️ THESE LINES ARE SENT VERBATIM BY THE ROUTE, NOT WRITTEN BY THE MODEL, AND THAT IS HOW "no
-// calendar link anywhere" BECOMES A GUARANTEE RATHER THAN AN INSTRUCTION. A prompt telling a
-// model not to offer a calendar is a prompt a model can talk itself past, and it only has to
-// happen once. The scheduling turns are a deterministic state machine in
-// src/app/api/onboarding2/chat/route.ts keyed off the lead row, so there is no turn in which a
-// link could be produced at all.
+// ‼️ THESE LINES ARE SENT VERBATIM BY THE ROUTE, NOT WRITTEN BY THE MODEL. A prompt telling a
+// model what to say at the end is a prompt a model can talk itself past, and it only has to
+// happen once. The scheduling turns are likewise a deterministic state machine in
+// src/app/api/onboarding2/chat/route.ts keyed off the lead row.
+//
+// ‼️ THERE IS NOW EXACTLY ONE CALENDAR IN THIS FLOW AND THE MODEL STILL CANNOT REACH IT.
+// This header used to read "NO CALENDAR LINK, ANYWHERE IN THIS FLOW" and that stopped being
+// true on 2026-09-04, when the Calendly embed came back ahead of the questions. The GUARANTEE
+// is unchanged and is worth restating because it is the reason the old rule existed: the embed
+// is rendered by the client from a URL the ROUTE returns, on a turn the model never sees. No
+// prompt produces a link, no tool returns one, and CHAT_HARD_LINES still forbids the assistant
+// from offering one. What changed is that the funnel has a calendar; what did not change is
+// that the assistant has no way to hand one out.
 //
 // Three messages, sent one after another like somebody actually texting.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const CLOSING_MESSAGES: string[] = [
-  guard("close 1", "Congratulations, we are all set."),
+  guard("close 1", "That is everything, thank you."),
   guard(
     "close 2",
-    "To get you live we just need to schedule our onboarding call so I can show you everything."
+    "Matthew has what he needs to get your build started before the call."
   ),
-  guard("close 3", "What works better for you, mornings or afternoons?"),
+  guard("close 3", "See you then."),
 ];
 
 export const DAYPART_OPTIONS = {
@@ -380,6 +429,37 @@ export const SCHEDULING_UI = {
   closing: guard("sched closing", "That is everything. Talk soon."),
   /** When a typed reply is not readable as a daypart, a zone or a day. Asked once, not argued. */
   reask: guard("sched reask", "Just tap one of the options below and we are done."),
+
+  // ── The Calendly handoff (2026-09-04) ────────────────────────────────────
+  //
+  // ‼️ THE DAY IS AGREED IN CONVERSATION AND THE HOUR IS PICKED ON CALENDLY, and the split is
+  // deliberate. The daypart, zone and day are what make the calendar SHORT: Calendly opens on
+  // the day they already chose, filtered to the half of it they already chose, so they are
+  // picking between three slots rather than scrolling a month. Asking all of it on Calendly
+  // would work and would convert worse; asking all of it here would need a booking API this
+  // account does not have.
+  /** Sent with the embed, once the day is agreed. `{day}` is the label they tapped. */
+  pickTime: guard("sched pick time", "Great, {day} it is. Pick a time that suits you."),
+  /**
+   * ‼️ SAID ONLY AFTER CALENDLY REPORTS event_scheduled, NEVER WHEN THE EMBED IS SHOWN.
+   * The email is Calendly's, and it is real: it goes out the moment the booking lands. Saying it
+   * a screen early would be the funnel promising an email that nothing has sent yet, which is
+   * the exact failure confirmedNoInvite above exists to avoid.
+   */
+  emailSent: guard(
+    "sched email sent",
+    "You are booked. We just sent an email with your appointment confirmation."
+  ),
+  /**
+   * The honest state when there is no Calendly URL configured at all.
+   *
+   * ‼️ TRI-STATE, LIKE EVERY OTHER BOOKING SURFACE IN THIS REPO. With no token AND no public
+   * URL, the screen offers the phone number rather than a button that opens nothing.
+   */
+  noCalendar: guard(
+    "sched no calendar",
+    "I will confirm the exact time with you by email shortly."
+  ),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

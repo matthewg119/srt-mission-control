@@ -119,6 +119,96 @@ export function signedCard(args: {
   return { text, blocks };
 }
 
+/**
+ * The top-level card for a BOOKED call, which is what starts a client now.
+ *
+ * ‼️ IT IS NOT signedCard() WITH THE WORD CHANGED, AND THE DIFFERENCE IS THE POINT. That card
+ * reports on an executed contract: who signed, under which template, with which document hash
+ * and how many initials, and it links a PDF. None of that exists here. Nothing has been signed;
+ * the agreement is signed by hand on the call, which is delivery step `agreement_signed`. A card
+ * that kept those fields and rendered them as dashes would be reporting the absence of a
+ * ceremony that is no longer supposed to have happened.
+ *
+ * signedCard() is deliberately left in place for the day e-signature comes back.
+ */
+export function bookedCard(args: {
+  row: Onboarding2SigningRow;
+  lead: Onboarding2LeadRow | null;
+  provision: ProvisionResult;
+}): { text: string; blocks: SlackBlock[] } {
+  const { row, provision, lead } = args;
+  const business = row.business_legal_name || row.contact_email || "A new lead";
+  const text = `Call booked: ${business}`;
+
+  const blocks: SlackBlock[] = [
+    header(`Call booked: ${business}`),
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*Contact*\n${orDash(row.contact_name)}` },
+        { type: "mrkdwn", text: `*Title*\n${orDash(row.signer_title)}` },
+        { type: "mrkdwn", text: `*Email*\n${orDash(row.contact_email)}` },
+        { type: "mrkdwn", text: `*Phone*\n${telLink(row.contact_phone)}` },
+        { type: "mrkdwn", text: `*Website*\n${orDash(row.website)}` },
+        { type: "mrkdwn", text: `*When*\n${orDash(lead?.call_choice_label)}` },
+      ],
+    },
+  ];
+
+  // ‼️ THE CONFIRMATION EMAIL IS CALENDLY'S AND WE DID NOT SEND IT. Said out loud because the
+  // funnel tells the client "we just sent an email", and whoever reads this card when they say
+  // they never got one needs to know which system to go and look in.
+  const ledger: string[] = [
+    ":white_check_mark: Calendly sent the confirmation and the invite",
+    ":black_square_button: Nothing signed yet, the agreement is signed on the call",
+  ];
+
+  if (provision.error) {
+    ledger.push(":rotating_light: *BOOKED BUT NOT PROVISIONED*");
+    blocks.push(section(ledger.join("\n")));
+    blocks.push(
+      section(
+        `*There is a call on the calendar and no client row behind it.*\n\`${provision.error}\`\n` +
+          `Close out a seat, then provision this by hand. The booking itself is unaffected.`
+      )
+    );
+  } else {
+    ledger.push(
+      provision.alreadyProvisioned
+        ? ":information_source: Client already existed, reused rather than taking a second seat"
+        : ":white_check_mark: Client provisioned"
+    );
+    ledger.push(
+      provision.onboardingUrl
+        ? ":white_check_mark: Intake link minted"
+        : ":warning: No intake link. CLIENT_LINK_SECRET is not set, so none could be minted"
+    );
+    blocks.push(section(ledger.join("\n")));
+
+    if (provision.onboardingUrl) {
+      blocks.push(section(`*Pre-call intake*  <${provision.onboardingUrl}|open the intake form>`));
+    }
+    if (provision.clientId) {
+      blocks.push(
+        context(`Client \`${provision.clientId}\`  |  slug \`${provision.slug ?? "none"}\``)
+      );
+    }
+  }
+
+  if (provision.warnings.length) {
+    blocks.push(context(provision.warnings.map((w) => `- ${w}`).join("\n")));
+  }
+
+  blocks.push(
+    context(
+      `Session \`${row.id}\`` +
+        (lead?.calendly_event_uri ? `  |  Calendly \`${lead.calendly_event_uri.slice(-12)}\`` : "")
+    )
+  );
+
+  return { text, blocks };
+}
+
 /** All six answers, in ONE reply. Not six replies, which is the wall the step board removed. */
 export function qualifyingReply(lead: Onboarding2LeadRow): { text: string; blocks: SlackBlock[] } {
   const byKey = new Map(lead.qualifying.map((a) => [a.key, a.answer]));

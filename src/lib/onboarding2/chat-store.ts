@@ -32,8 +32,25 @@ export interface ChatTurnRow {
  * it flips exactly once per session: re-deriving it later from the row's current signed_at would
  * relabel every pre-signature question as a qualifying answer the moment somebody signs.
  */
+/**
+ * Which toolset this session gets.
+ *
+ * ‼️ IT KEYS ON IDENTITY, NOT ON A SIGNATURE (changed 2026-09-04). It used to read
+ * `row.signed_at ? "qualifying" : "grounded"`, which was right while the funnel was
+ * identity -> agreement -> signature -> questions. The agreement and signature screens are gone:
+ * nothing sets signed_at any more, so that expression would pin every new session to grounded
+ * mode forever and hand a booking flow an assistant whose only job is answering questions about
+ * a document nobody is reading.
+ *
+ * `email` is the right gate because POST /api/onboarding2/email is what sets it, and that is
+ * screen one. The chat is not mounted before then, so a row without an email reaching here is a
+ * session that skipped the front door, and grounded mode is the correct, harmless answer for it.
+ *
+ * ‼️ "grounded" IS STILL A VALID MODE AND MUST STAY IN ChatMode. onboarding2_chat_turns has a
+ * CHECK constraint naming exactly ('grounded', 'qualifying'), and real rows carry both.
+ */
 export function modeFor(row: Onboarding2SigningRow): ChatMode {
-  return row.signed_at ? "qualifying" : "grounded";
+  return row.email ? "qualifying" : "grounded";
 }
 
 export async function loadTurns(signingId: string): Promise<ChatTurnRow[]> {

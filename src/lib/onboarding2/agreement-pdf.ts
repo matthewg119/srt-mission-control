@@ -128,13 +128,49 @@ function bullets(state: PageState, items: string[]): void {
   state.y += 2;
 }
 
+/** A ruled line to sign on, with its caption underneath. Blank mode only. */
+function signatureRule(state: PageState, caption: string, width: number): void {
+  ensureSpace(state, 14);
+  const { doc } = state;
+  state.y += 6;
+  setColor(doc, "draw", MUTED);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN, state.y, MARGIN + width, state.y);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  setColor(doc, "text", MUTED);
+  doc.text(caption, MARGIN, state.y + 4);
+  state.y += 8;
+}
+
+export interface RenderAgreementOptions {
+  /**
+   * An UNSIGNED counterpart, for wet signature on a call.
+   *
+   * ‼️ IT DROPS THE "SIGNATURE RECORD" TABLE, AND THAT IS THE POINT. Signing id, SHA-256, server
+   * timestamp, hashed IP and user agent all describe an e-signature ceremony that has not
+   * happened. Printing them empty on a blank counterpart would produce a document whose
+   * provenance block asserts nothing while looking exactly like one that asserts something.
+   * The eight signature fields become ruled lines instead of a filled table.
+   *
+   * The agreement TEXT is identical either way, and the footer still carries the document hash,
+   * so a blank counterpart is still traceable to the template version it was struck from.
+   */
+  blank?: boolean;
+}
+
 /**
- * Render one signed agreement.
+ * Render one agreement, signed or blank.
  *
  * The footer carries the document hash on EVERY page, which is what makes a single photocopied
  * page traceable back to a record rather than to a template.
  */
-export function renderAgreementPdf(snapshot: AgreementSnapshot, signature: SignedRecord): Buffer {
+export function renderAgreementPdf(
+  snapshot: AgreementSnapshot,
+  signature: SignedRecord,
+  opts?: RenderAgreementOptions
+): Buffer {
+  const blank = opts?.blank === true;
   const state = startDoc({
     title: snapshot.title,
     footer: plainFooter(
@@ -157,7 +193,10 @@ export function renderAgreementPdf(snapshot: AgreementSnapshot, signature: Signe
 
   paragraph(state, snapshot.promise, { size: 12, bold: true, color: REEF, gap: 8 });
 
-  // ── The fourteen sections ──
+  // ── The sections ──
+  //
+  // On a blank counterpart the map is empty, so initialLine() returns early and no section
+  // carries an initial. Nothing else changes.
   const byNumber = new Map(signature.initials.map((r) => [r.n, r]));
   for (const s of snapshot.sections) {
     sectionHeading(state, s.heading, { number: s.n });
@@ -174,36 +213,54 @@ export function renderAgreementPdf(snapshot: AgreementSnapshot, signature: Signe
   for (const p of snapshot.closing) paragraph(state, p);
   state.y += 2;
 
-  keyValueTable(state, [
-    { label: "Client signature", value: signature.signatureTyped, tone: "good" },
-    { label: "Print name", value: signature.printName },
-    { label: "Title", value: signature.signerTitle ?? "" },
-    { label: "Business legal name", value: signature.businessLegalName },
-    { label: "Business address", value: signature.address },
-    { label: "Best contact email", value: signature.contactEmail },
-    { label: "Best contact phone", value: signature.contactPhoneTyped ?? "" },
-    { label: "Date", value: signature.signedDate ?? "" },
-  ]);
+  if (blank) {
+    signatureRule(state, "Client signature", CONTENT_W * 0.6);
+    signatureRule(state, "Print name", CONTENT_W * 0.6);
+    signatureRule(state, "Title", CONTENT_W * 0.45);
+    signatureRule(state, "Business legal name", CONTENT_W * 0.75);
+    signatureRule(state, "Business address", CONTENT_W);
+    signatureRule(state, "Best contact email", CONTENT_W * 0.6);
+    signatureRule(state, "Best contact phone", CONTENT_W * 0.45);
+    signatureRule(state, "Date", CONTENT_W * 0.35);
+  } else {
+    keyValueTable(state, [
+      { label: "Client signature", value: signature.signatureTyped, tone: "good" },
+      { label: "Print name", value: signature.printName },
+      { label: "Title", value: signature.signerTitle ?? "" },
+      { label: "Business legal name", value: signature.businessLegalName },
+      { label: "Business address", value: signature.address },
+      { label: "Best contact email", value: signature.contactEmail },
+      { label: "Best contact phone", value: signature.contactPhoneTyped ?? "" },
+      { label: "Date", value: signature.signedDate ?? "" },
+    ]);
+  }
 
   // ── The record about the record ──
   //
   // Printed inside the document rather than kept only in the database, so a PDF handed to a
   // lawyer carries its own provenance and does not need us to be reachable to be checkable.
-  state.y += 4;
-  sectionHeading(state, "Signature record");
-  keyValueTable(state, [
-    { label: "Signing id", value: signature.signingId },
-    { label: "Template version", value: signature.templateVersion },
-    { label: "Canonical form", value: signature.canon },
-    { label: "Agreement SHA-256", value: signature.documentSha256 },
-    { label: "Signed at (server)", value: signature.signedAt ?? "" },
-    { label: "Signer IP (hashed)", value: signature.ipHash ?? "" },
-    { label: "Signer user agent", value: signature.userAgent ?? "" },
-  ]);
+  //
+  // ‼️ SUPPRESSED ON A BLANK COUNTERPART. See RenderAgreementOptions.blank.
+  if (!blank) {
+    state.y += 4;
+    sectionHeading(state, "Signature record");
+    keyValueTable(state, [
+      { label: "Signing id", value: signature.signingId },
+      { label: "Template version", value: signature.templateVersion },
+      { label: "Canonical form", value: signature.canon },
+      { label: "Agreement SHA-256", value: signature.documentSha256 },
+      { label: "Signed at (server)", value: signature.signedAt ?? "" },
+      { label: "Signer IP (hashed)", value: signature.ipHash ?? "" },
+      { label: "Signer user agent", value: signature.userAgent ?? "" },
+    ]);
+  }
 
+  state.y += 4;
   paragraph(
     state,
-    "The agreement text above is reproduced from the record stored when this document was signed, not from any later version of the template. The SHA-256 is taken over that stored text.",
+    blank
+      ? `Unsigned counterpart. Template ${signature.templateVersion}, text SHA-256 ${signature.documentSha256}. This copy carries no signature record because it has not been signed. Signing it on paper does not create one.`
+      : "The agreement text above is reproduced from the record stored when this document was signed, not from any later version of the template. The SHA-256 is taken over that stored text.",
     { size: 8, color: MUTED }
   );
 

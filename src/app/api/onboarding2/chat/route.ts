@@ -17,12 +17,16 @@
 // ‼️ THE MODE IS READ OFF THE ROW, NEVER OFF THE REQUEST. A client-sent mode would hand anybody
 // the post-signature toolset.
 //
-// ‼️ THE SCHEDULING CLOSE IS A DETERMINISTIC STATE MACHINE AND THE MODEL IS NOT IN IT
-// (2026-09-03). Once the last question is answered, every remaining turn is decided here, from
-// the lead row, with fixed copy from config/onboarding2.ts and days computed by scheduling.ts.
-// That is what makes "no calendar link anywhere in this flow" a guarantee rather than an
-// instruction: there is no turn in which a model could produce one. It also costs nothing, which
-// is a pleasant second reason but not the first one.
+// ‼️ SCHEDULING IS A DETERMINISTIC STATE MACHINE AND THE MODEL IS NOT IN IT (2026-09-03), AND IT
+// NOW RUNS FIRST (2026-09-04). Until the lead row carries booked_slot_at, every turn is decided
+// here, from that row, with fixed copy from config/onboarding2.ts and days computed by
+// scheduling.ts. The questions come after the booking.
+//
+// This used to make "no calendar link anywhere in this flow" true. There IS a calendar now: the
+// Calendly embed, mounted by the CLIENT from a `bookingUrl` this route returns. The guarantee it
+// was protecting is unchanged and is the reason to say this out loud: no prompt produces a link,
+// no tool returns one, and the model never sees the turn the URL is sent on. The funnel gained a
+// calendar; the assistant did not gain a way to hand one out.
 //
 // ‼️ THE REPLY IS AN ARRAY OF MESSAGES, NOT A STRING. Two or three short bubbles in a row read
 // like a person texting; one paragraph reads like a form. See lib/onboarding2/texting.ts for the
@@ -54,11 +58,14 @@ import {
 import { nextQuestion, runTurn, type ExecutorContext } from "@/lib/onboarding2/chat";
 import { findLeadByEmail, leadEmailFor, upsertLead } from "@/lib/onboarding2/lead";
 import { callReply, qualifyingReply } from "@/lib/onboarding2/card";
-import { scheduleCallAndInvite } from "@/lib/onboarding2/calendar";
+// ‼️ scheduleCallAndInvite() IS NO LONGER CALLED FROM ANYWHERE, and src/lib/onboarding2/calendar.ts
+// is deliberately left in the tree. It is a complete, working Microsoft Graph implementation
+// gated on four MS_CALENDAR_* vars that have never been set. If that Azure app is ever created,
+// this is a one-line re-import, and its file header carries the AADSTS65001 reasoning that is
+// the only record of why Graph was chosen over Calendly in the first place.
+import { bookingUrlFor } from "@/lib/onboarding2/booking";
 import { splitIntoMessages } from "@/lib/onboarding2/texting";
 import {
-  CALL_HOUR,
-  clockLabel,
   dayOptions,
   readTimezone,
   readDayChoice,
@@ -149,12 +156,27 @@ export async function POST(req: NextRequest) {
 
   // ── THE SCHEDULING BRANCH, BEFORE THE MODEL AND INSTEAD OF IT ──
   //
-  // ‼️ EVERY TURN AFTER THE LAST ANSWER IS HANDLED HERE. Reached whenever the questions are done,
-  // which is the state the lead row already records, so it survives a refresh, a new tab and a
-  // cold instance without anything extra to keep in sync.
-  if (mode === "qualifying" && lead?.qualifying_completed_at && !lead.call_day) {
+  // ‼️ THE GATE INVERTED ON 2026-09-04. It used to read
+  // `lead?.qualifying_completed_at && !lead.call_day`: every question first, scheduling last,
+  // enforced a second time inside makeExecutor's offer_booking. Now scheduling comes FIRST and
+  // the questions follow the booking.
+  //
+  // Matthew's call, and the reasoning is about what each half is for. The BOOKING is the
+  // commitment; the QUESTIONS are preparation for the call it commits to. Gating the booking on
+  // eight answers meant somebody who wanted to book had to fill in a form first, and anyone who
+  // dropped at question four left with neither. Reversed, a lead who books and then abandons
+  // question four has still done the thing that matters, and we have a call to ask the rest on.
+  //
+  // ‼️ IT KEYS ON booked_slot_at, WHICH ONLY /api/onboarding2/booked WRITES. Not on call_day,
+  // which is set the moment they tap a day and BEFORE Calendly has seen them: keying on that
+  // would walk somebody into the questions while the calendar was still on their screen. The
+  // state lives on the lead row, so it survives a refresh, a new tab and a cold instance.
+  if (mode === "qualifying" && lead && !lead.booked_slot_at) {
     const out = await handleScheduling({ lead, typed: message, isDemo: Boolean(row.is_demo) });
     await storeAssistant({ signingId: row.id, mode, from: ordinal + 1, messages: out.messages });
+    // ‼️ THE SLACK CALL REPLY FIRES ON THE AGREED DAY, NOT ON THE BOOKING. It always did: the
+    // handler returns a lead only on the turn a day lands. Matthew wants to know a call was
+    // agreed even if Calendly is never completed, which is exactly the lead worth chasing.
     if (out.lead && row.slack_thread_ts && row.slack_channel && !row.is_demo) {
       const reply = callReply(out.lead);
       await slack
@@ -168,11 +190,15 @@ export async function POST(req: NextRequest) {
       mode,
       messages: out.messages,
       options: out.options,
-      // The client swaps the composer for the closing summary on this, so it is only true once a
-      // day is actually stored, never when the daypart lands.
-      scheduled: Boolean(out.lead?.call_day),
+      // The URL the client mounts the Calendly embed on. Present only on the turn a day lands.
+      bookingUrl: out.bookingUrl ?? null,
+      // ‼️ NOT `complete`, AND NOT `scheduled` EITHER. Both used to be true here because
+      // scheduling was the LAST thing this funnel did. It is now the first, so the composer must
+      // stay live: the questions come next. The client shows the closing summary when the
+      // QUESTIONS finish, which is a different response entirely.
+      scheduled: false,
       callLabel: out.lead?.call_choice_label ?? null,
-      complete: true,
+      complete: false,
     });
   }
 
@@ -182,7 +208,6 @@ export async function POST(req: NextRequest) {
     row,
     lead,
     ordinal,
-    bookingOffered: false,
     justCompleted: false,
     priceFlagged: false,
   };
@@ -205,13 +230,17 @@ export async function POST(req: NextRequest) {
   // recover, ask the next outstanding question ourselves. It is computed from stored answers, so
   // it cannot contradict what the model just did.
   //
-  // ‼️ THE offer_booking CASE IS DIFFERENT AND MUST NOT FALL THROUGH TO THE FALLBACK. That tool
-  // deliberately tells the model to say nothing, because the three closing messages below are
-  // ours. An empty reply there is the intended outcome, not a failure.
+  // ‼️ THE LAST-ANSWER CASE IS DIFFERENT AND MUST NOT FALL THROUGH TO THE FALLBACK. record_answer
+  // tells the model to say nothing once every question is in, because the three closing messages
+  // below are ours. An empty reply there is the intended outcome, not a failure.
+  //
+  // This branch used to key on ctx.bookingOffered, which was set by the offer_booking tool that
+  // no longer exists. It keys on justCompleted now: same moment, one fewer round trip, and it
+  // cannot be reached by a model deciding to call a tool early.
   let messages: string[] = [];
   const text = result.response.trim();
 
-  if (ctx.bookingOffered) {
+  if (ctx.justCompleted) {
     // The close, verbatim, as three separate bubbles. No model, no link, nothing to argue with.
     messages = [...CLOSING_MESSAGES];
   } else if (text) {
@@ -269,15 +298,17 @@ export async function POST(req: NextRequest) {
 
   // The chips under the next question, from the same function that decided what to ask, so what
   // is tappable and what was asked cannot come apart.
-  const upcoming = mode === "qualifying" && !ctx.bookingOffered ? nextQuestion(ctx.lead) : null;
+  // nextQuestion() already returns null once every question is answered, so the old
+  // `&& !ctx.bookingOffered` guard was doing nothing the function did not already do.
+  const upcoming = mode === "qualifying" ? nextQuestion(ctx.lead) : null;
 
   return NextResponse.json({
     ok: true,
     messages,
     mode,
-    options: ctx.bookingOffered
-      ? [DAYPART_OPTIONS.morning, DAYPART_OPTIONS.afternoon]
-      : (upcoming?.options ?? []),
+    // No daypart chips here any more: scheduling happens before the model ever has a turn, in
+    // the branch above, and offering them at the END would offer a booking they already made.
+    options: upcoming?.options ?? [],
     otherOption: upcoming?.otherOption ?? null,
     answered: ctx.lead?.qualifying_answered ?? 0,
     complete: ctx.justCompleted || Boolean(ctx.lead?.qualifying_completed_at),
@@ -332,7 +363,13 @@ async function handleScheduling(args: {
   lead: Onboarding2LeadRow;
   typed: string;
   isDemo: boolean;
-}): Promise<{ messages: string[]; options: string[]; lead: Onboarding2LeadRow | null }> {
+}): Promise<{
+  messages: string[];
+  options: string[];
+  lead: Onboarding2LeadRow | null;
+  /** Set on the final scheduling turn only. The client mounts the Calendly embed on it. */
+  bookingUrl?: string;
+}> {
   const { lead, typed } = args;
 
   if (!lead.call_daypart) {
@@ -384,34 +421,32 @@ async function handleScheduling(args: {
     call_chosen_at: new Date().toISOString(),
   });
 
-  // ‼️ THE DAY IS WRITTEN BEFORE THE INVITE IS ATTEMPTED, AND THAT ORDER IS THE FALLBACK. If
-  // Graph is unreachable the booking is already durable and the Slack card still fires; the
-  // reverse order would lose an agreed call to protect an invite nobody has seen yet.
-  const saved =
-    (await scheduleCallAndInvite({
-      lead: stored ?? lead,
-      date: picked.date,
-      daypart: lead.call_daypart,
-      timeZone: lead.call_timezone,
-      isDemo: args.isDemo,
-    })) ?? stored;
+  // ‼️ THE DAY IS WRITTEN BEFORE THE CALENDAR IS OFFERED, AND THAT ORDER IS THE FALLBACK. If the
+  // embed never loads, or they close the tab on the Calendly screen, the agreed day is already
+  // durable and the Slack card still fires. The reverse order would lose an agreed call to
+  // protect a booking nobody has made yet.
+  //
+  // ‼️ NOTHING IS CONFIRMED HERE. This turn hands over a calendar; it does not claim a booking
+  // and it does not claim an email. Both of those are said by /api/onboarding2/booked, after
+  // Calendly reports event_scheduled. See SCHEDULING_UI.emailSent for why that separation is
+  // the one thing this close cannot get wrong.
+  const url = bookingUrlFor(stored ?? lead, picked.date);
 
-  // ‼️ THE CONFIRMATION NAMES THE HOUR ONLY WHEN AN INVITE ACTUALLY WENT OUT, and the two strings
-  // are separate constants rather than one with an optional clause. "The invite is on its way"
-  // said on a row whose call_invite_sent_at is null is the one sentence this close cannot afford
-  // to get wrong: the client stops watching for it and nobody finds out for a week.
-  const zoneLabel =
-    TIMEZONE_OPTIONS.find((t) => t.zone === lead.call_timezone)?.label ?? "";
-  const confirm = saved?.call_invite_sent_at
-    ? SCHEDULING_UI.confirmed
-        .replace("{day}", picked.label)
-        .replace("{time}", `${clockLabel(CALL_HOUR[lead.call_daypart])} ${zoneLabel}`.trim())
-    : SCHEDULING_UI.confirmedNoInvite.replace("{day}", picked.label);
+  if (!url) {
+    return {
+      messages: [
+        SCHEDULING_UI.confirmedNoInvite.replace("{day}", picked.label),
+        SCHEDULING_UI.noCalendar,
+      ],
+      options: [],
+      lead: stored,
+    };
+  }
 
   return {
-    // Two bubbles, the way somebody actually confirms something.
-    messages: [confirm, SCHEDULING_UI.closing],
+    messages: [SCHEDULING_UI.pickTime.replace("{day}", picked.label)],
     options: [],
-    lead: saved,
+    lead: stored,
+    bookingUrl: url,
   };
 }
