@@ -2258,9 +2258,8 @@ import { pageSlug } from "../src/lib/hub/pages";
   // _probe-step-verify.ts DID. Both sat at 33 through the concierge lane's two additions, so
   // both suites were red and each one read as somebody else's problem. Keeping the literal is
   // deliberate: the check exists to make a person ACKNOWLEDGE a change to the step list, and
-  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge) -> 37
-  // (tracking_installed, self_report_field).
-  eq("the step count is what the last person to change it said", STEPS.length, 37);
+  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica).
+  eq("the step count is what the last person to change it said", STEPS.length, 39);
 
   {
     const seenPhases = new Set<string>();

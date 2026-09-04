@@ -168,6 +168,7 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
 
   // ── The two things every section draft shares. Read once, not once per page ─
   const evidence = await loadNumberedEvidence(clientId, null);
+
   const magnets = await magnetsForClient(clientId);
 
   const written: string[] = [];
@@ -288,8 +289,30 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
     .eq("client_id", clientId)
     .maybeSingle();
 
+  // ‼️ A CONFIG ROW IS NOT A WORKING WIDGET, AND THIS CARD USED TO SAY IT WAS. Every embed tag
+  // in production points at conciergeHostname(), and on 2026-09-04 that host did not resolve at
+  // all: NXDOMAIN, no CONCIERGE_HOST env, so the fallback constant named a hostname nobody had
+  // ever attached. The card printed "the assistant appears on every page above" for a widget that
+  // could not load anywhere. That is a green tick over unchecked work, on the one artifact whose
+  // entire job is to be walked in front of a stranger.
+  //
+  // So the reachable half is OBSERVED: one request for the loader, short timeout, reported either
+  // way. Same doctrine as verified_source, applied to card copy. A line may describe only what was
+  // actually checked.
+  const { widgetHostReachable } = await import("@/lib/concierge/host-check");
+  const host = await widgetHostReachable();
+
   lines.push("");
-  if (!conf) {
+  if (!host.ok) {
+    lines.push(
+      ":rotating_light: *The assistant will not load on these pages.* `" +
+        host.host +
+        "` " +
+        host.detail +
+        ", and that is the hostname every embed tag names. The pages above render; the box in " +
+        "the corner does not appear. Attach the host, add its DNS record, then re-run this step."
+    );
+  } else if (!conf) {
     lines.push(
       ":warning: *No assistant on these pages yet.* This client has no `concierge_configs` row, " +
         "so run the AI Skin Concierge preview step first and then re-run this one."
@@ -312,8 +335,128 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
       `on their own domain has changed.`
   );
 
+  // ── Offers of their own, drafted from the site we just read ───────────────────
+  //
+  // ‼️ WHY THE REPLICA DRAFTS THESE AT ALL. magnetsForClient() reads the CATALOGUE, and for a
+  // client nobody has drafted for that holds nothing but the seven generic library rows. So a
+  // rebuild of somebody's own website offered them "Free AI visibility scan", which is the one
+  // thing a walk on a call cannot afford to show. Measured 2026-09-04: all six live clients had
+  // zero offers of their own, because drafting only ever ran from startPageDraft and no step
+  // before the call writes a page.
+  //
+  // ‼️ AFTER THE LOOP, NOT BEFORE IT, AND THE FIRST VERSION OF THIS HAD IT WRONG. The sections
+  // are what file their website as evidence: recordWebsiteSnapshot runs inside the loop above.
+  // Drafting first meant loadNumberedEvidence returned NOTHING on a first run, and five offers
+  // written with no sources cited a business they had never read. Proven by running it: every
+  // candidate came back with an empty evidenceRefs. Nothing is lost by waiting, because the
+  // sections could not have named an unapproved offer anyway.
+  const sectionLabels = written;
+  let magnetDrafts = 0;
+  let magnetNote = "";
+  const { draftMagnetsForClient, hasOwnMagnet, draftsForClient } = await import(
+    "@/lib/concierge/magnet-drafts"
+  );
+
+  if (await hasOwnMagnet(clientId)) {
+    magnetNote = "own";
+  } else {
+    const outstanding = await draftsForClient(clientId);
+    if (outstanding.length > 0) {
+      magnetDrafts = outstanding.length;
+      magnetNote = "waiting";
+    } else {
+      const drafted = await draftMagnetsForClient(clientId, sectionLabels);
+      if (drafted.ok) {
+        magnetDrafts = drafted.candidates.length;
+        magnetNote = "waiting";
+      } else {
+        magnetNote = drafted.error ?? "the offers could not be drafted";
+      }
+    }
+  }
+
+  // ── The five offers, if any are waiting on a decision ──────────────────────
+  lines.push("");
+  if (magnetNote === "own") {
+    lines.push(":white_check_mark: This client already has an offer of their own in the catalogue.");
+  } else if (magnetNote === "waiting") {
+    lines.push(
+      ":point_down: *" +
+        magnetDrafts +
+        " offers about this business are drafted and waiting below.* Until one is approved, " +
+        "every page above falls back to the generic library offer, which is the wrong thing to " +
+        "show somebody a rebuild of their own website."
+    );
+  } else if (magnetNote) {
+    lines.push(":warning: No offers were drafted for this business: " + magnetNote);
+  }
+
+  // ‼️ A SECOND MESSAGE RATHER THAN MORE OF THIS ONE, BECAUSE THIS ONE CANNOT CARRY BUTTONS.
+  // An AutoResult returns text, which runReadyAutoSteps posts for us. Approving is a human act and
+  // needs an action block, so it goes through notifyStep the way the avatar candidates do.
+  if (magnetNote === "waiting" && magnetDrafts > 0) {
+    await postOfferDrafts(clientId).catch((e) =>
+      console.error("[site-replica] offer drafts card failed:", (e as Error).message)
+    );
+  }
+
   return {
     ok: true,
     note: lines.join("\n"),
   };
+}
+
+/**
+ * The drafted offers, one Approve button each, in this step's thread.
+ *
+ * ‼️ THE BUTTON CARRIES THE CANDIDATE ID AND NOTHING THAT COULD GO STALE SEPARATELY. The
+ * `${clientId}:${id}` shape is what every other card uses, and a re-onboard kills both halves
+ * together rather than leaving a live-looking button pointed at half a dead client.
+ *
+ * Rejecting is deliberately not offered. Setting five aside without choosing is what the `magnet`
+ * command in the page studio is for, and a button that discards the batch is one misclick away
+ * from an empty catalogue on the morning of a call.
+ */
+async function postOfferDrafts(clientId: string): Promise<void> {
+  const { draftsForClient } = await import("@/lib/concierge/magnet-drafts");
+  const { notifyStep } = await import("@/lib/clients/step-board");
+
+  const drafts = await draftsForClient(clientId);
+  if (drafts.length === 0) return;
+
+  const header =
+    ":gift: *" +
+    drafts.length +
+    " offers written for this business.* Approve ONE. It becomes what the assistant hands over " +
+    "on every page of the replica, and on every hub page written later that does not name " +
+    "something more specific.";
+
+  const blocks: unknown[] = [{ type: "section", text: { type: "mrkdwn", text: header } }];
+
+  for (const d of drafts) {
+    const body = [
+      "*" + d.title + "*",
+      d.promise,
+      "_Pill reads:_ " + d.ctaLabel,
+      d.rationale ? "_Why:_ " + d.rationale : "",
+      d.evidenceRefs.length ? "_From:_ " + d.evidenceRefs.join(", ") : "_From: nothing on file_",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    blocks.push({
+      type: "section",
+      // 2,900 rather than Slack's 3,000, the same margin bodySections() leaves.
+      text: { type: "mrkdwn", text: body.slice(0, 2900) },
+      accessory: {
+        type: "button",
+        text: { type: "plain_text", text: "Approve this one" },
+        action_id: "client_magnet_approve",
+        value: clientId + ":" + d.id,
+      },
+    });
+  }
+
+  const fallback = drafts.map((d) => d.title + ": " + d.promise).join("\n");
+  await notifyStep(clientId, "site_replica", header + "\n\n" + fallback, blocks as never);
 }

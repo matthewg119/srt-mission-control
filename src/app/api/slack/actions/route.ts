@@ -217,6 +217,15 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         clientId: action.value ?? "",
       });
+    // ── The offer this client's assistant hands over, approved before the call ──
+    case "client_magnet_approve":
+      return clientMagnetApproveAction({
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        value: action.value ?? "",
+      });
     // ── LANE 2: the avatar, and the research it decides ──
     case "avatar_pick":
       return avatarPickAction({
@@ -1824,6 +1833,68 @@ async function conciergeAudienceAction(args: {
       const { postStep } = await import("@/lib/clients/step-engine");
       await postStep(clientId, "concierge_preview");
     })().catch((e) => console.error("[slack/actions] concierge_audience failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Approve one of the offers drafted for this client, before any page of theirs exists.
+ *
+ * ‼️ THE HUMAN HALF OF "THE TOOL PROPOSES, A PERSON CONFIRMS", AND IT IS THE ONLY ROUTE INTO
+ * lead_magnets. approveMagnetCandidate does the mint and every copy re-check; this handler does
+ * nothing but read who pressed and hand it over. A model wrote five offers into a table nothing
+ * downstream reads, and one tap moves exactly one of them into the catalogue every visitor sees.
+ *
+ * pageId is null on purpose. These were written for the business rather than for a page, so there
+ * is nothing to point at the minted key: the ladder reaches it at the client rung instead.
+ */
+async function clientMagnetApproveAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  // `${clientId}:${candidateId}`. Both halves are uuids, so a plain split is safe here, unlike
+  // avatar_pick where the label can carry a colon.
+  const [clientId, candidateId] = args.value.split(":");
+  if (!clientId || !candidateId) return NextResponse.json({ ok: true });
+
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { approveMagnetCandidate } = await import("@/lib/concierge/magnet-drafts");
+      const result = await approveMagnetCandidate({
+        clientId,
+        pageId: null,
+        candidateId,
+        by: actor,
+      });
+
+      if (!result.ok) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          `:warning: Not approved: ${result.error}`
+        );
+        return;
+      }
+
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        `:white_check_mark: *${result.title}* is now this client's offer, approved by ${actor}. ` +
+          `The pill reads "${result.ctaLabel}". It resolves on every page of the replica and on ` +
+          `every hub page written later that does not name something more specific. The other ` +
+          `drafts are set aside.`
+      );
+
+      // Rebuild the step card so its counts and its magnet line describe what is true now.
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await postStep(clientId, "site_replica");
+    })().catch((e) => console.error("[slack/actions] client_magnet_approve failed:", e))
   );
 
   return NextResponse.json({ ok: true });

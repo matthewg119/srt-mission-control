@@ -49,10 +49,14 @@ const verifierKeys = Object.keys(STEP_VERIFIERS);
 // correct, it is here to make somebody ACKNOWLEDGE that the step list changed: deriving it from
 // DELIVERY_STEPS.length would assert nothing at all. It sat at 33 while the concierge lane
 // shipped two steps, so this probe was red for a whole session and read as somebody else's
-// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed,
-// self_report_field). If you are reading this because it failed: update the number here, the
-// prose count at the top of src/config/delivery-steps.ts, and the one in step-verify.ts.
-ok(`${stepKeys.length} steps defined`, stepKeys.length === 37, `found ${stepKeys.length}, expected 37`);
+// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica).
+//
+// Bumped to 39 on 2026-09-04 by the session that landed last. The two additions came from two
+// CONCURRENT sessions, and each correctly refused to bump this literal on the other's behalf:
+// acknowledging somebody else's change is exactly the acknowledgement this gate is not asking for.
+// If you are reading this because it failed: update the number here, the prose count at the top of
+// src/config/delivery-steps.ts, and the one in step-verify.ts.
+ok(`${stepKeys.length} steps defined`, stepKeys.length === 39, `found ${stepKeys.length}, expected 39`);
 
 const missing = stepKeys.filter((k) => !(k in STEP_VERIFIERS));
 ok("every step has a verifier", missing.length === 0, missing.join(", "));

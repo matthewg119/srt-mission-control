@@ -39,7 +39,8 @@ export const MIN_CANDIDATES = 5;
 
 export interface MagnetCandidate {
   id: string;
-  pageId: string;
+  /** Null on a client-scoped draft, written before this client had any page. */
+  pageId: string | null;
   audience: Audience;
   title: string;
   promise: string;
@@ -270,7 +271,8 @@ interface Ground {
 
 async function gather(
   clientId: string,
-  pageId: string
+  pageId: string | null,
+  sections: readonly string[] = []
 ): Promise<{ ok: true; ground: Ground } | { ok: false; error: string }> {
   // ‼️ NO CONFIG ROW MEANS NO WIDGET, AND THE HONEST ANSWER IS A REFUSAL THAT NAMES THE STEP.
   // Defaulting an audience here would open exactly the hole for-client.ts's header refuses to open
@@ -285,18 +287,35 @@ async function gather(
     };
   }
 
-  const { data: page } = await supabaseAdmin
-    .from("client_pages")
-    .select("question, slug")
-    .eq("id", pageId)
-    .eq("client_id", clientId)
-    .maybeSingle();
+  // ‼️ A NULL pageId IS THE CLIENT SCOPE, NOT A MISSING ARGUMENT. Offers drafted before any
+  // page exists are written from the whole business rather than from one question, because on the
+  // call there IS no page yet: `first_page` is step 29 and the walk is at 19. Everything else
+  // below is identical, which is the reason this is a branch here and not a second function.
+  let question: string;
+  let slug = "";
 
-  if (!page) return { ok: false, error: "That page does not exist." };
+  if (pageId) {
+    const { data: page } = await supabaseAdmin
+      .from("client_pages")
+      .select("question, slug")
+      .eq("id", pageId)
+      .eq("client_id", clientId)
+      .maybeSingle();
 
-  const question = ((page.question as string | null) ?? "").trim();
-  if (!question) {
-    return { ok: false, error: "That page has no question, so there is nothing to write an offer for." };
+    if (!page) return { ok: false, error: "That page does not exist." };
+
+    question = ((page.question as string | null) ?? "").trim();
+    if (!question) {
+      return { ok: false, error: "That page has no question, so there is nothing to write an offer for." };
+    }
+    slug = (page.slug as string | null) ?? "";
+  } else {
+    // The sections are their OWN navigation, read off their site by buildSiteReplica. Naming them
+    // is what stops these five reading like five offers for a category rather than for a business.
+    question =
+      sections.length > 0
+        ? `What this business actually does. Their own website is organised as: ${sections.join(", ")}.`
+        : "What this business actually does, for somebody who has just found them.";
   }
 
   const { data: client } = await supabaseAdmin
@@ -353,7 +372,7 @@ async function gather(
     ground: {
       audience: tenant.audience,
       question,
-      slug: (page.slug as string | null) ?? "",
+      slug,
       evidenceBlock,
       validRefs,
       numberHaystack,
@@ -390,7 +409,51 @@ export async function draftMagnetsForPage(
   pageId: string,
   opts: { replace?: boolean } = {}
 ): Promise<DraftResult> {
-  const ground = await gather(clientId, pageId);
+  return draftInto(clientId, pageId, [], opts);
+}
+
+/**
+ * Write five candidate offers for the CLIENT, before any page of theirs exists.
+ *
+ * ‼️ THIS IS THE ONE THAT MAKES THE CALL WORTH WALKING, AND IT EXISTS BECAUSE OF WHEN THINGS RUN.
+ * `draftMagnetsForPage` has always been able to write five real offers about a business. It is
+ * reached only from `startPageDraft`, and no step before the call writes a page: `page_candidates`
+ * scores questions and `first_page` is step 29. So `magnetsForClient()` on the replica could only
+ * ever return the seven generic library rows, and a prospect was shown "Free AI visibility scan"
+ * on a rebuild of their own website. Measured 2026-09-04: every one of the six live clients had
+ * zero offers of their own.
+ *
+ * ‼️ ONE APPROVED CLIENT OFFER COVERS EVERY PAGE, WHICH IS WHY THERE IS NO PER-PAGE DECISION HERE.
+ * rungOf() scores a client_id row at 8, above every library rung, so the minted magnet is what the
+ * ladder resolves on every replica section and every hub page this client ever gets, until a page
+ * names something more specific. The per-page drafter stays exactly as it was for that case.
+ *
+ * `sections` is their own navigation, as read off their site by buildSiteReplica. It is grounding,
+ * not a target: it stops five offers reading like five offers for an industry.
+ */
+export async function draftMagnetsForClient(
+  clientId: string,
+  sections: readonly string[] = [],
+  opts: { replace?: boolean } = {}
+): Promise<DraftResult> {
+  return draftInto(clientId, null, sections, opts);
+}
+
+/**
+ * The drafting both entry points share.
+ *
+ * ‼️ ONE BODY, NOT TWO, SO THE VALIDATORS CANNOT DRIFT APART. The orphan-number check, the pill
+ * length, the dash ban and the evidence-ref check are the whole reason a promise read by a
+ * stranger is safe to show. A second copy of this function is a second place for one of them to be
+ * quietly dropped, and the one that would go first is the one that was added last.
+ */
+async function draftInto(
+  clientId: string,
+  pageId: string | null,
+  sections: readonly string[],
+  opts: { replace?: boolean } = {}
+): Promise<DraftResult> {
+  const ground = await gather(clientId, pageId, sections);
   if (!ground.ok) return { ok: false, error: ground.error, candidates: [] };
   const g = ground.ground;
 
@@ -402,7 +465,12 @@ export async function draftMagnetsForPage(
         : "a member of the public reading this page, who might become a customer"
     }`,
     "",
-    `THE QUESTION THIS PAGE ANSWERS: ${g.question}`,
+    pageId
+      ? `THE QUESTION THIS PAGE ANSWERS: ${g.question}`
+      : `WHAT THESE OFFERS ARE FOR: ${g.question}
+There is no page yet. These sit on a rebuild of ` +
+        `their own website, so write offers that make sense anywhere on it, not offers that only ` +
+        `follow from one question.`,
     "",
     "THE CUSTOMER:",
     g.avatarBlock,
@@ -436,11 +504,13 @@ export async function draftMagnetsForPage(
   }
 
   if (opts.replace) {
-    await supabaseAdmin
-      .from("page_magnet_candidates")
-      .delete()
-      .eq("page_id", pageId)
-      .eq("status", "draft");
+    // Scoped the same way the rows are: `.is("page_id", null)` and not `.eq(..., null)`, because
+    // PostgREST renders the second as `page_id=eq.null` and matches nothing, which would silently
+    // leave the old five in place and print ten.
+    const del = supabaseAdmin.from("page_magnet_candidates").delete().eq("status", "draft");
+    await (pageId
+      ? del.eq("page_id", pageId)
+      : del.eq("client_id", clientId).is("page_id", null));
   }
 
   const rows = batch.candidates.map((c) => ({
@@ -487,7 +557,7 @@ function toCandidate(row: Record<string, unknown>): MagnetCandidate {
   const refs = row.evidence_refs;
   return {
     id: String(row.id),
-    pageId: String(row.page_id),
+    pageId: row.page_id == null ? null : String(row.page_id),
     audience: row.audience === "owner" ? "owner" : "patient",
     title: (row.title as string) ?? "",
     promise: (row.promise as string) ?? "",
@@ -509,6 +579,40 @@ function toCandidate(row: Record<string, unknown>): MagnetCandidate {
  * would name a different offer than the one they read, which is the same class of bug sort_order
  * exists to prevent in the catalogue.
  */
+export async function draftsForClient(clientId: string): Promise<MagnetCandidate[]> {
+  const { data, error } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .select(CANDIDATE_COLUMNS)
+    .eq("client_id", clientId)
+    .is("page_id", null)
+    .eq("status", "draft")
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (error) {
+    console.error(`[magnet-drafts] draftsForClient: ${error.message}`);
+    return [];
+  }
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map(toCandidate);
+}
+
+/**
+ * Whether this client already has an offer of their own in the catalogue.
+ *
+ * Used to decide whether the replica should draft any. It asks the CATALOGUE rather than the
+ * candidates table, because an approved draft and a hand-seeded row are the same fact to a visitor
+ * and only one of them leaves a candidate row behind.
+ */
+export async function hasOwnMagnet(clientId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("lead_magnets")
+    .select("id")
+    .eq("client_id", clientId)
+    .eq("active", true)
+    .limit(1);
+  return (data ?? []).length > 0;
+}
+
 export async function draftsForPage(pageId: string): Promise<MagnetCandidate[]> {
   const { data, error } = await supabaseAdmin
     .from("page_magnet_candidates")
@@ -554,6 +658,9 @@ export async function draftsByPageFor(
   const out: Record<string, MagnetCandidate[]> = {};
   for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
     const c = toCandidate(row);
+    // A client-scoped draft belongs to no page and must not be grouped under one. The board's
+    // per-page optgroup would otherwise offer the same five under every page on the hub.
+    if (!c.pageId) continue;
     (out[c.pageId] ??= []).push(c);
   }
   return out;
@@ -602,20 +709,32 @@ export type ApproveResult =
  */
 export async function approveMagnetCandidate(args: {
   clientId: string;
-  pageId: string;
+  /** Null approves a CLIENT-scoped draft: it mints the offer and points no page at it. */
+  pageId: string | null;
   candidateId: string;
   by: string | null;
 }): Promise<ApproveResult> {
-  const { data: row, error: readError } = await supabaseAdmin
+  // ‼️ SCOPED WITH `.is()` FOR THE NULL CASE. PostgREST turns `.eq("page_id", null)` into
+  // `page_id=eq.null`, which matches no row at all, so a client-scoped approval would report
+  // "that draft does not belong" for a draft that is sitting right there.
+  let read = supabaseAdmin
     .from("page_magnet_candidates")
     .select(CANDIDATE_COLUMNS)
     .eq("id", args.candidateId)
-    .eq("client_id", args.clientId)
-    .eq("page_id", args.pageId)
-    .maybeSingle();
+    .eq("client_id", args.clientId);
+  read = args.pageId ? read.eq("page_id", args.pageId) : read.is("page_id", null);
+
+  const { data: row, error: readError } = await read.maybeSingle();
 
   if (readError) return { ok: false, error: readError.message };
-  if (!row) return { ok: false, error: "That draft does not belong to this page." };
+  if (!row) {
+    return {
+      ok: false,
+      error: args.pageId
+        ? "That draft does not belong to this page."
+        : "That draft does not belong to this client, or it was written for a page rather than for the business.",
+    };
+  }
 
   const cand = toCandidate(row as unknown as Record<string, unknown>);
 
@@ -724,15 +843,21 @@ export async function approveMagnetCandidate(args: {
     };
   }
 
-  const { setPageMagnet } = await import("@/lib/hub/pages");
-  const set = await setPageMagnet(args.clientId, args.pageId, magnetKey);
-  if (!set.ok) {
-    return {
-      ok: false,
-      error:
-        `"${cand.title}" was added to the catalogue but the page was not pointed at it: ` +
-        `${set.error}. Say \`magnet ${magnetKey}\` to finish it.`,
-    };
+  // ‼️ NOTHING IS POINTED AT A CLIENT-SCOPED OFFER, AND THAT IS THE WHOLE MECHANISM. There is no
+  // page yet to carry a lead_magnet_key. The row is reached by the ladder instead, at the client
+  // rung, which is above every library rung, so it is what resolves on every replica section and
+  // on every page written later that does not name something more specific.
+  if (args.pageId) {
+    const { setPageMagnet } = await import("@/lib/hub/pages");
+    const set = await setPageMagnet(args.clientId, args.pageId, magnetKey);
+    if (!set.ok) {
+      return {
+        ok: false,
+        error:
+          `"${cand.title}" was added to the catalogue but the page was not pointed at it: ` +
+          `${set.error}. Say \`magnet ${magnetKey}\` to finish it.`,
+      };
+    }
   }
 
   const now = new Date().toISOString();
@@ -748,11 +873,13 @@ export async function approveMagnetCandidate(args: {
 
   // The siblings are set aside rather than deleted: a page offers one thing, and what was on the
   // table when somebody chose is worth being able to read back.
-  await supabaseAdmin
+  const siblings = supabaseAdmin
     .from("page_magnet_candidates")
     .update({ status: "rejected", decided_at: now, decided_by: args.by })
-    .eq("page_id", args.pageId)
     .eq("status", "draft");
+  await (args.pageId
+    ? siblings.eq("page_id", args.pageId)
+    : siblings.eq("client_id", args.clientId).is("page_id", null));
 
   return { ok: true, magnetKey, title: cand.title, ctaLabel: cand.ctaLabel };
 }

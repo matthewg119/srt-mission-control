@@ -440,6 +440,39 @@ async function instructionsFor(
       ];
     }
 
+    case "agreement_signed": {
+      // ‼️ THE STEP THAT HAD NO CARD, WHICH IS WHY IT NEEDED ONE. It arrived on 2026-09-04 when
+      // the signature moved off the funnel and onto the call, and test-onboarding-artifacts.ts has
+      // been failing "every step that waits for a person has an instruction card" ever since. A
+      // manual step with no arm posts a bare title and three buttons, so the person looking at it
+      // has to already know what the evidence is. This one especially: the thing it wants in the
+      // thread is not the thing the step is named after.
+      //
+      // ‼️ IT IS A THREAD-TIER STEP AND THE CARD SAYS SO OUT LOUD. The verifier reads replies in
+      // this thread; it cannot read a signature. So the tick means "somebody recorded the signing",
+      // never "this was signed", and a card that let anybody believe otherwise would be the green
+      // tick over unchecked work that the whole verified_source split exists to prevent.
+      return [
+        "*Nothing in the funnel signs this any more.* /onboarding2 books the call and asks the",
+        "questions; the agreement is signed here, with you, once the preview has been walked and",
+        "the pages are picked. That is what `call_held` above attests to, and it is why this step",
+        "sits last in the phase rather than first.",
+        "",
+        "The blank counterpart: `bun scripts/_render-agreement-blank.ts`.",
+        "",
+        "*Then put the evidence in this thread and press Done.* Any one of:",
+        "  • the countersigned PDF",
+        "  • a photo of the signed page",
+        "  • a note saying where it is filed",
+        "",
+        ":ballot_box_with_check: *This step can only ever be a thread-tier tick.* It records that",
+        "somebody filed the signing, not that a signature exists. The e-signature path",
+        "(`onboarding2_signings`, per-page initials, the document hash) is still in the schema and",
+        "the funnel no longer reaches it, so nothing here is cryptographic and the card will not",
+        "pretend it is.",
+      ];
+    }
+
     case "access_granted": {
       // ‼️ THE GATE LINE GOES ABOVE THE CLICK PATHS, AND THE CLICK PATHS ARE UNCHANGED.
       // They are correct and they are what somebody reads off the phone. What was missing was

@@ -289,7 +289,18 @@ function promptIsEmpty(): void {
   });
 
   // Digits appear only in the rule numbering and the word count, never as a claim.
-  const claims = prompt.match(/\b\d{2,}\b/g) ?? [];
+  //
+  // ‼️ THE RULE NUMBERS ARE REMOVED BEFORE THE SCAN RATHER THAN ALLOWED THROUGH IT. This check
+  // went red on 2026-09-04 when the owner prompt gained a TENTH rule: "10." is a two-digit token,
+  // the regex counted it as a figure, and the prompt was never touched. Adding "10" to the allowed
+  // list would have been the wrong repair twice over: it fixes one number, and the eleventh rule
+  // breaks it again.
+  //
+  // Stripping the leading ordinal keeps the check as sharp as it was. Any multi-digit number
+  // ANYWHERE else in the prompt still fails, which is the thing worth catching: a model reading a
+  // number out of its own instructions is how an invented statistic reaches a stranger.
+  const scannable = prompt.replace(/^\s*\d+\.\s/gm, "");
+  const claims = scannable.match(/\b\d{2,}\b/g) ?? [];
   check(
     "the owner prompt states no multi-digit figure but the reply length",
     claims.every((c) => c === "45"),
@@ -328,7 +339,18 @@ function promptIsEmpty(): void {
  * silences. What is tested is the import, the call and the table read.
  */
 function reachesPersona(src: string): boolean {
+  // ‼️ CRLF DEFEATED THIS STRIPPER COMPLETELY, AND IT FAILED IN THE DIRECTION THAT CRIES WOLF.
+  // In JavaScript `.` does not match a carriage return, because \r is a line terminator. On a file
+  // with Windows endings, split("\n") leaves a trailing \r on every line, so `.*` halts in front of
+  // it while `$` sits behind it and the pattern never matches. NOTHING was stripped, and the check
+  // then read this lane's own documentation as an importer: tools.ts says "IT DOES NOT READ
+  // bot_persona. loadPersona() is not imported here", and that sentence was the offender.
+  //
+  // Normalising first is the fix rather than loosening the patterns. A real import is code and was
+  // always caught either way, so the firewall itself never had a hole; it just accused the comment
+  // that documents the firewall, which is the kind of red that teaches people to ignore red.
   const code = src
+    .replace(/\r\n?/g, "\n")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .split("\n")
     .map((l) => l.replace(/\/\/.*$/, ""))

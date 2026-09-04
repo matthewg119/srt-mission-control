@@ -322,6 +322,54 @@ async function liveRows(): Promise<void> {
     );
   }
 
+  // ‼️ A CLIENT-SCOPED DRAFT MUST NEVER BE GROUPED UNDER A PAGE. page_id is nullable since
+  // 2026-09-04 so offers can exist before the first page does, and the board's per-page optgroup
+  // reads draftsByPageFor(). A null slipping into that map would offer the same five under every
+  // page on the hub, each claiming to have been written for it.
+  const { draftsByPageFor } = await import("@/lib/concierge/magnet-drafts");
+  const { data: scoped } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .select("client_id")
+    .is("page_id", null)
+    .limit(1);
+
+  if ((scoped ?? []).length > 0) {
+    const owner = (scoped ?? [])[0].client_id as string;
+    const grouped = await draftsByPageFor(owner);
+    const leaked = Object.entries(grouped).filter(([, list]) => list.some((c) => !c.pageId));
+    check(
+      "no client-scoped draft is grouped under a page",
+      leaked.length === 0,
+      leaked.map(([k]) => k).join(", ")
+    );
+  } else {
+    check("no client-scoped draft is grouped under a page", true, "none on file to check");
+  }
+
+  // ‼️ ONE APPROVED CLIENT-SCOPED OFFER PER CLIENT, WHICH THE FIRST PARTIAL INDEX CANNOT SEE.
+  // page_magnet_candidates_one_approved is UNIQUE on (page_id) WHERE status='approved', and
+  // Postgres treats two NULLs as distinct, so it permits any number of approved client-scoped
+  // rows. Two of those means two client-rung magnets at the same sort_order and rankMagnets
+  // breaking the tie alphabetically, which is a coin toss deciding what a stranger is offered.
+  // docs/2026-09-04-client-magnets.sql adds the second index; this asserts the outcome.
+  const { data: approvedScoped } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .select("client_id")
+    .is("page_id", null)
+    .eq("status", "approved");
+
+  const perClient = new Map<string, number>();
+  for (const r of approvedScoped ?? []) {
+    const k = String(r.client_id);
+    perClient.set(k, (perClient.get(k) ?? 0) + 1);
+  }
+  const doubled = [...perClient.entries()].filter(([, n]) => n > 1);
+  check(
+    "no client has two approved client-scoped offers",
+    doubled.length === 0,
+    doubled.map(([k, n]) => `${k} has ${n}`).join(", ")
+  );
+
   // Who is on which lane, and whether anybody said so.
   const { data: configs } = await supabaseAdmin
     .from("concierge_configs")
