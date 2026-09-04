@@ -10,6 +10,21 @@
 // what the magnet promises, and editing that row changes every embedded page with no deploy and no
 // re-paste of the snippet.
 //
+// ‼️ IT CARRIES ITS OWN x-vercel-* QUERY PARAMS ONTO EVERYTHING IT OPENS, AND ONLY THOSE.
+// A preview deployment sits behind Vercel Deployment Protection, so a funnel on one project
+// loading this script from another project's preview gets a 302 to SSO on the script, on the
+// config fetch and on the frame. The bypass token has to travel with all three. Forwarding the
+// loader's own query string is the only way to do that without a second attribute nobody would
+// remember to remove. The prefix filter is the whole safety of it: nothing but Vercel's own
+// protection params can ride along, so this cannot become a channel into our API. In production
+// the script src carries no query at all and every line here is a no-op.
+//
+// ‼️ THE TEASER IS REMEMBERED IN MEMORY AND NOWHERE ELSE. Dismissing it lasts until the page is
+// reloaded, and that is deliberate rather than unfinished: the line above says this script sets no
+// cookies and touches no storage, and a sessionStorage key on a client's own domain would be the
+// first exception to it. A teaser that comes back on the next page load is a smaller cost than a
+// storage write we would then have to explain in their privacy policy.
+//
 // ‼️ IT FAILS SILENTLY AND COMPLETELY. Every branch that cannot proceed simply returns. A widget
 // that does not appear is a bad day; a widget that throws in a client's console, or worse leaves a
 // half-built button on their page, is a support call and a loss of trust.
@@ -31,12 +46,32 @@ const SCRIPT = `(function(){
  var category=me.getAttribute("data-category")||"";
  var city=me.getAttribute("data-city")||"";
  var mode=me.getAttribute("data-mode")||"popup";   // popup | inline
+ // The offer this page was written toward. Set by the page that renders the tag, never guessed
+ // here. Empty means "let the ladder decide", which is every page written before it existed.
+ var magnet=me.getAttribute("data-magnet")||"";
 
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
 
- var frameSrc=origin+"/w/"+encodeURIComponent(slug)+"?"+q({
-   category:category,city:city,path:location.pathname,host:location.host});
+ // Vercel's protection params and the preview grant, copied off our own <script src>.
+ //
+ // "pt" is a signed, client-scoped, 14-day token that Mission Control's own preview page puts on
+ // this tag so a SWITCHED-OFF widget will answer there, and nowhere else. It is copied rather
+ // than read from a data- attribute so it travels the same path the protection params already
+ // take: into the frame URL and into /api/concierge/config, both of which need it. Nothing on a
+ // client's real website ever carries one. See src/lib/concierge/preview-grant.ts.
+ var pass="";
+ try{
+  var mine=new URL(me.src,location.href).searchParams,keep=[];
+  mine.forEach(function(v,k){
+   if(k.indexOf("x-vercel-")===0||k==="pt")keep.push(encodeURIComponent(k)+"="+encodeURIComponent(v));
+  });
+  pass=keep.join("&");
+ }catch(e){}
+ function withPass(u){return pass?u+(u.indexOf("?")<0?"?":"&")+pass:u}
+
+ var frameSrc=withPass(origin+"/w/"+encodeURIComponent(slug)+"?"+q({
+   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host}));
 
  function makeFrame(){
   var f=document.createElement("iframe");
@@ -57,43 +92,90 @@ const SCRIPT = `(function(){
   return;
  }
 
- // ── popup: a header line, a button, and a panel under it ───────────────────
+ // ── popup: a teaser line, a pill, and a panel under it ────────────────────
+ //
+ // The palette is onboarding2's chat bubble: a near black ground with #00C9A7 as the one accent.
+ // Matthew asked for the same object in both places, so the two are deliberately not styled
+ // independently. If one changes, change both.
+ var REEF="#00C9A7", INK="#04252b";
+
  var wrap=document.createElement("div");
- wrap.style.cssText="position:fixed;right:20px;bottom:20px;z-index:2147483000;font:15px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+ wrap.style.cssText="position:fixed;right:20px;bottom:20px;z-index:2147483000;display:flex;flex-direction:column;align-items:flex-end;font:15px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
  var panel=document.createElement("div");
- panel.style.cssText="display:none;width:min(380px,calc(100vw - 40px));height:min(560px,calc(100vh - 120px));background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.22);margin-bottom:12px";
+ panel.style.cssText="display:none;width:min(380px,calc(100vw - 40px));height:min(560px,calc(100vh - 120px));background:#0b1416;border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.35);margin-bottom:12px";
+
+ // ── the teaser: what is on offer, before anybody has clicked anything ──────
+ //
+ // ‼️ IT CARRIES THE MAGNET AND THE PILL CARRIES THE ACTION. The pill has room for four words and
+ // the promise needs a sentence, so putting both on the button meant the promise was never said.
+ // It stays hidden until the config answers, because a teaser with no offer in it is just noise
+ // on somebody's website.
+ var teaser=document.createElement("div");
+ teaser.style.cssText="display:none;position:relative;max-width:300px;margin-bottom:10px;padding:14px 34px 14px 16px;background:#0b1416;color:#fff;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.28);cursor:pointer;text-align:left";
+
+ var teaserTitle=document.createElement("div");
+ teaserTitle.style.cssText="font-weight:700;font-size:14px;line-height:1.35;color:"+REEF;
+
+ var teaserPromise=document.createElement("div");
+ teaserPromise.style.cssText="margin-top:5px;font-size:13px;line-height:1.45;color:#cfe3e2";
+
+ var close=document.createElement("button");
+ close.type="button";
+ close.setAttribute("aria-label","Dismiss");
+ close.textContent="×";
+ close.style.cssText="position:absolute;top:6px;right:8px;border:0;background:none;color:#7fa3a2;font-size:19px;line-height:1;cursor:pointer;padding:2px 4px";
+
+ teaser.appendChild(teaserTitle);teaser.appendChild(teaserPromise);teaser.appendChild(close);
 
  var btn=document.createElement("button");
  btn.type="button";
- btn.style.cssText="display:block;margin-left:auto;padding:13px 20px;border:0;border-radius:999px;background:#111;color:#fff;font-weight:600;font-size:15px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)";
+ btn.style.cssText="display:block;padding:13px 20px;border:0;border-radius:999px;background:"+REEF+";color:"+INK+";font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)";
  btn.textContent="Chat";
  btn.setAttribute("aria-expanded","false");
 
  var opened=false;
- btn.addEventListener("click",function(){
-  var show=panel.style.display==="none";
+ function toggle(show){
   panel.style.display=show?"block":"none";
   btn.setAttribute("aria-expanded",show?"true":"false");
   // ‼️ THE FRAME IS BUILT ON FIRST OPEN, NOT ON PAGE LOAD. Nothing is fetched, no session row is
   // written and no model is reachable until somebody actually clicks. On a page that gets crawled
   // or scraped, that is the difference between zero cost and one row per bot.
   if(show&&!opened){opened=true;panel.appendChild(makeFrame())}
+  // Open means the offer is on screen inside the panel, so the teaser has said its piece.
+  if(show)teaser.style.display="none";
   btn.textContent=show?"Close":(btn.getAttribute("data-label")||"Chat");
+ }
+
+ btn.addEventListener("click",function(){toggle(panel.style.display==="none")});
+ teaser.addEventListener("click",function(){toggle(true)});
+ close.addEventListener("click",function(e){
+  e.stopPropagation();                  // dismissing the teaser is not opening the panel
+  teaser.style.display="none";
+  teaser.setAttribute("data-dismissed","1");
  });
 
- wrap.appendChild(panel);wrap.appendChild(btn);
+ wrap.appendChild(panel);wrap.appendChild(teaser);wrap.appendChild(btn);
 
  function mount(){document.body&&document.body.appendChild(wrap)}
  if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",mount)}else{mount()}
 
- // The label follows the resolved magnet. A failure here leaves the neutral "Chat" and the widget
- // still works, so this is deliberately not awaited before mounting.
- fetch(origin+"/api/concierge/config?"+q({c:slug,category:category}))
+ // The label and the teaser follow the resolved magnet. A failure here leaves the neutral "Chat"
+ // and no teaser, and the widget still works, so this is deliberately not awaited before mounting.
+ fetch(withPass(origin+"/api/concierge/config?"+q({c:slug,category:category,magnet:magnet})))
   .then(function(r){return r.json()})
   .then(function(d){
     if(!d||!d.enabled){wrap.remove();return}
     if(d.ctaLabel){btn.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}
+    if(!d.headline)return;
+    teaserTitle.textContent=d.headline;
+    teaserPromise.textContent=d.promise||"";
+    // A beat, so it reads as an offer arriving rather than as an overlay the page loaded with.
+    setTimeout(function(){
+      if(panel.style.display==="none"&&!teaser.getAttribute("data-dismissed")){
+        teaser.style.display="block";
+      }
+    },1200);
   })
   .catch(function(){});
 

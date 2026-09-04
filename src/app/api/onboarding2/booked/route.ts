@@ -1,35 +1,55 @@
-// The onboarding call day, recorded from outside the chat.
+// The Calendly booking, recorded. THIS IS WHAT STARTS A CLIENT NOW.
 //
-// ‼️ THIS IS NO LONGER A CALENDLY WEBHOOK RECEIVER (2026-09-03). There is no calendar in this
-// funnel: the day is agreed in the chat and written by the scheduling branch of
-// api/onboarding2/chat. This route survives as the out-of-band way to record the same fact, which
-// is what the walk probe drives and what a support path would use, and it enforces the same two
-// rules that branch does.
+// ‼️ IT IS A CALENDLY RECEIVER AGAIN (2026-09-04), AFTER BEING ONE, THEN NOT BEING ONE.
+// Its own header said "THIS IS NO LONGER A CALENDLY WEBHOOK RECEIVER (2026-09-03)". That was
+// true for a day, while the funnel agreed a day in chat and MS Graph was supposed to send the
+// invite. The four MS_CALENDAR_* vars were never set, so that path sent nothing, and Calendly is
+// back. The history is left in this comment rather than tidied away, because the next person to
+// wonder why there are two calendar implementations deserves the answer.
 //
-// ‼️ THE ORIGIN CHECK THAT USED TO MATTER IS GONE WITH THE FRAME IT GUARDED. The old client
-// listened for a postMessage from calendly.com, and without an origin check any opener could have
-// posted a fake event_scheduled, fired a paid conversion and written a booking that never
-// happened. No frame, no listener, no forgery surface. What is left is the second half of that
-// guard, which still applies: nothing may record a call against an unsigned session.
+// ‼️ THIS ROUTE HAS TAKEN OVER PROVISIONING FROM /api/onboarding2/sign. The signature screens are
+// gone from the funnel, so signing is no longer the moment somebody commits: BOOKING IS. Nothing
+// else changed about the chain. It provisions, patches the signing row, upserts the lead, posts
+// the top-level Slack card and opens the ops thread, in that order, exactly as finishSigning()
+// did. What it does NOT do is email a PDF, because there is no signed PDF: the agreement is
+// signed by hand on the call, at delivery step `agreement_signed`.
+//
+// ── THE FORGERY SURFACE, AND WHY IT IS NOT LEFT OPEN ────────────────────────
+//
+// The old header recorded the risk exactly: "without an origin check any opener could have posted
+// a fake event_scheduled, fired a paid conversion and written a booking that never happened".
+// That surface is back with the iframe, and it now costs MORE than a bad row, because this route
+// provisions and provisioning takes one of six pilot seats.
+//
+// Two guards, and the client-side one is the weaker of them:
+//   1. The client checks e.origin === "https://calendly.com" before posting here. Necessary, and
+//      worth nothing on its own: anybody can POST to this route directly with a stolen token.
+//   2. THE EVENT URI IS VERIFIED AGAINST CALENDLY'S API before anything is written. A forged
+//      payload names an event that does not exist, and the fetch says so.
+//
+// ‼️ WHEN CALENDLY_API_TOKEN IS UNSET, GUARD 2 CANNOT RUN, AND THE ROUTE SAYS SO ON THE ROW
+// RATHER THAN PRETENDING. `booking_verified` comes back false and the Slack card carries it.
+// Refusing the booking instead would mean an unset token silently breaks the funnel; accepting it
+// silently would mean a row nobody can tell apart from a verified one. Neither is acceptable, so
+// it is recorded.
 
 import { NextRequest, NextResponse } from "next/server";
 import { slack } from "@/lib/slack-bot";
 import { clean } from "@/lib/medspa/validate";
-import { loadByToken } from "@/lib/onboarding2/session";
+import { loadByToken, patchDelivery } from "@/lib/onboarding2/session";
 import { findLeadByEmail, leadEmailFor, upsertLead } from "@/lib/onboarding2/lead";
-import { callReply } from "@/lib/onboarding2/card";
-import {
-  dayOptions,
-  readDayChoice,
-  readDaypart,
-  readTimezone,
-  SCHEDULING_TZ,
-} from "@/lib/onboarding2/scheduling";
-import { scheduleCallAndInvite } from "@/lib/onboarding2/calendar";
+import { bookedCard } from "@/lib/onboarding2/card";
+import { verifyScheduledEvent } from "@/lib/calendly";
+import { hasBooked } from "@/lib/onboarding2/booking";
+import { provisionFromSigning } from "@/lib/onboarding2/provision";
+import { openOpsThread } from "@/lib/onboarding2/delivery";
+import { onboardingChannel } from "@/lib/onboarding2/constants";
+import type { Onboarding2SigningRow } from "@/lib/onboarding2/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -42,95 +62,161 @@ export async function POST(req: NextRequest) {
   const row = await loadByToken(body.sessionToken as string);
   if (!row) return NextResponse.json({ ok: false, error: "Not found." }, { status: 404 });
 
-  // A call is a post-signature act. An unsigned session has nothing to schedule.
-  if (!row.signed_at) {
-    return NextResponse.json({ ok: false, error: "Not signed." }, { status: 409 });
-  }
-
+  // ‼️ IDENTITY, NOT A SIGNATURE. This used to refuse on `!row.signed_at`, which would now refuse
+  // every booking there is. What still has to be true is that the session went through screen
+  // one: a booking recorded against a row with no email has no lead to attach to and no client to
+  // provision.
   const email = leadEmailFor(row);
-  if (!email) return NextResponse.json({ ok: false, error: "Not found." }, { status: 404 });
+  if (!email) return NextResponse.json({ ok: false, error: "Not identified." }, { status: 409 });
 
-  const daypart = readDaypart(clean(body.daypart, 40));
-  if (!daypart) {
-    return NextResponse.json({ ok: false, error: "Unknown daypart." }, { status: 400 });
-  }
-
-  // ‼️ THE DAY IS MATCHED AGAINST THE OFFER, NOT TAKEN FROM THE REQUEST. Accepting an arbitrary
-  // date here would let a call be written for a Sunday, or for last March, on a row a human then
-  // reads as a commitment somebody made.
-  const picked = readDayChoice(clean(body.day, 80), dayOptions(daypart));
-  if (!picked) {
-    return NextResponse.json({ ok: false, error: "Unknown day." }, { status: 400 });
-  }
-
-  // ‼️ THE ZONE IS OPTIONAL HERE AND REQUIRED IN THE CHAT, AND THAT ASYMMETRY IS DELIBERATE.
-  // The chat asks four buttons and gets an answer; this route is the out-of-band path a support
-  // call or the walk probe uses, and refusing a booking because nobody typed a timezone would
-  // make the recovery path harder to use than the thing it is recovering. With none given it
-  // falls back to SCHEDULING_TZ, which is OURS, and the row records that honestly: a reader can
-  // tell an asked zone from an assumed one because the chat always writes one and this may not.
-  const zone = readTimezone(clean(body.timezone, 60)) ?? SCHEDULING_TZ;
+  const eventUri = clean(body.eventUri, 300);
+  const inviteeUri = clean(body.inviteeUri, 300);
 
   const existing = await findLeadByEmail(email);
-  // Idempotent. A double submit saying the same thing is noise in a thread somebody is reading.
-  if (existing?.call_day) {
-    return NextResponse.json({ ok: true, alreadyScheduled: true });
+  // Idempotent. Calendly's embed can fire event_scheduled more than once on a slow connection,
+  // and a second card in a thread somebody is reading is worse than a dropped one.
+  // ‼️ SAME PREDICATE THE CHAT GATE USES. An unverified booking sets only calendly_event_uri,
+  // so checking booked_slot_at here would let a second event_scheduled re-provision the client.
+  if (hasBooked(existing)) {
+    return NextResponse.json({ ok: true, alreadyBooked: true });
+  }
+
+  // ── Guard 2 ──
+  const verified = await verifyScheduledEvent(eventUri);
+  if (verified.status === "not_found") {
+    console.error(`[onboarding2/booked] unverifiable event uri for signing ${row.id}`);
+    return NextResponse.json({ ok: false, error: "Unknown booking." }, { status: 409 });
   }
 
   const stored = await upsertLead({
     email,
-    call_daypart: daypart,
-    call_day: picked.date,
-    call_choice_label: picked.label,
-    call_chosen_at: new Date().toISOString(),
+    // ‼️ THE REAL INSTANT WHEN CALENDLY GAVE US ONE, AND ONLY THEN. `startTime` comes off the
+    // verified event, never off the request body. Falling back to now() would put a timestamp on
+    // the row that reads as the appointment and is actually the moment somebody clicked.
+    booked_slot_at: verified.startTime ?? null,
+    calendly_event_uri: eventUri || inviteeUri || null,
   });
 
-  // Same order as the chat close: the day is durable before Graph is asked, so an outage costs
-  // the invite and never the booking.
-  const lead = stored
-    ? ((await scheduleCallAndInvite({
-        lead: stored,
-        date: picked.date,
-        daypart,
-        timeZone: zone,
-        isDemo: Boolean(row.is_demo),
-      })) ?? stored)
-    : null;
-
-  if (lead && row.slack_thread_ts && row.slack_channel && !row.is_demo) {
-    const reply = callReply(lead);
-    await slack
-      .postThreadReply(row.slack_channel, row.slack_thread_ts, reply.text, reply.blocks)
-      .catch((e) => console.error("[onboarding2/booked] slack reply failed:", (e as Error).message));
+  if (!stored?.booked_slot_at && !stored?.calendly_event_uri) {
+    // The same lesson this route's previous version records: report what was WRITTEN, not what
+    // was sent. upsertLead swallows its own error and returns null, so a missing column or an RLS
+    // refusal has to surface here rather than as a confident yes.
+    return NextResponse.json({ ok: false, error: "Could not store the booking." }, { status: 500 });
   }
 
-  // ‼️ THE RESPONSE REPORTS WHETHER THE ROW WAS ACTUALLY WRITTEN, AND IT DID NOT UNTIL
-  // 2026-09-03. upsertLead() catches its own error and returns null, so this route answered
-  // `{ok:true, day, label}` off the PICKED object whether or not anything was stored. The walk
-  // probe asserted on exactly those two fields and went green against a database missing the
-  // call_starts_at column: the write failed on every request, the log said so, and the check
-  // that exists to prove the close works said PASS.
-  //
-  // `stored` is read off the saved ROW rather than off the request, so a missing column, an RLS
-  // refusal or a constraint violation all surface as ok:false instead of a confident yes.
+  // ‼️ EVERYTHING BELOW IS BEST-EFFORT AND NONE OF IT MAY COST THE BOOKING. The row is already
+  // durable at this point. A provisioning failure is loud in Slack and leaves a real calendar
+  // appointment intact, which is the right trade in that order and not the other one.
+  await finishBooking(row, verified.verified).catch((e) =>
+    console.error("[onboarding2/booked] finishBooking:", (e as Error).message)
+  );
+
   return NextResponse.json({
-    ok: Boolean(lead?.call_day),
-    stored: Boolean(lead?.call_day),
-    day: picked.date,
-    label: picked.label,
-    // not_attempted is the default and honest state: MS_CALENDAR_* ships unset, and a demo host
-    // never sends one at all.
-    invite: lead?.call_invite_sent_at
-      ? "sent"
-      : lead?.call_invite_error
-        ? "failed"
-        : "not_attempted",
-    // ‼️ REPORTED SEPARATELY FROM `stored`, BECAUSE THE TWO WRITES ARE SEPARATE ON PURPOSE. The
-    // day lands first and the zone plus the computed instant land second, so a failure on the
-    // second one costs the invite and never the booking. That is what makes this feature safe to
-    // deploy before docs/2026-09-03-onboarding2-call-invite.sql has run: without those columns
-    // the close degrades to exactly its old behaviour, a day agreed and an honest Slack card.
-    // A null here on a request that supplied a zone means the migration is still owed.
-    zone: lead?.call_timezone ?? null,
+    ok: true,
+    stored: true,
+    startsAt: stored?.booked_slot_at ?? null,
+    // Reported so the walk probe and the Slack card agree about what was actually checked.
+    verified: verified.verified,
   });
+}
+
+/**
+ * Provision, announce, open the ops thread. Lifted from finishSigning() in the sign route.
+ *
+ * ‼️ THE ORDER IS LOAD-BEARING AND IT IS NOT THE OBVIOUS ONE. The card is posted BEFORE the ops
+ * thread, and its `ts` is NOT clients.ops_thread_ts: postDeliveryChecklist edits the ops thread
+ * message in place to become the board header, so pointing ops_thread_ts at this card would erase
+ * it the moment the board opened.
+ *
+ * ‼️ THE DELIVERY BOARD DOES NOT OPEN HERE, AND THAT IS DELIBERATE. startPilot and the ops thread
+ * happen on booking so an abandoned chat is still visible in Slack; seedDeliverySteps and
+ * intake_received wait for the LAST qualifying answer, because intake_received's verifier needs
+ * clients.intake_completed_at and four steps are blocked behind it. Opening a board on a
+ * half-finished intake produces one stalled on step 1. Same reasoning as at signature, one
+ * trigger earlier.
+ */
+async function finishBooking(row: Onboarding2SigningRow, verified: boolean): Promise<void> {
+  const provision = await provisionFromSigning(row).catch((e) => ({
+    ok: false,
+    clientId: null,
+    slug: null,
+    onboardingUrl: null,
+    contactId: null,
+    alreadyProvisioned: false,
+    error: (e as Error).message,
+    warnings: [(e as Error).message],
+  }));
+
+  if (provision.clientId || provision.contactId) {
+    await patchDelivery(row.id, {
+      client_id: provision.clientId,
+      contact_id: provision.contactId,
+    });
+  }
+
+  const lead = await upsertLead({
+    email: leadEmailFor(row),
+    business_name: row.business_legal_name,
+    contact_name: row.contact_name,
+    signer_title: row.signer_title,
+    phone: row.contact_phone,
+    website: row.website,
+    client_id: provision.clientId,
+    contact_id: provision.contactId,
+  }).catch(() => null);
+
+  const channel = onboardingChannel();
+  const card = bookedCard({ row, lead, provision });
+
+  if (!verified) {
+    card.blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text:
+            ":warning: This booking was NOT verified against Calendly, because CALENDLY_API_TOKEN " +
+            "is unset. Confirm the appointment exists before you prepare for it.",
+        },
+      ],
+    });
+  }
+
+  if (!channel) {
+    console.error(
+      "[onboarding2/booked] SLACK_CLIENT_ONBOARDING_CHANNEL unset. Card:\n" + card.text
+    );
+    return;
+  }
+
+  const posted = await slack.postMessage(channel, card.text, card.blocks).catch((e) => {
+    console.error("[onboarding2/booked] slack post failed:", (e as Error).message);
+    return null;
+  });
+
+  // slackFetch never throws, so ok has to be checked rather than assumed.
+  const ts = posted && posted.ok ? (posted.ts as string) : null;
+  if (ts) await patchDelivery(row.id, { slack_channel: channel, slack_thread_ts: ts });
+
+  // postDeliveryChecklist REFUSES outright when ops_thread_ts is null, so if this post fails the
+  // board can never open later. That is why the failure is a warning in the thread and not a log.
+  if (provision.clientId) {
+    const ops = await openOpsThread({
+      clientId: provision.clientId,
+      name: row.business_legal_name || row.contact_name || "New client",
+    }).catch((e) => ({ ts: null, warning: (e as Error).message }));
+
+    if (ops.warning && ts) {
+      await slack
+        .postThreadReply(
+          channel,
+          ts,
+          [
+            `:warning: The ops thread did not open: ${ops.warning}`,
+            "The delivery board cannot post until it does.",
+          ].join("\n")
+        )
+        .catch(() => null);
+    }
+  }
 }

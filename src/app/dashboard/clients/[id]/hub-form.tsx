@@ -37,6 +37,40 @@ export interface HubPageView {
   publishedAt: string | null;
 }
 
+/**
+ * One lead magnet, as the drafting picker offers it.
+ *
+ * ‼️ THE PICKER IS THE POINT OF THIS WHOLE CONTROL AND IT SITS BEFORE "Draft it" DELIBERATELY.
+ * Matthew's instruction (2026-09-03): the magnet is chosen before the page is written, not
+ * inferred after it exists. draftPage() reads it and writes the answer to stop where that offer
+ * begins, and the publish gate's no_magnet check is what notices when nobody chose.
+ */
+export interface MagnetChoiceView {
+  magnetKey: string;
+  title: string;
+  promise: string;
+  ctaLabel: string | null;
+  scope: string;
+  deliverable: boolean;
+}
+
+/**
+ * One of the five offers drafted FOR a page, before anybody has picked it.
+ *
+ * ‼️ IT HAS NO magnetKey AND THAT IS THE DIFFERENCE THAT MATTERS. A MagnetChoiceView is a row in
+ * the catalogue that any page can name. This is a proposal that exists only for this page and has
+ * never been in the catalogue: it gets a key at the moment somebody approves it, which is what
+ * mints it. So the dropdown carries `cand:<id>` for these, and the server resolves that into a
+ * real key before anything is stored. See resolveMagnetChoice in the hub route.
+ */
+export interface MagnetCandidateView {
+  id: string;
+  title: string;
+  promise: string;
+  ctaLabel: string;
+  rationale: string | null;
+}
+
 export interface AuditPromptView {
   text: string;
   block: string | null;
@@ -81,6 +115,7 @@ const BLANK = {
   answerMd: "",
   metaDescription: "",
   sourceReportId: "",
+  leadMagnetKey: "",
 };
 
 /**
@@ -146,6 +181,8 @@ export function HubForm({
   hosts,
   pages,
   prompts,
+  magnets,
+  magnetCandidates,
   day0ArchivedAt,
   day0Source,
   vercelConfigured,
@@ -159,6 +196,15 @@ export function HubForm({
   hosts: HubHostView[];
   pages: HubPageView[];
   prompts: AuditPromptView[];
+  /** Empty when this client has no concierge_configs row, which the panel says out loud. */
+  magnets: MagnetChoiceView[];
+  /**
+   * The offers written for each page, keyed by page id.
+   *
+   * Empty for a page nobody has drafted offers for yet, which the picker answers with a button
+   * rather than with silence. The page studio fills this in automatically when a page is claimed.
+   */
+  magnetCandidates: Record<string, MagnetCandidateView[]>;
   /** NULL means the Day 0 wall is shut and Publish will be refused. */
   day0ArchivedAt: string | null;
   day0Source: string | null;
@@ -187,6 +233,20 @@ export function HubForm({
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(true);
+  /**
+   * ‼️ READ STRAIGHT OFF THE PROP, NOT MIRRORED INTO STATE. post() ends with router.refresh(),
+   * which re-runs the server component and brings a fresh set down. A useState seeded from the
+   * prop would be initialised once and then never update, so [Write five offers] would appear to
+   * do nothing until a full page load.
+   */
+  const pageCandidates = draft.id ? (magnetCandidates[draft.id] ?? []) : [];
+
+  /** The row behind the chosen key, so the panel can say what the pill will read. */
+  const chosenMagnet = magnets.find((m) => m.magnetKey === draft.leadMagnetKey) ?? null;
+  /** Or the candidate behind it, when the choice is one of this page's own five. */
+  const chosenCandidate = draft.leadMagnetKey.startsWith("cand:")
+    ? pageCandidates.find((c) => `cand:${c.id}` === draft.leadMagnetKey) ?? null
+    : null;
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ‼️ THE GATE STATE IS FETCHED, NOT PASSED AS A PROP, for the same reason the page body is.
@@ -276,6 +336,7 @@ export function HubForm({
           question: string;
           answerMd?: string;
           metaDescription?: string | null;
+          leadMagnetKey?: string | null;
         }>;
       };
       const found = json.pages?.find((x) => x.id === pageId);
@@ -290,6 +351,7 @@ export function HubForm({
         answerMd: found.answerMd ?? "",
         metaDescription: found.metaDescription ?? "",
         sourceReportId: "",
+        leadMagnetKey: found.leadMagnetKey ?? "",
       });
       // A saved page's map lives in the database and is not re-sent on an ordinary save. See
       // SavePageInput.evidenceMap: an undefined map leaves the stored one alone, which is what
@@ -377,6 +439,9 @@ export function HubForm({
           question: draft.question,
           // So the drafter reads this page's own evidence, not only the client library.
           pageId: draft.id || null,
+          // The offer chosen above. It never lands in the body; it tells the drafter where the
+          // answer should stop so the free thing is still worth asking for. See draftPage().
+          leadMagnetKey: draft.leadMagnetKey || null,
         }),
       });
       const json = (await res.json()) as {
@@ -924,6 +989,95 @@ export function HubForm({
             </div>
           )}
 
+          {/* ── The offer, chosen before the page is written ─────────────── */}
+          <div>
+            <label className="mb-1 block text-xs text-[rgba(255,255,255,0.5)]">
+              What this page earns: the lead magnet the concierge will offer on it
+            </label>
+            {magnets.length === 0 ? (
+              <p className="rounded border border-white/10 px-2 py-1.5 text-xs text-[rgba(255,255,255,0.45)]">
+                This client has no concierge widget provisioned, so there is no offer to write
+                toward. The concierge_preview delivery step creates it.
+              </p>
+            ) : (
+              <>
+                <select
+                  className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                  value={draft.leadMagnetKey}
+                  onChange={(e) => setDraft((d) => ({ ...d, leadMagnetKey: e.target.value }))}
+                >
+                  <option value="">Let the ladder decide (generic, same on every page)</option>
+                  {/*
+                    Written for THIS page and listed first, because that is the whole point: until
+                    now every client saw the same shared catalogue and none of it was about them.
+                    These carry `cand:` and are minted server-side on Save or Draft it.
+                  */}
+                  {pageCandidates.length > 0 && (
+                    <optgroup label="Written for this page">
+                      {pageCandidates.map((c) => (
+                        <option key={c.id} value={`cand:${c.id}`}>
+                          {c.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label={pageCandidates.length > 0 ? "Already in the catalogue" : "The catalogue"}>
+                    {magnets.map((m) => (
+                      <option key={m.magnetKey} value={m.magnetKey}>
+                        {m.title} · {m.scope}
+                        {m.deliverable ? "" : " · asset missing"}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded border border-white/15 px-2 py-1 text-xs text-[rgba(255,255,255,0.7)] disabled:opacity-40"
+                    disabled={!draft.id || busy === "page_magnets_draft"}
+                    onClick={() => {
+                      void post({ action: "page_magnets_draft", pageId: draft.id }, "page_magnets_draft");
+                    }}
+                  >
+                    {busy === "page_magnets_draft"
+                      ? "Writing five offers..."
+                      : pageCandidates.length > 0
+                        ? "Write five different ones"
+                        : "Write five offers for this page"}
+                  </button>
+                  {!draft.id && (
+                    <span className="text-xs text-[rgba(255,255,255,0.35)]">
+                      Save the page first. Offers are written for a page, not for a form.
+                    </span>
+                  )}
+                </div>
+
+                {chosenCandidate && (
+                  <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
+                    Pill reads &ldquo;{chosenCandidate.ctaLabel}&rdquo;. {chosenCandidate.promise}{" "}
+                    <span className="text-[rgba(255,255,255,0.35)]">
+                      It joins this client&rsquo;s catalogue when you Save or Draft it.
+                    </span>
+                  </p>
+                )}
+                {chosenMagnet && (
+                  <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
+                    Pill reads &ldquo;{chosenMagnet.ctaLabel || chosenMagnet.title}&rdquo;.{" "}
+                    {chosenMagnet.promise}
+                    {chosenMagnet.deliverable ? null : (
+                      <span className="text-[#FF6B6B]">
+                        {" "}
+                        Its asset is not configured, so the widget will not offer it and Publish
+                        will refuse this page.
+                      </span>
+                    )}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
           <Field
             label="Title"
             value={draft.title}
@@ -1047,7 +1201,11 @@ export function HubForm({
               </button>
               <span className="text-xs text-[rgba(255,255,255,0.4)]">
                 {draft.question.trim()
-                  ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}. Read every line before you save it.`
+                  ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}` +
+                    (chosenMagnet || chosenCandidate
+                      ? `, toward "${(chosenMagnet ?? chosenCandidate)!.title}"`
+                      : ", toward no particular offer") +
+                    ". Read every line before you save it."
                   : "Pick a question first."}
               </span>
             </div>
@@ -1149,6 +1307,10 @@ export function HubForm({
                   answerMd: draft.answerMd,
                   metaDescription: draft.metaDescription || null,
                   sourceReportId: draft.sourceReportId || null,
+                  // Always sent, because this form always knows the answer. An empty string
+                  // clears the key, which is a real thing to want: it hands the page back to
+                  // the ladder. See SavePageInput.leadMagnetKey.
+                  leadMagnetKey: draft.leadMagnetKey,
                   // Sent ONLY when this save is carrying a fresh draft. An ordinary edit sends
                   // nothing here and savePage leaves the stored map alone, or drops it if the
                   // body actually changed. See SavePageInput.evidenceMap for why undefined and

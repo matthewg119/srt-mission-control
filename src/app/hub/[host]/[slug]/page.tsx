@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { getPublished } from "@/lib/hub/pages";
 import { HubAnswerBody, plainText, truncate } from "@/components/hub/hub-bodies";
+import { ConciergeEmbed } from "@/lib/concierge/embed";
 
 export const revalidate = 300;
 
@@ -48,6 +49,17 @@ export default async function HubPage({ params }: Props) {
   const page = await getPublished(client.id, params.slug);
   if (!page) notFound();
 
-  return <HubAnswerBody client={client} host={host} page={page} />;
+  return (
+    <>
+      <HubAnswerBody client={client} host={host} page={page} />
+      {/*
+        The concierge, carrying the offer THIS page was written toward. Renders null unless the
+        client's concierge_configs.enabled is true, which only the concierge_live step sets.
+        A page with no key falls back to the ladder, which is every page written before the
+        column existed.
+      */}
+      <ConciergeEmbed clientId={client.id} magnetKey={page.leadMagnetKey} />
+    </>
+  );
 }
 

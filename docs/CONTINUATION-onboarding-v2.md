@@ -1,5 +1,12 @@
 # Continuation prompt: make onboarding runnable end to end
 
+> NOTE 2026-09-04: the step COUNT in this document is stale. The array in
+> `src/config/delivery-steps.ts` is the only source of truth and now holds 38 steps:
+> `agreement_signed` was appended to the During-the-call phase when the e-signature
+> screens were removed from /onboarding2, which shifted every After-the-call step by one.
+> Nothing in code hardcodes a number; `stepNumber()` computes from the array. Any step
+> number written below is an index into an older array, not a key.
+
 Paste everything below the line into a new Claude Code session.
 
 ---

@@ -206,6 +206,17 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         threadTs: payload.container?.message_ts ?? "",
         value: action.value ?? "",
       });
+    // ── The concierge's audience: which of the two lanes this client's widget speaks from ──
+    case "concierge_audience_patient":
+    case "concierge_audience_owner":
+      return conciergeAudienceAction({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        clientId: action.value ?? "",
+      });
     // ── LANE 2: the avatar, and the research it decides ──
     case "avatar_pick":
       return avatarPickAction({
@@ -1770,6 +1781,53 @@ async function cleanupConfirmAllAction(args: {
 // first real client the step came out `skipped`. The panel exists now; so does the button, in the
 // place the decision is actually being read.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * [Patient lane] and [Owner lane] on the concierge_preview card.
+ *
+ * ‼️ THE ONE PLACE A PERSON SAYS WHO THE WIDGET IS TALKING TO. `concierge_configs.audience` decides
+ * which magnet catalogue resolves, whether competitor ammo is offered at all, and where booking
+ * hands off. Provisioning seeds it from the client's vertical, which is a proposal; this is the
+ * ratification, and concierge_live refuses until it has happened.
+ *
+ * The card is rebuilt rather than re-posted, so the button labels show the new state in place.
+ * Slack orders a channel by post time and a delete-and-repost would move the step to the bottom.
+ */
+async function conciergeAudienceAction(args: {
+  actionId: string;
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  const clientId = args.clientId.trim();
+  if (!clientId) return NextResponse.json({ ok: true });
+
+  const audience = args.actionId === "concierge_audience_owner" ? "owner" : "patient";
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { confirmConciergeAudience } = await import("@/lib/clients/concierge-audience");
+      const result = await confirmConciergeAudience({ clientId, audience, by: actor });
+
+      if (!result.ok) {
+        await slack.postThreadReply(args.channel, args.slackTs, `:warning: Not confirmed: ${result.error}`);
+        return;
+      }
+
+      await slack.postThreadReply(args.channel, args.slackTs, result.line);
+
+      // Rebuild in place so the buttons read "(confirmed)" and the body drops the grey question
+      // mark. postStep is idempotent on slack_message_ts and updates rather than posting.
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await postStep(clientId, "concierge_preview");
+    })().catch((e) => console.error("[slack/actions] concierge_audience failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
 
 async function avatarPickAction(args: {
   channel: string;

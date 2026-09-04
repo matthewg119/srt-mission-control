@@ -276,6 +276,14 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return provisionConcierge(clientId);
   },
 
+  // The replica of their own site, plus the preview link the call is walked on. Produces no
+  // bytes; it writes client_replica_pages rows and the page_sources snapshots underneath them.
+  // Idempotent: a re-run refreshes every page and prunes anything that left their navigation.
+  site_replica: async (clientId) => {
+    const { buildSiteReplica } = await import("../site-replica");
+    return buildSiteReplica(clientId);
+  },
+
   review_tool_preview: async (clientId) => {
     // Produces no bytes. It verifies that the preview is genuinely themed and posts the URL,
     // and refuses when the theme is unconfirmed — which is the only way "themed to match" can

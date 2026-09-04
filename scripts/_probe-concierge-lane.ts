@@ -24,7 +24,7 @@ import { competitorAmmo } from "@/lib/ammo/supply";
 import { unspentAmmo, ammoKey, spentAmmo } from "@/lib/ammo/spend";
 import { fromCityState } from "@/lib/market/place";
 import { conciergeAmmo } from "@/lib/concierge/ammo";
-import { rankMagnets, rungOf, type LeadMagnet } from "@/lib/concierge/magnets";
+import { pillLabel, rankMagnets, rungOf, type LeadMagnet } from "@/lib/concierge/magnets";
 import { bookingGate, asksToBook, openingFor } from "@/lib/concierge/engine";
 import { resolveBooking } from "@/lib/concierge/booking";
 import type { ConciergeConfig } from "@/lib/concierge/config";
@@ -221,7 +221,7 @@ function audiences(): void {
   const m = (over: Partial<LeadMagnet>): LeadMagnet => ({
     id: "x", magnetKey: "k", chainsToKey: null, audience: "owner", clientId: null,
     vertical: null, treatment: null, category: null, title: "t", promise: "p",
-    assetUrl: null, conciergeEntry: "e", sortOrder: 100, ...over,
+    ctaLabel: null, assetUrl: null, conciergeEntry: "e", sortOrder: 100, ...over,
   });
 
   const ownerQ = { audience: "owner" as const, clientId: "c1", vertical: "aeo-agency-med-spa", treatment: null, category: "Comparison" };
@@ -381,6 +381,58 @@ function noPersona(): void {
   check("nor do the concierge routes", routeOffenders.length === 0, routeOffenders.join(", "));
 }
 
+// ── 8b. The page's own magnet outranks the ladder ────────────────────────────
+//
+// ‼️ THIS IS THE WHOLE POINT OF THE DRAFTING PICKER AND IT IS PROVED OFFLINE. The lattice is a
+// ranking over placement columns, and on a live page every one of those columns is null: nothing
+// writes a category onto client_pages and treatment is hardcoded null at every query site. So the
+// four category-scoped owner rows were unreachable in production while looking perfectly seeded in
+// the database, which is the failure mode a ladder test alone cannot see.
+function pageChoosesTheMagnet(): void {
+  console.log("\n8b. a page names its own offer, and the ladder cannot outvote it");
+
+  const m = (over: Partial<LeadMagnet>): LeadMagnet => ({
+    id: "x", magnetKey: "k", chainsToKey: null, audience: "owner", clientId: null,
+    vertical: null, treatment: null, category: null, title: "t", promise: "p",
+    ctaLabel: null, assetUrl: null, conciergeEntry: "e", sortOrder: 100, ...over,
+  });
+
+  // The state a real hub page is in: a vertical off the tenant row, and nothing else known.
+  const livePage = {
+    audience: "owner" as const,
+    clientId: "c1",
+    vertical: "aeo-agency-med-spa",
+    treatment: null,
+    category: null,
+  };
+
+  const categoryScoped = m({ magnetKey: "city_rivals", category: "Comparison", vertical: "aeo-agency-med-spa" });
+  const wildcard = m({ magnetKey: "visibility_scan" });
+
+  check(
+    "a category-scoped magnet is unreachable by ranking on a real page",
+    rungOf(categoryScoped, livePage) === null
+  );
+  check(
+    "so the ladder always returns the same wildcard, whatever the page is about",
+    rankMagnets([categoryScoped, wildcard], livePage)[0]?.magnetKey === "visibility_scan"
+  );
+
+  // What the key buys: engine.ts, start/route.ts and config/route.ts all reach for magnetByKey
+  // BEFORE resolveMagnet, so the row is fetched by name and the lattice never runs. The lattice
+  // itself cannot be asked to prove that, so this asserts the property that makes it safe: a
+  // named row is a row the ranking would have refused.
+  check(
+    "the named row is exactly the one ranking would have dropped",
+    rungOf(categoryScoped, livePage) === null && categoryScoped.magnetKey === "city_rivals"
+  );
+
+  // The pill.
+  check("a magnet with a cta_label uses it", pillLabel(m({ ctaLabel: "Free scan", title: "The AI Visibility Scan" })) === "Free scan");
+  check("a magnet without one falls back to its title", pillLabel(m({ ctaLabel: null, title: "The AI Visibility Scan" })) === "The AI Visibility Scan");
+  check("a blank cta_label is not a label", pillLabel(m({ ctaLabel: "   ", title: "The AI Visibility Scan" })) === "The AI Visibility Scan");
+}
+
 // ── 9. The catalogue itself ──────────────────────────────────────────────────
 async function catalogue(): Promise<void> {
   console.log("\n9. the seeded catalogue is coherent");
@@ -437,6 +489,36 @@ async function catalogue(): Promise<void> {
 }
 
 // ── 10. The mock rail ────────────────────────────────────────────────────────
+// ── 9b. Every seeded magnet can actually be put on a pill ────────────────────
+async function pillLabels(): Promise<void> {
+  console.log("\n9b. the launcher pill");
+
+  const { data } = await supabaseAdmin
+    .from("lead_magnets")
+    .select("magnet_key, audience, title, cta_label")
+    .eq("active", true);
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  check("the pill can read the catalogue", rows.length > 0, `${rows.length} rows`);
+
+  // ‼️ LENGTH IS THE CHECK, BECAUSE THE PILL IS A PILL. `title` is the honest fallback and it is
+  // written to be read inside a conversation: "The 20 Questions Your Patients Ask ChatGPT Before
+  // They Book" is 62 characters and wraps a corner button into a paragraph. A row over the limit
+  // is not broken, it is unfinished, and this is where that shows.
+  const tooLong = rows.filter((r) => {
+    const label = (typeof r.cta_label === "string" && r.cta_label.trim()) || String(r.title ?? "");
+    return label.length > 28;
+  });
+  check(
+    "every magnet has a label short enough for a corner pill",
+    tooLong.length === 0,
+    tooLong.map((r) => `${r.magnet_key} (${((r.cta_label as string) || (r.title as string) || "").length})`).join(", ")
+  );
+
+  const dashed = rows.filter((r) => typeof r.cta_label === "string" && hasBannedDash(r.cta_label));
+  check("no pill label carries a banned dash", dashed.length === 0, dashed.map((r) => r.magnet_key).join(", "));
+}
+
 async function mockRail(): Promise<void> {
   console.log("\n10. no clinic is live on a mock analysis");
 
@@ -566,7 +648,9 @@ async function main(): Promise<void> {
   chaining();
   promptIsEmpty();
   noPersona();
+  pageChoosesTheMagnet();
   await catalogue();
+  await pillLabels();
   await mockRail();
   await booking();
 

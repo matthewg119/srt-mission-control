@@ -1,4 +1,9 @@
-// The two modes: grounded before signature, qualifying after.
+// The two modes: grounded while an agreement is on screen, qualifying once a call is booked.
+//
+// ‼️ THE FUNNEL NO LONGER SHOWS AN AGREEMENT (2026-09-04), SO GROUNDED MODE HAS NO LIVE CALLER.
+// It is kept whole, and so is groundedPrompt(), because onboarding2_chat_turns rows carry
+// mode 'grounded' and the CHECK constraint on that column still names it. The signature screens
+// were removed from the funnel, not from the record.
 //
 // ‼️ THE PROMPT IS THE COSMETIC HALF OF THE GROUNDED GATE. The structural half is that the
 // grounded assistant is handed the agreement snapshot and ONE tool and nothing else. No CRM, no
@@ -6,9 +11,11 @@
 // the lesson call-coach-price-gate.ts records after a prompt-level rule leaked the number in 2
 // of 3 live runs: absent beats forbidden.
 //
-// ‼️ offer_booking IS REFUSED BY THE EXECUTOR, NOT BY THE PROMPT. A gate that lives only in a
-// system prompt is a gate the model argues past. The executor returns a plain refusal naming the
-// outstanding questions, and the model carries on asking. Same lesson stepPrecondition learned.
+// ‼️ THE MODEL HAS NO TOOL THAT REACHES SCHEDULING, WHICH IS STRONGER THAN THE GATE IT REPLACED.
+// offer_booking used to be refused by the executor until every question was answered, on the
+// principle that a gate living only in a system prompt is one the model argues past. The call is
+// now booked BEFORE the questions, by a state machine the model never sees, so the tool is gone
+// entirely. Absent beats refused, the same lesson GROUNDED_TOOLS records below.
 
 import { runConversationWithTools, isAIConfigured } from "@/lib/ai";
 import type { ToolExecutionResult } from "@/lib/ai-tools";
@@ -22,7 +29,7 @@ import {
   type QualifyingQuestion,
 } from "@/config/onboarding2";
 import { snapshotToPlainText, type AgreementSnapshot } from "./snapshot";
-import { flagQuestion } from "./chat-store";
+import { flagQuestion, modeFor } from "./chat-store";
 import { leadEmailFor, upsertLead } from "./lead";
 import type { Onboarding2LeadRow, Onboarding2SigningRow, QualifyingAnswer } from "./types";
 
@@ -115,24 +122,32 @@ export const QUALIFYING_TOOLS = [
     description: "Which qualifying questions are answered and which are still outstanding.",
     input_schema: { type: "object" as const, properties: {} },
   },
-  {
-    name: "offer_booking",
-    description:
-      "Hand the conversation over to scheduling. Only works once every question is answered.",
-    input_schema: { type: "object" as const, properties: {} },
-  },
 ];
+
+// ‼️ `offer_booking` WAS REMOVED ON 2026-09-04 AND MUST NOT COME BACK. The call is booked BEFORE
+// the questions are asked now, so by the time the model has a turn there is nothing left to
+// offer: the scheduling state machine in app/api/onboarding2/chat/route.ts has already run and
+// the lead row already carries booked_slot_at. A tool that handed the conversation to scheduling
+// would hand it somewhere it has been.
+//
+// Its gate ("only works once every question is answered") is gone with it, and that is not a
+// loosening. The gate existed to stop the model skipping the form; the form now comes after the
+// commitment, so there is nothing to skip past.
 
 export function qualifyingPrompt(row: Onboarding2SigningRow, lead: Onboarding2LeadRow | null): string {
   const answered = new Set((lead?.qualifying ?? []).map((a) => a.key));
   const outstanding = QUALIFYING_QUESTIONS.filter((q) => !answered.has(q.key));
 
   return [
-    `You are the SRT Agency onboarding assistant. ${row.print_name || "This person"} has just signed the onboarding agreement for ${row.business_legal_name || "their business"}.`,
+    `You are the SRT Agency onboarding assistant. ${row.contact_name || row.print_name || "This person"} has just booked an onboarding call for ${row.business_legal_name || "their business"}.`,
     "",
     QUALIFYING_INTRO,
     "",
-    "YOUR JOB: ask the outstanding questions below, ONE AT A TIME, in order, conversationally. Call record_answer as soon as you have each answer. When all six are answered, call offer_booking.",
+    // ‼️ "WHEN THEY ARE ALL ANSWERED, STOP", NOT "CALL offer_booking". The call is already booked
+    // by the time this prompt is built, and the closing messages are sent by the route. This line
+    // said "when all six are answered" against a seven-item array for a day; the count is now
+    // never stated, because a number in prose is a number that goes stale on the next edit.
+    "YOUR JOB: ask the outstanding questions below, ONE AT A TIME, in order, conversationally. Call record_answer as soon as you have each answer. When every question is answered, say nothing further.",
     "",
     "RULES:",
     "1. One question per message. Never stack two.",
@@ -140,7 +155,7 @@ export function qualifyingPrompt(row: Onboarding2SigningRow, lead: Onboarding2Le
     // record_answer comes back with the next question already written and an instruction not to
     // ask anything else, which the model reads as an outcome rather than as a rule it can weigh.
     "2. NEVER ask a clarifying or confirming follow-up. Not one, ever. Take the first answer they give exactly as given, record it, and move to the next question. Do not ask which service they meant, do not ask whether they meant under or exactly, do not repeat their answer back to check it. A vague answer is an answer.",
-    "3. Never ask for their name, business name, website, email, phone, title, business address, or the date. All of that was collected before they signed and asking again reads as not listening.",
+    "3. Never ask for their name, business name, website, email, phone, title, business address, or the date. All of that was collected on the first screen and asking again reads as not listening.",
     "4. Record answers verbatim. Do not tidy or summarise what they said.",
     // ‼️ THE OPTIONS ARE ON SCREEN AS BUTTONS. The route sends them alongside every reply, from
     // the same question object this prompt was built from. A model that also reads them out gives
@@ -149,8 +164,13 @@ export function qualifyingPrompt(row: Onboarding2SigningRow, lead: Onboarding2Le
     "6. If they give an answer that does not fit the options, record what they said anyway. These are not a form.",
     "7. Keep every message under 40 words. This is a text message.",
     "8. Never use an em dash or an en dash. Use commas, periods and single hyphens.",
-    "9. Do not renegotiate, reinterpret or discuss the agreement. That conversation is over. If they raise it, tell them Matthew will pick it up on the call.",
-    "10. Never mention a calendar, a booking link, or a scheduling page. There is none in this flow.",
+    "9. Do not discuss, quote or interpret contract terms, pricing or the agreement. Nothing has been signed. If they raise any of it, tell them Matthew will go through it with them on the call.",
+    // ‼️ STILL RULE 10, AND STILL FOR THE SAME REASON, THOUGH THE FACT BEHIND IT CHANGED.
+    // There IS a calendar in this flow now, and their call is already booked by the time this
+    // prompt exists. The model must still never produce a link: the embed is rendered by the
+    // client from a URL the route returns on a turn the model never sees, so a link written here
+    // could only be one the model invented.
+    "10. Never mention a calendar, a booking link, or a scheduling page, and never offer to rebook. Their call is already booked. If they want to move it, tell them to use the reschedule link in their confirmation email.",
     "",
     "ALREADY ANSWERED, DO NOT ASK AGAIN:",
     answered.size ? Array.from(answered).join(", ") : "nothing yet",
@@ -179,9 +199,7 @@ export interface ExecutorContext {
   row: Onboarding2SigningRow;
   lead: Onboarding2LeadRow | null;
   ordinal: number;
-  /** Set by offer_booking once every question is answered. The route reads it. */
-  bookingOffered: boolean;
-  /** Set when the SIXTH answer lands, so the route posts the Slack reply exactly once. */
+  /** Set when the LAST answer lands, so the route posts the Slack reply exactly once. */
   justCompleted: boolean;
   /** Set when a turn was handed off as a price negotiation. Read by the blank-bubble fallback. */
   priceFlagged: boolean;
@@ -268,7 +286,7 @@ export function makeExecutor(ctx: ExecutorContext) {
       // right at $500?", which is a form arguing with somebody who already answered it. Handing
       // back the next question ALREADY WRITTEN, as a tool result, leaves nothing to decide: the
       // outstanding list is computed from stored answers, so this line cannot contradict what
-      // just happened. Same move stepPrecondition and the offer_booking gate below both make.
+      // just happened. Same move stepPrecondition makes.
       const nextUp = QUALIFYING_QUESTIONS.find((q) => !next.some((a) => a.key === q.key));
 
       return ok({
@@ -277,42 +295,8 @@ export function makeExecutor(ctx: ExecutorContext) {
         total: QUALIFYING_QUESTIONS.length,
         allDone: complete,
         say: complete
-          ? "Every question is answered. Call offer_booking now and say nothing else."
+          ? "Every question is answered. Say nothing at all, return an empty reply. The closing messages are already being sent."
           : `Acknowledge in at most five words, then ask this next, in your own sentence: "${nextUp?.question ?? ""}". Ask NOTHING else. Do not clarify, confirm, or repeat back the answer you just recorded. Do NOT list the answer options: they are already on screen as buttons under your message, and reading them out doubles them.`,
-      });
-    }
-
-    if (name === "offer_booking") {
-      const answered = (ctx.lead?.qualifying ?? []).length;
-      const outstanding = QUALIFYING_QUESTIONS.filter(
-        (q) => !(ctx.lead?.qualifying ?? []).some((a) => a.key === q.key)
-      ).map((q) => q.key);
-
-      // ‼️ THE GATE, AND IT LIVES HERE RATHER THAN IN THE PROMPT ON PURPOSE. It counts against
-      // QUALIFYING_QUESTIONS, so it followed the nine to six on its own. A prompt-level gate is
-      // one the model argues past, and it only has to happen once.
-      if (outstanding.length > 0) {
-        return ok({
-          offered: false,
-          reason: "Not every question is answered yet.",
-          answered,
-          outstanding,
-          say: `Do not move to scheduling yet. Ask about ${outstanding[0]} next.`,
-        });
-      }
-
-      ctx.bookingOffered = true;
-      await supabaseAdmin
-        .from("onboarding2_leads")
-        .update({ booking_offered_at: new Date().toISOString() })
-        .eq("email", leadEmailFor(ctx.row));
-
-      // ‼️ SAY NOTHING. The close is three fixed messages sent by the route, not written here.
-      // There is no calendar to point at and no link to offer, and the only way to guarantee the
-      // model never produces one is to give it nothing to say at this moment.
-      return ok({
-        offered: true,
-        say: "Say nothing at all. Return an empty reply. The scheduling messages are already being sent.",
       });
     }
 
@@ -360,7 +344,19 @@ export async function runTurn(args: {
 }): Promise<{ ok: boolean; response: string }> {
   if (!isAIConfigured()) return { ok: false, response: "" };
 
-  const grounded = !args.ctx.row.signed_at;
+  // ‼️ modeFor(), NOT `!row.signed_at`. THIS LINE WAS A SECOND, PRIVATE COPY OF THE MODE RULE AND
+  // IT DEAD-ENDED THE FUNNEL.
+  //
+  // chat-store.ts owns the question "which mode is this session in", and it was rewritten twice
+  // on 2026-09-04 as the agreement screens and then the identity form came out. This expression
+  // was not, because it never imported it: it re-derived the same fact from `signed_at`, which
+  // nothing sets any more. So modeFor() correctly said "qualifying", the route correctly ran the
+  // scheduling machine, and then every post-booking turn was handed the GROUNDED prompt and
+  // invited somebody who had just booked a call to ask questions about an agreement they had
+  // never seen. It answered "I have noted that the signing entity is Glow Clinic LLC."
+  //
+  // One reader now. A rule with two implementations has no owner.
+  const grounded = modeFor(args.ctx.row) === "grounded";
   const systemPrompt = grounded
     ? groundedPrompt(args.ctx.row.agreement_snapshot)
     : qualifyingPrompt(args.ctx.row, args.ctx.lead);

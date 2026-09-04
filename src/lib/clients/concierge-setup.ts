@@ -1,4 +1,4 @@
-// Steps 16 and 35: provisioning the AI Skin Concierge for one client.
+// Steps 17 and 33: provisioning the AI Concierge for one client.
 //
 // `concierge_preview` (before the call) creates the config row and hands back a link that
 // works, so the Concierge can be DEMOED LIVE on the call. That demo is the reason the offer's
@@ -15,10 +15,25 @@
 // are absent from that list on purpose: they are decisions made after this step, and a re-run
 // that reset them would silently take a live client's widget down or point their bookings at
 // nothing. If you add a column to concierge_configs, decide which list it belongs in.
+//
+// ‼️ THERE IS NOW A THIRD LIST, AND `audience` IS ITS ONLY MEMBER: SEEDED ONCE, NEVER RE-SEEDED.
+// It is not a per-run field, because a re-run that re-derived it would silently undo somebody's
+// correction, which is the exact failure the paragraph above exists to prevent. It is not a
+// never-touched field either, because until 2026-09-04 nothing wrote it at all and every client
+// provisioned so far inherited the column default 'patient'. SRT reads 'owner' only because
+// docs/2026-09-03-concierge-audience.sql updated one row by hand.
+//
+// So the row is read BEFORE the upsert and `audience` joins the payload only when there is no row
+// yet. What it is seeded WITH is a proposal, not a reading: see concierge/audience-proposal.ts for
+// why deriving it here does not violate that migration's "NEVER DERIVED FROM vertical", and why
+// concierge_live refuses until a person has pressed one of the two buttons on this card.
 
 import { supabaseAdmin } from "@/lib/db";
 import { notifyStep } from "./step-board";
 import type { AutoResult } from "./artifacts/registry";
+import { proposeAudience } from "@/lib/concierge/audience-proposal";
+import { conciergeLaneName } from "@/lib/concierge/lane-name";
+import { verticalFor } from "./harvest";
 
 /** Where the widget answers. Matches CONCIERGE_HOST in src/lib/hub/host-classify.ts. */
 export function conciergeHost(): string {
@@ -57,10 +72,10 @@ export function seedOrigins(domain: string | null, hosts: string[]): string[] {
 }
 
 /**
- * Step 16, `concierge_preview`. Creates the config row and posts the demo link.
+ * Step 17, `concierge_preview`. Creates the config row and posts the demo link.
  *
  * Idempotent by construction: a second run re-seeds the origins (a client who adds a hostname
- * next month wants that) and touches nothing else.
+ * next month wants that), seeds the audience only if there is no row, and touches nothing else.
  */
 export async function provisionConcierge(clientId: string): Promise<AutoResult> {
   const { data: client, error } = await supabaseAdmin
@@ -102,16 +117,33 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
   const url = conciergeFrameUrl(slug);
   const name = (client.dba_name || client.legal_name || "this client") as string;
 
-  // See the header: seeded fields only.
-  const { error: upsertError } = await supabaseAdmin.from("concierge_configs").upsert(
-    {
-      client_id: clientId,
-      vertical: (client.vertical_slug as string | null) || "medspa",
-      allowed_origins: origins,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "client_id" }
-  );
+  // ── The audience, read before it is written. See the header's third list. ──
+  //
+  // The vertical comes through verticalFor() rather than off the column, because that function is
+  // already this repo's answer to "what is this client" and it REFUSES rather than guessing. It
+  // used to end `?? "med_spa"`, which filed an AEO agency's forty harvested phrases under med_spa.
+  // A twelfth call site reading vertical_slug directly would be the twelfth chance to bring that
+  // back. Its `{ ok: false }` is not an error here, it is the ambiguous case.
+  const { data: existing } = await supabaseAdmin
+    .from("concierge_configs")
+    .select("audience, audience_confirmed_at")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  const resolved = await verticalFor(clientId);
+  const proposal = proposeAudience(resolved.ok ? resolved.vertical : null);
+
+  const seeded: Record<string, unknown> = {
+    client_id: clientId,
+    vertical: (client.vertical_slug as string | null) || "medspa",
+    allowed_origins: origins,
+    updated_at: new Date().toISOString(),
+  };
+  if (!existing) seeded.audience = proposal.audience;
+
+  const { error: upsertError } = await supabaseAdmin
+    .from("concierge_configs")
+    .upsert(seeded, { onConflict: "client_id" });
 
   if (upsertError) {
     // The table is created by docs/2026-09-01-concierge.sql. Saying so here saves somebody
@@ -120,9 +152,18 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
       ok: false,
       error:
         `concierge_configs upsert failed: ${upsertError.message}. ` +
-        `If this says the relation does not exist, docs/2026-09-01-concierge.sql has not been run.`,
+        `If this says the relation does not exist, docs/2026-09-01-concierge.sql has not been run. ` +
+        `If it names \`audience_confirmed_at\`, docs/2026-09-04-magnet-lane.sql has not been run.`,
     };
   }
+
+  // What the row says NOW: an existing row's own value survives, a new one carries the proposal.
+  const audience =
+    existing?.audience === "owner" || existing?.audience === "patient"
+      ? existing.audience
+      : proposal.audience;
+  const ratified = Boolean(existing?.audience_confirmed_at);
+  const lane = conciergeLaneName(audience);
 
   // output_ref is free text by design — the step-engine migration calls it "a PDF, a report id,
   // a URL" — so the frame URL is a first-class value here, the same as review_tool_preview.
@@ -136,26 +177,38 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
     clientId,
     "concierge_preview",
     [
-      `*AI Skin Concierge — ${name}*`,
+      `*${lane}, ${name}*`,
       `Preview: ${url}`,
       "",
       ":lock: Not live on their site. `enabled` is false until the `concierge_live` step, so " +
         "this link is for the call and nothing is running on their domain yet.",
+      "",
+      // ‼️ THE AUDIENCE IS STATED ON THE CARD WHETHER OR NOT IT NEEDS CHANGING, because the
+      // failure being prevented is nobody noticing. A silently defaulted 'patient' looks exactly
+      // like a chosen one until a clinic's visitors are offered a call with an AEO agency.
+      ratified
+        ? `:white_check_mark: *Audience: ${audience}.* Confirmed, so the ${lane} is the right ` +
+          `bot for these people.`
+        : `:grey_question: *Audience: ${audience}, not yet confirmed.* ${proposal.reason}\n` +
+          `Press one of the two buttons below. \`concierge_live\` refuses until somebody has.`,
       "",
       origins.length
         ? `Embed allowlist seeded with ${origins.length}: ${origins.join(", ")}`
         : ":warning: No embed origins could be seeded. The widget will only frame on its own " +
           "hostname until this client has a `domain` or an attached hub host.",
       "",
-      "• Walk it on the call. The scan is the demo, not the slide.",
-      // ‼️ THE BOOKING-BOT ASK IS PINNED TO THE MOMENT THE SCAN FINISHES, and this post is the
+      "• Walk it on the call. The demo is the thing itself, not the slide.",
+      // ‼️ THE BOOKING-BOT ASK IS PINNED TO THE MOMENT THE DEMO FINISHES, and this post is the
       // one that hands over the link, so it is where the reminder belongs. Their answer sets the
       // terms of the engagement, and it is the only condition on the five-patient guarantee.
-      "• *The moment the scan finishes, ask whether they want the appointment booking bot.* Yes " +
+      "• *The moment the demo finishes, ask whether they want the appointment booking bot.* Yes " +
         "puts them on the guarantee, no makes it $499/month flat. Wording is on the `call_held` " +
         "card, and write the answer in your call notes.",
-      "• The analysis provider is `mock` until a vendor is chosen, so the scores are synthetic " +
-        "and the skin age is deliberately blank. Do not read them out as measurements.",
+      audience === "patient"
+        ? "• The analysis provider is `mock` until a vendor is chosen, so the scores are synthetic " +
+          "and the skin age is deliberately blank. Do not read them out as measurements."
+        : "• This lane runs no photo analysis at all. It answers from the market dataset, so " +
+          "anything it names is measured, and it says so when a city has not been measured.",
       hostWarning,
     ]
       .filter(Boolean)
@@ -164,6 +217,8 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
 
   return {
     ok: true,
-    note: `Concierge preview ready at ${url}, ${origins.length} embed origin(s) seeded`,
+    note:
+      `${lane} preview ready at ${url}, ${origins.length} embed origin(s) seeded, ` +
+      `audience ${audience}${ratified ? " (confirmed)" : " (awaiting confirmation)"}`,
   };
 }

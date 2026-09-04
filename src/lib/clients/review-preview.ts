@@ -78,10 +78,16 @@ export const PREVIEW_TOKEN_TTL_DAYS = 14;
  * than a card saying the link could not be minted. Same tri-state discipline as BOOKING_LINK and
  * site_signals: an absent thing says it is absent.
  */
-export function clientPreviewUrl(clientId: string, kind: "hub" | "reviews" = "hub"): string | null {
+export function clientPreviewUrl(
+  clientId: string,
+  // "site" is the replica of their OWN website (src/lib/clients/site-replica.ts). It rides the
+  // same signed preview token as the other two rather than minting a scheme of its own: one
+  // token type, one TTL, one revocation story.
+  kind: "hub" | "reviews" | "site" = "hub"
+): string | null {
   try {
     const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
-    return `${appUrl()}/preview/${token}${kind === "reviews" ? "?kind=reviews" : ""}`;
+    return `${appUrl()}/preview/${token}${kind === "hub" ? "" : `?kind=${kind}`}`;
   } catch (e) {
     console.error("[clients/review-preview] preview link not minted:", (e as Error).message);
     return null;
@@ -89,9 +95,22 @@ export function clientPreviewUrl(clientId: string, kind: "hub" | "reviews" = "hu
 }
 
 /** The line a step card prints for a preview link, or the honest absence of one. */
-export function previewLinkLine(url: string | null, what: string): string {
+export function previewLinkLine(
+  url: string | null,
+  what: string,
+  /**
+   * What the link actually shows.
+   *
+   * A PARAMETER BECAUSE THE DEFAULT SENTENCE IS FALSE FOR THE SITE REPLICA. "shows published
+   * pages only" is the load-bearing promise for the hub and review previews and it must keep
+   * being said there. The replica has no published state to filter on at all, so printing that
+   * sentence under a replica link would be this file telling a client something untrue about
+   * what they are looking at.
+   */
+  shows: string = "shows published pages only"
+): string {
   return url
-    ? `*${what}, safe to screen-share:* ${url}\nIt needs no login, shows published pages only, and is noindex. It expires in ${PREVIEW_TOKEN_TTL_DAYS} days.`
+    ? `*${what}, safe to screen-share:* ${url}\nIt needs no login, ${shows}, and is noindex. It expires in ${PREVIEW_TOKEN_TTL_DAYS} days.`
     : `*No shareable ${what.toLowerCase()} link could be minted*: CLIENT_LINK_SECRET is not set on this environment, so nothing can sign one. Set it and this prints a URL.`;
 }
 

@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { frameAncestorsFor, loadConciergeConfig } from "@/lib/concierge/config";
+import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,12 +41,32 @@ function notFound(): NextResponse {
 export async function GET(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const config = await loadConciergeConfig(slug);
-  if (!config || !config.enabled) return notFound();
+  // A signed preview token for THIS client is the one thing that opens a switched-off tenant.
+  // Without it this route 404s, which is what made the demo link concierge_preview posts before
+  // the call dead on arrival. See src/lib/concierge/preview-grant.ts.
+  const previewToken = new URL(req.url).searchParams.get(PREVIEW_TOKEN_PARAM);
+  if (!config || !conciergeAllowed(config, previewToken)) return notFound();
 
   const ancestors = await frameAncestorsFor(config);
   const q = new URL(req.url).searchParams;
   const category = (q.get("category") ?? "").slice(0, 40);
   const city = (q.get("city") ?? "").slice(0, 120);
+  // The offer the PAGE named. Bounded and lowercased before it reaches a query, the same way the
+  // config route bounds it: everything on this line arrived from a third party's markup.
+  const magnet = (q.get("magnet") ?? "").slice(0, 60).toLowerCase();
+
+  // ‼️ THE PROTECTION TOKEN, CARRIED INTO THIS DOCUMENT'S OWN FETCHES. Same reason embed.js
+  // forwards it: on a protected preview, /api/concierge/start and /turn are behind SSO too, and
+  // this frame is cross-site so no bypass cookie reaches them. Only Vercel's own params are
+  // copied, and in production there are none, so `pass` is empty and nothing below changes.
+  // ‼️ THE PREVIEW TOKEN RIDES THE SAME CHANNEL AS THE PROTECTION PARAMS, deliberately. This
+  // document's own fetches to /start and /turn are the ones that need it, and `pass` is already
+  // the mechanism that carries a query param into every one of them. A second mechanism for the
+  // same job would be a second place to forget.
+  const pass = [...q.entries()]
+    .filter(([k]) => k.startsWith("x-vercel-") || k === PREVIEW_TOKEN_PARAM)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
   const path = (q.get("path") ?? "").slice(0, 500);
   const host = (q.get("host") ?? "").slice(0, 200);
 
@@ -59,23 +80,29 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
 <meta name="robots" content="noindex,nofollow">
 <title>${esc(title)}</title>
 <style>
-:root{--bg:#fff;--fg:#111;--mut:#666;--line:#e5e5e5;--me:#111;--meFg:#fff;--acc:#111}
-@media(prefers-color-scheme:dark){:root{--bg:#141414;--fg:#f2f2f2;--mut:#9a9a9a;--line:#2c2c2c;--me:#f2f2f2;--meFg:#141414;--acc:#f2f2f2}}
+/* onboarding2's chat bubble, in the palette Matthew picked for it: a near black ground and
+   #00C9A7 as the single accent. ONE LOOK, NO prefers-color-scheme BRANCH, and that is a choice
+   rather than an omission. This document renders inside somebody else's page, so a widget that
+   flips to white because the visitor's OS is in light mode would sit on a dark client site as a
+   glaring rectangle. The panel around it in embed.js is painted #0b1416 to match, and the two are
+   the same object: change one and change the other. */
+:root{--bg:#0b1416;--fg:#eaf4f3;--mut:#8fa9a8;--line:#1d2c2e;--card:#152325;--me:#00C9A7;--meFg:#04252b;--acc:#00C9A7;--accFg:#04252b}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column}
-header{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
+header{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:700;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--acc)}
 #log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
 .b{max-width:86%;padding:10px 13px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word}
-.a{background:transparent;border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
-.u{background:var(--me);color:var(--meFg);align-self:flex-end;border-bottom-right-radius:4px}
+.a{background:var(--card);align-self:flex-start;border-bottom-left-radius:5px}
+.u{background:var(--me);color:var(--meFg);align-self:flex-end;border-bottom-right-radius:5px;font-weight:500}
 .cite{font-size:12px;color:var(--mut);align-self:flex-start;max-width:86%;padding-left:2px}
-a.att{display:inline-block;margin-top:8px;padding:9px 14px;background:var(--acc);color:var(--bg);border-radius:10px;text-decoration:none;font-weight:600;font-size:14px}
+a.att{display:inline-block;margin-top:8px;padding:9px 14px;background:var(--acc);color:var(--accFg);border-radius:999px;text-decoration:none;font-weight:700;font-size:14px}
 .slots{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-a.slot{flex:1 1 44%;text-align:center;padding:11px 10px;border:1px solid var(--acc);border-radius:10px;text-decoration:none;color:var(--fg);font-weight:600;font-size:14px;white-space:nowrap}
+a.slot{flex:1 1 44%;text-align:center;padding:11px 10px;border:1px solid var(--acc);border-radius:999px;text-decoration:none;color:var(--acc);font-weight:600;font-size:14px;white-space:nowrap}
 form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
-input{flex:1;min-width:0;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--fg);font-size:16px}
-button{padding:11px 16px;border:0;border-radius:10px;background:var(--acc);color:var(--bg);font-weight:600;font-size:15px;cursor:pointer}
+input{flex:1;min-width:0;padding:11px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--fg);font-size:16px}
+input::placeholder{color:var(--mut)}
+button{padding:11px 18px;border:0;border-radius:999px;background:var(--acc);color:var(--accFg);font-weight:700;font-size:15px;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
 .dots{color:var(--mut);font-size:13px;padding-left:4px}
 </style></head><body>
@@ -84,7 +111,9 @@ button:disabled{opacity:.45;cursor:default}
 <form id="f" autocomplete="off"><input id="i" placeholder="Type here" aria-label="Your message" maxlength="1200" disabled><button id="s" disabled>Send</button></form>
 <script>
 (function(){
- var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
+ var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},magnet:${JSON.stringify(magnet)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
+ var PASS=${JSON.stringify(pass)};
+ function api(p){return PASS?p+(p.indexOf("?")<0?"?":"&")+PASS:p}
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
  var token=null,busy=false;
  // ‼️ THE VISITOR'S ZONE, READ IN THE VISITOR'S BROWSER. The calendar has to offer THEIR today.
@@ -124,8 +153,8 @@ button:disabled{opacity:.45;cursor:default}
 
  function lock(on){busy=on;input.disabled=on;send.disabled=on;if(!on){input.focus()}}
 
- fetch('/api/concierge/start',{method:'POST',headers:{'content-type':'application/json'},
-  body:JSON.stringify({slug:CFG.slug,category:CFG.category,city:CFG.city,path:CFG.path,host:CFG.host})})
+ fetch(api('/api/concierge/start'),{method:'POST',headers:{'content-type':'application/json'},
+  body:JSON.stringify({slug:CFG.slug,category:CFG.category,magnet:CFG.magnet,city:CFG.city,path:CFG.path,host:CFG.host})})
  .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
  .then(function(d){token=d.token;bubble('a',d.opening);lock(false);height()})
  .catch(function(){bubble('a','This is not available right now.')});
@@ -136,7 +165,7 @@ button:disabled{opacity:.45;cursor:default}
   if(!text||busy||!token)return;
   input.value='';bubble('u',text);lock(true);
   var wait=el('dots','...');
-  fetch('/api/concierge/turn',{method:'POST',headers:{'content-type':'application/json'},
+  fetch(api('/api/concierge/turn'),{method:'POST',headers:{'content-type':'application/json'},
    body:JSON.stringify({token:token,message:text,tz:tz})})
   .then(function(r){return r.json()})
   .then(function(d){

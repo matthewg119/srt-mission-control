@@ -38,6 +38,7 @@ import {
   type EvidenceRef,
 } from "@/lib/clients/page-evidence";
 import type { EvidenceClaim } from "@/lib/hub/draft-page";
+import { offerForPage } from "@/lib/concierge/for-client";
 
 /**
  * Every path that consults this gate. Documentation, not enforcement: enforcement is the call
@@ -64,6 +65,12 @@ export const NOT_GATED = [
   "hub/pages.ts startPageDraft / appendPageBody  (the page studio)",
   "the preview route",
   "the review tool",
+  // The site replica (client_replica_pages, /preview/{token}?kind=site). It is OUTSIDE this
+  // gate rather than waived from it, and the distinction is structural: replica rows are not
+  // client_pages, they have no status column, and there is no code path that could put one on a
+  // client host. A gate exists to stop something publishable from publishing badly; there is
+  // nothing publishable here. See src/lib/clients/site-replica.ts.
+  "the site replica",
 ] as const;
 
 export type CheckTier = "block" | "warn";
@@ -294,6 +301,59 @@ function checkNoEvidence(evidence: EvidenceRef[]): GateCheck {
     tier: "block",
     status: "pass",
     detail: `${usable.length} source${usable.length === 1 ? "" : "s"} on file.`,
+  };
+}
+
+/**
+ * What the concierge will actually offer on this page once it is live.
+ *
+ * !! TWO TIERS OUT OF ONE CHECK, AND THE LINE IS THE ONE THIS FILE ALREADY DRAWS.
+ *
+ *   BLOCK when nothing resolves at all. The launcher still renders and still carries a label, so
+ *          a visitor is shown a button that hands over nothing. `A magnet is a promise` in
+ *          concierge/magnets.ts refuses that one row at a time and `resolveBooking` refuses it
+ *          for the call; this is the same refusal asked about a whole page before it is live on
+ *          the client's own domain. It is publishable-and-false, which is the block tier's rule.
+ *
+ *   WARN  when the page named no magnet but the ladder still reaches one. The offer is generic
+ *          rather than absent, which is weak and not wrong. Matthew's instruction is that the
+ *          magnet is chosen before drafting, and this is where a page that skipped that says so,
+ *          but blocking on it would refuse every page written before the column existed and a
+ *          rail everybody steps over is worse than no rail.
+ */
+async function checkMagnet(clientId: string, magnetKey: string | null): Promise<GateCheck> {
+  const { magnet, chosen } = await offerForPage(clientId, magnetKey);
+
+  if (!magnet) {
+    return {
+      key: "no_magnet",
+      tier: "block",
+      status: "fail",
+      detail: chosen
+        ? `This page is written toward "${magnetKey}", and that magnet no longer resolves. It was ` +
+          `deactivated, renamed, or its asset is gone. The widget would still show a pill and hand ` +
+          `over nothing. Pick a magnet that exists on the board, or fix the row.`
+        : "This page names no lead magnet and the ladder reaches none either, so the widget would " +
+          "show a pill that hands over nothing. Choose the magnet on the board before publishing.",
+    };
+  }
+
+  if (!chosen) {
+    return {
+      key: "no_magnet",
+      tier: "warn",
+      status: "fail",
+      detail:
+        `No magnet was chosen for this page, so the widget falls back to "${magnet.title}" for ` +
+        `every page on this hub. Choose the one this page actually earns.`,
+    };
+  }
+
+  return {
+    key: "no_magnet",
+    tier: "warn",
+    status: "pass",
+    detail: `Written toward "${magnet.title}".`,
   };
 }
 
@@ -575,6 +635,7 @@ interface PageRow {
   answer_md: string;
   meta_description: string | null;
   evidence_map: EvidenceClaim[] | null;
+  lead_magnet_key: string | null;
 }
 
 /**
@@ -590,7 +651,7 @@ export async function runGate(
 ): Promise<{ ok: true; run: GateRun } | { ok: false; error: string }> {
   const { data: pageData, error: pageError } = await supabaseAdmin
     .from("client_pages")
-    .select("id, title, question, answer_md, meta_description, evidence_map")
+    .select("id, title, question, answer_md, meta_description, evidence_map, lead_magnet_key")
     .eq("id", pageId)
     .eq("client_id", clientId)
     .maybeSingle();
@@ -616,6 +677,7 @@ export async function runGate(
 
   const checks: GateCheck[] = [
     checkNoEvidence(evidence),
+    await checkMagnet(clientId, page.lead_magnet_key),
     checkUnbackedClaims(evidenceMap),
     checkOrphanNumbers(body, evidence),
     await checkDuplicate(clientId, pageId, body),

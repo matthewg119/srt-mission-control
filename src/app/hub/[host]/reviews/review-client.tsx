@@ -19,6 +19,20 @@
 //   2. A READABILITY HINT that POINTS at long sentences and never supplies different ones.
 //
 // Both are below. Neither may quietly become the thing that was declined.
+//
+// ‼️ 2026-09-04 ADDED A STAR RATING, AN ATTESTATION AND A PRIVATE NOTE. Three features that
+// each look like the thing this file refuses, and are not, for one reason apiece:
+//
+//   - THE STARS ROUTE NOTHING. Gating is a rating that decides whether she sees the public
+//     review link. Here every value 1 to 5 reaches the same questions, the same editable box
+//     and the same destination links. The stars are captured for the client's own reporting.
+//   - THE PRIVATE NOTE IS BELOW THE LINKS AND OFFERED TO EVERYONE. It adds a channel; it
+//     removes none. Conditioning it on a low rating would rebuild the gating funnel exactly.
+//   - THE ATTESTATION GATES THE COPY BUTTON AND NOTHING ELSE. It is evidence, not a filter.
+//
+// scripts/_probe-review-gating.ts asserts the first two by rendering the component at every
+// rating and diffing the output. If you add a branch that reads `rating`, that probe fails,
+// and it is supposed to.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -103,6 +117,23 @@ export function ReviewClient({
   const [copied, setCopied] = useState(false);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // The rating, and the one thing it is allowed to do
+  //
+  // ‼️ IT OPENS THE PAGE AND IT ROUTES NOTHING. There is no branch anywhere below that reads
+  // `rating` to decide which questions to show, whether to reveal the notes, or whether to
+  // render a destination link. A one and a five walk the identical path to the identical
+  // button. That is not a nicety: routing by rating is review gating, which Google's Business
+  // Profile policy prohibits outright and which FTC 16 CFR Part 465 reaches as suppression.
+  //
+  // `privateNote` is an ADDITION offered alongside the public path, never a substitute for it.
+  // The moment it replaces the review link for anybody, this file is doing the thing it was
+  // built not to do. scripts/_probe-review-gating.ts fails the build if that changes.
+  // ───────────────────────────────────────────────────────────────────────────
+  const [rating, setRating] = useState<number | null>(null);
+  const [privateNote, setPrivateNote] = useState("");
+  const [attested, setAttested] = useState(false);
+
   // Detected after mount so the server render and the first client render agree. Doing this
   // during render would hydrate a button that is not in the server HTML.
   const [micAvailable, setMicAvailable] = useState(false);
@@ -184,7 +215,15 @@ export function ReviewClient({
       const res = await fetch("/api/hub/reviews/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ clientId, answers, submissionId, postedDestination }),
+        body: JSON.stringify({
+          clientId,
+          answers,
+          submissionId,
+          postedDestination,
+          rating,
+          privateNote: privateNote.trim() || undefined,
+          attested,
+        }),
       });
       const json = (await res.json()) as { id?: string };
       if (json.id) setSubmissionId(json.id);
@@ -235,12 +274,36 @@ export function ReviewClient({
       */}
       <header className="hub-head">
         <p className="hub-eyebrow">{businessName}</p>
-        <h1>Four questions, in your own words</h1>
+        <h1>Leave us a review</h1>
         <p className="hub-lede">
           About ninety seconds. Answer whichever you like and skip the rest. Nothing is posted
           unless you post it yourself.
         </p>
       </header>
+
+      {/*
+        ‼️ THE STARS DECIDE NOTHING. Read the state declaration above before adding any branch
+        that reads `rating`. Every value leads to the same four questions below, which are
+        rendered unconditionally and are NOT nested inside this block.
+      */}
+      <fieldset className="rev-stars">
+        <legend>How would you rate your experience?</legend>
+        <div className="rev-stars-row" role="radiogroup" aria-label="Rating out of five">
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button
+              key={n}
+              type="button"
+              role="radio"
+              aria-checked={rating === n}
+              aria-label={`${n} star${n === 1 ? "" : "s"}`}
+              className={rating !== null && n <= rating ? "is-on" : undefined}
+              onClick={() => setRating(n)}
+            >
+              <span aria-hidden="true">★</span>
+            </button>
+          ))}
+        </div>
+      </fieldset>
 
       {needsSpanish && (
         // Rendered rather than hidden, because a Spanish-speaking customer being handed
@@ -354,7 +417,32 @@ export function ReviewClient({
             </p>
           )}
 
-          <button type="button" className="rev-primary" onClick={copy}>
+          {/*
+            ‼️ THE ATTESTATION IS THE EVIDENCE, WHICH IS WHY IT GATES THE COPY BUTTON AND
+            NOTHING ELSE. FTC 16 CFR Part 465 is about reviews from people who were not
+            customers and words the customer did not write. One checkbox, stored with a
+            timestamp, is the difference between believing these are genuine and being able to
+            show it. It does not gate the questions, the assembly or the destination links,
+            because it is not a rating and must never behave like one.
+          */}
+          <label className="rev-attest">
+            <input
+              type="checkbox"
+              checked={attested}
+              onChange={(e) => {
+                setAttested(e.target.checked);
+                setCopied(false);
+              }}
+            />
+            <span>I am a real customer of this business and these are my own words.</span>
+          </label>
+
+          <button
+            type="button"
+            className="rev-primary"
+            onClick={copy}
+            disabled={!attested}
+          >
             {copied ? "Copied" : "Copy and go"}
           </button>
 
@@ -380,6 +468,30 @@ export function ReviewClient({
               Copy your words, then paste them into your review on Google.
             </p>
           )}
+
+          {/*
+            ‼️ AFTER THE DESTINATION LINKS, NEVER INSTEAD OF THEM, AND OFFERED TO EVERYONE.
+            The gating pattern this tool refuses is: low rating, private form, no public link.
+            So this box sits BELOW the links in the DOM, is not conditional on `rating`, and
+            takes nothing away. Making it appear only under a low rating would rebuild the
+            funnel that FTC 16 CFR Part 465 and Google's policy exist to stop, one prop at a
+            time.
+          */}
+          <details className="rev-private">
+            <summary>Something you would rather tell {businessName} privately?</summary>
+            <p className="rev-hint">
+              This goes to the business and is not posted anywhere.
+            </p>
+            <textarea
+              rows={3}
+              value={privateNote}
+              onChange={(e) => setPrivateNote(e.target.value)}
+              placeholder="Optional"
+            />
+            <button type="button" className="rev-secondary" onClick={() => void store()}>
+              Send privately
+            </button>
+          </details>
         </>
       )}
     </>

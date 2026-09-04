@@ -37,6 +37,7 @@ import {
   CHAT_FAQS,
   CHAT_HARD_LINES,
   CLOSING_MESSAGES,
+  SCHEDULING_INTRO,
   QUALIFYING_QUESTIONS,
   SCHEDULING_UI,
   TIMEZONE_OPTIONS,
@@ -92,12 +93,42 @@ function fakeInitial(pageNo: number, sections: number[], at: string): InitialRow
 async function main(): Promise<void> {
   const snapshot = await buildSnapshot();
 
-  const unsigned = { signed_at: null, agreement_snapshot: snapshot } as Onboarding2SigningRow;
-  const signed = { signed_at: "2026-09-01T00:00:00Z", agreement_snapshot: snapshot } as Onboarding2SigningRow;
+  // !! `unsigned` AND `signed` NOW MEAN "BEFORE AND AFTER SCREEN ONE", NOT BEFORE AND AFTER A
+  // SIGNATURE. modeFor() keys on `email` since 2026-09-04, because nothing sets signed_at any
+  // more and keying on it would pin every new session to grounded mode forever. The variable
+  // names are kept so the rest of this 500-line probe still reads, and signed_at is left on the
+  // fixture to prove it is no longer what decides.
+  const unsigned = { signed_at: null, email: null, agreement_snapshot: snapshot } as Onboarding2SigningRow;
+  const signed = {
+    signed_at: null,
+    email: "owner@example.com",
+    agreement_snapshot: snapshot,
+  } as Onboarding2SigningRow;
 
   // ── The mode gate ──
-  check("an unsigned session is grounded", modeFor(unsigned) === "grounded");
-  check("a signed session is qualifying", modeFor(signed) === "qualifying");
+  //
+  // ‼️ IT IS UNCONDITIONAL NOW, AND THAT IS THE ASSERTION WORTH MAKING. This checked
+  // `signed_at`, then `email`, as the agreement screens and then the identity form came out.
+  // Both were wrong the moment the thing they keyed on stopped being collected before the chat:
+  // the email became the FIFTH question in the conversation, so keying on it ran the first four
+  // turns in grounded mode and the scheduling branch never fired. There is no phase left in this
+  // funnel where an agreement is on screen, so there is no phase grounded mode describes.
+  check("every session is qualifying, whatever is on the row", modeFor(unsigned) === "qualifying");
+  check("a row with an email is qualifying too", modeFor(signed) === "qualifying");
+
+  // ‼️ THE SECOND COPY OF THIS RULE IS THE ONE THAT BIT. runTurn() re-derived the mode from
+  // `!row.signed_at` instead of importing modeFor, so post-booking turns were handed the
+  // GROUNDED prompt and asked somebody who had just booked a call to ask questions about an
+  // agreement they had never seen. A rule with two implementations has no owner.
+  const chatSrc = fs.readFileSync(
+    path.join(process.cwd(), "src/lib/onboarding2/chat.ts"),
+    "utf8"
+  );
+  check(
+    "runTurn reads the mode from modeFor, not from a private copy of the rule",
+    /const grounded = modeFor\(/.test(chatSrc) && !/const grounded = !args\.ctx\.row\.signed_at/.test(chatSrc),
+    "runTurn is deriving the mode itself again"
+  );
 
   // ── Grounded mode has exactly one tool, and it cannot write anything ──
   check("grounded mode has exactly one tool", GROUNDED_TOOLS.length === 1, `got ${GROUNDED_TOOLS.length}`);
@@ -297,12 +328,23 @@ async function main(): Promise<void> {
     !QUALIFYING_QUESTIONS.some((q) => ["website", "top_objection", "top_competitor"].includes(q.key)),
     QUALIFYING_QUESTIONS.map((q) => q.key).join(",")
   );
+  // ‼️ business_name IS QUESTION ONE SINCE 2026-09-04. The identity form used to collect it
+  // before anything else; the chat intake that replaced the form asks four things and not this,
+  // because it is not needed to BOOK. It is needed afterwards: clients.legal_name is NOT NULL and
+  // startPilot falls back to the EMAIL ADDRESS without it.
   check(
-    "question one is open text",
-    QUALIFYING_QUESTIONS[0].key === "highest_margin_service" &&
+    "question one asks for the business name, in their own words",
+    QUALIFYING_QUESTIONS[0].key === "business_name" &&
       QUALIFYING_QUESTIONS[0].freeText === true &&
       QUALIFYING_QUESTIONS[0].options.length === 0,
     JSON.stringify(QUALIFYING_QUESTIONS[0])
+  );
+  check(
+    "the margin question is still open text, right after it",
+    QUALIFYING_QUESTIONS[1].key === "highest_margin_service" &&
+      QUALIFYING_QUESTIONS[1].freeText === true &&
+      QUALIFYING_QUESTIONS[1].options.length === 0,
+    JSON.stringify(QUALIFYING_QUESTIONS[1])
   );
   // ‼️ TWO OPEN-TEXT QUESTIONS NOW, NOT ONE. highest_margin_service and primary_treatment are both
   // free text on purpose: each one ends up interpolated into generated copy, so a menu would put
@@ -348,27 +390,38 @@ async function main(): Promise<void> {
     ""
   );
 
-  // ── THE GATE THAT MATTERS: scheduling is refused below 6 of 6 ──
-  // One short of complete, derived rather than typed, so adding a question moves the gate with it.
+  // ── THE GATE THAT MATTERS, INVERTED 2026-09-04 ──
+  //
+  // There is no longer an offer_booking tool to refuse. The call is booked BEFORE the questions
+  // are asked, by the deterministic state machine in app/api/onboarding2/chat/route.ts, so the
+  // thing worth asserting is that the model has NO tool that could reach scheduling at all.
+  // Absent beats refused, which is the same lesson GROUNDED_TOOLS records at the top of chat.ts.
+  const toolNames = QUALIFYING_TOOLS.map((t) => t.name);
+  check(
+    "the qualifying toolset cannot reach scheduling",
+    !toolNames.includes("offer_booking"),
+    `tools: ${toolNames.join(", ")}`
+  );
+
+  // One short of complete, derived rather than typed, so adding a question moves this with it.
   const oneShort = QUALIFYING_QUESTIONS.length - 1;
   const ctx5: ExecutorContext = {
-    row: signed, lead: fakeLead(oneShort), ordinal: 0, bookingOffered: false, justCompleted: false, priceFlagged: false,
+    row: signed, lead: fakeLead(oneShort), ordinal: 0, justCompleted: false, priceFlagged: false,
   };
-  const at5 = JSON.parse(
-    (await makeExecutor(ctx5)("offer_booking", {})).content
-  ) as { offered: boolean; outstanding?: string[] };
+  const progress = JSON.parse(
+    (await makeExecutor(ctx5)("get_progress", {})).content
+  ) as { outstanding?: string[]; total?: number };
 
   check(
-    "offer_booking is REFUSED one question short, by the executor and not by the prompt",
-    at5.offered === false,
-    at5.offered ? "The gate is open early. A prompt-level gate is one the model argues past." : ""
+    "get_progress reports exactly one question outstanding, one short of complete",
+    Array.isArray(progress.outstanding) && progress.outstanding.length === 1,
+    JSON.stringify(progress.outstanding)
   );
   check(
-    "the refusal names what is still outstanding",
-    Array.isArray(at5.outstanding) && at5.outstanding.length === 1,
-    JSON.stringify(at5.outstanding)
+    "get_progress counts against QUALIFYING_QUESTIONS, so adding a question moves it",
+    progress.total === QUALIFYING_QUESTIONS.length,
+    `total ${progress.total}, questions ${QUALIFYING_QUESTIONS.length}`
   );
-  check("ctx.bookingOffered stays false one question short", ctx5.bookingOffered === false);
 
   // ── THE NO-CLARIFYING GATE, in the executor ──
   //
@@ -384,10 +437,27 @@ async function main(): Promise<void> {
     /Ask NOTHING else\. Do not clarify, confirm, or repeat back/.test(executorSrc),
     "the no-follow-ups rule has to be a tool RESULT, not only a prompt line"
   );
+  // !! THE TOOL IS GONE, SO THE ASSERTION IS ABOUT ITS ABSENCE (2026-09-04). It used to be
+  // handed back "Say nothing at all. Return an empty reply", so the close could not come from the
+  // model. The call is now booked BEFORE the questions, by a state machine the model never sees,
+  // so there is no tool to instruct. Absent beats instructed.
+  //
+  // ‼️ IT STRIPS COMMENTS FIRST, AND THAT IS NOT A LOOPHOLE. chat.ts names offer_booking three
+  // times on purpose, recording what it was and why it must not come back, and a check that
+  // punished the file for documenting its own history would push somebody to delete the note
+  // rather than the tool. What must not exist is a BRANCH.
+  const executorCode = executorSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
   check(
-    "offer_booking tells the model to say nothing, so the close cannot come from it",
-    /Say nothing at all\. Return an empty reply/.test(executorSrc),
-    ""
+    "the executor has no offer_booking branch, so nothing can reach scheduling from a turn",
+    !/offer_booking/.test(executorCode),
+    "an offer_booking branch is back in makeExecutor"
+  );
+  check(
+    "no tool result tells the model to call a tool that does not exist",
+    !/Call offer_booking/.test(executorCode),
+    "record_answer is handing back an instruction naming a removed tool"
   );
   check(
     "record_answer's description tells it to record the first answer, vague or not",
@@ -499,7 +569,7 @@ async function main(): Promise<void> {
 
   // ── The price gate, in the executor rather than the prompt ──
   const ctxPrice: ExecutorContext = {
-    row: unsigned, lead: null, ordinal: 0, bookingOffered: false, justCompleted: false,
+    row: unsigned, lead: null, ordinal: 0, justCompleted: false,
     priceFlagged: false,
   };
   const flagged = JSON.parse(
@@ -531,11 +601,24 @@ async function main(): Promise<void> {
     CLOSING_MESSAGES.length === 3,
     `got ${CLOSING_MESSAGES.length}`
   );
+  // !! THE DAYPART QUESTION MOVED OUT OF THE CLOSE AND INTO THE OPENER (2026-09-04).
+  // CLOSING_MESSAGES used to end the questions by asking "mornings or afternoons?", because
+  // scheduling came last. Scheduling comes first now, so that line lives in SCHEDULING_INTRO and
+  // the close is the wrap-up after the last answer.
   check(
-    "the close asks mornings or afternoons and offers no link",
-    /mornings or afternoons/i.test(CLOSING_MESSAGES[2]) &&
-      !CLOSING_MESSAGES.some((m) => /http|calendly|calendar|link/i.test(m)),
-    CLOSING_MESSAGES.join(" | ")
+    "the opener asks mornings or afternoons",
+    SCHEDULING_INTRO.some((m) => /mornings or afternoons/i.test(m)),
+    SCHEDULING_INTRO.join(" | ")
+  );
+  // !! STILL NO LINK IN ANY MODEL-ADJACENT COPY, AND THIS IS THE ASSERTION WORTH KEEPING.
+  // There IS a calendar in the funnel now, but its URL is a field on a route response that the
+  // model never sees. Nothing in the fixed copy may carry one.
+  check(
+    "neither the opener nor the close carries a calendar link",
+    ![...CLOSING_MESSAGES, ...SCHEDULING_INTRO].some((m) =>
+      /http|calendly|calendar|link/i.test(m)
+    ),
+    [...CLOSING_MESSAGES, ...SCHEDULING_INTRO].join(" | ")
   );
 
   // 2026-09-03 is a Thursday. 08:00 local is before both cutoffs; 20:00 is after both.
@@ -722,7 +805,13 @@ async function main(): Promise<void> {
       ? { ...a, answer: "Injectables, Botox and filler" }
       : a.key === "booking_software"
         ? { ...a, answer: "Boulevard" }
-        : a
+        // ‼️ THE BUSINESS NAME IS AN ANSWER NOW, NOT A SIGNATURE FIELD. This fixture used to set
+        // it only on the signing row, and the check below passed because that was the only
+        // source. It is the fallback now, so an answer of "something" (fakeLead's filler) would
+        // win and land in clients.legal_name.
+        : a.key === "business_name"
+          ? { ...a, answer: "Glow Clinic LLC" }
+          : a
   );
 
   const { patch, domain } = intakePatchFrom(
@@ -780,10 +869,14 @@ async function main(): Promise<void> {
     typeof patch.intake_completed_at === "string",
     ""
   );
+  // ‼️ THE ANSWER WINS OVER THE SIGNING ROW. `business_legal_name` was typed into a signature
+  // block that no longer exists, so on every session since 2026-09-04 it is null and the
+  // business_name ANSWER is the only source. Both are read, answer first, so form-era rows still
+  // resolve.
   check(
-    "the signature block becomes the canonical legal name",
+    "the business name answer becomes the canonical legal name",
     patch.legal_name === "Glow Clinic LLC" && patch.dba_name === "Jordan Reyes",
-    ""
+    String(patch.legal_name)
   );
   check(
     "answeredCount counts only the answers that were actually given",

@@ -1,16 +1,21 @@
 "use client";
 
-// The assistant. A corner bubble while they read the contract, THE WHOLE PAGE once the questions
-// start.
+// The assistant. THE WHOLE PAGE, from the moment identity is in.
 //
-// One widget, two modes, and it does not decide which. The `signed` prop only picks the
-// placeholder text, whether the panel opens itself, and how it is laid out; the actual mode is
-// read off the signing row by the server on every turn, because the mode is an authorisation
-// boundary and a prop is not one.
+// ‼️ IT IS NO LONGER A CORNER BUBBLE ANYWHERE (2026-09-04). It used to be one while somebody read
+// the contract, and the `signed` prop picked between that and the full-page questions. There is
+// no contract on screen to sit beside: the funnel is six fields, then this. `fullscreen` is
+// still a prop because the component can still be laid out either way, and losing that would be
+// throwing away the layout for no reason.
 //
-// ‼️ IT READS LIKE A TEXTING APP FROM THE MOMENT THE QUESTIONS START (Matthew, 2026-09-03). Full
-// bleed, message bubbles, tappable answers, three dots while it thinks. A corner widget was fine
-// for "question about clause 4"; it is the wrong shape for the only thing on the screen.
+// ‼️ TWO PHASES, ONE THREAD, AND IT DECIDES NEITHER. First it books a call, then it asks the
+// questions. Which of the two a turn belongs to is decided SERVER-SIDE off the lead row
+// (booked_slot_at), not here, because that is an authorisation boundary and component state is
+// not one. What this file owns is what a phase LOOKS like: chips, a calendar, a summary card.
+//
+// ‼️ IT READS LIKE A TEXTING APP (Matthew, 2026-09-03). Full bleed, message bubbles, tappable
+// answers, three dots while it thinks. A corner widget was fine for "question about clause 4"; it
+// is the wrong shape for the only thing on the screen.
 //
 // ‼️ TWO OR THREE MESSAGES ARRIVE AT A TIME, STAGGERED. The route returns an array and this
 // component paints them one at a time with a gap, because six bubbles appearing simultaneously is
@@ -23,11 +28,43 @@
 // maxTokens on the server. A stated cost rather than a hidden one.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CHAT_UI, CLOSING_SUMMARY, OTHER_PROMPT, QUALIFYING_INTRO } from "@/config/onboarding2";
+import {
+  CHAT_UI,
+  CLOSING_SUMMARY,
+  DAYPART_OPTIONS,
+  OTHER_PROMPT,
+  QUALIFYING_INTRO,
+  SCHEDULING_INTRO,
+  SCHEDULING_UI,
+} from "@/config/onboarding2";
 import { OFFER_INCLUDES } from "@/config/pitch";
 import { BUBBLE_GAP_MS } from "@/lib/onboarding2/texting";
 
 const REEF = "#00C9A7";
+
+/**
+ * Stamp the browser's own hostname onto the Calendly URL.
+ *
+ * ‼️ WITHOUT `embed_domain` CALENDLY DOES NOT POST event_scheduled AND THE CONVERSATION STOPS
+ * DEAD. That is exactly what happened on 2026-09-04: the booking went through, the iframe showed
+ * "You are scheduled!", and the thread underneath never continued. `embed_type=Inline` is set
+ * server-side in lib/onboarding2/booking.ts; this half has to happen in the browser because the
+ * value must be the host the page is actually being served from, and the same deployment answers
+ * on the apex, on the mission subdomain and on a *.vercel.app preview.
+ *
+ * Falls back to the untouched URL rather than throwing: a calendar that renders and does not
+ * report back is worse than one that reports back, and far better than no calendar at all.
+ */
+function embedUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.searchParams.set("embed_domain", window.location.hostname);
+    url.searchParams.set("embed_type", "Inline");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
 
 interface Msg {
   role: "user" | "assistant";
@@ -44,16 +81,25 @@ interface ChatReply {
   callLabel?: string | null;
   duplicate?: boolean;
   error?: string;
+  /** Present only on the turn a day is agreed. The Calendly embed mounts on it. */
+  bookingUrl?: string | null;
 }
 
+/**
+ * !! THE `signed` PROP WAS REMOVED ON 2026-09-04. It picked the opener and the placeholder, and
+ * it distinguished "reading the agreement" from "answering the questions". Neither state exists:
+ * the agreement is no longer read here, so every session that reaches this component has been
+ * through screen one and is on its way to a booking.
+ *
+ * It was never an authorisation boundary. The server reads the mode off the signing row
+ * (modeFor in lib/onboarding2/chat-store.ts) and always did.
+ */
 export function ChatPanel({
   sessionToken,
-  signed,
   fullscreen,
   demo,
 }: {
   sessionToken: string;
-  signed: boolean;
   fullscreen: boolean;
   demo: boolean;
 }) {
@@ -67,9 +113,18 @@ export function ChatPanel({
   /** The "please be specific" popup behind the Other chip. */
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
-  /** Set once a call day lands. The summary card closes the conversation out. */
+  /** Set once every question is answered. The summary card closes the conversation out. */
   const [scheduled, setScheduled] = useState(false);
   const [callLabel, setCallLabel] = useState<string | null>(null);
+  /**
+   * The Calendly embed, mounted mid-conversation once a day is agreed.
+   *
+   * !! THE URL COMES FROM THE ROUTE, NOT FROM THE MODEL. It is a field on the JSON response,
+   * built by lib/onboarding2/booking.ts on a turn Claude never sees. Nothing the assistant says
+   * can produce a link, which is the guarantee config/onboarding2.ts describes.
+   */
+  const [bookingUrl, setBookingUrl] = useState<string | null>(null);
+  const [booking, setBooking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -123,6 +178,7 @@ export function ChatPanel({
         }
         setOptions(data.options ?? []);
         setOtherOption(data.otherOption ?? null);
+        if (data.bookingUrl) setBookingUrl(data.bookingUrl);
         if (data.scheduled) {
           setCallLabel(data.callLabel ?? null);
           setScheduled(true);
@@ -136,18 +192,83 @@ export function ChatPanel({
     [busy, paint, sessionToken]
   );
 
-  // The assistant opens the qualifying run itself. Kicked with a nudge rather than a canned first
-  // question, so the questions live in one place, the system prompt.
+  // ───────────────────────────────────────────────────────────────────────────
+  // Calendly reporting a booking.
+  //
+  // ‼️ THE ORIGIN CHECK IS NOT OPTIONAL AND IT IS ALSO NOT SUFFICIENT. Without it, any page that
+  // opened this one could post a fake event_scheduled and write a booking that never happened.
+  // With it, the browser is honest, and a script POSTing to /api/onboarding2/booked directly is
+  // not affected at all. The real guard is server-side: that route verifies the event URI against
+  // Calendly's API before it writes or provisions anything. This is the cheap half.
+  // ───────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!bookingUrl) return;
+
+    async function onMessage(e: MessageEvent) {
+      if (e.origin !== "https://calendly.com") return;
+      const data = e.data as { event?: string; payload?: Record<string, unknown> } | null;
+      if (!data || data.event !== "calendly.event_scheduled") return;
+
+      setBooking(true);
+      const payload = (data.payload ?? {}) as {
+        event?: { uri?: string };
+        invitee?: { uri?: string };
+      };
+
+      let confirmed = false;
+      try {
+        const res = await fetch("/api/onboarding2/booked", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionToken,
+            eventUri: payload.event?.uri ?? null,
+            inviteeUri: payload.invitee?.uri ?? null,
+          }),
+        });
+        const json = (await res.json()) as { ok?: boolean };
+        confirmed = json.ok === true;
+      } catch {
+        confirmed = false;
+      }
+
+      // ‼️ THE CALENDAR COMES DOWN EITHER WAY, AND THE COPY DOES NOT LIE EITHER WAY. Calendly has
+      // taken the booking and sent its own confirmation regardless of what our route said; what a
+      // failure here means is that WE did not record it. Leaving the embed up would invite a
+      // second booking for the same call. Claiming the email when the write failed would be the
+      // one sentence this close cannot get wrong, so the two messages are separate constants.
+      setBookingUrl(null);
+      setBooking(false);
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: confirmed ? SCHEDULING_UI.emailSent : SCHEDULING_UI.noCalendar },
+        { role: "assistant", content: QUALIFYING_INTRO },
+      ]);
+      // The first question. Sent as a turn because the questions live in the system prompt, which
+      // is the one place they are allowed to live.
+      void send("Ready for the questions.");
+    }
+
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [bookingUrl, sessionToken, send]);
+
+  // !! THE CONVERSATION OPENS ON SCHEDULING, NOT ON THE QUESTIONS (2026-09-04).
+  //
+  // Both opening lines are LOCAL, and there is no kick-off POST any more. It used to send
+  // "I'm ready." to make the model ask question one; the first thing that happens now is the
+  // daypart, which the deterministic scheduling branch handles without a model at all. Sending a
+  // turn just to be told "mornings or afternoons?" would burn a round trip to reach copy we
+  // already hold.
+  //
+  // The daypart chips are seeded here for the same reason: the route only starts returning
+  // options once it has a turn to answer, and the first question has no turn before it.
   useEffect(() => {
     if (!open || started) return;
     setStarted(true);
-    if (signed) {
-      setMessages([{ role: "assistant", content: QUALIFYING_INTRO }]);
-      void send("I'm ready.");
-    } else {
-      setMessages([{ role: "assistant", content: CHAT_UI.opener }]);
-    }
-  }, [open, signed, started, send]);
+    setMessages(SCHEDULING_INTRO.map((content) => ({ role: "assistant" as const, content })));
+    setOptions([DAYPART_OPTIONS.morning, DAYPART_OPTIONS.afternoon]);
+  }, [open, started]);
 
   function tapOption(value: string) {
     if (otherOption && value === otherOption) {
@@ -188,7 +309,7 @@ export function ChatPanel({
 
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <span className="text-sm font-semibold">
-          {signed ? "A few quick questions" : CHAT_UI.title}
+          {bookingUrl || !scheduled ? CHAT_UI.title : "A few quick questions"}
         </span>
         {/* No close button in full screen. There is nothing behind it to go back to. */}
         {!fullscreen && (
@@ -246,9 +367,25 @@ export function ChatPanel({
             offer restated and the work named, at the moment they are most glad they signed. */}
         {scheduled && <ClosingSummary callLabel={callLabel} />}
 
+        {/* ‼️ THE CALENDAR, INSIDE THE THREAD. Mounted from a URL the ROUTE returned, never from
+            anything the assistant said. It stays until Calendly reports event_scheduled, at which
+            point onBooked() unmounts it and the questions begin. */}
+        {bookingUrl && !booking && (
+          <div className="pt-2">
+            <iframe
+              src={embedUrl(bookingUrl)}
+              title="Book your onboarding call"
+              className="h-[640px] w-full rounded-xl border border-white/10 bg-white"
+            />
+          </div>
+        )}
+        {booking && (
+          <p className="pt-2 text-sm text-white/50">One moment, confirming your booking.</p>
+        )}
+
         {/* Tappable answers. Server-computed from the question that was actually asked, so what is
             on screen to tap and what was asked cannot come apart. */}
-        {!busy && !scheduled && options.length > 0 && (
+        {!busy && !scheduled && !bookingUrl && options.length > 0 && (
           <div className="flex flex-wrap gap-2 pt-1">
             {options.map((o) => (
               <button
@@ -273,7 +410,7 @@ export function ChatPanel({
         <textarea
           rows={1}
           className="max-h-24 flex-1 resize-none rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-[#00C9A7]"
-          placeholder={signed ? CHAT_UI.placeholderPost : CHAT_UI.placeholderPre}
+          placeholder={CHAT_UI.placeholderPost}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

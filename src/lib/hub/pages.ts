@@ -18,13 +18,27 @@ export interface ClientPage {
   promptBlock: PromptBlock | null;
   answerMd: string;
   metaDescription: string | null;
+  /**
+   * The lead magnet this page was written toward, by `lead_magnets.magnet_key`.
+   *
+   * ‼️ CHOSEN BEFORE THE PAGE IS DRAFTED, NOT GUESSED AFTER IT EXISTS (Matthew, 2026-09-03). The
+   * concierge ladder in lib/concierge/magnets.ts answers "what would we offer a visitor standing
+   * here", which is a ranking over placement columns. This is the other question: what is this
+   * page for. It is a key rather than a foreign key because `city_rivals` is seeded twice and the
+   * page is naming the offer, not one row of it.
+   *
+   * Null means the ladder decides, which is every page written before this column existed.
+   */
+  leadMagnetKey: string | null;
   status: PageStatus;
   publishedAt: string | null;
   updatedAt: string | null;
 }
 
+// ‼️ ONE STRING LITERAL, NOT A CONCATENATION. supabase-js parses this at the type level, and
+// "a" + "b" widens to `string`, which turns every read here into GenericStringError.
 const COLUMNS =
-  "id, slug, title, question, prompt_block, answer_md, meta_description, status, published_at, updated_at";
+  "id, slug, title, question, prompt_block, answer_md, meta_description, lead_magnet_key, status, published_at, updated_at";
 
 function toPage(row: Record<string, unknown>): ClientPage {
   return {
@@ -35,6 +49,7 @@ function toPage(row: Record<string, unknown>): ClientPage {
     promptBlock: (row.prompt_block as PromptBlock | null) ?? null,
     answerMd: (row.answer_md as string) ?? "",
     metaDescription: (row.meta_description as string | null) ?? null,
+    leadMagnetKey: (row.lead_magnet_key as string | null) ?? null,
     status: row.status as PageStatus,
     publishedAt: (row.published_at as string | null) ?? null,
     updatedAt: (row.updated_at as string | null) ?? null,
@@ -126,6 +141,12 @@ export interface SavePageInput {
   metaDescription?: string | null;
   sourceReportId?: string | null;
   /**
+   * The magnet this page is written toward. Same undefined/null split as `evidenceMap` below:
+   * `undefined` is "this save says nothing about it" and leaves the stored key alone, `null`
+   * clears it. The page studio sets it through `setPageMagnet` rather than through here.
+   */
+  leadMagnetKey?: string | null;
+  /**
    * What each claim rests on, from the drafter. `[{ claim, sourceRef }]`.
    *
    * ‼️ UNDEFINED AND NULL MEAN DIFFERENT THINGS HERE AND THE WRITE BELOW DEPENDS ON IT.
@@ -178,6 +199,11 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
     source_report_id: input.sourceReportId ?? null,
     updated_at: new Date().toISOString(),
   };
+
+  // Only when the caller actually said something about it. See SavePageInput.leadMagnetKey.
+  if (input.leadMagnetKey !== undefined) {
+    row.lead_magnet_key = input.leadMagnetKey?.trim() || null;
+  }
 
   // Only when the caller actually said something about it. See SavePageInput.evidenceMap.
   if (input.evidenceMap !== undefined) {
@@ -402,4 +428,33 @@ export async function appendPageBody(
 
   bustPages(clientId);
   return { ok: true, words: next.split(/\s+/).filter(Boolean).length };
+}
+
+/**
+ * Name the magnet a draft is being written toward, from the page studio.
+ *
+ * ‼️ A SEPARATE WRITER RATHER THAN A savePage CALL, for the reason startPageDraft and
+ * appendPageBody are also separate: the Slack lane holds a page id and one field, not a whole
+ * form, and routing it through savePage would make it re-send a title, a question and a body it
+ * never read. It is also the only writer here that touches a PUBLISHED page on purpose. Changing
+ * which free thing a live page offers is not editing the page, it is editing the offer, and
+ * refusing it would mean unpublishing a page to fix a mislabelled pill.
+ *
+ * Not gated. Naming an offer is not publishing — see NOT_GATED in clients/day-zero.ts.
+ */
+export async function setPageMagnet(
+  clientId: string,
+  pageId: string,
+  magnetKey: string | null
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ lead_magnet_key: magnetKey?.trim() || null, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  bustPages(clientId);
+  return { ok: true };
 }

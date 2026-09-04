@@ -10,9 +10,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
+import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { openingFor } from "@/lib/concierge/engine";
 import { conciergeAmmo } from "@/lib/concierge/ammo";
-import { resolveMagnet } from "@/lib/concierge/magnets";
+import { magnetByKey, resolveMagnet } from "@/lib/concierge/magnets";
 import { appendMessage, startConciergeSession } from "@/lib/concierge/session";
 import { clientIpFrom, hashIp } from "@/lib/scan/session";
 import { supabaseAdmin } from "@/lib/db";
@@ -58,7 +59,16 @@ export async function POST(req: NextRequest) {
   if (!config) return notFound();
 
   // The one thing that puts this on a real site. A row existing is not consent.
-  if (!config.enabled) return notFound();
+  //
+  // ‼️ THE ONE EXCEPTION IS A SIGNED PREVIEW TOKEN FOR THIS EXACT CLIENT, and it is what makes
+  // the demo link concierge_preview posts before the call actually work. It is not a relaxation
+  // of `enabled`: nothing on the open internet can hold one. See lib/concierge/preview-grant.ts.
+  //
+  // ‼️ THIS IS ALSO THE GATE THAT COVERS /turn AND /booked. A session is minted here and nowhere
+  // else, so a session token is proof that a grant was spent, which is why those two routes trust
+  // the session rather than asking for the token again.
+  const token = new URL(req.url).searchParams.get(PREVIEW_TOKEN_PARAM);
+  if (!conciergeAllowed(config, token)) return notFound();
 
   const ipHash = hashIp(clientIpFrom(req));
   if (await overLimit(ipHash)) {
@@ -79,6 +89,7 @@ export async function POST(req: NextRequest) {
     entryPath: str(body.path, 500),
     entryPageId: null,
     pageCategory: str(body.category, 40),
+    pageMagnetKey: str(body.magnet, 60)?.toLowerCase() ?? null,
     embedOrigin: req.headers.get("origin"),
     ipHash,
     userAgent: str(req.headers.get("user-agent"), 400),
@@ -102,13 +113,20 @@ export async function POST(req: NextRequest) {
       : null;
 
   const evidence = ammo?.candidates[0] ?? null;
-  const magnet = await resolveMagnet({
-    audience: config.audience,
-    clientId: config.clientId,
-    vertical: config.vertical,
-    treatment: null,
-    category: session.pageCategory,
-  });
+
+  // ‼️ THE PAGE'S OWN CHOICE WINS, AND IT DOES NOT FALL BACK WHEN IT FAILS. Same rule as
+  // offerForPage() in concierge/for-client.ts: a named key that no longer resolves means the
+  // decision somebody made no longer holds, and quietly opening on a different offer under it
+  // would hide that. The opener degrades to its no-magnet shape, which openingFor already has.
+  const magnet = session.pageMagnetKey
+    ? await magnetByKey(session.pageMagnetKey, config.audience)
+    : await resolveMagnet({
+        audience: config.audience,
+        clientId: config.clientId,
+        vertical: config.vertical,
+        treatment: null,
+        category: session.pageCategory,
+      });
 
   const opening = openingFor({
     audience: config.audience,

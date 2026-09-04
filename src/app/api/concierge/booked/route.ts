@@ -74,7 +74,15 @@ export async function GET(req: NextRequest) {
     .maybeSingle();
   const slug = typeof client?.slug === "string" ? client.slug : null;
   const config = slug ? await loadConciergeConfig(slug) : null;
-  if (!config || !config.enabled) return reject();
+  if (!config) return reject();
+
+  // ‼️ NO `enabled` CHECK HERE, AND IT IS THE SESSION THAT REPLACES IT. This URL is built server
+  // side by engine.ts and carries a session token, and a session is minted only by
+  // /api/concierge/start, which does check. So reaching this line already proves the tenant was
+  // open to this visitor when the conversation began. Re-checking would break the one thing a
+  // preview demo is for: pressing the slot button in front of the client and seeing the hop
+  // recorded. The open-redirect guard below is what actually protects this route, and it is
+  // untouched.
 
   if (!hostAllowed(target, [process.env.CONCIERGE_BOOKING_URL ?? null, config.bookingUrl])) {
     console.error(`[concierge] refused a redirect to ${target.hostname}`);

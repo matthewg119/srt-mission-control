@@ -16,7 +16,6 @@ import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, skinClass } from "@/lib/hub/skin";
-import { ConciergeEmbed } from "@/lib/concierge/embed";
 import "./hub.css";
 
 // Not force-dynamic. Every dashboard page and API route in this repo sets
@@ -82,18 +81,22 @@ export default async function HubLayout({ children, params }: Props) {
     >
       <div className="hub-wrap">{children}</div>
       {/*
-        The concierge, on every page we host for this client, from one place.
+        ‼️ THE CONCIERGE USED TO BE MOUNTED HERE AND IT MOVED, ON PURPOSE. Do not put it back.
 
-        ‼️ IN THE LAYOUT RATHER THAN IN hub-bodies.tsx OR THE SKIN, AND THAT IS THE POINT.
-        Matthew asked for it on all of their pages, and the layout is the only file that is all of
-        their pages. skin.ts forbids markup in a skin ("a skin that could carry its own HTML would
-        be a skin that could silently delete the thing we sell") and draft-page.ts rejects any link
-        inside answer_md, so both of those rails stay intact and neither had to be loosened.
+        The layout is the only file that is all of a client's pages, which is exactly why it cannot
+        know WHICH page it is. Once a page names the magnet it was drafted toward
+        (client_pages.lead_magnet_key), the widget has to be mounted somewhere that has read the
+        page row, and a layout never does: params for a child dynamic segment do not reach it.
 
-        Renders null unless that client's concierge_configs.enabled is true, which only the
-        concierge_live delivery step sets.
+        It now sits in page.tsx and [slug]/page.tsx, which between them are still all of a client's
+        pages. Two mounts instead of one, and the slug page already holds the row, so the key costs
+        no extra query. skin.ts still forbids markup in a skin and draft-page.ts still rejects links
+        inside answer_md: neither rail was loosened to do this.
+
+        The move also took the widget OFF the reviews host, which it should never have been on.
+        This layout wraps both kinds of host and the review tool is regulated separately, with
+        NOT_GATED in hub/page-gate.ts saying no model may go near it.
       */}
-      <ConciergeEmbed clientId={resolved.client.id} />
     </div>
   );
 }

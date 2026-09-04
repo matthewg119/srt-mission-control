@@ -45,6 +45,7 @@ export interface Onboarding2SigningRow {
   website: string | null;
   is_demo: boolean;
 
+
   agreement_snapshot: AgreementSnapshot;
   template_version: string;
   agreement_sha256: string;

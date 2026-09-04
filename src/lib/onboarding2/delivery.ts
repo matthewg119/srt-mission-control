@@ -113,6 +113,20 @@ export function intakePatchFrom(
   const reviewWorkflow: Record<string, unknown> = {};
   put(reviewWorkflow, "booking_software", a.booking_software);
 
+  // ‼️ THE PLATFORM NAME, AND DELIBERATELY NOT A URL. `review_destination` is one of six names
+  // the funnel offers, and it decides the ORDER of the buttons in the review tool plus which URL
+  // field the Review handover panel needs filled. destinationsFor() in
+  // app/hub/[host]/reviews/review-tool.tsx renders a destination only where a HUMAN pasted the
+  // real URL, and that stays true: "absent beats wrong", because a link built from a business
+  // name sends a real patient to somebody else's profile.
+  //
+  // Written in both shapes because both already have readers: `destinations` is the array intake
+  // step 4 writes into this same bag, and review_destination_primary is the column call-sheet.ts,
+  // hub/resolve.ts and hub/page-preview.ts read. Lowercased to match the column's 'google'
+  // default and the PLATFORMS keys.
+  const destination = a.review_destination ? a.review_destination.trim().toLowerCase() : "";
+  if (destination) reviewWorkflow.destinations = [a.review_destination];
+
   // ‼️ PARTIAL, AND IT SAYS SO. The rest of the access inventory (GBP login, site backend,
   // registrar and DNS, analytics, prior agencies) stays deferred to the token-gated /onboarding
   // link after the call, which is the correct place for it. Recording `source` stops a later
@@ -127,9 +141,15 @@ export function intakePatchFrom(
     // nothing else, and four steps are blockedBy it.
     intake_completed_at: now,
     onboarding_status: "intake_complete",
-    // The signature block IS the canonical NAP. It is the one place this person typed their
-    // details knowing they were signing them.
-    ...(signed.business_legal_name ? { legal_name: signed.business_legal_name } : {}),
+    // ‼️ THE BUSINESS NAME NOW COMES FROM THE QUESTIONS, WITH THE SIGNING ROW AS A FALLBACK, AND
+    // THE ORDER MATTERS. `business_legal_name` was typed into a signature block that no longer
+    // exists, so on every session since 2026-09-04 it is null and `a.business_name` is the only
+    // source. Rows from the form era have the column and no answer, so both are read, answer
+    // first. Without this, startPilot falls back to the email address and every board in Mission
+    // Control shows "someone@clinic.com" where a company name belongs.
+    ...(a.business_name || signed.business_legal_name
+      ? { legal_name: a.business_name || signed.business_legal_name }
+      : {}),
     ...(signed.address_line1 ? { address_line1: normalizeAddress(signed.address_line1) } : {}),
     ...(signed.address_city ? { city: signed.address_city } : {}),
     ...(signed.address_state ? { state: normalizeState(signed.address_state) } : {}),
@@ -177,6 +197,9 @@ export function intakePatchFrom(
   if (Object.keys(accessInventory).length) patch.access_inventory = accessInventory;
   // Mirrors the v1 column api/onboarding/save writes at its step 4. The call sheet reads it.
   if (a.booking_software) patch.booking_software = a.booking_software;
+  // The column, alongside the bag above. Both already have readers; see the note by
+  // reviewWorkflow.destinations for why this is a name and never a link.
+  if (destination) patch.review_destination_primary = destination;
 
   // ‼️ 1, NOT TOTAL_STEPS, AND THE DIFFERENCE IS NOT COSMETIC. This funnel never rendered the
   // v1 form, so claiming step 6 would be a lie told to the resume logic. Screen one plus the

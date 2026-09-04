@@ -32,8 +32,33 @@ export interface ChatTurnRow {
  * it flips exactly once per session: re-deriving it later from the row's current signed_at would
  * relabel every pre-signature question as a qualifying answer the moment somebody signs.
  */
+/**
+ * Which toolset this session gets.
+ *
+ * ‼️ IT IS ALWAYS "qualifying" NOW, AND THE ARGUMENT IS THAT THERE IS NOTHING ELSE TO BE.
+ *
+ * Two rewrites landed here on 2026-09-04 and the second corrected the first. It read
+ * `row.signed_at ? ... : "grounded"` while the funnel was identity -> agreement -> signature ->
+ * questions; when the agreement screens went, that would have pinned every session to grounded
+ * forever, so it became `row.email ? ...`. Then the identity FORM went too, and the email became
+ * the FIFTH question in the chat rather than something collected before it. Keying on email
+ * meant the first four turns of every conversation ran in grounded mode: the scheduling branch
+ * in the chat route tests `mode === "qualifying"`, so it would never fire, and an assistant
+ * whose only job is answering questions about an agreement would have been handed "Mornings".
+ *
+ * There is no phase left in this funnel where the agreement is on screen, so there is no phase
+ * that grounded mode describes.
+ *
+ * ‼️ "grounded" STAYS IN ChatMode AND MUST. onboarding2_chat_turns has a CHECK constraint naming
+ * exactly ('grounded', 'qualifying') and real rows carry both. groundedPrompt() is likewise kept
+ * whole. What was removed is the funnel screen, not the record or the capability.
+ *
+ * The argument is deliberately unused rather than dropped: every caller passes a row, and a
+ * signature change would touch four files to say the same thing this comment says.
+ */
 export function modeFor(row: Onboarding2SigningRow): ChatMode {
-  return row.signed_at ? "qualifying" : "grounded";
+  void row;
+  return "qualifying";
 }
 
 export async function loadTurns(signingId: string): Promise<ChatTurnRow[]> {

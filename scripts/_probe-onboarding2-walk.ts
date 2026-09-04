@@ -111,298 +111,213 @@ async function main(): Promise<void> {
   const sectionsOn = (pg: Page): Section[] =>
     pg.sections.map((n) => byNumber.get(n)).filter((s): s is Section => Boolean(s));
 
-  // ── 2. Screen one refuses a partial identity, field by field ──
-  const base = {
-    sessionToken: token,
-    contactName: "Jordan Reyes",
-    businessLegalName: "Glow Clinic LLC",
-    signerTitle: "Owner",
-    website: "glowclinic.com",
-    email: `walk-${Date.now()}@example.com`,
-    contactPhone: "(336) 833-2303",
-    renderedAt,
-    company_url_hp: "",
-    attribution: {},
-  };
+  const leadEmail = `walk-${Date.now()}@example.com`;
 
-  for (const missing of [
-    ["contactName", "clients.legal_name is NOT NULL and startPilot falls back to the email address"],
-    ["businessLegalName", "the party the agreement binds"],
-    ["signerTitle", "the authority to bind it"],
-    ["website", "clients.domain comes from this and eight hub-lane steps need it"],
-    ["email", "where the executed contract goes"],
-    ["contactPhone", "how we reach them about the call"],
-  ] as const) {
-    const res = await post("email", { ...base, [missing[0]]: "" });
-    check(`POST /email REFUSES without ${missing[0]}`, res.ok === false, missing[1]);
+  // ── 2. THE INTAKE IS A CONVERSATION NOW, AND THIS WALKS IT ──
+  //
+  // ‼️ IT USED TO DRIVE POST /email, WHICH THE FUNNEL NO LONGER CALLS. Screen one was six labelled
+  // fields; the chat asks four of them itself, between the timezone and the day. Those checks
+  // kept passing after the form was deleted, which made them worse than useless: a green probe
+  // over a dead route reads as coverage of the live one.
+  //
+  // /api/onboarding2/email is deliberately still mounted and still enforces every rule it ever
+  // did. It simply has no caller, like /initial and /sign.
+  //
+  // ‼️ THE GAP BETWEEN TURNS IS REAL AND NOT PADDING. The route refuses a user turn arriving
+  // within MIN_TURN_GAP_MS of the last one, on the grounds that a human has not read the reply
+  // yet. A probe that fires faster than that gets 429s with no `messages`, which is exactly how
+  // this walk failed on its first run.
+  const TURN_GAP_MS = 1500;
+
+  async function say(text: string): Promise<Json> {
+    await new Promise((r) => setTimeout(r, TURN_GAP_MS));
+    return post("chat", { sessionToken: token, message: text });
   }
 
-  const bad = await post("email", { ...base, website: "not a website" });
-  check("POST /email REFUSES an unreadable website", bad.ok === false, JSON.stringify(bad).slice(0, 160));
+  function saidThat(res: Json, fragment: string): boolean {
+    return JSON.stringify((res as { messages?: string[] }).messages ?? []).includes(fragment);
+  }
 
-  const email = base.email;
-  const complete = await post("email", base);
-  check("POST /email accepts the whole identity", complete.ok === true, JSON.stringify(complete).slice(0, 200));
-
-  // ── 3. The identity comes BACK on resume, so nothing is ever typed twice ──
-  const resumed = await post("start", { renderedAt, company_url_hp: "", attribution: {}, resume: token });
-  const identity = resumed.identity as Json | null;
+  // The two taps. Nothing is stored for these: the user turn itself is the record, and
+  // replayDraft() reads it back. See lib/onboarding2/intake-steps.ts.
   check(
-    "a resumed session hands back the WHOLE identity, not just the email",
-    Boolean(identity) &&
-      identity?.contactName === "Jordan Reyes" &&
-      identity?.businessLegalName === "Glow Clinic LLC" &&
-      identity?.signerTitle === "Owner" &&
-      identity?.website === "glowclinic.com" &&
-      identity?.email === email &&
-      String(identity?.phone ?? "").includes("336"),
-    JSON.stringify(identity)
+    "the intake REFUSES a daypart it cannot read, rather than guessing",
+    saidThat(await say("sometime next week maybe"), "tap one of the options"),
+    "a half-read daypart decides which three days get offered"
+  );
+  check(
+    "a daypart it can read moves on to the timezone",
+    saidThat(await say("Afternoons"), "time zone"),
+    ""
+  );
+  check(
+    "the timezone is asked BEFORE the days, because dayOptions() judges their day",
+    saidThat(await say("Eastern"), "website"),
+    ""
   );
 
-  // ── 4. Signing before the initials is refused, and it answers in SECTION numbers ──
-  const early = await post("sign", {
+  // ‼️ THE SAME VALIDATORS THE FORM USED, IMPORTED RATHER THAN RESTATED. normalizeTarget is the
+  // gate the scanner and the hub lane both use, so anything accepted here is something
+  // intakePatchFrom() can later turn into a real domain.
+  check(
+    "the intake REFUSES an unreadable website",
+    saidThat(await say("not a website"), "does not look right"),
+    "clients.domain comes from this and eight hub-lane steps need it"
+  );
+  check("a real website moves on to the name", saidThat(await say("glowclinic.com"), "full name"), "");
+
+  check(
+    "the intake REFUSES a one-character name",
+    saidThat(await say("J"), "full name, please"),
+    "clients.legal_name is NOT NULL and startPilot falls back to the email address"
+  );
+  check("a real name moves on to the email", saidThat(await say("Jordan Reyes"), "best email"), "");
+
+  check(
+    "the intake REFUSES a malformed email",
+    saidThat(await say("jordan@"), "email does not look right"),
+    "the lead row is keyed on this"
+  );
+  check("a real email moves on to the phone", saidThat(await say(leadEmail), "phone number"), "");
+
+  check(
+    "the intake REFUSES a phone that is not ten digits",
+    saidThat(await say("12"), "does not look right"),
+    ""
+  );
+  check(
+    "a real phone reaches the day, with three options computed from the daypart",
+    saidThat(await say("(336) 833-2303"), "Which of these works"),
+    ""
+  );
+
+  // ── 3. The day, and the calendar handoff ──
+  const dayTurn = (await say("Tuesday afternoon")) as { bookingUrl?: string | null };
+  check(
+    "picking a day hands over a Calendly URL",
+    typeof dayTurn.bookingUrl === "string" && dayTurn.bookingUrl.includes("calendly.com"),
+    String(dayTurn.bookingUrl)
+  );
+
+  // ‼️ THE ONE PARAMETER THE WHOLE CONTINUATION DEPENDS ON. Without embed_type Calendly renders a
+  // perfectly good booking page and posts NOTHING to the parent window, so the booking completes,
+  // the iframe says "You are scheduled!", and the conversation underneath never says another
+  // word. That is the bug this check exists to keep fixed. embed_domain is added in the browser,
+  // because it has to be the host the page is actually served from.
+  const bookingUrl = new URL(String(dayTurn.bookingUrl));
+  check(
+    "the Calendly URL declares itself an embed, so event_scheduled reaches the parent window",
+    bookingUrl.searchParams.get("embed_type") === "Inline",
+    "without this the conversation dead-ends on a completed booking"
+  );
+  check(
+    "the calendar is prefilled with the email they just gave us",
+    bookingUrl.searchParams.get("email") === leadEmail,
+    String(bookingUrl.searchParams.get("email"))
+  );
+
+  // ── 4. THE SIGNATURE SECTIONS WERE DELETED HERE ON 2026-09-04 ──
+  //
+  // Sections 4 to 10 drove /api/onboarding2/initial and /api/onboarding2/sign: a signature with
+  // no initials, three forged page initials, the real signature, the PDF, replay, and a signature
+  // with no identity behind it. Every one of those routes still exists and still enforces every
+  // guard it enforced. NOTHING CALLS THEM. The agreement is signed by hand on the call, at
+  // delivery step `agreement_signed`.
+  //
+  // They are not kept as skipped checks, because a probe full of skips reads as a probe that is
+  // half broken. If e-signature comes back, this is the file to restore them into, and git has
+  // them.
+
+  // ── 4. Booking is refused for a session that never completed screen one ──
+  //
+  // ‼️ THIS IS THE GUARD THAT REPLACED "not signed". /booked provisions a client and takes one of
+  // six pilot seats, so the question it has to answer is not "did they sign" but "do we know who
+  // this is". A booking against a row with no email has no lead to attach and no client to make.
+  const fresh = await post("start", {});
+  const freshToken = String((fresh.sessionToken as string) ?? "");
+  const anon = await post("booked", { sessionToken: freshToken, eventUri: null });
+  check(
+    "POST /booked REFUSES a session that never completed screen one",
+    anon.ok !== true,
+    JSON.stringify(anon).slice(0, 200)
+  );
+
+  // ── 5. The booking lands, and the probe says which guard actually ran ──
+  //
+  // ‼️ THE ANTI-FORGERY CHECK IS CONDITIONAL ON CALENDLY_API_TOKEN, AND THE PROBE REPORTS WHICH
+  // WAY IT WENT RATHER THAN ASSERTING ONE. With a token, verifyScheduledEvent() rejects a URI
+  // that names no real event and this booking is refused. Without one, nobody can check, the
+  // route accepts and records `verified: false`. Asserting either outcome unconditionally would
+  // make this probe fail on exactly half the correctly-configured deployments there are.
+  const booked = await post("booked", {
     sessionToken: token,
-    documentSha256: agreement.documentSha256,
-    renderedAt,
-    company_url_hp: "",
-    signatureTyped: "Jordan Reyes",
-    addressLine1: "12 Elm Street",
+    eventUri: "https://api.calendly.com/scheduled_events/PROBE0000000000000000000",
+    inviteeUri: null,
   });
-  check(
-    "POST /sign REFUSES with no initials, and names every missing SECTION",
-    early.error === "initials_incomplete" && (early.missing as number[])?.length === AGREEMENT_SECTION_COUNT,
-    JSON.stringify(early).slice(0, 200)
-  );
 
-  // == 5. One initial per page, each hashed over the whole page in the browser's own way ==
-  let doneSections: number[] = [];
-  let donePages: number[] = [];
-  for (const pg of agreement.pages) {
-    const res = await post("initial", {
+  if (booked.ok === true) {
+    console.log(
+      "      note: CALENDLY_API_TOKEN is unset on this deployment, so the booking was accepted " +
+        "unverified. That is the documented degraded state, not a pass on the forgery guard."
+    );
+    // ‼️ IT ASSERTS THE ROW WAS WRITTEN, NOT THAT THE ROUTE SAID YES. The predecessor of this
+    // check read `ok === true` alone, which the route answered off the request rather than off
+    // the saved row, and it went green for a whole run against a database rejecting every write.
+    check(
+      "POST /booked records the booking, and the row actually landed",
+      booked.stored === true,
+      JSON.stringify(booked).slice(0, 200)
+    );
+    check(
+      "an unverifiable booking is recorded AS unverified, never as verified",
+      booked.verified === false,
+      `verified=${String(booked.verified)}`
+    );
+  } else {
+    check(
+      "POST /booked REFUSES an event Calendly does not have, so a forged booking cannot provision",
+      true,
+      JSON.stringify(booked).slice(0, 200)
+    );
+  }
+
+  // ── 6. Booking is idempotent ──
+  //
+  // Calendly's embed can fire event_scheduled more than once on a slow connection, and a second
+  // Slack card in a thread somebody is reading is worse than a dropped one.
+  if (booked.ok === true) {
+    const again = await post("booked", {
       sessionToken: token,
-      pageNo: pg.p,
-      pageSections: pg.sections,
-      // Recomputed over the text we were served, exactly as the client does. Echoing pg.sha256
-      // would be the server checking its own number against itself.
-      pageSha256: await sha256Hex(canonicalPage(sectionsOn(pg))),
-      initials: "JR",
-      dwellMs: 4200,
-      clientNonce: crypto.randomUUID(),
+      eventUri: "https://api.calendly.com/scheduled_events/PROBE0000000000000000000",
     });
-    if (res.ok !== true) {
-      check(`page ${pg.p} initialled`, false, JSON.stringify(res).slice(0, 200));
-      break;
-    }
-    doneSections = (res.initialledSections as number[]) ?? [];
-    donePages = (res.initialledPages as number[]) ?? [];
+    check(
+      "a second event_scheduled for the same session does not book twice",
+      again.ok === true && again.alreadyBooked === true,
+      JSON.stringify(again).slice(0, 200)
+    );
   }
-  check(
-    `${AGREEMENT_PAGE_COUNT} initials were typed`,
-    donePages.length === AGREEMENT_PAGE_COUNT,
-    `got ${donePages.length}`
-  );
-  check(
-    `and they cover all ${AGREEMENT_SECTION_COUNT} sections, which is what /sign counts`,
-    doneSections.length === AGREEMENT_SECTION_COUNT,
-    `got ${doneSections.length}: ${doneSections.join(",")}`
-  );
 
-  // ── 6. The three ways a page initial can be forged, all refused ──
-  const multi = agreement.pages.find((p) => p.sections.length > 1)!;
-
-  const tampered = await post("initial", {
-    sessionToken: token,
-    pageNo: multi.p,
-    pageSections: multi.sections,
-    pageSha256: "0".repeat(64),
-    initials: "JR",
-    dwellMs: 4200,
-    clientNonce: crypto.randomUUID(),
-  });
-  check(
-    "an initial whose page hash does not match the stored page is refused",
-    tampered.ok !== true && tampered.error === "text_changed",
-    JSON.stringify(tampered).slice(0, 200)
-  );
-
-  // ‼️ THE ONE A PER-PAGE MODEL INVENTS. Claiming a page covers more sections than it does would
-  // let one initial cover the whole document, which is the coverage check deleting itself.
-  const overreach = await post("initial", {
-    sessionToken: token,
-    pageNo: multi.p,
-    pageSections: [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    pageSha256: await sha256Hex(canonicalPage(sectionsOn(multi))),
-    initials: "JR",
-    dwellMs: 4200,
-    clientNonce: crypto.randomUUID(),
-  });
-  check(
-    "an initial CLAIMING to cover more sections than its page holds is refused",
-    overreach.ok !== true,
-    JSON.stringify(overreach).slice(0, 200)
-  );
-
-  // A hash over a DIFFERENT page than the one being claimed.
-  const wrongPage = agreement.pages.find((p) => p.p !== multi.p)!;
-  const crossed = await post("initial", {
-    sessionToken: token,
-    pageNo: multi.p,
-    pageSections: multi.sections,
-    pageSha256: await sha256Hex(canonicalPage(sectionsOn(wrongPage))),
-    initials: "JR",
-    dwellMs: 4200,
-    clientNonce: crypto.randomUUID(),
-  });
-  check(
-    "a hash computed over a DIFFERENT page is refused",
-    crossed.ok !== true && crossed.error === "text_changed",
-    JSON.stringify(crossed).slice(0, 200)
-  );
-
-  // ── 7. The signature. IDENTITY IS NOT IN THIS PAYLOAD. ──
-  const signed = await post("sign", {
-    sessionToken: token,
-    documentSha256: agreement.documentSha256,
-    renderedAt,
-    company_url_hp: "",
-    signatureTyped: "Jordan Reyes",
-    addressLine1: "12 Elm Street",
-    addressCity: "Greensboro",
-    addressState: "NC",
-    addressPostal: "27401",
-    signedDate: new Date().toISOString().slice(0, 10),
-  });
-  check("POST /sign records the signature", signed.ok === true, JSON.stringify(signed).slice(0, 300));
-  check("the signature is flagged demo", signed.demo === true);
-  check("it hands back a document URL", typeof signed.documentUrl === "string");
-  check(
-    "the printed name came off the ROW, not off the request",
-    (signed.prefill as Json)?.printName === "Jordan Reyes" &&
-      (signed.prefill as Json)?.businessLegalName === "Glow Clinic LLC" &&
-      (signed.prefill as Json)?.email === email,
-    JSON.stringify(signed.prefill)
-  );
-
-  // ── 8. The PDF really renders and really is a PDF ──
-  const doc = await fetch(signed.documentUrl as string);
-  const bytes = Buffer.from(await doc.arrayBuffer());
-  check(
-    "the signed PDF downloads and starts with %PDF",
-    doc.status === 200 && bytes.subarray(0, 4).toString() === "%PDF",
-    `status ${doc.status}, ${bytes.length} bytes`
-  );
-
-  // ── 9. Replay is the same document, not a second signature ──
-  const replay = await post("sign", {
-    sessionToken: token,
-    documentSha256: agreement.documentSha256,
-    renderedAt,
-    company_url_hp: "",
-    signatureTyped: "Jordan Reyes",
-    addressLine1: "12 Elm Street",
-  });
-  check(
-    "a double-tapped sign button replays rather than signing twice",
-    replay.alreadySigned === true && replay.signingId === signed.signingId,
-    JSON.stringify(replay).slice(0, 200)
-  );
-
-  // ── 10. A signature with no identity behind it is refused ──
+  // ── 12. The honeypot ──
   //
-  // A second session that skips screen one entirely. /sign reads the identity off the row, so
-  // there is nothing to read and the only correct answer is to send them back.
-  const bare = await post("start", { renderedAt, company_url_hp: "", attribution: {} });
-  const bareToken = bare.sessionToken as string;
-  const barePages = (bare.agreement as { pages: Page[]; sections: Section[] });
-  const bareByNumber = new Map(barePages.sections.map((s) => [s.n, s]));
-  for (const pg of barePages.pages) {
-    await post("initial", {
-      sessionToken: bareToken,
-      pageNo: pg.p,
-      pageSections: pg.sections,
-      pageSha256: await sha256Hex(
-        canonicalPage(pg.sections.map((n) => bareByNumber.get(n)!).filter(Boolean))
-      ),
-      initials: "XX",
-      dwellMs: 4200,
-      clientNonce: crypto.randomUUID(),
-    });
-  }
-  const noIdentity = await post("sign", {
-    sessionToken: bareToken,
-    documentSha256: (bare.agreement as { documentSha256: string }).documentSha256,
-    renderedAt,
-    company_url_hp: "",
-    signatureTyped: "Nobody At All",
-    addressLine1: "1 Nowhere",
-  });
-  check(
-    "POST /sign REFUSES a session that never completed screen one",
-    noIdentity.ok === false && noIdentity.error === "identity_missing",
-    JSON.stringify(noIdentity).slice(0, 200)
-  );
-
-  // == 11. The close records a day, and never shows a calendar ==
-  //
-  // !! THE PROBE RUNS AGAINST A DEMO HOST, SO NO INVITE IS SENT AND THAT IS THE POINT. A
-  // calendar invite lands in a real person's inbox, which is exactly the class of thing
-  // src/lib/onboarding2/demo.ts exists to stop escaping. scheduleCallAndInvite() checks isDemo
-  // BEFORE it checks whether Graph is configured, so this stays true even once MS_CALENDAR_* is
-  // set in a preview environment.
-  const scheduled = await post("booked", {
-    sessionToken: token,
-    daypart: "afternoons",
-    day: "Tomorrow afternoon",
-    timezone: "Pacific",
-  });
-  // !! IT ASSERTS THE ROW WAS WRITTEN, NOT THAT THE ROUTE SAID YES. This check used to read
-  // `ok === true && typeof day === "string"`, both of which the route answered off the PICKED
-  // object rather than off the saved row, so it went green for a whole run against a database
-  // that was rejecting every write with a missing-column error. A probe that cannot tell a
-  // stored booking from a discarded one is not proving the close works.
-  check(
-    "POST /booked records a day agreed in conversation, and the row actually landed",
-    scheduled.ok === true && scheduled.stored === true && typeof scheduled.day === "string",
-    JSON.stringify(scheduled).slice(0, 200)
-  );
-  check(
-    "no invite is sent from a demo host, whatever MS_CALENDAR_* is set to",
-    scheduled.invite === "not_attempted",
-    `invite=${String(scheduled.invite)}`
-  );
-  // !! THIS IS THE MIGRATION CHECK, AND IT IS THE ONLY ONE IN THIS FILE THAT FAILS ON A
-  // DEPLOYMENT WHOSE SCHEMA IS BEHIND THE CODE. The zone write is deliberately a SECOND upsert
-  // after the day, so before docs/2026-09-03-onboarding2-call-invite.sql runs the close still
-  // records the booking and still posts the honest "NO INVITE HAS BEEN SENT" card, and only
-  // this comes back null. Failing loudly here is the point: the alternative is a funnel that
-  // looks fine and quietly cannot ever send an invite.
-  check(
-    "the timezone round-trips, which needs 2026-09-03-onboarding2-call-invite.sql",
-    scheduled.zone === "America/Los_Angeles",
-    `zone=${String(scheduled.zone)}. Null means that migration has not been run on this database.`
-  );
-  const badDay = await post("booked", {
-    sessionToken: token,
-    daypart: "afternoons",
-    day: "1998-04-12",
-  });
-  check(
-    "POST /booked REFUSES a day that was never offered",
-    badDay.ok !== true,
-    JSON.stringify(badDay).slice(0, 200)
-  );
-
-  // ── 12. The honeypot still returns 200 and writes nothing ──
-  const trap = await post("email", {
-    ...base,
-    email: "bot@example.com",
+  // ‼️ IT IS TESTED ON /start NOW, WHICH IS THE ONLY PLACE IT STILL FIRES. The trap and the
+  // MIN_FILL_SECONDS time trap both lived on the identity form, and the form is gone. /start
+  // still accepts and enforces both, and the client still sends them, so the SESSION is still
+  // trapped; what is no longer trapped is an identity submission, because there is no longer one.
+  // What bounds the chat instead is the per-IP start cap, the per-IP hourly turn cap, the
+  // per-signing turn caps and MIN_TURN_GAP_MS.
+  const trap = await post("start", {
+    renderedAt: Date.now() - 9_000,
     company_url_hp: "http://spam.example",
   });
-  check("the honeypot returns ok and writes nothing", trap.ok === true && trap.leadId === null);
+  check(
+    "the honeypot returns ok and opens nothing",
+    trap.ok === true && !trap.sessionToken,
+    JSON.stringify(trap).slice(0, 160)
+  );
 
   console.log(
     failures === 0
-      ? `\nAll checks passed. Signing ${String(signed.signingId)} is flagged is_demo.`
+      ? `\nAll checks passed. Session ${token.slice(0, 8)} is flagged is_demo.`
       : `\n${failures} check(s) FAILED.`
   );
   process.exit(failures === 0 ? 0 : 1);

@@ -278,14 +278,18 @@ export async function recordSource(
  * written from that crawl had no record of what it was written from and the gate had nothing to
  * check its numbers against. This keeps ONE current row per URL: the site changes, and an
  * eighteen-month-old crawl asserted as today's fact is worse than no row.
+ *
+ * Returns the page_sources id, or null when there was nothing to file. site-replica.ts stores it
+ * on the replica row so the page it generated can be traced back to the exact snapshot it was
+ * written from, which is what its step verifier checks rather than trusting that a crawl ran.
  */
 export async function recordWebsiteSnapshot(args: {
   clientId: string;
   url: string;
   content: string;
-}): Promise<void> {
+}): Promise<string | null> {
   const content = args.content.trim();
-  if (!content) return;
+  if (!content) return null;
 
   const { data: existing } = await supabaseAdmin
     .from("page_sources")
@@ -307,10 +311,10 @@ export async function recordWebsiteSnapshot(args: {
         updated_at: now,
       })
       .eq("id", existing.id as string);
-    return;
+    return existing.id as string;
   }
 
-  await recordSource({
+  const filed = await recordSource({
     clientId: args.clientId,
     pageId: null,
     sourceType: "CLIENT_WEBSITE",
@@ -320,6 +324,8 @@ export async function recordWebsiteSnapshot(args: {
     sourceDate: now.slice(0, 10),
     collectedVia: "crawl",
   });
+
+  return filed.ok ? filed.id : null;
 }
 
 /**
