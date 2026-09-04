@@ -10,7 +10,7 @@
 import { toCsv } from "./csv";
 import type { DedupeMatch, DuplicateRow } from "./dedup";
 import { JUNK_REASON_ORDER, type JunkReason } from "./rules";
-import type { StoredRow } from "./store";
+import type { BatchStatus, StoredRow, Workflow } from "./store";
 import type { CutoffPlan, ScoreResult } from "./score";
 import {
   OPTIMIZATION_KEY_ORDER,
@@ -345,6 +345,117 @@ export function formatWorkflowPicker(input: {
   lines.push("");
   lines.push("React :one: or :two: on THIS message.");
   return lines.join("\n");
+}
+
+const KEYCAP: Record<Workflow, string> = { filter: ":one:", score: ":two:" };
+const WORKFLOW_NAME: Record<Workflow, string> = {
+  filter: "filter and verify",
+  score: "score first",
+};
+
+/**
+ * The recovery for a batch that has already been picked, and the reason it is not "drop it again".
+ *
+ * ‼️ RE-DROPPING THE FILE IS THE OBVIOUS ADVICE AND IT IS WRONG. `recordSeen` runs at the DROP,
+ * before the pick, so every new row of a batch that later died is already in `scraper_seen`:
+ * dropping the same file again reports one big pile of duplicates and the workflow lands on
+ * "nothing new to work", which is true and completely misleading. The purge takes the ledger keys
+ * back along with the batch, so naming it here is not a convenience, it is the difference between a
+ * recovery and an hour lost to a number that looks like an answer.
+ */
+function purgeAndRedrop(batchId: string, picked: Workflow): string[] {
+  return [
+    "",
+    "To run " + KEYCAP[picked] + " on this list, take the batch back first. Dropping the same " +
+      "file again on its own will NOT work: the drop already recorded every new row in " +
+      "`scraper_seen`, so it would come back as duplicates with nothing left to work.",
+    "```",
+    "bun run scripts/purge-scraper-batch.ts " + batchId + " --commit",
+    "```",
+    "Then drop the file again.",
+  ];
+}
+
+/**
+ * A pick that could not run, handing the picker back instead of killing the batch.
+ *
+ * ‼️ THE LAST LINE IS LOAD-BEARING. Slack fires `reaction_added` when a reaction is ADDED and
+ * never again, so the keycap he wants is very often already sitting on the card: he reacted :one:
+ * and :two: on `leads (5).csv` before either had run, which is how this whole failure was found.
+ * Without the take-it-off-and-put-it-back instruction, the rewind looks exactly as broken as the
+ * silence it replaces.
+ */
+export function formatPickRewind(input: {
+  reason: string;
+  other: Workflow;
+  otherColumn: string;
+}): string {
+  const key = KEYCAP[input.other];
+  return [
+    ":x: " + input.reason,
+    "",
+    // Stated out loud because it is the claim he is being asked to trust before reacting again.
+    "Nothing was inserted and nothing was spent, so the picker above is live again. `" +
+      input.otherColumn + "` is there, so " + key + " *" + WORKFLOW_NAME[input.other] +
+      "* can run on this file.",
+    "",
+    "React " + key + " on the picker above. *If " + key + " is already on it, take it off and " +
+      "put it back.* Slack only tells me about a reaction the moment it is added, so one that is " +
+      "already sitting there never reaches me.",
+  ].join("\n");
+}
+
+/** Stages where rows are already inserted and a workflow is genuinely in flight. */
+const IN_FLIGHT: BatchStatus[] = ["parsing", "mx", "filtered", "verifying", "scoring", "auditing"];
+
+/**
+ * A reaction on a picker that has already been picked.
+ *
+ * ‼️ THIS NAMES A NO-OP, IT DOES NOT PERFORM ONE. For one release the handler simply returned
+ * on `batch.workflow` and said nothing, which on 2026-09-04 ate a :two: on a batch :one: had just
+ * refused: no message, no log an operator can see, and a picker that was dead forever. In a lane
+ * where the reaction IS the interface, a swallowed gate reaction is the one failure that cannot be
+ * afforded. The four arms read differently because they mean different things, and only the two
+ * that are past saving carry a recovery.
+ */
+export function formatLatePick(input: {
+  batchId: string;
+  fileName: string | null;
+  /** The keycap just reacted. */
+  picked: Workflow;
+  /** The workflow already recorded on the batch. */
+  running: Workflow;
+  status: BatchStatus;
+  error: string | null;
+}): string {
+  const name = "*" + (input.fileName ?? "That file") + "*";
+  const ran = KEYCAP[input.running];
+  const now = KEYCAP[input.picked];
+
+  if (IN_FLIGHT.includes(input.status)) {
+    if (input.running === input.picked) {
+      return ":eyes: " + name + " is already running " + ran + ", status `" + input.status +
+        "`. Same workflow, so this changes nothing.";
+    }
+    return ":no_entry: " + name + " is already running " + ran + ", status `" + input.status +
+      "`. I am not switching to " + now + " mid-flight: rows are already inserted under " + ran +
+      ", and switching would either drop them silently or buy a search for every one of them. " +
+      "Let it finish.";
+  }
+
+  if (input.status === "error") {
+    return [
+      ":x: " + name + " stopped under " + ran + ", so " + now + " cannot pick it up. " +
+        (input.error ?? "No reason was recorded."),
+      ...purgeAndRedrop(input.batchId, input.picked),
+    ].join("\n");
+  }
+
+  return [
+    ":information_source: " + ran + " already finished on " + name + ", status `" + input.status +
+      "`, so " + now + " does nothing here.",
+    ...purgeAndRedrop(input.batchId, input.picked),
+  ].join("\n");
 }
 
 /** How many names the drop card prints in full before it starts counting instead. */

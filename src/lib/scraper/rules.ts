@@ -9,6 +9,7 @@
 // without a resolver, a Slack token or a database.
 
 import { DISPOSABLE_DOMAINS } from "@/data/disposable-domains";
+import type { Workflow } from "./store";
 
 /** Every reason a row can be dropped. Written to `scraper_rows.reason` and to junk.csv. */
 export type JunkReason =
@@ -113,6 +114,54 @@ export function resolveStateColumn(headers: string[]): string | null {
 
 export function resolvePhoneColumn(headers: string[]): string | null {
   return resolveColumn(headers, PHONE_HEADER_CANDIDATES);
+}
+
+/**
+ * The one column each workflow cannot run without.
+ *
+ * Workflow 1 needs an address to filter and verify; workflow 2 needs a name to search for. City and
+ * website are NOT here on purpose: their absence is a "not measured" signal in score.ts rather than
+ * a zero, so they change what a number means and never whether the run can happen.
+ */
+const REQUIRED_COLUMN: Record<Workflow, (headers: string[]) => string | null> = {
+  filter: resolveEmailColumn,
+  score: resolveCompanyColumn,
+};
+
+const OTHER_WORKFLOW: Record<Workflow, Workflow> = { filter: "score", score: "filter" };
+
+/** What the missing column is called in the thread. Not the header, the concept. */
+const REQUIRED_LABEL: Record<Workflow, "email" | "company"> = { filter: "email", score: "company" };
+
+export type ColumnVerdict =
+  /** The chosen workflow can run. */
+  | { kind: "ok"; column: string }
+  /** It cannot, but the OTHER one can, so this was a wrong pick rather than a bad file. */
+  | { kind: "rewind"; missing: "email" | "company"; other: Workflow; otherColumn: string }
+  /** Neither workflow has its column. Nothing in this lane can work the file. */
+  | { kind: "terminal"; missing: "email" | "company" };
+
+/**
+ * Can this workflow run on these headers, and if not, can the other one?
+ *
+ * ‼️ THE `rewind` / `terminal` SPLIT IS THE TERMINATION PROOF FOR THE PICKER REWIND. A rewind is
+ * only ever offered once the OTHER workflow's required column has been confirmed present, so the
+ * picker can never hand back a pick that bounces off the same class of refusal. That bounds the
+ * chain at one hop, structurally, with no attempt counter to keep in sync. A file carrying neither
+ * column is genuinely terminal and must stay terminal: offering a picker there is offering a choice
+ * between two refusals.
+ *
+ * Pure, so `_probe-scraper.ts` can assert the bound offline.
+ */
+export function columnVerdict(workflow: Workflow, headers: string[]): ColumnVerdict {
+  const column = REQUIRED_COLUMN[workflow](headers);
+  if (column) return { kind: "ok", column };
+
+  const missing = REQUIRED_LABEL[workflow];
+  const other = OTHER_WORKFLOW[workflow];
+  const otherColumn = REQUIRED_COLUMN[other](headers);
+  if (!otherColumn) return { kind: "terminal", missing };
+  return { kind: "rewind", missing, other, otherColumn };
 }
 
 const LOCAL_PART = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;

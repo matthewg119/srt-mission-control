@@ -28,6 +28,7 @@ import { slack } from "@/lib/slack-bot";
 import { parseCsv } from "./csv";
 import { filterRows } from "./filter";
 import {
+  columnVerdict,
   resolveCityColumn,
   resolveStateColumn,
   resolveCompanyColumn,
@@ -85,7 +86,9 @@ import {
   formatCutoffEcho,
   formatCutoffRefusal,
   formatGeoDrop,
+  formatLatePick,
   formatMvSummary,
+  formatPickRewind,
   formatCutoffCard,
   formatScoreSummary,
   type ScoredCsvRow,
@@ -218,6 +221,40 @@ async function fail(batch: BatchRow, message: string): Promise<void> {
   console.error("[scraper] batch", batch.id, "failed:", message);
   await updateBatch(batch.id, { status: "error", error: message });
   await say(batch, ":x: " + message);
+}
+
+/**
+ * A WRONG PICK, NOT A FAILED BATCH. Puts the batch back at the picker instead of killing it.
+ *
+ * ‼️ ONLY LEGAL BEFORE THE FIRST ROW IS INSERTED, AND THE REASON IS `ignoreDuplicates`. Both
+ * inserters upsert on (batch_id, row_index) ignoring conflicts, so a rewind taken AFTER an insert
+ * lets the other workflow's insert be silently DROPPED: workflow 1 would then sweep MX over company
+ * rows carrying a null domain and publish a clean.csv of nothing, with no error anywhere. Every
+ * other `fail()` in this file is at or past that line and stays terminal.
+ *
+ * ‼️ A REWIND NEEDS A CARD TO REWIND *TO*. The Apollo-export child batch (handleThreadedCsv)
+ * is born with workflow 'filter' and NO picker: its thread already chose, and scoring an export of
+ * contacts that were already scored is meaningless. A null `workflow_pick_ts` degrades to fail()
+ * structurally, rather than by remembering to check parent_batch_id at each call site.
+ *
+ * ‼️ IT DOES NOT TOUCH `dedupe_ran_at`, `dedupe_dupe_indexes` OR `scraper_seen`. The drop
+ * already recorded every new row in the ledger. Clearing the split would make the next
+ * advanceBatch re-dedupe the file against the keys THIS BATCH JUST WROTE, report a near-total
+ * duplicate count, and land in beginScoreWorkflow's `keep.length === 0` arm with a reason that is
+ * a lie.
+ */
+async function rewindPick(
+  batch: BatchRow,
+  input: { reason: string; other: Workflow; otherColumn: string }
+): Promise<void> {
+  if (!batch.workflow_pick_ts) return fail(batch, input.reason);
+
+  console.warn("[scraper] batch", batch.id, "rewound to the picker:", input.reason);
+
+  // `error` is CLEARED. This is not an obstacle to work around, it is the same question being
+  // asked again, and a stored error under a live picker would make `status` lie about both.
+  await updateBatch(batch.id, { status: "awaiting_workflow", workflow: null, error: null });
+  await say(batch, formatPickRewind(input));
 }
 
 /**
@@ -544,16 +581,22 @@ async function handleThreadedCsv(event: ScraperEvent, file: SlackFile): Promise<
  * picker: a company list must be able to reach 2️⃣ without dying on this check first.
  */
 async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): Promise<void> {
-  const emailColumn = resolveEmailColumn(parsed.headers);
-  if (!emailColumn) {
+  const verdict = columnVerdict("filter", parsed.headers);
+  if (verdict.kind !== "ok") {
     // Naming what WAS found is the difference between a message he can act on and the Python's
     // "Column 'email' not in CSV", which required opening the file to find out what to change.
-    return fail(
-      batch,
+    const reason =
       "No email column in that file, so there is nothing to filter. Headers found: " +
-        parsed.headers.map((h) => "`" + h + "`").join(", ")
-    );
+      parsed.headers.map((h) => "`" + h + "`").join(", ");
+    // A file with no company column either is a file this lane cannot work at all, and THAT is
+    // genuinely terminal. `columnVerdict` makes the split, so the rewind can never be offered on a
+    // pick that would bounce off the same refusal. See its comment for why that is the bound.
+    if (verdict.kind === "terminal") {
+      return fail(batch, reason + " There is no company column either, so :two: cannot run on it.");
+    }
+    return rewindPick(batch, { reason, other: verdict.other, otherColumn: verdict.otherColumn });
   }
+  const emailColumn = verdict.column;
 
   const knownEmails = await knownProspectEmails();
   // The drop's verdicts, carried in by index. `already_in_crm` still runs underneath: that one asks
@@ -587,14 +630,19 @@ async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof pa
  * than a zero, which is why neither is checked here.
  */
 async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): Promise<void> {
-  const companyColumn = resolveCompanyColumn(parsed.headers);
-  if (!companyColumn) {
-    return fail(
-      batch,
+  const verdict = columnVerdict("score", parsed.headers);
+  if (verdict.kind !== "ok") {
+    const reason =
       "No company column in that file, so there is nothing to score. Headers found: " +
-        parsed.headers.map((h) => "`" + h + "`").join(", ")
-    );
+      parsed.headers.map((h) => "`" + h + "`").join(", ");
+    // Symmetric with beginFilterWorkflow, and the symmetry is the point: exactly one refusal in
+    // each workflow is a WRONG PICK rather than a broken file, and it is the required-column one.
+    if (verdict.kind === "terminal") {
+      return fail(batch, reason + " There is no email column either, so :one: cannot run on it.");
+    }
+    return rewindPick(batch, { reason, other: verdict.other, otherColumn: verdict.otherColumn });
   }
+  const companyColumn = verdict.column;
 
   const cityColumn = resolveCityColumn(parsed.headers);
   const websiteColumn = resolveWebsiteColumn(parsed.headers);
@@ -628,6 +676,14 @@ async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof par
   const keep = located.filter((r) => r.verdict !== "not_us");
 
   if (keep.length === 0) {
+    // ‼️ THIS STAYS `fail()`. The missing-column refusals above became rewinds; do NOT
+    // generalise that to here, because neither arm of this one is a wrong pick. Every row already
+    // seen: workflow 1 reads the SAME skip set and junks every row as `duplicate_prior_batch`, so
+    // it is a slower way of saying exactly this. Every row outside the US: workflow 1 does not read
+    // `state` or `city` at all, so it would filter foreign leads and then pay MillionVerifier per
+    // address to verify businesses SRT must never call, which is the Riga failure the comment above
+    // exists to prevent. Being before the insert is NECESSARY for a rewind and not sufficient.
+    //
     // Which of the two emptied it, named. "Nothing to score" with the wrong reason attached sends
     // somebody to check the geo filter over a file that was simply a re-drop.
     const why =
@@ -1592,8 +1648,16 @@ export async function handleScraperReaction(input: {
   switch (gate) {
     case "workflow_pick": {
       if (!keycap || keycap > 2) return false;
-      // Guarded: a second reaction on the picker must not re-parse and re-insert the whole file.
-      if (batch.workflow) return true;
+      // ‼️ STILL GUARDED, BUT IT SAYS SO NOW. A second reaction on the picker must not re-parse
+      // and re-insert the whole file. For one release this returned here SILENTLY, and on
+      // 2026-09-04 that ate a :two: on a batch workflow 1 had just refused for a missing email
+      // column: no message, no log an operator can see, an `error` row the cron will never touch
+      // again, and a picker that was dead forever. In this lane the reaction IS the interface, so a
+      // swallowed gate reaction is the one failure that cannot be afforded.
+      if (batch.workflow) {
+        waitUntil(noteLatePick(batch, keycap === 1 ? "filter" : "score"));
+        return true;
+      }
       waitUntil(runWorkflowPick(batch, keycap === 1 ? "filter" : "score"));
       return true;
     }
@@ -1625,6 +1689,32 @@ export async function handleScraperReaction(input: {
       return true;
     }
   }
+}
+
+/**
+ * A reaction on a picker that has already been picked.
+ *
+ * ‼️ IT SAYS ONE LINE AND CHANGES NOTHING. This is a no-op being NAMED, not a state transition:
+ * it must never write `workflow`, never write `status`, and above all never clear `error`, or a
+ * stray tap on a dead batch erases the record of how it died. The rewind above is the only thing
+ * allowed to re-arm a picker, and only from inside a workflow that refused before its first insert.
+ */
+async function noteLatePick(batch: BatchRow, picked: Workflow): Promise<void> {
+  console.log(
+    "[scraper] batch", batch.id, "late pick", picked, "on a batch already at", batch.workflow,
+    "status", batch.status
+  );
+  await say(
+    batch,
+    formatLatePick({
+      batchId: batch.id,
+      fileName: batch.file_name,
+      picked,
+      running: batch.workflow as Workflow,
+      status: batch.status,
+      error: batch.error,
+    })
+  );
 }
 
 async function releaseMvUpload(batch: BatchRow): Promise<void> {

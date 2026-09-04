@@ -3236,7 +3236,7 @@ reproducible across runs and models rather than trusted to an LLM. The reasoning
 blocker is that no list of angles exists and nothing consumes the number. It is a pure function
 over the company column when it is wanted, and needs no schema change.
 
-Probe: `bunx tsx scripts/_probe-scraper.ts` (71 checks, no network, no DB, no Slack; `--mx` adds
+Probe: `bunx tsx scripts/_probe-scraper.ts` (93 checks, no network, no DB, no Slack; `--mx` adds
 three real lookups). It is the file that answers "is the port faithful to the Python", which is
 why `filter.ts` and `rules.ts` are pure and stop before the resolver.
 
@@ -3275,7 +3275,7 @@ what would kill a company list on "no email column" before anybody could choose 
 **The drop stores headers and a file id and nothing else.** `startBatch` no longer resolves a column
 or inserts a row; the pick re-reads the file through `slack.filesInfo`. One extra Slack download
 buys two things: 50k rows are not inserted for a workflow that may never be chosen, and workflow A's
-body is the old `startBatch` tail unchanged, so `_probe-scraper.ts`'s 71 checks still prove the port
+body is the old `startBatch` tail unchanged, so `_probe-scraper.ts`'s checks still prove the port
 is faithful to the Python.
 
 > ‼️ **A TOP-LEVEL DROP IS NEW; A THREADED DROP BELONGS TO ITS BATCH.** A CSV replied into a thread
@@ -3455,6 +3455,66 @@ it would make the cron's worklist dishonest. The two gate statuses that ARE list
 guarded by their own `*_ts`, so a re-entry re-reads one row — and a card whose Slack post failed at
 drop time gets posted on the next tick instead of the batch sitting silent forever. **The cron may
 poll external work. It may never advance past a gate.**
+
+### The picker is re-armable, exactly once, and only before the first insert (2026-09-04)
+`rewindPick` in `lane.ts`, `formatPickRewind` / `formatLatePick` in `report.ts`, `columnVerdict` in
+`rules.ts`.
+
+`leads (5).csv` was dropped, :one: was reacted, and workflow 1 correctly refused a file with no
+email column. It refused by calling `fail()`, which marks the batch `error` -- and `error` is not in
+`ACTIVE_STATUSES`, so the cron never looks again. The :two: reacted a minute later hit
+`if (batch.workflow) return true;` and was **swallowed with no message**. Two workflows, both
+"broken", and the picker card was dead forever. The card had even printed *"No email column in this
+file, so :two: is probably it"* before he picked.
+
+**A missing required column is a WRONG PICK, not a broken file.** The two column refusals
+(`beginFilterWorkflow` no email, `beginScoreWorkflow` no company) now call `rewindPick`, which puts
+the row back to `awaiting_workflow` with `workflow` and `error` null and says so. Three rails:
+
+1. ‼️ **Only legal BEFORE the first insert.** Both inserters upsert on `(batch_id, row_index)` with
+   `ignoreDuplicates`, so a rewind taken after an insert lets the other workflow's insert be
+   silently DROPPED -- MX swept over rows with a null domain, a clean.csv of nothing, no error
+   anywhere. Every other `fail()` is at or past that line and **stays terminal**.
+2. ‼️ **A rewind needs a card to rewind TO.** `workflow_pick_ts` null degrades to `fail()`, which is
+   what keeps the Apollo-export child (born `workflow:'filter'`, no picker) out of it structurally
+   rather than by remembering to check `parent_batch_id`.
+3. ‼️ **It never touches `dedupe_ran_at`, `dedupe_dupe_indexes` or `scraper_seen`.** Clearing the
+   split would re-dedupe the file against the keys this batch just wrote and land in
+   `keep.length === 0` with a reason that is a lie.
+
+‼️ **`columnVerdict`'s `rewind` / `terminal` split IS the termination proof.** A rewind is only
+offered once the OTHER workflow's required column is confirmed present, so the picker can never hand
+back a pick that bounces off the same class of refusal. One hop, structurally, no attempt counter.
+A file with neither column is genuinely terminal.
+
+‼️ **`beginScoreWorkflow`'s `keep.length === 0` STAYS terminal**, and it is before the insert too --
+which is why "before the insert" is necessary and not sufficient. All rows already seen: workflow 1
+reads the same skip set and junks every row as `duplicate_prior_batch`, a slower way of saying the
+same thing. All rows outside the US: workflow 1 does not read `state`/`city` at all, so it would
+filter foreign leads and pay MillionVerifier per address to verify businesses SRT must never call.
+
+‼️ **A swallowed gate reaction is the one failure this lane cannot afford**, because the reaction IS
+the interface. `noteLatePick` now answers every reaction on an already-picked card, in four
+wordings (mid-flight same keycap / mid-flight other keycap / finished / dead). It writes **nothing**
+-- not `workflow`, not `status`, and above all never clears `error`, or a stray tap erases the
+record of how a batch died.
+
+‼️ **The recovery text names `purge-scraper-batch.ts` and it has to.** "Just drop the file again" is
+the obvious advice and it is wrong: `recordSeen` runs at the DROP, before the pick, so a re-drop of
+a batch that later died comes back as duplicates with nothing to work. The probe asserts the purge
+is named before the re-drop is suggested.
+
+**Decided: the lane asks rather than reads.** Slack never re-fires `reaction_added` for an emoji
+already on the message, so after a rewind the other keycap is usually already sitting there (he
+reacted both before either had run). `reactions.get` could be used to honour it -- the app does now
+have `reactions:read` -- but Matthew's call on 2026-09-04 was to ask instead of acting on a reaction
+the lane was not handed. **So the rewind message MUST end with take-it-off-and-put-it-back**, or it
+looks exactly as broken as the silence it replaces. The probe asserts that line.
+
+**Still open, flagged not fixed:** `runWorkflowPick`'s catch calls `fail()`, so a transient
+`slack.filesInfo` blip in `reloadCsv` permanently kills a batch -- and `advanceBatch`'s `parsing`
+arm, which exists to retry exactly that, can never run because the row has left `ACTIVE_STATUSES`.
+Needs a bounded-attempts story.
 
 **Not built: ReachInbox.** The endpoint is `POST api.reachinbox.ai/api/v1/campaigns/add-email` with a
 Bearer token and a 5/sec limit, but the request body is not publicly documented and Matthew's call
@@ -3708,7 +3768,7 @@ weights, **both directions of the denominator rule** on each score AND on their 
 graduated curve and that more always scores strictly higher than less**, the `GAP_FRACTION` bar, the
 Westminster trap off the real payload, the three distinct unmeasured notes, the live profile shape,
 the `opt_` collision, every grammar form, the presence tie-break and the United States filter.
-`_probe-score.ts` (107) and `_probe-scraper.ts` (71) are untouched and still pass.
+`_probe-score.ts` (107) and `_probe-scraper.ts` (93) are untouched and still pass.
 
 ## ONE number, and the file sorts by it: `presence_score` (2026-08-28)
 `presenceScore` / `sortByPresence` in `gbp-audit.ts`, `geo.ts`. **No migration and no new column.**

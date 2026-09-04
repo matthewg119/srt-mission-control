@@ -11,9 +11,9 @@
 // records what happens otherwise: five checks once sat below them and never ran.
 
 import { parseCsv, parseCsvRows, toCsv } from "../src/lib/scraper/csv";
-import { emailDomain, isDisposableDomain, isRoleAccount, resolveEmailColumn } from "../src/lib/scraper/rules";
+import { columnVerdict, emailDomain, isDisposableDomain, isRoleAccount, resolveEmailColumn } from "../src/lib/scraper/rules";
 import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
-import { formatBreakdown } from "../src/lib/scraper/report";
+import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
 import { hasMx } from "../src/lib/scraper/mx";
 
@@ -235,6 +235,114 @@ eq(
   "mv: a line with no recognisable verdict is skipped, never guessed",
   parseResultLines("e@x.com,mystery").size,
   0
+);
+
+// ── the picker refuses, it does not kill ───────────────────────────────────────────
+// On 2026-09-04 `leads (5).csv` was dropped, :one: was reacted, and workflow 1 correctly refused a
+// file with no email column - by calling fail(), which marked the batch `error`. The :two: reacted
+// straight afterwards was then swallowed with no message at all, and the picker was dead forever.
+// A missing required column is a WRONG PICK, not a broken file.
+
+eq(
+  "a company list picked for filtering rewinds to score",
+  columnVerdict("filter", ["company", "city", "state", "website"]),
+  { kind: "rewind", missing: "email", other: "score", otherColumn: "company" }
+);
+eq(
+  "leads (5).csv's real headers rewind rather than die",
+  columnVerdict("filter", [
+    "company", "city", "state", "industry", "employees", "website", "confidence", "people_count", "contacts",
+  ]).kind,
+  "rewind"
+);
+eq(
+  "a contact list picked for scoring rewinds to filter",
+  columnVerdict("score", ["Email", "First Name"]),
+  { kind: "rewind", missing: "company", other: "filter", otherColumn: "Email" }
+);
+
+// The bound. A rewind is only ever offered once the OTHER workflow's column is confirmed present,
+// so pick -> rewind -> pick cannot bounce twice. A file carrying NEITHER column has to stay
+// terminal, or the picker hands back a choice between two refusals and the lane loops.
+eq(
+  "neither column is terminal, never a rewind (filter)",
+  columnVerdict("filter", ["first_name", "phone"]),
+  { kind: "terminal", missing: "email" }
+);
+eq(
+  "neither column is terminal, never a rewind (score)",
+  columnVerdict("score", ["first_name", "phone"]),
+  { kind: "terminal", missing: "company" }
+);
+check(
+  "no headers can produce a rewind in either direction",
+  (["filter", "score"] as const).every((w) =>
+    [[], ["first_name"], ["phone", "zip"]].every((h) => columnVerdict(w, h).kind !== "rewind")
+  )
+);
+
+eq("both columns present, filter runs", columnVerdict("filter", ["Email", "Company"]), {
+  kind: "ok",
+  column: "Email",
+});
+eq("both columns present, score runs", columnVerdict("score", ["Email", "Company"]), {
+  kind: "ok",
+  column: "Company",
+});
+
+// ‼️ Slack never re-fires reaction_added for an emoji already on the message, and after a wrong
+// pick the other keycap is usually already sitting there. Without this line the rewind looks
+// exactly as broken as the silence it replaces.
+const rewindCard = formatPickRewind({
+  reason: "No email column in that file, so there is nothing to filter. Headers found: `company`",
+  other: "score",
+  otherColumn: "company",
+});
+check("the rewind says to take the reaction off and put it back", rewindCard.includes("take it off and put it back"));
+check("the rewind names the keycap to react", rewindCard.includes(":two:"));
+check("the rewind names the column that survives", rewindCard.includes("`company`"));
+check(
+  "the rewind promises nothing was inserted and nothing was spent",
+  rewindCard.includes("Nothing was inserted and nothing was spent")
+);
+
+// ‼️ "Just drop the file again" is the obvious advice and it is WRONG: recordSeen runs at the
+// drop, before the pick, so a re-drop of a batch that later died comes back as duplicates. Any arm
+// that tells him to re-drop must name the purge first.
+const latePick = (status: Parameters<typeof formatLatePick>[0]["status"], error: string | null) =>
+  formatLatePick({
+    batchId: "044ca122-6125-49af-a87e-0c7b3273a133",
+    fileName: "leads (5).csv",
+    picked: "score",
+    running: "filter",
+    status,
+    error,
+  });
+
+const deadCard = latePick("error", "No email column in that file");
+check("a late pick on a dead batch is not silent", deadCard.length > 0);
+check("a late pick on a dead batch quotes the stored error", deadCard.includes("No email column in that file"));
+check("a late pick on a dead batch names the purge script", deadCard.includes("purge-scraper-batch.ts"));
+check("a late pick on a dead batch names the batch id", deadCard.includes("044ca122-6125-49af-a87e-0c7b3273a133"));
+check(
+  "the purge is named BEFORE the re-drop is suggested",
+  deadCard.indexOf("purge-scraper-batch.ts") < deadCard.indexOf("Then drop the file again")
+);
+
+const doneCard = latePick("done", null);
+check("a late pick on a finished batch names the purge script", doneCard.includes("purge-scraper-batch.ts"));
+
+// Mid-flight is a different answer: the batch is still going, so there is nothing to purge and
+// nothing to re-drop. Collapsing these arms into one would tell him to destroy a live run.
+const flightCard = latePick("mx", null);
+check("a late pick mid-flight does not offer the purge", !flightCard.includes("purge-scraper-batch.ts"));
+check("a late pick mid-flight refuses to switch workflow", flightCard.includes("mid-flight"));
+check("a late pick mid-flight reports the stage", flightCard.includes("`mx`"));
+check(
+  "the same keycap mid-flight reads differently from the other one",
+  formatLatePick({
+    batchId: "b", fileName: "f.csv", picked: "filter", running: "filter", status: "mx", error: null,
+  }) !== flightCard
 );
 
 // ── live MX, opt-in ─────────────────────────────────────────────────────────────────────────────
