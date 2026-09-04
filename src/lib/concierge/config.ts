@@ -111,7 +111,20 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
  * silently dead on every page at once.
  */
 export async function frameAncestorsFor(config: ConciergeConfig): Promise<string> {
-  if (config.allowedOrigins.length > 0) return `'self' ${config.allowedOrigins.join(" ")}`;
+  // ‼️ OUR OWN APP ORIGIN IS ALWAYS ALLOWED, AND WITHOUT IT THE PREVIEW IS A BLANK BOX.
+  //
+  // 'self' is the CONCIERGE hostname, not Mission Control's, so a frame embedded by
+  // /preview/{token} is refused by the browser with nothing in any server log. seedOrigins()
+  // seeds the client's own domain and their hub hosts, never ours, so no amount of re-running
+  // concierge_preview fixes it. This is a hostname we control and every page on it that embeds
+  // the widget is one we render, so it is not a widening of the tenant allowlist below: that
+  // list is still what stops one clinic embedding a competitor's widget.
+  const ours = appOrigin();
+  if (config.allowedOrigins.length > 0) {
+    const listed = new Set(config.allowedOrigins);
+    if (ours) listed.add(ours);
+    return `'self' ${[...listed].join(" ")}`;
+  }
 
   const { data } = await supabaseAdmin
     .from("client_hosts")
@@ -135,5 +148,23 @@ export async function frameAncestorsFor(config: ConciergeConfig): Promise<string
     hosts.add(`https://www.${domain}`);
   }
 
+  if (ours) hosts.add(ours);
+
   return hosts.size > 0 ? `'self' ${[...hosts].sort().join(" ")}` : "'self'";
+}
+
+/**
+ * Mission Control's own origin, or null on a deployment that has not been told what it is.
+ *
+ * Null rather than a guessed default: a wrong origin in a CSP is a widget that silently will not
+ * render, which is the hardest class of bug to see. Same tri-state discipline as BOOKING_LINK.
+ */
+function appOrigin(): string | null {
+  const raw = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return null;
+  }
 }

@@ -22,6 +22,51 @@ import {
   type SourceType,
 } from "@/lib/clients/page-evidence";
 import { magnetsForClient } from "@/lib/concierge/for-client";
+import {
+  approveMagnetCandidate,
+  draftsByPageFor,
+  draftMagnetsForPage,
+} from "@/lib/concierge/magnet-drafts";
+
+/**
+ * Turn whatever the picker sent into a key the database can hold.
+ *
+ * ‼️ THE `cand:` PREFIX IS A TRANSPORT FORM AND MUST NEVER REACH client_pages.lead_magnet_key.
+ * The five offers drafted for a page have no magnet_key until somebody approves one, so the
+ * dropdown carries their row ids instead. Storing that raw would give the page a key magnetByKey
+ * cannot resolve, and offerForPage would then report a chosen offer that hands over nothing,
+ * which is exactly the state the publish gate's block tier exists to catch.
+ *
+ * Choosing the option and pressing Save or Draft it IS the human act, so minting here is not a
+ * silent write: it is the same decision the page studio's `magnet 3` makes, on the other surface.
+ */
+async function resolveMagnetChoice(
+  clientId: string,
+  pageId: string | null,
+  raw: string,
+  actor: string
+): Promise<string | null> {
+  const value = raw.trim();
+  if (!value) return null;
+  if (!value.startsWith("cand:")) return value;
+
+  // A candidate is meaningless without the page it was written for. Refusing by returning null is
+  // right: the save carries on and the page keeps no offer, rather than keeping a broken one.
+  if (!pageId) return null;
+
+  const approved = await approveMagnetCandidate({
+    clientId,
+    pageId,
+    candidateId: value.slice("cand:".length),
+    by: actor,
+  });
+
+  if (!approved.ok) {
+    console.error(`[hub] magnet candidate not approved: ${approved.error}`);
+    return null;
+  }
+  return approved.magnetKey;
+}
 
 export const dynamic = "force-dynamic";
 // Attaching two domains means up to four Vercel calls plus the DNS writeback.
@@ -45,6 +90,8 @@ export async function POST(
   }
 
   const action = String(body.action ?? "");
+  // Who is doing this, for the columns that record a human act. Same shape as page_gate_runs.run_by.
+  const actor = session.user.email || session.user.name || "the board";
 
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -91,7 +138,15 @@ export async function POST(
         pageId: typeof body.pageId === "string" ? body.pageId : null,
         // The offer chosen before the page is written. It never lands in the body; it tells the
         // drafter where to stop. See draftPage's header.
-        magnetKey: typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : null,
+        //
+        // A `cand:` value is one of the five drafted FOR this page, which has no magnet_key yet.
+        // resolveMagnetChoice mints it first, so what reaches the drafter is always a real key.
+        magnetKey: await resolveMagnetChoice(
+          clientId,
+          typeof body.pageId === "string" ? body.pageId : null,
+          typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : "",
+          actor
+        ),
       });
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
 
@@ -115,6 +170,28 @@ export async function POST(
       return NextResponse.json({ ok: true, draft: result.page });
     }
 
+    // ── Write five offers for one page, so the picker is never a list of six library rows ──
+    //
+    // ‼️ AN ACTION AND NOT PART OF THE GET, BECAUSE A PAGE LOAD MUST NEVER CALL A MODEL. The page
+    // studio drafts these automatically when a page is claimed, which is where "ready before
+    // anybody looks" actually happens. This is the board's way to ask for them, and its retry.
+    case "page_magnets_draft": {
+      const pageId = typeof body.pageId === "string" ? body.pageId.trim() : "";
+      if (!pageId) {
+        return NextResponse.json({
+          ok: false,
+          error: "Save the page first. Offers are written for a page, not for a form.",
+        });
+      }
+
+      const result = await draftMagnetsForPage(clientId, pageId, { replace: true });
+      return NextResponse.json(
+        result.ok
+          ? { ok: true, candidates: result.candidates }
+          : { ok: false, error: result.error }
+      );
+    }
+
     case "page_save": {
       const result = await savePage({
         clientId,
@@ -133,7 +210,20 @@ export async function POST(
         evidenceMap: Array.isArray(body.evidenceMap) ? (body.evidenceMap as unknown[]) : undefined,
         // Same undefined/null discipline as evidenceMap directly above: a form that says nothing
         // about the magnet leaves the stored key alone, and an empty string clears it.
-        leadMagnetKey: typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : undefined,
+        //
+        // ‼️ RESOLVED, NOT STORED RAW. The picker's own five carry a `cand:<uuid>` value, which is
+        // a transport form and must never reach client_pages.lead_magnet_key: magnetByKey would
+        // find nothing and offerForPage would report the page as pointing at a dead offer. This
+        // mints the candidate and hands back a real key. Undefined stays undefined.
+        leadMagnetKey:
+          typeof body.leadMagnetKey === "string"
+            ? await resolveMagnetChoice(
+                clientId,
+                typeof body.id === "string" ? body.id : null,
+                body.leadMagnetKey,
+                actor
+              )
+            : undefined,
       });
 
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
@@ -411,5 +501,8 @@ export async function GET(
     gateRuns: latestByPage,
     sources: await loadEvidenceFor(params.id, null),
     magnets: await magnetsForClient(params.id),
+    // The five written for each page, so the picker offers this client's own offers above the
+    // shared catalogue. Keyed by page id because the board renders every page at once.
+    magnetCandidates: await draftsByPageFor(params.id),
   });
 }

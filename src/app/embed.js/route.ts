@@ -53,12 +53,18 @@ const SCRIPT = `(function(){
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
 
- // Vercel's protection params, and nothing else, copied off our own <script src>.
+ // Vercel's protection params and the preview grant, copied off our own <script src>.
+ //
+ // "pt" is a signed, client-scoped, 14-day token that Mission Control's own preview page puts on
+ // this tag so a SWITCHED-OFF widget will answer there, and nowhere else. It is copied rather
+ // than read from a data- attribute so it travels the same path the protection params already
+ // take: into the frame URL and into /api/concierge/config, both of which need it. Nothing on a
+ // client's real website ever carries one. See src/lib/concierge/preview-grant.ts.
  var pass="";
  try{
   var mine=new URL(me.src,location.href).searchParams,keep=[];
   mine.forEach(function(v,k){
-   if(k.indexOf("x-vercel-")===0)keep.push(encodeURIComponent(k)+"="+encodeURIComponent(v));
+   if(k.indexOf("x-vercel-")===0||k==="pt")keep.push(encodeURIComponent(k)+"="+encodeURIComponent(v));
   });
   pass=keep.join("&");
  }catch(e){}

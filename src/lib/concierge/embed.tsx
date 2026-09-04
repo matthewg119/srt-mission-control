@@ -18,8 +18,18 @@ interface Embeddable {
   slug: string;
 }
 
-/** The tenant slug for an enabled widget, or null. One query, one row, no join beyond the slug. */
-async function embeddableClient(clientId: string): Promise<Embeddable | null> {
+/**
+ * The tenant slug for a widget that may render here, or null. One query, one row, no join beyond
+ * the slug.
+ *
+ * `allowDisabled` is the preview lane and ONLY the preview lane. It relaxes exactly one thing,
+ * the `enabled` flag; a client with no concierge_configs row at all still renders nothing,
+ * because there is no widget to preview. See the `preview` prop below.
+ */
+async function embeddableClient(
+  clientId: string,
+  allowDisabled: boolean
+): Promise<Embeddable | null> {
   const { data, error } = await supabaseAdmin
     .from("concierge_configs")
     .select("enabled, clients!inner(slug)")
@@ -28,7 +38,7 @@ async function embeddableClient(clientId: string): Promise<Embeddable | null> {
 
   if (error || !data) return null;
   const row = data as unknown as Record<string, unknown>;
-  if (row.enabled !== true) return null;
+  if (row.enabled !== true && !allowDisabled) return null;
 
   const client = (Array.isArray(row.clients) ? row.clients[0] : row.clients) as
     | Record<string, unknown>
@@ -50,6 +60,19 @@ export interface ConciergeEmbedProps {
    * a different one because a ranking preferred it.
    */
   magnetKey?: string | null;
+  /**
+   * A signed preview token, which makes a SWITCHED-OFF widget render.
+   *
+   * ‼️ ONLY /preview/[token] MAY PASS THIS, AND IT IS NOT A WAY TO TURN THE WIDGET ON. `enabled`
+   * keeps its exact meaning: it is the only thing that puts this on a client's real website, it
+   * still defaults false, and nothing in the preview lane flips it. What the token says is
+   * narrower, and the API routes verify it themselves rather than trusting this tag: "whoever
+   * opened this page holds a link we minted for this client in the last fourteen days".
+   *
+   * It exists because `concierge_preview` promises a widget that can be demoed on the call and
+   * every route refused one. See src/lib/concierge/preview-grant.ts.
+   */
+  preview?: string | null;
 }
 
 /**
@@ -61,14 +84,27 @@ export interface ConciergeEmbedProps {
  * executes normally and document.currentScript is set for it, which is how embed.js reads its own
  * data attributes.
  */
-export async function ConciergeEmbed({ clientId, category, magnetKey }: ConciergeEmbedProps) {
-  const client = await embeddableClient(clientId);
+export async function ConciergeEmbed({
+  clientId,
+  category,
+  magnetKey,
+  preview,
+}: ConciergeEmbedProps) {
+  const token = preview?.trim() || null;
+  const client = await embeddableClient(clientId, token !== null);
   if (!client) return null;
+
+  // ‼️ ON THE src, NOT IN A data- ATTRIBUTE. embed.js copies query params off its own script URL
+  // into the frame URL and into its config fetch, which are the two places that have to carry it.
+  // A data- attribute would need threading through both by hand.
+  const src = token
+    ? `${conciergeOrigin()}/embed.js?pt=${encodeURIComponent(token)}`
+    : `${conciergeOrigin()}/embed.js`;
 
   return (
     <script
       async
-      src={`${conciergeOrigin()}/embed.js`}
+      src={src}
       data-client={client.slug}
       {...(category ? { "data-category": category } : {})}
       {...(magnetKey ? { "data-magnet": magnetKey } : {})}

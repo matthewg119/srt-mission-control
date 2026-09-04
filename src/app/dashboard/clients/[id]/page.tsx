@@ -27,6 +27,7 @@ import {
   type MagnetChoiceView,
 } from "./hub-form";
 import { magnetsForClient } from "@/lib/concierge/for-client";
+import { draftsByPageFor } from "@/lib/concierge/magnet-drafts";
 import { ThemeForm, type ThemeView } from "./theme-form";
 import { BaselineForm } from "./baseline-form";
 import { CompetitorForm } from "./competitor-form";
@@ -165,6 +166,9 @@ export default async function ClientDetailPage({
   // The offers a page for this client can be written toward. Empty when the concierge was never
   // provisioned, and the panel says so rather than hiding the control.
   const hubMagnets: MagnetChoiceView[] = await magnetsForClient(id);
+  // The five offers written for each page, so the picker leads with this client's own rather than
+  // the shared catalogue. One query for every page, keyed by page id.
+  const hubMagnetCandidates = await draftsByPageFor(id);
 
   // The three grids a person fills in: the presence sweep (steps 4, 5 and 25), the competitor
   // pick (step 7) and the review audit. Every one of them writes a column that had a
@@ -713,6 +717,7 @@ export default async function ClientDetailPage({
           pages={hubPages}
           prompts={auditPrompts}
           magnets={hubMagnets}
+          magnetCandidates={hubMagnetCandidates}
           day0ArchivedAt={(client.day_0_archived_at as string | null) ?? null}
           day0Source={(client.day_0_source as string | null) ?? null}
         />

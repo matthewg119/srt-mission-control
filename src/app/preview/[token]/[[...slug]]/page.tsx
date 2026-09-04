@@ -37,7 +37,15 @@ import { verifyOnboardingToken } from "@/lib/clients/token";
 import { loadClientForPreview } from "@/lib/hub/resolve";
 import { listAllForBoard } from "@/lib/hub/pages";
 import { hostsFor } from "@/lib/hub/vercel-domains";
-import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
+import {
+  HubIndexBody,
+  HubAnswerBody,
+  HubReplicaBody,
+  HubReplicaIndexBody,
+  type HubReplicaPage,
+} from "@/components/hub/hub-bodies";
+import { listReplica } from "@/lib/hub/replica-pages";
+import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, skinClass } from "@/lib/hub/skin";
 import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
@@ -80,12 +88,75 @@ export default async function TokenPreview({ params, searchParams }: Props) {
     domain: string | null;
   });
 
-  const kind = searchParams.kind === "reviews" ? "reviews" : "hub";
+  const kind =
+    searchParams.kind === "reviews" ? "reviews" : searchParams.kind === "site" ? "site" : "hub";
   const host =
     wanted.find((w) => w.kind === kind)?.host ??
     `${kind === "reviews" ? "reviews" : "learn"}.{no domain set}`;
 
   const slug = params.slug?.[0];
+  // ‼️ JOINED, NOT [0]. The replica keeps their own path, slashes and all, which is the whole
+  // reason it lives here rather than on a client host: this route is a catch-all on the INTERNAL
+  // host, so a nested path costs nothing, while middleware's HUB_SLUG forbids one on a hostname
+  // a client's registrar controls. That rule is untouched and must stay that way.
+  const replicaPath = (params.slug ?? []).join("/");
+
+  // ── The replica of their own site ────────────────────────────────────────
+  //
+  // ‼️ IT DOES NOT FILTER ON STATUS, AND THAT IS NOT THE DRAFT RULE BEING BENT. The hub branch
+  // below shows published pages only, because a DRAFT answer page read on a call is a promise
+  // about a page that may never ship. A replica row is not a draft of anything: it has no status
+  // column, no publish path and no route that could serve it on a client's domain, and the page
+  // it shadows already exists on their own site. Its ribbon says exactly that.
+  if (kind === "site") {
+    const rows = await listReplica(verified.clientId);
+    const pages: HubReplicaPage[] = rows.map((r) => ({
+      id: r.id,
+      path: r.path,
+      navLabel: r.navLabel,
+      title: r.title,
+      bodyMd: r.bodyMd,
+    }));
+
+    const href = (path: string) =>
+      path ? `/preview/${params.token}/${path}?kind=site` : `/preview/${params.token}?kind=site`;
+
+    const current = replicaPath ? pages.find((p) => p.path === replicaPath) : null;
+    if (replicaPath && !current) notFound();
+
+    const magnetKey = current
+      ? (rows.find((r) => r.path === current.path)?.leadMagnetKey ?? null)
+      : (rows.find((r) => r.path === "")?.leadMagnetKey ?? null);
+
+    return (
+      <div
+        className={`hub-root ${skinClass(client.skin)}`}
+        lang={client.language}
+        style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
+      >
+        <ReplicaRibbon />
+        <div className="hub-wrap">
+          {current ? (
+            <HubReplicaBody client={client} page={current} pages={pages} href={href} />
+          ) : (
+            <HubReplicaIndexBody
+              client={client}
+              home={pages.find((p) => p.path === "") ?? null}
+              pages={pages}
+              href={href}
+            />
+          )}
+        </div>
+        {/*
+          The whole second half of the ask: the assistant, on pages they recognise. `preview`
+          carries this page's own signed token, which is the only thing that makes a widget whose
+          `enabled` is still false answer at all. It turns nothing on: see
+          src/lib/concierge/preview-grant.ts.
+        */}
+        <ConciergeEmbed clientId={verified.clientId} magnetKey={magnetKey} preview={params.token} />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -176,6 +247,39 @@ function PreviewRibbon({ host, slug }: { host: string; slug?: string }) {
       <span>
         This is what <code style={{ color: "#fff" }}>{host}</code>
         {slug ? `/${slug}` : ""} will serve. Nothing here is live yet and nothing is indexed.
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The replica's ribbon, and it says a different thing from the hub's.
+ *
+ * The hub ribbon answers "is this live yet", because a client looking at answer pages wants to
+ * know when they appear on their domain. A client looking at a rebuild of their OWN site asks a
+ * sharper question, usually in the first five seconds and usually out loud: have you touched my
+ * website. The answer is no, and it is the first thing here rather than a reassurance offered
+ * after they ask.
+ */
+function ReplicaRibbon() {
+  return (
+    <div
+      style={{
+        background: "#1d1d1f",
+        color: "rgba(255,255,255,0.75)",
+        borderBottom: "1px solid rgba(255,255,255,0.12)",
+        padding: "10px 16px",
+        font: "13px/1.5 ui-sans-serif, system-ui, sans-serif",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "12px",
+        alignItems: "baseline",
+      }}
+    >
+      <strong style={{ color: "#F5A623" }}>PREVIEW</strong>
+      <span>
+        Your own site, rebuilt on our servers with the assistant on it. Nothing on your website has
+        been changed or copied, and none of this is indexed.
       </span>
     </div>
   );

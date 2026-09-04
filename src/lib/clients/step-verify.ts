@@ -231,7 +231,11 @@ async function artifactOnRecord(ctx: VerifyCtx, label: string): Promise<Verdict>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 33.
+// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 39.
+//
+// (It said 33 for a long time while the array grew to 39. The NUMBER is prose and drifts; the
+// TYPE is the thing that actually holds, and adding site_replica to delivery-steps.ts broke this
+// file at compile time until this entry existed, exactly as its header promises.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
@@ -666,6 +670,75 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
   citation_cleanup_list: async (ctx) => artifactOnRecord(ctx, "the citation cleanup list"),
 
+  // ‼️ IT VERIFIES THE PAGES AND THE EVIDENCE UNDER THEM, NOT THAT ANYBODY LIKED THE RESULT.
+  // Rows exist and each was written from a snapshot of the page it shadows: both are real state
+  // and both are checked. Whether the replica reads like their business is a judgement, which is
+  // why the step is auto_then_manual and waits for a person to open the link.
+  site_replica: async (ctx) => {
+    const { data, error } = await supabaseAdmin
+      .from("client_replica_pages")
+      .select("nav_label, path, lead_magnet_key, source_id")
+      .eq("client_id", ctx.clientId)
+      .order("nav_order", { ascending: true });
+
+    if (error) {
+      // 42P01 is a migration that has not been run, which is a fault with somewhere to send it,
+      // not work somebody still owes. Every other error is the database being unreachable.
+      if (error.code === "42P01") {
+        return broken(
+          "the client_replica_pages table",
+          "it does not exist",
+          "Run docs/2026-09-04-site-replica.sql against this environment."
+        );
+      }
+      return dbUnreachable("client_replica_pages");
+    }
+
+    const rows = data ?? [];
+    if (rows.length === 0) {
+      return notYet(
+        "replica pages for this client",
+        "their site has not been read",
+        "Un-tick the step to re-run it. If it keeps coming back empty, their site is blocking " +
+          "us or has no navigation we can read, and that is a finding for the call."
+      );
+    }
+
+    // ‼️ THE EVIDENCE CHECK IS THE POINT OF THIS VERIFIER. A replica page with no snapshot behind
+    // it was not written from their website; it was written from whatever the model already knew,
+    // which is the one failure this artifact cannot survive, because the person reading it wrote
+    // the original. Never  when the evidence path cannot be reached.
+    const unsourced = rows.filter((r) => !r.source_id).length;
+    if (unsourced === rows.length) {
+      return broken(
+        "the page_sources snapshot behind each replica page",
+        `all ${rows.length} replica pages carry no source_id`,
+        "recordWebsiteSnapshot returned null for every page, so nothing was filed as " +
+          "CLIENT_WEBSITE evidence and these pages were not written from their site. Check " +
+          "page-evidence.ts and re-run the step."
+      );
+    }
+
+    const labels = rows.map((r) => r.nav_label as string).filter(Boolean);
+    const offered = rows.filter((r) => r.lead_magnet_key).length;
+
+    const evidence = [
+      `${rows.length} page${rows.length === 1 ? "" : "s"} of their own site rebuilt (${labels
+        .slice(0, 6)
+        .join(", ")}${labels.length > 6 ? `, +${labels.length - 6} more` : ""})`,
+      `${rows.length - unsourced} of ${rows.length} written from a filed snapshot of the page it shadows`,
+      offered === rows.length
+        ? "every page names its own offer"
+        : `${offered} of ${rows.length} name an offer, the rest fall back to the ladder`,
+    ];
+
+    if (unsourced > 0) {
+      evidence.push(`${unsourced} page${unsourced === 1 ? "" : "s"} lost their snapshot link`);
+    }
+
+    return verified(...evidence);
+  },
+
   hub_preview: async (ctx) => {
     const { data: hosts, error } = await supabaseAdmin
       .from("client_hosts")
@@ -726,7 +799,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   concierge_preview: async (ctx) => {
     const { data, error } = await supabaseAdmin
       .from("concierge_configs")
-      .select("enabled, allowed_origins, analysis_provider")
+      .select("enabled, allowed_origins, analysis_provider, audience, audience_confirmed_at")
       .eq("client_id", ctx.clientId)
       .maybeSingle();
 
@@ -765,18 +838,28 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(
       `concierge_configs row present, ${origins.length} embed origin${origins.length === 1 ? "" : "s"} seeded (${origins.join(", ")})`,
       `analysis provider is \`${data.analysis_provider}\``,
+      // ‼️ SAID, NOT REFUSED, AND THE LINE IS WHERE THE WIDGET IS. A preview answers on our own
+      // hostname, so an unratified audience here is a thing to notice rather than a thing to
+      // stop. concierge_live is where it becomes a refusal, because that is the step that puts
+      // the widget in front of a client's own visitors.
+      data.audience_confirmed_at
+        ? `audience is \`${data.audience}\`, confirmed`
+        : `audience is \`${data.audience}\` but nobody has confirmed it, so it may be the seeded ` +
+          `default. Press one of the two buttons on this card. concierge_live refuses until you do`,
       data.enabled
         ? "enabled is true, so this client's widget is already live"
         : "enabled is false, which is correct before the concierge_live step"
     );
   },
 
-  // The go-live. Two facts, both real state: the widget is on, and it has somewhere to send a
-  // person who wants to book. Neither is asserted by a button.
+  // The go-live. Three facts, all real state: somebody chose who it speaks to, the widget is on,
+  // and it has somewhere to send a person who wants to book. None is asserted by a button.
   concierge_live: async (ctx) => {
     const { data, error } = await supabaseAdmin
       .from("concierge_configs")
-      .select("enabled, booking_mode, booking_url, booking_phone, allowed_origins")
+      .select(
+        "enabled, booking_mode, booking_url, booking_phone, allowed_origins, audience, audience_confirmed_at, audience_confirmed_by"
+      )
       .eq("client_id", ctx.clientId)
       .maybeSingle();
 
@@ -795,6 +878,26 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "the concierge_configs row for this client",
         "no row exists",
         "Complete the concierge_preview step first: it creates the row."
+      );
+    }
+
+    // ‼️ THE AUDIENCE IS CHECKED BEFORE `enabled`, AND THE ORDER IS THE POINT. This is the step
+    // that puts the widget in front of a client's own visitors. `audience` decides which magnet
+    // catalogue resolves, whether competitor ammo is offered at all, and where booking hands off,
+    // and until 2026-09-04 nothing in src/ ever wrote it: every client fell to the column default
+    // 'patient'. A defaulted value and a chosen one look identical in the column, so without this
+    // refusal the wrong bot goes live on a clinic's site and the board shows a green tick over it.
+    //
+    // Refusing FIRST means a person cannot satisfy this step by flipping `enabled` and having the
+    // audience question never come up.
+    if (!data.audience_confirmed_at) {
+      return notYet(
+        "concierge_configs.audience_confirmed_at for this client",
+        `the widget is set to the \`${data.audience}\` lane but nobody has confirmed that, so it ` +
+          `may be the value provisioning guessed`,
+        "Press [Patient lane] or [Owner lane] on the concierge_preview card. Patient is a visitor " +
+          "to their site who might book a treatment; owner is a business owner who might hire us. " +
+          "Getting it wrong points their visitors at the wrong offers entirely."
       );
     }
 
@@ -831,6 +934,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     const origins = (data.allowed_origins as string[] | null) ?? [];
     return verified(
       "concierge_configs.enabled is true",
+      `audience is \`${data.audience}\`, confirmed by ${data.audience_confirmed_by ?? "somebody"}`,
       destination,
       `${origins.length} embed origin${origins.length === 1 ? "" : "s"} allowed`
     );

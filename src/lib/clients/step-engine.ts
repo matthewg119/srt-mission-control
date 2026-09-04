@@ -1097,12 +1097,44 @@ async function instructionsFor(
       const refs = await outputRefsFor(c.id);
       const url = refs.get("concierge_preview");
 
+      // ‼️ WHICH LANE THIS CLIENT IS ON CHANGES WHAT THE DEMO IS. The patient lane's demo is the
+      // skin scan; the owner lane has no camera and demos a visibility answer built from the
+      // market dataset. Telling somebody to "run one scan" on an owner tenant sends them looking
+      // for a button that is not there. See lib/concierge/lane-name.ts.
+      const { data: cfg } = await supabaseAdmin
+        .from("concierge_configs")
+        .select("audience, audience_confirmed_at")
+        .eq("client_id", c.id)
+        .maybeSingle();
+
+      const { conciergeLaneName } = await import("@/lib/concierge/lane-name");
+      const audience = cfg?.audience === "owner" ? "owner" : "patient";
+      const lane = conciergeLaneName(audience);
+      const ratified = Boolean(cfg?.audience_confirmed_at);
+
       return [
+        `*${lane}.*`,
         url ? `*Demo link:* ${url}` : "*The preview link is not on the row yet.* Hit Retry on the board.",
         ":lock: Not live on their site. `enabled` stays false until the concierge_live step.",
         "",
-        "*Walk it on the call. The scan is the demo, not a slide.* Open it on your screen, run one",
-        "scan, and let them watch a patient's version of it rather than describing it.",
+        // ‼️ THE AUDIENCE QUESTION IS ON THE CARD WHETHER OR NOT IT LOOKS WRONG, because the
+        // failure is nobody noticing. Nothing wrote this column until 2026-09-04, so every client
+        // provisioned before then reads `patient` because of a default rather than a decision,
+        // and the two are indistinguishable in the row.
+        ratified
+          ? `*Audience: ${audience}*, confirmed.`
+          : `‼️ *Audience: ${audience}, and nobody has confirmed it.* Patient means a visitor to ` +
+            `their site who might book a treatment. Owner means a business owner who might hire ` +
+            `us. It decides which lead magnets exist, whether competitor evidence is offered at ` +
+            `all, and where booking hands off. Press [Patient lane] or [Owner lane] below. ` +
+            `concierge_live refuses until you do.`,
+        "",
+        audience === "owner"
+          ? "*Walk it on the call. The answer is the demo, not a slide.* Open it on your screen, ask"
+          : "*Walk it on the call. The scan is the demo, not a slide.* Open it on your screen, run one",
+        audience === "owner"
+          ? "it who ChatGPT names in their city, and let them watch the answer come back."
+          : "scan, and let them watch a patient's version of it rather than describing it.",
         "",
         "‼️ *The moment it finishes is when you ask about the booking bot*, because that is the",
         "only point in the call where they have just seen what it does. The wording is on the",
@@ -1114,27 +1146,103 @@ async function instructionsFor(
       ];
     }
 
-    case "concierge_live": {
+    case "site_replica": {
+      const { data: row } = await supabaseAdmin
+        .from("clients")
+        .select("website, domain")
+        .eq("id", c.id)
+        .maybeSingle();
+
+      const site = ((row?.website as string | null) || (row?.domain as string | null) || "").trim();
+      if (!site) {
+        return [
+          "*No website on file, so there is nothing to replicate.* Set the website or the domain",
+          "on the client board and hit Retry. Everything this step does is read off their own site.",
+        ];
+      }
+
+      const { clientPreviewUrl, previewLinkLine } = await import("./review-preview");
+
       return [
-        "*This is the switch.* It flips `concierge_configs.enabled` to true and the widget starts",
-        "answering on every page we host for them.",
+        `*Their site:* ${site}`,
+        previewLinkLine(
+          clientPreviewUrl(c.id, "site"),
+          "Their site rebuilt, with the assistant",
+          "shows every page of the replica"
+        ),
         "",
-        "Three things have to be true first, and none of them is a button:",
-        "  • *Booking destination set* — `calendly` takes appointments in the chat, `link` sends",
+        "*What this is.* Their own navigation, read once, and every section rebuilt in their own",
+        "words with the assistant sitting on it. It is the thing to share your screen on: they",
+        "recognise the pages, so the widget is being demoed on their business rather than on ours.",
+        "",
+        "‼️ *It is not a copy of their website and you should say so in those words.* We did not",
+        "scrape their site, we did not host their pages, and nothing on their domain changed. The",
+        "first question they ask is whether we touched their site. The ribbon on the page answers",
+        "it, and it is better if you answer it first.",
+        "",
+        "*Nothing here is published and nothing here can be.* It lives on our hostname, it is",
+        "noindex, and there is no publish path from it. Their real pages keep their own rankings.",
+        "",
+        "*Open it before the call.* If a section reads like it is about somebody else's business,",
+        "un-tick and Retry: their site is probably rendered in JavaScript and the readable text was",
+        "thin. That is a finding worth having on the call either way.",
+        "",
+        "*[Done] verifies the pages and the snapshot behind each one, not whether it is a good",
+        "likeness.* Nothing can query that, which is why this step waits for you.",
+      ];
+    }
+
+    case "concierge_live": {
+      // ‼️ THIS ARM WAS WRITTEN FOR ONE OF THE TWO LANES AND READ AS THOUGH IT COVERED BOTH.
+      // Every precondition below except the booking destination is about a photo: the consent
+      // copy, the 24 hour deletion, the camera. The owner lane has no camera and takes no photo,
+      // so on an owner tenant this card told somebody to go and confirm a thing that does not
+      // exist, which is worse than saying nothing. The patient wording is kept as it was.
+      const { data: cfg } = await supabaseAdmin
+        .from("concierge_configs")
+        .select("audience, audience_confirmed_at")
+        .eq("client_id", c.id)
+        .maybeSingle();
+
+      const { conciergeLaneName } = await import("@/lib/concierge/lane-name");
+      const audience = cfg?.audience === "owner" ? "owner" : "patient";
+      const lane = conciergeLaneName(audience);
+
+      return [
+        `*This is the switch for the ${lane}.* It flips \`concierge_configs.enabled\` to true and the`,
+        "widget starts answering on every page we host for them.",
+        "",
+        cfg?.audience_confirmed_at
+          ? `Audience is *${audience}*, confirmed, so this is the right bot for these people.`
+          : `‼️ *Audience is ${audience} and nobody has confirmed it.* [Done] refuses until ` +
+            `somebody presses [Patient lane] or [Owner lane] on the concierge_preview card. ` +
+            `Turning the wrong bot on over a client's own visitors is what that refusal exists ` +
+            `to stop.`,
+        "",
+        "These have to be true first, and none of them is a button:",
+        "  • *Booking destination set*: `calendly` takes appointments in the chat, `link` sends",
         "    them to their own page, `none` is capture only and a human calls back. `none` is a",
         "    legitimate choice somebody makes, not a default to arrive at by forgetting.",
-        "  • *Consent copy approved* — they have read what the visitor is told before a photo is",
-        "    taken. Photos are deleted after 24 hours and that promise is enforced in code.",
-        "  • *Subdomain live* — a widget with nowhere to be embedded is not live, it is enabled.",
+        audience === "owner"
+          ? "  • *Nothing to consent to*: this lane takes no photo, so there is no consent copy " +
+            "and no retention promise. It answers from the market dataset."
+          : "  • *Consent copy approved*: they have read what the visitor is told before a photo " +
+            "is taken. Photos are deleted after 24 hours and that promise is enforced in code.",
+        "  • *Subdomain live*: a widget with nowhere to be embedded is not live, it is just enabled.",
         "",
-        "‼️ *This step is manual and must stay manual.* It puts a camera in front of their",
-        "patients. Nothing about that should happen because a sweep decided the prerequisites",
-        "looked satisfied.",
+        audience === "owner"
+          ? "‼️ *This step is manual and must stay manual.* It starts a bot speaking for us to " +
+            "strangers. Nothing about that should happen because a sweep decided the " +
+            "prerequisites looked satisfied."
+          : "‼️ *This step is manual and must stay manual.* It puts a camera in front of their " +
+            "patients. Nothing about that should happen because a sweep decided the " +
+            "prerequisites looked satisfied.",
         "",
         "*If they said no to the booking bot on the call*, set the booking destination to `none`",
         "or skip this step outright, and note that they are on $499/month flat.",
         "",
-        "*[Done] reads the config row:* enabled true, plus a booking destination that exists.",
+        "*[Done] reads the config row:* a confirmed audience, enabled true, and a booking",
+        "destination that exists.",
       ];
     }
 
@@ -1397,6 +1505,43 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
     return [
       { label: "Reuse it", actionId: "avatar_reuse_research", value: `${c.id}` },
       { label: "Run it again", actionId: "avatar_rerun_research", value: `${c.id}` },
+    ];
+  }
+
+  // ‼️ WHO THE WIDGET IS TALKING TO IS A DECISION, AND THIS IS WHERE IT IS MADE.
+  // concierge-setup.ts SEEDS `audience` from the client's vertical, which is a proposal made from
+  // a classifier's free text. Until 2026-09-04 nothing wrote the column at all, so every client
+  // carried the default 'patient' and nobody could tell that from a chosen one. These two buttons
+  // are the ratification, and `concierge_live` refuses while audience_confirmed_at is null.
+  //
+  // Both are offered even after confirmation, because a correction is a legitimate later act and
+  // hiding them would mean the only way to fix a wrong lane is SQL.
+  if (step.key === "concierge_preview") {
+    const { data } = await supabaseAdmin
+      .from("concierge_configs")
+      .select("audience, audience_confirmed_at")
+      .eq("client_id", c.id)
+      .maybeSingle();
+
+    // No row means provisioning has not run. Buttons that confirm a value on a row that does not
+    // exist would refuse on every press, which reads as broken rather than as not-yet.
+    if (!data) return [];
+
+    const confirmed = Boolean(data.audience_confirmed_at);
+    const current = data.audience;
+    const mark = (a: string) => (current === a ? (confirmed ? "confirmed" : "seeded") : "");
+
+    return [
+      {
+        label: `Patient lane${mark("patient") ? ` (${mark("patient")})` : ""}`,
+        actionId: "concierge_audience_patient",
+        value: c.id,
+      },
+      {
+        label: `Owner lane${mark("owner") ? ` (${mark("owner")})` : ""}`,
+        actionId: "concierge_audience_owner",
+        value: c.id,
+      },
     ];
   }
 

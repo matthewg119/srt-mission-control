@@ -1,8 +1,15 @@
-// The 37 delivery steps. One constant, one file — Runner v3 section 1.
+// The 39 delivery steps. One constant, one file — Runner v3 section 1.
 //
 // Was 33 until the AI Skin Concierge added `concierge_preview` and `concierge_live`, and 35
-// until the attribution stack added `tracking_installed` and `self_report_field`. The count is
-// written down in prose here and in step-verify.ts; if you add another step, both say so.
+// until the attribution stack added `tracking_installed` and `self_report_field`, and 38 with
+// the review workflow. `site_replica` is the 39th. The count is written down in prose here and
+// in step-verify.ts; if you add another step, both say so.
+//
+// ‼️ THE PROSE HAD DRIFTED AND THE TYPE HAD NOT, WHICH IS THE DESIGN WORKING. This said 37 and
+// step-verify.ts said 33 while the array held 38. Nothing broke, because the count is
+// documentation and `Record<StepKey, Verifier>` is the enforcement: adding a step still refuses
+// to compile until somebody says what evidence confirms it. Fix the numbers when you notice
+// them; never rely on them.
 //
 // ‼️ THIS LIVES IN config/ RATHER THAN NEXT TO THE CODE THAT RENDERS IT, AND THE REASON IS A
 // BUILD FAILURE, NOT TIDINESS.
@@ -176,12 +183,29 @@ const STEP_LIST = [
   // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
   // auto_then_manual and why [Done] refuses until somebody has confirmed it.
   { key: "hub_preview", phase: PHASE_BEFORE, label: "Hub built, themed, preview live, theme confirmed by me", auto: true, mode: "auto_then_manual", blockedBy: ["intake_received"] },
+  // ‼️ A REPLICA OF THEIR OWN SITE, AND IT IS NEVER PUBLISHED. The full account of why a real
+  // rehost was refused is the header of src/lib/clients/site-replica.ts. The short version: it
+  // renders on /preview/{token}?kind=site, which is ours, noindex and needs no login, because a
+  // PHASE_BEFORE step cannot publish anything past the Day 0 wall and should not want to.
+  //
+  // auto_then_manual because the system really does read their nav and rebuild every section,
+  // but whether it is a fair likeness of their business is a judgement somebody makes by opening
+  // the link. blockedBy concierge_preview because a replica with no assistant on it is half the
+  // artifact, and that is advisory as always: the runner says so in its card either way.
+  { key: "site_replica", phase: PHASE_BEFORE, label: "Replica of their own site built, assistant on it, preview link ready to walk", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview", "concierge_preview"] },
   { key: "review_tool_preview", phase: PHASE_BEFORE, label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   // The conversion engine, staged the same way the hub is: a working preview BEFORE the call,
   // and a separate human decision to go live AFTER it. Auto because the system really does
   // create the config row and seed the embed allowlist; auto_then_manual because the half that
-  // matters is somebody walking the scan on the call, which no runner can assert happened.
-  { key: "concierge_preview", phase: PHASE_BEFORE, label: "AI Skin Concierge preview live, ready to demo on the call", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview"] },
+  // matters is somebody walking it on the call, which no runner can assert happened.
+  //
+  // ‼️ THE LABEL SAYS "AI Concierge" AND NOT "AI Skin Concierge", BECAUSE IT IS ONE ENGINE WITH
+  // TWO AUDIENCES. The patient lane reads a photo and is the AI Skin Concierge; the owner lane
+  // has no camera at all and is the AI Visibility Concierge. A constant in this array is
+  // evaluated once for every client at once, so it cannot know which it is describing and must
+  // not claim. The card body and the instruction arm both hold a client and do say which:
+  // conciergeLaneName() in lib/concierge/lane-name.ts is the one place that decides.
+  { key: "concierge_preview", phase: PHASE_BEFORE, label: "AI Concierge preview live, ready to demo on the call", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview"] },
   { key: "review_card_pdf", phase: PHASE_BEFORE, label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   { key: "call_sheet", phase: PHASE_BEFORE, label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },
 
@@ -244,7 +268,7 @@ const STEP_LIST = [
   // that should happen because a sweep decided the prerequisites looked satisfied. blockedBy
   // call_held because the consent conversation happens on the call, and subdomain_live because
   // a widget with nowhere to be embedded is not live, it is just enabled.
-  { key: "concierge_live", phase: PHASE_AFTER, label: "AI Skin Concierge enabled: booking destination set, consent copy approved", mode: "manual", blockedBy: ["subdomain_live", "call_held"] },
+  { key: "concierge_live", phase: PHASE_AFTER, label: "AI Concierge enabled: audience confirmed, booking destination set, consent copy approved", mode: "manual", blockedBy: ["subdomain_live", "call_held"] },
   // ─────────────────────────────────────────────────────────────────────────
   // THE ATTRIBUTION STACK. These two are the delivery half of section 3 of the agreement, and
   // section 3 is the only reason SRT ever gets paid: the guarantee counts an appointment where

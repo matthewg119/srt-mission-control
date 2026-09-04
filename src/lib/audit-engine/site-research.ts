@@ -103,6 +103,32 @@ function extractSchemaHints(html: string): Record<string, unknown>[] {
   return hints;
 }
 
+/**
+ * One href, resolved and judged, or null.
+ *
+ * ‼️ THE ONE URL RULE, SHARED BY BOTH READERS BELOW. `findInnerPaths` scans every href on the
+ * page and `discoverNavSections` scans anchors for their text; those are legitimately different
+ * extractions, but "is this a same-origin page worth fetching" must be answered in one place, or
+ * the audit and the replica end up disagreeing about what counts as part of somebody's site.
+ *
+ * mailto: and tel: need no rule of their own: their origin is never the site's origin.
+ */
+function sameOriginUrl(href: string, origin: string): string | null {
+  let abs: string;
+  try {
+    abs = new URL(href, origin).toString();
+  } catch {
+    return null;
+  }
+  if (new URL(abs).origin !== origin) return null; // stay on-site
+  // A file is not a page. Fetching one costs a request and yields no readable text.
+  if (/\.(pdf|zip|docx?|xlsx?|pptx?|jpe?g|png|gif|svg|webp|avif|mp4|mp3|wav|ico|css|js|xml|json)$/i.test(
+      new URL(abs).pathname)) {
+    return null;
+  }
+  return abs;
+}
+
 /** Find up to `limit` distinct inner-page URLs worth fetching, based on nav/footer hrefs. */
 function findInnerPaths(html: string, origin: string, limit: number): string[] {
   const hrefs = [...html.matchAll(/href=["']([^"'#]+)["']/gi)].map((m) => m[1]);
@@ -114,19 +140,116 @@ function findInnerPaths(html: string, origin: string, limit: number): string[] {
     const lower = href.toLowerCase();
     if (!INNER_PATH_HINTS.some((hint) => lower.includes(hint))) continue;
 
-    let abs: string;
-    try {
-      abs = new URL(href, origin).toString();
-    } catch {
-      continue;
-    }
-    if (new URL(abs).origin !== origin) continue; // stay on-site
-    if (seen.has(abs)) continue;
+    const abs = sameOriginUrl(href, origin);
+    if (!abs || seen.has(abs)) continue;
     seen.add(abs);
     found.push(abs);
   }
 
   return found;
+}
+
+/**
+ * The handful of HTML entities that actually turn up in a navigation label.
+ *
+ * ‼️ HERE RATHER THAN IN textFromHtml, WHICH DECODES ONLY &nbsp;. That function feeds the audit
+ * classifier, where a stray "&amp;" costs nothing because a model reads straight through it.
+ * A nav label is different: it is rendered VERBATIM on the site replica, on a screen the client
+ * is looking at, and "Botox &amp; Fillers" in their own menu is the kind of detail that makes
+ * the whole artifact look broken. Widening textFromHtml would change what the audit lane sees
+ * for no benefit it asked for.
+ *
+ * Named entities only, plus numeric escapes. Not a general HTML decoder and not trying to be:
+ * the output is React text content, never markup, so an entity we miss renders as itself.
+ */
+function decodeEntities(text: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+    ndash: "-",
+    mdash: "-",
+    rsquo: "'",
+    lsquo: "'",
+    rdquo: '"',
+    ldquo: '"',
+    hellip: "...",
+  };
+
+  return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (whole, body: string) => {
+    if (body.startsWith("#")) {
+      const code = body[1] === "x" || body[1] === "X"
+        ? parseInt(body.slice(2), 16)
+        : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : whole;
+    }
+    return named[body.toLowerCase()] ?? whole;
+  });
+}
+
+/** One page of their site, as their own navigation names it. */
+export interface NavSection {
+  url: string;
+  /** The anchor text, which is what makes a replica recognisable to the person who wrote it. */
+  label: string;
+  /** Their own path with its slashes intact. The homepage is the empty string. */
+  path: string;
+  order: number;
+}
+
+/**
+ * The sections of a site, read off its own navigation.
+ *
+ * ‼️ IT READS ANCHORS RATHER THAN HREFS, AND THAT IS THE DIFFERENCE FROM findInnerPaths. The
+ * label is the payload here: a replica is recognisable because it carries the words the owner
+ * chose for their own menu, not because it guessed that a URL containing "about" is the about
+ * page. So a bare `<link>` or a scripted href, which findInnerPaths would happily take, is not a
+ * section: nothing named it.
+ *
+ * ‼️ IT DOES NOT FOLLOW ANYTHING. One document in, a bounded list out. A crawler that walked
+ * from here would be the rehost this whole lane exists to refuse; see the header of
+ * src/lib/clients/site-replica.ts.
+ *
+ * Document order is kept, because a site's nav is already ordered by how its owner ranks it.
+ */
+export function discoverNavSections(html: string, origin: string, limit: number): NavSection[] {
+  const anchors = [...html.matchAll(/<a\s[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+  const seen = new Set<string>();
+  const out: NavSection[] = [];
+
+  for (const [, href, inner] of anchors) {
+    if (out.length >= limit) break;
+
+    const abs = sameOriginUrl(href, origin);
+    if (!abs) continue;
+
+    const path = new URL(abs).pathname.replace(/^\/+|\/+$/g, "");
+    // The homepage is fetched by the caller and is not a section of itself.
+    if (!path) continue;
+    if (seen.has(path)) continue;
+
+    // An anchor wrapping a logo or an icon has no text. It names nothing, so it is not a
+    // section: a replica page titled "" is worse than one page fewer.
+    // ‼️ DASHES NORMALISED AFTER DECODING, AND IT IS A CONSISTENCY FIX, NOT A STYLE ONE. The
+    // named map turns &mdash; into a hyphen, so leaving &#8212; to decode into a real em dash
+    // would render the SAME label two different ways depending on how their CMS happened to
+    // encode it. The repo-wide no-em-dash rule agrees with the direction; this is the reason it
+    // is done here rather than left to hasBannedDash, which guards drafted copy and not a label
+    // taken verbatim off somebody else's menu.
+    const label = decodeEntities(textFromHtml(inner))
+      .replace(/[–—]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!label || label.length > 60) continue;
+
+    seen.add(path);
+    out.push({ url: abs, label, path, order: out.length });
+  }
+
+  return out;
 }
 
 export async function researchWebsite(websiteInput: string): Promise<SiteResearch> {

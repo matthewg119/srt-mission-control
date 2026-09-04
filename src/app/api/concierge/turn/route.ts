@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
+import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { runConciergeTurn } from "@/lib/concierge/engine";
 import { appendMessage, bumpTurns, loadConciergeSession, loadMessages } from "@/lib/concierge/session";
 import { supabaseAdmin } from "@/lib/db";
@@ -64,7 +65,11 @@ export async function POST(req: NextRequest) {
 
   const slug = await slugForClient(session.clientId);
   const config = slug ? await loadConciergeConfig(slug) : null;
-  if (!config || !config.enabled) return no(404, "Not found");
+  // A switched-off tenant answers nothing, EXCEPT to a caller holding a signed preview token for
+  // this client. The frame forwards it on every call, so a demo walked before concierge_live can
+  // hold a whole conversation. See lib/concierge/preview-grant.ts.
+  const previewToken = new URL(req.url).searchParams.get(PREVIEW_TOKEN_PARAM);
+  if (!config || !conciergeAllowed(config, previewToken)) return no(404, "Not found");
 
   // The next free ordinal. Reading it rather than trusting a counter means a resumed tab lands in
   // the right place, and the unique index catches the race either way.

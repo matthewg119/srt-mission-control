@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { frameAncestorsFor, loadConciergeConfig } from "@/lib/concierge/config";
+import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +41,11 @@ function notFound(): NextResponse {
 export async function GET(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const config = await loadConciergeConfig(slug);
-  if (!config || !config.enabled) return notFound();
+  // A signed preview token for THIS client is the one thing that opens a switched-off tenant.
+  // Without it this route 404s, which is what made the demo link concierge_preview posts before
+  // the call dead on arrival. See src/lib/concierge/preview-grant.ts.
+  const previewToken = new URL(req.url).searchParams.get(PREVIEW_TOKEN_PARAM);
+  if (!config || !conciergeAllowed(config, previewToken)) return notFound();
 
   const ancestors = await frameAncestorsFor(config);
   const q = new URL(req.url).searchParams;
@@ -54,8 +59,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
   // forwards it: on a protected preview, /api/concierge/start and /turn are behind SSO too, and
   // this frame is cross-site so no bypass cookie reaches them. Only Vercel's own params are
   // copied, and in production there are none, so `pass` is empty and nothing below changes.
+  // ‼️ THE PREVIEW TOKEN RIDES THE SAME CHANNEL AS THE PROTECTION PARAMS, deliberately. This
+  // document's own fetches to /start and /turn are the ones that need it, and `pass` is already
+  // the mechanism that carries a query param into every one of them. A second mechanism for the
+  // same job would be a second place to forget.
   const pass = [...q.entries()]
-    .filter(([k]) => k.startsWith("x-vercel-"))
+    .filter(([k]) => k.startsWith("x-vercel-") || k === PREVIEW_TOKEN_PARAM)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
   const path = (q.get("path") ?? "").slice(0, 500);

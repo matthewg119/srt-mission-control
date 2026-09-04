@@ -226,3 +226,137 @@ export function HubAnswerBody({
     </>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The site replica. See src/lib/clients/site-replica.ts for why it exists and why it is
+// never published.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One page of the replica, as the preview needs it. */
+export interface HubReplicaPage {
+  id: string;
+  path: string;
+  navLabel: string;
+  title: string;
+  bodyMd: string;
+}
+
+/**
+ * The replica's own navigation, rendered on every one of its pages.
+ *
+ * A replica with no way to move between its pages is a page, not a site, and "somewhere real to
+ * walk" was the entire request. It carries their own anchor text, which is the thing that makes
+ * the artifact recognisable to the person who wrote the original.
+ */
+function ReplicaNav({
+  pages,
+  current,
+  href,
+}: {
+  pages: HubReplicaPage[];
+  current: string | null;
+  href: (path: string) => string;
+}) {
+  if (pages.length === 0) return null;
+  return (
+    <nav className="hub-eyebrow" aria-label="Site">
+      {pages.map((p, i) => (
+        <span key={p.id}>
+          {i > 0 ? " · " : ""}
+          {p.path === current ? <strong>{p.navLabel}</strong> : <a href={href(p.path)}>{p.navLabel}</a>}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+/**
+ * One replica page.
+ *
+ * ‼️ NO JSON-LD, UNLIKE HubAnswerBody, AND THE ABSENCE IS CORRECT RATHER THAN UNFINISHED. That
+ * component emits QAPage because an answer page IS a question and an answer, and it is indexed on
+ * the client's domain. A replica of somebody's About page is neither: it is noindex, it is on our
+ * hostname, and stamping QAPage on it would be a structured-data claim about a document that does
+ * not exist anywhere. There is nothing to describe to a crawler that will never see it.
+ */
+export function HubReplicaBody({
+  client,
+  page,
+  pages,
+  href,
+}: {
+  client: HubClient;
+  page: HubReplicaPage;
+  pages: HubReplicaPage[];
+  href: (path: string) => string;
+}) {
+  return (
+    <>
+      <header className="hub-head">
+        <HubLogo client={client} />
+        <ReplicaNav pages={pages} current={page.path} href={href} />
+        <h1>{page.title}</h1>
+      </header>
+
+      <div className="hub-answer">
+        {/*
+          Same rule as HubAnswerBody: react-markdown without rehype-raw, so raw HTML never
+          renders. The body here came from a model reading somebody else's page, which is more
+          reason to keep that guard, not less.
+        */}
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{page.bodyMd}</ReactMarkdown>
+      </div>
+
+      <p className="hub-foot">{client.displayName}</p>
+    </>
+  );
+}
+
+/** The replica's front page: their homepage, with the rest of their site listed under it. */
+export function HubReplicaIndexBody({
+  client,
+  home,
+  pages,
+  href,
+}: {
+  client: HubClient;
+  home: HubReplicaPage | null;
+  pages: HubReplicaPage[];
+  href: (path: string) => string;
+}) {
+  const where = [client.city, client.state].filter(Boolean).join(", ");
+
+  return (
+    <>
+      <header className="hub-head">
+        <HubLogo client={client} />
+        <ReplicaNav pages={pages} current={home ? home.path : null} href={href} />
+        <h1>{home?.title || client.displayName}</h1>
+        {where && <p className="hub-lede">{where}</p>}
+      </header>
+
+      {home ? (
+        <div className="hub-answer">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{home.bodyMd}</ReactMarkdown>
+        </div>
+      ) : (
+        <p>Their homepage could not be read, so the replica starts at the sections below.</p>
+      )}
+
+      {pages.length > 1 && (
+        <>
+          <h2>The rest of the site</h2>
+          <ul className="hub-list">
+            {pages
+              .filter((p) => p.path !== "")
+              .map((p) => (
+                <li key={p.id}>
+                  <a href={href(p.path)}>{p.navLabel}</a>
+                </li>
+              ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
+}

@@ -29,6 +29,7 @@ import {
 } from "@/lib/clients/dns-records";
 import { subdomainLabel } from "@/lib/clients/normalize";
 import { readTheme } from "@/lib/hub/theme";
+import { stepNumber } from "@/config/delivery-steps";
 
 interface ClientRow {
   id: string;
@@ -131,8 +132,13 @@ export function formatDnsRecords(
   const out: string[] = preview
     ? [
         "*Three records. Two CNAMEs and one TXT.* Say it that way: \"CNAME and TXT\" reads as two.",
-        "*For reference only right now.* Do not put these in yet: step 15 attaches the hostnames",
-        "and fills in the real values, and step 22 is where they get typed into the registrar and",
+        // ‼️ COMPUTED, NOT TYPED. These were literal "15" and "22" and the second one had
+        // already gone stale: agreement_signed landed on 2026-09-04 and pushed dns_records from
+        // 22 to 23, so this card was sending somebody to the wrong step down the phone. A
+        // position is an array index, which delivery-steps.ts says twice, and every number a
+        // person reads has to come from stepNumber().
+        `*For reference only right now.* Do not put these in yet: step ${stepNumber("hub_preview")} attaches the hostnames`,
+        `and fills in the real values, and step ${stepNumber("dns_records")} is where they get typed into the registrar and`,
         "confirmed. This is here so the whole DNS conversation is in one thread while you are on",
         "the phone.",
         "",

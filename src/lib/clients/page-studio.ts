@@ -324,9 +324,10 @@ async function startSession(text: string, messageTs: string): Promise<void> {
   }
 
   lines.push("");
-  lines.push("Reply with a number to claim one. Then `ask` to walk the interview, or just talk");
-  lines.push("and your words go into the page exactly as you said them. `magnet` picks what this");
-  lines.push("page offers, `draft` writes it from the evidence, `polish` tidies what you wrote,");
+  lines.push("Reply with a number to claim one. Five lead magnet offers get written for it there");
+  lines.push("and then. `ask` walks the interview, or just talk and your words go into the page");
+  lines.push("exactly as you said them. `magnet` picks what this page offers from those five,");
+  lines.push("`draft` writes it from the evidence, `polish` tidies what you wrote,");
   lines.push("`check` runs the quality gate, `done` when you are finished, `cancel` to drop this.");
 
   const posted = (await slack.postThreadReply(channel, messageTs, lines.join("\n"))) as {
@@ -409,10 +410,34 @@ async function claim(session: Session, n: number): Promise<void> {
       "\n*`ask`* walks the interview: what only they know, filed as evidence rather than as page " +
       "copy, and the drafter is then held to it.\n" +
       "Or just talk, and everything you send lands in the body word for word.\n" +
-      "*`magnet`* lists what this page can offer and `magnet <key>` picks one, before you draft.\n" +
+      "*`magnet`* lists what this page can offer and `magnet <number>` picks one, before you draft.\n" +
       "`draft` writes it from the evidence, `polish` tidies what you wrote, `check` runs the " +
       "quality gate, `done` finishes."
   );
+
+  // ‼️ THE OFFERS ARE WRITTEN WITH THE PAGE, NOT ASKED FOR AFTERWARDS.
+  // Matthew, 2026-09-04: "I want lead magnet ideas ready as drafts in the onboarding page for
+  // speed", and the magnet belongs "inside the drafting workflow not side by side it". So this
+  // hangs off the claim rather than off a step or a command: by the time anybody types `magnet`,
+  // five offers about THIS client and THIS question are already in the thread.
+  //
+  // ‼️ ONLY ON A NEW PAGE. `resumed` means somebody is coming back to a draft they already
+  // started, and re-rolling five offers they have already read, possibly after they picked one,
+  // would replace a decision with a fresh guess.
+  //
+  // A failure is SAID and never blocks the claim. Drafting a page with no offers ready is slow;
+  // it is not broken, and `magnet more` is the retry.
+  if (!opened.resumed) {
+    const { draftMagnetsForPage } = await import("@/lib/concierge/magnet-drafts");
+    const drafted = await draftMagnetsForPage(session.clientId, opened.id);
+    await say(
+      session.threadTs,
+      drafted.ok
+        ? renderDrafts(drafted.candidates)
+        : `:warning: No offers were drafted for this page: ${drafted.error}\n` +
+          "`magnet more` tries again, or `magnet <key>` picks one from the catalogue."
+    );
+  }
 }
 
 /** Append what he said, verbatim, and say what happened to it. */
@@ -693,6 +718,34 @@ async function check(session: Session): Promise<void> {
 }
 
 /**
+ * The five, as a person reads them before picking one.
+ *
+ * Numbered rather than keyed, because these do not have keys yet: a candidate only becomes a
+ * `magnet_key` at the moment somebody approves it. The number is positional against
+ * draftsForPage(), which orders by created_at so the list is stable between two readings.
+ */
+function renderDrafts(
+  drafts: Array<{ title: string; promise: string; ctaLabel: string; rationale: string | null }>
+): string {
+  if (drafts.length === 0) {
+    return "No offers came back for this page. `magnet more` tries again.";
+  }
+  return [
+    `*${drafts.length} offers written for this page.* \`magnet 1\` to \`magnet ${drafts.length}\` picks one.`,
+    "",
+    ...drafts.flatMap((d, i) =>
+      [
+        `*${i + 1}.* ${d.title}`,
+        `    _"${d.ctaLabel}"_ on the pill. ${d.promise}`,
+        d.rationale ? `    ${d.rationale}` : "",
+      ].filter(Boolean)
+    ),
+    "",
+    "None of them right? `magnet more` writes five different ones, `magnet no` sets them aside.",
+  ].join("\n");
+}
+
+/**
  * `magnet` — what this page is written to earn, named before it is drafted.
  *
  * ‼️ IT IS A COMMAND HERE FOR THE SAME REASON IT IS A DROPDOWN ON THE BOARD: the Slack lane is a
@@ -701,6 +754,16 @@ async function check(session: Session): Promise<void> {
  * body was written toward nothing and has to be redrafted to benefit.
  *
  * Bare `magnet` lists. `magnet <key>` sets. `magnet none` clears it back to the ladder.
+ *
+ * ‼️ IT ALSO LISTS THE FIVE THIS PAGE HAD WRITTEN FOR IT, AND THOSE COME FIRST (2026-09-04).
+ * Until now every client's list was the same six library rows, none of them about this client,
+ * because nothing in src/ had ever inserted into lead_magnets. draftMagnetsForPage runs when the
+ * page is claimed, so by the time anybody types this the five are already here. `magnet 3` mints
+ * one and points the page at it; `magnet more` re-rolls; the catalogue keys still work as before.
+ *
+ * ‼️ A BARE DIGIT IS SAFE HERE AND IS NOT SAFE ONE LEVEL UP. The top-level digit branch claims a
+ * page and only fires while session.pageId is null; this one requires a claimed page. They can
+ * never both match, which is why the number does not have to be spelled some other way.
  */
 async function magnet(session: Session, arg: string): Promise<void> {
   if (!session.pageId) {
@@ -708,7 +771,10 @@ async function magnet(session: Session, arg: string): Promise<void> {
     return;
   }
 
+  const pageId = session.pageId;
   const { magnetsForClient } = await import("@/lib/concierge/for-client");
+  const { draftsForPage, approveMagnetCandidate, draftMagnetsForPage, rejectAllDrafts } =
+    await import("@/lib/concierge/magnet-drafts");
   const choices = await magnetsForClient(session.clientId);
 
   if (choices.length === 0) {
@@ -726,24 +792,113 @@ async function magnet(session: Session, arg: string): Promise<void> {
     const { data: page } = await supabaseAdmin
       .from("client_pages")
       .select("lead_magnet_key")
-      .eq("id", session.pageId)
+      .eq("id", pageId)
       .eq("client_id", session.clientId)
       .maybeSingle();
 
     const current = (page?.lead_magnet_key as string | null) ?? null;
+    const drafts = await draftsForPage(pageId);
+
     const lines = [
       current
         ? `This page is written toward \`${current}\`.`
         : "This page names no magnet, so the widget falls back to whatever the ladder picks.",
-      "",
+    ];
+
+    if (drafts.length) {
+      lines.push(
+        "",
+        `*Written for this page* (\`magnet 1\` to \`magnet ${drafts.length}\` picks one):`,
+        ...drafts.flatMap((d, i) => [
+          `*${i + 1}.* ${d.title}`,
+          `    _"${d.ctaLabel}"_ on the pill. ${d.promise}`,
+          d.rationale ? `    ${d.rationale}` : "",
+        ]),
+        "",
+        "*Or one already in the catalogue:*"
+      );
+    } else {
+      lines.push("", "*The catalogue:*");
+    }
+
+    lines.push(
       ...choices.map(
         (c) =>
           `\`${c.magnetKey}\` is ${c.title} (${c.scope})${c.deliverable ? "" : " · asset missing"}`
       ),
       "",
-      "`magnet <key>` to pick one, `magnet none` to hand it back to the ladder.",
-    ];
-    await say(session.threadTs, lines.join("\n"));
+      drafts.length
+        ? "`magnet <number>` picks one of the five, `magnet <key>` picks a catalogue one, " +
+          "`magnet more` writes five fresh ones, `magnet none` hands it back to the ladder."
+        : "`magnet <key>` to pick one, `magnet more` to write five for this page, " +
+          "`magnet none` to hand it back to the ladder."
+    );
+
+    await say(session.threadTs, lines.filter((l) => l !== "").join("\n"));
+    return;
+  }
+
+  // `magnet more` — the re-roll. Says so before it starts, because it takes a model call and a
+  // silent twenty seconds reads as a command that did nothing.
+  if (wanted === "more" || wanted === "again") {
+    await say(session.threadTs, "Writing five fresh offers for this page.");
+    const res = await draftMagnetsForPage(session.clientId, pageId, { replace: true });
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: ${res.error}`);
+      return;
+    }
+    await say(session.threadTs, renderDrafts(res.candidates));
+    return;
+  }
+
+  // `magnet <number>` — approve one of this page's own drafts. Read fresh rather than trusting a
+  // number typed against a list somebody may have re-rolled since.
+  const asNumber = /^([0-9]{1,2})$/.exec(wanted);
+  if (asNumber) {
+    const drafts = await draftsForPage(pageId);
+    if (drafts.length === 0) {
+      await say(
+        session.threadTs,
+        "There are no drafted offers on this page right now. `magnet more` writes five."
+      );
+      return;
+    }
+    const picked = drafts[Number(asNumber[1]) - 1];
+    if (!picked) {
+      await say(session.threadTs, `Pick a number between 1 and ${drafts.length}.`);
+      return;
+    }
+
+    const approved = await approveMagnetCandidate({
+      clientId: session.clientId,
+      pageId,
+      candidateId: picked.id,
+      by: "page studio",
+    });
+
+    if (!approved.ok) {
+      await say(session.threadTs, `:warning: That was not set: ${approved.error}`);
+      return;
+    }
+
+    await say(
+      session.threadTs,
+      `This page now earns *${approved.title}*. The pill will read "${approved.ctaLabel}".\n` +
+        `It is in this client's catalogue as \`${approved.magnetKey}\`, so any other page can name ` +
+        `it too.\n` +
+        "`draft` will write the answer to stop where that offer begins."
+    );
+    return;
+  }
+
+  if (wanted === "no" || wanted === "reject") {
+    const res = await rejectAllDrafts(pageId, "page studio");
+    await say(
+      session.threadTs,
+      res.ok
+        ? `Set aside ${res.count} drafted offer${res.count === 1 ? "" : "s"}. \`magnet more\` writes five new ones.`
+        : `That did not save: ${res.error}`
+    );
     return;
   }
 

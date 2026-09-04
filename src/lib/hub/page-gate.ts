@@ -65,6 +65,12 @@ export const NOT_GATED = [
   "hub/pages.ts startPageDraft / appendPageBody  (the page studio)",
   "the preview route",
   "the review tool",
+  // The site replica (client_replica_pages, /preview/{token}?kind=site). It is OUTSIDE this
+  // gate rather than waived from it, and the distinction is structural: replica rows are not
+  // client_pages, they have no status column, and there is no code path that could put one on a
+  // client host. A gate exists to stop something publishable from publishing badly; there is
+  // nothing publishable here. See src/lib/clients/site-replica.ts.
+  "the site replica",
 ] as const;
 
 export type CheckTier = "block" | "warn";

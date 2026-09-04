@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
+import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { openingFor } from "@/lib/concierge/engine";
 import { conciergeAmmo } from "@/lib/concierge/ammo";
 import { magnetByKey, resolveMagnet } from "@/lib/concierge/magnets";
@@ -58,7 +59,16 @@ export async function POST(req: NextRequest) {
   if (!config) return notFound();
 
   // The one thing that puts this on a real site. A row existing is not consent.
-  if (!config.enabled) return notFound();
+  //
+  // ‼️ THE ONE EXCEPTION IS A SIGNED PREVIEW TOKEN FOR THIS EXACT CLIENT, and it is what makes
+  // the demo link concierge_preview posts before the call actually work. It is not a relaxation
+  // of `enabled`: nothing on the open internet can hold one. See lib/concierge/preview-grant.ts.
+  //
+  // ‼️ THIS IS ALSO THE GATE THAT COVERS /turn AND /booked. A session is minted here and nowhere
+  // else, so a session token is proof that a grant was spent, which is why those two routes trust
+  // the session rather than asking for the token again.
+  const token = new URL(req.url).searchParams.get(PREVIEW_TOKEN_PARAM);
+  if (!conciergeAllowed(config, token)) return notFound();
 
   const ipHash = hashIp(clientIpFrom(req));
   if (await overLimit(ipHash)) {
