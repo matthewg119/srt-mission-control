@@ -60,9 +60,21 @@ export async function widgetHostReachable(): Promise<HostVerdict> {
       detail: `answered ${res.status} for /embed.js rather than serving the loader`,
     };
   } catch (e) {
-    const message = (e as Error).message || "";
-    const dns = /ENOTFOUND|EAI_AGAIN|getaddrinfo|ERR_NAME/i.test(message);
-    const timedOut = /abort|timeout|timed out/i.test(message);
+    // ‼️ THE REASON IS IN `cause`, NOT IN `message`, AND READING ONLY THE MESSAGE LOSES IT.
+    // Node's fetch collapses every transport failure into the string "fetch failed" and hangs the
+    // real error off `cause`. Matching on the message alone reported a missing DNS record as
+    // "could not be reached", which sends somebody to look at the route and at Deployment
+    // Protection when the answer was that the hostname does not exist. Walk the chain instead.
+    const parts: string[] = [];
+    for (let err: unknown = e, hops = 0; err && hops < 4; hops++) {
+      const o = err as { message?: string; code?: string; cause?: unknown };
+      if (o.code) parts.push(o.code);
+      if (o.message) parts.push(o.message);
+      err = o.cause;
+    }
+    const message = parts.join(" ");
+    const dns = /ENOTFOUND|EAI_AGAIN|getaddrinfo|ERR_NAME|NXDOMAIN/i.test(message);
+    const timedOut = /abort|timeout|timed out|ETIMEDOUT/i.test(message);
 
     return {
       ok: false,

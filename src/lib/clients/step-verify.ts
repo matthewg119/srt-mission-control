@@ -931,9 +931,37 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
           ? "bookings are taken in the chat via Calendly"
           : "capture only, no booking destination, so a human calls them back";
 
+    // ‼️ ENABLED IS A DECISION SOMEBODY MADE. ANSWERING IS A FACT ABOUT THE WORLD.
+    // This step is the one that says the assistant is LIVE on a client's own website, and until
+    // 2026-09-04 it proved that entirely from columns. On that date it returned a system-tier
+    // green tick for SRT while `concierge.srtagency.com` was NXDOMAIN: the host had never been
+    // attached and no CONCIERGE_HOST was set, so conciergeHostname() fell to a constant naming
+    // nothing, and every embed tag in production pointed at a host that did not exist.
+    //
+    // Nothing in concierge_configs can see that. A row cannot know whether the hostname it is
+    // configured for resolves, so the only honest way to find out is to ask, and a step whose
+    // whole claim is "this is live for their visitors" is exactly where asking is worth the
+    // round trip.
+    //
+    // ‼️ not_yet, NOT broken, AND THE DIFFERENCE MATTERS. Missing DNS is work somebody still owes
+    // and has somewhere to go: attach the host, add the record. `broken` is reserved for a fault
+    // with no owner. The refusal names the host so nobody has to go and find out which one.
+    const { widgetHostReachable } = await import("@/lib/concierge/host-check");
+    const host = await widgetHostReachable();
+    if (!host.ok) {
+      return notYet(
+        `the widget host \`${host.host}\``,
+        `it ${host.detail}, so the assistant cannot load on any page even though the row says enabled`,
+        `Every embed tag names \`${host.host}\`. Attach it to the Vercel project and add its DNS ` +
+          `record at the registrar, then press Done again. Setting CONCIERGE_HOST to the internal ` +
+          `host instead would 404 the dashboard: classifyHost checks the concierge class first.`
+      );
+    }
+
     const origins = (data.allowed_origins as string[] | null) ?? [];
     return verified(
       "concierge_configs.enabled is true",
+      `\`${host.host}\` is answering, so the loader every embed tag names is reachable`,
       `audience is \`${data.audience}\`, confirmed by ${data.audience_confirmed_by ?? "somebody"}`,
       destination,
       `${origins.length} embed origin${origins.length === 1 ? "" : "s"} allowed`

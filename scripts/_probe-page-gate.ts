@@ -192,6 +192,35 @@ async function main(): Promise<void> {
     }
   }
 
+  // ‼️ THE DASH RAIL, AND THE ONE THING THAT IS NOT A DASH.
+  // copy-guard's BANNED includes `--`, so a markdown horizontal rule reads as punctuation and the
+  // replica drafter rejected any section carrying one. Measured on srtagency.com 2026-09-04: four
+  // of seven pages dropped, Home and Pricing among them, and not one of them contained an em dash.
+  // The retry made it worse, rewriting "Founding Offer - 5 spots" as "Founding Offer. 5 spots",
+  // because a model told its copy has a banned dash starts editing hyphens that were never wrong.
+  //
+  // withoutRules() exempts a line that is nothing but hyphens, and nothing else. These cases are
+  // the proof that the exemption did not become a hole.
+  {
+    const { withoutRules } = await import("../src/lib/hub/draft-replica");
+    const { hasBannedDash } = await import("../src/lib/copy-guard");
+    const cases: Array<[string, string, boolean]> = [
+      ["a horizontal rule is not a dash", "copy.\n\n---\n\n## Heading", false],
+      ["an indented rule is not a dash", "copy\n\n   ---   \n\nmore", false],
+      ["a longer rule is not a dash", "copy\n\n----\n\nmore", false],
+      ["a single hyphen is still fine", "Founding Offer - 5 spots", false],
+      ["an em dash is still rejected", "copy \u2014 more", true],
+      ["an en dash is still rejected", "5\u201310 here", true],
+      ["a horizontal bar is still rejected", "copy \u2015 more", true],
+      ["a double hyphen in prose is still rejected", "copy -- more", true],
+      ["--- inside a sentence is still rejected", "he said ---no", true],
+      ["a rule does not hide a real dash beside it", "a\n\n---\n\nb \u2014 c", true],
+    ];
+    for (const [name, input, shouldReject] of cases) {
+      check(name, hasBannedDash(withoutRules(input)) === shouldReject, JSON.stringify(input));
+    }
+  }
+
   console.log(`\n${failures === 0 ? "All green." : `${failures} failing.`}`);
   process.exit(failures === 0 ? 0 : 1);
 }

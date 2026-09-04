@@ -71,9 +71,13 @@ THE RULES, and each one exists because breaking it is worse than a thin page.
 4. NO SELLING THAT THEY DID NOT DO. Match the register of the source. A calm services page stays
    calm. Do not add urgency, superlatives or a call to action that is not on their page.
 
-5. PLAIN MARKDOWN ONLY. Headings, paragraphs, lists. No links, no images, no HTML, no tables.
+5. PLAIN MARKDOWN ONLY. Headings, paragraphs, lists. No links, no images, no HTML, no tables,
+   and no horizontal rules: a heading already separates two sections.
 
-6. NEVER USE AN EM DASH OR AN EN DASH. Use commas, periods or hyphens. This is absolute.
+6. NEVER USE AN EM DASH OR AN EN DASH. Use commas, periods or hyphens. This is absolute,
+   it is checked character by character, and a section that breaks it is DROPPED rather
+   than published. It is the rule this task fails most often, and it fails it in exactly
+   one place: joining two clauses for emphasis. Write that as two sentences.
 
 7. THE TITLE IS THEIRS. Use the page's own heading or nav label. Do not improve it.
 
@@ -145,7 +149,7 @@ function isDrafted(v: unknown, validKeys: Set<string>): v is DraftedSection {
   const d = v as Record<string, unknown>;
   if (typeof d.title !== "string" || !d.title.trim()) return false;
   if (typeof d.bodyMd !== "string" || !d.bodyMd.trim()) return false;
-  if (hasBannedDash(d.title) || hasBannedDash(d.bodyMd)) return false;
+  if (hasBannedDash(d.title) || hasBannedDash(withoutRules(d.bodyMd))) return false;
   const key = d.leadMagnetKey;
   if (key === null || key === undefined) return true;
   // A key that names nothing is refused rather than stored. offerForPage deliberately does NOT
@@ -154,13 +158,69 @@ function isDrafted(v: unknown, validKeys: Set<string>): v is DraftedSection {
   return typeof key === "string" && validKeys.has(key);
 }
 
+/**
+ * The body as the dash rule should see it: markdown thematic breaks removed.
+ *
+ * ‼️ A `---` SEPARATOR IS NOT A DASH, AND TREATING IT AS ONE COST FOUR PAGES OF A LIVE REPLICA.
+ * copy-guard's BANNED is /[emdash endash horbar]|--/, and the `--` half is there to catch somebody
+ * typing a double hyphen as punctuation. A line consisting only of hyphens is a horizontal rule,
+ * which is BLOCK syntax and exactly what rule 5 asks for when it says plain markdown. Measured on
+ * srtagency.com 2026-09-04: Home, Method, Pricing and Contact were all rejected, none of them
+ * contained an em dash or an en dash, and every reported span was a "\n\n---\n\n" between two
+ * headings. The three sections that survived were the three with no section breaks in them.
+ *
+ * Worse than the drop: the one correction that did land rewrote "Founding Offer - 5 spots" as
+ * "Founding Offer. 5 spots", because a model told its copy contains a banned dash starts editing
+ * hyphens that were never the problem. A false positive here does not just reject good work, it
+ * teaches the retry to damage it.
+ *
+ * ‼️ THIS LOOSENS NOTHING. An em dash, an en dash, a horizontal bar and a double hyphen used as
+ * punctuation all still fail, in the title and in the body. Only a line that is nothing but
+ * hyphens is exempt, and a line that is nothing but hyphens cannot be punctuation.
+ */
+export function withoutRules(md: string): string {
+  return md.replace(/^[ \t]*-{3,}[ \t]*$/gm, "");
+}
+
+/**
+ * Every banned dash, quoted with enough of its sentence to be found and fixed in place.
+ *
+ * Bounded at five so one dash-happy draft cannot produce a correction prompt larger than the
+ * section it is correcting.
+ */
+function dashSpans(...fields: string[]): string {
+  const out: string[] = [];
+  for (const field of fields) {
+    for (const m of field.matchAll(/[\u2013\u2014]|--/g)) {
+      const i = m.index ?? 0;
+      out.push(JSON.stringify(field.slice(Math.max(0, i - 45), i + 45)));
+      if (out.length >= 5) return out.join(", ");
+    }
+  }
+  return out.length ? out.join(", ") : "(none found, which means the check and this message disagree)";
+}
+
 function whyInvalid(v: unknown, validKeys: Set<string>): string {
   if (!v || typeof v !== "object") return "not an object";
   const d = v as Record<string, unknown>;
   if (typeof d.title !== "string" || !d.title.trim()) return "title is missing or empty";
   if (typeof d.bodyMd !== "string" || !d.bodyMd.trim()) return "bodyMd is missing or empty";
-  if (hasBannedDash(String(d.title)) || hasBannedDash(String(d.bodyMd))) {
-    return "the copy contains an em dash or en dash, which is banned. Use commas, periods or hyphens.";
+  if (hasBannedDash(String(d.title)) || hasBannedDash(withoutRules(String(d.bodyMd)))) {
+    // ‼️ THE OFFENDING SENTENCES ARE QUOTED BACK, AND WITHOUT THAT THE CORRECTION DOES NOT LAND.
+    // callClaudeJSON gets exactly ONE correction attempt and hands the model this string. Told
+    // only "there is an em dash somewhere", it rewrote the section from scratch and produced new
+    // ones: a live run on srtagency.com lost Home, Method, Pricing and Contact that way, four of
+    // seven sections, and kept only the three driest pages. The source text had no dashes in it
+    // at all, so this is the model reaching for them in persuasive prose, not copying them.
+    //
+    // Naming the span makes the retry surgical, which is the same move draft-page.ts makes when
+    // it quotes back a dangling evidence ref instead of saying "a ref is wrong". The rule itself
+    // is untouched and still absolute: this changes what the model is TOLD, never what is allowed.
+    return (
+      "the copy contains an em dash or en dash, which is banned. Replace each one with a comma, " +
+      "a period or a plain hyphen and change NOTHING else. The offending spans are: " +
+      dashSpans(String(d.title), withoutRules(String(d.bodyMd)))
+    );
   }
   const key = d.leadMagnetKey;
   if (typeof key === "string" && !validKeys.has(key)) {
