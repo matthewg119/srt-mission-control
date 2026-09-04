@@ -49,6 +49,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
   // The offer the PAGE named. Bounded and lowercased before it reaches a query, the same way the
   // config route bounds it: everything on this line arrived from a third party's markup.
   const magnet = (q.get("magnet") ?? "").slice(0, 60).toLowerCase();
+
+  // ‼️ THE PROTECTION TOKEN, CARRIED INTO THIS DOCUMENT'S OWN FETCHES. Same reason embed.js
+  // forwards it: on a protected preview, /api/concierge/start and /turn are behind SSO too, and
+  // this frame is cross-site so no bypass cookie reaches them. Only Vercel's own params are
+  // copied, and in production there are none, so `pass` is empty and nothing below changes.
+  const pass = [...q.entries()]
+    .filter(([k]) => k.startsWith("x-vercel-"))
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
   const path = (q.get("path") ?? "").slice(0, 500);
   const host = (q.get("host") ?? "").slice(0, 200);
 
@@ -94,6 +103,8 @@ button:disabled{opacity:.45;cursor:default}
 <script>
 (function(){
  var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},magnet:${JSON.stringify(magnet)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
+ var PASS=${JSON.stringify(pass)};
+ function api(p){return PASS?p+(p.indexOf("?")<0?"?":"&")+PASS:p}
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
  var token=null,busy=false;
  // ‼️ THE VISITOR'S ZONE, READ IN THE VISITOR'S BROWSER. The calendar has to offer THEIR today.
@@ -133,7 +144,7 @@ button:disabled{opacity:.45;cursor:default}
 
  function lock(on){busy=on;input.disabled=on;send.disabled=on;if(!on){input.focus()}}
 
- fetch('/api/concierge/start',{method:'POST',headers:{'content-type':'application/json'},
+ fetch(api('/api/concierge/start'),{method:'POST',headers:{'content-type':'application/json'},
   body:JSON.stringify({slug:CFG.slug,category:CFG.category,magnet:CFG.magnet,city:CFG.city,path:CFG.path,host:CFG.host})})
  .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
  .then(function(d){token=d.token;bubble('a',d.opening);lock(false);height()})
@@ -145,7 +156,7 @@ button:disabled{opacity:.45;cursor:default}
   if(!text||busy||!token)return;
   input.value='';bubble('u',text);lock(true);
   var wait=el('dots','...');
-  fetch('/api/concierge/turn',{method:'POST',headers:{'content-type':'application/json'},
+  fetch(api('/api/concierge/turn'),{method:'POST',headers:{'content-type':'application/json'},
    body:JSON.stringify({token:token,message:text,tz:tz})})
   .then(function(r){return r.json()})
   .then(function(d){
