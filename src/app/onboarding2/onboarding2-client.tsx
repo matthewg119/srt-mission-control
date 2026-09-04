@@ -41,11 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AGREEMENT_UI,
   CHAT_UI,
-  LANDING,
-  SIGNATURE_UI,
-  SIGNED_UI,
 } from "@/config/onboarding2";
 import { canonicalDocument, canonicalPage, sha256Hex } from "@/lib/onboarding2/canonical";
 import { formatPhoneUS } from "@/lib/clients/normalize";
@@ -58,10 +54,6 @@ const CTA =
   "w-full rounded-lg bg-[#00C9A7] px-6 py-4 text-base font-bold text-[#04252b] disabled:opacity-50";
 const INPUT_BASE =
   "w-full rounded-lg border bg-white/5 px-4 py-3 text-white placeholder-white/30 outline-none focus:border-[#00C9A7] ";
-
-function inputClass(hasError: boolean): string {
-  return INPUT_BASE + (hasError ? "border-red-400/60" : "border-white/15");
-}
 
 interface SnapshotSection {
   n: number;
@@ -104,7 +96,7 @@ interface Agreement {
 // The signing ROW, the snapshot, /api/onboarding2/initial, /api/onboarding2/sign and the
 // onboarding2_initials table all still exist. The SCREENS were removed from the funnel, not the
 // record from the database.
-type Stage = "loading" | "identity" | "chat" | "limited";
+type Stage = "loading" | "chat" | "limited";
 
 interface Report {
   score: number | null;
@@ -262,8 +254,8 @@ export function Onboarding2Funnel({
       });
       if (cancelled) return;
       if (!res || res.ok !== true) {
-        setError("Could not load the agreement. Refresh and try again.");
-        setStage("identity");
+        setError("Could not start your session. Refresh and try again.");
+        setStage("chat");
         return;
       }
       if (res.limited) {
@@ -290,13 +282,12 @@ export function Onboarding2Funnel({
       // The initials seed and the pages-done arithmetic went with the agreement screens. `res`
       // still carries `agreement`, because POST /start still freezes a snapshot; nothing on the
       // client reads it now.
+      // !! EVERY SESSION LANDS IN THE CHAT, RESUMED OR NOT. There is no form to go back to. A
+      // resumed session still gets its stored identity into state, because the chat's own
+      // progress is computed server-side from the same row and this keeps the two agreeing.
       const resumed = res.identity as Identity | null;
-      if (resumed) {
-        setIdentity(resumed);
-        setStage("chat");
-      } else {
-        setStage("identity");
-      }
+      if (resumed) setIdentity(resumed);
+      setStage("chat");
     })();
     return () => {
       cancelled = true;
@@ -352,55 +343,11 @@ export function Onboarding2Funnel({
 
 
 
-  // ── Screen 1 ──
-  async function submitIdentity() {
-    setError(null);
-    const errs: Record<string, string> = {};
-    const name = identity.contactName.trim();
-    const company = identity.businessLegalName.trim();
-    const title = identity.signerTitle.trim();
-    const website = identity.website.trim();
-    const email = identity.email.trim().toLowerCase();
-    const phone = identity.phone.trim();
-
-    // The server checks every one of these again. This is only so the message arrives without a
-    // round trip.
-    if (name.length < 2 || !/\p{L}/u.test(name)) errs.contactName = "Your full name, please.";
-    if (company.length < 2) errs.businessLegalName = "The name your business is registered under.";
-    if (title.length < 2) errs.signerTitle = "Owner, Medical Director, and so on.";
-    if (!/^[a-z0-9.-]+\.[a-z]{2,}/i.test(website.replace(/^https?:\/\//i, "")))
-      errs.website = "That does not look like a website.";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) errs.email = "That email does not look right.";
-    if (phone.replace(/\D/g, "").length < 10) errs.phone = "A ten digit number, please.";
-
-    setIdErrors(errs);
-    if (Object.keys(errs).length) return;
-
-    setSaving(true);
-    const res = await post("email", {
-      sessionToken,
-      contactName: name,
-      businessLegalName: company,
-      signerTitle: title,
-      website,
-      email,
-      contactPhone: phone,
-      renderedAt: renderedAt.current,
-      company_url_hp: trap,
-      attribution: attribution(),
-    });
-    setSaving(false);
-    if (!res || res.ok !== true) {
-      setError((res?.error as string) || "Could not save that. Try again.");
-      return;
-    }
-    track("Lead");
-    // !! STRAIGHT TO THE CHAT, WHICH OPENS ON BOOKING. There is no agreement screen between the
-    // two any more, so this is the whole of the funnel's front half: six fields, then a
-    // conversation that books the call.
-    setStage("chat");
-    window.scrollTo({ top: 0 });
-  }
+  // !! submitIdentity() WAS DELETED HERE ON 2026-09-04 WITH THE SCREEN THAT CALLED IT.
+  // It validated six fields client-side and POSTed them to /api/onboarding2/email. The chat
+  // asks for four of them now and validates them SERVER-SIDE with the same functions, in
+  // lib/onboarding2/intake-steps.ts, which is where that logic always belonged: the client
+  // copy only ever existed to save a round trip. The route is intact and unreferenced.
 
   // !! submitInitial() AND submitSignature() WERE DELETED HERE ON 2026-09-04, WITH THE SCREENS
   // THAT CALLED THEM. Between them they carried the page-hash echo, the client-side
@@ -459,6 +406,33 @@ export function Onboarding2Funnel({
   // That pairing is what almost everybody in the world has looked at a contract in.
   // ─────────────────────────────────────────────────────────────────────────
 
+  // !! THE LAST SCREEN IN THIS COMPONENT IS GONE (2026-09-04, second pass).
+  //
+  // `identity` was six labelled fields: full name, business legal name, title, website, email,
+  // phone. The chat asks for four of them now, in conversation, between the timezone and the day
+  // (see lib/onboarding2/intake-steps.ts). Business legal name moved to the first post-booking
+  // question and the signer title is not asked at all: the agreement it existed for is signed by
+  // hand on the call.
+  //
+  // !! TWO GUARDS DIED WITH THIS SCREEN AND NEITHER WAS REPLACED IN KIND.
+  // The honeypot (`company_url_hp`) and the MIN_FILL_SECONDS time trap both lived on the form.
+  // POST /start still accepts and enforces both, and the mount effect above still sends them, so
+  // the SESSION is still trapped; what is no longer trapped is the identity submission, because
+  // there is no longer a submission. What bounds the chat instead is the per-IP start cap, the
+  // per-IP hourly turn cap, the per-signing turn caps and MIN_TURN_GAP_MS. Stricter in
+  // aggregate, different in kind, and worth knowing before somebody reports "the honeypot is
+  // gone" as a regression.
+  //
+  // Attribution is unaffected: it was always sent to /start as well, which is where the utm_*,
+  // fbc and fbp columns are written.
+  if (!sessionToken) {
+    return (
+      <div className="mx-auto w-full max-w-2xl px-4 py-24 text-center text-white/50">
+        {error ?? "Loading"}
+      </div>
+    );
+  }
+
   return (
     <>
       {demo && (
@@ -466,204 +440,11 @@ export function Onboarding2Funnel({
           TEST MODE. Nothing here reaches Slack, the CRM, your inbox or the client list.
         </div>
       )}
-
-      <Shell>
-        {stage === "identity" && (
-          <div className={CARD}>
-            <div className="mb-6 text-sm font-bold uppercase tracking-wide" style={{ color: REEF }}>
-              {LANDING.eyebrow}
-            </div>
-            <h1 className="mb-3 text-3xl font-bold leading-tight sm:text-4xl">{LANDING.heading}</h1>
-            <p className="mb-6 text-lg font-semibold" style={{ color: REEF }}>
-              {LANDING.promise}
-            </p>
-            <p className="mb-6 text-white/70">{LANDING.body}</p>
-
-            {/* ‼️ SIX FIELDS, AND THIS IS THE ONLY SCREEN THAT ASKS FOR ANY OF THEM. */}
-            <Field
-              label={LANDING.nameLabel}
-              hint={LANDING.nameHelp}
-              autoComplete="name"
-              value={identity.contactName}
-              error={idErrors.contactName}
-              onChange={(v) => setIdentity((s) => ({ ...s, contactName: v }))}
-              required
-            />
-            <Field
-              label={LANDING.companyLabel}
-              hint={LANDING.companyHelp}
-              autoComplete="organization"
-              value={identity.businessLegalName}
-              error={idErrors.businessLegalName}
-              onChange={(v) => setIdentity((s) => ({ ...s, businessLegalName: v }))}
-              required
-            />
-            <Field
-              label={LANDING.titleLabel}
-              hint={LANDING.titleHelp}
-              autoComplete="organization-title"
-              value={identity.signerTitle}
-              error={idErrors.signerTitle}
-              onChange={(v) => setIdentity((s) => ({ ...s, signerTitle: v }))}
-              required
-            />
-            <Field
-              label={LANDING.websiteLabel}
-              hint={LANDING.websiteHelp}
-              type="url"
-              autoComplete="url"
-              placeholder="yourclinic.com"
-              value={identity.website}
-              error={idErrors.website}
-              onChange={(v) => setIdentity((s) => ({ ...s, website: v }))}
-              required
-            />
-            <Field
-              label={LANDING.emailLabel}
-              hint={LANDING.emailHelp}
-              type="email"
-              autoComplete="email"
-              placeholder="you@yourclinic.com"
-              value={identity.email}
-              error={idErrors.email}
-              onChange={(v) => setIdentity((s) => ({ ...s, email: v }))}
-              required
-            />
-            {/* ‼️ LIVE FORMATTED, AND IT ABSORBS A TYPED +1 AS THEY GO. formatPhoneUS is the same
-                function every other funnel in this repo uses; normalizeLeadPhone on the server
-                decides what is STORED, and what is stored is E.164 plus the raw string. There is
-                never a separate WhatsApp number anywhere. */}
-            <Field
-              label={LANDING.phoneLabel}
-              hint={LANDING.phoneHelp}
-              kind="tel"
-              placeholder="(336) 833-2303"
-              value={identity.phone}
-              error={idErrors.phone}
-              onChange={(v) => setIdentity((s) => ({ ...s, phone: formatPhoneUS(v) }))}
-              required
-            />
-
-            {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
-
-            {/* Offscreen, not display:none. A bot fills it, a person never sees it. */}
-            <input
-              type="text"
-              name="company_url_hp"
-              value={trap}
-              onChange={(e) => setTrap(e.target.value)}
-              tabIndex={-1}
-              autoComplete="off"
-              aria-hidden="true"
-              className="absolute left-[-9999px] h-0 w-0 opacity-0"
-            />
-
-            <button
-              className={`${CTA} mt-5`}
-              onClick={submitIdentity}
-              disabled={saving || !sessionToken}
-            >
-              {saving ? "One moment" : LANDING.cta}
-            </button>
-            {/* ‼️ THE LAST LINE ON THIS SCREEN. The value stack that used to sit under it was
-                deleted on 2026-09-02. Do not add a second block below this one. */}
-            <p className="mt-4 text-xs text-white/40">{LANDING.fine}</p>
-          </div>
-        )}
-
-      </Shell>
-
-      {/*
-        !! NO CORNER BUBBLE HERE ANY MORE. It existed to answer questions about the agreement while
-        somebody read it, and there is no agreement on screen to ask about. The only stage that
-        reaches this return is `identity`, six labelled fields; an assistant floating over it would
-        have nothing to be grounded in. The chat takes the whole page one stage later.
-      */}
+      <ChatPanel sessionToken={sessionToken} fullscreen demo={demo} />
     </>
   );
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
   return <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">{children}</div>;
-}
-
-/** The document glyph in the viewer toolbar. Inline SVG, because one icon is not a dependency. */
-function DocIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden
-      className="h-7 w-7 shrink-0"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      style={{ color: REEF }}
-    >
-      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-      <path d="M14 3v5h5" />
-      <path d="M9 13h6M9 17h4" />
-    </svg>
-  );
-}
-
-function Recap({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex gap-3">
-      <dt className="w-20 shrink-0 text-white/40">{label}</dt>
-      <dd className="min-w-0 break-words text-white/85">{value || "not given"}</dd>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  error,
-  hint,
-  type = "text",
-  kind,
-  required,
-  className = "",
-  autoComplete,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  error?: string;
-  hint?: string;
-  type?: string;
-  /** "tel" turns on the numeric keypad and the formatted width. */
-  kind?: "tel";
-  required?: boolean;
-  className?: string;
-  autoComplete?: string;
-  placeholder?: string;
-}) {
-  const isTel = kind === "tel";
-  return (
-    <div className="mb-4">
-      <label className="mb-1.5 block text-sm font-medium">
-        {label}
-        {required && (
-          <span className="ml-1" style={{ color: REEF }}>
-            *
-          </span>
-        )}
-      </label>
-      <input
-        type={isTel ? "tel" : type}
-        inputMode={isTel ? "tel" : type === "email" ? "email" : undefined}
-        autoComplete={isTel ? "tel" : autoComplete}
-        maxLength={isTel ? 14 : undefined}
-        placeholder={placeholder}
-        className={`${inputClass(Boolean(error))} ${className}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      {hint && <p className="mt-1 text-xs text-white/40">{hint}</p>}
-      {error && <p className="mt-1.5 text-xs text-red-300">{error}</p>}
-    </div>
-  );
 }

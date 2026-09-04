@@ -106,13 +106,28 @@ async function main(): Promise<void> {
   } as Onboarding2SigningRow;
 
   // ── The mode gate ──
-  check("a session with no identity is grounded", modeFor(unsigned) === "grounded");
-  check("a session that has been through screen one is qualifying", modeFor(signed) === "qualifying");
+  //
+  // ‼️ IT IS UNCONDITIONAL NOW, AND THAT IS THE ASSERTION WORTH MAKING. This checked
+  // `signed_at`, then `email`, as the agreement screens and then the identity form came out.
+  // Both were wrong the moment the thing they keyed on stopped being collected before the chat:
+  // the email became the FIFTH question in the conversation, so keying on it ran the first four
+  // turns in grounded mode and the scheduling branch never fired. There is no phase left in this
+  // funnel where an agreement is on screen, so there is no phase grounded mode describes.
+  check("every session is qualifying, whatever is on the row", modeFor(unsigned) === "qualifying");
+  check("a row with an email is qualifying too", modeFor(signed) === "qualifying");
+
+  // ‼️ THE SECOND COPY OF THIS RULE IS THE ONE THAT BIT. runTurn() re-derived the mode from
+  // `!row.signed_at` instead of importing modeFor, so post-booking turns were handed the
+  // GROUNDED prompt and asked somebody who had just booked a call to ask questions about an
+  // agreement they had never seen. A rule with two implementations has no owner.
+  const chatSrc = fs.readFileSync(
+    path.join(process.cwd(), "src/lib/onboarding2/chat.ts"),
+    "utf8"
+  );
   check(
-    "signed_at no longer decides the mode",
-    modeFor({ signed_at: "2026-09-01T00:00:00Z", email: null, agreement_snapshot: snapshot } as Onboarding2SigningRow) ===
-      "grounded",
-    "a signature with no identity behind it is not a qualifying session"
+    "runTurn reads the mode from modeFor, not from a private copy of the rule",
+    /const grounded = modeFor\(/.test(chatSrc) && !/const grounded = !args\.ctx\.row\.signed_at/.test(chatSrc),
+    "runTurn is deriving the mode itself again"
   );
 
   // ── Grounded mode has exactly one tool, and it cannot write anything ──
@@ -313,12 +328,23 @@ async function main(): Promise<void> {
     !QUALIFYING_QUESTIONS.some((q) => ["website", "top_objection", "top_competitor"].includes(q.key)),
     QUALIFYING_QUESTIONS.map((q) => q.key).join(",")
   );
+  // ‼️ business_name IS QUESTION ONE SINCE 2026-09-04. The identity form used to collect it
+  // before anything else; the chat intake that replaced the form asks four things and not this,
+  // because it is not needed to BOOK. It is needed afterwards: clients.legal_name is NOT NULL and
+  // startPilot falls back to the EMAIL ADDRESS without it.
   check(
-    "question one is open text",
-    QUALIFYING_QUESTIONS[0].key === "highest_margin_service" &&
+    "question one asks for the business name, in their own words",
+    QUALIFYING_QUESTIONS[0].key === "business_name" &&
       QUALIFYING_QUESTIONS[0].freeText === true &&
       QUALIFYING_QUESTIONS[0].options.length === 0,
     JSON.stringify(QUALIFYING_QUESTIONS[0])
+  );
+  check(
+    "the margin question is still open text, right after it",
+    QUALIFYING_QUESTIONS[1].key === "highest_margin_service" &&
+      QUALIFYING_QUESTIONS[1].freeText === true &&
+      QUALIFYING_QUESTIONS[1].options.length === 0,
+    JSON.stringify(QUALIFYING_QUESTIONS[1])
   );
   // ‼️ TWO OPEN-TEXT QUESTIONS NOW, NOT ONE. highest_margin_service and primary_treatment are both
   // free text on purpose: each one ends up interpolated into generated copy, so a menu would put
@@ -779,7 +805,13 @@ async function main(): Promise<void> {
       ? { ...a, answer: "Injectables, Botox and filler" }
       : a.key === "booking_software"
         ? { ...a, answer: "Boulevard" }
-        : a
+        // ‼️ THE BUSINESS NAME IS AN ANSWER NOW, NOT A SIGNATURE FIELD. This fixture used to set
+        // it only on the signing row, and the check below passed because that was the only
+        // source. It is the fallback now, so an answer of "something" (fakeLead's filler) would
+        // win and land in clients.legal_name.
+        : a.key === "business_name"
+          ? { ...a, answer: "Glow Clinic LLC" }
+          : a
   );
 
   const { patch, domain } = intakePatchFrom(
@@ -837,10 +869,14 @@ async function main(): Promise<void> {
     typeof patch.intake_completed_at === "string",
     ""
   );
+  // ‼️ THE ANSWER WINS OVER THE SIGNING ROW. `business_legal_name` was typed into a signature
+  // block that no longer exists, so on every session since 2026-09-04 it is null and the
+  // business_name ANSWER is the only source. Both are read, answer first, so form-era rows still
+  // resolve.
   check(
-    "the signature block becomes the canonical legal name",
+    "the business name answer becomes the canonical legal name",
     patch.legal_name === "Glow Clinic LLC" && patch.dba_name === "Jordan Reyes",
-    ""
+    String(patch.legal_name)
   );
   check(
     "answeredCount counts only the answers that were actually given",

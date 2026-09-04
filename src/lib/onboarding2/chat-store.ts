@@ -35,22 +35,30 @@ export interface ChatTurnRow {
 /**
  * Which toolset this session gets.
  *
- * ‼️ IT KEYS ON IDENTITY, NOT ON A SIGNATURE (changed 2026-09-04). It used to read
- * `row.signed_at ? "qualifying" : "grounded"`, which was right while the funnel was
- * identity -> agreement -> signature -> questions. The agreement and signature screens are gone:
- * nothing sets signed_at any more, so that expression would pin every new session to grounded
- * mode forever and hand a booking flow an assistant whose only job is answering questions about
- * a document nobody is reading.
+ * ‼️ IT IS ALWAYS "qualifying" NOW, AND THE ARGUMENT IS THAT THERE IS NOTHING ELSE TO BE.
  *
- * `email` is the right gate because POST /api/onboarding2/email is what sets it, and that is
- * screen one. The chat is not mounted before then, so a row without an email reaching here is a
- * session that skipped the front door, and grounded mode is the correct, harmless answer for it.
+ * Two rewrites landed here on 2026-09-04 and the second corrected the first. It read
+ * `row.signed_at ? ... : "grounded"` while the funnel was identity -> agreement -> signature ->
+ * questions; when the agreement screens went, that would have pinned every session to grounded
+ * forever, so it became `row.email ? ...`. Then the identity FORM went too, and the email became
+ * the FIFTH question in the chat rather than something collected before it. Keying on email
+ * meant the first four turns of every conversation ran in grounded mode: the scheduling branch
+ * in the chat route tests `mode === "qualifying"`, so it would never fire, and an assistant
+ * whose only job is answering questions about an agreement would have been handed "Mornings".
  *
- * ‼️ "grounded" IS STILL A VALID MODE AND MUST STAY IN ChatMode. onboarding2_chat_turns has a
- * CHECK constraint naming exactly ('grounded', 'qualifying'), and real rows carry both.
+ * There is no phase left in this funnel where the agreement is on screen, so there is no phase
+ * that grounded mode describes.
+ *
+ * ‼️ "grounded" STAYS IN ChatMode AND MUST. onboarding2_chat_turns has a CHECK constraint naming
+ * exactly ('grounded', 'qualifying') and real rows carry both. groundedPrompt() is likewise kept
+ * whole. What was removed is the funnel screen, not the record or the capability.
+ *
+ * The argument is deliberately unused rather than dropped: every caller passes a row, and a
+ * signature change would touch four files to say the same thing this comment says.
  */
 export function modeFor(row: Onboarding2SigningRow): ChatMode {
-  return row.email ? "qualifying" : "grounded";
+  void row;
+  return "qualifying";
 }
 
 export async function loadTurns(signingId: string): Promise<ChatTurnRow[]> {

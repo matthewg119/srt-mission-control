@@ -29,7 +29,7 @@ import {
   type QualifyingQuestion,
 } from "@/config/onboarding2";
 import { snapshotToPlainText, type AgreementSnapshot } from "./snapshot";
-import { flagQuestion } from "./chat-store";
+import { flagQuestion, modeFor } from "./chat-store";
 import { leadEmailFor, upsertLead } from "./lead";
 import type { Onboarding2LeadRow, Onboarding2SigningRow, QualifyingAnswer } from "./types";
 
@@ -344,7 +344,19 @@ export async function runTurn(args: {
 }): Promise<{ ok: boolean; response: string }> {
   if (!isAIConfigured()) return { ok: false, response: "" };
 
-  const grounded = !args.ctx.row.signed_at;
+  // ‼️ modeFor(), NOT `!row.signed_at`. THIS LINE WAS A SECOND, PRIVATE COPY OF THE MODE RULE AND
+  // IT DEAD-ENDED THE FUNNEL.
+  //
+  // chat-store.ts owns the question "which mode is this session in", and it was rewritten twice
+  // on 2026-09-04 as the agreement screens and then the identity form came out. This expression
+  // was not, because it never imported it: it re-derived the same fact from `signed_at`, which
+  // nothing sets any more. So modeFor() correctly said "qualifying", the route correctly ran the
+  // scheduling machine, and then every post-booking turn was handed the GROUNDED prompt and
+  // invited somebody who had just booked a call to ask questions about an agreement they had
+  // never seen. It answered "I have noted that the signing entity is Glow Clinic LLC."
+  //
+  // One reader now. A rule with two implementations has no owner.
+  const grounded = modeFor(args.ctx.row) === "grounded";
   const systemPrompt = grounded
     ? groundedPrompt(args.ctx.row.agreement_snapshot)
     : qualifyingPrompt(args.ctx.row, args.ctx.lead);

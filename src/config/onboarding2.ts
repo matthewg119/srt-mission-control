@@ -172,6 +172,26 @@ export interface QualifyingQuestion {
 
 export const QUALIFYING_QUESTIONS: QualifyingQuestion[] = [
   {
+    // ‼️ FIRST, AND IT IS HERE BECAUSE THE IDENTITY FORM STOPPED ASKING IT (2026-09-04).
+    //
+    // The form collected `businessLegalName` before anything else. The chat intake that replaced
+    // it asks for the website, the name, the email and the phone, and deliberately not this: four
+    // questions before a booking is already the ceiling, and this one is not needed to BOOK.
+    //
+    // It is needed afterwards, twice, which is why it did not simply disappear. `clients.legal_name`
+    // is NOT NULL and startPilot falls back to the EMAIL ADDRESS when it has no name, which puts
+    // "someone@clinic.com" where a company name goes on every board in Mission Control. And the
+    // agreement, now signed by hand on the call, binds "[Client Business Legal Name]".
+    //
+    // Asked first of the post-booking set because it is the easiest question in it: they have just
+    // booked, and typing their own clinic's name is a warm-up, not an interrogation.
+    key: "business_name",
+    question: guard("q0", "What is the name of your business?"),
+    help: guard("q0 help", "However it is registered, if you know it."),
+    options: [],
+    freeText: true,
+  },
+  {
     key: "highest_margin_service",
     // OPEN TEXT as of 2026-09-03. The option list was a med-spa menu, and a clinic whose best
     // margin is something not on it had to pick "Something else", which is the answer that

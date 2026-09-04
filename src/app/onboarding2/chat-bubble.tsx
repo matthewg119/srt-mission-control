@@ -42,6 +42,30 @@ import { BUBBLE_GAP_MS } from "@/lib/onboarding2/texting";
 
 const REEF = "#00C9A7";
 
+/**
+ * Stamp the browser's own hostname onto the Calendly URL.
+ *
+ * ‼️ WITHOUT `embed_domain` CALENDLY DOES NOT POST event_scheduled AND THE CONVERSATION STOPS
+ * DEAD. That is exactly what happened on 2026-09-04: the booking went through, the iframe showed
+ * "You are scheduled!", and the thread underneath never continued. `embed_type=Inline` is set
+ * server-side in lib/onboarding2/booking.ts; this half has to happen in the browser because the
+ * value must be the host the page is actually being served from, and the same deployment answers
+ * on the apex, on the mission subdomain and on a *.vercel.app preview.
+ *
+ * Falls back to the untouched URL rather than throwing: a calendar that renders and does not
+ * report back is worse than one that reports back, and far better than no calendar at all.
+ */
+function embedUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.searchParams.set("embed_domain", window.location.hostname);
+    url.searchParams.set("embed_type", "Inline");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 interface Msg {
   role: "user" | "assistant";
   content: string;
@@ -349,7 +373,7 @@ export function ChatPanel({
         {bookingUrl && !booking && (
           <div className="pt-2">
             <iframe
-              src={bookingUrl}
+              src={embedUrl(bookingUrl)}
               title="Book your onboarding call"
               className="h-[640px] w-full rounded-xl border border-white/10 bg-white"
             />

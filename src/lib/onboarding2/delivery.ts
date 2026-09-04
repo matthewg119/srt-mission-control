@@ -141,9 +141,15 @@ export function intakePatchFrom(
     // nothing else, and four steps are blockedBy it.
     intake_completed_at: now,
     onboarding_status: "intake_complete",
-    // The signature block IS the canonical NAP. It is the one place this person typed their
-    // details knowing they were signing them.
-    ...(signed.business_legal_name ? { legal_name: signed.business_legal_name } : {}),
+    // ‼️ THE BUSINESS NAME NOW COMES FROM THE QUESTIONS, WITH THE SIGNING ROW AS A FALLBACK, AND
+    // THE ORDER MATTERS. `business_legal_name` was typed into a signature block that no longer
+    // exists, so on every session since 2026-09-04 it is null and `a.business_name` is the only
+    // source. Rows from the form era have the column and no answer, so both are read, answer
+    // first. Without this, startPilot falls back to the email address and every board in Mission
+    // Control shows "someone@clinic.com" where a company name belongs.
+    ...(a.business_name || signed.business_legal_name
+      ? { legal_name: a.business_name || signed.business_legal_name }
+      : {}),
     ...(signed.address_line1 ? { address_line1: normalizeAddress(signed.address_line1) } : {}),
     ...(signed.address_city ? { city: signed.address_city } : {}),
     ...(signed.address_state ? { state: normalizeState(signed.address_state) } : {}),

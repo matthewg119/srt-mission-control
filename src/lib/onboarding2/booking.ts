@@ -29,6 +29,31 @@ import { bookingPageUrl } from "@/lib/calendly";
 import type { Onboarding2LeadRow } from "./types";
 
 /**
+ * Has Calendly reported a booking for this lead?
+ *
+ * ‼️ IT IS NOT `Boolean(lead.booked_slot_at)`, AND THAT MISTAKE DEAD-ENDED THE FUNNEL ONCE.
+ *
+ * `booked_slot_at` is the appointment's real instant, and it is only known when the event was
+ * VERIFIED against Calendly's API: the start time comes off the verified event and is never
+ * invented from the request. So on the documented degraded path, where CALENDLY_API_TOKEN is
+ * unset and nothing can be checked, a perfectly real booking lands with `calendly_event_uri` set
+ * and `booked_slot_at` null.
+ *
+ * The chat route gates the entire questions phase on "has this person booked". Reading that off
+ * `booked_slot_at` meant every unverified booking stayed stuck in the scheduling branch forever,
+ * answering "just tap one of the options below" to a calendar that was already gone. Both
+ * readers use this instead, so the two cannot drift.
+ *
+ * Deliberately NOT widened to `call_day`: that is set the moment somebody taps a day, which is
+ * BEFORE the calendar is even shown. Gating on it would walk somebody into the questions while
+ * Calendly was still on their screen.
+ */
+export function hasBooked(lead: { booked_slot_at: string | null; calendly_event_uri: string | null } | null): boolean {
+  if (!lead) return false;
+  return Boolean(lead.booked_slot_at || lead.calendly_event_uri);
+}
+
+/**
  * Which of the two event types an onboarding call is.
  *
  * ‼️ bookingPageUrl() FALLS BACK TO NEXT_PUBLIC_CALENDLY_URL when the install-specific var is
@@ -66,6 +91,22 @@ export function bookingUrlFor(lead: Onboarding2LeadRow, date: string | null): st
   if (lead.email) url.searchParams.set("email", lead.email);
   // Calendly hides its own cookie banner inside an embed when asked.
   url.searchParams.set("hide_gdpr_banner", "1");
+
+  // ‼️ `embed_type` IS WHAT MAKES CALENDLY POST event_scheduled TO THE PARENT WINDOW, AND
+  // WITHOUT IT THE CONVERSATION SILENTLY DEAD-ENDS.
+  //
+  // This is the bug Matthew hit: the booking completed, Calendly rendered its own "You are
+  // scheduled!" panel inside the iframe, and the chat below it never said another word. A plain
+  // <iframe src="https://calendly.com/..."> is a perfectly good booking page and emits NOTHING.
+  // Calendly only runs its parent-window messaging when the URL declares itself an embed, which
+  // is why /chatgpt-ads works: it loads widget.js, and widget.js appends these two parameters.
+  //
+  // ‼️ `embed_domain` IS ADDED BY THE CLIENT, NOT HERE, and that is not laziness. It has to be
+  // the host the BROWSER is on, and this function runs on the server for a request that could be
+  // the apex, the mission subdomain or a *.vercel.app preview. Guessing it from an env var is how
+  // the preview silently stops emitting events. See chat-bubble.tsx, which appends it from
+  // window.location.hostname immediately before mounting the frame.
+  url.searchParams.set("embed_type", "Inline");
 
   // YYYY-MM-DD. Anything else is dropped rather than passed through, because a bad `date`
   // parameter makes Calendly render its error page inside our iframe.

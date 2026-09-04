@@ -40,6 +40,7 @@ import { loadByToken, patchDelivery } from "@/lib/onboarding2/session";
 import { findLeadByEmail, leadEmailFor, upsertLead } from "@/lib/onboarding2/lead";
 import { bookedCard } from "@/lib/onboarding2/card";
 import { verifyScheduledEvent } from "@/lib/calendly";
+import { hasBooked } from "@/lib/onboarding2/booking";
 import { provisionFromSigning } from "@/lib/onboarding2/provision";
 import { openOpsThread } from "@/lib/onboarding2/delivery";
 import { onboardingChannel } from "@/lib/onboarding2/constants";
@@ -74,7 +75,9 @@ export async function POST(req: NextRequest) {
   const existing = await findLeadByEmail(email);
   // Idempotent. Calendly's embed can fire event_scheduled more than once on a slow connection,
   // and a second card in a thread somebody is reading is worse than a dropped one.
-  if (existing?.booked_slot_at) {
+  // ‼️ SAME PREDICATE THE CHAT GATE USES. An unverified booking sets only calendly_event_uri,
+  // so checking booked_slot_at here would let a second event_scheduled re-provision the client.
+  if (hasBooked(existing)) {
     return NextResponse.json({ ok: true, alreadyBooked: true });
   }
 

@@ -111,52 +111,109 @@ async function main(): Promise<void> {
   const sectionsOn = (pg: Page): Section[] =>
     pg.sections.map((n) => byNumber.get(n)).filter((s): s is Section => Boolean(s));
 
-  // ── 2. Screen one refuses a partial identity, field by field ──
-  const base = {
-    sessionToken: token,
-    contactName: "Jordan Reyes",
-    businessLegalName: "Glow Clinic LLC",
-    signerTitle: "Owner",
-    website: "glowclinic.com",
-    email: `walk-${Date.now()}@example.com`,
-    contactPhone: "(336) 833-2303",
-    renderedAt,
-    company_url_hp: "",
-    attribution: {},
-  };
+  const leadEmail = `walk-${Date.now()}@example.com`;
 
-  for (const missing of [
-    ["contactName", "clients.legal_name is NOT NULL and startPilot falls back to the email address"],
-    ["businessLegalName", "the party the agreement binds"],
-    ["signerTitle", "the authority to bind it"],
-    ["website", "clients.domain comes from this and eight hub-lane steps need it"],
-    ["email", "where the executed contract goes"],
-    ["contactPhone", "how we reach them about the call"],
-  ] as const) {
-    const res = await post("email", { ...base, [missing[0]]: "" });
-    check(`POST /email REFUSES without ${missing[0]}`, res.ok === false, missing[1]);
+  // ── 2. THE INTAKE IS A CONVERSATION NOW, AND THIS WALKS IT ──
+  //
+  // ‼️ IT USED TO DRIVE POST /email, WHICH THE FUNNEL NO LONGER CALLS. Screen one was six labelled
+  // fields; the chat asks four of them itself, between the timezone and the day. Those checks
+  // kept passing after the form was deleted, which made them worse than useless: a green probe
+  // over a dead route reads as coverage of the live one.
+  //
+  // /api/onboarding2/email is deliberately still mounted and still enforces every rule it ever
+  // did. It simply has no caller, like /initial and /sign.
+  //
+  // ‼️ THE GAP BETWEEN TURNS IS REAL AND NOT PADDING. The route refuses a user turn arriving
+  // within MIN_TURN_GAP_MS of the last one, on the grounds that a human has not read the reply
+  // yet. A probe that fires faster than that gets 429s with no `messages`, which is exactly how
+  // this walk failed on its first run.
+  const TURN_GAP_MS = 1500;
+
+  async function say(text: string): Promise<Json> {
+    await new Promise((r) => setTimeout(r, TURN_GAP_MS));
+    return post("chat", { sessionToken: token, message: text });
   }
 
-  const bad = await post("email", { ...base, website: "not a website" });
-  check("POST /email REFUSES an unreadable website", bad.ok === false, JSON.stringify(bad).slice(0, 160));
+  function saidThat(res: Json, fragment: string): boolean {
+    return JSON.stringify((res as { messages?: string[] }).messages ?? []).includes(fragment);
+  }
 
-  const email = base.email;
-  const complete = await post("email", base);
-  check("POST /email accepts the whole identity", complete.ok === true, JSON.stringify(complete).slice(0, 200));
-
-  // ── 3. The identity comes BACK on resume, so nothing is ever typed twice ──
-  const resumed = await post("start", { renderedAt, company_url_hp: "", attribution: {}, resume: token });
-  const identity = resumed.identity as Json | null;
+  // The two taps. Nothing is stored for these: the user turn itself is the record, and
+  // replayDraft() reads it back. See lib/onboarding2/intake-steps.ts.
   check(
-    "a resumed session hands back the WHOLE identity, not just the email",
-    Boolean(identity) &&
-      identity?.contactName === "Jordan Reyes" &&
-      identity?.businessLegalName === "Glow Clinic LLC" &&
-      identity?.signerTitle === "Owner" &&
-      identity?.website === "glowclinic.com" &&
-      identity?.email === email &&
-      String(identity?.phone ?? "").includes("336"),
-    JSON.stringify(identity)
+    "the intake REFUSES a daypart it cannot read, rather than guessing",
+    saidThat(await say("sometime next week maybe"), "tap one of the options"),
+    "a half-read daypart decides which three days get offered"
+  );
+  check(
+    "a daypart it can read moves on to the timezone",
+    saidThat(await say("Afternoons"), "time zone"),
+    ""
+  );
+  check(
+    "the timezone is asked BEFORE the days, because dayOptions() judges their day",
+    saidThat(await say("Eastern"), "website"),
+    ""
+  );
+
+  // ‼️ THE SAME VALIDATORS THE FORM USED, IMPORTED RATHER THAN RESTATED. normalizeTarget is the
+  // gate the scanner and the hub lane both use, so anything accepted here is something
+  // intakePatchFrom() can later turn into a real domain.
+  check(
+    "the intake REFUSES an unreadable website",
+    saidThat(await say("not a website"), "does not look right"),
+    "clients.domain comes from this and eight hub-lane steps need it"
+  );
+  check("a real website moves on to the name", saidThat(await say("glowclinic.com"), "full name"), "");
+
+  check(
+    "the intake REFUSES a one-character name",
+    saidThat(await say("J"), "full name, please"),
+    "clients.legal_name is NOT NULL and startPilot falls back to the email address"
+  );
+  check("a real name moves on to the email", saidThat(await say("Jordan Reyes"), "best email"), "");
+
+  check(
+    "the intake REFUSES a malformed email",
+    saidThat(await say("jordan@"), "email does not look right"),
+    "the lead row is keyed on this"
+  );
+  check("a real email moves on to the phone", saidThat(await say(leadEmail), "phone number"), "");
+
+  check(
+    "the intake REFUSES a phone that is not ten digits",
+    saidThat(await say("12"), "does not look right"),
+    ""
+  );
+  check(
+    "a real phone reaches the day, with three options computed from the daypart",
+    saidThat(await say("(336) 833-2303"), "Which of these works"),
+    ""
+  );
+
+  // ── 3. The day, and the calendar handoff ──
+  const dayTurn = (await say("Tuesday afternoon")) as { bookingUrl?: string | null };
+  check(
+    "picking a day hands over a Calendly URL",
+    typeof dayTurn.bookingUrl === "string" && dayTurn.bookingUrl.includes("calendly.com"),
+    String(dayTurn.bookingUrl)
+  );
+
+  // ‼️ THE ONE PARAMETER THE WHOLE CONTINUATION DEPENDS ON. Without embed_type Calendly renders a
+  // perfectly good booking page and posts NOTHING to the parent window, so the booking completes,
+  // the iframe says "You are scheduled!", and the conversation underneath never says another
+  // word. That is the bug this check exists to keep fixed. embed_domain is added in the browser,
+  // because it has to be the host the page is actually served from.
+  const bookingUrl = new URL(String(dayTurn.bookingUrl));
+  check(
+    "the Calendly URL declares itself an embed, so event_scheduled reaches the parent window",
+    bookingUrl.searchParams.get("embed_type") === "Inline",
+    "without this the conversation dead-ends on a completed booking"
+  );
+  check(
+    "the calendar is prefilled with the email they just gave us",
+    bookingUrl.searchParams.get("email") === leadEmail,
+    String(bookingUrl.searchParams.get("email"))
   );
 
   // ── 4. THE SIGNATURE SECTIONS WERE DELETED HERE ON 2026-09-04 ──
@@ -240,13 +297,23 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── 12. The honeypot still returns 200 and writes nothing ──
-  const trap = await post("email", {
-    ...base,
-    email: "bot@example.com",
+  // ── 12. The honeypot ──
+  //
+  // ‼️ IT IS TESTED ON /start NOW, WHICH IS THE ONLY PLACE IT STILL FIRES. The trap and the
+  // MIN_FILL_SECONDS time trap both lived on the identity form, and the form is gone. /start
+  // still accepts and enforces both, and the client still sends them, so the SESSION is still
+  // trapped; what is no longer trapped is an identity submission, because there is no longer one.
+  // What bounds the chat instead is the per-IP start cap, the per-IP hourly turn cap, the
+  // per-signing turn caps and MIN_TURN_GAP_MS.
+  const trap = await post("start", {
+    renderedAt: Date.now() - 9_000,
     company_url_hp: "http://spam.example",
   });
-  check("the honeypot returns ok and writes nothing", trap.ok === true && trap.leadId === null);
+  check(
+    "the honeypot returns ok and opens nothing",
+    trap.ok === true && !trap.sessionToken,
+    JSON.stringify(trap).slice(0, 160)
+  );
 
   console.log(
     failures === 0
