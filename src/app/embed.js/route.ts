@@ -35,7 +35,12 @@ export const runtime = "nodejs";
 
 const SCRIPT = `(function(){
  "use strict";
- var me=document.currentScript;
+ // ‼️ currentScript FIRST, THEN A SEARCH, BECAUSE THE TAG IS NOT ALWAYS WHERE IT WAS PASTED.
+ // document.currentScript is null inside a module, inside a callback, and for a tag a CMS or a
+ // tag manager injected after load, and every one of those is a normal way for this snippet to
+ // end up on a client's site. It used to bail out on all of them, which is a widget that simply
+ // never appears and leaves nothing in the console to explain why.
+ var me=document.currentScript||document.querySelector("script[data-client]");
  if(!me)return;
  var slug=me.getAttribute("data-client")||"";
  if(!slug)return;

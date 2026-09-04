@@ -71,6 +71,26 @@ const publicConfig = unstable_cache(
   { revalidate: REVALIDATE_SECONDS, tags: ["concierge-config"] }
 );
 
+/**
+ * ‼️ CORS, AND IT WAS MISSING, WHICH MADE THIS ROUTE UNREACHABLE FROM EVERY PAGE THAT USES IT.
+ * embed.js is served with `access-control-allow-origin: *` and this one was not, so the loader's
+ * fetch was blocked by the browser on any page not on our own origin. That is every client hub
+ * (learn.<clientdomain> calling concierge.srtagency.com) and every third-party site. The failure
+ * was invisible because the fetch is deliberately not awaited and its rejection is swallowed: the
+ * pill simply kept the neutral fallback label and the teaser never appeared. Nothing looked broken.
+ *
+ * `*` rather than an origin echo, deliberately. The response is a hand-picked public subset with
+ * nothing private in it, it takes no credentials, and echoing an origin would mean this route
+ * quietly became the place that decides which sites may talk to us. That decision belongs to
+ * `allowed_origins` and frame-ancestors on /w/[slug], which is where the widget actually lives.
+ */
+function publicHeaders(): Record<string, string> {
+  return {
+    "cache-control": `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}`,
+    "access-control-allow-origin": "*",
+  };
+}
+
 export async function GET(req: NextRequest) {
   const params = new URL(req.url).searchParams;
   const slug = (params.get("c") ?? "").trim().toLowerCase();
@@ -85,13 +105,8 @@ export async function GET(req: NextRequest) {
   // is fetched by a script tag on somebody else's page: a 404 in their console reads as our
   // outage, and there is nothing secret about a widget being off.
   if (!config) {
-    return NextResponse.json(
-      { enabled: false },
-      { headers: { "cache-control": `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}` } }
-    );
+    return NextResponse.json({ enabled: false }, { headers: publicHeaders() });
   }
 
-  return NextResponse.json(config, {
-    headers: { "cache-control": `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}` },
-  });
+  return NextResponse.json(config, { headers: publicHeaders() });
 }
