@@ -10,6 +10,15 @@
 // what the magnet promises, and editing that row changes every embedded page with no deploy and no
 // re-paste of the snippet.
 //
+// ‼️ IT CARRIES ITS OWN x-vercel-* QUERY PARAMS ONTO EVERYTHING IT OPENS, AND ONLY THOSE.
+// A preview deployment sits behind Vercel Deployment Protection, so a funnel on one project
+// loading this script from another project's preview gets a 302 to SSO on the script, on the
+// config fetch and on the frame. The bypass token has to travel with all three. Forwarding the
+// loader's own query string is the only way to do that without a second attribute nobody would
+// remember to remove. The prefix filter is the whole safety of it: nothing but Vercel's own
+// protection params can ride along, so this cannot become a channel into our API. In production
+// the script src carries no query at all and every line here is a no-op.
+//
 // ‼️ THE TEASER IS REMEMBERED IN MEMORY AND NOWHERE ELSE. Dismissing it lasts until the page is
 // reloaded, and that is deliberate rather than unfinished: the line above says this script sets no
 // cookies and touches no storage, and a sessionStorage key on a client's own domain would be the
@@ -44,8 +53,19 @@ const SCRIPT = `(function(){
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
 
- var frameSrc=origin+"/w/"+encodeURIComponent(slug)+"?"+q({
-   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host});
+ // Vercel's protection params, and nothing else, copied off our own <script src>.
+ var pass="";
+ try{
+  var mine=new URL(me.src,location.href).searchParams,keep=[];
+  mine.forEach(function(v,k){
+   if(k.indexOf("x-vercel-")===0)keep.push(encodeURIComponent(k)+"="+encodeURIComponent(v));
+  });
+  pass=keep.join("&");
+ }catch(e){}
+ function withPass(u){return pass?u+(u.indexOf("?")<0?"?":"&")+pass:u}
+
+ var frameSrc=withPass(origin+"/w/"+encodeURIComponent(slug)+"?"+q({
+   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host}));
 
  function makeFrame(){
   var f=document.createElement("iframe");
@@ -136,7 +156,7 @@ const SCRIPT = `(function(){
 
  // The label and the teaser follow the resolved magnet. A failure here leaves the neutral "Chat"
  // and no teaser, and the widget still works, so this is deliberately not awaited before mounting.
- fetch(origin+"/api/concierge/config?"+q({c:slug,category:category,magnet:magnet}))
+ fetch(withPass(origin+"/api/concierge/config?"+q({c:slug,category:category,magnet:magnet})))
   .then(function(r){return r.json()})
   .then(function(d){
     if(!d||!d.enabled){wrap.remove();return}
