@@ -370,6 +370,23 @@ async function liveRows(): Promise<void> {
     doubled.map(([k, n]) => `${k} has ${n}`).join(", ")
   );
 
+  // ‼️ THE PICKER MUST DESCRIBE THE SAME ROW TWICE RUNNING. `city_rivals` and `question_20` are
+  // each seeded twice at one sort_order, and listMagnetsFor collapses to one row per key. Without
+  // an id tie break the survivor was whichever candidatesFor returned first, and that query has no
+  // ORDER BY, so the scope text in the board picker and the studio list could change between
+  // renders while describing the same key. Read it repeatedly and insist it does not move.
+  const { listMagnetsFor } = await import("@/lib/concierge/magnets");
+  const reads: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const list = await listMagnetsFor("owner", null);
+    reads.push(list.map((m) => `${m.magnetKey}[${m.scope}]`).join("|"));
+  }
+  check(
+    "listMagnetsFor returns the same scope for a key on every read",
+    new Set(reads).size === 1,
+    [...new Set(reads)].join(" VS ")
+  );
+
   // Who is on which lane, and whether anybody said so.
   const { data: configs } = await supabaseAdmin
     .from("concierge_configs")

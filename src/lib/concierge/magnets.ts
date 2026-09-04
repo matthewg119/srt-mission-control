@@ -311,7 +311,8 @@ function scopeOf(m: LeadMagnet, clientId: string | null): string {
  *
  * ‼️ ONE ROW PER KEY. `city_rivals` is seeded twice, once for Comparison and once for
  * Neighbourhood, and two identical dropdown entries is a choice nobody can make correctly. The
- * widest scope wins the description, since that is the row a keyed lookup will find.
+ * row kept is the one magnetByKey would resolve, lowest sort_order and then lowest id, so the
+ * scope shown describes the placement a keyed lookup actually finds rather than a different one.
  */
 export async function listMagnetsFor(
   audience: Audience,
@@ -329,7 +330,19 @@ export async function listMagnetsFor(
   for (const m of candidates) {
     if (!m.magnetKey) continue; // an unkeyed row cannot be named on a page
     const held = byKey.get(m.magnetKey);
-    if (!held || m.sortOrder < held.sortOrder) byKey.set(m.magnetKey, m);
+    // ‼️ THE id TIE BREAK IS NOT OPTIONAL, FOR THE REASON magnetByKey ALREADY HAS ONE.
+    // `city_rivals` is seeded twice at sort_order 20 and `question_20` twice at 30, so a plain
+    // `<` never replaces on a tie and the survivor was whichever row candidatesFor happened to
+    // return first. That query has no ORDER BY, so the `scope` string this function hands the
+    // picker and the studio list could read "aeo-agency-med-spa · Comparison" on one render and
+    // "· Neighbourhood" on the next, describing the same key two different ways.
+    //
+    // Ordering on id makes the description STABLE, and picking the same row magnetByKey picks
+    // (sort_order asc, then id asc) makes it TRUE: the scope shown is the scope of the row a
+    // keyed lookup will actually resolve.
+    const wins =
+      !held || m.sortOrder < held.sortOrder || (m.sortOrder === held.sortOrder && m.id < held.id);
+    if (wins) byKey.set(m.magnetKey, m);
   }
 
   return [...byKey.values()]

@@ -183,16 +183,6 @@ const STEP_LIST = [
   // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
   // auto_then_manual and why [Done] refuses until somebody has confirmed it.
   { key: "hub_preview", phase: PHASE_BEFORE, label: "Hub built, themed, preview live, theme confirmed by me", auto: true, mode: "auto_then_manual", blockedBy: ["intake_received"] },
-  // ‼️ A REPLICA OF THEIR OWN SITE, AND IT IS NEVER PUBLISHED. The full account of why a real
-  // rehost was refused is the header of src/lib/clients/site-replica.ts. The short version: it
-  // renders on /preview/{token}?kind=site, which is ours, noindex and needs no login, because a
-  // PHASE_BEFORE step cannot publish anything past the Day 0 wall and should not want to.
-  //
-  // auto_then_manual because the system really does read their nav and rebuild every section,
-  // but whether it is a fair likeness of their business is a judgement somebody makes by opening
-  // the link. blockedBy concierge_preview because a replica with no assistant on it is half the
-  // artifact, and that is advisory as always: the runner says so in its card either way.
-  { key: "site_replica", phase: PHASE_BEFORE, label: "Replica of their own site built, assistant on it, preview link ready to walk", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview", "concierge_preview"] },
   { key: "review_tool_preview", phase: PHASE_BEFORE, label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   // The conversion engine, staged the same way the hub is: a working preview BEFORE the call,
   // and a separate human decision to go live AFTER it. Auto because the system really does
@@ -206,6 +196,29 @@ const STEP_LIST = [
   // not claim. The card body and the instruction arm both hold a client and do say which:
   // conciergeLaneName() in lib/concierge/lane-name.ts is the one place that decides.
   { key: "concierge_preview", phase: PHASE_BEFORE, label: "AI Concierge preview live, ready to demo on the call", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview"] },
+  // ‼️ A REPLICA OF THEIR OWN SITE, AND IT IS NEVER PUBLISHED. The full account of why a real
+  // rehost was refused is the header of src/lib/clients/site-replica.ts. The short version: it
+  // renders on /preview/{token}?kind=site, which is ours, noindex and needs no login, because a
+  // PHASE_BEFORE step cannot publish anything past the Day 0 wall and should not want to.
+  //
+  // auto_then_manual because the system really does read their nav and rebuild every section,
+  // but whether it is a fair likeness of their business is a judgement somebody makes by opening
+  // the link. blockedBy concierge_preview because a replica with no assistant on it is half the
+  // artifact.
+  //
+  // ‼️ IT SITS BELOW concierge_preview AND THE ORDER IS LOAD BEARING, NOT COSMETIC. This entry
+  // used to sit ABOVE its own blocker, and this note used to call the dependency "advisory as
+  // always". That is true of the card copy and false of the cursor. reachableCursor() adds a step
+  // only when every blocker is resolved, then breaks on the first step whose mode is not "auto",
+  // reachable or not. Sitting above concierge_preview meant that the moment hub_preview completed
+  // the loop skipped this entry and broke, the cursor came back EMPTY, and every step from here to
+  // the end of the array got no anchor, no card and no runner for any client. provisionConcierge
+  // is reached only through AUTO_RUNNERS, which is gated on that same cursor, so the blocker could
+  // never clear itself and the only exit was the dashboard or SQL.
+  //
+  // The rule this encodes: a step must appear LATER in this array than everything it names in
+  // blockedBy. Nothing enforces that yet, so read it before you reorder anything here.
+  { key: "site_replica", phase: PHASE_BEFORE, label: "Replica of their own site built, assistant on it, preview link ready to walk", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview", "concierge_preview"] },
   { key: "review_card_pdf", phase: PHASE_BEFORE, label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   { key: "call_sheet", phase: PHASE_BEFORE, label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },
 

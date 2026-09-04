@@ -67,6 +67,27 @@ ok("every step has a verifier", missing.length === 0, missing.join(", "));
 const orphans = verifierKeys.filter((k) => !stepKeys.includes(k));
 ok("no verifier without a step", orphans.length === 0, orphans.join(", "));
 
+// ‼️ A BLOCKER MUST SIT EARLIER IN THE ARRAY THAN THE STEP THAT NAMES IT, AND ON 2026-09-04
+// ONE DID NOT. site_replica was inserted above concierge_preview while declaring it in blockedBy.
+// reachableCursor() adds a step only when every blocker is resolved and then BREAKS on the first
+// step whose mode is not "auto", reachable or not, so the moment hub_preview completed the walk
+// skipped site_replica and stopped: the cursor came back empty and every later step got no anchor,
+// no card and no runner. provisionConcierge is reached only through AUTO_RUNNERS, gated on that
+// same cursor, so the blocker could never clear itself and the only exit was the dashboard or SQL.
+//
+// It was invisible in testing because no client had a confirmed theme, so the walk broke harmlessly
+// at hub_preview and the board looked merely unfinished rather than stuck.
+const stepOrder = new Map(DELIVERY_STEPS.map((s, i) => [s.key as string, i]));
+const forwardRefs: string[] = [];
+for (const [i, step] of DELIVERY_STEPS.entries()) {
+  for (const blocker of step.blockedBy ?? []) {
+    const at = stepOrder.get(blocker);
+    if (at === undefined) forwardRefs.push(`${step.key} names unknown blocker ${blocker}`);
+    else if (at > i) forwardRefs.push(`${step.key} (#${i + 1}) is blocked by ${blocker} (#${at + 1})`);
+  }
+}
+ok("no step is blocked by a later step", forwardRefs.length === 0, forwardRefs.join("; "));
+
 ok(
   "every verifier is a function",
   verifierKeys.every((k) => typeof STEP_VERIFIERS[k as StepKey] === "function")
