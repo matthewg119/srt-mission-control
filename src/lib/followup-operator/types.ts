@@ -80,6 +80,15 @@ export interface OutreachProspectRow {
    * blanks on an existing row without ever creating one.
    */
   source: "audit" | "outlook_sweep" | "manual" | "reachinbox" | "loom";
+
+  /**
+   * Which ReachInbox campaign put this row on the board.
+   *
+   * Null for every other source, and null on reachinbox rows created before 2026-09-07: until the
+   * webhook existed there was nowhere to learn the campaign from, so every campaign ever run
+   * produced identical attribution.
+   */
+  campaign: string | null;
   paused: boolean;
 
   pending_drafts: PendingDraft[] | null;
@@ -118,5 +127,5 @@ export const PROSPECT_COLUMNS =
   "state, closed_reason, step, next_channel, first_sent_at, last_touch_at, " +
   "last_reply_at, next_touch_at, last_call_at, call_attempts, conversation_id, " +
   "thread_subject, last_message_id, ammo_used, slack_channel_id, slack_thread_ts, " +
-  "confirmed, source, paused, pending_drafts, pending_kind, last_digest_at, " +
+  "confirmed, source, campaign, paused, pending_drafts, pending_kind, last_digest_at, " +
   "created_at, updated_at";

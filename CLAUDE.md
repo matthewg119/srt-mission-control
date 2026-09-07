@@ -3524,9 +3524,10 @@ statuses with a reader and no writer, the same class this file records five othe
 the same reasoning that deleted `SCRAPER_MV_MAX_EMAILS` rather than leaving it inert. Adding them
 later is one `alter table`.
 
-> ‼️ **AND IT CANNOT BE BUILT ON THE CURRENT PLAN, verified 2026-08-28.** ReachInbox gates
+> ‼️ **AND IT COULD NOT BE BUILT ON THE PLAN OF 2026-08-28.** ReachInbox gated
 > **webhooks AND the REST API** behind Tier 4 -- their own support answer, and the lock on every
-> card of the integrations page. So `campaigns/add-email` is not merely undocumented, it is
+> card of the integrations page. (A PRO free trial opened the webhook half on 2026-09-07; the REST
+> API was never re-tested, so `campaigns/add-email` is still unbuilt.) So `campaigns/add-email` is not merely undocumented, it is
 > unreachable, and the decision above is no longer a judgement call. See the ReachInbox campaign
 > lane below for what IS reachable without it.
 
@@ -3971,8 +3972,13 @@ route and `outreach-sender/pacing.ts` are KEPT, unscheduled and callable by hand
 > and the ⚡ Smart Follow-up card STAY: they fire only when Matthew presses something, which is the
 > line — **nothing posts there unless a real prospect did something or he clicked a button.**
 
-### ‼️ There is no webhook and no API, and that decided the whole design
-ReachInbox gates **webhooks and the REST API** behind Tier 4 (their own support answer; it is the
+### ‼️ There was no webhook and no API, and that decided the whole design
+
+> **SUPERSEDED IN PART, 2026-09-07. The webhook exists now.** See *The webhook turned up* below.
+> Everything in this section about the MAILBOX remains true and remains load-bearing: it is the
+> half that survives the trial ending.
+
+ReachInbox gated **webhooks and the REST API** behind Tier 4 (their own support answer; it was the
 "Unlock Feature" lock on the integrations page). Matthew declined to upgrade. **And the sending
 mailboxes were PURCHASED INSIDE ReachInbox**, so they are not in this Microsoft 365 tenant and
 Graph cannot read them either. No API to poll, no mailbox to sweep.
@@ -3981,7 +3987,7 @@ The one free channel left is the mail itself. The purchased mailboxes **forward 
 a mailbox we do own (`REACHINBOX_REPLY_MAILBOX`, a free M365 shared mailbox), and from that point a
 campaign reply is an ordinary Outlook message that `reply-sweep.ts` already reads every 5 minutes
 inside `/api/cron/outreach-sender`. Sent, replied, bounced and auto-reply all come for free.
-**Opens and clicks never leave ReachInbox and are not recoverable.** Matthew chose to skip them.
+Opens and clicks did not leave ReachInbox on that plan; they arrive on the webhook now.
 
 > Forwarding is preferred over a campaign Reply-To because it also catches bounces and
 > out-of-offices, which follow the envelope sender rather than Reply-To, and because it puts no
@@ -4031,7 +4037,11 @@ replies and never sent from**. Both sweeps loop that list, so nothing else was n
 - `source: "reachinbox"` needed **no migration**: the column is free text with no CHECK constraint.
   Both TS unions were widened.
 
-### ‼️ The digest prints no rate, and that is the point
+### ‼️ The digest printed no rate, and that was the point (until 2026-09-07)
+
+> **The rates exist now.** The paragraph below describes why they did not, which is still the rule
+> the new ones obey. See *The webhook turned up* at the end of this section.
+
 `/api/cron/campaign-digest`, `0 13 * * *` (09:00 ET), replacing the pacing entry. One daily UTC
 firing, so no DST slot claim is needed — `claimPacingSlot()` existed only because pacing fired at
 six candidate hours to hit three Eastern slots.
@@ -4055,7 +4065,72 @@ eventually builds a URL too long to send.
 REACHINBOX_REPLY_MAILBOX=    # The forwarding target. UNSET IS HANDLED: the lane is off and
                              # reply-sweep behaves exactly as it did. It must receive NOTHING else.
 OUTREACH_MAILBOXES=          # Append the same address with a :0 cap so it is swept, never sent from.
+REACHINBOX_WEBHOOK_SECRET=   # The ?token= on /api/webhooks/reachinbox. UNSET FAILS CLOSED: the
+                             # route 403s everything, because it is a public URL that writes rows.
+SLACK_VEKTOR_EMAIL_DIRECTOR_CHANNEL=  # C0AUH1969EG. Unset means the digest builds and posts nothing.
 ```
+
+## The webhook turned up (2026-09-07)
+`src/lib/reachinbox/parse.ts`, `src/lib/reachinbox/stats.ts`,
+`src/app/api/webhooks/reachinbox/route.ts`, `docs/2026-09-07-reachinbox-events.sql`,
+`scripts/_probe-reachinbox-webhook.ts` (61 checks, offline).
+
+The section above says webhooks are Tier 4 and a reply rate is therefore impossible. On 2026-09-07
+the Slack webhook integration was simply open, with a campaign selector and an **Email Sent** event,
+on a **PRO free trial that ends September 15th**. That is the denominator the whole lane was written
+around not having.
+
+**‼️ THE WEBHOOK POINTS AT MISSION CONTROL, NOT AT SLACK, EVEN THOUGH THE INTEGRATION IS CALLED
+"Slack Webhook".** The URL field takes any URL. `All Events` includes Email Sent and Email Opened,
+so a Slack-bound webhook buries `#vektor-email-director`, whose entire invariant is that nothing
+posts there unless a real prospect did something. And Slack cannot aggregate: a rate needs somewhere
+to divide. Register it as
+`https://mission.srtagency.com/api/webhooks/reachinbox?token=$REACHINBOX_WEBHOOK_SECRET`, All
+Campaigns, All Events.
+
+**‼️ THE PARSER WAS WRITTEN AGAINST A PAYLOAD NOBODY HAD SEEN, SO IT GUESSES WIDELY AND NEVER
+THROWS.** The body may be ReachInbox's own event JSON or Slack Block Kit where the facts are only
+English prose; both are read. Anything unreadable is stored as `unknown` with the raw body intact,
+because a 400 inside an 8-day trial loses the event permanently. **`payload` keeps the original on
+every row forever** -- a wrong field mapping is then a re-read rather than data never captured.
+
+Two bugs the probe caught that a live test would have hidden for days:
+- **`\b` does not match across an underscore.** `/\bsent\b/` misses `email_sent` and `/\bbounc/`
+  misses `EMAIL_BOUNCED`, the two most likely machine spellings. Every event parsed as `unknown`.
+  Separators are normalised to spaces first.
+- **`replied` must be tested before `sent`.** ReachInbox calls a reply "Reply Received" and writes
+  prose like *"a reply was received to the email sent on Tuesday"*. A `sent` test running first
+  files every reply as a send: the denominator inflates and the numerator drains in the same event,
+  so the reply rate is wrong twice over and still looks plausible.
+
+**‼️ A RATE IS PRINTED ONLY WHEN ITS OWN DENOMINATOR WAS MEASURED, AND THAT IS WHY THIS IS SAFE TO
+BUILD ON A TRIAL.** `sent: 0` from SQL becomes `sent: null` in `fetchFunnels`, because send counts
+exist only while the webhook does -- a campaign that genuinely sent nothing produces no events and
+no row at all, so the two cannot be confused. When the trial lapses the card prints counts, says
+*"No send events arrived in this window"*, and never divides. Replies are the **union** of the
+webhook and the forwarding mailbox, so the reply COUNT survives even though the reply RATE does not.
+
+**The funnel aggregates in Postgres**, not in the digest: `reachinbox_campaign_funnel(days)`. A
+month of sends is far more rows than PostgREST will page into a serverless function to produce eight
+integers. Every count is `count(distinct email)`, never `count(*)`, or "reply rate" would silently
+mean replies per email sent rather than per person emailed.
+
+**‼️ BOOKINGS HAVE TWO ATTRIBUTION PATHS AND THE SECOND IS NOT REDUNDANT.** A prospect row is minted
+only when somebody REPLIES, so anyone who clicked the booking link in the cold email and booked
+without ever writing back is invisible on the prospect path -- and that person is the best outcome
+the campaign has. The `onboarding2_leads.utm_campaign` path catches them, **which is why the booking
+links inside the ReachInbox templates must carry `?utm_campaign=<name>`**. That is a ReachInbox-side
+edit and nothing in this repo can enforce it. A booking carrying somebody else's `utm_campaign` (a
+Meta ad) cannot invent a campaign row: the path is gated on the name being known to this lane.
+
+**Closed means a `clients` row exists.** The CRM's `Closed` stage covers won AND lost, so it cannot
+be used. `outreach_prospects.campaign` is new; it is stamped from the webhook log at mint time by
+`campaignForEmail`, because the forwarded reply itself carries no campaign identifier -- it arrives
+at one single-purpose mailbox that is deliberately identical for every campaign.
+
+`contacts.utm_campaign` was null on every ReachInbox lead before this: `ingestLead` was passed
+`utmSource` and `utmMedium` as constants and no campaign at all, so every campaign ever run produced
+byte-identical attribution.
 
 ## The drop dedupes before it asks which workflow (2026-09-03)
 
