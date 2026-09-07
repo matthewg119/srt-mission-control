@@ -217,7 +217,10 @@ const STEP_LIST = [
   // never clear itself and the only exit was the dashboard or SQL.
   //
   // The rule this encodes: a step must appear LATER in this array than everything it names in
-  // blockedBy. Nothing enforces that yet, so read it before you reorder anything here.
+  // blockedBy. _probe-step-verify.ts:80-89 enforces it for all 39 steps and names the offender
+  // ("site_replica (#16) is blocked by concierge_preview (#18)"), so a reorder that breaks it
+  // fails the probe rather than emptying the cursor in production. Read it anyway before you
+  // reorder anything here: the probe tells you what broke, not what the order should be.
   { key: "site_replica", phase: PHASE_BEFORE, label: "Replica of their own site built, assistant on it, preview link ready to walk", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview", "concierge_preview"] },
   { key: "review_card_pdf", phase: PHASE_BEFORE, label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   { key: "call_sheet", phase: PHASE_BEFORE, label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },

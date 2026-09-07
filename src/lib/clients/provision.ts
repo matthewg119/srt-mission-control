@@ -42,8 +42,22 @@ import {
 import { resolveMarketCenter } from "@/lib/clients/geocode";
 import { normalizePhone } from "@/lib/medspa/validate";
 
-/** Six at a time, pilots included. PILOT §1 and D-P2. Enforced here, never rendered. */
-export const MAX_CONCURRENT_CLIENTS = 6;
+/**
+ * How many clients may be live at once. UNSET MEANS NO LIMIT, and that is the intent.
+ *
+ * This was a hard 6: arithmetic on ~15 hours of delivery per Complete clinic (PILOT 1, D-P2),
+ * not scarcity marketing, and never rendered anywhere. Delivery is not that shape any more and
+ * the target is 30 onboardings a day, so a constant that silently deletes the seventh client is
+ * the wrong default now.
+ *
+ * IT IS Infinity RATHER THAN A LARGE NUMBER, AND THE REASON IS THE REFUSAL BELOW: that branch
+ * DELETES the row it has just inserted. A finite cap has to be a deliberate act, so the check is
+ * guarded on Number.isFinite and cannot fire by accident.
+ *
+ * Set CLIENT_SEAT_CAP to a number to put a ceiling back without a deploy. A non-numeric or zero
+ * value reads as unset, which is the safe direction: it lets a client in rather than eating one.
+ */
+export const MAX_CONCURRENT_CLIENTS = Number(process.env.CLIENT_SEAT_CAP) || Infinity;
 
 const PILOT_DAYS = 90;
 
@@ -128,9 +142,11 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     domain = normalized.target.domain;
   }
 
-  // ── Seat cap ──
-  // Counted server-side, refused with a plain sentence. There is no counter anywhere in
-  // the UI: "six at a time" is delivery truth, not scarcity marketing (PILOT §1).
+  // ── Seat count ──
+  // Counted server-side either way, because the number is worth having even when nothing
+  // refuses on it. There is no counter anywhere in the UI and there never was: the cap was
+  // delivery arithmetic, not scarcity marketing (PILOT §1). It is now unset by default and
+  // this count only gates anything when somebody has set CLIENT_SEAT_CAP.
   const { count } = await supabaseAdmin
     .from("clients")
     .select("id", { count: "exact", head: true })
@@ -260,7 +276,7 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
 
   // The cap is checked against clients that already existed, so a re-click on an
   // existing client is never refused by it.
-  if (inserted && live >= MAX_CONCURRENT_CLIENTS) {
+  if (inserted && Number.isFinite(MAX_CONCURRENT_CLIENTS) && live >= MAX_CONCURRENT_CLIENTS) {
     await supabaseAdmin.from("clients").delete().eq("id", clientId);
     return {
       ok: false,

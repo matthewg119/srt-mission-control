@@ -49,3 +49,8 @@ package-lock.json
 
 # Supabase CLI scratch (version-check cache), never source
 supabase/.temp/
+
+# Board-reset backups. _reset-client-board.ts writes the whole client here before it deletes
+# anything: the clients row carries a real name, email, phone and street address, and client_docs
+# carries their artifacts. Recoverable by hand is the point; committed to git is not.
+backups/

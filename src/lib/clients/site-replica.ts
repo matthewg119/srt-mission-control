@@ -313,9 +313,16 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
         "the corner does not appear. Attach the host, add its DNS record, then re-run this step."
     );
   } else if (!conf) {
+    // ‼️ "AI Concierge", NOT "AI Skin Concierge", AND conciergeLaneName() CANNOT BE USED HERE.
+    // This is the no-`concierge_configs`-row arm, which is precisely the state in which this
+    // client has no `audience` to read: lane-name.ts takes an Audience and there is none to
+    // give it. Defaulting to one would be the exact failure docs/2026-09-04-magnet-lane.sql
+    // added audience_confirmed_at to make visible, on the card that owner-lane clients read.
+    // So this says what config/delivery-steps.ts says for the same reason: the neutral name,
+    // which is true of both lanes and is also the step's own label.
     lines.push(
       ":warning: *No assistant on these pages yet.* This client has no `concierge_configs` row, " +
-        "so run the AI Skin Concierge preview step first and then re-run this one."
+        "so run the AI Concierge preview step first and then re-run this one."
     );
   } else if (conf.enabled === true) {
     lines.push(":white_check_mark: The assistant is live and appears on every page above.");

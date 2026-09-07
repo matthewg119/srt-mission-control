@@ -131,16 +131,24 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
   });
 
   if (!result.ok) {
-    // ‼️ THE SEAT CAP LANDS HERE. startPilot DELETES the row it just inserted when
+    // ‼️ A SEAT CAP WOULD LAND HERE. startPilot DELETES the row it just inserted when
     // MAX_CONCURRENT_CLIENTS is reached, so there is genuinely no client. The signature is
     // already committed and stays valid; this is a Slack problem, not a signer problem, and the
     // signer's screen never mentions it.
+    //
+    // The cap is Infinity unless CLIENT_SEAT_CAP is set, so this second line is CONDITIONAL:
+    // startPilot fails for other reasons too (an unreadable website, no free channel name),
+    // and printing "the seat cap is Infinity" against one of those sends whoever reads the
+    // warning looking for a cap that is not there.
+    const capped = Number.isFinite(MAX_CONCURRENT_CLIENTS);
     return {
       ...empty,
       error: result.error,
       warnings: [
         result.error,
-        `The seat cap is ${MAX_CONCURRENT_CLIENTS}. A signed agreement now has no client row behind it.`,
+        capped
+          ? `The seat cap is ${MAX_CONCURRENT_CLIENTS}. A signed agreement now has no client row behind it.`
+          : "A signed agreement now has no client row behind it.",
       ],
     };
   }
