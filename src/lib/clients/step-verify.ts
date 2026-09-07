@@ -421,7 +421,49 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
-  presence_pdf: async (ctx) => artifactOnRecord(ctx, "the presence and consistency PDF"),
+  // ‼️ A FILE EXISTING IS NOT THE SAME AS THE FILE SAYING ANYTHING, AND THIS IS THE STEP
+  // WHERE THAT GAP SHOWS. This was artifactOnRecord(), which proves exactly one thing: a
+  // client_docs row carries this step key.
+  //
+  // Measured on SRT 2026-09-07 with presence_sweep_manual skipped: all 19 listings sat at
+  // confirmed_status null, the PDF said so on its own cover in amber ("a skipped step reads as
+  // not checked everywhere, and that is an absence of evidence, never evidence of
+  // correctness"), and the board line read "the presence and consistency PDF is filed against
+  // this client (1 file)". Every layer was honest except the one a human actually reads, and
+  // the card is what gets read.
+  //
+  // ‼️ IT STILL TICKS RATHER THAN REFUSING, AND THAT IS NOT A SOFTENING. `skipped` is a
+  // decision somebody is allowed to make, and findings_doc and citation_cleanup_list are both
+  // blockedBy this step, so refusing over a legitimate skip deadlocks the board with no way
+  // out. What changes is that the line can no longer imply content the document does not have.
+  // citation_cleanup, further down, is the step that DOES refuse on not_checked, because
+  // ticking "the cleanup was executed" over rows nobody opened is a different claim entirely.
+  presence_pdf: async (ctx) => {
+    const filed = await artifactOnRecord(ctx, "the presence and consistency PDF");
+    if (!filed.ok) return filed;
+
+    // Counted separately from loadSweep for the reason citation_cleanup already records:
+    // loadSweep swallows a query error into an empty array, and "the query failed" must never
+    // render as "no rows exist". If the two reads disagree, say nothing rather than a number.
+    const total = await countRows("nap_discrepancies", ctx.clientId);
+    if (total === null) return dbUnreachable("nap_discrepancies");
+
+    const { loadSweep, countByStatus } = await import("./presence-sweep");
+    const rows = await loadSweep(ctx.clientId);
+    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
+
+    const counts = countByStatus(rows);
+    const checked = rows.length - counts.not_checked;
+
+    return verified(
+      `the presence and consistency PDF is filed against this client, reporting ${checked} of ` +
+        `${rows.length} platform${rows.length === 1 ? "" : "s"} checked` +
+        (counts.not_checked
+          ? `. The other ${counts.not_checked} print as "not checked", which is an absence of ` +
+            `evidence and not a finding of correctness`
+          : "")
+    );
+  },
 
   competitor_shortlist: async (ctx) => {
     const total = await countRows("competitor_candidates", ctx.clientId);

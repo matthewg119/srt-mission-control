@@ -42,9 +42,12 @@
  * is reopened here by calling openOpsThread + postDeliveryChecklist directly, which is what
  * startDelivery does after its claim, so the claim itself is not needed and must not be faked.
  *
- * The baseline scan is NOT re-fired. audit_reports is kept, baseline_scan resolves by client_id
- * only (step-verify.ts:255-273), so step 2 verifies off the photograph that already exists. Firing
- * a fresh audit would spend a real run proving something already proven.
+ * The baseline scan is NOT re-fired, and step 2 is ticked against the kept report instead.
+ * audit_reports survives the reset and baseline_scan resolves by client_id only, so the
+ * verifier confirms it off the photograph that already exists. Firing a fresh audit would spend
+ * a real run to prove something already proven AND mint a newer report that replaces the very
+ * thing this reset preserves. Ticking it is not optional politeness: baseline_scan has no card
+ * and no runner, so a board that leaves it pending cannot be advanced from Slack at all.
  *
  *   SLACK_CLIENT_ONBOARDING_CHANNEL=C0BLK797PNU \
  *     bunx tsx --env-file=.env.local scripts/_reset-client-board.ts <slug> --dry
@@ -337,6 +340,32 @@ async function main() {
   // column was kept.
   const ticked = await autoCompleteStep(clientId, "intake_received");
   console.log(`intake_received: ${ticked.ok ? "ticked" : `REFUSED (${ticked.error})`}`);
+
+  // ‼️ baseline_scan TOO, OR THE BOARD STOPS DEAD AT STEP 2 WITH NOTHING THAT CAN MOVE IT.
+  // Measured on the first real run of this script, 2026-09-07. baseline_scan is `mode: auto`,
+  // so the board gives it an ANCHOR and no card, which means no [Done] button in Slack. And it
+  // is in ROUTE_COMPLETED rather than AUTO_RUNNERS (artifacts/registry.ts), so no board runner
+  // will ever fire it either: in a real onboarding startDelivery calls startBaselineScan as a
+  // separate step of its own. This script deliberately does not, because audit_reports is KEPT
+  // and a fresh scan would mint a NEWER report that replaces the Day 0 photograph the whole
+  // reset went out of its way to preserve.
+  //
+  // So the step was left reachable, uncompletable, and blocking competitor_shortlist,
+  // avatar_confirmed, review_audit and avatar_harvest behind it. The only exit was the
+  // dashboard checkbox, which nothing told you about.
+  //
+  // This is NOT a free tick. autoCompleteStep routes through the same verifier the button
+  // does, and that verifier reads audit_runs and the report status. With no kept report it
+  // REFUSES and says so in the thread, which is the correct outcome: a client with no
+  // photograph genuinely has not had step 2 done.
+  const scanned = await autoCompleteStep(clientId, "baseline_scan");
+  console.log(
+    `baseline_scan:   ${scanned.ok ? "ticked off the kept audit report" : `not ticked (${scanned.error})`}`
+  );
+  if (!scanned.ok) {
+    console.log("    No usable audit on file. Fire a fresh one, or the board stops at step 2:");
+    console.log("      startBaselineScan(clientId) in src/lib/clients/baseline-scan.ts");
+  }
 
   await postDeliveryChecklist(clientId);
   console.log("board reopened\n");
