@@ -185,6 +185,10 @@ const base: CampaignFunnel = {
   const out = formatFunnel({ ...base, replied: 0, booked: 0, closed: 0 }).lines.join(" | ");
   check("funnel (no replies): no 0 of 0", out.includes("0 of 0"), false);
   check("funnel (no replies): reply rate is still measured", out.includes("0 of 412"), true);
+  // The clause naming the denominator has to vanish with the denominator, or the line reads like
+  // a sentence that got cut off: "Closed: 0 of the people who booked."
+  check("funnel (no replies): no dangling denominator clause", out.includes("of the people who replied"), false);
+  check("funnel (no replies): booked is a bare count", out.includes("Booked: 0."), true);
 }
 
 {

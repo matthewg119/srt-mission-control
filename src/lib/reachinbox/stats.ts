@@ -86,8 +86,13 @@ export function formatFunnel(f: CampaignFunnel): FunnelLines {
     lines.push(`Reply rate: ${countOf(f.replied, f.sent)} of the people we emailed.`);
   }
 
-  lines.push(`Booked: ${countOf(f.booked, f.replied)} of the people who replied.`);
-  lines.push(`Closed: ${countOf(f.closed, f.booked)} of the people who booked.`);
+  // The trailing clause names the denominator, so it has to disappear along with it. "Closed: 0 of
+  // the people who booked" when nobody booked reads like a sentence that got cut off.
+  const over = (n: number, d: number, what: string) =>
+    d > 0 ? `${countOf(n, d)} of the people who ${what}.` : `${n}.`;
+
+  lines.push(`Booked: ${over(f.booked, f.replied, "replied")}`);
+  lines.push(`Closed: ${over(f.closed, f.booked, "booked")}`);
 
   return { header: `*${f.campaign}*`, lines };
 }

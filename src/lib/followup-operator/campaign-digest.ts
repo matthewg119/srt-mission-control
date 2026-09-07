@@ -263,10 +263,19 @@ export async function runCampaignDigest(opts?: { dry?: boolean }): Promise<Campa
     return { ...report, skipped: "no_channel" };
   }
 
-  // A silent channel is the goal, so a day with nothing in it says nothing. The card is worth
-  // posting when there is something to report and worth withholding when there is not -- a daily
-  // "0 replies" card is the pace card this lane replaced.
-  if (!report.repliesYesterday && !report.bouncedYesterday && !report.newContacts) {
+  // ‼️ THE SILENCE RULE CHANGED ON 2026-09-07, ON MATTHEW'S EXPLICIT ASK FOR "the daily digest of
+  // what we need at the end of each day". It used to withhold any day with no replies, because a
+  // daily "0 replies" card was the pace card this lane had just replaced. That reasoning held while
+  // the card carried nothing but yesterday. It now carries the standing funnel, which is the thing
+  // he actually reads, and a campaign that sent 400 emails and got no answer is a real report
+  // rather than noise. So: silent only when there is genuinely nothing, which means no activity
+  // yesterday AND no campaign running at all.
+  if (
+    !report.repliesYesterday &&
+    !report.bouncedYesterday &&
+    !report.newContacts &&
+    !report.funnels.length
+  ) {
     return { ...report, skipped: "nothing_to_report" };
   }
 
