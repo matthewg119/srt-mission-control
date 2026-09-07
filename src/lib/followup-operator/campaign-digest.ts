@@ -1,16 +1,26 @@
 // The 09:00 ET campaign card in #vektor-email-director.
 //
-// ‼️ IT PRINTS NO SEND COUNT, NO OPEN RATE, NO CLICK RATE AND NO REPLY RATE, AND THAT IS NOT AN
-// OVERSIGHT TO FIX LATER.
-// ReachInbox sends from mailboxes we do not own and gates its API behind Tier 4, so the number of
-// emails that went out is genuinely unobservable from here. A reply rate needs that denominator.
-// Printing one would mean inventing it, and a rate is exactly the figure somebody makes a spend
-// decision on. Same rule as the audit engine's coverage gate and pacing.ts's "counts touches, not
-// the queue": a denominator we did not measure is worse than no denominator. The card says where
-// the send numbers actually live instead.
+// !! EVERY RATE ON THIS CARD IS GATED ON HAVING MEASURED ITS OWN DENOMINATOR, AND THAT GATE IS THE
+// POINT OF THE FILE.
+// This card used to print no rates at all, because ReachInbox sends from mailboxes we do not own
+// and gated its API behind Tier 4, so the number of emails that went out was unobservable. On
+// 2026-09-07 the Slack webhook integration turned out to be open on the PRO free trial, and
+// /api/webhooks/reachinbox began capturing `Email Sent`. That is the denominator, and a reply rate
+// became computable for the first time.
 //
-// Everything below is read from outreach_touches joined to outreach_prospects where
-// source = 'reachinbox' -- both written by the reply sweep. No new table.
+// !! THE TRIAL ENDS 2026-09-15. If it is not renewed the send events stop, `sent` goes to null,
+// and this card falls back to counts and says so. It must never divide by a partial send number: a
+// rate is exactly the figure a spend decision gets made on, and a half-measured denominator reads
+// high and looks fine. Same rule as the audit engine's coverage gate. The gate itself lives in
+// reachinbox/stats.ts, where the probe asserts every branch of it offline.
+//
+// Replies are the UNION of the webhook and the forwarding mailbox, so the reply COUNT survives the
+// trial lapsing even though the reply RATE does not.
+//
+// Yesterday's activity is read from outreach_touches joined to outreach_prospects where
+// source = 'reachinbox'. The funnel is one call to the reachinbox_campaign_funnel() function,
+// which aggregates in the database because a month of sends is far more rows than PostgREST will
+// page into a serverless function.
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack, slackThreadLink, type SlackBlock } from "@/lib/slack-bot";
@@ -18,10 +28,14 @@ import { startOfETDay, etDateKey } from "./cadence";
 import { classifyReply } from "./classify-reply";
 import { campaignChannel } from "./campaign-replies";
 import { displayName } from "./digest";
+import { formatFunnel, sortFunnels, type CampaignFunnel } from "@/lib/reachinbox/stats";
 import type { OutreachProspectRow, OutreachTouchRow } from "./types";
 import { PROSPECT_COLUMNS } from "./types";
 
 const WEEK_DAYS = 7;
+/** The funnel window. Long enough for a booking to follow a send, short enough to describe what
+ *  the campaigns are doing now rather than what they did in the spring. */
+const FUNNEL_DAYS = 30;
 
 export interface CampaignDigestResult {
   dateKey: string;
@@ -35,6 +49,7 @@ export interface CampaignDigestResult {
   objection: number;
   optOut: number;
   posted: boolean;
+  funnels: CampaignFunnel[];
   skipped?: "no_channel" | "nothing_to_report";
   text: string;
 }
@@ -83,11 +98,44 @@ async function inboundInWindow(
   return { touches: touches.filter((t) => prospects.has(t.prospect_id)), prospects };
 }
 
+/**
+ * The per-campaign funnel over the last FUNNEL_DAYS days.
+ *
+ * !! `sent: 0` FROM SQL BECOMES `sent: null` HERE, AND THAT CONVERSION IS THE WHOLE GATE. Send
+ * counts exist only because the webhook reports them, so a campaign with zero send events was
+ * never measured rather than measured as zero. A campaign that genuinely sent nothing produces no
+ * events and therefore no row at all, so the two cases cannot be confused. null is what makes
+ * stats.ts refuse to print a reply rate.
+ */
+async function fetchFunnels(): Promise<CampaignFunnel[]> {
+  const { data, error } = await supabaseAdmin.rpc("reachinbox_campaign_funnel", {
+    days: FUNNEL_DAYS,
+  });
+  if (error) {
+    // The card still has yesterday's replies to report, so a missing function or a failed query
+    // costs the funnel section and nothing else.
+    console.error("[reachinbox] funnel rpc failed:", error.message);
+    return [];
+  }
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    campaign: String(r.campaign ?? "(unnamed)"),
+    sent: Number(r.sent ?? 0) > 0 ? Number(r.sent) : null,
+    replied: Number(r.replied ?? 0),
+    bounced: Number(r.bounced ?? 0),
+    opened: Number(r.opened ?? 0),
+    clicked: Number(r.clicked ?? 0),
+    booked: Number(r.booked ?? 0),
+    closed: Number(r.closed ?? 0),
+  }));
+}
+
 export async function buildCampaignDigest(now = new Date()): Promise<CampaignDigestResult> {
   const { start: yStart, end: yEnd } = yesterdayETRange(now);
   const weekStart = new Date(yEnd.getTime() - WEEK_DAYS * 24 * 60 * 60 * 1000);
 
   const { touches, prospects } = await inboundInWindow(weekStart.toISOString());
+  const funnels = sortFunnels(await fetchFunnels());
 
   const inYesterday = (t: OutreachTouchRow) => {
     const at = new Date(t.occurred_at).getTime();
@@ -163,9 +211,27 @@ export async function buildCampaignDigest(now = new Date()): Promise<CampaignDig
     lines.push(...namedLines);
   }
 
-  lines.push("");
-  // See the header. This line is the honest substitute for a rate, not a footnote.
-  lines.push("_Sends, opens and clicks are not measured here. Read those in the ReachInbox dashboard._");
+  if (funnels.length) {
+    lines.push("");
+    lines.push(`*Last ${FUNNEL_DAYS} days, by campaign*`);
+    for (const f of funnels) {
+      const block = formatFunnel(f);
+      lines.push("");
+      lines.push(block.header);
+      for (const l of block.lines) lines.push(`  ${l}`);
+    }
+    if (funnels.every((f) => f.sent === null)) {
+      // The line that tells him the trial lapsed, in the one place he is certain to be looking.
+      lines.push("");
+      lines.push(
+        "_No send events arrived in this window, so there is no reply rate. Check the ReachInbox " +
+          "webhook is still on._"
+      );
+    }
+  } else {
+    lines.push("");
+    lines.push("_No campaign events captured yet. Register the ReachInbox webhook to get rates._");
+  }
 
   const text = lines.join("\n");
   const result: CampaignDigestResult = {
@@ -180,6 +246,7 @@ export async function buildCampaignDigest(now = new Date()): Promise<CampaignDig
     objection,
     optOut,
     posted: false,
+    funnels,
     text,
   };
 
@@ -196,10 +263,19 @@ export async function runCampaignDigest(opts?: { dry?: boolean }): Promise<Campa
     return { ...report, skipped: "no_channel" };
   }
 
-  // A silent channel is the goal, so a day with nothing in it says nothing. The card is worth
-  // posting when there is something to report and worth withholding when there is not -- a daily
-  // "0 replies" card is the pace card this lane replaced.
-  if (!report.repliesYesterday && !report.bouncedYesterday && !report.newContacts) {
+  // ‼️ THE SILENCE RULE CHANGED ON 2026-09-07, ON MATTHEW'S EXPLICIT ASK FOR "the daily digest of
+  // what we need at the end of each day". It used to withhold any day with no replies, because a
+  // daily "0 replies" card was the pace card this lane had just replaced. That reasoning held while
+  // the card carried nothing but yesterday. It now carries the standing funnel, which is the thing
+  // he actually reads, and a campaign that sent 400 emails and got no answer is a real report
+  // rather than noise. So: silent only when there is genuinely nothing, which means no activity
+  // yesterday AND no campaign running at all.
+  if (
+    !report.repliesYesterday &&
+    !report.bouncedYesterday &&
+    !report.newContacts &&
+    !report.funnels.length
+  ) {
     return { ...report, skipped: "nothing_to_report" };
   }
 

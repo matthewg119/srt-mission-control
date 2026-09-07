@@ -61,6 +61,8 @@ export interface CreateProspectInput {
   audit_report_id?: string | null;
   contact_id?: string | null;
   source?: "audit" | "outlook_sweep" | "manual" | "reachinbox" | "loom";
+  /** ReachInbox only. The campaign that produced this reply. */
+  campaign?: string | null;
   confirmed?: boolean;
 }
 
@@ -85,6 +87,7 @@ export async function upsertProspect(input: CreateProspectInput): Promise<Outrea
     if (!existing.audit_report_id && input.audit_report_id) patch.audit_report_id = input.audit_report_id;
     if (!existing.contact_id && input.contact_id) patch.contact_id = input.contact_id;
     if (!existing.confirmed && input.confirmed) patch.confirmed = true;
+    if (!existing.campaign && input.campaign) patch.campaign = input.campaign;
     if (!Object.keys(patch).length) return existing;
     return updateProspect(existing.id, patch);
   }
@@ -101,6 +104,7 @@ export async function upsertProspect(input: CreateProspectInput): Promise<Outrea
       audit_report_id: input.audit_report_id ?? null,
       contact_id: input.contact_id ?? null,
       source: input.source ?? "outlook_sweep",
+      campaign: input.campaign ?? null,
       confirmed: input.confirmed ?? false,
     })
     .select(PROSPECT_COLUMNS)

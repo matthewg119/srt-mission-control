@@ -2,11 +2,17 @@
 // CRM contact.
 //
 // WHY THIS EXISTS AT ALL
-// ReachInbox gates webhooks AND the REST API behind Tier 4, and the sending mailboxes were
-// purchased inside ReachInbox, so they are not in our Microsoft 365 tenant and Graph cannot read
-// them. There is no API to poll and no mailbox to sweep. The one free channel left is the mail
-// itself: the purchased mailboxes forward inbound to a mailbox we DO own, and from that point a
-// campaign reply is an ordinary Outlook message that reply-sweep.ts already reads every 5 minutes.
+// The sending mailboxes were purchased inside ReachInbox, so they are not in our Microsoft 365
+// tenant and Graph cannot read them. There is no mailbox to sweep. The one free channel is the
+// mail itself: the purchased mailboxes forward inbound to a mailbox we DO own, and from that point
+// a campaign reply is an ordinary Outlook message that reply-sweep.ts already reads every 5
+// minutes.
+//
+// ‼️ THIS PATH IS STILL THE DURABLE ONE, EVEN NOW THAT THE WEBHOOK EXISTS. On 2026-09-07 the Slack
+// webhook integration turned out to be open on a PRO free trial that ends 2026-09-15, and
+// /api/webhooks/reachinbox now captures sends, opens, clicks and replies. If that trial lapses,
+// forwarding keeps delivering replies and this file keeps working unchanged. Nothing here may be
+// rewritten to depend on the webhook.
 //
 // ‼️ THE MAILBOX IS THE DISCRIMINATOR, AND IT MUST STAY SINGLE-PURPOSE.
 // A campaign reply arrives from someone we never sent to, so it matches no prospect by
@@ -16,9 +22,12 @@
 // and nowhere else. Point anything else at that address and it starts inventing prospects and
 // CRM leads out of ordinary mail.
 //
-// Opens and clicks are not here and cannot be: they never leave ReachInbox on this plan.
+// Opens and clicks are not here. They arrive on the webhook instead, and are stored but never
+// put in front of a spend decision: Apple Mail Privacy Protection pre-fetches images, so an open
+// count is inflated by an unknown amount.
 
 import { slack } from "@/lib/slack-bot";
+import { supabaseAdmin } from "@/lib/db";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { ingestLead } from "@/lib/lead-intake";
 import { upsertProspect, updateProspect } from "./prospects";
@@ -62,6 +71,39 @@ function splitName(display: string | null | undefined): { first: string; last: s
   return { first: parts[0] ?? "", last: parts.slice(1).join(" ") };
 }
 
+/**
+ * Which campaign emailed this address, according to the webhook log.
+ *
+ * The forwarded reply itself carries no campaign identifier -- it arrives at one single-purpose
+ * mailbox that is deliberately the same for every campaign, so the mailbox cannot discriminate.
+ * The webhook is the only thing that knows, and it knew before the reply arrived because it saw
+ * the send.
+ *
+ * Newest first, so a prospect emailed by two campaigns is credited to the one that actually
+ * prompted the reply. Returns null when the webhook never saw them, which is the normal case for
+ * anyone emailed before 2026-09-07 and for every campaign if the trial lapses.
+ */
+export async function campaignForEmail(email: string): Promise<string | null> {
+  const clean = email.trim().toLowerCase();
+  if (!clean) return null;
+  const { data, error } = await supabaseAdmin
+    .from("reachinbox_events")
+    .select("campaign_name")
+    .eq("lead_email", clean)
+    .not("campaign_name", "is", null)
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  // A missing table or a failed query must never break reply handling: the campaign is a nice
+  // label on a row whose real job is to get Matthew the reply.
+  if (error) {
+    console.error("[reachinbox] campaignForEmail:", error.message);
+    return null;
+  }
+  const name = (data as { campaign_name?: string | null } | null)?.campaign_name;
+  return name?.trim() || null;
+}
+
 export interface CampaignProspectInput {
   email: string;
   displayName?: string | null;
@@ -85,9 +127,12 @@ export async function createCampaignProspect(
   const { first, last } = splitName(input.displayName);
   const name = [first, last].filter(Boolean).join(" ") || null;
 
+  const campaign = await campaignForEmail(email);
+
   const prospect = await upsertProspect({
     email,
     name,
+    campaign,
     // A freemail domain is not a company website, and guessing one would put a dead link in the
     // CRM. Company is left null rather than title-casing a domain into something that reads like
     // a verified fact.
@@ -165,6 +210,9 @@ export async function announceCampaignReply(
       speedToLead: isHot(classification),
       utmSource: "reachinbox",
       utmMedium: "email",
+      // Until 2026-09-07 this was omitted, so contacts.utm_campaign was null on every ReachInbox
+      // lead and every campaign ever run produced byte-identical attribution in the CRM.
+      utmCampaign: prospect.campaign ?? undefined,
     });
     contactId = res.contactId;
     if (contactId) await updateProspect(prospect.id, { contact_id: contactId });
