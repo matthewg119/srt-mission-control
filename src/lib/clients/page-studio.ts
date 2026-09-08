@@ -31,6 +31,7 @@
 // download-and-transcribe path, which is imported rather than copied.
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import { slack } from "@/lib/slack-bot";
 import { isVoiceNote, transcribeAudio } from "./voice-notes";
 import { startPageDraft, appendPageBody, listAllForBoard, type ClientPage } from "@/lib/hub/pages";
@@ -347,8 +348,9 @@ async function startSession(text: string, messageTs: string): Promise<void> {
   if (menu.length === 0) {
     await say(
       messageTs,
-      `*${client.name}* has no scored page candidates yet. That is step 13 on the delivery ` +
-        "checklist, and it needs the phrase harvest (step 10) to have run first.\n" +
+      `*${client.name}* has no scored page candidates yet. That is step ` +
+        `${stepNumber("page_candidates")} on the delivery checklist, and it needs the phrase ` +
+        `harvest (step ${stepNumber("avatar_harvest")}) to have run first.\n` +
         `${appUrl()}/dashboard/clients/${client.id}`
     );
     return;
@@ -364,8 +366,8 @@ async function startSession(text: string, messageTs: string): Promise<void> {
     "",
     // The distinction, said on the card rather than assumed. It is the question Matthew asked
     // about these two steps, and it is a question rather than a defect.
-    "_This is step 13, the PUBLISHING backlog: what is worth writing._",
-    "_Step 12 is the MEASUREMENT set, frozen at Day 0, and nothing is ever published from it._",
+    `_This is step ${stepNumber("page_candidates")}, the PUBLISHING backlog: what is worth writing._`,
+    `_Step ${stepNumber("custom_question_set")} is the MEASUREMENT set, frozen at Day 0, and nothing is ever published from it._`,
     "",
   ];
 
@@ -1371,7 +1373,7 @@ async function avatarCommand(session: Session, arg: string): Promise<void> {
       `:new: *${label}* created for \`${resolved.vertical}\`, as \`${slug}\`.`,
       "",
       "‼️ *It has no research yet.* Paste this into claude.com and bring the answer back with " +
-        "`research:` in step 10's thread, which is where the extractor lives:",
+        `\`research:\` in step ${stepNumber("avatar_harvest")}'s thread, which is where the extractor lives:`,
       "```",
       prompt.slice(0, 2400),
       "```",

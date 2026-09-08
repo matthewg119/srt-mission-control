@@ -42,6 +42,7 @@ import {
   type StoredSkin,
   type HubTemplate,
 } from "@/lib/hub/skin";
+import { stepNumber } from "@/config/delivery-steps";
 import { readSkinFromImages } from "@/lib/hub/skin-vision";
 import {
   candidateAt,
@@ -457,7 +458,8 @@ export async function handleSkinThreadReply(input: {
         // know why this one did the opposite. The reasoning is in confirmSkinPick's header and in
         // docs/2026-09-08-skin-candidates.sql.
         "The theme is confirmed, because choosing one of three rendered previews is a person " +
-          "looking at it and saying yes. That is what step 15's [Done] was waiting on.",
+          `looking at it and saying yes. That is what step ${stepNumber("hub_preview")}'s [Done] ` +
+          "was waiting on.",
         "",
         "*Next:*",
         `  • Press [Done] on this step.`,
