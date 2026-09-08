@@ -350,13 +350,24 @@ export const slack = {
                   return data.messages ?? [];
         },
 
-        /** Fetch channel info (name, etc.). Returns null if not found or error. */
-        async getChannelInfo(channel: string): Promise<{ name?: string } | null> {
+        /** Fetch channel info. Returns null if not found or error.
+         *
+         *  ‼️ `is_member` IS WHY THIS RETURNS MORE THAN A NAME NOW. The bot can chat.postMessage
+         *  into a public channel it has never joined, but Slack does not DELIVER message events
+         *  from one. That asymmetry is how #aeo-seo-page-drafting sat dead for weeks with no
+         *  error anywhere: every reply the page studio would have sent was never asked for.
+         *  Anything that owns a channel it did not create should check this and say so. */
+        async getChannelInfo(
+                  channel: string
+        ): Promise<{ name?: string; is_member?: boolean; is_private?: boolean; is_archived?: boolean } | null> {
                   const token = getToken();
                   if (!token) return null;
                   const url = `${SLACK_API}/conversations.info?channel=${encodeURIComponent(channel)}`;
                   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-                  const data = await res.json() as { ok: boolean; channel?: { name?: string } };
+                  const data = await res.json() as {
+                            ok: boolean;
+                            channel?: { name?: string; is_member?: boolean; is_private?: boolean; is_archived?: boolean };
+                  };
                   if (!data.ok) return null;
                   return data.channel ?? null;
         },

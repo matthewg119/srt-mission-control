@@ -61,6 +61,56 @@ export function pageStudioHint(): string {
   return `<#${pageStudioChannel()}>`;
 }
 
+/**
+ * The same words with Slack's formatting wrappers taken off, for COMMAND MATCHING ONLY.
+ *
+ * ‼️ THIS IS A REAL BUG FIX AND THE SYMPTOM WAS SILENCE. Matthew typed `page SRT Agency LLC`
+ * as an inline code span. Slack delivers the backticks as literal characters, every command
+ * test below is anchored at the start of the message, so nothing matched and the branch fell
+ * through to the nudge. Typing a command in a code span is the most natural thing in the world
+ * in a channel whose entire vocabulary is commands.
+ *
+ * ‼️ IT IS DELIBERATELY NOT APPLIED TO WHAT GETS STORED. The body append and the evidence
+ * answer both take the RAW text, because those are his words going verbatim onto a page on the
+ * client's own domain, and an asterisk he typed on purpose is his.
+ *
+ * Four wrappers: a fenced block, an inline code span, bold and italic. This is not a mrkdwn
+ * parser and must not become one.
+ *
+ * ‼️ IT PEELS UNTIL NOTHING COMES OFF, NOT ONCE PER MARKER, and the difference is a real case.
+ * A single pass in a fixed order leaves `*` + backtick + text + backtick + `*` half-wrapped,
+ * because bold is stripped after the code span it was hiding. Bounded by MAX_PEELS so a
+ * pathological string cannot spin.
+ *
+ * A marker with only one side is left alone: a message opening with a backtick and never
+ * closing it is prose, not a command wearing a costume. And an emphasised word MID-sentence is
+ * untouched, which matters because this same message may be dictation headed verbatim onto a
+ * page.
+ */
+const MAX_PEELS = 4;
+
+export function unwrapFormatting(text: string): string {
+  let out = text.trim();
+  const pairs: ReadonlyArray<readonly [string, string]> = [
+    ["```", "```"],
+    ["`", "`"],
+    ["*", "*"],
+    ["_", "_"],
+  ];
+
+  for (let pass = 0; pass < MAX_PEELS; pass += 1) {
+    const before = out;
+    for (const [open, close] of pairs) {
+      if (out.length > open.length + close.length && out.startsWith(open) && out.endsWith(close)) {
+        out = out.slice(open.length, out.length - close.length).trim();
+      }
+    }
+    if (out === before) break;
+  }
+
+  return out;
+}
+
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
 }
@@ -1126,12 +1176,16 @@ export async function handlePageStudioEvent(args: {
   files: StudioFile[];
 }): Promise<boolean> {
   const text = (args.text ?? "").trim();
+  // ‼️ TWO VIEWS OF THE SAME MESSAGE, AND WHICH ONE A BRANCH READS IS THE POINT.
+  // `command` is unwrapped so a backticked command still fires; `text` stays raw so
+  // anything that lands on a page lands exactly as he typed it. See unwrapFormatting.
+  const command = unwrapFormatting(text);
   const inThread = Boolean(args.threadTs && args.threadTs !== args.messageTs);
 
   // Top level: `page <client>` is the only thing that starts anything.
   if (!inThread) {
-    if (/^page\b/i.test(text)) {
-      await startSession(text, args.messageTs);
+    if (/^page\b/i.test(command)) {
+      await startSession(command, args.messageTs);
       return true;
     }
     if (text || args.files.length) {
@@ -1154,18 +1208,18 @@ export async function handlePageStudioEvent(args: {
   // ‼️ THE ABANDON BRANCH, AND IT IS NOT OPTIONAL. Every thread session in this repo has one.
   // Without it a menu left half-finished eats a digit typed days later and claims a question
   // nobody meant to claim.
-  if (/^(cancel|nevermind|never mind|stop)$/i.test(text)) {
+  if (/^(cancel|nevermind|never mind|stop)$/i.test(command)) {
     await supabaseAdmin.from("page_studio_sessions").delete().eq("thread_ts", session.threadTs);
     await say(session.threadTs, "Dropped. Nothing else in this thread will be read as a page.");
     return true;
   }
 
-  if (/^done$/i.test(text)) {
+  if (/^done$/i.test(command)) {
     await finish(session);
     return true;
   }
 
-  if (/^polish$/i.test(text)) {
+  if (/^polish$/i.test(command)) {
     await polish(session);
     return true;
   }
@@ -1173,7 +1227,7 @@ export async function handlePageStudioEvent(args: {
   // ‼️ IT TAKES AN ARGUMENT, WHICH NO OTHER COMMAND HERE DOES, so the pattern is anchored and the
   // rest of the line is the key rather than dictation. A bare `magnet` lists rather than clearing,
   // because a command that silently erased the offer would be the one mistake nobody would notice.
-  const magnetCmd = /^magnet(?:\s+(.+))?$/i.exec(text);
+  const magnetCmd = /^magnet(?:\s+(.+))?$/i.exec(command);
   if (magnetCmd) {
     await magnet(session, magnetCmd[1] ?? "");
     return true;
@@ -1183,27 +1237,27 @@ export async function handlePageStudioEvent(args: {
   // They are whole-word only, for the reason `done` and `polish` already are: a sentence that
   // happens to begin with "next" is a sentence, and swallowing it as a command would lose
   // dictation with no sign that it did.
-  if (/^ask$/i.test(text)) {
+  if (/^ask$/i.test(command)) {
     await startInterview(session);
     return true;
   }
 
-  if (session.mode === "evidence" && /^(next|skip)$/i.test(text)) {
+  if (session.mode === "evidence" && /^(next|skip)$/i.test(command)) {
     await skipTopic(session);
     return true;
   }
 
-  if (/^body$/i.test(text)) {
+  if (/^body$/i.test(command)) {
     await leaveInterview(session);
     return true;
   }
 
-  if (/^draft$/i.test(text)) {
+  if (/^draft$/i.test(command)) {
     await draft(session);
     return true;
   }
 
-  if (/^check$/i.test(text)) {
+  if (/^check$/i.test(command)) {
     await check(session);
     return true;
   }
@@ -1219,7 +1273,7 @@ export async function handlePageStudioEvent(args: {
   // something he said about the page and belongs in the body. Same doctrine as
   // thread-assistant.ts, where a bare digit means different things at different moments and
   // the stored state is what decides.
-  const digit = /^([0-9]{1,2})$/.exec(text);
+  const digit = /^([0-9]{1,2})$/.exec(command);
   if (digit && !session.pageId) {
     await claim(session, Number(digit[1]));
     return true;
