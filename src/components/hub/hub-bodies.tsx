@@ -71,8 +71,14 @@ export function truncate(text: string, max: number): string {
  * routing it through the optimizer would put every hub page's header behind our image
  * pipeline for no benefit. Height is capped in CSS so a 2000px logo cannot own the page.
  * alt is the business name because that is what the mark says.
+ *
+ * ‼️ EXPORTED SINCE 2026-09-08 FOR THE REVIEW TOOL, WHICH HAD NO LOGO AT ALL. reviews.{domain}
+ * and learn.{domain} come off the same client record and share a layout, but the mark was drawn
+ * only by the bodies in this file, so a client with a confirmed logo had it on one host and not
+ * the other. Two hosts for one business that do not look like each other is the exact thing
+ * sharing a theme object exists to prevent.
  */
-function HubLogo({ client }: { client: HubClient }) {
+export function HubLogo({ client }: { client: HubClient }) {
   if (!client.theme?.logoUrl) return null;
   // eslint-disable-next-line @next/next/no-img-element
   return <img className="hub-logo" src={client.theme.logoUrl} alt={client.displayName} />;

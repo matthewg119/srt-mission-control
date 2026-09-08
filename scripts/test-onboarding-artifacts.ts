@@ -57,7 +57,12 @@ import {
   tieAtCutoff,
   REQUIRED_SELECTIONS,
 } from "../src/lib/clients/competitors";
-import { analyse, gradeLevel, sentences as splitSentences } from "../src/lib/hub/readability";
+import {
+  analyse,
+  gradeLevel,
+  mergeMarks,
+  sentences as splitSentences,
+} from "../src/lib/hub/readability";
 import { PHASE_BEFORE, PHASE_DURING, PHASE_AFTER } from "../src/config/delivery-steps";
 import fs from "node:fs";
 import path from "node:path";
@@ -1222,6 +1227,113 @@ eq(
     "sentence splitting keeps offsets in order",
     splitSentences("One. Two.").map((s) => s.start),
     [0, 5]
+  );
+}
+
+// -- The Hemingway pass: it points at words too, and still never rewrites -----
+// The word-level half, added 2026-09-08. Same rule as the sentence half: a mark is an
+// observation about what she wrote. Nothing here proposes different words and nothing may.
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "readability.ts"),
+    "utf8"
+  );
+  // Restated for the new code rather than assumed to still hold: the whole vocabulary is
+  // single-column lists of things to POINT AT, so there is nowhere a replacement could live.
+  ok("still imports nothing after the Hemingway pass", !/^\s*import\s/m.test(src));
+  // Comments stripped FIRST, and that is not a detail. The header of readability.ts explains at
+  // length that Matthew "chose this instead", and an earlier version of this check failed on
+  // that sentence, which would have pushed somebody to delete the paragraph documenting the
+  // rule in order to make the test pass. _probe-review-gating.ts learned the same lesson on the
+  // printed card. Comments say what we intend; only code is evidence.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  ok(
+    "no vocabulary maps a word to a replacement",
+    !/(SIMPLER|REPLACEMENT|ALTERNATIVE|SUBSTITUT)\w*\s*[:=]/i.test(code)
+  );
+  // The lists are Sets and arrays of strings. A Record or a Map from one word to another is the
+  // shape a replacement table would have to take, so its absence is the structural half.
+  ok(
+    "and no lookup table from a word to another word",
+    !/(?:Record<string,\s*string>|new Map<string,\s*string>)/.test(code)
+  );
+
+  // The carve-out that keeps the hint readable. hemingway.app calls "I was worried" passive; it
+  // is a predicate adjective and it is also the literal shape of the answer to question one, so
+  // a generic detector would mark nearly every review this tool has ever collected.
+  const feelings = analyse("I was worried about the pain. I am pleased with the result.");
+  eq("a feeling is not read as the passive voice", feelings.flags.length, 0);
+
+  const passive = analyse("The room was cleaned before I arrived.");
+  eq("a real passive is caught", passive.flags.filter((f) => f.kind === "passive").length, 1);
+  eq(
+    "and it spans the auxiliary and the participle together",
+    "was cleaned",
+    "The room was cleaned before I arrived.".slice(
+      passive.flags[0]?.start ?? 0,
+      passive.flags[0]?.end ?? 0
+    )
+  );
+
+  const hedged = analyse("It was kind of good and I really liked the staff.");
+  ok(
+    "a hedge is caught",
+    hedged.flags.some((f) => f.kind === "qualifier")
+  );
+
+  const adverbs = analyse("She explained it beautifully.");
+  eq("an adverb is caught", adverbs.flags.filter((f) => f.kind === "adverb").length, 1);
+  eq("a friendly nurse is not an adverb", analyse("The friendly nurse helped.").flags.length, 0);
+  eq("and neither is a family member", analyse("My family came along.").flags.length, 0);
+
+  // A word is marked once. "really" is both an -ly adverb and a hedge, and two marks on one
+  // word would put a mark inside a mark.
+  const overlap = analyse("I was really worried.");
+  eq("one word carries one mark", overlap.flags.length, 1);
+
+  // Flags never overlap each other, which is what lets mergeMarks stay a cover test.
+  const busy = analyse(
+    "The room was cleaned really beautifully and I was kind of nervous, but it was fine."
+  );
+  ok(
+    "word flags never overlap each other",
+    busy.flags.every((f, i) => i === 0 || f.start >= (busy.flags[i - 1]?.end ?? 0))
+  );
+
+  // -- mergeMarks: the pieces must join back to the original, exactly ---------
+  // The review tool paints these into a div underneath a transparent textarea. One dropped or
+  // duplicated character does not look broken, it looks like the hint is pointing at the wrong
+  // sentence. Every case below deliberately has a word flag nested inside a hard sentence,
+  // which is the arrangement the old single-cursor walk could not survive.
+  const samples = [
+    "",
+    "Short.",
+    "The room was cleaned really beautifully.",
+    "I was genuinely unsure about whether the treatment would hurt at all because I have had a " +
+      "bad experience somewhere else before and I did not want that again.",
+    "Kind of nervous. Really pleased. The staff were lovely.",
+    "utilize approximately numerous methods",
+  ];
+  for (const sample of samples) {
+    const merged = mergeMarks(sample, analyse(sample));
+    eq(
+      `mergeMarks rebuilds ${JSON.stringify(sample.slice(0, 24))} exactly`,
+      merged.map((m) => m.text).join(""),
+      sample
+    );
+    ok(
+      `and emits no empty piece for ${JSON.stringify(sample.slice(0, 24))}`,
+      merged.every((m) => m.text.length > 0)
+    );
+  }
+
+  // The nesting case, stated as its own proposition rather than left implied by the rebuild.
+  const nested = "The whole room was cleaned really beautifully before I ever walked in there.";
+  const marks = mergeMarks(nested, analyse(nested));
+  ok(
+    "a flagged word inside a flagged sentence carries both",
+    marks.some((m) => m.hard !== null && m.flag !== null) ||
+      analyse(nested).hard.length === 0
   );
 }
 

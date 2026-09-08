@@ -38,7 +38,8 @@ import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, skinClass } from "@/lib/hub/skin";
-import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
+import { ReviewTool, readLook } from "@/app/hub/[host]/reviews/review-tool";
+import type { ChatLook } from "@/app/hub/[host]/reviews/review-client";
 import "@/app/hub/[host]/hub.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
@@ -54,7 +55,7 @@ export const metadata: Metadata = {
 
 interface Props {
   params: { id: string; slug?: string[] };
-  searchParams: { kind?: string };
+  searchParams: { kind?: string; look?: string };
 }
 
 export default async function HubPreview({ params, searchParams }: Props) {
@@ -85,6 +86,11 @@ export default async function HubPreview({ params, searchParams }: Props) {
   });
 
   const kind = searchParams.kind === "reviews" ? "reviews" : "hub";
+  // ‼️ THE ONLY PLACE THE CHAT LOOK CAN BE CHOSEN, AND IT IS BEHIND auth(). The three
+  // variations exist so Matthew can pick one; a client host has no way to pass this and always
+  // renders the default. readLook() validates rather than interpolates, because the value ends
+  // up in a class attribute.
+  const look = readLook(searchParams.look);
   const host =
     wanted.find((w) => w.kind === kind)?.host ??
     // No domain on the record yet. Say so in the hostname rather than rendering a
@@ -100,10 +106,10 @@ export default async function HubPreview({ params, searchParams }: Props) {
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
-      <PreviewBanner clientId={params.id} kind={kind} host={host} slug={slug} />
+      <PreviewBanner clientId={params.id} kind={kind} host={host} slug={slug} look={look} />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReviewTool client={client} />
+          <ReviewTool client={client} look={look} />
         ) : slug ? (
           <PreviewAnswer clientId={params.id} host={host} slug={slug} client={client} />
         ) : (
@@ -160,13 +166,25 @@ function PreviewBanner({
   kind,
   host,
   slug,
+  look,
 }: {
   clientId: string;
   kind: "hub" | "reviews";
   host: string;
   slug?: string;
+  look: ChatLook;
 }) {
   const other = kind === "reviews" ? "hub" : "reviews";
+
+  // ‼️ EVERY SURFACE THAT STARTS SOMETHING PRINTS WHAT CAN BE DONE NEXT. Matthew's acceptance
+  // criterion, and the shape is copied from step 15's card, which offers its four templates,
+  // the screenshot lane, the preview link and the confirm link in one place. A preview that
+  // shows three possible looks and gives you no way to see the other two is the bug.
+  const looks: ReadonlyArray<{ key: ChatLook; label: string }> = [
+    { key: "a", label: "bubbles" },
+    { key: "b", label: "editorial" },
+    { key: "c", label: "compact" },
+  ];
 
   return (
     <div
@@ -193,6 +211,24 @@ function PreviewBanner({
       {kind === "reviews" && (
         <span style={{ color: "rgba(255,255,255,0.5)" }}>
           Type into it freely. Submissions from here are discarded, not stored.
+        </span>
+      )}
+      {kind === "reviews" && (
+        <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>chat look:</span>
+          {looks.map((option) => (
+            <a
+              key={option.key}
+              href={`/dashboard/clients/${clientId}/preview?kind=reviews&look=${option.key}`}
+              style={{
+                color: option.key === look ? "#fff" : "#F5A623",
+                fontWeight: option.key === look ? 700 : 400,
+                textDecoration: option.key === look ? "none" : "underline",
+              }}
+            >
+              {option.label}
+            </a>
+          ))}
         </span>
       )}
       <span style={{ marginLeft: "auto", display: "flex", gap: "12px" }}>
