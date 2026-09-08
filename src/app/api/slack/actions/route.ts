@@ -1351,7 +1351,18 @@ async function deliveryStepAction(args: {
           return;
         }
 
-        await resolveStepCard(args.channel, clientId, stepKey, `:white_check_mark: *${step.label}* — done by ${actor}.`);
+        // ‼️ A CARD THAT COMPLETES AND OFFERS NOTHING IS THE BUG BEING FIXED. This was one
+        // line and a full stop, on the single most-pressed button on the board. The footer is
+        // derived from DELIVERY_STEPS rather than typed, so it cannot name a step number that
+        // has moved. asDone, because what comes next is computed as though this step is done,
+        // which at this point it is.
+        const doneNext = await nextStepFooter(clientId, stepKey, { asDone: true });
+        await resolveStepCard(
+          args.channel,
+          clientId,
+          stepKey,
+          `:white_check_mark: *${step.label}* — done by ${actor}.${doneNext}`
+        );
         return;
       }
 
@@ -1377,13 +1388,15 @@ async function deliveryStepAction(args: {
           return;
         }
 
+        // A skip advances the board exactly as a completion does, so it owes the same footer.
+        const skipNext = await nextStepFooter(clientId, stepKey, { asDone: true });
         await resolveStepCard(
           args.channel,
           clientId,
           stepKey,
           `:heavy_minus_sign: *${step.label}* — skipped by ${actor}. ` +
             `It renders as "not checked" everywhere, never as "no issues found". ` +
-            `Reply here with why, so the artifact can say it.`
+            `Reply here with why, so the artifact can say it.${skipNext}`
         );
         return;
       }
@@ -1417,7 +1430,12 @@ async function deliveryStepAction(args: {
         clientId,
         stepKey,
         `:warning: *${step.label}* — ${actor} hit a problem. Say what happened in this thread. ` +
-          `It is now in the #alerts-infra digest and it will not advance on its own.`
+          `It is now in the #alerts-infra digest and it will not advance on its own.` +
+          // NOT asDone: a flagged step blocks whatever was waiting on it, so naming the step it
+          // unblocks would be pointing at work that is now further away, not closer.
+          (await nextStepFooter(clientId, stepKey, {
+            own: ["  • Re-open it with the buttons on the card once the problem is fixed."],
+          }))
       );
     })().catch(async (e) => {
       // ‼️ THIS IIFE HAD NO CATCH, unlike every neighbouring handler in this file.
@@ -1764,6 +1782,30 @@ async function pageReviewUseAction(args: {
   );
 
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * The `*Next:*` block, as a string ready to append to a reply.
+ *
+ * ‼️ IT NEVER THROWS AND NEVER BLOCKS THE REPLY. This runs between a person pressing a button
+ * and the message that says what happened. A footer is worth having; it is not worth losing the
+ * confirmation over, so a failure here returns "" and the reply goes out without it.
+ */
+async function nextStepFooter(
+  clientId: string,
+  stepKey: string,
+  opts: { asDone?: boolean; own?: string[] } = {}
+): Promise<string> {
+  try {
+    const { nextStepLines } = await import("@/lib/clients/next-steps");
+    const { isStepKey } = await import("@/config/delivery-steps");
+    if (!isStepKey(stepKey)) return "";
+    const lines = await nextStepLines(clientId, stepKey, opts);
+    return lines.length ? `\n\n${lines.join("\n")}` : "";
+  } catch (e) {
+    console.error("[slack/actions] next-step footer failed:", (e as Error).message);
+    return "";
+  }
 }
 
 async function cleanupConfirmAllAction(args: {

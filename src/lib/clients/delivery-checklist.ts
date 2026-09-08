@@ -477,18 +477,39 @@ export async function setDeliveryStep(args: {
   // The evidence goes in the step's own thread, as a record of WHAT was checked rather than
   // a bare tick. A line saying "verified: 20 audit_runs rows, 14 answered" is auditable three
   // weeks later; ":white_check_mark: Photograph I" is not.
+  // ‼️ THE SAME FOOTER THE BUTTON PATH ADDS, BECAUSE THIS IS THE OTHER DOOR TO THE SAME
+  // MOMENT. A step completed by a runner or by an API call lands here instead of in
+  // actions/route.ts, and a card that offers a next step only when a human pressed the button
+  // is a card that offers one about half the time.
+  //
+  // It never blocks the notify: the row is already written, and losing the confirmation over a
+  // footer would be strictly worse than losing the footer.
+  const footer = async (asDone: boolean): Promise<string> => {
+    try {
+      const { nextStepLines } = await import("./next-steps");
+      const { isStepKey } = await import("@/config/delivery-steps");
+      if (!isStepKey(args.stepKey)) return "";
+      const lines = await nextStepLines(args.clientId, args.stepKey, { asDone });
+      return lines.length ? `\n\n${lines.join("\n")}` : "";
+    } catch (e) {
+      console.error("[delivery-checklist] next-step footer failed:", (e as Error).message);
+      return "";
+    }
+  };
+
   if (complete && verdict?.ok) {
     await notifyStep(
       args.clientId,
       args.stepKey,
-      confirmationText(step.label, verdict, args.actor ?? null)
+      confirmationText(step.label, verdict, args.actor ?? null) + (await footer(true))
     );
   } else if (skipped) {
     await notifyStep(
       args.clientId,
       args.stepKey,
       `:${MARK_SKIPPED}: *${step.label}* — skipped${args.actor ? ` by ${args.actor}` : ""}. ` +
-        `It reads as not checked everywhere, never as no issues found.`
+        `It reads as not checked everywhere, never as no issues found.` +
+        (await footer(true))
     );
   }
 

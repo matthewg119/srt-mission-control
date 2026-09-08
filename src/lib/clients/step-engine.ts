@@ -23,7 +23,8 @@ import {
   SWEEP_GATE_COUNT,
   platformByKey,
 } from "@/config/presence-platforms";
-import { DAY_ZERO_STEP_KEY, stepNumber } from "@/config/delivery-steps";
+import { DAY_ZERO_STEP_KEY, stepNumber, type StepKey } from "@/config/delivery-steps";
+import { nextStepLines } from "./next-steps";
 // The channel surface. Everything this module says about a step goes through these, never
 // through notifyThread: a step's output belongs in that step's thread.
 import {
@@ -1795,6 +1796,31 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
     (await instructionsFor(step, facts, {
       outputRef: (row?.output_ref as string | null) ?? null,
     })) ?? [];
+
+  // ‼️ THE NEXT-STEP FOOTER IS ADDED HERE, ONCE, RATHER THAN IN THIRTY `case` ARMS.
+  //
+  // Matthew: "every workflow card that completes ends by printing what can be done next. A card
+  // that completes and offers nothing is the bug." Measured before this: three of the twenty-nine
+  // arms printed a real one. Twenty were bare, and the steps with no arm at all
+  // (`default: return null`) printed a label and three buttons.
+  //
+  // Doing it at the one place every body passes through means a step added tomorrow gets it for
+  // free, and a step with no arm gets it too, which is exactly the set that needed it most.
+  //
+  // ‼️ AND IT DEFERS TO AN ARM THAT ALREADY SAYS IT. hub_preview, review_request_configured and
+  // offer_locked write their own, tuned to what that step actually accepts in its thread. Two
+  // "Next" blocks on one card is worse than either alone, so the arm wins.
+  //
+  // NOT asDone: this is the card for a step that is still open, so what comes next is what
+  // unblocks when it closes, phrased as the thing it leads to rather than the thing to do now.
+  if (!body.some((line) => line.includes("*Next:*"))) {
+    const footer = await nextStepLines(clientId, stepKey as StepKey).catch((e: Error) => {
+      console.error(`[step-engine] next-step footer failed for ${stepKey}:`, e.message);
+      return [] as string[];
+    });
+    if (footer.length) body.push("", ...footer);
+  }
+
   const kit = blocks(step, facts, body, await extraActionsFor(step, facts));
   const fallback = `${facts.name} · ${step.label}`;
 

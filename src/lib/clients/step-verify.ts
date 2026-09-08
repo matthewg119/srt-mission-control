@@ -1912,6 +1912,20 @@ export function refusalText(stepLabel: string, verdict: Verdict): string {
 
   lines.push("");
   lines.push("The step is still open and has no checkmark.");
+
+  // ‼️ A REFUSAL THAT ENDS ON "STILL OPEN" TELLS SOMEBODY THEY ARE STUCK AND NOT HOW TO GET OUT.
+  // The verdict above already carries the specific todo or fix. This is the generic half: what
+  // the buttons do and where the rest of it lives.
+  //
+  // ‼️ AND IT IS SYNCHRONOUS, WHICH IS WHY IT DOES NOT NAME THE NEXT STEP. This function runs
+  // inside the button path, between a tap and the reply Slack is waiting three seconds for, and
+  // making it async to look up the board would put a query in that gap. next-steps.ts records
+  // the same reason on nextStepLinesSync.
+  lines.push("");
+  lines.push("*Next:*");
+  lines.push("  • Do the thing above, then press *Re-check* on the card.");
+  lines.push("  • Or say what happened in this thread, which is where the evidence is read from.");
+
   return lines.join("\n");
 }
 
