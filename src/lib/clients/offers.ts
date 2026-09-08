@@ -94,6 +94,64 @@ const SOURCES: readonly OfferSource[] = [
   "call",
 ];
 
+/**
+ * Placeholder answers people give a required field they do not want to answer.
+ *
+ * ‼️ MEASURED, AND SRT'S OWN ROW IS THE CASE. `ideal_patient.highest_margin` on SRT Agency is
+ * literally the string "any". Proposing "any" as the offer would put it into [treatment], so
+ * every tracked question, every page candidate and every magnet query would be aimed at a word
+ * that means the opposite of one service.
+ *
+ * Exactly the same shape as the competitor box containing "a", which usableCompetitorName() in
+ * question-sets.ts was written to catch, and which isExcludedFromShortlist handles for
+ * aggregators. A required field does not make an answer.
+ *
+ * ‼️ IT REFUSES RATHER THAN GUESSING PAST IT. The chain falls through to the next source, and
+ * when every source is a placeholder the proposal is EMPTY and says so, which is a state the
+ * board can act on. Silently proposing "any" is a state nobody would ever notice.
+ */
+const PLACEHOLDERS = new Set([
+  "any",
+  "all",
+  "all of them",
+  "everything",
+  "various",
+  "many",
+  "n/a",
+  "na",
+  "none",
+  "no",
+  "yes",
+  "tbd",
+  "unsure",
+  "not sure",
+  "dont know",
+  "don't know",
+  "other",
+  "misc",
+  "general",
+  "services",
+  "everything we do",
+  "the whole menu",
+]);
+
+/**
+ * A service name somebody could aim a page at, or null.
+ *
+ * Mechanical, like usableCompetitorName: at least three characters, at least two letters
+ * together, and not one of the placeholders above. It does NOT check the words are a real
+ * treatment, because a vocabulary would refuse a real business's real service for not being on
+ * a list somebody wrote in advance.
+ */
+export function usableTreatment(raw: unknown): string | null {
+  const value = text(raw);
+  if (!value) return null;
+  if (value.length < 3) return null;
+  if (!/[A-Za-z]{2,}/.test(value)) return null;
+  if (PLACEHOLDERS.has(value.toLowerCase().replace(/[.!?]+$/, ""))) return null;
+  return value;
+}
+
 function text(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const value = raw.trim();
@@ -225,10 +283,14 @@ export async function proposeOffer(
   const ideal = (data.ideal_patient ?? {}) as Record<string, unknown>;
   const current = readOffer((data as { offer?: unknown }).offer);
 
+  // ‼️ usableTreatment, NOT text. A required field does not make an answer: SRT's own
+  // highest_margin is the string "any", and proposing that would aim the whole build at a word
+  // meaning the opposite of one service. Each source falls through to the next, and when they
+  // are all placeholders the proposal is empty and the card says to ask on the call.
   const candidates: Array<{ value: string | null; source: OfferSource }> = [
-    { value: text(services.primary_treatment), source: "primary_treatment" },
-    { value: text(ideal.highest_margin), source: "highest_margin" },
-    { value: firstLine(services.services_list), source: "services_list" },
+    { value: usableTreatment(services.primary_treatment), source: "primary_treatment" },
+    { value: usableTreatment(ideal.highest_margin), source: "highest_margin" },
+    { value: usableTreatment(firstLine(services.services_list)), source: "services_list" },
   ];
 
   const found = candidates.find((c) => c.value !== null) ?? null;
@@ -268,8 +330,15 @@ export async function lockOffer(args: {
   positioning?: string | null;
   by: string;
 }): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
-  const treatment = text(args.treatment);
-  if (!treatment) return { ok: false, error: "an offer needs a name" };
+  const treatment = usableTreatment(args.treatment);
+  if (!treatment) {
+    return {
+      ok: false,
+      error:
+        "that is not a service anybody can aim a page at. One thing they sell, in their own " +
+        "words, not \"any\" or \"everything\".",
+    };
+  }
 
   const current = await loadOffer(args.clientId);
   const next: StoredOffer = {

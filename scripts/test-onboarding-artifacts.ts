@@ -83,6 +83,7 @@ import {
   isOfferReply,
   offerLine,
   readOffer,
+  usableTreatment,
 } from "../src/lib/clients/offers";
 import {
   candidateAt,
@@ -1628,6 +1629,23 @@ eq(
   eq("nothing is an empty offer", readOffer(null).proposedTreatment, null);
   eq("an unknown source is dropped, not kept", readOffer({ proposedSource: "vibes" }).proposedSource, null);
   eq("whitespace is not a treatment", readOffer({ treatment: "   " }).treatment, null);
+
+  // ‼️ A REQUIRED FIELD DOES NOT MAKE AN ANSWER, AND SRT'S OWN ROW IS THE CASE.
+  // ideal_patient.highest_margin on SRT Agency is literally the string "any". Proposing that
+  // would put "any" into [treatment], so every tracked question would read "the best any in
+  // Greensboro". Same shape as the competitor box containing "a", which usableCompetitorName
+  // was written to catch.
+  eq("a placeholder is not a treatment", usableTreatment("any"), null);
+  eq("nor is everything", usableTreatment("Everything"), null);
+  eq("nor is n/a", usableTreatment("N/A"), null);
+  eq("nor is a shrug", usableTreatment("not sure"), null);
+  eq("nor is one letter", usableTreatment("a"), null);
+  eq("nor is punctuation", usableTreatment("--"), null);
+  eq("a real service survives", usableTreatment("lip filler"), "lip filler");
+  eq("and so does a long one", usableTreatment("AEO Services for med spas"), "AEO Services for med spas");
+  // ‼️ NO VOCABULARY. It checks the SHAPE, never the words, because a list of allowed treatments
+  // would refuse a real business's real service for not being on it.
+  eq("an unusual service is still a service", usableTreatment("cryoskin toning"), "cryoskin toning");
 
   // The prefix is exact. Free text in a step thread is answered by a model otherwise, and a
   // sentence that merely mentions an offer must fall through untouched.

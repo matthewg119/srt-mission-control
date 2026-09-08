@@ -25,7 +25,7 @@
 // `freezeUniversalV1()` below are untouched by it.
 
 import { supabaseAdmin } from "@/lib/db";
-import { readOffer } from "./offers";
+import { readOffer, usableTreatment } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
   "What's the best med spa near me for [Botox / filler / laser]?",
@@ -300,13 +300,18 @@ export async function substitutionsWithProvenance(
   //
   // `primary_service` HAS NEVER EXISTED and stays at the end of the chain: it costs nothing and
   // removing a key is how a row nobody knew about goes blank.
-  const treatmentPrimary = (
-    offer.treatment ||
-    String(services.primary_treatment ?? "") ||
-    ideal.highest_margin ||
-    firstLine(services.services_list) ||
-    String(services.primary_service ?? "")
-  ).trim();
+  //
+  // ‼️ EVERY LINK IS usableTreatment, AND THAT IS WHAT STOPS [treatment] BECOMING "any".
+  // SRT's highest_margin is the string "any". Without this the substitution resolves to it and
+  // every tracked question reads "the best any in Greensboro". Same guard usableCompetitorName
+  // applies one field over, and for the same reason: a required field does not make an answer.
+  const treatmentPrimary =
+    usableTreatment(offer.treatment) ??
+    usableTreatment(services.primary_treatment) ??
+    usableTreatment(ideal.highest_margin) ??
+    usableTreatment(firstLine(services.services_list)) ??
+    usableTreatment(services.primary_service) ??
+    "";
   const clientName = (((client.dba_name || client.legal_name) as string | null) ?? "").trim();
 
   // ‼️ THE CONFIRMED COMPETITOR OUTRANKS THE TYPED ONE. Step 7 is where somebody looked at who
