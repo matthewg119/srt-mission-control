@@ -780,7 +780,41 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`${n} page candidates scored and ranked`);
   },
 
-  citation_cleanup_list: async (ctx) => artifactOnRecord(ctx, "the citation cleanup list"),
+  // ‼️ SAME GAP presence_pdf HAD, SAME FIX. artifactOnRecord proves one thing: a client_docs
+  // row carries this step key. It cannot tell an empty list built from a finished sweep from an
+  // empty list built from a sweep nobody started, and those are opposite claims about a
+  // business. Measured on SRT: all 19 rows at confirmed_status null and the board line read
+  // like the work was done.
+  //
+  // It still TICKS rather than refusing, for the reason presence_pdf's note gives: the list is
+  // generated, the step is auto, and refusing here would deadlock a board over a legitimately
+  // skipped sweep. citation_cleanup, further down, is the step that DOES refuse on not_checked,
+  // because "the cleanup was executed" is a different claim from "the list was built".
+  citation_cleanup_list: async (ctx) => {
+    const filed = await artifactOnRecord(ctx, "the citation cleanup list");
+    if (!filed.ok) return filed;
+
+    const total = await countRows("nap_discrepancies", ctx.clientId);
+    if (total === null) return dbUnreachable("nap_discrepancies");
+
+    const { loadSweep, countByStatus } = await import("./presence-sweep");
+    const rows = await loadSweep(ctx.clientId);
+    // loadSweep swallows a query error into an empty array, so a disagreement between the two
+    // reads means say nothing rather than a number.
+    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
+
+    const counts = countByStatus(rows);
+    const checked = rows.length - counts.not_checked;
+
+    return verified(
+      `the citation cleanup list is filed against this client, built from ${checked} of ` +
+        `${rows.length} platform${rows.length === 1 ? "" : "s"} that have been checked` +
+        (counts.not_checked
+          ? `. The other ${counts.not_checked} cannot appear on it: there is no confirmed ` +
+            `finding to put on the list, which is an unfinished sweep and not a clean record`
+          : "")
+    );
+  },
 
   // ‼️ IT VERIFIES THE PAGES AND THE EVIDENCE UNDER THEM, NOT THAT ANYBODY LIKED THE RESULT.
   // Rows exist and each was written from a snapshot of the page it shadows: both are real state

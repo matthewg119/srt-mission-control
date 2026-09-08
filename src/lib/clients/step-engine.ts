@@ -769,6 +769,57 @@ async function instructionsFor(
         "Nothing about somebody else's Google profile is observable from here.",
       ];
 
+    // ‼️ THIS STEP HAD NO ARM AT ALL, SO ITS CARD WAS A LABEL AND THREE BUTTONS.
+    //
+    // It is `mode: "auto"`, so the only prose anybody ever saw about it was the runner's own
+    // delivery line, and that line used to read "0 to correct, 19 platforms not yet checked".
+    // Matthew read it top down, as everyone does, and "0 to correct" is a clean bill of health.
+    //
+    // The card now says the plain sentence first and points at the step that fills the gap. The
+    // nineteen-platform breakdown is ONE LINE PER STATE here; the per-listing detail is in the
+    // PDF, which is the whole reason the PDF exists.
+    case "citation_cleanup_list": {
+      const refs = await outputRefsFor(c.id);
+      const list = docLink(c.id, refs.get("citation_cleanup_list"), "the cleanup list");
+
+      const { loadSweep, countByStatus } = await import("./presence-sweep");
+      const rows = await loadSweep(c.id);
+      const counts = countByStatus(rows);
+      const checked = rows.length - counts.not_checked;
+
+      const head =
+        counts.not_checked === rows.length && rows.length > 0
+          ? [
+              "*Nobody has looked at any of these yet.*",
+              `All ${rows.length} platforms sit at "not checked", so there is nothing confirmed ` +
+                "to put on a list. An empty list here is a statement about how far the sweep has " +
+                "got, not about the state of the listings.",
+            ]
+          : counts.not_checked > 0
+            ? [
+                `*${checked} of ${rows.length} platforms have been checked.*`,
+                `The other ${counts.not_checked} cannot appear on the list: there is no confirmed ` +
+                  "finding to put on it.",
+              ]
+            : [`*All ${rows.length} platforms have been checked.*`];
+
+      return [
+        ...head,
+        "",
+        `${counts.mismatch} mismatch · ${counts.duplicate} duplicate · ${counts.missing} missing · ` +
+          `${counts.match} match · ${counts.not_checked} not checked`,
+        "",
+        ...(list ? [`*The list, with every listing and its correction:* ${list}`] : []),
+        "",
+        "*Next:*",
+        `  • Screenshots go in step ${stepNumber("presence_sweep_manual")}'s thread, and I read ` +
+          "them back with a *Confirm all as read* button, which is one tap for the batch.",
+        `  • Row by row instead on the Presence sweep panel: ${boardUrl(c)}`,
+        `  • Step ${stepNumber("citation_cleanup")} is where the corrections actually get made, ` +
+          "and it refuses while anything is unchecked.",
+      ];
+    }
+
     case "citation_cleanup": {
       const refs = await outputRefsFor(c.id);
       const list = docLink(c.id, refs.get("citation_cleanup_list"), `step ${stepNumber("citation_cleanup_list")}'s ranked cleanup list`);

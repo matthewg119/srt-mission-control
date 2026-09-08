@@ -45,6 +45,7 @@ import {
   type PageState,
   type TableRow,
 } from "@/lib/pdf/kit";
+import { stepNumber } from "@/config/delivery-steps";
 import { deliverArtifact } from "./deliver";
 import type { AutoResult } from "./registry";
 
@@ -373,6 +374,32 @@ export async function generateCitationCleanupList(clientId: string): Promise<Aut
 
   const buffer = finishDoc(state);
 
+  // ‼️ THE UNCHECKED COUNT LEADS WHEN THERE IS NOTHING TO CORRECT, AND THE ORDER IS THE FIX.
+  //
+  // This read "0 to correct, 19 platforms not yet checked" and Matthew read it top down, which
+  // is the only way anybody reads a line. "0 to correct" first is a clean bill of health, and
+  // the qualifier after it arrives too late to stop the sentence meaning that. The PDF has got
+  // this right since it was written (see the amber block above: "This is not a clean bill of
+  // health, it is an unfinished sweep") and the Slack line said the opposite of the document it
+  // was announcing.
+  //
+  // So: when nothing is confirmed and the sweep is unfinished, the plain sentence goes first
+  // and the number second, with the step that fills it named. The per-platform breakdown stays
+  // in the PDF, where there is room for it, which is the whole reason the PDF exists.
+  const nothingKnown = items.length === 0 && counts.not_checked > 0;
+  const sweepStep = `step ${stepNumber("presence_sweep_manual")}`;
+
+  const headline = nothingKnown
+    ? `*Nobody has looked at any of these yet.* ${counts.not_checked} of ${rows.length} platforms ` +
+      `are still unchecked, so there is nothing confirmed to put on a list. It gets longer as ` +
+      `${sweepStep} gets finished, and a short list here is a statement about the sweep rather ` +
+      `than about the listings.`
+    : `${items.length} confirmed finding${items.length === 1 ? "" : "s"} to correct` +
+      (counts.not_checked > 0
+        ? `, and ${counts.not_checked} of ${rows.length} platforms nobody has checked yet. Those ` +
+          `cannot appear on the list, because there is no confirmed finding to put on it.`
+        : `, and every platform has been checked.`);
+
   const delivered = await deliverArtifact({
     clientId,
     stepKey: "citation_cleanup_list",
@@ -380,9 +407,8 @@ export async function generateCitationCleanupList(clientId: string): Promise<Aut
     buffer,
     message:
       `*Citation cleanup list — ${name}*\n` +
-      `${items.length} confirmed finding${items.length === 1 ? "" : "s"} to correct` +
-      (counts.not_checked > 0 ? `, with ${counts.not_checked} platforms still unchecked.` : ".") +
-      `\nNothing has been submitted. This is the list; the work is manual and gated on the Day-0 archive.`,
+      `${headline}\n` +
+      `Nothing has been submitted. This is the list; the work is manual and gated on the Day-0 archive.`,
   });
 
   if (!delivered.ok) return { ok: false, error: delivered.error };
@@ -390,8 +416,10 @@ export async function generateCitationCleanupList(clientId: string): Promise<Aut
   return {
     ok: true,
     docId: delivered.docId,
-    note:
-      `Citation cleanup list built: ${items.length} to correct` +
-      (counts.not_checked > 0 ? `, ${counts.not_checked} platforms not yet checked.` : "."),
+    note: nothingKnown
+      ? `Nothing confirmed yet: ${counts.not_checked} of ${rows.length} platforms unchecked, so ` +
+        `the list is empty because the sweep is unfinished, not because the listings are clean.`
+      : `Citation cleanup list built: ${items.length} to correct` +
+        (counts.not_checked > 0 ? `, ${counts.not_checked} of ${rows.length} not yet checked.` : "."),
   };
 }
