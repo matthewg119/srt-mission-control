@@ -71,6 +71,13 @@ import {
 } from "../src/lib/hub/review-destinations";
 import { hasBannedDash } from "../src/lib/copy-guard";
 import {
+  droppedLine,
+  filterPhrases,
+  isUsablePhrase,
+  phraseFaults,
+  tidyPhrase,
+} from "../src/lib/clients/phrase-quality";
+import {
   effectiveTreatment,
   isLocked,
   isOfferReply,
@@ -1647,6 +1654,81 @@ eq(
   );
   // PostgREST fails the whole select on one unknown column, so the read has to name it.
   ok("the client select carries the offer column", /\.select\("[^"]*offer/.test(chainSrc));
+}
+
+// -- Phrase quality: two thirds of the corpus is not a phrase ----------------
+// ‼️ MEASURED ON PRODUCTION, 2026-09-08. SRT Agency's vertical `aeo-agency-med-spa` holds 451
+// question_bank rows and 169 of them are usable. Matthew, about the step 12 PDF: "the pdf shows
+// a lot of BS, tbh most of it is not even usable". He was right, and this is the number.
+//
+// The rules are mechanical so a dropped row can be shown the reason it was dropped. Everything
+// here is a property of the string; nothing asks a model whether a phrase is any good, because
+// that answer would move on every run and the tracked question set is frozen at Day 0.
+{
+  const qualitySrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "phrase-quality.ts"),
+    "utf8"
+  );
+  ok("phrase-quality imports nothing", !/^\s*import\s/m.test(qualitySrc));
+
+  // Real rows from the live corpus, each one the shape of a whole class of debris.
+  const debris: Array<[string, string]> = [
+    ["url", "Inconsistent citations hurt rankings -> https://example.com/blog/x?utmsource=openai"],
+    ["citation_marker", "best marketing for med spa high ROI【41†L65-L69】 owners worry"],
+    ["label", "Why: Regulatory risk; owner liable for patient data security"],
+    ["too_long", "When a client cannot see meaningful differences between one clinic and the next one down the road then the decision shifts almost entirely toward price and nothing else matters"],
+    ["too_short", "book now"],
+    ["nav_chrome", "Continue Back Best number to reach you?"],
+    ["fragment", "that agencies are either snake oil or too expensive."],
+    ["dangling", "Out of scope of the retainer:"],
+  ];
+  for (const [expected, phrase] of debris) {
+    ok(`${expected} is caught`, phraseFaults(phrase).includes(expected as never));
+    ok(`and ${expected} is not usable`, !isUsablePhrase(phrase));
+  }
+
+  // ‼️ THE REAL QUESTIONS SURVIVE, AND THIS HALF MATTERS MORE THAN THE HALF ABOVE. A filter that
+  // is too eager throws away the market's own wording, which is the entire value of the corpus.
+  const keepers = [
+    "How much does this cost?",
+    "Is a consultation required?",
+    "What deposit, cancellation, or rescheduling rules apply?",
+    "Does ChatGPT recommend med spas?",
+    "Can I do citation building myself or should I hire an agency?",
+    "How do AI assistants decide which local businesses to recommend?",
+    "Are AEO agencies legit or is this snake oil?",
+    // ‼️ CAUGHT BY AN EARLIER VERSION OF THE FRAGMENT RULE AND IT SHOULD NOT BE. Opening on a
+    // discourse marker is how people actually speak, and a question mark means somebody asked.
+    "So how much does it cost?",
+    "But does it hurt?",
+  ];
+  for (const phrase of keepers) {
+    ok(`kept: ${phrase.slice(0, 40)}`, isUsablePhrase(phrase));
+  }
+
+  // Entities are OUR damage, not the market's wording. Decoding them restores what was said;
+  // nothing else about the string changes, and no typo is corrected.
+  eq(
+    "our own HTML entities are decoded",
+    tidyPhrase("Is my data and my patients&#x27; data safe?"),
+    "Is my data and my patients' data safe?"
+  );
+  eq("and whitespace is collapsed", tidyPhrase("  a   b  "), "a b");
+  eq(
+    "but the market's own typos are kept",
+    tidyPhrase("does lazer hair removal hurt"),
+    "does lazer hair removal hurt"
+  );
+
+  // The count is part of the answer: a corpus that silently loses two thirds of itself looks
+  // like a small corpus, and that sends somebody to run another harvest.
+  const mixed = [{ p: "How much does this cost?" }, { p: "Why: a label" }, { p: "x" }];
+  const filtered = filterPhrases(mixed, (r) => r.p);
+  eq("one of three survives", filtered.kept.length, 1);
+  eq("and two were dropped", filtered.dropped, 2);
+  ok("with a reason each", Object.keys(filtered.faults).length >= 2);
+  ok("and a line that names them", (droppedLine(filtered, 3) ?? "").includes("1 of 3"));
+  eq("nothing dropped means nothing said", droppedLine(filterPhrases([{ p: "How much is it?" }], (r) => r.p), 1), null);
 }
 
 // ---- LANE 3 ----------------------------------------------------------------

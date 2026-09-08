@@ -52,6 +52,7 @@ import { deliverArtifact } from "./deliver";
 // itself reads, so a channel move cannot leave this pointing at the old one.
 import { pageStudioHint } from "../page-studio";
 import type { AutoResult } from "./registry";
+import { filterPhrases, droppedLine } from "../phrase-quality";
 
 /** Runner v3 asks for 100 for the call. It is the ceiling on what gets printed, not a target. */
 export const CANDIDATE_CAP = 100;
@@ -409,7 +410,17 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
     .eq("vertical", vertical)
     .order("commercial_intent_score", { ascending: false })
     .order("frequency_score", { ascending: false })
-    .limit(400);
+    .limit(500);
+
+  // ‼️ SAME FILTER AS STEP 12, AND THE LIMIT MISMATCH IS FIXED WITH IT. This read was capped at
+  // 400 while custom-question-set.ts read the same table at 500, so on a 451-row vertical the
+  // tracked question set saw the whole corpus and the page candidates silently scored only the
+  // top 400, while both files told the reader in Slack that they work off the same corpus. They
+  // do now.
+  //
+  // The quality filter is the larger half: two thirds of these rows are extraction debris rather
+  // than anything anybody said. Filtered on read, nothing deleted. See phrase-quality.ts.
+  const bankFiltered = filterPhrases(bank ?? [], (r) => String(r.phrase ?? ""));
 
   const named = await namedByQuestion(clientId);
   const reviewText = await ownReviewText(clientId);
@@ -420,7 +431,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   // through, rather than inventing a second formula for the ideas the PDF prints beside them.
   const terms = new Map<string, ScoringInput>();
 
-  for (const row of bank ?? []) {
+  for (const row of bankFiltered.kept) {
     const phrase = ((row.phrase as string) ?? "").trim();
     if (!phrase) continue;
 

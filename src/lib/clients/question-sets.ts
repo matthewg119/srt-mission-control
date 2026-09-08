@@ -238,7 +238,7 @@ function firstLine(raw: unknown): string {
 export async function substitutionsWithProvenance(
   clientId: string
 ): Promise<SubstitutionsResolved | null> {
-  const { data: client } = await supabaseAdmin
+  const { data: client, error } = await supabaseAdmin
     .from("clients")
     // ‼️ `offer` IS IN THE SELECT, AND A NAME THAT DOES NOT EXIST BREAKS THE WHOLE QUERY.
     // PostgREST fails the entire select on one unknown column, so docs/2026-09-08-client-offer.sql
@@ -246,6 +246,21 @@ export async function substitutionsWithProvenance(
     .select("city, state, services, ideal_patient, dba_name, legal_name, offer")
     .eq("id", clientId)
     .maybeSingle();
+
+  // ‼️ A MISS AND A FAILURE ARE DIFFERENT ANSWERS AND COLLAPSING THEM IS THE EXPENSIVE MISTAKE.
+  // resolveHost() carries this warning already and it is the same shape here. Every caller of
+  // this function turns a null into "Client not found while reading substitutions", which is a
+  // LIE when the client exists and the query was refused: measured 2026-09-08, step 12 reported
+  // a missing client because the offer column had not been migrated yet, which sends somebody to
+  // look at the client record instead of at the migration. The error is named now.
+  if (error) {
+    console.error(
+      `[question-sets] substitutions query failed for ${clientId}: ${error.message}. ` +
+        `If it names a column, that migration has not been run: PostgREST fails the whole select ` +
+        `on one unknown name.`
+    );
+    return null;
+  }
 
   if (!client) return null;
 

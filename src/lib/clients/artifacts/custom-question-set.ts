@@ -49,6 +49,7 @@ import {
 } from "@/lib/pdf/kit";
 import { deliverArtifact } from "./deliver";
 import type { AutoResult } from "./registry";
+import { filterPhrases, droppedLine } from "../phrase-quality";
 
 /** Core gets twenty, Complete gets sixty. Runner v3 section 11. */
 export const SET_SIZE: Record<"core" | "complete", number> = { core: 20, complete: 60 };
@@ -161,6 +162,17 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     .order("frequency_score", { ascending: false })
     .limit(500);
 
+  // ‼️ TWO THIRDS OF THIS CORPUS IS EXTRACTION DEBRIS, AND FILLING SIXTY SLOTS OUT OF IT IS WHY
+  // THE PDF READS AS PADDING. Measured on SRT's own vertical, 2026-09-08: 169 usable rows of
+  // 451. The rest are URLs glued onto quotes, citation markers the model left in, headline
+  // fields from a brief, and whole paragraphs of somebody's prose. The composition targets then
+  // guarantee all sixty slots get filled, so the padding was structural rather than incidental.
+  //
+  // Filtered on READ. Nothing is deleted: question_bank has no client_id and is shared by every
+  // client in the vertical forever, so a delete is not something one client's session gets to
+  // do. See src/lib/clients/phrase-quality.ts for the rules and the numbers.
+  const bankFiltered = filterPhrases(bank ?? [], (r) => String(r.phrase ?? ""));
+
   const provenance: SetProvenance = { harvest: 0, deepResearch: 0, ownerIntake: 0, shortfall: [] };
   const pool: CustomQuestion[] = [];
   const seen = new Set<string>();
@@ -182,7 +194,7 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     push(phrase, "owner_intake", Number.MAX_SAFE_INTEGER, commercialIntent(phrase));
   }
 
-  for (const row of bank ?? []) {
+  for (const row of bankFiltered.kept) {
     const phrase = ((row.phrase as string) ?? "").trim();
     if (!phrase) continue;
     push(
@@ -290,9 +302,30 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       { label: "Harvested", value: `${provenance.harvest} phrases from cited sources` },
       { label: "Deep research", value: `${provenance.deepResearch} from the pasted-back brief` },
       { label: "Owner's own words", value: `${provenance.ownerIntake} from intake, verbatim` },
+      // ‼️ THE SKIPPED COUNT IS PART OF THE PROVENANCE, NOT A FOOTNOTE. A set drawn from 169
+      // usable rows out of 451 stored is a different artifact from one drawn from 451, and the
+      // difference is invisible unless it is printed. Without this line a thin set looks like a
+      // thin market, and somebody goes and runs another harvest that adds more of the same.
+      {
+        label: "Skipped",
+        value: `${bankFiltered.dropped} stored rows were extraction debris, not phrases`,
+      },
     ] as TableRow[],
     { labelWidth: 45 }
   );
+
+  {
+    const line = droppedLine(bankFiltered, (bank ?? []).length);
+    if (line) {
+      paragraph(
+        state,
+        `${line} Nothing was deleted: question_bank is shared by every client in this vertical, ` +
+          `so debris is filtered when it is read rather than removed. The rules are mechanical ` +
+          `and each one names the reason a row was skipped.`,
+        { size: 9.5 }
+      );
+    }
+  }
 
   if (provenance.harvest + provenance.deepResearch < target) {
     paragraph(
@@ -355,7 +388,13 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       `*Custom question set — ${name}* (DRAFT)\n` +
       `${questions.length} questions for ${tier === "complete" ? "Complete" : "Core"} scope, ` +
       `drafted from ${provenance.harvest + provenance.deepResearch} harvested phrases and ` +
-      `${provenance.ownerIntake} of the owner's own.\n` +
+      `${provenance.ownerIntake} of the owner's own` +
+      // ‼️ ON THE CARD, NOT ONLY IN THE PDF. The number that explains a short set has to be
+      // where somebody reads it, and nobody opens a PDF to find out why it looks thin.
+      (bankFiltered.dropped > 0
+        ? `, after skipping ${bankFiltered.dropped} stored rows that were extraction debris`
+        : "") +
+      `.\n` +
       `Not frozen. It is approved on the call and frozen after that.`,
   });
 
