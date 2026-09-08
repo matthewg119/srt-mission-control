@@ -335,7 +335,14 @@ async function startSession(text: string, messageTs: string): Promise<void> {
   }
 
   const client = matches[0];
-  const [menu, pages] = await Promise.all([buildMenu(client.id), listAllForBoard(client.id)]);
+  const [menu, pages, aim] = await Promise.all([
+    buildMenu(client.id),
+    listAllForBoard(client.id),
+    // ‼️ THE OFFER AND THE AVATAR GO ON THE CARD BEFORE THE MENU, because a page claimed
+    // without them is a page aimed at nobody and the five magnets written with it are drafted
+    // from the same two answers.
+    aimLines(client.id),
+  ]);
 
   if (menu.length === 0) {
     await say(
@@ -352,6 +359,8 @@ async function startSession(text: string, messageTs: string): Promise<void> {
 
   const lines: string[] = [
     `*${client.name}* — page candidates, best first.`,
+    "",
+    ...aim,
     "",
     // The distinction, said on the card rather than assumed. It is the question Matthew asked
     // about these two steps, and it is a question rather than a defect.
@@ -374,11 +383,15 @@ async function startSession(text: string, messageTs: string): Promise<void> {
   }
 
   lines.push("");
-  lines.push("Reply with a number to claim one. Five lead magnet offers get written for it there");
-  lines.push("and then. `ask` walks the interview, or just talk and your words go into the page");
-  lines.push("exactly as you said them. `magnet` picks what this page offers from those five,");
-  lines.push("`draft` writes it from the evidence, `polish` tidies what you wrote,");
-  lines.push("`check` runs the quality gate, `done` when you are finished, `cancel` to drop this.");
+  lines.push("*Next, in this thread:*");
+  lines.push("  • `offer: <what they sell>` and `avatar: <who buys it>` set what everything aims at.");
+  lines.push("  • `avatar new <who buys it>` creates one and hands back its research prompt.");
+  lines.push("  • `keywords` lists the phrases this market uses, ranked, aimed at the offer.");
+  lines.push("  • A number claims a page. Five lead magnet offers get written for it there and then.");
+  lines.push("  • `ask` walks the interview, or just talk and your words go into the page exactly");
+  lines.push("    as you said them. `magnet` picks what this page offers from those five,");
+  lines.push("    `draft` writes it from the evidence, `polish` tidies what you wrote,");
+  lines.push("    `check` runs the quality gate, `done` when you are finished, `cancel` to drop this.");
 
   const posted = (await slack.postThreadReply(channel, messageTs, lines.join("\n"))) as {
     ok?: boolean;
@@ -1160,6 +1173,259 @@ async function handleVoice(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Offer, then avatar, then the questions
+//
+// Matthew: "OFFER (this client's, or the seven stock library rows), then AVATAR (pick, or create
+// a new one right there, no separate channel), then HEADLINES AND STRATEGY QUESTIONS against the
+// keyword set."
+//
+// ‼️ IT IS A CARD, NOT A WIZARD, AND THE DIFFERENCE IS THAT NOTHING IS ASKED TWICE.
+//
+// The obvious build is a stage machine: ask for the offer, wait, ask for the avatar, wait, then
+// show the menu. But the offer and the avatar are not page state, they are CLIENT state, and
+// both already have a home: clients.offer written at offer_locked, clients.primary_avatar_slug
+// written at avatar_confirmed. A wizard would make somebody re-answer, in a page thread, two
+// questions that were settled on the call, and then have to decide which answer wins.
+//
+// So the card READS both, says what they are, and offers the commands to change either. When one
+// is missing it leads with that instead of the menu, because a page drafted against no offer and
+// no avatar is a page aimed at nobody. Nothing is stored on the session: there is no new column
+// here and no second copy of either answer.
+//
+// ‼️ AND IT NEEDS NO NEW SESSION COLUMNS FOR EXACTLY THAT REASON. page_studio_sessions gains
+// nothing, so readSession's select is unchanged, which matters because PostgREST fails the whole
+// select on one unknown column and that failure silences EVERY thread in the channel.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What this client is aimed at, as the studio card says it. */
+async function aimLines(clientId: string): Promise<string[]> {
+  const { loadOffer, offerLine, isLocked } = await import("./offers");
+  const { confirmedAvatarFor } = await import("./avatars");
+
+  const [offer, avatar] = await Promise.all([loadOffer(clientId), confirmedAvatarFor(clientId)]);
+
+  const lines: string[] = ["*What this is aimed at*", `  • Offer: ${offerLine(offer)}`];
+
+  lines.push(
+    avatar
+      ? `  • Avatar: *${avatar.label}* (\`${avatar.slug}\`), confirmed.`
+      : "  • Avatar: *none confirmed*. Every page is written for somebody; nobody is not a somebody."
+  );
+
+  const missing: string[] = [];
+  if (!isLocked(offer)) missing.push("`offer: <what they sell>`");
+  if (!avatar) missing.push("`avatar: <who buys it>`");
+
+  if (missing.length) {
+    lines.push(
+      "",
+      `‼️ *Set ${missing.length === 2 ? "both" : "this"} before drafting:* ${missing.join(" and ")}.`,
+      "A page drafted with neither is a page aimed at nobody, and the lead magnet on it is " +
+        "written from the same two answers."
+    );
+  } else {
+    lines.push("", "Change either with `offer: ...` or `avatar: ...`. Both write the client record.");
+  }
+
+  return lines;
+}
+
+/**
+ * `offer`, `offer: ...` in a studio thread.
+ *
+ * ‼️ IT WRITES clients.offer THROUGH lockOffer, THE SAME DOOR THE CALL USES. Not a copy of it,
+ * and not a page-scoped field: an offer decided in a page thread is the same decision as one
+ * decided on the call, and two places to record it is two answers to one question.
+ */
+async function offerCommand(session: Session, arg: string): Promise<void> {
+  const { loadOffer, offerLine, lockOffer, usableTreatment } = await import("./offers");
+  const body = arg.trim();
+
+  if (!body) {
+    const offer = await loadOffer(session.clientId);
+    await say(session.threadTs, [
+      offerLine(offer),
+      "",
+      "`offer: <what they sell>` to set it, or `offer: <what they sell> | <positioning>` for both.",
+      "It writes the client record, so the call sheet, the tracked questions, the page " +
+        "candidates and the magnet ladder all follow it.",
+    ].join("\n"));
+    return;
+  }
+
+  const [rawTreatment, ...rest] = body.split("|");
+  if (!usableTreatment(rawTreatment)) {
+    await say(
+      session.threadTs,
+      ":warning: That is not a service anybody can aim a page at. One thing they sell, in their " +
+        "own words, not \"any\" or \"everything\"."
+    );
+    return;
+  }
+
+  const res = await lockOffer({
+    clientId: session.clientId,
+    treatment: rawTreatment.trim(),
+    positioning: rest.join("|").trim() || undefined,
+    by: "page studio",
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: Could not set that: ${res.error}`);
+    return;
+  }
+
+  await say(session.threadTs, [
+    `:white_check_mark: Locked on *${res.offer.treatment}*.`,
+    ...(res.offer.positioning ? [`_Positioning: ${res.offer.positioning}_`] : []),
+    "",
+    "*Next:* `keywords` for the phrases this offer earns, `avatar` for who buys it, or pick a " +
+      "number from the menu to claim a page.",
+  ].join("\n"));
+}
+
+/**
+ * `avatar`, `avatar: ...`, `avatar new <label>` in a studio thread.
+ *
+ * ‼️ NO SEPARATE AVATAR CHANNEL, WHICH MATTHEW ASKED FOR BY NAME, AND NO THIRD RESEARCHER.
+ * `avatar new` writes the (vertical, avatar_slug) row and hands back the SAME prompt step 10
+ * hands back, built by the same buildCompactPrompt. avatar_briefs has no client_id on purpose,
+ * so the second client in a vertical inherits the research and times_reused counts it.
+ */
+async function avatarCommand(session: Session, arg: string): Promise<void> {
+  const {
+    avatarCandidatesFor,
+    confirmedAvatarFor,
+    confirmAvatar,
+    slotForTypedAvatar,
+    slugifyAvatar,
+    avatarBriefFor,
+    recordAvatarPrompt,
+  } = await import("./avatars");
+
+  const body = arg.trim();
+
+  if (!body) {
+    const [current, candidates] = await Promise.all([
+      confirmedAvatarFor(session.clientId),
+      avatarCandidatesFor(session.clientId),
+    ]);
+    await say(session.threadTs, [
+      current ? `Confirmed: *${current.label}*.` : "No avatar confirmed for this client.",
+      "",
+      ...(candidates.candidates.length
+        ? [
+            "*From the vertical's brief:*",
+            ...candidates.candidates.map((c) => `  • ${c.label}`),
+            "",
+          ]
+        : ["_No candidates on the vertical's brief, so name one yourself._", ""]),
+      "`avatar: <who buys it>` to confirm one, or `avatar new <who buys it>` to create one and " +
+        "get the research prompt for it.",
+    ].join("\n"));
+    return;
+  }
+
+  // ── Create ────────────────────────────────────────────────────────────────
+  const creating = body.match(/^new\s+(.+)$/i);
+  if (creating) {
+    const label = creating[1].trim();
+    const slug = slugifyAvatar(label);
+    if (!slug) {
+      await say(session.threadTs, ":warning: I could not make a slug out of that. Plain words.");
+      return;
+    }
+
+    const { verticalFor } = await import("./harvest");
+    const resolved = await verticalFor(session.clientId);
+    if (!resolved.ok) {
+      await say(session.threadTs, `:warning: ${resolved.error}`);
+      return;
+    }
+
+    // ‼️ ALREADY RESEARCHED IS NOT AN ERROR, IT IS THE WHOLE POINT OF THE TABLE. The second med
+    // spa aiming at the same buyer inherits the first one's research rather than paying for the
+    // run again, and reuseAvatarResearch is what counts it.
+    const existing = await avatarBriefFor(resolved.vertical, slug);
+    if (existing?.researchText) {
+      await say(session.threadTs, [
+        `:recycle: *${label}* already has deep research on file for this vertical, from an ` +
+          `earlier client. Nothing to run.`,
+        "",
+        `\`avatar: ${label}\` confirms it for this client and reuses that research.`,
+      ].join("\n"));
+      return;
+    }
+
+    const { buildContext, buildCompactPrompt } = await import("./artifacts/deep-research-run");
+    const ctx = await buildContext(session.clientId);
+    if (!ctx.ok) {
+      await say(session.threadTs, `:warning: Could not build the research prompt: ${ctx.error}`);
+      return;
+    }
+
+    const prompt = buildCompactPrompt(ctx.ctx);
+    await recordAvatarPrompt({ vertical: resolved.vertical, avatarSlug: slug, avatarLabel: label, promptText: prompt, clientId: session.clientId });
+
+    await say(session.threadTs, [
+      `:new: *${label}* created for \`${resolved.vertical}\`, as \`${slug}\`.`,
+      "",
+      "‼️ *It has no research yet.* Paste this into claude.com and bring the answer back with " +
+        "`research:` in step 10's thread, which is where the extractor lives:",
+      "```",
+      prompt.slice(0, 2400),
+      "```",
+      "",
+      `*Next:* \`avatar: ${label}\` confirms it for this client either way. The research makes ` +
+        "the magnets and the pages better; it does not gate them.",
+    ].join("\n"));
+    return;
+  }
+
+  // ── Confirm ───────────────────────────────────────────────────────────────
+  const candidates = await avatarCandidatesFor(session.clientId);
+  const slot = slotForTypedAvatar(body, candidates.candidates);
+  const res = await confirmAvatar({
+    clientId: session.clientId,
+    slot,
+    label: body,
+    by: "page studio",
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: Could not confirm that: ${res.error}`);
+    return;
+  }
+
+  await say(session.threadTs, [
+    `:white_check_mark: Avatar is *${body}*.`,
+    "",
+    "*Next:* `keywords` for what this avatar asks, or pick a number to claim a page.",
+  ].join("\n"));
+}
+
+/** `keywords` in a studio thread. The 99, ranked, aimed at whatever offer is set. */
+async function keywordsCommand(session: Session): Promise<void> {
+  const { buildKeywordSet, formatKeywordSet } = await import("./keyword-set");
+  const set = await buildKeywordSet(session.clientId);
+
+  if ("error" in set) {
+    await say(session.threadTs, `:warning: ${set.error}`);
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    [
+      ...formatKeywordSet(set, 20),
+      "",
+      "*Next:* pick a number from the menu to claim a page, or `offer: ...` to aim this list at " +
+        "one thing they sell.",
+    ].join("\n")
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The one entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1237,6 +1503,39 @@ export async function handlePageStudioEvent(args: {
   // They are whole-word only, for the reason `done` and `polish` already are: a sentence that
   // happens to begin with "next" is a sentence, and swallowing it as a command would lose
   // dictation with no sign that it did.
+  // ‼️ OFFER, AVATAR AND KEYWORDS SIT ABOVE THE BODY APPEND AND BELOW NOTHING ELSE, the same
+  // placement rule every other command in this switch follows. They take an argument, so they
+  // are anchored like `magnet` rather than whole-word like `done`: a sentence that begins
+  // "offer them a discount" is dictation and must reach the page, which is why the colon or the
+  // end of the line is required.
+  const offerCmd = /^offer(?:\s*[:]\s*(.+))?$/i.exec(command);
+  if (offerCmd) {
+    await offerCommand(session, offerCmd[1] ?? "");
+    return true;
+  }
+
+  // ‼️ EXACT, AND TWO LIVE CASES FORCED IT THERE. page-studio.ts's own rule is that the
+  // prefixes are exact "for the same reason isResearchPaste refuses to sniff": anything not a
+  // command is appended to the page VERBATIM, so a pattern one character too loose swallows a
+  // sentence of dictation and puts nothing on screen to say it did.
+  //
+  // Caught before this was tightened: "avatars are hard to write" captured "s are hard to
+  // write", and "avatar research takes a while" captured "research takes a while".
+  //
+  // So the argument form needs a COLON, and `new` is the single named exception, because
+  // `avatar new busy clinic manager` reads better than `avatar: new busy clinic manager` and it
+  // is a keyword rather than an open capture.
+  const avatarCmd = /^avatar(?:\s*:\s*(.+)|\s+(new\s+.+))?$/i.exec(command);
+  if (avatarCmd) {
+    await avatarCommand(session, avatarCmd[1] ?? avatarCmd[2] ?? "");
+    return true;
+  }
+
+  if (/^keywords?$/i.test(command)) {
+    await keywordsCommand(session);
+    return true;
+  }
+
   if (/^ask$/i.test(command)) {
     await startInterview(session);
     return true;

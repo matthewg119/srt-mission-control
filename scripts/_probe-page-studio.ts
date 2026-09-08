@@ -82,6 +82,54 @@ async function main(): Promise<void> {
     check(re.test(unwrapFormatting(typed)), `a backticked ${JSON.stringify(typed)} still matches its command`);
   }
 
+  // ── 1b. A command must not eat a sentence ─────────────────────────────────
+  //
+  // ‼️ THE FAILURE THIS CATCHES IS SILENT, WHICH IS WHY IT IS ASSERTED RATHER THAN TRUSTED.
+  // In a studio thread, anything that is not a command is appended to the page VERBATIM. So a
+  // command pattern that is one character too loose does not throw, it swallows a sentence of
+  // dictation and puts nothing on screen to say it did. page-studio.ts already carries that
+  // warning about `next`; these are the two commands added 2026-09-08 that take an argument.
+  //
+  // Caught live before this existed: "avatars are hard to write" matched the avatar command and
+  // captured "s are hard to write".
+  //
+  // The patterns are COPIES on purpose. If one in page-studio.ts is loosened, this notices.
+  const OFFER_CMD = /^offer(?:\s*[:]\s*(.+))?$/i;
+  const AVATAR_CMD = /^avatar(?:\s*:\s*(.+)|\s+(new\s+.+))?$/i;
+  const KEYWORDS_CMD = /^keywords?$/i;
+
+  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "body"]> = [
+    ["offer", "offer"],
+    ["offer: lip filler", "offer"],
+    ["offer: lip filler | the one they rebook", "offer"],
+    ["`offer: lip filler`", "offer"],
+    ["avatar", "avatar"],
+    ["avatar: med spa owner", "avatar"],
+    ["avatar new busy clinic manager", "avatar"],
+    ["keywords", "keywords"],
+    ["keyword", "keywords"],
+    // ‼️ EVERY ONE OF THESE IS DICTATION AND MUST REACH THE PAGE UNTOUCHED.
+    ["offer them a discount on the second visit", "body"],
+    ["offers we make to new patients", "body"],
+    ["avatars are hard to write", "body"],
+    ["avatar research takes a while", "body"],
+    ["avatar: new patients only", "avatar"],
+    ["keywords matter less than people think", "body"],
+    ["the offer: what we give away", "body"],
+  ];
+
+  for (const [typed, expected] of argCommands) {
+    const c = unwrapFormatting(typed);
+    const got = OFFER_CMD.test(c)
+      ? "offer"
+      : AVATAR_CMD.test(c)
+        ? "avatar"
+        : KEYWORDS_CMD.test(c)
+          ? "keywords"
+          : "body";
+    check(got === expected, `${JSON.stringify(typed)} is ${expected}`, got === expected ? undefined : `read as ${got}`);
+  }
+
   // ── 2. The channel, over the real API ──────────────────────────────────────
   const channel = pageStudioChannel();
   const join = process.argv.includes("--join");
