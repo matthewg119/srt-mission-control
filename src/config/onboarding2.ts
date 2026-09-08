@@ -20,6 +20,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { guard } from "@/lib/copy-guard";
+import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen 1. THE WHOLE IDENTITY, IN ONE PLACE, ONCE.
@@ -286,18 +287,14 @@ export const QUALIFYING_QUESTIONS: QualifyingQuestion[] = [
     // app/hub/[host]/reviews/review-tool.tsx renders a destination only where a human pasted the
     // actual URL, and that stays true.
     //
-    // The six names must match PLATFORMS in review-tool.tsx. A client picking a seventh option
-    // here would choose a destination nothing can ever render.
+    // ‼️ THE OPTIONS ARE THE SHARED TABLE, NOT A COPY OF IT (2026-09-08). They used to be six
+    // literals with a comment asking whoever read it to keep them in step with PLATFORMS in
+    // review-tool.tsx and with the boxes on the Review handover panel. The panel had two of the
+    // six, so a client picking Trustpilot here chose a destination nothing could ever render.
+    // A name offered here now cannot exist without a URL field to hold its link.
     key: "review_destination",
     question: guard("q7", "Where do you want your patient reviews to go?"),
-    options: [
-      guard("q7 o1", "Google"),
-      guard("q7 o2", "Yelp"),
-      guard("q7 o3", "Trustpilot"),
-      guard("q7 o4", "BBB"),
-      guard("q7 o5", "Facebook"),
-      guard("q7 o6", "RealSelf"),
-    ],
+    options: REVIEW_PLATFORMS.map((p) => guard(`q7 ${p.key}`, p.name)),
     help: guard(
       "q7 help",
       "Wherever you pick is where the review tool sends your patients when they finish writing."

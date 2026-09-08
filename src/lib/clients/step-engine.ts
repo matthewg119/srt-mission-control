@@ -843,7 +843,7 @@ async function instructionsFor(
     case "review_request_configured": {
       const { data: client } = await supabaseAdmin
         .from("clients")
-        .select("booking_software, review_workflow, review_request_mode, review_owner_name")
+        .select("booking_software, review_workflow, review_request_mode, review_owner_name, review_destination_primary")
         .eq("id", c.id)
         .maybeSingle();
 
@@ -853,6 +853,18 @@ async function instructionsFor(
         : [];
       const mode = (client?.review_request_mode as string | null) ?? null;
       const booking = (client?.booking_software as string | null) ?? null;
+
+      // ‼️ THE CARD SAYS WHICH LINK IS MISSING NOW, NOT JUST THAT LINKS EXIST. It used to end on
+      // "while you are there, add the review URLs", which is true for every client forever and
+      // therefore tells you nothing. destinationLine() reads the actual row: SRT's says they
+      // chose Trustpilot and no Trustpilot link is set, which is why their review page has no
+      // button on it. Same sentence the board panel prints, from the same function, so the two
+      // cannot drift.
+      const { destinationLine, destinationState } = await import("@/lib/hub/review-destinations");
+      const destState = destinationState(
+        workflow,
+        (client?.review_destination_primary as string | null) ?? null
+      );
 
       return [
         "*Two branches and the label allows either.* Pick one, record it, and this step can close.",
@@ -873,10 +885,18 @@ async function instructionsFor(
         ...(destinations.length
           ? [`They told us at intake they collect on: ${destinations.join(", ")}.`]
           : []),
-        "While you are there, add the *review URLs*. The tool's Post on Google button reads them,",
-        "and with nothing set every customer gets a hint telling her to find the page herself.",
+        `*Where her review goes:* ${destinationLine(destState)}`,
+        ...(destState.primaryMissingUrl && destState.primary
+          ? [
+              `Ask them for their ${destState.primary.name} review link. All six platforms have a`,
+              "box on the board, and until one is filled the review page shows no button at all.",
+            ]
+          : []),
         "",
-        `Record it on the board: ${boardUrl(c, "review-handover")}`,
+        "*Next:*",
+        `  • Record the mode and paste the links: ${boardUrl(c, "review-destination")}`,
+        `  • See what she will see: ${appUrl()}/dashboard/clients/${c.id}/preview?kind=reviews`,
+        `  • Then step ${stepNumber("review_tool_handed")} hands the tool to the named person.`,
       ];
     }
 

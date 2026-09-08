@@ -220,16 +220,28 @@ export default async function ClientDetailPage({
   // Steps 29 and 30. `review_workflow` is intake step 4's bag; the two URL keys are added to it
   // by the Review handover panel and are read by destinationsFor() in the hub's review tool.
   const reviewWorkflowBag = (client.review_workflow ?? {}) as Record<string, unknown>;
+  // ‼️ THE WHOLE BAG, NOT TWO PICKED KEYS. It used to lift google_url and realself_url by name,
+  // which is how the panel came to have two boxes for six platforms and how a client whose
+  // chosen destination was Trustpilot ended up with nowhere to put its link. The panel reads
+  // REVIEW_PLATFORMS now and the route MERGES on save, so the intake keys sitting in this same
+  // bag are never touched by passing it down.
+  //
+  // Live only when a reviews host is ATTACHED, not when one is merely composed from the record.
+  // A hostname nothing serves is not somewhere to send a QR code.
+  const reviewsHostRow = (hostRows ?? []).find(
+    (r) => r.kind === "reviews" && Boolean(r.vercel_attached_at)
+  );
   const reviewWorkflowView: ReviewWorkflowView = {
     mode: (client.review_request_mode as ReviewWorkflowView["mode"]) ?? null,
     ownerName: (client.review_owner_name as string | null) ?? null,
-    googleUrl: typeof reviewWorkflowBag.google_url === "string" ? reviewWorkflowBag.google_url : null,
-    realselfUrl:
-      typeof reviewWorkflowBag.realself_url === "string" ? reviewWorkflowBag.realself_url : null,
+    workflow: reviewWorkflowBag,
+    primaryKey: (client.review_destination_primary as string | null) ?? null,
     intakeDestinations: Array.isArray(reviewWorkflowBag.destinations)
       ? (reviewWorkflowBag.destinations as string[])
       : [],
     bookingSoftware: (client.booking_software as string | null) ?? null,
+    reviewsHost: (reviewsHostRow?.host as string | undefined) ?? null,
+    previewUrl: `/dashboard/clients/${id}/preview?kind=reviews`,
   };
 
   // What unlocks delivery step 21. `clients.select("*")` already carries the four columns, so

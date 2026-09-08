@@ -64,6 +64,12 @@ import {
   sentences as splitSentences,
 } from "../src/lib/hub/readability";
 import { PHASE_BEFORE, PHASE_DURING, PHASE_AFTER } from "../src/config/delivery-steps";
+import {
+  REVIEW_PLATFORMS,
+  destinationLine,
+  destinationState,
+} from "../src/lib/hub/review-destinations";
+import { hasBannedDash } from "../src/lib/copy-guard";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -1368,6 +1374,88 @@ eq(
   );
 }
 
+
+// -- The six review destinations, written down once ---------------------------
+// ‼️ THE SAME SIX PLATFORMS USED TO BE SPELLED OUT IN THREE FILES WITH A COMMENT ASKING PEOPLE TO
+// KEEP THEM IN STEP, AND THEY WERE NOT. The onboarding2 funnel offered six names, the Review
+// handover panel had two boxes, and SRT Agency's own record names Trustpilot. So the platform
+// the client picked was the one with nowhere to put its link, the review tool rendered no
+// button, and nothing anywhere said so. Measured in production 2026-09-08.
+{
+  const platformSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "review-destinations.ts"),
+    "utf8"
+  );
+
+  eq("six platforms", REVIEW_PLATFORMS.length, 6);
+  ok(
+    "every platform has a distinct key and a distinct URL field",
+    new Set(REVIEW_PLATFORMS.map((p) => p.key)).size === 6 &&
+      new Set(REVIEW_PLATFORMS.map((p) => p.field)).size === 6
+  );
+  ok(
+    "every key is lowercase, so it matches review_destination_primary",
+    REVIEW_PLATFORMS.every((p) => p.key === p.key.toLowerCase())
+  );
+  ok(
+    "no banned dash in a platform name or label",
+    !REVIEW_PLATFORMS.some((p) => hasBannedDash(`${p.name} ${p.label}`))
+  );
+
+  // ‼️ ABSENT BEATS WRONG, MADE STRUCTURAL. The table carries no template a URL could be built
+  // from, because a link constructed out of a business name sends a real customer to somebody
+  // else's profile to leave a review about this one. delivery.ts:116 is the note.
+  // ‼️ COMMENTS STRIPPED, AND PER LINE, AND BOTH HALVES WERE LEARNED THE HARD WAY.
+  //
+  // The header of review-destinations.ts says in prose "there is no `searchUrl`, no template, no
+  // fallback", which is the rule this check enforces, and a check that fails on the sentence
+  // documenting its own rule teaches somebody to delete the documentation. _probe-review-gating
+  // .ts carries the same note about the printed card. Comments say what we intend; only code is
+  // evidence.
+  //
+  // And per line, because a character class excluding only quotes runs happily across half a
+  // file and finds an interpolation in an unrelated function.
+  const platformCode = platformSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  ok(
+    "the table holds no URL template to synthesise a link from",
+    !platformCode
+      .split("\n")
+      .some((line) => /searchUrl|urlTemplate|buildUrl|https?:\/\/[^"']*\$\{/.test(line))
+  );
+
+  // The state helper, which is what the panel, the tool and any card describe themselves with.
+  const nothing = destinationState({}, "trustpilot");
+  eq("nothing configured is nothing configured", nothing.configured.length, 0);
+  eq("and the client's own choice is still known", nothing.primary?.key, "trustpilot");
+  ok("and it says the chosen one is the one missing", nothing.primaryMissingUrl);
+  ok(
+    "the line names the platform they picked rather than saying nothing is set",
+    /Trustpilot/.test(destinationLine(nothing))
+  );
+
+  const partial = destinationState({ google_url: "https://g.page/r/x" }, "trustpilot");
+  eq("a link that IS set shows up", partial.configured.length, 1);
+  ok("and the mismatch is still called out", partial.primaryMissingUrl);
+  ok(
+    "the line says the button they asked for is the one that will not appear",
+    /will not appear/.test(destinationLine(partial))
+  );
+
+  const ordered = destinationState(
+    { google_url: "https://g.page/r/x", trustpilot_url: "https://www.trustpilot.com/evaluate/x" },
+    "trustpilot"
+  );
+  eq("the client's own choice sorts first", ordered.configured[0]?.key, "trustpilot");
+  ok("and nothing is flagged missing", !ordered.primaryMissingUrl);
+
+  // Whitespace is not a link. A box someone tabbed through is empty.
+  eq("blank is not configured", destinationState({ google_url: "   " }, "google").configured.length, 0);
+  // An unknown platform name is nobody, not a guess.
+  eq("an unknown primary resolves to null", destinationState({}, "angies-list").primary, null);
+  eq("and so does a missing one", destinationState({}, null).primary, null);
+}
 
 // ---- LANE 3 ----------------------------------------------------------------
 // The call, and the close. Pure functions only: no network, no database, no model.

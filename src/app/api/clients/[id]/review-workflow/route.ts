@@ -34,6 +34,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
+import { REVIEW_URL_KEYS } from "@/lib/hub/review-destinations";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -42,8 +43,18 @@ export const fetchCache = "force-no-store";
 const MODES = ["booking_system", "card_only"] as const;
 type Mode = (typeof MODES)[number];
 
-/** The destination keys destinationsFor() reads. Adding one here means adding one there. */
-const URL_KEYS = ["google_url", "realself_url"] as const;
+/**
+ * The destination keys destinationsFor() reads.
+ *
+ * ‼️ IT WAS TWO OF SIX, AND THAT WAS THE BUG. This list held google_url and realself_url while
+ * the funnel offered six platforms to choose from, so a client who picked Trustpilot, Yelp, BBB
+ * or Facebook had their answer recorded on review_destination_primary with no box anywhere that
+ * could accept the matching link. SRT Agency is one of them. The review tool then rendered no
+ * destination at all, correctly and silently, because absent beats wrong.
+ *
+ * Imported now rather than restated, from the one table all three surfaces share.
+ */
+const URL_KEYS = REVIEW_URL_KEYS;
 
 function textOrNull(raw: unknown): string | null | undefined {
   if (raw === undefined) return undefined;
