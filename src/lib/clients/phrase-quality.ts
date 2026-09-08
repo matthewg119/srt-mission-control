@@ -23,13 +23,22 @@
 // sure it fills all sixty, so the padding is guaranteed rather than incidental.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// ‼️ THIS FILTERS ON READ, NOT ON WRITE, AND THAT IS A DELIBERATE CHOICE FOR NOW.
+// ‼️ IT FILTERS ON READ **AND** ON WRITE, AND NEITHER SIDE MAKES THE OTHER REDUNDANT.
 //
-// Filtering at extraction time would stop the pollution and do nothing for the 306 rows already
-// stored, on a table with NO client_id that is shared by every client in the vertical forever.
-// Filtering at read time fixes every existing client immediately and is reversible: nothing is
-// deleted, the rows stay, and a rule that turns out to be wrong is one edit away from being
-// undone. The extractor should adopt this too, and when it does these two facts stay true.
+// It began on the read side alone, because filtering at extraction time would have done nothing
+// for the 306 rows already stored in a table with NO client_id shared by every client in the
+// vertical forever. That reasoning still holds and the read filter stays: it fixes every
+// existing client immediately, nothing is deleted, and a rule that turns out to be wrong is one
+// edit away from being undone.
+//
+// research-intake.ts now applies it at WRITE too (2026-09-08), because leaving it off meant the
+// corpus kept growing debris at the rate it always had and every future client inherited it.
+// Same shape as harvest.ts's isPageChrome, which is applied on both sides for the same reason.
+//
+// ‼️ THE TWO SIDES DO NOT USE THE SAME RULES, AND THAT IS ON PURPOSE. See DEBRIS_FAULTS below:
+// the KEYWORDS block is legitimately two words long and legitimately not question-shaped, so
+// applying the full rule set to it would throw away "botox cost" as too_short. Only the faults
+// that mean OUR extraction broke are applied there.
 //
 // ‼️ IT IMPORTS NOTHING AND MAKES NO MODEL CALL, same discipline as readability.ts. Every rule
 // below is a mechanical property of the string, so a phrase that was dropped can be shown the
@@ -195,6 +204,26 @@ export function isUsablePhrase(raw: string): boolean {
   return phraseFaults(raw).length === 0;
 }
 
+/**
+ * The faults that mean the EXTRACTION broke, as opposed to the phrase being the wrong shape.
+ *
+ * ‼️ THIS IS THE SET THE KEYWORDS BLOCK IS FILTERED BY, AND THE DISTINCTION IS LOAD-BEARING.
+ * Section 9 of the research brief asks for search phrases: "botox cost", "lip filler near me",
+ * "is it worth it". Those are two, four and four words, and none of them is question-shaped.
+ * The full rule set calls the first one too_short and would silently delete the most commercial
+ * third of every keyword block ever pasted. What is still debris in a keyword is a URL glued on,
+ * a citation marker, an arrow joining a phrase to its source, a quoted paragraph, leftover
+ * markup, or a trailing colon: all six mean the text was cut wrong, whatever shape it is.
+ */
+export const DEBRIS_FAULTS: readonly PhraseFault[] = [
+  "url",
+  "citation_marker",
+  "arrow",
+  "quoted",
+  "markup",
+  "dangling",
+];
+
 export interface PhraseFilterResult<T> {
   kept: T[];
   dropped: number;
@@ -209,13 +238,22 @@ export interface PhraseFilterResult<T> {
  * small corpus, and "the vertical only has 144 phrases" sends somebody to run another harvest
  * when the truth is that 306 rows of debris are already stored. Every caller prints this.
  */
-export function filterPhrases<T>(rows: readonly T[], of: (row: T) => string): PhraseFilterResult<T> {
+export function filterPhrases<T>(
+  rows: readonly T[],
+  of: (row: T) => string,
+  /**
+   * Which faults disqualify a row. Omitted means all of them, which is what every existing
+   * caller wants. Pass DEBRIS_FAULTS for a corpus whose shape rules do not apply.
+   */
+  only?: readonly PhraseFault[]
+): PhraseFilterResult<T> {
   const kept: T[] = [];
   const faults: Record<string, number> = {};
   let dropped = 0;
 
   for (const row of rows) {
-    const found = phraseFaults(of(row));
+    const all = phraseFaults(of(row));
+    const found = only ? all.filter((f) => only.includes(f)) : all;
     if (found.length === 0) {
       kept.push(row);
       continue;

@@ -31,6 +31,7 @@ import {
   verticalFor,
   type HarvestedPhrase,
 } from "./harvest";
+import { filterPhrases, droppedLine, DEBRIS_FAULTS } from "./phrase-quality";
 
 /** What a message has to start with to be treated as research. Case-insensitive. */
 export const RESEARCH_PREFIX = /^\s*research\s*:/i;
@@ -78,6 +79,16 @@ export interface ResearchIntakeResult {
    */
   keywordsError?: string;
   runId?: string;
+  /**
+   * What the quality filter refused at the door, so a short result explains itself.
+   *
+   * ‼️ PRINTED, NEVER SWALLOWED. Same rule keyword-set.ts holds: a paste that silently loses
+   * two thirds of itself looks like a thin research run, and "the brief only came back with 56
+   * phrases" sends somebody to run it again when the truth is that 250 of them were debris.
+   */
+  droppedPhrases?: number;
+  droppedKeywords?: number;
+  droppedNote?: string | null;
 }
 
 /**
@@ -133,18 +144,54 @@ export async function ingestResearch(args: {
     };
   }
 
-  const phrases: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
+  const extracted: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
+
+  // ‼️ FILTERED BEFORE IT IS STORED, NOT ONLY WHEN IT IS READ BACK.
+  //
+  // Measured on SRT's corpus 2026-09-08: 306 deep_research rows, 56 usable. Eighteen per cent.
+  // The other 250 are URLs glued onto quotes, 【41†L65-L69】 citation markers, brief field names
+  // and whole paragraphs of somebody's prose. phrase-quality.ts filtered them on READ, which
+  // fixed every existing client at once and left this function writing more of them on every
+  // paste, into a table with no client_id that every client in the vertical shares forever.
+  //
+  // The read filter stays. Both sides, same rules, same reason harvest.ts applies isPageChrome
+  // on both: the read side repairs what is stored and the write side stops the pile growing.
+  const phraseFilter = filterPhrases(extracted, (p) => p.phrase);
+  const phrases = phraseFilter.kept;
 
   // ‼️ PARSED SEPARATELY AND STORED UNDER ITS OWN `source`. extractPhrases would drop all 100 of
   // these without saying so: a keyword is rarely question-shaped and often under four words.
   // Absent block returns [], which is every research document written before section 9 existed.
-  const keywords = extractKeywords(body);
+  const rawKeywords = extractKeywords(body);
 
+  // ‼️ A NARROWER RULE SET, AND USING THE FULL ONE HERE WOULD BE A BUG.
+  // A keyword is legitimately two words and legitimately not question-shaped: "botox cost" is
+  // exactly what section 9 asks for and the full filter calls it too_short. DEBRIS_FAULTS is
+  // only the six faults that mean OUR extraction broke, which apply whatever shape the phrase is.
+  const keywordFilter = filterPhrases(rawKeywords, (k) => k.phrase, DEBRIS_FAULTS);
+  const keywords = keywordFilter.kept;
+
+  // ‼️ TWO DIFFERENT EMPTIES AND THEY MUST NOT READ THE SAME.
+  //
+  // "Nothing question-shaped came out of that" is true when the paste had no phrase list in it.
+  // It is a lie when the extractor found forty and the quality filter refused all forty, which
+  // is the case the write-side filter just made possible. One of those means paste the list;
+  // the other means the research came back as prose with its citations glued on, and running it
+  // again the same way produces the same forty.
   if (!phrases.length) {
     return {
       ok: false,
-      error:
-        "nothing question-shaped or objection-shaped came out of that. The brief asks for a ranked list of the exact phrases buyers type; make sure that list is in what you pasted.",
+      error: extracted.length
+        ? `${extracted.length} phrase${extracted.length === 1 ? "" : "s"} came out of that and ` +
+          `none of them survived the quality filter (${Object.entries(phraseFilter.faults)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([fault, n]) => `${n} ${fault.replace(/_/g, " ")}`)
+            .join(", ")}). ` +
+          "That is a formatting problem in the research, not something you pasted wrong: the " +
+          "phrases came back with their citations glued on, or as prose rather than as a list. " +
+          "Nothing was written."
+        : "nothing question-shaped or objection-shaped came out of that. The brief asks for a ranked list of the exact phrases buyers type; make sure that list is in what you pasted.",
     };
   }
 
@@ -260,6 +307,9 @@ export async function ingestResearch(args: {
     keywords: keywordsStored,
     keywordsError: keywordsFailed,
     runId,
+    droppedPhrases: phraseFilter.dropped,
+    droppedKeywords: keywordFilter.dropped,
+    droppedNote: droppedLine(phraseFilter, extracted.length),
   };
 }
 
@@ -273,12 +323,26 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
     // Named either way. A keyword block that silently did not arrive looks identical to one
     // that did, and section 9 is the half the page candidates rank on.
     r.keywords
-      ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.`
+      ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.` +
+        (r.droppedKeywords ? ` ${r.droppedKeywords} were dropped as extraction debris.` : "")
       : r.keywordsError
         ? `:x: *The KEYWORDS block was there and the database refused it:* ${r.keywordsError}\n` +
           "The phrases above still landed. This is a schema problem, not something you pasted wrong."
         : ":mag: No KEYWORDS block found. Section 9 asks for 100 search phrases as `phrase | volume | intent | source`; paste that block and this reply will count them.",
   ];
+
+  // ‼️ WHAT THE FILTER REFUSED IS PRINTED, NEVER SWALLOWED. A paste that quietly loses two
+  // thirds of itself looks like a thin research run, and "it only came back with 56 phrases"
+  // sends somebody to run the brief again when the truth is that 250 of them were never a
+  // phrase anybody said. Same rule the step 12 PDF and the keyword set already follow.
+  if (r.droppedNote) {
+    lines.push(
+      "",
+      `:broom: ${r.droppedNote}`,
+      "Nothing was rewritten. Debris is refused at the door now as well as filtered on read, so " +
+        "the shared corpus stops growing it."
+    );
+  }
 
   if (topPhrases.length) {
     lines.push("", "Highest commercial intent:");

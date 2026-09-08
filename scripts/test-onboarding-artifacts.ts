@@ -703,6 +703,31 @@ ok("comparing outranks researching",
 // one nobody has measured either.
 ok("an unsourced volume still scores",
   (kws.find((k) => k.phrase === "juvederm vs restylane")?.frequencyScore ?? 0) > 0);
+
+// ‼️ A NUMBER WITH NO SOURCE BESIDE IT IS NOT A MEASUREMENT, AND frequency_score IS A RANKING
+// COLUMN. No volume API touches the client lane (keyword-set.ts's header says why, and Matthew
+// declined to buy one on 2026-09-08), so this column is filled by a research model that was
+// asked for a monthly volume. A model asked for a number produces one. Stored unqualified, an
+// estimate ranks exactly like a measurement and nothing downstream can tell them apart.
+//
+// The rule: trust the number only when the row cites where it came from. Everything else reads
+// as unknown and ranks on commercial intent, which is a categorical judgement this corpus
+// already relies on rather than a quantity wearing a measurement's clothes.
+const kwUncited = extractKeywords(
+  [
+    "## KEYWORDS",
+    "cheek filler cost | 4400 | price | seen on a keyword tool",
+    "chin filler cost | 4400 | price | https://example.com/cited",
+  ].join(String.fromCharCode(10))
+);
+ok(
+  "an uncited volume does not become a ranking score",
+  kwUncited.find((k) => k.phrase === "cheek filler cost")?.frequencyScore === 1
+);
+ok(
+  "a volume with a real source URL is kept",
+  kwUncited.find((k) => k.phrase === "chin filler cost")?.frequencyScore === 4400
+);
 // The close is prose, not a row. Eating it would file a sentence as a keyword.
 ok("the closing line is not eaten as a keyword",
   !kws.some((k) => /25 phrases/.test(k.phrase)));

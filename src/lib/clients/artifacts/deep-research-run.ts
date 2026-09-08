@@ -298,10 +298,19 @@ const SECTIONS: SectionSpec[] = [
       `voice-shaped ones people dictate to an assistant, the "near me" ones, the brand-versus- ` +
       `brand comparisons, the "is it worth it" and "how much does it cost" ones, and the ` +
       `after-the-fact worries. Look at autocomplete suggestions, People Also Ask boxes, the ` +
-      `related-searches strip, and the question titles on forums and review sites. Do not invent ` +
-      `volumes: write "unknown" where you cannot source one. Return them as a block titled ` +
-      `KEYWORDS, one per line, as: phrase | monthly volume or unknown | ` +
-      `ready|comparing|researching|price | source URL.`,
+      `related-searches strip, and the question titles on forums and review sites.\n\n` +
+      // ‼️ THE VOLUME COLUMN IS WHERE THIS SECTION LIES IF IT IS GOING TO. It is asked for as a
+      // number, a model will produce a plausible one, and it lands in frequency_score, which is
+      // what ranks a keyword. There is no volume API in the client lane on purpose. So the ask
+      // is now explicit that an unsourced number is worse than no number, and the parser only
+      // trusts one that arrives with a URL beside it.
+      `ABOUT THE VOLUME COLUMN. We do not buy search-volume data, so whatever you put there is ` +
+      `what gets used. Write "unknown" unless you actually saw a number on a page you can link ` +
+      `in the source column, and then link it. An estimate is worse than "unknown" here, ` +
+      `because "unknown" is handled and an estimate is ranked on as though somebody measured ` +
+      `it. Ranking by how ready the phrase sounds is what we want anyway.\n\n` +
+      `Return them as a block titled KEYWORDS, one per line, as: phrase | monthly volume or ` +
+      `unknown | ready|comparing|researching|price | source URL.`,
     searches: 8,
   },
 ];

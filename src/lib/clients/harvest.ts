@@ -674,12 +674,29 @@ export function extractKeywords(text: string): HarvestedPhrase[] {
     const intentScore = Math.max(0, Math.min(MAX_INTENT_SCORE, mapped));
     const sourceUrl = cells.slice(3).join(" ").trim();
 
+    const cited = /^https?:\/\//i.test(cells.slice(3).join(" ").trim());
+
     out.push({
       phrase,
       normalized,
-      // The volume when one was sourced, 1 when it says "unknown". Never 0: the column is what
-      // ranks a keyword, and a 0 would sort a real phrase below one nobody has measured either.
-      frequencyScore: Number.isFinite(volume) && volume > 0 ? volume : 1,
+      // ‼️ THE NUMBER IS ONLY TRUSTED WHEN THE ROW CITES WHERE IT CAME FROM, and that rule is
+      // the whole reason this line is not just `volume || 1`.
+      //
+      // frequency_score is what RANKS a keyword, and keyword-set.ts reads it. This column is
+      // filled by a research model that was asked for a monthly search volume. No volume API
+      // touches the client lane, deliberately (see the header of keyword-set.ts: Google Ads
+      // volume is the wrong denominator for this product and Matthew's call on 2026-09-08 was
+      // not to buy it). So a number here is a model's estimate unless something says otherwise,
+      // and an estimate that lands in a ranking column is indistinguishable from a measurement
+      // the moment it is stored.
+      //
+      // A source URL beside it is the "otherwise". It is not proof, but it is the difference
+      // between a number somebody can go and check and a number nobody can. Everything else
+      // reads as unknown and ranks on commercial intent, which is a categorical judgement this
+      // corpus already relies on rather than a quantity wearing a measurement's clothes.
+      //
+      // Never 0: the column ranks, and a 0 would sort a real phrase below one nobody measured.
+      frequencyScore: cited && Number.isFinite(volume) && volume > 0 ? volume : 1,
       commercialIntentScore: intentScore,
       objectionPhrase: false,
       sourceUrl: /^https?:\/\//i.test(sourceUrl) ? sourceUrl : "",
