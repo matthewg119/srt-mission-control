@@ -32,7 +32,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { DELIVERY_STEPS, type StepKey } from "@/config/delivery-steps";
+import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         "clients.intake_completed_at",
         "empty, so the intake form was never finished",
-        "Send the client their /onboarding link again and wait for step 6 to save."
+        "Send the client their /onboarding link again and wait for the last step of the intake form to save."
       );
     }
     return verified(`intake completed at ${at}`);
@@ -655,7 +655,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "clients.primary_avatar",
         "no avatar has been confirmed",
         "Pick one of the three on this card, or reply `avatar: laser hair removal` with your " +
-          "own, or use the Avatar panel on the client board. Step 10 researches whoever is " +
+          `own, or use the Avatar panel on the client board. Step ${stepNumber("avatar_harvest")} researches whoever is ` +
           "picked, and the custom question set and the page candidates are both scored against " +
           "it, so none of the three means anything until this is answered."
       );
@@ -735,7 +735,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     return verified(
       parts.join(", "),
-      "Step 13's question set and step 14's page candidates are rebuilt against this."
+      `Step ${stepNumber("custom_question_set")}'s question set and step ${stepNumber("page_candidates")}'s page candidates are rebuilt against this.`
     );
   },
 
@@ -1217,7 +1217,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         "the reviews host for this client",
         data ? "a row exists but nothing was attached" : "no reviews host is registered",
-        "The reviews host is attached by the hub step. Confirm step 15 first."
+        `The reviews host is attached by the hub step. Confirm step ${stepNumber("hub_preview")} first.`
       );
     }
 
@@ -1389,7 +1389,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "client_dns_records for this client",
         "no DNS rows have been seeded",
         "seedDnsRecords never ran, which happens when the hub step did not complete. Confirm " +
-          "step 15 first; it seeds all three records."
+          `step ${stepNumber("hub_preview")} first; it seeds all three records.`
       );
     }
     if (!allVerified(rows)) {
@@ -1454,7 +1454,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return broken(
         "nap_discrepancies for this client",
         "no presence rows exist, so there is no cleanup list to have executed",
-        "The sweep never seeded. Confirm step 4 first."
+        `The sweep never seeded. Confirm step ${stepNumber("nap_sweep")} first.`
       );
     }
 
@@ -1522,7 +1522,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return broken(
         "the cname_hub row for this client",
         "no hub CNAME record has been seeded",
-        "seedDnsRecords never ran for this client. Confirm step 15 first: registerHubAndSeedDns " +
+        `seedDnsRecords never ran for this client. Confirm step ${stepNumber("hub_preview")} first: registerHubAndSeedDns ` +
           "is what writes the three rows."
       );
     }

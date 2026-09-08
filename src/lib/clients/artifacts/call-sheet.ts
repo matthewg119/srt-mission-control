@@ -17,6 +17,7 @@
 // said on the call has to be reconstructed from memory afterwards.
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import {
   MATERIALIZATION_FALLBACKS,
   composeTrackedSet,
@@ -237,7 +238,10 @@ function questions(state: PageState, d: CallSheetData) {
     { color: d.questionSetVersion ? MUTED : RED, size: 9 }
   );
 
-  paragraph(state, "The custom set is drafted at step 12 and prints here once it exists.", {
+  paragraph(
+    state,
+    `The custom set is drafted at step ${stepNumber("custom_question_set")} and prints here once it exists.`,
+    {
     color: MUTED,
     size: 9,
   });
@@ -276,7 +280,7 @@ function dns(state: PageState, d: CallSheetData) {
   if (i && !i.resolverHealthy) {
     paragraph(
       state,
-      "THE DNS LOOKUP DID NOT COMPLETE, so the provider below is not confirmed. Re-run step 3 before this call.",
+      `THE DNS LOOKUP DID NOT COMPLETE, so the provider below is not confirmed. Re-run step ${stepNumber("site_dns_intel")} before this call.`,
       { color: RED, bold: true }
     );
   }

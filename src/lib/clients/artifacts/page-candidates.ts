@@ -28,6 +28,7 @@
 // number that moves on its own makes the day-30 comparison meaningless.
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import { commercialIntent, isObjection, verticalFor } from "../harvest";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import { confirmedAvatarFor } from "../avatars";
@@ -478,7 +479,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       ok: false,
       error:
         `No harvested phrases for vertical "${vertical}", so there is nothing to score. ` +
-        `The avatar phrase harvest (step 10) fills question_bank, and it either has not run ` +
+        `The avatar phrase harvest (step ${stepNumber("avatar_harvest")}) fills question_bank, and it either has not run ` +
         `or came back empty. Nothing was written.`,
     };
   }
@@ -567,7 +568,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
     (confirmedAvatar
       ? `This build is aimed at one confirmed customer, ${confirmedAvatar.label}, so an avatar ` +
         "tag on these rows would read the same on every one of them and separate nothing. "
-      : "No avatar has been confirmed yet, which is delivery step 8. ") +
+      : `No avatar has been confirmed yet, which is delivery step ${stepNumber("avatar_confirmed")}. `) +
       "Every phrase below was harvested against the vertical rather than tagged per avatar, so " +
       "theme is the axis that actually tells one row from another. It is derived from the shape " +
       "of the question itself.",
@@ -660,7 +661,8 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       // are mode:"auto", so postReadySteps skips them and instructionsFor is never reached —
       // this note is the whole surface either of them has. It is where the ranked list stops
       // being a PDF and starts being pages.
-      `*This is step 13, the PUBLISHING backlog: what is worth writing.* Step 12's question set ` +
+      `*This is step ${stepNumber("page_candidates")}, the PUBLISHING backlog: what is worth writing.* ` +
+      `Step ${stepNumber("custom_question_set")}'s question set ` +
       `is the MEASUREMENT set, frozen at Day 0, and nothing is ever published from it.\n` +
       `To turn any of these into a draft, post \`page ${name}\` in ${pageStudioHint()}. ` +
       `Pick a number, then type or send a voice note and your words go into the page verbatim.`,

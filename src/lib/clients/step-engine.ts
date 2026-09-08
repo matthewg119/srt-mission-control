@@ -389,7 +389,7 @@ async function instructionsFor(
 
       const head = [
         "*Which customer is this whole build aimed at?* Everything after this is scored against",
-        "the answer: step 10 researches THIS buyer, the custom question set is built from their",
+        `the answer: step ${stepNumber("avatar_harvest")} researches THIS buyer, the custom question set is built from their`,
         "wording, and the page candidates are ranked for them.",
         "",
       ];
@@ -435,7 +435,7 @@ async function instructionsFor(
         "",
         already
           ? `Currently confirmed: *${already.label}* (${already.slot}). Confirming again replaces it and the old one is kept in the history.`
-          : "Nothing is confirmed yet, so step 10 has nothing to research.",
+          : `Nothing is confirmed yet, so step ${stepNumber("avatar_harvest")} has nothing to research.`,
         `Or on the board: ${boardUrl(c)}#avatar`,
       ];
     }
@@ -600,7 +600,7 @@ async function instructionsFor(
         "at Day 0. The day 30, 60 and 90 numbers are scored against exactly these and nothing",
         "else, which is why it is frozen: a set that moved would make the comparison meaningless.",
         "",
-        "*Nothing is ever published from it.* That is step 13, which is a different list built",
+        `*Nothing is ever published from it.* That is step ${stepNumber("page_candidates")}, which is a different list built`,
         "from the same corpus. This one says what we MEASURE. That one says what we WRITE.",
         "",
         link ? `*The draft:* ${link}` : "*Not generated yet.*",
@@ -621,11 +621,11 @@ async function instructionsFor(
       const derived = rows.filter((r) => (r.origin as string | null) === "derived").length;
 
       return [
-        "*This is the PUBLISHING backlog.* The same corpus as step 12, scored for which",
+        `*This is the PUBLISHING backlog.* The same corpus as step ${stepNumber("custom_question_set")}, scored for which`,
         "questions are worth building a page about, with `currently_named` as a tri-state so a",
         "question the engines already name them for can be skipped.",
         "",
-        "*It is not the tracked set.* Step 12 is the measurement set and is frozen at Day 0.",
+        `*It is not the tracked set.* Step ${stepNumber("custom_question_set")} is the measurement set and is frozen at Day 0.`,
         "This list is regenerated and is meant to change.",
         "",
         link ? `*The ranked list:* ${link}` : "*Not generated yet.*",
@@ -644,7 +644,7 @@ async function instructionsFor(
 
     case "first_page": {
       const refs = await outputRefsFor(c.id);
-      const candidates = docLink(c.id, refs.get("page_candidates"), "step 13's ranked page candidates");
+      const candidates = docLink(c.id, refs.get("page_candidates"), `step ${stepNumber("page_candidates")}'s ranked page candidates`);
 
       const { listAllForBoard } = await import("@/lib/hub/pages");
       const pages = await listAllForBoard(c.id);
@@ -653,8 +653,8 @@ async function instructionsFor(
 
       return [
         "Pages are written and published from the Hub panel on the client board.",
-        `Start here: ${candidates ?? "step 13's page candidates (not generated yet)"} — the`,
-        "PUBLISHING backlog. Step 12's question set is the MEASUREMENT set and nothing is ever",
+        `Start here: ${candidates ?? `step ${stepNumber("page_candidates")}'s page candidates (not generated yet)`} — the`,
+        `PUBLISHING backlog. Step ${stepNumber("custom_question_set")}'s question set is the MEASUREMENT set and nothing is ever`,
         "published from it.",
         "",
         // ‼️ THE EVIDENCE STEP IS NAMED FIRST BECAUSE THE GATE REFUSES WITHOUT IT.
@@ -771,7 +771,7 @@ async function instructionsFor(
 
     case "citation_cleanup": {
       const refs = await outputRefsFor(c.id);
-      const list = docLink(c.id, refs.get("citation_cleanup_list"), "step 14's ranked cleanup list");
+      const list = docLink(c.id, refs.get("citation_cleanup_list"), `step ${stepNumber("citation_cleanup_list")}'s ranked cleanup list`);
 
       const { loadSweep, countByStatus, effectiveStatus, worstFirst } = await import("./presence-sweep");
       const rows = await loadSweep(c.id);
@@ -782,7 +782,7 @@ async function instructionsFor(
       );
 
       return [
-        list ? `*The list:* ${list}` : "*Step 14's cleanup list has not been generated yet.*",
+        list ? `*The list:* ${list}` : `*Step ${stepNumber("citation_cleanup_list")}'s cleanup list has not been generated yet.*`,
         "",
         // The verifier refuses on not_checked FIRST, so the card says it first. A card that
         // buried this under the mismatch count would have him fixing listings and still
@@ -790,7 +790,7 @@ async function instructionsFor(
         counts.not_checked > 0
           ? `:warning: *${counts.not_checked} of ${rows.length} listings carry no confirmed status.* ` +
             "[Done] refuses on that before it looks at anything else: a row nobody has read is " +
-            "not a row that was cleaned. Step 14 reads the sweep screenshots and posts what it " +
+            `not a row that was cleaned. Step ${stepNumber("citation_cleanup_list")} reads the sweep screenshots and posts what it ` +
             "proposes with a *Confirm all as read* button on it, which is one tap for the batch. " +
             "Row by row instead on the Presence sweep panel."
           : `All ${rows.length} listings carry a confirmed status.`,
@@ -822,15 +822,15 @@ async function instructionsFor(
         .maybeSingle();
 
       return [
-        pdf ? `*Print this:* ${pdf}` : "*Step 17's card PDF has not been generated yet.*",
+        pdf ? `*Print this:* ${pdf}` : `*Step ${stepNumber("review_card_pdf")}'s card PDF has not been generated yet.*`,
         "",
         // ‼️ THE REAL HOST OR NOTHING. review-card.ts already refuses to derive this and says
         // why: somebody fixing a typo on the board must not silently invalidate a thousand
         // printed cards. A card that guessed the hostname here would contradict the PDF.
         host?.host
-          ? `The QR points at \`${host.host}\`${host.vercel_attached_at ? ", which is attached and live from the moment the domain resolves" : " — *NOT attached to Vercel yet*, so check step 15 before printing"}.`
+          ? `The QR points at \`${host.host}\`${host.vercel_attached_at ? ", which is attached and live from the moment the domain resolves" : ` — *NOT attached to Vercel yet*, so check step ${stepNumber("hub_preview")} before printing`}.`
           : ":warning: *No reviews host is attached for this client*, so the QR on that PDF has " +
-            "nothing behind it. Do not print until step 15 has attached it.",
+            `nothing behind it. Do not print until step ${stepNumber("hub_preview")} has attached it.`,
         "",
         "The cards work before the hub has any pages: the reviews host is independent of them.",
         "",
@@ -879,7 +879,7 @@ async function instructionsFor(
           : ":warning: *Nothing is recorded yet, so neither branch has been chosen* and [Done] will refuse.",
         client?.review_owner_name
           ? `The named person on the record is *${client.review_owner_name as string}*.`
-          : "No named person is on the record yet. Step 30 wants one.",
+          : `No named person is on the record yet. Step ${stepNumber("review_tool_handed")} wants one.`,
         "",
         ...(destinations.length
           ? [`They told us at intake they collect on: ${destinations.join(", ")}.`]
@@ -916,7 +916,7 @@ async function instructionsFor(
       const owner = (client?.review_owner_name as string | null) ?? null;
 
       return [
-        "*This step owns the HANDOVER.* Step 16 owned whether the tool renders; this is the",
+        `*This step owns the HANDOVER.* Step ${stepNumber("review_tool_preview")} owned whether the tool renders; this is the`,
         "conversation where a person is shown it and takes it on.",
         "",
         owner
@@ -1046,7 +1046,7 @@ async function instructionsFor(
         "Six things have to happen on the call, and the label lists them because each one",
         "unblocks something later:",
         "  • *NAP read aloud* — the canonical record is what every listing is corrected to.",
-        "  • *Question set approved* — step 12's set is what day 30/60/90 is measured on.",
+        `  • *Question set approved* — step ${stepNumber("custom_question_set")}'s set is what day 30/60/90 is measured on.`,
         "  • *Consent confirmed* — named or anonymized results. It defaults to anonymized.",
         "  • *Preview walked* — the hub, the review tool and the Concierge, on their own screen.",
         "  • *Pages picked* — which of the candidates gets written first.",

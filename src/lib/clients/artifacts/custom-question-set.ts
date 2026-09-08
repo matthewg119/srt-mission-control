@@ -30,6 +30,7 @@
 // custom_v1 happens on approval, which is `call_held`, and is separate work.
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import { commercialIntent, isObjection, verticalFor } from "../harvest";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import {
@@ -210,7 +211,8 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       ok: false,
       error:
         `Nothing to draft from: question_bank is empty for "${vertical}" and intake recorded no ` +
-        `objections in the owner's own words. Run the avatar phrase harvest (step 10) first.`,
+        `objections in the owner's own words. Run the avatar phrase harvest ` +
+        `(step ${stepNumber("avatar_harvest")}) first.`,
     };
   }
 
@@ -410,8 +412,8 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       // says it too. Both steps are mode:"auto", so postReadySteps skips them and
       // instructionsFor is never reached — this note is the whole surface either one has, and a
       // distinction stated on only one of two steps that share a corpus is not stated.
-      `\n*This is step 12, the MEASUREMENT set: these are frozen at Day 0 and the day 30/60/90 ` +
+      `\n*This is step ${stepNumber("custom_question_set")}, the MEASUREMENT set: these are frozen at Day 0 and the day 30/60/90 ` +
       `numbers are scored against exactly them.* Nothing is ever published from this list. ` +
-      `Step 13 is the PUBLISHING backlog, same corpus, opposite job.`,
+      `Step ${stepNumber("page_candidates")} is the PUBLISHING backlog, same corpus, opposite job.`,
   };
 }

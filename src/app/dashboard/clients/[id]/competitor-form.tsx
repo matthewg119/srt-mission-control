@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { stepNumber } from "@/config/delivery-steps";
 
 export interface CandidateView {
   id: string;
@@ -73,9 +74,9 @@ export function CompetitorForm({
   if (!candidates.length) {
     return (
       <p className="text-xs text-[rgba(255,255,255,0.5)]">
-        No shortlist yet. It is built from the baseline scan, so confirm step 2 first. A scan
-        that named nobody is itself a finding worth saying on the call, not an empty screen to
-        work around.
+        No shortlist yet. It is built from the baseline scan, so confirm step{" "}
+        {stepNumber("baseline_scan")} first. A scan that named nobody is itself a finding worth
+        saying on the call, not an empty screen to work around.
       </p>
     );
   }

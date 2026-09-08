@@ -8,6 +8,7 @@ import { notFound } from "next/navigation";
 import { BarChart3 } from "lucide-react";
 import { supabaseAdmin } from "@/lib/db";
 import { INTAKE_STEPS } from "@/config/client-intake";
+import { stepNumber } from "@/config/delivery-steps";
 import { ONBOARDING_STAGES } from "@/lib/clients/provision";
 import { DELIVERY_STEPS } from "@/lib/clients/delivery-checklist";
 import { DRAFTS } from "@/lib/clients/client-drafts";
@@ -617,7 +618,9 @@ export default async function ClientDetailPage({
       >
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Avatar</h2>
-          <span className="text-xs text-[rgba(255,255,255,0.4)]">step 8</span>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            step {stepNumber("avatar_confirmed")}
+          </span>
         </div>
         <AvatarForm
           clientId={id}
@@ -643,7 +646,8 @@ export default async function ClientDetailPage({
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Review handover</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
-            steps 29 and 30
+            steps {stepNumber("review_request_configured")} and{" "}
+            {stepNumber("review_tool_handed")}
           </span>
         </div>
         <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />
@@ -663,7 +667,9 @@ export default async function ClientDetailPage({
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Payment</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
-            {paymentView.recordedAt ? "recorded, step 21 is open" : "not recorded, step 21 is held"}
+            {paymentView.recordedAt
+              ? `recorded, step ${stepNumber("access_granted")} is open`
+              : `not recorded, step ${stepNumber("access_granted")} is held`}
           </span>
         </div>
         <PaymentForm clientId={id} view={paymentView} />

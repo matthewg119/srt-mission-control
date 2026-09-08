@@ -42,14 +42,39 @@ const ROOT = path.join(__dirname, "..", "src");
  *
  * delivery-steps.ts prints the count of steps and describes its own history ("33 -> 35 -> 37").
  * The probes assert counts on purpose. Neither is a sentence naming a step by position.
+ *
+ * ‼️ workflow-builder.ts IS A DIFFERENT STEP LIST ENTIRELY, the same hazard OTHER_NUMBERING
+ * guards against and the same answer. Its five "Step 1: drop the song" ... "Step 5: final
+ * prompts" are the CONTENT workflow builder's own wizard stages, each posted immediately after
+ * `updateJob(job, { stage: "b2_*" })`. The module imports nothing from @/config/delivery-steps
+ * and nothing from lib/clients/, so there is no delivery step that could renumber them. A
+ * per-line rule cannot express this: "Step 3: your timings" contains none of the words
+ * OTHER_NUMBERING looks for, so the exemption has to be the file.
  */
 const EXEMPT = new Set([
   path.join("config", "delivery-steps.ts"),
+  path.join("lib", "reel", "workflow-builder.ts"),
 ]);
 
-/** Strip comments so prose explaining the rule cannot fail the rule. */
+/**
+ * Strip comments so prose explaining the rule cannot fail the rule.
+ *
+ * ‼️ COMMENTS ARE BLANKED, NOT DELETED, AND THE DIFFERENCE IS EVERY LINE NUMBER BELOW.
+ * Deleting a block comment removes its newlines with it, so every offender after the first doc
+ * comment in a file was reported low by however many lines those blocks spanned. On
+ * step-engine.ts that was a 53-line drift: the probe said 339 for what is really line 392,
+ * which sends whoever is fixing it to the wrong place in the file.
+ *
+ * ‼️ AND THE LINE COMMENT STRIPPER USES [^\S\n], NOT \s, WHICH IS THE SUBTLER HALF OF THE SAME
+ * BUG. `\s` matches a newline, so `^\s*\/\/` walks BACKWARDS over every preceding blank and
+ * comment line and swallows the lot as one match. A twenty-line header comment collapsed to a
+ * single empty line, and the run of `//` lines in this repo's headers is long enough that
+ * step-engine.ts lost 29 lines to it even after the block comments were fixed.
+ */
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/^[^\S\n]*\/\/.*$/gm, "");
 }
 
 /**
@@ -63,6 +88,19 @@ const STRINGS = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
 
 /** "step 15", "Step 15", "steps 29 and 30". Not "step_key", not "stepNumber". */
 const STEP_LITERAL = /\bsteps?\s+(\d{1,2})\b/i;
+
+/**
+ * ‼️ A SENTENCE IN JSX IS NOT IN QUOTES, AND SEVEN OF THEM WERE INVISIBLE HERE.
+ *
+ * STRINGS only sees quoted literals, so `<p>Step 21 collects GBP manager access</p>` passed
+ * every run of this probe while saying the same wrong thing to the same person on the same
+ * screen. payment-form.tsx and review-workflow-form.tsx carried four and three of them.
+ *
+ * Run over the WHOLE FILE rather than per line, because JSX text routinely opens on one line
+ * and closes two below it, and a line-by-line scan sees neither the `>` nor the `<`. Anything
+ * with a brace in it is an expression, not text, and is left to the string scan.
+ */
+const JSX_TEXT = />([^<>{}]+)</g;
 
 /**
  * ‼️ "INTAKE STEP 2" IS A DIFFERENT NUMBERING AND IT DID NOT MOVE.
@@ -92,11 +130,35 @@ function walk(dir: string, out: string[]): string[] {
 
 const offenders: Offender[] = [];
 
+/** One offender per line, whichever scan found it first. */
+function report(seen: Set<string>, file: string, line: number, text: string): void {
+  const key = `${file}:${line}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  offenders.push({ file, line, text: text.trim().slice(0, 110) });
+}
+
 for (const file of walk(ROOT, [])) {
   const rel = path.relative(ROOT, file);
   if (EXEMPT.has(rel)) continue;
 
-  const lines = code(fs.readFileSync(file, "utf8")).split("\n");
+  const src = code(fs.readFileSync(file, "utf8"));
+  const lines = src.split("\n");
+  const seen = new Set<string>();
+
+  // JSX text first, because it is the scan that reads a whole sentence rather than the half of
+  // one that happens to be quoted, so its excerpt is the more useful of the two.
+  if (file.endsWith(".tsx")) {
+    for (const m of src.matchAll(JSX_TEXT)) {
+      const text = m[1];
+      if (!STEP_LITERAL.test(text)) continue;
+      const line = src.slice(0, m.index).split("\n").length;
+      // Same whole-line exemption the string scan uses, applied to the line the text opens on.
+      if (OTHER_NUMBERING.test(text)) continue;
+      report(seen, rel, line, text.replace(/\s+/g, " "));
+    }
+  }
+
   lines.forEach((line, i) => {
     // ‼️ THE EXEMPTION IS CHECKED ON THE WHOLE LINE, NOT ON ONE LITERAL, and that is not a
     // shortcut. A sentence is routinely split across two concatenated strings, so "Intake" can
@@ -108,7 +170,7 @@ for (const file of walk(ROOT, [])) {
 
     for (const literal of line.match(STRINGS) ?? []) {
       if (STEP_LITERAL.test(literal)) {
-        offenders.push({ file: rel, line: i + 1, text: literal.trim().slice(0, 110) });
+        report(seen, rel, i + 1, literal);
         break;
       }
     }

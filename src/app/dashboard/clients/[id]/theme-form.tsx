@@ -18,6 +18,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { stepNumber } from "@/config/delivery-steps";
 import { TEMPLATE_CATALOGUE, type StoredSkin } from "@/lib/hub/skin";
 
 export interface ThemeView {
@@ -161,7 +162,8 @@ export function ThemeForm({
         <p className="text-xs text-[rgba(255,255,255,0.4)]">
           The layout the hub and the review tool are built on. Picking one un-confirms the
           theme, so look at the preview before confirming again. To go further than these four,
-          paste a screenshot of a reference into this client&apos;s step 15 thread in Slack and
+          paste a screenshot of a reference into this client&apos;s step{" "}
+          {stepNumber("hub_preview")} thread in Slack and
           the colours, corners, column width and text size are read off it.
         </p>
         <div className="flex flex-wrap gap-2">

@@ -14,6 +14,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { stepNumber } from "@/config/delivery-steps";
 
 export interface PaymentView {
   recordedAt: string | null;
@@ -83,7 +84,7 @@ export function PaymentForm({ clientId, view }: { clientId: string; view: Paymen
               <span className="text-white/85">{(view.recordedAt ?? "").slice(0, 10)}</span>
             </>
           ) : (
-            "No payment recorded. Step 21 refuses until there is one."
+            `No payment recorded. Step ${stepNumber("access_granted")} refuses until there is one.`
           )}
         </p>
         <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
@@ -143,13 +144,15 @@ export function PaymentForm({ clientId, view }: { clientId: string; view: Paymen
 
       {view.accessOutstanding ? (
         <p className="text-[11px] text-[rgba(255,255,255,0.45)]">
-          Step 21 collects GBP manager access, Search Console and Analytics. It is held until this
-          is recorded, because a client who has not committed does not hand over their Google
-          account, and asking early is how a call ends with neither.
+          Step {stepNumber("access_granted")} collects GBP manager access, Search Console and
+          Analytics. It is held until this is recorded, because a client who has not committed
+          does not hand over their Google account, and asking early is how a call ends with
+          neither.
         </p>
       ) : (
         <p className="text-[11px] text-[rgba(255,255,255,0.45)]">
-          Step 21 is already resolved, so this is a record rather than a gate.
+          Step {stepNumber("access_granted")} is already resolved, so this is a record rather
+          than a gate.
         </p>
       )}
 
@@ -180,8 +183,9 @@ export function PaymentForm({ clientId, view }: { clientId: string; view: Paymen
 
       {recorded ? (
         <p className="text-[11px] text-[rgba(255,255,255,0.45)]">
-          Clearing it removes all four fields together and puts step 21 back behind the gate. Do it
-          when the record was wrong, not to tidy up.
+          Clearing it removes all four fields together and puts step{" "}
+          {stepNumber("access_granted")} back behind the gate. Do it when the record was wrong,
+          not to tidy up.
         </p>
       ) : null}
     </div>

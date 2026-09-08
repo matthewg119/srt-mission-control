@@ -1,4 +1,6 @@
-// The citation cleanup list — delivery step 14, Runner v3 section 12 (5e).
+// The citation cleanup list — the citation_cleanup_list step, Runner v3 section 12 (5e).
+//
+// ‼️ NAMED BY KEY, NOT BY NUMBER. This said "delivery step 14" and the step is now 15.
 //
 // Every listing that needs correcting, worst first, with the correction already written out:
 // platform, tier, canonical versus listed, what to change, what access it takes, how long it

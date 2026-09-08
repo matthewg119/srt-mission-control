@@ -39,6 +39,7 @@
 // appears, through the outputRefsFor / docLink path every other card already uses.
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { spokenPromises } from "@/lib/audit-engine/delivery-guards";
 import { noDashes } from "@/lib/audit-engine/email-assistant";
@@ -771,7 +772,7 @@ export async function generateCallQuestions(clientId: string): Promise<AutoResul
       ok: false,
       error:
         "No baseline measurement for this client, so there is nothing to build closing questions " +
-        "from. Confirm the baseline scan (step 2) first.",
+        `from. Confirm the baseline scan (step ${stepNumber("baseline_scan")}) first.`,
     };
   }
 
@@ -838,12 +839,17 @@ export async function generateCallQuestions(clientId: string): Promise<AutoResul
     .eq("step_key", "call_held");
 
   if (error) {
-    return { ok: false, error: `filing it against step 20 failed: ${error.message}` };
+    return {
+      ok: false,
+      error: `filing it against step ${stepNumber("call_held")} failed: ${error.message}`,
+    };
   }
 
   return {
     ok: true,
     docId: stored.docId,
-    note: `${questions.length} closing questions filed against the call, waiting on step 20's card.`,
+    note:
+      `${questions.length} closing questions filed against the call, waiting on ` +
+      `step ${stepNumber("call_held")}'s card.`,
   };
 }

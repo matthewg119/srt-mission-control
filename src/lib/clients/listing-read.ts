@@ -1,6 +1,9 @@
-// Reading a directory listing off the screenshot of it — delivery step 14.
+// Reading a directory listing off the screenshot of it — the citation_cleanup_list step.
 //
-// Matthew: "help me so step 14 actually reads the images and creates the good report from the
+// ‼️ NAMED BY KEY, NOT BY NUMBER. This said "delivery step 14" until 2026-09-08, when
+// offer_proposed was inserted at position 10 and moved it to 15 without moving the sentence.
+//
+// Matthew: "help me so the cleanup list actually reads the images and creates the good report from the
 // screenshots we sent before. I want it to work with screenshots because this says nothing was
 // found." The cleanup PDF read "0 confirmed findings to correct, with 18 platforms still
 // unchecked" on a client whose step 5 thread holds eighteen screenshots of those very listings.
@@ -130,6 +133,7 @@ export const MIN_LEGIBLE = 0.5;
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import { platformByKey } from "@/config/presence-platforms";
 import { compareListing, type ComparisonResult } from "./nap-compare";
 import { canonicalFor, loadSweep, effectiveStatus, type SweepRow } from "./presence-sweep";
@@ -335,7 +339,7 @@ const PROPOSAL_SEVERITY: Record<string, number> = {
 };
 
 /**
- * The proposals as the step 14 card prints them.
+ * The proposals as the citation_cleanup_list card prints them.
  *
  * ‼️ EVERY LINE SAYS "PROPOSED" AND THE HEADER SAYS NOTHING IS RECORDED. A card that listed
  * eight findings without that word would read as eight findings, which is a green tick over
@@ -354,7 +358,8 @@ export function formatCleanupProposals(rows: SweepRow[]): string[] {
   if (!proposals.length) return [];
 
   const lines = [
-    `*${proposals.length} listing${proposals.length === 1 ? "" : "s"} read off the screenshots in step 5's thread, worst first.*`,
+    `*${proposals.length} listing${proposals.length === 1 ? "" : "s"} read off the screenshots in ` +
+      `step ${stepNumber("presence_sweep_manual")}'s thread, worst first.*`,
     "*Nothing below is recorded.* These are proposals: every one of them reads as \"not checked\"",
     "on the client PDF until you confirm them, which is one tap.",
     "",
