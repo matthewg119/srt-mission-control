@@ -70,6 +70,11 @@ import {
   destinationState,
 } from "../src/lib/hub/review-destinations";
 import { hasBannedDash } from "../src/lib/copy-guard";
+import {
+  candidateAt,
+  readCandidateSet,
+  skinVariants,
+} from "../src/lib/hub/skin-variants";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -1455,6 +1460,116 @@ eq(
   // An unknown platform name is nobody, not a guess.
   eq("an unknown primary resolves to null", destinationState({}, "angies-list").primary, null);
   eq("and so does a missing one", destinationState({}, null).primary, null);
+}
+
+// -- Three designs from one screenshot, and none of them is a layout ----------
+// ‼️ skin-vision.ts's HEADER IS THE CONSTRAINT: "IT RETURNS TOKENS. IT CANNOT RETURN MARKUP, COPY
+// OR A LAYOUT, AND THE SCHEMA IS WHY." A variation can move a template, a ground colour, a
+// radius, a measure and a type scale, and nothing else. hub-bodies.tsx, the heading order, the
+// JSON-LD and the NAP block are identical in all three by construction, because a skin is CSS
+// custom properties. These checks are the structural half of that sentence.
+{
+  const variantSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "skin-variants.ts"),
+    "utf8"
+  );
+  const variantCode = variantSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  // The type is the enforcement, so the module may not grow a field that carries markup.
+  ok(
+    "a candidate cannot carry markup, copy or a section order",
+    !/\b(html|markup|body|headline|sections?|order|css)\s*[?]?\s*:/i.test(
+      variantCode.slice(variantCode.indexOf("interface SkinCandidate"), variantCode.indexOf("interface SkinCandidateSet"))
+    )
+  );
+
+  const read = {
+    template: "document" as const,
+    reading: "a quiet document with a warm ground",
+    bg: "#fbfaf8",
+    fg: "#1d1d1f",
+    muted: "#6b6b70",
+    faint: "#a0a0a5",
+    rule: "#e5e3df",
+    card: "#ffffff",
+    band: null,
+    bandFg: null,
+    headingFamily: "Georgia, serif",
+    radius: 10,
+    measure: 44,
+    baseSize: 17,
+    accentSuggestion: "#0a7c6a",
+  };
+
+  const variants = skinVariants(read, "test");
+  eq("three candidates", variants.length, 3);
+  eq("numbered from one", variants.map((v) => v.slot), [1, 2, 3]);
+  ok("each one says what it is", variants.every((v) => v.blurb.length > 8));
+  ok("no banned dash in a blurb", !variants.some((v) => hasBannedDash(v.blurb)));
+
+  // ‼️ THE FIRST ONE IS THE READ, UNTOUCHED. It is the only candidate with evidence behind it,
+  // so it must be exactly what the reference said and must be offered first.
+  eq("the first is the template that was read", variants[0]?.template, read.template);
+  eq("with the radius that was read", variants[0]?.radius, read.radius);
+  eq("and the measure that was read", variants[0]?.measure, read.measure);
+
+  // ‼️ NO CANDIDATE INVENTS A COLOUR. Making up a palette for a variation is the one thing
+  // skin-vision.ts refuses, arriving by the back door: a colour with no provenance, on a
+  // client's own domain, that somebody would then have to defend.
+  for (const v of variants) {
+    eq(`candidate ${v.slot} keeps the ground that was read`, v.bg, read.bg);
+    eq(`candidate ${v.slot} keeps the text colour that was read`, v.fg, read.fg);
+    eq(`candidate ${v.slot} keeps the rule colour that was read`, v.rule, read.rule);
+  }
+
+  // Three that look the same are one design offered three times.
+  ok(
+    "the three are actually distinguishable",
+    new Set(variants.map((v) => `${v.template}|${v.radius}|${v.measure}|${v.baseSize}`)).size === 3
+  );
+
+  // Every derived number survived readSkin(), which REFUSES out of range rather than clamping.
+  // A dropped field would come back null, so a null here means the arithmetic left the range.
+  for (const v of variants) {
+    ok(`candidate ${v.slot} has a radius readSkin accepted`, v.radius !== null);
+    ok(`candidate ${v.slot} has a measure readSkin accepted`, v.measure !== null);
+    ok(`candidate ${v.slot} has a base size readSkin accepted`, v.baseSize !== null);
+  }
+
+  // A read with nothing but a template still produces three usable designs rather than three
+  // copies of the default: the variation is the template plus the shape, not just the colours.
+  const bare = skinVariants(
+    { ...read, bg: null, fg: null, muted: null, faint: null, rule: null, card: null, headingFamily: null, radius: null, measure: null, baseSize: null },
+    "test"
+  );
+  eq("a colourless read still gives three", bare.length, 3);
+  ok(
+    "and they are still different from each other",
+    new Set(bare.map((v) => `${v.template}|${v.radius}|${v.measure}`)).size === 3
+  );
+  // ‼️ ROUNDER MEANS ROUNDER. A null radius is "nobody set one, so the stylesheet's 8px stands",
+  // not "no corners". Deriving from 0 would make the SOFTER variant squarer than the one it
+  // varies, which looks like a design opinion and is a bug.
+  ok("softer is rounder than the rendered default", (bare[1]?.radius ?? 0) > 8);
+
+  // The round trip through storage. Anything malformed is nothing, because a half-read set sends
+  // you back to the screenshot, which is where you would have to go anyway.
+  const set = {
+    generatedAt: "2026-09-08T00:00:00.000Z",
+    generatedBy: "test",
+    reading: read.reading,
+    accentSuggestion: read.accentSuggestion,
+    candidates: variants,
+  };
+  const round = readCandidateSet(JSON.parse(JSON.stringify(set)));
+  eq("a stored set reads back", round?.candidates.length, 3);
+  eq("and slot 2 is still slot 2", candidateAt(round, 2)?.slot, 2);
+  eq("a slot nobody offered is null", candidateAt(round, 9), null);
+  eq("an empty set is null", readCandidateSet({ candidates: [] }), null);
+  eq("rubbish is null", readCandidateSet("nope"), null);
+  eq("nothing is null", readCandidateSet(null), null);
 }
 
 // ---- LANE 3 ----------------------------------------------------------------

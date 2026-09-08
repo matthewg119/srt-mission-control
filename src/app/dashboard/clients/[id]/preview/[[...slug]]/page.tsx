@@ -40,6 +40,8 @@ import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, skinClass } from "@/lib/hub/skin";
 import { ReviewTool, readLook } from "@/app/hub/[host]/reviews/review-tool";
 import type { ChatLook } from "@/app/hub/[host]/reviews/review-client";
+import { loadCandidates } from "@/lib/clients/hub-skin";
+import { candidateAt, type SkinCandidateSet } from "@/lib/hub/skin-variants";
 import "@/app/hub/[host]/hub.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
@@ -55,7 +57,7 @@ export const metadata: Metadata = {
 
 interface Props {
   params: { id: string; slug?: string[] };
-  searchParams: { kind?: string; look?: string };
+  searchParams: { kind?: string; look?: string; candidate?: string };
 }
 
 export default async function HubPreview({ params, searchParams }: Props) {
@@ -91,6 +93,28 @@ export default async function HubPreview({ params, searchParams }: Props) {
   // renders the default. readLook() validates rather than interpolates, because the value ends
   // up in a class attribute.
   const look = readLook(searchParams.look);
+
+  // ‼️ A CANDIDATE IS RENDERED, NEVER STORED, AND THAT IS THE WHOLE POINT OF THE THREE.
+  //
+  // The screenshot lane offers three designs and applies none of them. This is how they are
+  // looked at: the page renders with a candidate's tokens substituted for the client's stored
+  // skin, so all three can be compared against each other and against what they already have,
+  // before anything is written. `pick <n>` in the step thread is the only thing that stores one.
+  //
+  // Login-required, like everything else under /dashboard. A client host cannot pass this and
+  // would have nothing to pass: candidates live on the client row and are cleared on the pick.
+  const candidateSlot = Number(searchParams.candidate);
+  const candidateSet =
+    Number.isInteger(candidateSlot) && candidateSlot > 0
+      ? await loadCandidates(params.id)
+      : null;
+  const candidate = candidateAt(candidateSet, candidateSlot);
+
+  // The tokens actually painted. A slot nobody offered falls back to the stored skin rather
+  // than to nothing: an unknown number is not a design, and rendering unstyled would read as a
+  // broken page rather than as a bad link.
+  const skin = candidate ?? client.skin;
+
   const host =
     wanted.find((w) => w.kind === kind)?.host ??
     // No domain on the record yet. Say so in the hostname rather than rendering a
@@ -101,12 +125,20 @@ export default async function HubPreview({ params, searchParams }: Props) {
 
   return (
     <div
-      className={`hub-root ${skinClass(client.skin)}`}
+      className={`hub-root ${skinClass(skin)}`}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
-      style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
+      style={{ ...skinStyle(skin), ...themeStyle(client.theme) }}
     >
-      <PreviewBanner clientId={params.id} kind={kind} host={host} slug={slug} look={look} />
+      <PreviewBanner
+        clientId={params.id}
+        kind={kind}
+        host={host}
+        slug={slug}
+        look={look}
+        candidateSet={candidateSet}
+        candidateSlot={candidate?.slot ?? null}
+      />
       <div className="hub-wrap">
         {kind === "reviews" ? (
           <ReviewTool client={client} look={look} />
@@ -167,12 +199,16 @@ function PreviewBanner({
   host,
   slug,
   look,
+  candidateSet,
+  candidateSlot,
 }: {
   clientId: string;
   kind: "hub" | "reviews";
   host: string;
   slug?: string;
   look: ChatLook;
+  candidateSet: SkinCandidateSet | null;
+  candidateSlot: number | null;
 }) {
   const other = kind === "reviews" ? "hub" : "reviews";
 
@@ -205,6 +241,42 @@ function PreviewBanner({
         This is what <code style={{ color: "#fff" }}>{host}</code>
         {slug ? `/${slug}` : ""} will serve. Nothing here is live and nothing is indexed.
       </span>
+      {/*
+        ‼️ IT SAYS OUT LOUD THAT NOTHING IS STORED. Somebody comparing three designs in three
+        tabs has to be able to tell, from the page itself, which one the client is actually on.
+        A preview that looked identical whether or not it had been chosen would make "did I
+        pick it" a question you answer by going and looking somewhere else.
+      */}
+      {candidateSet && (
+        <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>
+            {candidateSlot ? `design ${candidateSlot} of ${candidateSet.candidates.length}, not stored:` : "three on offer:"}
+          </span>
+          {candidateSet.candidates.map((option) => (
+            <a
+              key={option.slot}
+              href={`/dashboard/clients/${clientId}/preview?${kind === "reviews" ? "kind=reviews&" : ""}candidate=${option.slot}`}
+              style={{
+                color: option.slot === candidateSlot ? "#fff" : "#F5A623",
+                fontWeight: option.slot === candidateSlot ? 700 : 400,
+                textDecoration: option.slot === candidateSlot ? "none" : "underline",
+              }}
+            >
+              {option.slot}
+            </a>
+          ))}
+          <a
+            href={`/dashboard/clients/${clientId}/preview${kind === "reviews" ? "?kind=reviews" : ""}`}
+            style={{ color: candidateSlot ? "#F5A623" : "#fff", textDecoration: candidateSlot ? "underline" : "none" }}
+          >
+            stored
+          </a>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>
+            Type <code style={{ color: "#fff" }}>pick {candidateSlot ?? 1}</code> in the step
+            thread to keep one.
+          </span>
+        </span>
+      )}
       {kind === "hub" && (
         <span style={{ color: "rgba(255,255,255,0.5)" }}>Drafts are shown; the live hub omits them.</span>
       )}

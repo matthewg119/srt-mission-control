@@ -527,11 +527,11 @@ async function instructionsFor(
       const themed = await themeConfirmed(c.id);
       const overrides = themed ? await themeOverrides(c.id) : [];
 
-      // The design half. Read here rather than described in prose so the card states the
-      // template this client is ACTUALLY on, the same reason themeLine reads the stored theme.
-      const { loadSkin, designPreviewUrl } = await import("./hub-skin");
-      const { skinLine, templateMenu } = await import("@/lib/hub/skin");
-      const skin = await loadSkin(c.id);
+      // The design half. Read here rather than described in prose so the card states what this
+      // client is ACTUALLY on, the same reason themeLine reads the stored theme. designSection()
+      // owns the wording, so this arm, step 18's and every reply in the thread say one thing.
+      const { designSection, designPreviewUrl } = await import("./hub-skin");
+      const design = await designSection(c.id);
 
       return [
         "The hostnames are attached to Vercel already. What is left is the THEME.",
@@ -540,18 +540,17 @@ async function instructionsFor(
         "",
         ...formatDnsRecords(await loadDnsRows(c.id), domain),
         "",
-        skinLine(skin),
-        "*Do not like how it looks?* Reply in this thread:",
-        templateMenu(),
-        "Or paste a screenshot of a page whose look you want and I will read the colours, the " +
-          "corner radius, the column width and the text size off it. Every change un-confirms " +
-          "the theme, so you can go round as many times as you like before signing it off.",
+        ...design,
         `*See a change before it is confirmed:* ${designPreviewUrl(c.id)}`,
         "",
         themeLine(themed, overrides),
         // Matthew asked for this one by name: "Step 15 needs to give me the link to confirm the
         // theme in mission control." It is the anchor on the Identity and theme panel, so the
         // board opens scrolled to the control this step is waiting on rather than at the top.
+        //
+        // ‼️ AND `pick n` IS THE OTHER WAY IN NOW. Choosing one of three rendered previews sets
+        // theme.confirmedAt in the same write, so somebody who came in through the screenshot
+        // lane never has to go and sign off the design they just chose. Both routes end here.
         `Confirm the theme: ${boardUrl(c)}#theme`,
         "",
         ...previewLinkLine(clientPreviewUrl(c.id, "hub"), "The hub").split("\n"),
@@ -1215,6 +1214,7 @@ async function instructionsFor(
       }
 
       const { clientPreviewUrl, previewLinkLine } = await import("./review-preview");
+      const { designSection } = await import("./hub-skin");
 
       return [
         `*Their site:* ${site}`,
@@ -1239,6 +1239,12 @@ async function instructionsFor(
         "*Open it before the call.* If a section reads like it is about somebody else's business,",
         "un-tick and Retry: their site is probably rendered in JavaScript and the readable text was",
         "thin. That is a finding worth having on the call either way.",
+        "",
+        // ‼️ THIS IS WHERE A SCREENSHOT OF THEIR REAL SITE BELONGS, AND IT WAS FALLING THROUGH.
+        // This step already fetches their homepage and reads their nav, so "make it look like
+        // their site" is the literal subject here. Before SKIN_STEPS included site_replica a
+        // screenshot dropped in this thread was filed as a document nobody would open again.
+        ...(await designSection(c.id)),
         "",
         "*[Done] verifies the pages and the snapshot behind each one, not whether it is a good",
         "likeness.* Nothing can query that, which is why this step waits for you.",
