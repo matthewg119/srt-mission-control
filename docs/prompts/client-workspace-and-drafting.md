@@ -26,23 +26,30 @@ reversing it and why, or whether the reason still holds and Matthew needs to hea
 
 ---
 
-## 1. The review tool, rebuilt Typeform-style
+## 1. The review tool, rebuilt as a chat
 
 Today it renders four stacked textareas in unstyled default CSS while the hub beside it is themed.
-Files: `src/app/hub/[host]/reviews/review-tool.tsx` (server) and `review-client.tsx` (client).
+Files: `src/app/hub/[host]/reviews/review-tool.tsx` (server) and `review-client.tsx` (client, 499
+lines). Read the whole header of `review-client.tsx` before touching it. It is the negotiated
+history of this exact feature.
 
-What Matthew asked for:
+### The flow, screen by screen
 
-- **One question per screen, white and simple.** Typeform shape.
-- **Stars first.** Then, immediately after the star rating, **ask for microphone permission**, so
-  she is prepared to talk before the first question arrives.
-- **Voice is the intended path**, keyboard is the fallback.
-- **At the end, show everything together** in a Hemingway-style readability pass: her assembled
-  review with highlights, so she can improve it herself.
-- **Then a copy button and a link**: copy the review, go to the client's review destination, paste.
-- **Build three visual variations** of this and let him pick.
+1. **Stars.** Unchanged.
+2. **Mic priming, new.** Immediately after the stars, before any question: say what is about to
+   happen and get the permission out of the way. Copy, close to Matthew's words: *"Next you will
+   speak your review. It helps us understand what our clients actually need. Please accept the
+   microphone permission on the next screen."* A spinner sits at the bottom reading **"waiting on
+   microphone approval"**. A **Next button appears after 3 seconds** so anyone blocked, denied, or on
+   a browser without the API is never stuck.
+3. **The questions, as a chat.** One at a time, arriving as message bubbles as though a person is
+   asking. A **green microphone button with an idle animation** inviting the tap: press, speak, and
+   the transcript lands as her message. **A chat bar under it** so she can type instead. Yes/no
+   shaped answers get tappable chips.
+4. **The end screen.** Everything assembled, with the readability highlights, the attestation, the
+   copy button and the destination link.
 
-### Ground truth: the microphone is already right, and "force" is not achievable
+### Ground truth: the mic, and why it is this API
 
 `review-client.tsx:62-81`, verbatim:
 
@@ -62,60 +69,94 @@ What Matthew asked for:
 > **Firefox has neither. Where it is absent the button is simply not rendered** and the keyboard is
 > exactly as it was, no fallback, no upload path, no apology.
 
-**So: keep `SpeechRecognition`. Do not wire in `transcribeAudio()`.** And voice cannot be *forced*,
-because on Firefox it does not exist and on any browser she can refuse the permission. Build it as
-the default, prominent, first-offered path with the keyboard always reachable. Where the API is
-absent, skip the permission screen entirely rather than asking for something you cannot use.
+So: **keep `SpeechRecognition`, do not wire in `transcribeAudio()`, never construct a
+`MediaRecorder`, never upload audio.** "The audio gets recorded and turned into text" happens
+entirely in her browser.
 
-### Ground truth: the FTC line, and where the Hemingway idea sits
+**Priming the permission without holding a stream.** Either start `SpeechRecognition` and abort it
+in the same tick, or call `getUserMedia` and stop every track immediately. Never hold an open stream
+behind the spinner. Where `navigator.permissions.query({ name: "microphone" })` is supported, use it
+to resolve the spinner the moment she grants; treat an unsupported query as unknown and fall back to
+the 3 second timer.
+
+**On a browser with no SpeechRecognition, skip screen 2 entirely.** Do not show a permission
+interstitial for a capability that cannot be used. Go straight to the chat with the text bar and no
+mic button, exactly as the file already does today.
+
+### Ground truth: it must LOOK like the onboarding chat and must NOT work like it
+
+`src/app/onboarding2/chat-bubble.tsx` is the shape to copy: full bleed, message bubbles, tappable
+answers, three animated dots while it waits, two or three messages arriving staggered rather than at
+once (`BUBBLE_GAP_MS` in `lib/onboarding2/texting.ts`). `CHAT_UI` in `src/config/onboarding2.ts`
+holds its copy, and records that the waiting state is three dots and never a sentence claiming what
+the model is doing.
+
+**Reuse the look. Do not reuse the engine.** That component is driven by `runConversationWithTools`.
+The review tool has no model in it and must not gain one. Its "chatbot" is a scripted walk of the
+four fixed `REVIEW_QUESTIONS` in order: no generation, no branching on what she says, no network
+round trip per turn. That is what keeps it on the right side of the FTC line, and it also makes it
+instant, so there is no thinking delay to cover. The typing indicator is therefore a deliberate,
+short, honest pause between scripted bubbles, not a wait for anything.
+
+### Ground truth: nothing may branch on the rating
+
+`review-client.tsx:23-36`, verbatim:
+
+> THE STARS ROUTE NOTHING. Gating is a rating that decides whether she sees the public review link.
+> Here every value 1 to 5 reaches the same questions, the same editable box and the same
+> destination links... THE PRIVATE NOTE IS BELOW THE LINKS AND OFFERED TO EVERYONE. It adds a
+> channel; it removes none. Conditioning it on a low rating would rebuild the gating funnel
+> exactly. THE ATTESTATION GATES THE COPY BUTTON AND NOTHING ELSE.
+>
+> `scripts/_probe-review-gating.ts` asserts the first two by rendering the component at every rating
+> and diffing the output. **If you add a branch that reads `rating`, that probe fails, and it is
+> supposed to.**
+
+The new priming screen and the new chat must be identical at 1 star and at 5. Run that probe.
+
+### Ground truth: the FTC line, and the Hemingway pass
 
 `src/lib/hub/review-assemble.ts` header, verbatim:
 
 > THERE IS NO MODEL IN THIS PATH. Not for drafting, not for cleanup, not for tone, not for
-> spelling. That is the single most important line in the spec and the reason this file is pure
-> string work with no imports.
->
-> FTC 16 CFR Part 465 and the Rytr fact pattern: a tool that GENERATES review content its user did
-> not write is the thing being regulated. A tool that REFORMATS what she typed is not.
+> spelling... FTC 16 CFR Part 465 and the Rytr fact pattern: a tool that GENERATES review content
+> its user did not write is the thing being regulated. A tool that REFORMATS what she typed is not.
 
-`CLAUDE.md` repeats it: no model goes near `review-assemble.ts` or the review tool.
+And `review-client.tsx:11-21` records that Matthew already asked once for reviews rewritten to a
+sixth-grade reading level with an emotional hook, was told why not, and chose two things instead:
+the on-device microphone, and **"a READABILITY HINT that POINTS at long sentences and never supplies
+different ones."** Both already exist. "Neither may quietly become the thing that was declined."
 
-**The Hemingway idea can be built, and only in one shape.** Hemingway itself is not a model: it is
-deterministic heuristics over the text she already wrote. Sentence length, adverbs, passive voice,
-complex words. The screenshot Matthew sent shows exactly that, highlighting "very", "gets measured",
-"is already locked".
+So the Hemingway end screen extends a hint that is already there, in one shape only:
 
-So build it as:
+- **Deterministic, in-browser, zero network, pure string work.** `src/lib/hub/readability.ts`
+  exists; start there.
+- **Highlight only. It never proposes replacement text.** A red box saying "this sentence is hard to
+  read" is feedback on her writing. A red box saying "try this instead" is a tool generating review
+  content.
+- **Nothing auto-applied.** Submitting unchanged stays one tap.
+- `REVIEW_QUESTIONS`, `QUESTION_SET_VERSION` (`v3`), `assembleLabelled()` and `assemblePlain()` stay
+  byte-identical. If you want to edit `review-assemble.ts`, stop.
 
-- **Deterministic, in-browser, zero network.** Same doctrine as `review-assemble.ts`: pure string
-  work, no imports, isomorphic. `src/lib/hub/readability.ts` already exists; start there.
-- **Highlight only. It never proposes replacement text.** A red box that says "this sentence is hard
-  to read" is feedback on her writing. A red box that says "try this instead" is a tool generating
-  review content, and that is the regulated thing.
-- **Nothing is ever auto-applied.** She edits or she does not. Submitting unchanged must be one tap.
-- **`REVIEW_QUESTIONS`, `QUESTION_SET_VERSION` (`v3`), `assembleLabelled()` and `assemblePlain()`
-  stay byte-identical.** If your change makes you want to edit `review-assemble.ts`, stop. You have
-  crossed the line.
+If you cannot build the highlighter without a model call, do not build it. Say so.
 
-If you cannot build the highlighter without a model call, do not build it. Say so instead.
+### Everything else the rewrite must keep
 
-### Things the rewrite must not lose
-
-- Every question is skippable. The current copy promises "Answer whichever you like and skip the rest."
+- Every question skippable. The copy promises "Answer whichever you like and skip the rest."
 - The Spanish notice (`Estas preguntas aún no están disponibles en español`) and whatever drives it.
-- The star rating is **non-routing**. Stars do not send anyone anywhere and must not gate the flow
-  by sentiment. See the review-workflow lane.
-- `reviews.` is `noindex` and is the review tool only.
-- `review_tool_submissions` has no column for name, email, phone, IP, user agent or session id.
-  **Do not add one.** The absence is the enforcement.
-- The live preview of the assembly as she types is isomorphic on purpose: what she reads and what is
-  stored come from the same function, so they cannot drift.
+- The attestation gating the copy button, and the private note offered to everyone, below the links.
+- `reviews.` stays `noindex`.
+- `review_tool_submissions` gains no column for a name, email, phone, IP, user agent or session id.
+- The live isomorphic preview: what she reads and what is stored come from the same function.
 
-### Give it the client's skin
+### The skin, and three variations
 
-It is served on `reviews.{domain}` off the same client record and inherits nothing today. Reuse
-`skin.ts` and `theme.ts` rather than inventing a second styling path. That is the entire reason
-those two files are disjoint sets of CSS variables.
+It is served on `reviews.{domain}` off the same client record and inherits nothing today. **Reuse
+`skin.ts` and `theme.ts`** so it carries the client's own look, the same tokens the hub uses. Do not
+invent a second styling path.
+
+Build **three visual variations** of the chat flow to pick from, and **make the plain default look
+good on its own**, because that is what everyone sees before anybody picks.
 
 ## 2. The review destination link
 
