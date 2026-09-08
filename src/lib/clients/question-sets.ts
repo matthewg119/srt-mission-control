@@ -25,6 +25,7 @@
 // `freezeUniversalV1()` below are untouched by it.
 
 import { supabaseAdmin } from "@/lib/db";
+import { readOffer } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
   "What's the best med spa near me for [Botox / filler / laser]?",
@@ -176,10 +177,23 @@ function keysUsedIn(text: string): Set<keyof Substitutions> {
  *   intake              the client said it: services.primary_service, ideal_patient.highest_margin,
  *                       clients.city / .state, the name on the row
  *   selected_competitor a competitor CONFIRMED on the board at step 7, which outranks intake
+ *   locked_offer        the one offer AGREED ON THE CALL at offer_locked, which outranks intake
  *   fallback            MATERIALIZATION_FALLBACKS. A fact about the med spa twenty, nothing else
  *   missing             nothing on the record fills it
+ *
+ * ‼️ `locked_offer` IS ITS OWN VALUE RATHER THAN BORROWING `intake`, AND THAT IS THE POINT OF
+ * HAVING THIS UNION AT ALL. The call sheet prints these words beside the value so a person can
+ * see where each one came from and correct the right ones. "From intake" means the client typed
+ * it into a form before anybody spoke to them; a locked offer is what they said out loud when
+ * asked directly. Collapsing the two would make the artifact whose whole job is provenance
+ * unable to tell a form answer from a decision.
  */
-export type SubSource = "intake" | "selected_competitor" | "fallback" | "missing";
+export type SubSource =
+  | "intake"
+  | "selected_competitor"
+  | "locked_offer"
+  | "fallback"
+  | "missing";
 
 export type SubProvenance = Record<keyof Substitutions, SubSource>;
 
@@ -226,7 +240,10 @@ export async function substitutionsWithProvenance(
 ): Promise<SubstitutionsResolved | null> {
   const { data: client } = await supabaseAdmin
     .from("clients")
-    .select("city, state, services, ideal_patient, dba_name, legal_name")
+    // ‼️ `offer` IS IN THE SELECT, AND A NAME THAT DOES NOT EXIST BREAKS THE WHOLE QUERY.
+    // PostgREST fails the entire select on one unknown column, so docs/2026-09-08-client-offer.sql
+    // is a prerequisite for this file, not an enhancement to it.
+    .select("city, state, services, ideal_patient, dba_name, legal_name, offer")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -234,6 +251,7 @@ export async function substitutionsWithProvenance(
 
   const services = (client.services ?? {}) as Record<string, unknown>;
   const ideal = (client.ideal_patient ?? {}) as Record<string, string>;
+  const offer = readOffer((client as { offer?: unknown }).offer);
 
   const city = ((client.city as string | null) ?? "").trim();
   const state = ((client.state as string | null) ?? "").trim();
@@ -247,7 +265,29 @@ export async function substitutionsWithProvenance(
   //
   // `highest_margin` still wins, and it should: the intake question is "which service is your
   // highest margin", which is exactly what a tracked buying question should be about.
+  // ‼️ THE LOCKED OFFER FIRST, AND `primary_treatment` WAS MISSING FROM THIS CHAIN ENTIRELY.
+  //
+  // Two separate faults, and the second one is worse than the reader-with-no-writer above.
+  //
+  // `services.primary_treatment` is REQUIRED at intake and its config comment
+  // (src/config/client-intake.ts:124-131) says in capitals that it is "THE ONE FIELD THE WHOLE
+  // BUILD IS AIMED AT ... what we aim the pages, the posts and the free offer at". It appeared at
+  // NO position in this chain. Only deep-research-run.ts ever read it. So the field the whole
+  // build is aimed at reached the research prompt and reached nothing else: not the tracked
+  // question set, not the page candidates, not [treatment], not the magnet ladder. A writer with
+  // almost no reader, which is the same class as the bug the comment below records and harder to
+  // see, because nothing is null and nothing errors, it is just aimed at the wrong thing.
+  //
+  // And the LOCKED OFFER now outranks all of it. `highest_margin` is a good answer to a different
+  // question, and until somebody hears the answer out loud on the call, every one of these is a
+  // reading of a form. clients.offer.treatment is the only value a person put there deliberately.
+  // See src/lib/clients/offers.ts and delivery step offer_locked.
+  //
+  // `primary_service` HAS NEVER EXISTED and stays at the end of the chain: it costs nothing and
+  // removing a key is how a row nobody knew about goes blank.
   const treatmentPrimary = (
+    offer.treatment ||
+    String(services.primary_treatment ?? "") ||
     ideal.highest_margin ||
     firstLine(services.services_list) ||
     String(services.primary_service ?? "")
@@ -276,7 +316,14 @@ export async function substitutionsWithProvenance(
     provenance: {
       city: city ? "intake" : "missing",
       state: state ? "intake" : "missing",
-      treatmentPrimary: treatmentPrimary ? "intake" : "missing",
+      // A locked offer is not "intake": somebody decided it out loud on the call, and the call
+      // sheet prints this word beside the value. Calling a decision an intake answer would make
+      // the two indistinguishable in the one artifact whose job is to say where things came from.
+      treatmentPrimary: offer.treatment
+        ? "locked_offer"
+        : treatmentPrimary
+          ? "intake"
+          : "missing",
       clientName: clientName ? "intake" : "missing",
       competitorIntake1: picked ? "selected_competitor" : typed ? "intake" : "missing",
       concern: "fallback",
@@ -408,9 +455,14 @@ export function materializeSet(
     // fallback or from nothing may never carry that label. Questions 1 and 2 of the universal
     // twenty are the primary service and the city, which is why they are normally the ones that
     // read `from intake` — printed so the client corrects the right ones on the call.
+    // A locked offer counts as the client supplying it, and more strongly than intake does: it
+    // is the answer they gave when asked directly rather than a box they filled in beforehand.
     const sources = [...used].map((k) => provenance[k]);
     const origin: QuestionOrigin =
-      sources.length > 0 && sources.every((x) => x === "intake" || x === "selected_competitor")
+      sources.length > 0 &&
+      sources.every(
+        (x) => x === "intake" || x === "selected_competitor" || x === "locked_offer"
+      )
         ? "intake"
         : "universal";
 

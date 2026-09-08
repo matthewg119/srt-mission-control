@@ -71,6 +71,13 @@ import {
 } from "../src/lib/hub/review-destinations";
 import { hasBannedDash } from "../src/lib/copy-guard";
 import {
+  effectiveTreatment,
+  isLocked,
+  isOfferReply,
+  offerLine,
+  readOffer,
+} from "../src/lib/clients/offers";
+import {
   candidateAt,
   readCandidateSet,
   skinVariants,
@@ -1572,6 +1579,76 @@ eq(
   eq("nothing is null", readCandidateSet(null), null);
 }
 
+// -- The offer: a reading is not a decision ----------------------------------
+// ‼️ THE TWO HALVES OF clients.offer MEAN DIFFERENT THINGS AND THE WHOLE FEATURE RESTS ON THE
+// DIFFERENCE. A proposal is what the intake form said; a lock is what a person heard on the call.
+// Everything downstream reads the lock, so anything that let a proposal pass as one would aim a
+// client's entire build at a box they ticked before anybody spoke to them.
+{
+  const proposalOnly = readOffer({
+    proposedTreatment: "lip filler",
+    proposedSource: "primary_treatment",
+    proposedAt: "2026-09-08T00:00:00.000Z",
+  });
+  ok("a proposal alone is not locked", !isLocked(proposalOnly));
+  eq("and effective says so", effectiveTreatment(proposalOnly).certain, false);
+  eq("but it still has a value to open the call with", effectiveTreatment(proposalOnly).value, "lip filler");
+  ok(
+    "the line refuses to call it decided",
+    /Nobody has confirmed it/.test(offerLine(proposalOnly))
+  );
+
+  // ‼️ A TREATMENT WITH NO lockedAt IS NOT A LOCK. That pair is what a person leaves behind, and
+  // a value that appeared without one came from somewhere that is not a decision.
+  const halfWritten = readOffer({ treatment: "lip filler" });
+  ok("a treatment with no timestamp is not locked", !isLocked(halfWritten));
+
+  const locked = readOffer({
+    proposedTreatment: "lip filler",
+    proposedSource: "primary_treatment",
+    treatment: "laser hair removal",
+    lockedAt: "2026-09-08T00:00:00.000Z",
+    lockedBy: "@matthew",
+  });
+  ok("a lock is a lock", isLocked(locked));
+  eq("and it outranks the proposal", effectiveTreatment(locked).value, "laser hair removal");
+  eq("with certainty", effectiveTreatment(locked).certain, true);
+  ok("the line names who locked it", /@matthew/.test(offerLine(locked)));
+  ok("no banned dash in any offer line", !hasBannedDash(offerLine(locked) + offerLine(proposalOnly)));
+
+  // Drop-never-repair, the discipline readTheme and readSkin already follow.
+  eq("rubbish is an empty offer", readOffer("nope").treatment, null);
+  eq("nothing is an empty offer", readOffer(null).proposedTreatment, null);
+  eq("an unknown source is dropped, not kept", readOffer({ proposedSource: "vibes" }).proposedSource, null);
+  eq("whitespace is not a treatment", readOffer({ treatment: "   " }).treatment, null);
+
+  // The prefix is exact. Free text in a step thread is answered by a model otherwise, and a
+  // sentence that merely mentions an offer must fall through untouched.
+  ok("an offer reply is recognised", isOfferReply("offer: lip filler"));
+  ok("with whatever spacing", isOfferReply("  Offer :  lip filler"));
+  ok("a sentence about the offer is not one", !isOfferReply("the offer they liked was the filler"));
+  ok("and neither is a bare word", !isOfferReply("offer"));
+
+  // ‼️ THE CHAIN. primary_treatment was absent from treatmentPrimary entirely, which is the whole
+  // bug this pair of steps exists to close, and the locked offer has to sit in front of it.
+  const chainSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "question-sets.ts"),
+    "utf8"
+  );
+  const chain = chainSrc.slice(
+    chainSrc.indexOf("const treatmentPrimary"),
+    chainSrc.indexOf("const clientName")
+  );
+  ok("the locked offer comes first in the treatment chain", chain.indexOf("offer.treatment") === chain.search(/offer\.treatment|primary_treatment|highest_margin/));
+  ok("primary_treatment is in the chain at all", chain.includes("primary_treatment"));
+  ok(
+    "and it outranks highest_margin, which answers a different question",
+    chain.indexOf("primary_treatment") < chain.indexOf("highest_margin")
+  );
+  // PostgREST fails the whole select on one unknown column, so the read has to name it.
+  ok("the client select carries the offer column", /\.select\("[^"]*offer/.test(chainSrc));
+}
+
 // ---- LANE 3 ----------------------------------------------------------------
 // The call, and the close. Pure functions only: no network, no database, no model.
 
@@ -2574,7 +2651,7 @@ import { pageSlug } from "../src/lib/hub/pages";
   // both suites were red and each one read as somebody else's problem. Keeping the literal is
   // deliberate: the check exists to make a person ACKNOWLEDGE a change to the step list, and
   // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica).
-  eq("the step count is what the last person to change it said", STEPS.length, 39);
+  eq("the step count is what the last person to change it said", STEPS.length, 41);
 
   {
     const seenPhases = new Set<string>();

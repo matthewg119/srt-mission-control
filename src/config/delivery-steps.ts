@@ -1,4 +1,4 @@
-// The 39 delivery steps. One constant, one file — Runner v3 section 1.
+// The 41 delivery steps. One constant, one file — Runner v3 section 1.
 //
 // Was 33 until the AI Skin Concierge added `concierge_preview` and `concierge_live`, and 35
 // until the attribution stack added `tracking_installed` and `self_report_field`, and 38 with
@@ -168,16 +168,28 @@ const STEP_LIST = [
   // time this runs, so every phrase this step writes is TAGGED with that avatar slug.
   //
   // Renaming the KEY would orphan every row already carrying it. Labels are free; keys are not.
+  // ‼️ THE OFFER, PROPOSED. AUTOMATIC, AND IT MUST STAY `auto` OR IT STOPS THE BOARD.
+  //
+  // reachableCursor breaks the walk on the first unresolved step that WAITS FOR A PERSON, so an
+  // auto_then_manual here would hold the review audit, the harvest, the findings and everything
+  // after them behind a proposal nobody had looked at. It is `auto` because proposing is a
+  // reading of the intake form and not a decision: services.primary_treatment is REQUIRED and is
+  // literally the answer to "which one service do you most want more appointments for". The
+  // decision is offer_locked, on the call, further down.
+  //
+  // Matthew: "always need to have one preselected". This is that, and it costs nothing: no model
+  // call, no network, and a provenance on every value. See src/lib/clients/offers.ts.
+  { key: "offer_proposed", phase: PHASE_BEFORE, label: "One offer proposed from what they told us at intake", auto: true, mode: "auto", blockedBy: ["intake_received", "avatar_confirmed"] },
   { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest and the deep research for the confirmed avatar", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan", "avatar_confirmed"] },
   { key: "findings_doc", phase: PHASE_BEFORE, label: "Findings written up and attached", auto: true, mode: "auto", blockedBy: ["presence_pdf", "review_audit"] },
 
   // ── BEFORE THE CALL: prepare. None of it touches their properties ─────────
-  { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
+  { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_proposed"] },
   // ‼️ The label no longer promises a hundred. `prompt_library` does not exist -- the corpus is
   // question_bank plus this client's own twenty -- so 100 is the CEILING the artifact prints
   // against, not a number it can deliver. The KEY is unchanged, because renaming a key orphans
   // every row already carrying it; labels are free.
-  { key: "page_candidates", phase: PHASE_BEFORE, label: "Page candidates scored and ranked for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed"] },
+  { key: "page_candidates", phase: PHASE_BEFORE, label: "Page candidates scored and ranked for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_proposed"] },
   { key: "citation_cleanup_list", phase: PHASE_BEFORE, label: "Citation cleanup list built and ranked", auto: true, mode: "auto", blockedBy: ["presence_pdf"] },
   // `auto: true` as of the hub runner: the system really does attach both hostnames to Vercel
   // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
@@ -217,7 +229,7 @@ const STEP_LIST = [
   // never clear itself and the only exit was the dashboard or SQL.
   //
   // The rule this encodes: a step must appear LATER in this array than everything it names in
-  // blockedBy. _probe-step-verify.ts:80-89 enforces it for all 39 steps and names the offender
+  // blockedBy. _probe-step-verify.ts:80-89 enforces it for all 41 steps and names the offender
   // ("site_replica (#16) is blocked by concierge_preview (#18)"), so a reorder that breaks it
   // fails the probe rather than emptying the cursor in production. Read it anyway before you
   // reorder anything here: the probe tells you what broke, not what the order should be.
@@ -227,6 +239,17 @@ const STEP_LIST = [
 
   // ── DURING THE CALL ───────────────────────────────────────────────────────
   { key: "call_booked", phase: PHASE_DURING, label: "Call booked", mode: "manual" },
+  // ‼️ BEFORE call_held, NOT AFTER, AND THAT IS THE WHOLE POINT OF WHERE IT SITS.
+  //
+  // reachableCursor surfaces exactly one waiting step at a time, so placing this after call_held
+  // would mean the card only appeared once the call was already over: a place to RECORD what was
+  // agreed rather than a place to work it out. Matthew asked to pick it live with the customer,
+  // so the card has to be on screen while he is on the phone. call_booked resolves, this appears,
+  // and call_held comes after it.
+  //
+  // Manual, and it is the one step in this pair that waits for a person on purpose. A proposal is
+  // a reading of a form; a lock is somebody hearing the answer out loud.
+  { key: "offer_locked", phase: PHASE_DURING, label: "The one offer locked, live on the call, with its positioning", mode: "manual", blockedBy: ["call_booked", "offer_proposed"] },
   { key: "call_held", phase: PHASE_DURING, label: "Call held: NAP aloud, question set approved, consent confirmed, preview walked, pages picked", mode: "manual", blockedBy: ["call_sheet"] },
   { key: "access_granted", phase: PHASE_DURING, label: "Access granted: GBP manager, Search Console, Analytics", mode: "manual", blockedBy: ["call_held"] },
   // THREE records, and the phrasing is deliberate. "CNAME and TXT" read as two, which is

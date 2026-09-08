@@ -120,6 +120,50 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
   //
   // The step stays `auto_then_manual`, and it is back to waiting for somebody to RUN the research
   // rather than only to read it. Step 11 stays shut until Matthew presses Done either way.
+  /**
+   * Propose one offer, from what intake already said.
+   *
+   * ‼️ NO MODEL, NO NETWORK, AND THAT IS WHY IT IS SAFE TO RUN ITSELF. It reads three fields the
+   * client already filled in and picks the first that is not empty, carrying which one it was.
+   * A runner that spent a vision call or a research pass here would be an unattended cost on
+   * every onboarding for an answer already sitting in services.primary_treatment.
+   *
+   * The note names the source out loud, because the whole failure this fixes was a required
+   * intake field that reached the research prompt and nothing else.
+   */
+  offer_proposed: async (clientId) => {
+    const { proposeOffer, offerLine } = await import("../offers");
+    const res = await proposeOffer(clientId);
+    if (!res.ok) return { ok: false, error: res.error };
+
+    if (!res.offer.proposedTreatment) {
+      return {
+        ok: false,
+        error:
+          "no intake answer names a service, so there is nothing to propose. " +
+          "services.primary_treatment, ideal_patient.highest_margin and services_list are all empty.",
+      };
+    }
+
+    // ‼️ NO STEP NUMBER IS WRITTEN AS A LITERAL HERE. stepNumber() derives every one of them
+    // from DELIVERY_STEPS, and this note names three steps whose positions all moved the day
+    // the offer pair was inserted. A hardcoded "step 23" is a sentence that goes quietly wrong.
+    const { stepNumber } = await import("@/config/delivery-steps");
+
+    return {
+      ok: true,
+      note: [
+        offerLine(res.offer),
+        "",
+        `This is a reading of their intake form, not a decision. It is what step ` +
+          `${stepNumber("offer_locked")} opens with on the call, and it is what step ` +
+          `${stepNumber("custom_question_set")}'s question set and step ` +
+          `${stepNumber("page_candidates")}'s page candidates are built against until somebody ` +
+          `locks a different one.`,
+      ].join("\n"),
+    };
+  },
+
   avatar_harvest: async (clientId) => {
     const { runHarvest, formatHarvestSummary } = await import("../harvest");
     const { postResearchPrompt } = await import("./deep-research-run");

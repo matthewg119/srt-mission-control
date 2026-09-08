@@ -231,7 +231,7 @@ async function artifactOnRecord(ctx: VerifyCtx, label: string): Promise<Verdict>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 39.
+// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 41.
 //
 // (It said 33 for a long time while the array grew to 39. The NUMBER is prose and drifts; the
 // TYPE is the thing that actually holds, and adding site_replica to delivery-steps.ts broke this
@@ -666,6 +666,76 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       `primary avatar ${avatar} (${label}) confirmed${by ? ` by ${by}` : ""}`,
       "Everything downstream is aimed at this customer: the phrase harvest, the tracked question " +
         "set and the page ranking."
+    );
+  },
+
+  /**
+   * The proposal exists, and it says where it came from.
+   *
+   * ‼️ IT CONFIRMS A READING, NOT A DECISION, AND THE EVIDENCE LINE HAS TO SAY SO. Ticking this
+   * green means "the system read their intake form and put a name in the proposed slot". It does
+   * NOT mean anybody agreed. offer_locked is the step that means that, and conflating the two
+   * here would be a green tick over unchecked work in the most literal sense: the whole build
+   * pointed at a service nobody had confirmed the client wanted.
+   *
+   * NOTHING ON FILE IS A REFUSAL, NOT A PASS. `services.primary_treatment` is required at
+   * intake, so an empty proposal means the intake bag is empty or malformed, which is a real
+   * fault worth stopping on rather than a client who happens to sell nothing.
+   */
+  offer_proposed: async (ctx) => {
+    const { readOffer, offerLine } = await import("./offers");
+    const offer = readOffer((ctx.client as { offer?: unknown }).offer);
+
+    if (!offer.proposedTreatment) {
+      return notYet(
+        "clients.offer.proposedTreatment",
+        "nothing was proposed, so no intake answer named a service",
+        "This reads services.primary_treatment, then ideal_patient.highest_margin, then the " +
+          "first line of services_list. All three are empty for this client, which usually " +
+          "means the intake bag never saved. Check the Intake panel on the board, then Re-check."
+      );
+    }
+
+    return verified(
+      `proposed "${offer.proposedTreatment}", from ${offer.proposedSource ?? "an unrecorded source"}`,
+      // ‼️ The second line is the honest limit of what was checked. Same discipline the
+      // thread tier follows: describe the artifact, never the fact it stands for.
+      `A proposal, not a decision. ${offerLine(offer)}`
+    );
+  },
+
+  /**
+   * A person named the offer.
+   *
+   * ‼️ THE LOCK IS THE ONLY THING DOWNSTREAM READS AS DECIDED, so this refuses on the proposal
+   * alone however good the proposal looks. `lockedAt` and `lockedBy` are what separate "the form
+   * said this" from "we agreed this on the call", and every page, magnet and keyword set built
+   * after it inherits whichever one it was.
+   */
+  offer_locked: async (ctx) => {
+    const { readOffer, isLocked } = await import("./offers");
+    const offer = readOffer((ctx.client as { offer?: unknown }).offer);
+
+    if (!isLocked(offer)) {
+      return notYet(
+        "clients.offer.treatment",
+        offer.proposedTreatment
+          ? `only a proposal is on file ("${offer.proposedTreatment}"), and nobody has confirmed it`
+          : "nothing is proposed and nothing is locked",
+        "On the call, reply in this thread with `offer: <what they sell>`, or `offer: yes` to " +
+          "take the proposal as it stands. Everything after this points at whatever is locked " +
+          "here: the tracked question set, the page candidates, the keyword set and the magnet " +
+          "on every page."
+      );
+    }
+
+    const parts = [`locked on "${offer.treatment}" by ${offer.lockedBy ?? "somebody"}`];
+    if (offer.magnetKey) parts.push(`offered with ${offer.magnetKey}`);
+    if (offer.positioning) parts.push("positioning captured");
+
+    return verified(
+      parts.join(", "),
+      "Step 13's question set and step 14's page candidates are rebuilt against this."
     );
   },
 
@@ -1680,7 +1750,11 @@ const CLIENT_COLUMNS =
   // took steps 7 and 9 down with it by asking for `visibility_score`. pixel_key is created by
   // docs/2026-09-03-attribution.sql; that migration is a prerequisite for the board, not just
   // for the pixel.
-  "pixel_key";
+  //
+  // ‼️ `offer` IS THE SAME KIND OF PREREQUISITE. docs/2026-09-08-client-offer.sql creates it, and
+  // until that has run this select fails and EVERY verifier on the board refuses at once. Run the
+  // migration before the deploy, the same order of operations hub_skin needed.
+  "pixel_key, offer";
 
 /**
  * Confirm one step, or say precisely why it cannot be confirmed.

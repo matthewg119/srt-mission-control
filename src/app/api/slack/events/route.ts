@@ -946,6 +946,31 @@ export async function POST(request: NextRequest) {
         //
         // The real logic is in clients/avatars.ts. This is a call, not an implementation: the
         // prefix test, the Day-0 refusal and the question-set regeneration all live there.
+        // 1a-quater. `offer: ...` in the offer step's thread.
+        //
+        // ‼️ ABOVE THE AVATAR BRANCH AND ABOVE THE ASSISTANT, for the same reason every other
+        // typed answer in this gate is: free text in a step thread is answered by a model
+        // otherwise, and an offer typed on a live call would come back as a chat reply instead
+        // of being written to the column. That is the exact shape of the bug that left
+        // clients.primary_avatar with a verifier, a constraint and no writer.
+        //
+        // The prefix is EXACT and the handler returns null on a miss, so a sentence that
+        // mentions an offer falls straight through.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleOfferThreadReply } = await import("@/lib/clients/offers");
+          const locked = await handleOfferThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (locked) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, locked.message);
+            if (!slackOk(posted)) console.error("[slack/events] offer reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { handleAvatarThreadReply } = await import("@/lib/clients/avatars");
           const said = await handleAvatarThreadReply({

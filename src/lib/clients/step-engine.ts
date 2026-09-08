@@ -935,6 +935,66 @@ async function instructionsFor(
       ];
     }
 
+    /**
+     * The one offer, locked live on the call.
+     *
+     * ‼️ THE CARD OPENS WITH A PROPOSAL SO THE CALL DOES NOT START FROM A BLANK FIELD. Matthew:
+     * "always need to have one preselected". Step 10 read their intake form and put a name in
+     * the proposed slot; this is where somebody hears the answer out loud and either takes it,
+     * replaces it, or names something new.
+     */
+    case "offer_locked": {
+      const { loadOffer, offerLine, isLocked } = await import("./offers");
+      const offer = await loadOffer(c.id);
+
+      const { data: bag } = await supabaseAdmin
+        .from("clients")
+        .select("services")
+        .eq("id", c.id)
+        .maybeSingle();
+      const services = (bag?.services ?? {}) as Record<string, unknown>;
+      const menu = typeof services.services_list === "string" ? services.services_list.trim() : "";
+
+      const { listMagnetsFor } = await import("@/lib/concierge/magnets");
+      const library = await listMagnetsFor("patient", null).catch(() => []);
+
+      return [
+        `*${offerLine(offer)}*`,
+        "",
+        "*This is the thing everything after it points at.* One offer, not a menu: the pages, the",
+        "sub-pages beneath them, the lead magnet on each one, the tracked question set and the",
+        "keyword set are all built around whatever is locked here. A menu cannot be interpolated",
+        "into a sentence, which is why intake asks for one service and not for the list.",
+        "",
+        ...(menu
+          ? ["*What they told us they offer, in their own words:*", "```", menu.slice(0, 700), "```", ""]
+          : []),
+        "*Three ways to answer, in this thread:*",
+        "  • `offer: yes` takes the proposal above exactly as it stands.",
+        "  • `offer: <what they sell>` names a different one. Their words, not a category.",
+        "  • `offer: <what they sell> | <how they want it positioned>` captures both at once.",
+        "",
+        ...(library.length
+          ? [
+              "*The free thing to give away for it* can be one of ours or a new one. Either way it",
+              "is drafted per page in the page studio, so it does not hold this step up. Ours:",
+              ...library.slice(0, 7).map((m) => `  • \`${m.magnetKey}\` — ${m.title}`),
+              "",
+            ]
+          : []),
+        "*Have a sample they liked?* Drop it in this thread. It files against this step the way",
+        "every other artifact does, and it is what the first magnet gets written from.",
+        "",
+        isLocked(offer)
+          ? "*Next:* press [Done]. Locking rebuilds the question set and the page candidates " +
+            "against this offer, so they stop being about the whole vertical."
+          : "*[Done] refuses until one is locked*, because everything downstream would otherwise " +
+            "be aimed at whatever the intake form happened to say first.",
+        "",
+        `Board: ${boardUrl(c)}`,
+      ];
+    }
+
     case "call_booked": {
       // ‼️ THE MEASURE GATE IS REPEATED HERE, not left to the pinned header. The header states
       // it about the run as a whole; this is the card he is looking at when he books, which is

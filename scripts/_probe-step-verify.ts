@@ -49,14 +49,23 @@ const verifierKeys = Object.keys(STEP_VERIFIERS);
 // correct, it is here to make somebody ACKNOWLEDGE that the step list changed: deriving it from
 // DELIVERY_STEPS.length would assert nothing at all. It sat at 33 while the concierge lane
 // shipped two steps, so this probe was red for a whole session and read as somebody else's
-// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica).
+// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica) -> 41 (offer_proposed, offer_locked).
 //
 // Bumped to 39 on 2026-09-04 by the session that landed last. The two additions came from two
 // CONCURRENT sessions, and each correctly refused to bump this literal on the other's behalf:
 // acknowledging somebody else's change is exactly the acknowledgement this gate is not asking for.
+//
+// Bumped to 41 on 2026-09-08 for offer_proposed and offer_locked. What is being acknowledged:
+// nothing in this repo held the one thing a client sells. services.primary_treatment was
+// REQUIRED at intake, its own config comment called it "THE ONE FIELD THE WHOLE BUILD IS AIMED
+// AT", and the substitution chain in question-sets.ts read three other keys and not that one. So
+// the tracked question set and the page candidates were built out of a whole-vertical phrase
+// corpus with nothing tying them to the client, which is why step 13's PDF read as padding. The
+// pair splits proposing (a reading of the form, automatic) from locking (a decision on the call,
+// manual), and everything downstream reads the lock.
 // If you are reading this because it failed: update the number here, the prose count at the top of
 // src/config/delivery-steps.ts, and the one in step-verify.ts.
-ok(`${stepKeys.length} steps defined`, stepKeys.length === 39, `found ${stepKeys.length}, expected 39`);
+ok(`${stepKeys.length} steps defined`, stepKeys.length === 41, `found ${stepKeys.length}, expected 41`);
 
 const missing = stepKeys.filter((k) => !(k in STEP_VERIFIERS));
 ok("every step has a verifier", missing.length === 0, missing.join(", "));

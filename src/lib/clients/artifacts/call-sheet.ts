@@ -181,6 +181,9 @@ function questions(state: PageState, d: CallSheetData) {
   const SOURCE_WORD: Record<SubProvenance[keyof SubProvenance], string> = {
     intake: "from intake",
     selected_competitor: "the competitor you picked",
+    // Deliberately not "from intake". This is what they said when asked, which is the stronger
+    // claim, and the point of printing a source at all is that a person can tell them apart.
+    locked_offer: "the offer you locked on the call",
     fallback: "stand-in",
     missing: "nothing on record",
   };
