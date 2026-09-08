@@ -71,8 +71,8 @@ export async function deliverArtifact(args: {
   // to land in the same thread as everything else, so a PDF was findable only by scrolling
   // past whatever had been posted since. The anchor is created if it does not exist yet
   // rather than falling back to the header.
-  const { anchorTsFor } = await import("@/lib/clients/step-board");
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { anchorTsFor, channelFor } = await import("@/lib/clients/step-board");
+  const channel = await channelFor(args.clientId);
   const threadTs = channel ? await anchorTsFor(args.clientId, args.stepKey) : null;
 
   if (!channel || !threadTs) {

@@ -34,6 +34,33 @@ export interface CapturedDoc {
 }
 
 /**
+ * Is this a channel the client board lives in: the shared onboarding channel, or one client's
+ * own ops channel?
+ *
+ * ‼️ THE SHARED CHANNEL IS CHECKED FIRST AND WITHOUT A QUERY, because it is still where most
+ * traffic is and where every client provisioned before 2026-09-08 lives. The database lookup
+ * only runs for a channel that is not it, which in practice means a message that has already
+ * failed every other channel gate in the events route.
+ *
+ * Exported because the events route needs the same answer before it decides that a channel
+ * belongs to the client lane at all, and two copies of this test would drift.
+ */
+export async function isClientChannel(channelId: string): Promise<boolean> {
+  if (!channelId) return false;
+
+  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  if (onboardingChannel && channelId === onboardingChannel) return true;
+
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("id")
+    .eq("ops_channel_id", channelId)
+    .maybeSingle();
+
+  return Boolean(data);
+}
+
+/**
  * Which client owns this Slack thread, if any.
  *
  * The onboarding channel is ONE channel with a thread per client (clients.ops_thread_ts),
@@ -48,8 +75,14 @@ export async function clientForThread(
   channelId: string,
   threadTs: string | null | undefined
 ): Promise<{ id: string; legalName: string; stepKey: string | null } | null> {
-  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!onboardingChannel || channelId !== onboardingChannel) return null;
+  // ‼️ TWO KINDS OF CHANNEL NOW, AND MISSING THE SECOND SILENCES EVERY NEW CLIENT'S BOARD.
+  //
+  // This gate used to be byte-equality against SLACK_CLIENT_ONBOARDING_CHANNEL, which was
+  // correct while there was exactly one channel. A client with their own ops channel has all
+  // 41 step threads in it, and a gate that returns null before it looks at the database means
+  // every screenshot, every research paste and every thread reply in that channel falls through
+  // to the generic assistant tail. Nothing errors; the board just stops answering.
+  if (!(await isClientChannel(channelId))) return null;
   if (!threadTs) return null;
 
   // ‼️ TWO KINDS OF THREAD NOW, AND MISSING THE SECOND WOULD HAVE BROKEN EVERY UPLOAD.

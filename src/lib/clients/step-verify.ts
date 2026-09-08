@@ -145,7 +145,12 @@ async function docsInThread(ctx: VerifyCtx): Promise<number | null> {
  * complaint. Returns null when the thread could not be read, which is `broken`, not zero.
  */
 async function humanReplies(ctx: VerifyCtx): Promise<string[] | null> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  // ‼️ THE CLIENT'S CHANNEL, NOT THE SHARED ONE. This reads the evidence a thread-tier verdict
+  // is earned against. Reading the wrong channel returns [], and conversationsReplies cannot
+  // tell "no replies" from "wrong channel", so the failure would be a step that refuses forever
+  // while the screenshots sit in its thread.
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(ctx.clientId);
   if (!channel || !ctx.row.slack_anchor_ts) return null;
 
   const msgs = await slack.conversationsReplies(channel, ctx.row.slack_anchor_ts, 60);

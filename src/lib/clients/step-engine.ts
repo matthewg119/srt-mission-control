@@ -1765,7 +1765,8 @@ async function loadFacts(clientId: string): Promise<ClientFacts | null> {
  * a step nobody trusts.
  */
 export async function postStep(clientId: string, stepKey: string): Promise<void> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(clientId);
   if (!channel) return;
 
   const step = stepByKey(stepKey);

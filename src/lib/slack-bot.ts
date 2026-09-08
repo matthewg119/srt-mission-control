@@ -49,23 +49,76 @@ async function slackFetch(method: string, body: Record<string, unknown>): Promis
                   return { ok: false, error: "no_token" };
         }
 
-  const res = await fetch(`${SLACK_API}/${method}`, {
-            method: "POST",
-            headers: {
-                        Authorization: `Bearer ${token}`,
-                        "Content-Type": "application/json",
-            },
-            body: JSON.stringify(body),
-  });
+  // ‼️ SLACK RATE LIMITS AND THIS CLIENT USED TO TREAT THAT AS A PERMANENT FAILURE.
+  //
+  // Everything else here assumes HTTP 200 with the real answer in json.ok, which is true for
+  // every response EXCEPT 429: that one comes back with a Retry-After header and a body of
+  // `{ok:false, error:"ratelimited"}`, indistinguishable at the call site from name_taken or
+  // channel_not_found. Every caller in this repo treats {ok:false} as done and moves on.
+  //
+  // That was survivable while the board lived in one channel. Per-client channels make
+  // provisioning a burst: conversations.create is tier 2 (~20/min) and the target is 30
+  // onboardings a day, so the twenty-first in a busy minute would have come back "ratelimited",
+  // been recorded by provision.ts's warn() as an ordinary warning, and left a client with no
+  // channel and nothing saying why.
+  //
+  // ‼️ IT STILL RETURNS {ok:false} AND STILL NEVER THROWS. That contract is relied on by every
+  // caller and by three probes. Retrying is invisible to them: what changes is that a 429 gets
+  // a second chance before it becomes the {ok:false} they already handle.
+  //
+  // Bounded on purpose. Slack's Retry-After is usually one to a few seconds; anything asking for
+  // longer than MAX_RETRY_WAIT_MS is a sustained limit that waiting inside a request handler
+  // cannot fix, and blocking a Vercel function on it would trade one failure for a timeout.
+  for (let attempt = 0; ; attempt += 1) {
+            const res = await fetch(`${SLACK_API}/${method}`, {
+                        method: "POST",
+                        headers: {
+                                    Authorization: `Bearer ${token}`,
+                                    "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify(body),
+            });
 
-  const json = await res.json() as Record<string, unknown>;
+            if (res.status === 429 && attempt < RATE_LIMIT_RETRIES) {
+                        const waitMs = retryAfterMs(res.headers.get("retry-after"));
+                        if (waitMs <= MAX_RETRY_WAIT_MS) {
+                                    console.warn(`[Slack] ${method} rate limited, waiting ${waitMs}ms`);
+                                    await new Promise((r) => setTimeout(r, waitMs));
+                                    continue;
+                        }
+                        console.error(`[Slack] ${method} rate limited for ${waitMs}ms, too long to wait`);
+                        return { ok: false, error: "ratelimited" };
+            }
 
-  // Slack always returns HTTP 200; real errors are in json.ok === false
-  if (!json.ok) {
-            console.error("[Slack] API error:", JSON.stringify(json));
+            const json = await res.json() as Record<string, unknown>;
+
+            // Slack always returns HTTP 200; real errors are in json.ok === false
+            if (!json.ok) {
+                        console.error("[Slack] API error:", JSON.stringify(json));
+            }
+
+            return json;
   }
+}
 
-  return json;
+/** How many times a 429 gets a second chance before it becomes an ordinary {ok:false}. */
+const RATE_LIMIT_RETRIES = 2;
+
+/** conversations.list caps at 1000 per page; this bounds the walk so a bad cursor cannot loop. */
+const MAX_CHANNEL_PAGES = 10;
+
+/** Longer than this is a sustained limit, and sleeping through it inside a handler is a timeout. */
+const MAX_RETRY_WAIT_MS = 8_000;
+
+/**
+ * Retry-After is in SECONDS, and reading it as milliseconds is the classic version of this bug:
+ * it turns a one second wait into an immediate retry that is rate limited again.
+ *
+ * A missing or unparseable header means Slack did not say, so use a second rather than zero.
+ */
+function retryAfterMs(header: string | null): number {
+        const seconds = Number.parseInt(header ?? "", 10);
+        return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000;
 }
 
 /**
@@ -263,6 +316,46 @@ export const slack = {
                   };
                   if (!res.ok || !res.channel) return { ok: false, error: res.error };
                   return { ok: true, id: res.channel.id, name: res.channel.name };
+        },
+
+        /**
+         *  Find a channel this bot can see, by exact name.
+         *
+         *  ‼️ IT EXISTS FOR THE name_taken CASE AND FOR NOTHING ELSE. conversations.create
+         *  answers name_taken without telling you which channel took the name, and creating
+         *  `srt-acme-2` instead would split one client's history across two channels. This
+         *  resolves the one that already exists so it can be adopted.
+         *
+         *  Paged, because conversations.list caps at 1000 per call and a workspace running 30
+         *  onboardings a day passes that inside two months. Bounded at MAX_CHANNEL_PAGES so a
+         *  bad cursor cannot loop: not finding it is a clean null, which the caller treats as
+         *  a failure rather than as "create another one".
+         */
+        async findChannel(name: string, isPrivate = false): Promise<{ id: string; name: string } | null> {
+                  const wanted = name.trim().toLowerCase();
+                  let cursor = "";
+
+                  for (let page = 0; page < MAX_CHANNEL_PAGES; page += 1) {
+                            const res = (await slackFetch("conversations.list", {
+                                      types: isPrivate ? "private_channel" : "public_channel",
+                                      exclude_archived: true,
+                                      limit: 1000,
+                                      ...(cursor ? { cursor } : {}),
+                            })) as {
+                                      ok: boolean;
+                                      channels?: Array<{ id: string; name: string }>;
+                                      response_metadata?: { next_cursor?: string };
+                            };
+
+                            if (!res.ok) return null;
+
+                            const hit = (res.channels ?? []).find((c) => c.name?.toLowerCase() === wanted);
+                            if (hit) return { id: hit.id, name: hit.name };
+
+                            cursor = res.response_metadata?.next_cursor ?? "";
+                            if (!cursor) return null;
+                  }
+                  return null;
         },
 
         /** Invite users to a channel. users = comma-separated list of user IDs. */

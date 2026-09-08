@@ -348,12 +348,32 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     );
   }
 
-  // No client Slack channel is created. Slack is INTERNAL ONLY as of 2026-08-20: guests
-  // bill at 5 per PAID ACTIVE MEMBER, so fifty clients would mean buying ten seats for a
-  // workspace with one human in it. Client conversation is WhatsApp, contracts are email.
-  // See src/lib/clients/client-drafts.ts. The slack_channel_id / slack_channel_name
-  // columns still exist and still hold the one channel that was created before this
-  // reversed, but nothing writes them any more.
+  // ── An INTERNAL channel for this client's board ──
+  //
+  // ‼️ THIS IS NOT THE THING THAT WAS RETIRED ON 2026-08-20, AND THE DIFFERENCE IS WHO IS IN IT.
+  //
+  // What was retired was CLIENT-FACING channels, and the blocker was billing rather than
+  // doctrine: guests bill at 5 per PAID ACTIVE MEMBER, so fifty clients would have meant buying
+  // ten seats for a workspace with one human in it. This channel is PRIVATE, holds the bot and
+  // SRT, and no client is ever invited, so that blocker does not apply and "Slack is internal
+  // only" is untouched. Client conversation is still WhatsApp and contracts are still email.
+  //
+  // ‼️ NOT clients.slack_channel_id. That column is KEPT and still holds the one channel created
+  // before the reversal; the clients list renders it as "legacy Slack". Writing to it would make
+  // a dead record indistinguishable from a live one.
+  //
+  // ‼️ IT HAPPENS HERE, BEHIND THE PROVISIONING CLAIM, AND THE POSITION IS LOAD-BEARING.
+  // ops_channel_id is write-once: every step anchor stores a bare ts with no channel beside it,
+  // so moving the channel after a board exists orphans all 41 anchors silently. Creating it
+  // here means it is set before ops_thread_ts is claimed and before any anchor exists, and the
+  // claim above guarantees this runs at most once ever for this client.
+  //
+  // A failure is a warning, never fatal: channelFor() falls back to the shared onboarding
+  // channel, so a client whose channel could not be created works exactly as every client
+  // provisioned before today does.
+  await createOpsChannel(clientId, slug).catch((e) =>
+    warn(`ops channel not created: ${(e as Error).message}`)
+  );
 
   // ── Onboarding token ──
   let onboardingUrl: string | null = null;
@@ -603,9 +623,82 @@ async function linkToCrm(
 }
 
 /**
+ * Create this client's private internal channel and record it, once.
+ *
+ * ‼️ IDEMPOTENT ON THE COLUMN, NOT ON THE SLACK CALL. The write is conditional on
+ * ops_channel_id still being null, so a second run cannot replace a channel that already has a
+ * board in it. If Slack says name_taken, the existing channel is adopted rather than a second
+ * one created with a suffix: a re-provisioned client should land back in the channel that
+ * already holds their history.
+ *
+ * ‼️ conversations.join DOES NOT WORK ON A PRIVATE CHANNEL, and it is not needed: the bot that
+ * calls conversations.create is a member of what it creates. That is also why nothing here
+ * invites anybody. Humans join from the channel browser.
+ */
+async function createOpsChannel(clientId: string, slug: string): Promise<void> {
+  const { data: existing } = await supabaseAdmin
+    .from("clients")
+    .select("ops_channel_id")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (existing?.ops_channel_id) return;
+
+  // Slack channel names: lower case, no spaces, 80 chars. The slug is already that shape (the
+  // DDL comment on clients.slug says it IS the channel name) but it is truncated here anyway,
+  // because "srt-" plus an 80-character slug is not.
+  const name = `srt-${slug}`.slice(0, 78).replace(/-+$/, "");
+
+  const created = await slack.createChannel(name, true);
+
+  let channelId = created.ok ? created.id : undefined;
+  let channelName = created.ok ? created.name : undefined;
+
+  if (!created.ok) {
+    // ‼️ ratelimited IS NOT name_taken, AND BEFORE slackFetch LEARNED Retry-After THE TWO WERE
+    // THE SAME STRING AT THIS CALL SITE. It retries there now; this is what is left after it.
+    if (created.error !== "name_taken") {
+      throw new Error(created.error ?? "conversations.create failed");
+    }
+    // Adopt it. Nothing else in this workspace is called srt-<slug>, and if a person made it by
+    // hand for this client then that is the channel they are already using.
+    const found = await slack.findChannel(name, true);
+    if (!found) throw new Error(`name_taken but ${name} could not be resolved`);
+    channelId = found.id;
+    channelName = found.name;
+  }
+
+  if (!channelId) throw new Error("no channel id came back");
+
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({
+      ops_channel_id: channelId,
+      ops_channel_name: channelName ?? name,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", clientId)
+    // The claim. A concurrent provision that already set it wins and this one is a no-op.
+    .is("ops_channel_id", null);
+
+  if (error) throw new Error(`could not record the channel: ${error.message}`);
+
+  // channelFor memoises on the assumption the column never changes. It is changing right now,
+  // from null to a real channel, and anything earlier in this same provisioning run that asked
+  // would have cached the null. Dropping the entry is cheaper than reasoning about who asked.
+  const { forgetChannel } = await import("./step-board");
+  forgetChannel(clientId);
+}
+
+/**
  * The INTERNAL card in #onboarding-srt-aeo. This is not the client's view of anything and
  * never was; it is the row of the team's own board. The guest-invite line and the invite
  * reminder email that used to hang off it are gone with the client channel.
+ *
+ * ‼️ THIS ONE STAYS IN THE SHARED CHANNEL DELIBERATELY, even though the board has moved. It is
+ * the "a new client exists" announcement, and the whole point of it is that every new client
+ * appears in ONE place somebody watches. Moving it into the client's own channel would put the
+ * notice that a channel exists inside the channel.
  */
 async function postOnboardingCard(args: {
   legalName: string;

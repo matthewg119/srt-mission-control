@@ -153,7 +153,8 @@ export async function startBaselineScan(clientId: string): Promise<void> {
   // third of the wall on its own. They belong under step 2, which is the step that produced
   // them, and audit_reports.slack_thread_ts then points there so every thread command on the
   // report keeps working in the place the report actually is.
-  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const onboardingChannel = await channelFor(clientId);
   const stepThreadTs = onboardingChannel ? await anchorTsFor(clientId, BASELINE_STEP_KEY) : null;
   const deliveryThread =
     onboardingChannel && stepThreadTs

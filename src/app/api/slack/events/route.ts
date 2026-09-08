@@ -809,8 +809,18 @@ export async function POST(request: NextRequest) {
       //
       // The old gate here fired only for a research paste and let everything else fall through,
       // which is precisely how that happened. This one owns the channel: every branch returns.
-      const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-      if (onboardingChannel && channel === onboardingChannel) {
+      // ‼️ AND IT OWNS EVERY CLIENT CHANNEL, not just the shared one. A client provisioned
+      // after 2026-09-08 has their own private ops channel with all 41 step threads in it. A
+      // gate that only matched the shared channel would let every one of those threads fall
+      // through to the assistant tail described above, which is the exact failure this block
+      // was written to stop, reproduced once per new client.
+      //
+      // ‼️ THE LOOKUP IS LAST, AND THE ORDER IS THE COST CONTROL. isClientChannel answers the
+      // shared channel from env with no query at all, and only reaches the database for a
+      // channel that matched nothing else. This block already sits below every other channel
+      // constant in this route, so that is a message which was going to the assistant anyway.
+      const { isClientChannel } = await import("@/lib/clients/onboarding-docs");
+      if (await isClientChannel(channel)) {
         const client = parentThreadTs ? await clientForThread(channel, parentThreadTs) : null;
 
         // 1. A deep-research dump pasted into a client's thread. Explicit prefix only: see

@@ -211,9 +211,10 @@ function displayName(client: Record<string, unknown>): string {
  * column would orphan it.
  */
 export async function postDeliveryChecklist(clientId: string): Promise<void> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(clientId);
   if (!channel) {
-    console.error("[delivery-checklist] SLACK_CLIENT_ONBOARDING_CHANNEL unset, board not opened");
+    console.error("[delivery-checklist] no channel for this client, board not opened");
     return;
   }
 
@@ -228,6 +229,15 @@ export async function postDeliveryChecklist(clientId: string): Promise<void> {
   // its position at the top of the run and whatever client-level drafts hang under it.
   await refreshHeader(clientId);
   await pinHeader(clientId);
+
+  // ‼️ THE INDEX GOES UP BEFORE THE ANCHORS, and the order is the same one the header relies
+  // on: Slack sorts by post time, so anything posted after forty-one step anchors sits under
+  // all of them. It is a no-op for a client on the shared fallback channel, where a second
+  // pinned message per client would make "the pinned message" mean nothing.
+  const { refreshOpsIndex } = await import("./ops-index");
+  await refreshOpsIndex(clientId).catch((e) =>
+    console.error("[delivery-checklist] ops index failed:", (e as Error).message)
+  );
 
   // ‼️ AUTO STEPS RUN BEFORE MANUAL CARDS ARE POSTED, AND THE ORDER IS LOAD-BEARING.
   // postStep parks a row in awaiting_me and runReadyAutoSteps will not claim a row in that
@@ -259,6 +269,18 @@ export async function postDeliveryChecklist(clientId: string): Promise<void> {
  */
 export async function refreshDeliveryChecklist(clientId: string): Promise<void> {
   await refreshHeader(clientId);
+
+  // ‼️ THE INDEX RIDES ALONG HERE RATHER THAN GETTING ITS OWN SCHEDULE. A dozen call sites
+  // already say "bring the summary back in line with the rows", and the index is the other
+  // half of that summary: it states the offer, the avatar and the page counts, all of which
+  // move when a step completes. A separate trigger would be a second list of places to
+  // remember, and the failure mode of forgetting one is an index quietly describing last week.
+  //
+  // It never throws into the caller, same contract as the header above it.
+  const { refreshOpsIndex } = await import("./ops-index");
+  await refreshOpsIndex(clientId).catch((e) =>
+    console.error("[delivery-checklist] ops index refresh failed:", (e as Error).message)
+  );
 }
 
 /**
@@ -635,7 +657,8 @@ async function offerDraftsFor(
  * intro draft and the day 30/60/90 reports.
  */
 export async function notifyThread(clientId: string, text: string): Promise<void> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(clientId);
   if (!channel) return;
 
   const client = await loadClient(clientId);

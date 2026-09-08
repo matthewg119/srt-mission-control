@@ -349,7 +349,8 @@ export async function postDraft(
    */
   stepKey?: string | null
 ): Promise<{ posted: boolean; reason?: string }> {
-  const channelId = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("@/lib/clients/step-board");
+  const channelId = await channelFor(clientId);
   if (!channelId) return { posted: false, reason: "no_channel_env" };
 
   const client = await loadClient(clientId);
@@ -607,7 +608,8 @@ export function dnsCallChecklist(client: ClientRow): string {
  * and nowhere else.
  */
 export async function postDnsCallChecklist(clientId: string): Promise<void> {
-  const channelId = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("@/lib/clients/step-board");
+  const channelId = await channelFor(clientId);
   if (!channelId) return;
 
   const client = await loadClient(clientId);
