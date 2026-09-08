@@ -156,7 +156,68 @@ function refsAreReal(d: DraftedPage, valid: Set<string>): boolean {
   );
 }
 
-function isDrafted(v: unknown, valid: Set<string>): v is DraftedPage {
+/**
+ * A cited review must actually be QUOTED, not described.
+ *
+ * ‼️ THIS IS THE HALF OF THE FTC LINE THAT A TYPE CANNOT HOLD. Everywhere else in this file the
+ * schema is the enforcement: SkinRead has no field for markup, so a skin cannot carry a layout.
+ * Here the model is handed a real person's sentence and asked not to improve it, and there is no
+ * shape that prevents improving it. So it is verified: if the draft cites a CUSTOMER_REVIEW ref,
+ * a run of that review's own words has to appear in the body.
+ *
+ * The window is a whole sentence of the source, or the whole source when it is shorter than one.
+ * That is deliberately generous: quoting two sentences out of five is normal editing, and
+ * requiring the entire review would push somebody toward citing nothing. What it catches is the
+ * failure that matters, which is "our customers rave about the results [S3]" with none of S3 on
+ * the page.
+ *
+ * Whitespace is normalised on both sides because markdown rewraps lines. Nothing else is.
+ */
+const MIN_QUOTE_CHARS = 40;
+
+function quotesAreVerbatim(d: DraftedPage, reviews: Map<string, string>): boolean {
+  return missingQuoteRefs(d, reviews).length === 0;
+}
+
+function missingQuoteRefs(d: DraftedPage, reviews: Map<string, string>): string[] {
+  if (reviews.size === 0) return [];
+  const body = flat(d.answerMd);
+
+  const cited = new Set(
+    d.evidenceUsed
+      .map((c) => c.sourceRef)
+      .filter((r): r is string => typeof r === "string" && reviews.has(r))
+  );
+
+  const missing: string[] = [];
+  for (const ref of cited) {
+    const source = flat(reviews.get(ref) as string);
+    if (!source) continue;
+
+    // The whole thing, for a review shorter than one sentence.
+    if (source.length <= MIN_QUOTE_CHARS) {
+      if (!body.includes(source)) missing.push(ref);
+      continue;
+    }
+
+    const runs = source
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= MIN_QUOTE_CHARS);
+
+    const quoted =
+      body.includes(source) || runs.some((r) => body.includes(r));
+    if (!quoted) missing.push(ref);
+  }
+  return missing;
+}
+
+/** Collapse every run of whitespace, so a rewrapped line still matches its source. */
+function flat(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function isDrafted(v: unknown, valid: Set<string>, reviews: Map<string, string>): v is DraftedPage {
   const d = v as DraftedPage;
   return (
     !!d &&
@@ -165,6 +226,7 @@ function isDrafted(v: unknown, valid: Set<string>): v is DraftedPage {
       (c) => !!c && typeof c.claim === "string" && c.claim.trim().length > 0 && "sourceRef" in c
     ) &&
     refsAreReal(d, valid) &&
+    quotesAreVerbatim(d, reviews) &&
     typeof d.title === "string" &&
     d.title.trim().length > 0 &&
     d.title.length <= 90 &&
@@ -186,7 +248,7 @@ function isDrafted(v: unknown, valid: Set<string>): v is DraftedPage {
   );
 }
 
-function whyInvalid(v: unknown, valid: Set<string>): string {
+function whyInvalid(v: unknown, valid: Set<string>, reviews: Map<string, string>): string {
   const d = v as DraftedPage;
   if (!d || typeof d.answerMd !== "string") return "answerMd is missing.";
 
@@ -204,6 +266,17 @@ function whyInvalid(v: unknown, valid: Set<string>): string {
       `evidenceUsed cites ${bad.join(", ")}, which ${bad.length === 1 ? "is not a source" : "are not sources"} you were given. ` +
       `Use only the refs listed in the EVIDENCE block, or null if nothing supports the claim. ` +
       `Null is the correct answer when nothing does.`
+    );
+  }
+
+  const unquoted = Array.isArray(d.evidenceUsed) ? missingQuoteRefs(d, reviews) : [];
+  if (unquoted.length) {
+    return (
+      `${unquoted.join(", ")} ${unquoted.length === 1 ? "is a customer's own published review" : "are customers' own published reviews"} and you cited ` +
+      `${unquoted.length === 1 ? "it" : "them"} without quoting ${unquoted.length === 1 ? "it" : "them"}. ` +
+      `Put the review's own words on the page inside quotation marks, character for character, ` +
+      `typos included, or drop the citation. A sentence describing what customers say is not a ` +
+      `quote, and a tidied quote is a review the customer never wrote.`
     );
   }
 
@@ -368,6 +441,23 @@ function userPrompt(g: Grounding): string {
     );
     lines.push("recent and they came from the person doing the work.");
     lines.push("");
+
+    // ‼️ THE ONE SOURCE TYPE THAT MAY NOT BE PARAPHRASED, AND THE RULE IS ALSO CHECKED BELOW.
+    // A model handed somebody else's sentence will smooth it, because that is what being
+    // helpful looks like everywhere else in this prompt. Here the smoothing is the failure:
+    // the page publishes the tidied version under a real customer's name, and that is a review
+    // WE wrote. quotesAreVerbatim() enforces it after the fact, because a prose ban is not a
+    // ban, the same reason the dash rule is checked rather than asked for.
+    if (g.evidence.some((e) => e.type === "CUSTOMER_REVIEW")) {
+      lines.push("ONE OF THOSE SOURCES IS A CUSTOMER'S OWN PUBLISHED REVIEW. If you use it:");
+      lines.push("- Reproduce it inside quotation marks, character for character, typos and all.");
+      lines.push("- Do not correct spelling, grammar, punctuation or capitalisation.");
+      lines.push("- Do not shorten it, do not summarise it, do not merge two reviews into one.");
+      lines.push("- Do not write a sentence that describes what customers say instead of quoting");
+      lines.push("  one. If you cite a review ref, the review's own words must appear on the page.");
+      lines.push("- If it does not fit what this page is about, do not cite it. That is allowed.");
+      lines.push("");
+    }
   } else {
     // Absent beats forbidden, said out loud, the same move the no-website branch makes below.
     lines.push("NO EVIDENCE HAS BEEN COLLECTED FOR THIS PAGE. Nobody has dictated an answer and");
@@ -490,6 +580,13 @@ export async function draftPage(
   // ref real" is answered against what was sent rather than against a pattern.
   const validRefs = new Set(g.evidence.map((e) => e.ref));
 
+  // The review sources by ref, so the verbatim check has the words to compare against. Built
+  // here beside validRefs for the same reason: both validators answer against what was actually
+  // sent, never against a pattern or a re-read.
+  const reviewSources = new Map(
+    g.evidence.filter((e) => e.type === "CUSTOMER_REVIEW").map((e) => [e.ref, e.content] as const)
+  );
+
   try {
     const res = await callClaudeJSON<DraftedPage>({
       model: "claude-sonnet-4-6",
@@ -498,8 +595,8 @@ export async function draftPage(
       maxTokens: 2600,
       temperature: 0.4,
       schemaHint: `{ "title": string, "answerMd": string, "metaDescription": string, "evidenceUsed": [{ "claim": string, "sourceRef": string | null }] }`,
-      validate: (v): v is DraftedPage => isDrafted(v, validRefs),
-      describeInvalid: (v) => whyInvalid(v, validRefs),
+      validate: (v): v is DraftedPage => isDrafted(v, validRefs, reviewSources),
+      describeInvalid: (v) => whyInvalid(v, validRefs, reviewSources),
     });
 
     return { ok: true, page: res.data };

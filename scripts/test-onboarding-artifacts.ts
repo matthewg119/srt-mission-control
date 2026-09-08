@@ -2589,6 +2589,57 @@ import { pageSlug } from "../src/lib/hub/pages";
       !isFirstPartyBody.includes("EXTERNAL_RESEARCH")
   );
 
+  // ‼️ AND THE ONE ADDED 2026-09-08 IS IN IT. A customer's published review, transcribed
+  // verbatim and confirmed against the screenshot it came off, is the business's own knowledge
+  // in the sense the gate cares about. Asserted rather than assumed because the check above
+  // only says what must be ABSENT, and a type silently dropped from this set would quietly
+  // stop counting toward the first-party floor on every page that quotes a customer.
+  ok("isFirstParty includes CUSTOMER_REVIEW", isFirstPartyBody.includes("CUSTOMER_REVIEW"));
+
+  // ‼️ A CITED REVIEW MUST BE QUOTED, NOT DESCRIBED, AND IT IS CHECKED RATHER THAN ASKED FOR.
+  // The prompt tells the model to reproduce a review character for character. A prose ban is
+  // not a ban, the same reason the dash rule is verified: a model handed somebody else's
+  // sentence smooths it, and the smoothed version publishes under a real customer's name.
+  const draftPage = read("src/lib/hub/draft-page.ts");
+  ok(
+    "draft-page verifies a cited review is quoted verbatim",
+    draftPage.includes("function quotesAreVerbatim") &&
+      draftPage.includes("quotesAreVerbatim(d, reviews)")
+  );
+  ok(
+    "the verbatim check is wired into both validators",
+    draftPage.includes("isDrafted(v, validRefs, reviewSources)") &&
+      draftPage.includes("whyInvalid(v, validRefs, reviewSources)")
+  );
+
+  // ‼️ NOTHING IN THE REVIEW-QUOTE PATH MAY REACH review-assemble.ts. FTC 16 CFR Part 465: that
+  // file is the customer-facing review tool and imports nothing. Quoting a published review in
+  // the CLIENT's own marketing is a different artifact under a different rule, and the two must
+  // not be folded together by an import that looks convenient.
+  const pageReview = read("src/lib/clients/page-review.ts");
+  const quoteRead = read("src/lib/clients/review-quote-read.ts");
+  ok(
+    "the review-quote path never imports the review tool",
+    [pageReview, quoteRead].every((src) => {
+      // ‼️ THE IMPORT LINES THEMSELVES, NOT A SCAN OF THE FILE. Both of these files ARGUE about
+      // review-assemble.ts in their headers, at length, because the argument is the reason they
+      // are allowed to exist. A check that searched the whole source would fail on the sentence
+      // explaining why it passes, which teaches the next person to delete the explanation.
+      const imports = src
+        .split("\n")
+        .filter((l) => /^\s*import\b/.test(l))
+        .join("\n");
+      return !imports.includes("review-assemble") && !imports.includes("@/app/hub");
+    })
+  );
+
+  // A truncated quote is not a quote: half a review reads as a whole one on a page, and the
+  // missing half is the part that said "but".
+  ok(
+    "a truncated read is refused rather than published",
+    /!read\.truncated/.test(quoteRead)
+  );
+
   // ‼️ ONE NUMBERING FUNCTION. The drafter stores "S3" and the gate reads it back weeks later.
   ok(
     "numberEvidence is defined exactly once and both sides use it",

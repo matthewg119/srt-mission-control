@@ -76,6 +76,8 @@ async function main(): Promise<void> {
     ["`draft`", /^draft$/i],
     ["`check`", /^check$/i],
     ["`magnet more`", /^magnet(?:\s+(.+))?$/i],
+    ["`review`", /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i],
+    ["`review quotes`", /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i],
     ["`3`", /^([0-9]{1,2})$/],
   ];
   for (const [typed, re] of commands) {
@@ -97,8 +99,13 @@ async function main(): Promise<void> {
   const OFFER_CMD = /^offer(?:\s*[:]\s*(.+))?$/i;
   const AVATAR_CMD = /^avatar(?:\s*:\s*(.+)|\s+(new\s+.+))?$/i;
   const KEYWORDS_CMD = /^keywords?$/i;
+  // ‼️ THE THIRD ONE, AND THE RISKIEST OF THE THREE. This lane is ABOUT reviews, so the word
+  // shows up in ordinary dictation constantly: "reviews are up this month", "review the copy
+  // before it ships", "our review tool is live". Anchored at both ends and the plural is
+  // deliberately not a command, so all three of those reach the page untouched.
+  const REVIEW_CMD = /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i;
 
-  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "body"]> = [
+  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "review" | "body"]> = [
     ["offer", "offer"],
     ["offer: lip filler", "offer"],
     ["offer: lip filler | the one they rebook", "offer"],
@@ -116,17 +123,30 @@ async function main(): Promise<void> {
     ["avatar: new patients only", "avatar"],
     ["keywords matter less than people think", "body"],
     ["the offer: what we give away", "body"],
+    ["review", "review"],
+    ["review quotes", "review"],
+    ["review quote 3", "review"],
+    ["`review`", "review"],
+    // ‼️ DICTATION ABOUT REVIEWS, IN A LANE ABOUT REVIEWS. All of these must reach the page.
+    ["reviews are up this month", "body"],
+    ["review the copy before it ships", "body"],
+    ["our review tool is live", "body"],
+    ["reviewed it with her yesterday", "body"],
+    ["review quotes from last month were better", "body"],
   ];
 
   for (const [typed, expected] of argCommands) {
     const c = unwrapFormatting(typed);
+    // The same precedence order as the real dispatch in page-studio.ts.
     const got = OFFER_CMD.test(c)
       ? "offer"
       : AVATAR_CMD.test(c)
         ? "avatar"
         : KEYWORDS_CMD.test(c)
           ? "keywords"
-          : "body";
+          : REVIEW_CMD.test(c)
+            ? "review"
+            : "body";
     check(got === expected, `${JSON.stringify(typed)} is ${expected}`, got === expected ? undefined : `read as ${got}`);
   }
 

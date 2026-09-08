@@ -262,6 +262,13 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         clientId: action.value ?? "",
       });
+    // ── A customer's published review becomes evidence, on a person's tap ──
+    case "page_review_use":
+      return pageReviewUseAction({
+        userName: payload.user?.username ?? null,
+        userId,
+        threadTs: action.value ?? "",
+      });
     default:
       return NextResponse.json({ ok: true });
   }
@@ -1722,6 +1729,38 @@ async function reviewConfirmReadingsAction(args: {
 
       await slack.postThreadReply(args.channel, args.slackTs, lines.join("\n"));
     })().catch((e) => console.error("[slack/actions] review_confirm_readings failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * [Use this quote] in a page-studio thread.
+ *
+ * ‼️ IT TAKES THE STUDIO THREAD TS, NOT A CLIENT ID, and that is what makes it self-contained.
+ * The session row IS the thread, so one value resolves the client, the claimed page and the
+ * proposal together, and a button pressed in the wrong thread finds nothing rather than filing
+ * a quote against whoever was last worked on.
+ *
+ * ‼️ IT POSTS BACK INTO THE STUDIO THREAD, not into args.channel/slackTs. The card lives in the
+ * page studio channel and the conversation about this page is that thread; a reply hung off the
+ * card would start a second thread inside it.
+ */
+async function pageReviewUseAction(args: {
+  userName: string | null;
+  userId: string;
+  threadTs: string;
+}): Promise<NextResponse> {
+  if (!args.threadTs) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { confirmStudioReviewQuote } = await import("@/lib/clients/page-studio");
+      await confirmStudioReviewQuote({ threadTs: args.threadTs, by: actor });
+    })().catch((e) =>
+      console.error("[actions] page_review_use failed:", (e as Error).message)
+    )
   );
 
   return NextResponse.json({ ok: true });

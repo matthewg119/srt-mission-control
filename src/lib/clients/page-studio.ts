@@ -32,7 +32,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { stepNumber } from "@/config/delivery-steps";
-import { slack } from "@/lib/slack-bot";
+import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { isVoiceNote, transcribeAudio } from "./voice-notes";
 import { startPageDraft, appendPageBody, listAllForBoard, type ClientPage } from "@/lib/hub/pages";
 import {
@@ -220,8 +220,8 @@ async function setMode(
  * here. An unchecked failure in this lane is the worst kind: he dictates for two minutes, the
  * reply never lands, and there is nothing on screen saying whether the words were kept.
  */
-async function say(threadTs: string, text: string): Promise<boolean> {
-  const res = (await slack.postThreadReply(pageStudioChannel(), threadTs, text)) as {
+async function say(threadTs: string, text: string, blocks?: SlackBlock[]): Promise<boolean> {
+  const res = (await slack.postThreadReply(pageStudioChannel(), threadTs, text, blocks)) as {
     ok?: boolean;
     error?: string;
   };
@@ -1095,6 +1095,245 @@ async function finish(session: Session): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// `review`: a customer's published review becomes evidence, aimed at the offer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `review` (with a screenshot), `review` (bare), `review quotes`.
+ *
+ * ‼️ IT PROPOSES AND A PERSON CONFIRMS. The read lands in proposed_review and the card carries
+ * a [Use this quote] button. Nothing reaches page_sources until somebody presses it, which is
+ * the same slot discipline review-read.ts holds for review_audit_rows.proposed.
+ *
+ * ‼️ THE QUOTE IS SHOWN BACK IN FULL BEFORE IT IS CONFIRMED, and that is not politeness. The
+ * thing being confirmed is that this is what the customer actually wrote, and that cannot be
+ * confirmed against a summary of itself.
+ */
+async function reviewCommand(
+  session: Session,
+  arg: string,
+  files: StudioFile[],
+  messageTs: string
+): Promise<void> {
+  const {
+    isReviewImage,
+    MAX_VISION_BYTES,
+    proposeReviewFromImage,
+    proposeReviewFromTool,
+    loadToolQuotes,
+    positionQuote,
+    formatPositioning,
+  } = await import("./page-review");
+
+  // `review quotes` — the other door, for a client whose own review tool is collecting.
+  if (/^quotes?$/i.test(arg.trim())) {
+    const quotes = await loadToolQuotes(session.clientId);
+    if (!quotes.length) {
+      await say(session.threadTs, [
+        "Nothing in this client's own review tool yet.",
+        "",
+        "*Next:* screenshot a review off their Google, Yelp or Trustpilot listing and drop it " +
+          "here with `review`, or hand the tool over so it starts collecting.",
+      ].join("\n"));
+      return;
+    }
+    await say(session.threadTs, [
+      `*${quotes.length} review${quotes.length === 1 ? "" : "s"} from this client's own tool.*`,
+      ...quotes.map((q) => `  ${q.index}. ${q.text.slice(0, 240)}${q.text.length > 240 ? "…" : ""}`),
+      "",
+      "*Next:* `review quote <n>` to propose one, or drop a screenshot with `review` for a " +
+        "review published somewhere public.",
+    ].join("\n"));
+    return;
+  }
+
+  // `review quote <n>` — take one of the above.
+  const pick = /^quote\s+([0-9]{1,2})$/i.exec(arg.trim());
+  if (pick) {
+    const quotes = await loadToolQuotes(session.clientId);
+    const chosen = quotes.find((q) => q.index === Number(pick[1]));
+    if (!chosen) {
+      await say(session.threadTs, `There is no ${pick[1]} in that list. \`review quotes\` shows it again.`);
+      return;
+    }
+    const held = await proposeReviewFromTool({ threadTs: session.threadTs, quote: chosen.text });
+    if (!held.ok) {
+      await say(session.threadTs, `:warning: Could not hold that: ${held.error}`);
+      return;
+    }
+    await sayProposal(session, chosen.text, "their own review tool", null);
+    return;
+  }
+
+  const images = files.filter((f) => isReviewImage(f));
+
+  if (!images.length) {
+    await say(session.threadTs, [
+      "*`review` turns a customer's published review into a page they can rest on.*",
+      "",
+      "  • Drop a *screenshot* of the review with `review` in the message, and I read it out " +
+        "word for word.",
+      "  • `review quotes` lists what this client's own review tool has already collected.",
+      "",
+      "Nothing is filed until you press the button on what comes back. The quote is used " +
+        "verbatim or not at all: nothing here rewrites what a customer wrote.",
+    ].join("\n"));
+    return;
+  }
+
+  if (images.length > 1) {
+    await say(
+      session.threadTs,
+      `That is ${images.length} images. One review at a time: each quote goes on a page under a ` +
+        "customer's name, so each one is worth its own look. Send the first."
+    );
+    return;
+  }
+
+  const file = images[0];
+  if (!file.url_private_download) {
+    await say(session.threadTs, "Slack gave no download URL for that image. Try re-uploading it.");
+    return;
+  }
+
+  // ‼️ THE ACK GOES OUT BEFORE THE VISION CALL. Slack re-delivers any event it has not heard
+  // back from inside three seconds, and a re-delivery here is a second read of the same
+  // screenshot overwriting the first proposal.
+  await say(session.threadTs, "Reading that review, word for word…");
+
+  let image: { media_type: string; data: string };
+  try {
+    const buf = await slack.downloadFile(file.url_private_download);
+    if (buf.byteLength > MAX_VISION_BYTES) {
+      await say(session.threadTs, "That image is over 6 MB. Crop it to the review and send it again.");
+      return;
+    }
+    image = { media_type: (file.mimetype ?? "image/png").toLowerCase(), data: buf.toString("base64") };
+  } catch (e) {
+    // slack.downloadFile is the one helper in that client that throws.
+    await say(session.threadTs, `:warning: Could not download that image: ${(e as Error).message}`);
+    return;
+  }
+
+  const res = await proposeReviewFromImage({
+    clientId: session.clientId,
+    threadTs: session.threadTs,
+    image,
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  const attribution = [res.proposal.authorAsPrinted, res.proposal.platform, res.proposal.reviewedAtAsPrinted]
+    .filter(Boolean)
+    .join(", ");
+
+  await sayProposal(
+    session,
+    res.proposal.quote,
+    attribution || res.read.evidence,
+    res.proposal.rating
+  );
+
+  // The positioning is the half Matthew actually asked for, and it is posted whether or not the
+  // quote is ever confirmed: knowing it carries none of the market's wording is a reason NOT to
+  // press the button, so it has to arrive before the decision rather than after it.
+  const placed = await positionQuote(session.clientId, res.proposal.quote);
+  await say(session.threadTs, formatPositioning(placed).join("\n"));
+}
+
+/**
+ * [Use this quote] came back. File it, and say where it now sits.
+ *
+ * ‼️ EXPORTED FOR THE ACTIONS ROUTE AND FOR NOTHING ELSE. The route's job is to answer Slack
+ * inside three seconds; the work belongs next to the session it acts on, which is here.
+ */
+export async function confirmStudioReviewQuote(args: {
+  threadTs: string;
+  by: string;
+}): Promise<void> {
+  const session = await readSession(args.threadTs);
+  if (!session) {
+    await say(args.threadTs, ":warning: That thread is no longer an open page session.");
+    return;
+  }
+
+  const { confirmProposedReview, positionQuote, formatPositioning } = await import("./page-review");
+
+  const filed = await confirmProposedReview({
+    clientId: session.clientId,
+    threadTs: session.threadTs,
+    pageId: session.pageId,
+    by: args.by,
+  });
+
+  if (!filed.ok) {
+    await say(session.threadTs, `:warning: Nothing was filed: ${filed.error}`);
+    return;
+  }
+
+  const placed = await positionQuote(session.clientId, filed.proposal.quote);
+
+  // ‼️ THE SCOPE IS STATED, because null page_id is not a failure to attach and must not read
+  // as one. A source with no page is the CLIENT LIBRARY and feeds every page they ever have.
+  const scope = session.pageId
+    ? "It backs the page open in this thread."
+    : "No page is claimed, so it went to this client's library and is available to every page " +
+      "drafted for them from now on.";
+
+  await say(session.threadTs, [
+    `:ballot_box_with_check: Filed as evidence by ${args.by}, word for word.`,
+    scope,
+    "",
+    ...formatPositioning(placed),
+    "",
+    "*Next:*",
+    session.pageId
+      ? "  • `draft` writes the page from the evidence, and quotes this one exactly as it stands."
+      : "  • Pick a number from the menu to claim a page, then `draft`.",
+    "  • `review` again for another one.",
+    "  • `keywords` for the phrases this client's market actually uses.",
+  ].join("\n"));
+}
+
+/** The proposal card, with the one button that turns it into a record. */
+async function sayProposal(
+  session: Session,
+  quote: string,
+  attribution: string,
+  rating: number | null
+): Promise<void> {
+  const head = [
+    "*Read, not recorded.* This is what the customer wrote, character for character:",
+    "",
+    ...quote.split("\n").map((l) => `> ${l}`),
+    "",
+    `_${attribution}${rating !== null ? `, ${rating} stars` : ""}_`,
+    "",
+    "Check it against the screenshot. If a word is wrong, say so and send a clearer shot: a " +
+      "quote is only worth anything if it is exactly what they said.",
+  ].join("\n");
+
+  await say(session.threadTs, head, [
+    { type: "section", text: { type: "mrkdwn", text: head } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Use this quote", emoji: true },
+          style: "primary",
+          action_id: "page_review_use",
+          value: session.threadTs,
+        },
+      ],
+    },
+  ]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Voice notes
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1560,6 +1799,24 @@ export async function handlePageStudioEvent(args: {
 
   if (/^check$/i.test(command)) {
     await check(session);
+    return true;
+  }
+
+  // ‼️ ANCHORED AT BOTH ENDS, WHICH IS THE THIRD TIME THAT HAS BEEN FORCED IN THIS DISPATCH.
+  //
+  // See the note above `offer` and `avatar`: anything that is not a command is appended to the
+  // page VERBATIM, so a pattern one character too loose eats a sentence and says nothing. The
+  // two live captures recorded there were "avatars are hard to write" and "avatar research
+  // takes a while". The same shapes exist here in quantity, because this is a lane about
+  // reviews and somebody WILL type "reviews are up this month", "review the copy before it
+  // ships" and "our review tool is live" into it as dictation.
+  //
+  // So: `review` alone, or `review quotes`, or `review quote <n>`, and nothing else. The
+  // plural `reviews` is deliberately not a command. _probe-page-studio.ts holds a copy of this
+  // pattern and asserts all three sentences above still classify as body.
+  const reviewCmd = /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i.exec(command);
+  if (reviewCmd) {
+    await reviewCommand(session, reviewCmd[1] ?? "", args.files, args.messageTs);
     return true;
   }
 

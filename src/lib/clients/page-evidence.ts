@@ -22,10 +22,30 @@ export type SourceType =
   | "CLIENT_DOCUMENT"
   | "CLIENT_WEBSITE"
   | "FIRST_PARTY_DATA"
+  /**
+   * A customer's own published review, quoted VERBATIM.
+   *
+   * !! IT IS QUOTED OR IT IS NOT USED, and that is what keeps it on the right side of FTC
+   * 16 CFR Part 465. See the header of src/lib/clients/review-quote-read.ts and the argument
+   * draft-page.ts:3-8 already makes: the regulated thing is a tool that GENERATES review
+   * content, and reproducing what somebody already published is the opposite of that. The
+   * drafter is told to quote it or drop it, and a claim citing one of these is rejected
+   * unless it appears in the source character for character.
+   */
+  | "CUSTOMER_REVIEW"
   | "EXTERNAL_RESEARCH"
   | "AI_DERIVED";
 
-export type CollectedVia = "slack_voice" | "slack_typed" | "board" | "crawl" | "audit";
+export type CollectedVia =
+  | "slack_voice"
+  | "slack_typed"
+  | "board"
+  | "crawl"
+  | "audit"
+  /** Read off a screenshot of a public listing dropped in the page studio. */
+  | "review_screenshot"
+  /** Read out of the client's own review tool, review_tool_submissions. */
+  | "review_tool";
 
 export interface PageSource {
   id: string;
@@ -84,7 +104,12 @@ export function isFirstParty(type: SourceType): boolean {
     type === "CLIENT_VOICE" ||
     type === "CLIENT_DOCUMENT" ||
     type === "CLIENT_WEBSITE" ||
-    type === "FIRST_PARTY_DATA"
+    type === "FIRST_PARTY_DATA" ||
+    // A customer's own words about this business, published by them and transcribed by us.
+    // It came from a real person about this client rather than from a model or from a market,
+    // and it is checkable against the screenshot it was read off. Outside research is neither,
+    // which is why it stays out of this set even though it is real evidence.
+    type === "CUSTOMER_REVIEW"
   );
 }
 
@@ -104,6 +129,8 @@ export function sourceLabel(type: SourceType): string {
       return "Their website";
     case "FIRST_PARTY_DATA":
       return "Their own data";
+    case "CUSTOMER_REVIEW":
+      return "A customer's own review";
     case "EXTERNAL_RESEARCH":
       return "Outside research";
     case "AI_DERIVED":

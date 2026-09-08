@@ -401,6 +401,13 @@ export async function POST(
       // The type is whitelisted rather than trusted. It is what isFirstParty() reads, and a
       // request that could set its own type could label outside research as the client's own
       // words and satisfy the first-party floor with somebody else's page.
+      //
+      // ‼️ CUSTOMER_REVIEW IS DELIBERATELY NOT ON THIS LIST, and it is the one omission likely
+      // to look like an oversight. A review quote is only worth anything if it is what the
+      // customer actually published, and the guarantee that it is comes from being TRANSCRIBED
+      // off the screenshot it was read from, then confirmed against that picture. A free text
+      // box types an approximation and calls it a quote, with nothing to check it against. The
+      // page studio's `review` command is the one door, on purpose.
       const ALLOWED: SourceType[] = [
         "CLIENT_VOICE",
         "CLIENT_DOCUMENT",
