@@ -124,6 +124,16 @@ export async function loadSkin(clientId: string): Promise<StoredSkin> {
  *
  * The theme's four fields are untouched. Somebody's logo and brand colour survive a template
  * change; only the signature comes off.
+ *
+ * ‼️ AND IT CLEARS THE CANDIDATES, FOR THE SAME REASON IT CLEARS THE CONFIRMATION. Three designs
+ * on offer are an unanswered question about a skin, and this call answers it a different way.
+ * Leaving them behind made the step card lie: designSection() reads candidates FIRST, so
+ * `template bold` after a screenshot re-rendered step 16 as ":art: Three designs off that
+ * reference. Nothing has changed yet." over a row where the design had just changed, and a bare
+ * `template` re-printed three options that no longer described anything. Same rule as the
+ * confirmation: the stored design and what the card says about it must not disagree.
+ *
+ * confirmSkinPick() clears them too, by taking one. This clears them by superseding them.
  */
 export async function writeSkin(
   clientId: string,
@@ -151,6 +161,7 @@ export async function writeSkin(
     .from("clients")
     .update({
       hub_skin: skin,
+      hub_skin_candidates: null,
       theme: { ...theme, confirmedAt: null, confirmedBy: null },
     })
     .eq("id", clientId);
@@ -564,6 +575,21 @@ export function hasSkinReference(files: SkinReferenceFile[]): boolean {
 const MAX_REFERENCE_IMAGES = 3;
 
 /**
+ * How large one reference image may be before it is skipped.
+ *
+ * ‼️ THIS LANE WAS THE ONLY VISION READER IN THE REPO WITHOUT A CAP, AND THAT IS A HARD FAILURE
+ * RATHER THAN A SLOW ONE. onboarding-docs.ts, page-review.ts, page-studio.ts, listing-read.ts and
+ * review-audit.ts all stop at the same 6 MB. Here a full-page retina PNG went straight into a
+ * base64 payload, and Anthropic answers an oversized request with a 413 — which
+ * isTransientStatus() correctly declines to retry, so the whole read dies on the first attempt
+ * and the person gets a raw `Anthropic API error (413)` string back in the thread.
+ *
+ * Declared here rather than imported, the same way VISION_TYPES already is, so the hub lane does
+ * not take a dependency on the page lane for a number.
+ */
+const MAX_VISION_BYTES = 6 * 1024 * 1024;
+
+/**
  * A screenshot dropped in a design step's thread becomes a skin.
  *
  * Returns null when there is nothing here to read, so the caller falls through to the ordinary
@@ -586,10 +612,22 @@ export async function handleSkinScreenshot(input: {
 
   const picked = images.slice(0, MAX_REFERENCE_IMAGES);
   const payload: ClaudeImageInput[] = [];
+  let oversize = 0;
 
   for (const f of picked) {
     try {
       const buf = await slack.downloadFile(f.url_private_download as string);
+      // ‼️ MEASURED AFTER THE DOWNLOAD, BECAUSE SLACK'S `size` IS NOT ON THE EVENT WE GET.
+      // SkinReferenceFile carries id, name, mimetype and the private URL and nothing else, so
+      // widening it would mean widening the route's SlackEventFile too. The bytes are cheap
+      // next to the vision call this is protecting, and page-studio.ts measures the same way.
+      if (buf.byteLength > MAX_VISION_BYTES) {
+        oversize += 1;
+        console.error(
+          `[clients/hub-skin] reference too large to read: ${f.name ?? f.id} (${buf.byteLength} bytes)`
+        );
+        continue;
+      }
       payload.push({ media_type: (f.mimetype as string).toLowerCase(), data: buf.toString("base64") });
     } catch (e) {
       // One unreadable file must not lose the others. Named rather than swallowed.
@@ -598,10 +636,20 @@ export async function handleSkinScreenshot(input: {
   }
 
   if (payload.length === 0) {
+    // ‼️ TOO BIG AND COULD NOT BE FETCHED ARE DIFFERENT ANSWERS AND ONLY ONE OF THEM IS FIXED BY
+    // POSTING IT AGAIN. Telling somebody to re-post a 20 MB screenshot sends them round the same
+    // loop; telling them the limit is something they can act on.
     return {
-      message:
-        ":warning: I could not download those images from Slack, so nothing was read. " +
-        "Try posting them again.",
+      message: oversize
+        ? [
+            `:warning: ${oversize === 1 ? "That image is" : `All ${oversize} of those images are`} ` +
+              `too large to read. The limit is ${MAX_VISION_BYTES / (1024 * 1024)} MB each.`,
+            "",
+            "Nothing was changed. Post a smaller screenshot, or name one of the four by hand:",
+            templateMenu(),
+          ].join("\n")
+        : ":warning: I could not download those images from Slack, so nothing was read. " +
+          "Try posting them again.",
     };
   }
 
@@ -653,11 +701,24 @@ export async function handleSkinScreenshot(input: {
 
   const lines = candidateLines(input.clientId, set);
 
-  if (payload.length < images.length) {
+  // ‼️ TWO REASONS A FILE DID NOT MAKE IT, AND THEY MUST NOT SHARE A SENTENCE. This compared
+  // payload.length against images.length and blamed everything on the three-image cap, so a
+  // screenshot skipped for being 20 MB would have been explained as "more than that averages
+  // into a muddy skin" — a confident wrong answer about why the person's picture was ignored.
+  // The cap is measured against `picked`; the size skips are counted separately.
+  if (picked.length < images.length) {
     lines.push(
       "",
-      `_Read the first ${payload.length} of ${images.length} images. More than that averages ` +
+      `_Read the first ${picked.length} of ${images.length} images. More than that averages ` +
         `into a muddy skin rather than a sharper one._`
+    );
+  }
+
+  if (oversize > 0) {
+    lines.push(
+      "",
+      `_${oversize === 1 ? "One image was" : `${oversize} images were`} skipped for being over ` +
+        `${MAX_VISION_BYTES / (1024 * 1024)} MB. The designs above were read off the rest._`
     );
   }
 

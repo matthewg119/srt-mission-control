@@ -2921,6 +2921,119 @@ import { pageSlug } from "../src/lib/hub/pages";
 }
 
 
+// ---- STEP 16 UNBLOCK (2026-09-09) -------------------------------------------
+//
+// Three structural facts that were each found by reading rather than by failing, which is why
+// they are asserted here: none of the three has a pure function to call, and all three are the
+// kind of thing that reads as fine until a live run costs a card or a vision call.
+{
+  const hubSkinSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "hub-skin.ts"),
+    "utf8"
+  );
+
+  /** One exported function's source, comments and all, so an assertion cannot drift onto its neighbour. */
+  const fnBody = (src: string, name: string): string => {
+    const start = src.indexOf(`export async function ${name}`);
+    if (start === -1) return "";
+    const next = src.indexOf("\nexport ", start + 1);
+    return src.slice(start, next === -1 ? src.length : next);
+  };
+
+  // ── writeSkin clears BOTH, and the two are one decision ────────────────────
+  //
+  // The confirmation half has always been there. The candidate half was not, and its absence
+  // made the step card contradict the row: designSection() reads hub_skin_candidates FIRST, so
+  // `template bold` after a screenshot re-rendered step 16 as "Three designs off that reference.
+  // Nothing has changed yet." over a design that had just changed.
+  const writeSkinSrc = fnBody(hubSkinSrc, "writeSkin");
+  ok("writeSkin exists to be checked", writeSkinSrc.length > 0);
+  ok("writeSkin un-confirms the theme", /confirmedAt:\s*null/.test(writeSkinSrc));
+  ok("writeSkin clears the candidates too", /hub_skin_candidates:\s*null/.test(writeSkinSrc));
+  ok(
+    "and it does both in the one update, so the row can never half-change",
+    /\.update\(\{[\s\S]*?hub_skin_candidates:\s*null[\s\S]*?confirmedAt:\s*null[\s\S]*?\}\)/.test(
+      writeSkinSrc
+    )
+  );
+
+  // ── confirmSkinPick is still the one exception, and still sets the timestamp ──
+  //
+  // ‼️ A REGRESSION GUARD, NOT A FEATURE TEST. The rule every other skin write follows is
+  // "clear confirmedAt", and somebody tidying this file toward consistency would break the only
+  // reason the pick lane exists: choosing one of three rendered previews IS a person looking at
+  // it, so it must not then ask for a second signature on the same decision.
+  const pickSrc = fnBody(hubSkinSrc, "confirmSkinPick");
+  ok("confirmSkinPick exists to be checked", pickSrc.length > 0);
+  ok("the pick SETS confirmedAt rather than clearing it", /confirmedAt:\s*now/.test(pickSrc));
+  ok("the pick never clears it", !/confirmedAt:\s*null/.test(pickSrc));
+  ok("the pick takes the candidates off the row", /hub_skin_candidates:\s*null/.test(pickSrc));
+  ok(
+    "skin and confirmation land in one update, so the gate and the design cannot disagree",
+    /\.update\(\{[\s\S]*?hub_skin:\s*skin[\s\S]*?confirmedAt:\s*now[\s\S]*?\}\)/.test(pickSrc)
+  );
+
+  // ── The reference read has a size cap, like every other vision reader ──────
+  //
+  // Anthropic answers an oversized request with a 413, isTransientStatus declines to retry it,
+  // and the read dies on the first attempt. Before this the lane had no cap at all while
+  // onboarding-docs, page-review, page-studio, listing-read and review-audit all stopped at 6 MB.
+  const screenshotSrc = fnBody(hubSkinSrc, "handleSkinScreenshot");
+  ok("handleSkinScreenshot exists to be checked", screenshotSrc.length > 0);
+  ok(
+    "an oversized reference is skipped rather than sent",
+    /buf\.byteLength\s*>\s*MAX_VISION_BYTES/.test(screenshotSrc)
+  );
+  // Compared against a sibling's source rather than against a literal, so the day somebody
+  // raises the headroom the two cannot drift apart silently.
+  const capOf = (src: string): string | null =>
+    src.match(/MAX_VISION_BYTES\s*=\s*([^;]+);/)?.[1]?.trim() ?? null;
+  const siblingCap = capOf(
+    fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "page-review.ts"), "utf8")
+  );
+  ok("the sibling reader still declares a cap", siblingCap !== null);
+  ok("the cap is the same headroom the other readers use", capOf(hubSkinSrc) === siblingCap);
+  ok(
+    "too large and could not be fetched are different answers",
+    /too large to read/.test(screenshotSrc) && /could not download/.test(screenshotSrc)
+  );
+  // The three-image cap and a size skip are two different reasons a picture was ignored, and
+  // this note explains only the first. Measured against `picked`, never against `payload`.
+  ok(
+    "the muddy-skin note counts what the cap dropped, not what the size check did",
+    /picked\.length < images\.length/.test(screenshotSrc) &&
+      !/payload\.length < images\.length/.test(screenshotSrc)
+  );
+
+  // ── A refused [Done] re-renders its own card ───────────────────────────────
+  //
+  // ‼️ NOTHING IN PRODUCTION RE-RAN A CARD BODY BEFORE THIS. postStep was called only by
+  // scripts, postReadySteps skips any step that already has a slack_message_ts, and the three
+  // buttons either answer ephemerally or REPLACE the card with a one-line outcome. So a card
+  // rendered from the wrong environment stayed wrong, which is what put "CLIENT_LINK_SECRET is
+  // not set on this environment" into a live hub_preview card for a day.
+  const actionsSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "app", "api", "slack", "actions", "route.ts"),
+    "utf8"
+  );
+  const gateIdx = actionsSrc.indexOf("const gate = await stepPrecondition(clientId, stepKey);");
+  ok("the precondition gate is where it was", gateIdx > -1);
+  const gateBlock = actionsSrc.slice(gateIdx, gateIdx + 2600);
+  ok(
+    "a refused precondition re-renders the card",
+    /postStep\(clientId, stepKey\)/.test(gateBlock)
+  );
+  ok(
+    "the refusal is delivered first, so a render fault cannot swallow it",
+    gateBlock.indexOf("tellActor(args, clientId") < gateBlock.indexOf("postStep(clientId, stepKey)")
+  );
+  ok(
+    "the re-render cannot throw the handler",
+    /postStep\(clientId, stepKey\)\.catch\(/.test(gateBlock)
+  );
+}
+
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 //

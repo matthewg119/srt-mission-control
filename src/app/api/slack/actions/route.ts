@@ -1311,6 +1311,31 @@ async function deliveryStepAction(args: {
         const gate = await stepPrecondition(clientId, stepKey);
         if (!gate.ok) {
           await tellActor(args, clientId, gate.message ?? "Not yet.");
+
+          // ‼️ A REFUSAL IS THE ONE MOMENT THE CARD IS KNOWN TO BE OUT OF DATE, SO RE-RENDER IT.
+          //
+          // Until now NOTHING in production re-ran a card body. postStep is called only by
+          // scripts, postReadySteps skips any step that already has a slack_message_ts, and the
+          // three buttons either answer ephemerally (here) or REPLACE the card with a one-line
+          // outcome. So a card rendered wrong stayed wrong, and the standing advice to "press a
+          // button and let production re-render it" was describing behaviour that did not exist.
+          // It cost SRT Agency's hub_preview card a preview link: rendered from a shell with no
+          // CLIENT_LINK_SECRET, it read "no shareable link could be minted" for a day, which is
+          // a true sentence about the wrong environment sitting in a card about production.
+          //
+          // ‼️ AND IT WRITES NOTHING. postStep edits the existing slack_message_ts rather than
+          // re-posting, so the anchor keeps its position (Slack orders by post time and a
+          // delete-and-repost moves a step to the bottom permanently). Its trailing status
+          // update is gated `.in("status", ["pending","blocked","ready","error"])` and a card
+          // that exists sits at awaiting_me, so that statement matches no row. It also
+          // early-returns on complete/skipped, so it cannot resurrect a resolved step.
+          //
+          // The refusal goes first and the render is caught, because the person pressed the
+          // button to be told why it will not go through. A render fault must not swallow that.
+          const { postStep } = await import("@/lib/clients/step-engine");
+          await postStep(clientId, stepKey).catch((e: Error) =>
+            console.error(`[slack/actions] card re-render failed for ${stepKey}:`, e.message)
+          );
           return;
         }
 
