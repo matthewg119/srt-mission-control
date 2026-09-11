@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { telegram } from "@/lib/telegram";
 import { isAIConfigured, buildSystemPrompt, runConversationWithTools } from "@/lib/ai";
-import { supabaseAdmin } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -49,27 +48,17 @@ export async function POST(request: NextRequest) {
     // Show typing indicator
     await telegram.sendTyping(chatId);
 
-    // Load conversation history for this Telegram chat
-    const conversationId = `telegram-${chatId}`;
-    let history: Array<{ role: "user" | "assistant"; content: string }> = [];
-
-    try {
-      const { data } = await supabaseAdmin
-        .from("chat_messages")
-        .select("role, content")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true })
-        .limit(20); // Last 20 messages for context
-
-      if (data && data.length > 0) {
-        history = data.map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content as string,
-        }));
-      }
-    } catch {
-      // Tables may not exist yet — continue without history
-    }
+    // ‼️ `telegram-${chatId}` IS NOT A uuid, AND chat_conversations.id IS ONE. Every read here
+    // matched nothing and every write failed silently, so this assistant had no memory at all.
+    // chat-memory maps the key to a real conversation. It also returns the LAST twenty turns: the
+    // query here asked for `ascending` and got the first twenty, forever.
+    const { conversationFor, loadHistory, saveTurn } = await import("@/lib/chat-memory");
+    const conversationId = await conversationFor({
+      externalKey: `telegram-${chatId}`,
+      surface: "telegram",
+      title: `Telegram: ${userText.slice(0, 60)}`,
+    });
+    const history = await loadHistory(conversationId);
 
     // Build messages with history + new message
     const messages = [...history, { role: "user" as const, content: userText }];
@@ -89,23 +78,7 @@ export async function POST(request: NextRequest) {
     }
     await telegram.sendMessage(chatId, reply);
 
-    // Save conversation (best-effort)
-    try {
-      await supabaseAdmin.from("chat_conversations").upsert(
-        {
-          id: conversationId,
-          title: `Telegram: ${userText.slice(0, 60)}`,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      );
-      await supabaseAdmin.from("chat_messages").insert([
-        { conversation_id: conversationId, role: "user", content: userText },
-        { conversation_id: conversationId, role: "assistant", content: response },
-      ]);
-    } catch {
-      // Non-critical
-    }
+    await saveTurn({ conversationId, userText, assistantText: response });
 
     return NextResponse.json({ ok: true });
   } catch (error) {

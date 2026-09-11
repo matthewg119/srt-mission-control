@@ -124,7 +124,15 @@ const WIPE = [
   "nap_discrepancies",
   "review_audit_rows",
   "harvest_runs",
-  "client_avatar_runs",
+  // ‼️ client_avatar_runs IS NOT HERE ANY MORE, AND ITS ABSENCE IS THE POINT (2026-09-12).
+  //
+  // Measured: SRT has a confirmed avatar and ZERO rows in this table, which read as "the writer is
+  // broken". The writer is fine. This reset deleted the history on 2026-09-07 while deliberately
+  // KEEPING clients.primary_avatar*, so the confirmation survived and the record of it did not.
+  //
+  // It is history rather than board state: it says which buyer this client was aimed at and when
+  // it changed, which is exactly the kind of per-client record this script's own header says it
+  // preserves. Nothing verifies off it, so keeping it cannot make a step tick green.
   "client_dns_records",
   "client_docs",
   "client_messages",

@@ -97,6 +97,16 @@ export async function deliverArtifact(args: {
   const reallyShared = upload?.ok === true && Array.isArray(sharedFiles) && sharedFiles.length > 0;
 
   if (reallyShared) {
+    // ‼️ THE SLACK FILE ID IS STAMPED ONTO THE ROW WE ALREADY WROTE, and it is the second half of
+    // the double-filing fix. `file_shared` for the bot's own upload is skipped in the events route,
+    // but the two events race, so this closes the window: once the generated row carries the id,
+    // the unique partial index on slack_file_id refuses any second row for the same file.
+    const sharedId = (sharedFiles as Array<{ id?: string }>)[0]?.id;
+    if (sharedId) {
+      const { attachSlackFileId } = await import("../onboarding-docs");
+      await attachSlackFileId(stored.docId, sharedId, threadTs);
+    }
+
     // The `.catch(() => {})` that used to be here caught nothing: slackFetch resolves with
     // { ok: false } instead of throwing, so a refused post was completely silent.
     const res = (await slack.postThreadReply(channel, threadTs, args.message)) as {

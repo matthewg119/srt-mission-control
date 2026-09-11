@@ -11,13 +11,19 @@ export async function GET(request: NextRequest) {
   const action = request.nextUrl.searchParams.get("action");
   const agentId = request.nextUrl.searchParams.get("agentId") || "alex";
 
+  // ‼️ `agent_id` IS NOT A COLUMN ON chat_conversations, AND THIS FILTER FAILED THE WHOLE SELECT.
+  // Confirmed against production 2026-09-11: the table has id, title, created_at and updated_at.
+  // PostgREST rejects the query outright on the unknown name, so this list has always come back
+  // empty and the Brain Trust looked like it had no history. Which agent a conversation belongs to
+  // is recorded in `surface` instead, which chat-memory writes.
   if (action === "conversations") {
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("chat_conversations")
       .select("id, title, created_at")
-      .eq("agent_id", agentId)
+      .eq("surface", `brain_trust:${agentId}`)
       .order("created_at", { ascending: false })
       .limit(30);
+    if (error) console.error("[brain-trust] conversation list failed:", error.message);
     return NextResponse.json({ conversations: data || [] });
   }
 
@@ -26,12 +32,9 @@ export async function GET(request: NextRequest) {
     if (!conversationId) {
       return NextResponse.json({ error: "conversationId required" }, { status: 400 });
     }
-    const { data } = await supabaseAdmin
-      .from("chat_messages")
-      .select("role, content")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true });
-    return NextResponse.json({ messages: data || [] });
+    const { findConversation, loadHistory } = await import("@/lib/chat-memory");
+    const resolved = await findConversation(conversationId);
+    return NextResponse.json({ messages: await loadHistory(resolved, 200) });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
@@ -72,28 +75,21 @@ export async function POST(request: NextRequest) {
       agentTools
     );
 
-    // Save conversation (best-effort)
+    // Through chat-memory, like every other surface: the agent goes in `surface`, which exists,
+    // rather than in `agent_id`, which does not and took the whole write down with it.
     if (conversationId) {
-      try {
-        const userMessage = messages[messages.length - 1];
-        await supabaseAdmin
-          .from("chat_conversations")
-          .upsert(
-            {
-              id: conversationId,
-              title: userMessage.content.slice(0, 80),
-              updated_at: new Date().toISOString(),
-              agent_id: agentId,
-            },
-            { onConflict: "id" }
-          );
-        await supabaseAdmin.from("chat_messages").insert([
-          { conversation_id: conversationId, role: "user", content: userMessage.content },
-          { conversation_id: conversationId, role: "assistant", content: response },
-        ]);
-      } catch {
-        console.warn("Could not save brain trust chat history");
-      }
+      const userMessage = messages[messages.length - 1];
+      const { conversationFor, saveTurn } = await import("@/lib/chat-memory");
+      const resolved = await conversationFor({
+        externalKey: conversationId,
+        surface: `brain_trust:${agentId}`,
+        title: String(userMessage.content ?? "").slice(0, 80),
+      });
+      await saveTurn({
+        conversationId: resolved,
+        userText: String(userMessage.content ?? ""),
+        assistantText: response,
+      });
     }
 
     return NextResponse.json({ response, toolResults });

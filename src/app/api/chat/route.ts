@@ -25,6 +25,13 @@ export async function GET(request: NextRequest) {
     if (!conversationId) {
       return NextResponse.json({ error: "conversationId required" }, { status: 400 });
     }
+    // ‼️ THE POPUP PASSES THE LITERAL STRING "chat-popup" (chat-popup.tsx), not a uuid, so this
+    // read matched nothing for it and the popup opened blank every time. Mapped through
+    // chat-memory, which passes a real uuid straight through and looks anything else up.
+    const { findConversation } = await import("@/lib/chat-memory");
+    const resolved = await findConversation(conversationId);
+    if (!resolved) return NextResponse.json({ messages: [] });
+
     // tool_blocks is what lets a reloaded conversation keep its working
     // context. It may not exist yet (the column is added by
     // docs/2026-08-21-chat-tool-blocks.sql), so a failure here falls back to
@@ -32,7 +39,7 @@ export async function GET(request: NextRequest) {
     const withBlocks = await supabaseAdmin
       .from("chat_messages")
       .select("role, content, tool_blocks")
-      .eq("conversation_id", conversationId)
+      .eq("conversation_id", resolved)
       .order("created_at", { ascending: true });
 
     let rows: unknown[] = withBlocks.data ?? [];
@@ -41,7 +48,7 @@ export async function GET(request: NextRequest) {
       const textOnly = await supabaseAdmin
         .from("chat_messages")
         .select("role, content")
-        .eq("conversation_id", conversationId)
+        .eq("conversation_id", resolved)
         .order("created_at", { ascending: true });
       rows = textOnly.data ?? [];
     }
@@ -90,42 +97,23 @@ export async function POST(request: NextRequest) {
       { maxIterations: 10 }
     );
 
-    // Save conversation (best-effort — tables may not exist yet)
+    // One writer for every surface, so a key that is not a uuid (the popup's "chat-popup") is
+    // mapped rather than rejected, and a failed insert is LOGGED rather than swallowed by a catch
+    // that supabase-js never reaches. See lib/chat-memory.ts.
     if (conversationId) {
-      try {
-        const userMessage = messages[messages.length - 1];
-        await supabaseAdmin
-          .from("chat_conversations")
-          .upsert({
-            id: conversationId,
-            title: userMessage.content.slice(0, 80),
-            updated_at: new Date().toISOString(),
-          }, { onConflict: "id" });
-        const rows = [
-          { conversation_id: conversationId, role: "user", content: userMessage.content },
-          {
-            conversation_id: conversationId,
-            role: "assistant",
-            content: response,
-            tool_blocks: turnBlocks.length > 0 ? turnBlocks : null,
-          },
-        ];
-
-        const { error } = await supabaseAdmin.from("chat_messages").insert(rows);
-
-        // Retry without the column so an un-migrated database still keeps its
-        // text history. The chat is degraded (no memory across turns) but not
-        // broken.
-        if (error) {
-          console.warn("chat_messages insert failed, retrying without tool_blocks:", error.message);
-          await supabaseAdmin.from("chat_messages").insert(
-            rows.map(({ tool_blocks: _drop, ...rest }) => rest)
-          );
-        }
-      } catch {
-        // Chat tables may not exist yet — don't fail the response
-        console.warn("Could not save chat history — tables may not exist");
-      }
+      const userMessage = messages[messages.length - 1];
+      const { conversationFor, saveTurn } = await import("@/lib/chat-memory");
+      const resolved = await conversationFor({
+        externalKey: conversationId,
+        surface: "web",
+        title: String(userMessage.content ?? "").slice(0, 80),
+      });
+      await saveTurn({
+        conversationId: resolved,
+        userText: String(userMessage.content ?? ""),
+        assistantText: response,
+        toolBlocks: turnBlocks,
+      });
     }
 
     return NextResponse.json({

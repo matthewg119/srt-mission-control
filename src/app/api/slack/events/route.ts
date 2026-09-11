@@ -1120,12 +1120,28 @@ export async function POST(request: NextRequest) {
           const { toSlackMrkdwn } = await import("@/lib/slack-bot");
           // Scoped to the THREAD, not the channel. `slack-${channel}` gave one client's step
           // thread the last twenty messages from a different client's.
-          const { reply } = await askAssistant({
-            conversationId: `slack-${channel}-${parentThreadTs}`,
+          //
+          // ‼️ AND IT IS KEYED TO THE CLIENT. Matthew: "all of the data of each customer (inside
+          // Slack or Mission Control) needs to be saved with its specific dataset." This
+          // conversation is ABOUT this client, and until 2026-09-12 nothing recorded which one --
+          // nor, because the key was not a uuid, did a single message of it reach the database.
+          const { conversationFor, saveTurn } = await import("@/lib/chat-memory");
+          const conversationId = await conversationFor({
+            externalKey: `slack-${channel}-${parentThreadTs}`,
+            surface: "slack",
+            clientId: client.id,
+            title: `${client.legalName ?? "Client"}${client.stepKey ? ` · ${client.stepKey}` : ""}`,
+          });
+
+          const { reply, response } = await askAssistant({
+            conversationId,
             agentType: getAgentType(channel),
             userText,
             files: attachedFiles,
           });
+
+          // Both halves, saved. Neither side of this exchange was stored before.
+          await saveTurn({ conversationId, userText, assistantText: response });
 
           if (client.stepKey) {
             const { notifyStep } = await import("@/lib/clients/step-board");
@@ -1337,7 +1353,15 @@ export async function POST(request: NextRequest) {
       }
 
       const agentType = getAgentType(channel);
-      const conversationId = `slack-${channel}`;
+      // ‼️ `slack-${channel}` IS NOT A uuid and the upsert here also wrote `agent_id`, a column
+      // chat_conversations does not have. Both failures were inside a try/catch that supabase-js
+      // never reaches, so this assistant had no memory and nothing said so. See lib/chat-memory.ts.
+      const { conversationFor, saveTurn } = await import("@/lib/chat-memory");
+      const conversationId = await conversationFor({
+        externalKey: `slack-${channel}`,
+        surface: `slack:${agentType}`,
+        title: `Slack ${agentType}: ${userText.slice(0, 60)}`,
+      });
       const { reply, response } = await askAssistant({
         conversationId,
         agentType,
@@ -1348,24 +1372,7 @@ export async function POST(request: NextRequest) {
       // Send reply directly in channel
       await slack.postMessage(channel, reply);
 
-      // Save conversation (best-effort)
-      try {
-        await supabaseAdmin.from("chat_conversations").upsert(
-          {
-            id: conversationId,
-            title: `Slack ${agentType}: ${userText.slice(0, 60)}`,
-            agent_id: agentType,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "id" }
-        );
-        await supabaseAdmin.from("chat_messages").insert([
-          { conversation_id: conversationId, role: "user", content: userText },
-          { conversation_id: conversationId, role: "assistant", content: response },
-        ]);
-      } catch {
-        // Non-critical
-      }
+      await saveTurn({ conversationId, userText, assistantText: response });
     }
 
     // Always return 200 to Slack
@@ -2126,29 +2133,18 @@ async function captureOnboardingUploads(args: {
  * replaced, so that caller has to route through notifyStep instead.
  */
 async function askAssistant(args: {
-  conversationId: string;
+  /** A chat_conversations.id, already resolved by the caller through chat-memory. */
+  conversationId: string | null;
   agentType: string;
   userText: string;
   files: SlackEventFile[];
 }): Promise<{ reply: string; response: string }> {
   const { conversationId, agentType, userText, files } = args;
 
-  // Load conversation history
-  let history: Array<{ role: "user" | "assistant"; content: string }> = [];
-  try {
-    const { data } = await supabaseAdmin
-      .from("chat_messages")
-      .select("role, content")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true })
-      .limit(20);
-    history = (data || []).map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content as string,
-    }));
-  } catch {
-    // Continue without history
-  }
+  // The last twenty turns, oldest first. This used to read `ascending` and take twenty, which is
+  // the FIRST twenty messages: past that, the assistant re-read the opening exchange forever.
+  const { loadHistory } = await import("@/lib/chat-memory");
+  const history = await loadHistory(conversationId);
 
   // Build system prompt with agent personality
   const basePrompt = await buildSystemPrompt();
@@ -2214,6 +2210,19 @@ async function handleFileShared(fileId: string): Promise<void> {
     return;
   }
   const file = info.file;
+
+  // ‼️ THE BOT'S OWN UPLOADS ARE NOT EVIDENCE, AND THIS IS WHY EVERY GENERATED PDF WAS FILED TWICE.
+  //
+  // deliverArtifact stores the document (source 'generated', slack_file_id null) and then uploads
+  // the same bytes into the step's thread. Slack fires `file_shared` for the bot's own upload, and
+  // this handler runs BEFORE the bot filter that guards the message path, so captureOnboardingFile
+  // inserted a SECOND row for it, as `slack` evidence, with a file id the first row did not carry
+  // for the unique index to catch. Measured on SRT: ten client_docs rows for five documents.
+  //
+  // It also mattered beyond tidiness: a thread-tier verifier counts files in the thread, so the
+  // bot's own artifact could confirm a step that asked a PERSON to put something there.
+  const botUserId = process.env.SLACK_BOT_USER_ID || (await slack.getBotUserId().catch(() => null));
+  if (botUserId && file.user === botUserId) return;
 
   const allShareChannels = Object.keys({
     ...(file.shares?.public ?? {}),

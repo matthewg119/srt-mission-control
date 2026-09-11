@@ -16,6 +16,7 @@
 // list is how "the client said this" and "a model wrote this" quietly become the same thing.
 
 import { supabaseAdmin } from "@/lib/db";
+import { baselineReportsOnly } from "@/lib/audit-engine/run-labels";
 
 export type SourceType =
   | "CLIENT_VOICE"
@@ -520,28 +521,73 @@ export async function loadNumberedEvidence(
   const stored = await loadEvidenceFor(clientId, pageId);
   const refs = numberEvidence(stored);
 
+  // ‼️ THIS DROPPED THE CLIENT'S OWN WORDS OUT OF EVERY PAGE DRAFT, SILENTLY, FOR WEEKS.
+  //
+  // docs/2026-08-16-audit-call-notes.sql was never applied, so `call_notes` did not exist. A
+  // PostgREST select fails WHOLE on one unknown column, and this destructured only `{ data }`, so
+  // `report` came back null, the function returned early, and intake_answers -- which does exist
+  // and is the business's own words -- was dropped too. Nothing errored anywhere.
+  //
+  // Three changes, and each one is a different failure: the error is READ, the lookup prefers
+  // client_id (contact_id matches a prospect audit, and a client's baseline is keyed on the client),
+  // and a missing call_notes column degrades to intake answers rather than to nothing.
   const { data: client } = await supabaseAdmin
     .from("clients")
     .select("contact_id")
     .eq("id", clientId)
     .maybeSingle();
 
-  if (!client?.contact_id) return refs;
+  const contactId = (client?.contact_id as string | null) ?? null;
 
-  const { data: report } = await supabaseAdmin
-    .from("audit_reports")
-    .select("intake_answers, call_notes")
-    .eq("contact_id", client.contact_id as string)
-    .eq("status", "done")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const read = async (columns: string) => {
+    const byClient = await baselineReportsOnly(
+      supabaseAdmin
+        .from("audit_reports")
+        .select(columns)
+        .eq("client_id", clientId)
+        .eq("status", "done")
+    )
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byClient.error) return byClient;
+    if (byClient.data) return byClient;
+    if (!contactId) return byClient;
+
+    return baselineReportsOnly(
+      supabaseAdmin
+        .from("audit_reports")
+        .select(columns)
+        .eq("contact_id", contactId)
+        .eq("status", "done")
+    )
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  };
+
+  let { data: report, error } = await read("intake_answers, call_notes");
+
+  if (error && /call_notes/.test(error.message)) {
+    console.error(
+      "[page-evidence] audit_reports.call_notes is missing: run docs/2026-08-16-audit-call-notes.sql. " +
+        "Falling back to intake answers so pages keep their first-party ground."
+    );
+    ({ data: report, error } = await read("intake_answers"));
+  }
+
+  if (error) {
+    console.error("[page-evidence] first-party sources could not be read:", error.message);
+    return refs;
+  }
 
   if (!report) return refs;
 
+  const row = report as unknown as { intake_answers?: string | null; call_notes?: string | null };
   const extra: Array<[string | null, string]> = [
-    [(report.intake_answers as string | null)?.trim() || null, "What they told us at intake"],
-    [(report.call_notes as string | null)?.trim() || null, "What they said on the call"],
+    [row.intake_answers?.trim() || null, "What they told us at intake"],
+    [row.call_notes?.trim() || null, "What they said on the call"],
   ];
 
   for (const [text, topic] of extra) {

@@ -328,6 +328,36 @@ export async function storeGeneratedDoc(args: {
   return { ok: true, docId: data.id as string };
 }
 
+/**
+ * Record which Slack file a generated document became, once it has been uploaded.
+ *
+ * ‼️ IT IS WHAT STOPS THE SAME PDF BEING FILED TWICE. A generated row is written with
+ * slack_file_id null (it has no Slack file yet), the bytes are then uploaded into the step thread,
+ * and Slack fires `file_shared` for the bot's own upload. The events route skips bot uploads, but
+ * the two events race, so this closes the window from the other side: with the id stamped on, the
+ * unique partial index on slack_file_id refuses a second row for the same file.
+ *
+ * Conditional on the column still being null, the same claim shape postStepAnchor uses, so a
+ * re-run can never relabel a document as a different Slack file.
+ */
+export async function attachSlackFileId(
+  docId: string,
+  slackFileId: string,
+  threadTs: string | null
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("client_docs")
+    .update({ slack_file_id: slackFileId, slack_thread_ts: threadTs })
+    .eq("id", docId)
+    .is("slack_file_id", null);
+
+  // 23505 means the racing file_shared won and filed its own row first. The document exists either
+  // way, which is what matters; the duplicate is the thing being prevented, not this write.
+  if (error && (error as { code?: string }).code !== "23505") {
+    console.error("[clients/onboarding-docs] could not stamp the Slack file id:", error.message);
+  }
+}
+
 export interface OnboardingDocView {
   id: string;
   filename: string;
