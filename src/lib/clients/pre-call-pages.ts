@@ -596,6 +596,7 @@ async function postDraftSummary(clientId: string): Promise<void> {
   const lines: string[] = [
     `:page_facing_up: *${ids.length} drafts are ready to walk on the call.* Share your screen on the ` +
       "dashboard preview. The client's own link shows no drafts, on purpose.",
+    `Start from the plan map, which shows how they fit together: ${appUrl()}/dashboard/clients/${clientId}/plan`,
     "",
   ];
   let unsourcedTotal = 0;
@@ -652,6 +653,8 @@ export async function preCallPagesCardLines(clientId: string): Promise<string[]>
 
   return [
     formatPlan(rows, anchorTitle),
+    "",
+    `*Plan map* (pillar in the middle, supports around it, share it on the call): ${appUrl()}/dashboard/clients/${clientId}/plan`,
     "",
     approved.length === 0
       ? `*Nothing drafted yet.* \`plan approve\` locks these ${rows.length} in and drafts every one in full, from what is on file, three at a time.`

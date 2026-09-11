@@ -85,15 +85,24 @@ export function HubLogo({ client }: { client: HubClient }) {
   return <img className="hub-logo" src={client.theme.logoUrl} alt={client.displayName} />;
 }
 
+/**
+ * Where a page link points. `/` on a live hub, where the host is in the URL. The dashboard
+ * preview passes its own base, because there `/slug` would land on Mission Control's root and 404.
+ * A string rather than a function so it crosses any server/client boundary unchanged.
+ */
+const LIVE_LINK_BASE = "/";
+
 /** The index: who they are, what has been answered, and the canonical NAP. */
 export function HubIndexBody({
   client,
   host,
   pages,
+  linkBase = LIVE_LINK_BASE,
 }: {
   client: HubClient;
   host: string;
   pages: HubBodyPage[];
+  linkBase?: string;
 }) {
   const where = [client.city, client.state].filter(Boolean).join(", ");
 
@@ -127,7 +136,7 @@ export function HubIndexBody({
           <ul className="hub-list">
             {pages.map((page) => (
               <li key={page.id}>
-                <a href={`/${page.slug}`}>
+                <a href={`${linkBase}${page.slug}`}>
                   {page.title}
                   <span className="hub-q">{page.question}</span>
                 </a>
@@ -186,11 +195,15 @@ export function HubAnswerBody({
   host,
   page,
   links = NO_PLAN_LINKS,
+  linkBase = LIVE_LINK_BASE,
+  homeHref = LIVE_LINK_BASE,
 }: {
   client: HubClient;
   host: string;
   page: HubAnswerPage;
   links?: PlanLinks;
+  linkBase?: string;
+  homeHref?: string;
 }) {
   const pillar = links.isPillar ? null : links.pillar;
   const onward = links.isPillar ? links.supports : links.related;
@@ -234,7 +247,7 @@ export function HubAnswerBody({
       <header className="hub-head">
         <HubLogo client={client} />
         <p className="hub-eyebrow">
-          <a href="/">{client.displayName}</a>
+          <a href={homeHref}>{client.displayName}</a>
         </p>
         <h1>{page.title}</h1>
         {page.question !== page.title && <p className="hub-lede">{page.question}</p>}
@@ -246,7 +259,7 @@ export function HubAnswerBody({
       */}
       {pillar && (
         <p className="hub-part">
-          Part of <a href={`/${pillar.slug}`}>{pillar.title}</a>
+          Part of <a href={`${linkBase}${pillar.slug}`}>{pillar.title}</a>
         </p>
       )}
 
@@ -270,7 +283,7 @@ export function HubAnswerBody({
           <ul className="hub-list">
             {onward.map((link) => (
               <li key={link.slug}>
-                <a href={`/${link.slug}`}>{link.title}</a>
+                <a href={`${linkBase}${link.slug}`}>{link.title}</a>
               </li>
             ))}
           </ul>

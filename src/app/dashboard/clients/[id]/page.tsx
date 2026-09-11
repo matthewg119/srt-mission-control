@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Network } from "lucide-react";
 import { supabaseAdmin } from "@/lib/db";
 import { INTAKE_STEPS } from "@/config/client-intake";
 import { stepNumber } from "@/config/delivery-steps";
@@ -462,6 +462,17 @@ export default async function ClientDetailPage({
       <div className="mb-6 mt-2">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-medium text-white">{name}</h1>
+          <div className="flex items-center gap-2">
+          {/* The plan as a picture: pillar in the middle, supports around it. Shared on the call. */}
+          <Link
+            href={`/dashboard/clients/${id}/plan`}
+            title="Plan map"
+            aria-label="Plan map"
+            className="flex items-center gap-1.5 rounded-lg border border-[rgba(255,255,255,0.07)] px-2.5 py-1.5 text-xs text-[rgba(255,255,255,0.5)] hover:bg-[rgba(255,255,255,0.03)] hover:text-white"
+          >
+            <Network className="h-4 w-4" aria-hidden />
+            Plan map
+          </Link>
           {/* Traffic. The one number this whole hub exists to move, one click away. */}
           <Link
             href={`/dashboard/clients/${id}/metrics`}
@@ -472,6 +483,7 @@ export default async function ClientDetailPage({
             <BarChart3 className="h-4 w-4" aria-hidden />
             Traffic
           </Link>
+          </div>
         </div>
         <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[rgba(255,255,255,0.4)]">
           <span>{client.website as string}</span>

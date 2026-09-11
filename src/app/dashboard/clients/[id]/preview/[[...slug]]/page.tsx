@@ -33,7 +33,8 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { loadClientForPreview } from "@/lib/hub/resolve";
-import { listAllForBoard } from "@/lib/hub/pages";
+import { listAllForBoard, planLinkRows } from "@/lib/hub/pages";
+import { orderIndexPages, planLinksFor } from "@/lib/hub/plan-links";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
@@ -180,9 +181,17 @@ async function PreviewIndex({
   client: Awaited<ReturnType<typeof loadClientForPreview>> & object;
 }) {
   const all = await listAllForBoard(clientId);
-  const pages = all.filter((p) => p.status !== "archived");
+  const pages = orderIndexPages(
+    all.filter((p) => p.status !== "archived"),
+    await planLinkRows(clientId)
+  );
 
-  return <HubIndexBody client={client} host={host} pages={pages} />;
+  return <HubIndexBody client={client} host={host} pages={pages} linkBase={previewBase(clientId)} />;
+}
+
+/** Page links inside the preview stay inside the preview. */
+function previewBase(clientId: string): string {
+  return `/dashboard/clients/${clientId}/preview/`;
 }
 
 async function PreviewAnswer({
@@ -200,7 +209,25 @@ async function PreviewAnswer({
   const page = all.find((p) => p.slug === slug);
   if (!page) notFound();
 
-  return <HubAnswerBody client={client} host={host} page={page} />;
+  // ‼️ DRAFTS COUNT AS LINKABLE HERE, AND ONLY HERE. The live hub links published pages alone,
+  // because a link to a draft is a 404 on the client's domain. This preview shows drafts, so a
+  // link to one opens it, and the pillar and its supports can be walked on the call before any of
+  // them is live. Same plan, same planLinksFor, a wider list of pages.
+  const walkable = all
+    .filter((p) => p.status !== "archived")
+    .map((p) => ({ id: p.id, slug: p.slug, title: p.title }));
+  const links = planLinksFor(page.id, await planLinkRows(clientId), walkable);
+
+  return (
+    <HubAnswerBody
+      client={client}
+      host={host}
+      page={page}
+      links={links}
+      linkBase={previewBase(clientId)}
+      homeHref={`/dashboard/clients/${clientId}/preview`}
+    />
+  );
 }
 
 /**
@@ -326,6 +353,9 @@ function PreviewBanner({
           style={{ color: "#F5A623" }}
         >
           view the {other}
+        </a>
+        <a href={`/dashboard/clients/${clientId}/plan`} style={{ color: "#F5A623" }}>
+          plan map
         </a>
         <a href={`/dashboard/clients/${clientId}`} style={{ color: "rgba(255,255,255,0.6)" }}>
           back to the board

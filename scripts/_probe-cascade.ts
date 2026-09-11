@@ -190,6 +190,15 @@ async function main() {
   try {
     await seedDeliverySteps(clientId);
 
+    // ‼️ AN INTAKE SERVICE IS PART OF THE FIXTURE TOO (2026-09-11). offer_proposed reads it, and
+    // with none it parks in `error` ("no intake answer names a service"), which the error check at
+    // the end rightly reports. It also means the prep call card is walked with a proposal on it,
+    // which is how a real client arrives.
+    await supabaseAdmin
+      .from("clients")
+      .update({ services: { primary_treatment: "cascade probe treatment" } })
+      .eq("id", clientId);
+
     // ── Get to the starting line: confirm step 1 ────────────────────────────
     //
     // ‼️ A CANONICAL NAP IS PART OF THE FIXTURE, and without it this probe measures the wrong
@@ -467,7 +476,12 @@ async function main() {
     // card, and it then WAITED for a person instead of ticking itself. That is the invariant
     // that broke when postReadySteps ran before runReadyAutoSteps and parked the row where no
     // runner could ever claim it.
-    ok("avatar_harvest filed an output_ref, so its generator ran", Boolean(nine?.output_ref));
+    // ‼️ NOT output_ref ANY MORE (since 8e928be, 2026-08-28). Step 10 stopped running the research
+    // itself and now POSTS a prompt, which files no artifact, so output_ref stays empty until the
+    // answer comes back and this assertion had been failing on a correct board. What proves the
+    // runner ran is what follows: a card exists only once runReadyAutoSteps has left the row at
+    // `ready`, which it writes after the runner returns ok.
+    ok("avatar_harvest's runner ran and left it waiting, not errored", nine?.status !== "error", String(nine?.status));
     ok("avatar_harvest got its card", Boolean(nine?.slack_message_ts));
     ok(
       "and then waited for a person rather than ticking itself",

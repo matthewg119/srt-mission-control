@@ -36,6 +36,7 @@ import { offerBonus, OFFER_BONUS } from "@/lib/clients/artifacts/page-candidates
 import { normalizePhrase, isAboutOffer, offerVocabulary } from "@/lib/clients/phrase-quality";
 import { planLinksFor, orderIndexPages, type PlanLinkRow, type PublishedPageRef } from "@/lib/hub/plan-links";
 import { breadcrumbJsonLd } from "@/lib/hub/jsonld";
+import { MAP, layoutPlanMap, relatedPairs, wrapLabel, type MapNode } from "@/lib/clients/plan-map";
 import { hasBannedDash } from "@/lib/copy-guard";
 
 let failures = 0;
@@ -439,6 +440,43 @@ check(
   JSON.stringify(crumbs)
 );
 check("with absolute URLs", crumbItems.every((it) => String(it.item).startsWith("https://")));
+
+// ── 11. The plan map ─────────────────────────────────────────────────────────
+console.log("\n11. The plan map: no box overlaps another, labels fit, links match the hub's");
+
+const overlaps = (a: { x: number; y: number }, b: { x: number; y: number }, w: number, h: number) =>
+  Math.abs(a.x - b.x) < w && Math.abs(a.y - b.y) < h;
+for (const n of [3, 5, 8]) {
+  const pts = layoutPlanMap(n);
+  const clash = pts.some((p, i) => pts.some((q, j) => j > i && overlaps(p, q, MAP.NODE_W, MAP.NODE_H)));
+  const onPillar = pts.some((p) =>
+    overlaps(p, { x: MAP.CX, y: MAP.CY }, (MAP.NODE_W + MAP.PILLAR_W) / 2, (MAP.NODE_H + MAP.PILLAR_H) / 2)
+  );
+  const inside = pts.every(
+    (p) => p.x - MAP.NODE_W / 2 >= 0 && p.x + MAP.NODE_W / 2 <= MAP.W && p.y - MAP.NODE_H / 2 >= 0 && p.y + MAP.NODE_H / 2 <= MAP.H
+  );
+  check(`${n} supports: no two boxes overlap, none covers the pillar, all inside the drawing`, !clash && !onPillar && inside);
+}
+const wrapped = wrapLabel("What a med spa actually pays for answer engine optimization every month", 26, 2);
+check("a long title wraps to at most two lines of 26", wrapped.length === 2 && wrapped.every((l) => l.length <= 26), wrapped.join(" / "));
+check("and says it was cut", wrapped[1].endsWith("…"));
+const mapNodes: MapNode[] = linkPlan.map((r) => ({
+  planId: r.planId,
+  rank: r.rank,
+  role: r.role ?? "support",
+  pillarId: r.pillarId,
+  title: r.workingTitle,
+  keyword: r.workingTitle,
+  category: r.theme ?? "",
+  status: "proposed",
+  slug: null,
+  words: null,
+  unsourced: null,
+  pill: null,
+}));
+const pairs = relatedPairs(mapNodes);
+check("sibling links are drawn once per pair, never to itself", pairs.every(([a, b]) => a !== b) && new Set(pairs.map((p) => p.slice().sort().join())).size === pairs.length);
+check("and match planLinksFor: support S1 links S2 and S3", pairs.some((p) => p.includes("S1") && p.includes("S2")) && pairs.some((p) => p.includes("S1") && p.includes("S3")));
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 process.exit(failures === 0 ? 0 : 1);
