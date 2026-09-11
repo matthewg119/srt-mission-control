@@ -81,6 +81,26 @@ export function questionAnswerJsonLd(args: {
 }
 
 /**
+ * A BreadcrumbList: hub index, pillar, this page.
+ *
+ * ‼️ THE HIERARCHY LIVES HERE AND IN LINKS, NEVER IN THE PATH. HUB_SLUG in middleware.ts forbids a
+ * slash on a client host, so /pillar/support cannot exist, and this is how an engine still learns
+ * that a support sits under its pillar. `item` must be absolute: a relative URL here is ignored.
+ */
+export function breadcrumbJsonLd(items: Array<{ name: string; url: string }>): Json {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: items.map((it, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      name: it.name,
+      item: it.url,
+    })),
+  };
+}
+
+/**
  * Serialise for a <script type="application/ld+json">.
  *
  * `<` is escaped so a stray "</script>" inside a client's own copy cannot close the tag

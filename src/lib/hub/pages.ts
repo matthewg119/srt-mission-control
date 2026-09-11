@@ -6,6 +6,7 @@
 import { unstable_cache, revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/db";
 import { pagesTag } from "@/lib/hub/resolve";
+import type { PlanLinkRow, PlanLinkRole } from "@/lib/hub/plan-links";
 
 export type PageStatus = "draft" | "published" | "archived";
 export type PromptBlock = "SERVICIO" | "COMPARATIVO" | "INFO" | "MARCA";
@@ -99,6 +100,60 @@ export const getPublished = (clientId: string, slug: string) =>
     { revalidate: 300, tags: [pagesTag(clientId)] }
   )();
 
+// ‼️ ONLY THE LINK COLUMNS, AND ONE STRING LITERAL for the reason COLUMNS gives. A wider select
+// is a wider set of columns that can be missing, and every one of them is a way to lose the links.
+const PLAN_LINK_COLUMNS = "id, page_id, role, pillar_id, theme, working_title, rank";
+
+/**
+ * The page plan's link columns for one client, for the hub template to draw pillar and support
+ * links from. See lib/hub/plan-links.ts.
+ *
+ * ‼️ RETURNS [] ON ANY FAILURE, THE OPPOSITE OF listPublished, AND ON PURPOSE. The links are
+ * decoration on a page that rendered fine without them, and `role` and `pillar_id` arrive with
+ * docs/2026-09-11-one-strategy.sql, which has not run everywhere. PostgREST fails a whole select on
+ * one unknown column, so a throw here would take down every live hub page in that window. No links
+ * is the hub as it was yesterday.
+ *
+ * ‼️ THE THROW HAPPENS INSIDE THE CACHE AND THE CATCH OUTSIDE IT, so a failure is never cached as an
+ * empty plan for five minutes. unstable_cache stores only what returns.
+ */
+export async function planLinkRows(clientId: string): Promise<PlanLinkRow[]> {
+  try {
+    return await unstable_cache(
+      async (): Promise<PlanLinkRow[]> => {
+        const { data, error } = await supabaseAdmin
+          .from("page_plan")
+          .select(PLAN_LINK_COLUMNS)
+          .eq("client_id", clientId)
+          .order("rank", { ascending: true });
+
+        if (error) throw new Error(error.message);
+        return (data ?? []).map((row) => {
+          const r = row as Record<string, unknown>;
+          const role = r.role === "pillar" || r.role === "support" ? (r.role as PlanLinkRole) : null;
+          return {
+            planId: r.id as string,
+            pageId: (r.page_id as string | null) ?? null,
+            role,
+            pillarId: (r.pillar_id as string | null) ?? null,
+            theme: (r.theme as string | null) ?? null,
+            workingTitle: (r.working_title as string | null) ?? "",
+            rank: Number(r.rank) || 0,
+          };
+        });
+      },
+      ["hub-plan-links", clientId],
+      { revalidate: 300, tags: [pagesTag(clientId)] }
+    )();
+  } catch (e) {
+    console.error(
+      `[hub/pages] plan links unavailable for ${clientId} (${(e as Error).message}). If this names ` +
+        `role or pillar_id, docs/2026-09-11-one-strategy.sql has not been run. Rendering without links.`
+    );
+    return [];
+  }
+}
+
 /** Everything, including drafts. For the board only — never rendered on a hub host. */
 export async function listAllForBoard(clientId: string): Promise<ClientPage[]> {
   const { data, error } = await supabaseAdmin
@@ -172,8 +227,11 @@ export interface SavePageInput {
  * Same guard and the same reasoning as `revalidateClientHub()` in hub/resolve.ts and the attach
  * path in hub/vercel-domains.ts, both of which already wrote this down. The tag expires on its
  * own; a lost write does not.
+ *
+ * Exported for the plan writers: a changed role or pillar_id changes which links a live page
+ * draws, and planLinkRows is cached under the same tag.
  */
-function bustPages(clientId: string): void {
+export function bustPages(clientId: string): void {
   try {
     revalidateTag(pagesTag(clientId));
   } catch {

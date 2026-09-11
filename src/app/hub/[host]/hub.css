@@ -179,6 +179,12 @@ body:has(.hub-root) {
   color: var(--hub-faint);
 }
 
+/* The plan's links (2026-09-11): "Part of" under the masthead, the onward list after the answer.
+   Drawn by the template from page_plan, never from the body. The list reuses .hub-list so every
+   template already styles it. */
+.hub-part { font-size: 0.9375rem; color: var(--hub-muted); }
+.hub-links { margin-top: 3rem; }
+
 /* ── The review tool ───────────────────────────────────────────────────────── */
 
 .rev-field { margin: 1.75rem 0 0; }

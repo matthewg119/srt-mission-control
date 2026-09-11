@@ -19,7 +19,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { HubClient } from "@/lib/hub/resolve";
-import { localBusinessJsonLd, questionAnswerJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
+import { localBusinessJsonLd, questionAnswerJsonLd, breadcrumbJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
+import { NO_PLAN_LINKS, type PlanLinks } from "@/lib/hub/plan-links";
 
 export interface HubBodyPage {
   id: string;
@@ -173,16 +174,27 @@ export function HubIndexBody({
   );
 }
 
-/** One answer page. The unit the whole hub exists to publish. */
+/**
+ * One answer page. The unit the whole hub exists to publish.
+ *
+ * `links` comes from the page plan through lib/hub/plan-links.ts and holds PUBLISHED pages only.
+ * Optional, and absent means the page as it was before the plan existed: the previews render this
+ * same component without it, and a page off the plan gets NO_PLAN_LINKS.
+ */
 export function HubAnswerBody({
   client,
   host,
   page,
+  links = NO_PLAN_LINKS,
 }: {
   client: HubClient;
   host: string;
   page: HubAnswerPage;
+  links?: PlanLinks;
 }) {
+  const pillar = links.isPillar ? null : links.pillar;
+  const onward = links.isPillar ? links.supports : links.related;
+
   return (
     <>
       <script
@@ -200,6 +212,24 @@ export function HubAnswerBody({
         }}
       />
 
+      {/* ‼️ Hub, pillar, page. Only when the pillar is published, or the trail names a 404. */}
+      {pillar && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: jsonLdScript(
+              breadcrumbJsonLd([
+                { name: client.displayName, url: `https://${host}/` },
+                { name: pillar.title, url: `https://${host}/${pillar.slug}` },
+                { name: page.title, url: `https://${host}/${page.slug}` },
+              ])
+            ),
+          }}
+        />
+      )}
+
+      {/* ‼️ No Person/Physician node: nothing structured is on file, and a name pulled from intake's free-text credentials would be invented. */}
+
       {/* Same wrapper as the index, for the same reason. See HubIndexBody. */}
       <header className="hub-head">
         <HubLogo client={client} />
@@ -210,6 +240,16 @@ export function HubAnswerBody({
         {page.question !== page.title && <p className="hub-lede">{page.question}</p>}
       </header>
 
+      {/*
+        ‼️ BELOW THE MASTHEAD, NOT INSIDE IT. The split hero lays .hub-head's children into a grid
+        in DOM order, so one more child there would push the h1 into the wrong column.
+      */}
+      {pillar && (
+        <p className="hub-part">
+          Part of <a href={`/${pillar.slug}`}>{pillar.title}</a>
+        </p>
+      )}
+
       <div className="hub-answer">
         {/*
           react-markdown does not render raw HTML unless rehype-raw is added, and it is
@@ -219,6 +259,23 @@ export function HubAnswerBody({
         */}
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{page.answerMd}</ReactMarkdown>
       </div>
+
+      {/*
+        ‼️ THE TEMPLATE DRAWS THESE, NEVER THE BODY. draft-page.ts bans links in answer_md so a
+        model cannot invent a citation as a link, and this is how the pages still link each other.
+      */}
+      {onward.length > 0 && (
+        <nav className="hub-links" aria-label={links.isPillar ? "Questions in this guide" : "Related answers"}>
+          <h2>{links.isPillar ? "The questions people ask about this" : "Related"}</h2>
+          <ul className="hub-list">
+            {onward.map((link) => (
+              <li key={link.slug}>
+                <a href={`/${link.slug}`}>{link.title}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
 
       <p className="hub-foot">
         {page.publishedAt
