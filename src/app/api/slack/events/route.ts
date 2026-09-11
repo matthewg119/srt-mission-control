@@ -998,9 +998,14 @@ export async function POST(request: NextRequest) {
           const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
           const { handleKeywordThreadReply } = await import("@/lib/clients/client-keywords");
           const { handlePreCallThreadReply } = await import("@/lib/clients/pre-call-pages");
+          // `photograph` in the Day 0 thread: the tracked set, measured. It prints the question
+          // count and the cost before spending anything, and the run itself happens in waitUntil
+          // like every other model-shaped reply here.
+          const { handlePhotographThreadReply } = await import("@/lib/clients/photograph");
           const said =
             (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
-            (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by }));
+            (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText }));
           if (said) {
             const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
             if (!slackOk(posted)) console.error("[slack/events] keyword/plan reply failed");

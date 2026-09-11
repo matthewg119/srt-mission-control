@@ -25,6 +25,7 @@
 // `freezeUniversalV1()` below are untouched by it.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { readOffer, usableTreatment } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
@@ -683,6 +684,12 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
     .from("audit_reports")
     .select("id, prompts")
     .eq("client_id", clientId)
+    // ‼️ THE BASELINE, AND THIS FILTER IS THE MOST LOAD-BEARING ONE IN THE SET. The tracked
+    // universal set for a new vertical is DERIVED from this report and then FROZEN forever. A
+    // Photograph II asks universal_v1 plus custom_v1, so without this the first Day 0 run would
+    // become the source of the very set it was measuring, and every later client in the vertical
+    // would inherit it. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -778,18 +785,47 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
  * edited in place" is the entire contract of a frozen set. A change is a new version.
  */
 export async function freezeUniversalV1(): Promise<void> {
+  const res = await freezeQuestionSet({
+    version: "universal_v1@med_spa",
+    vertical: "med_spa",
+    questions: UNIVERSAL_V1_MED_SPA,
+    note:
+      "The 20 Questions PDF verbatim (A2 D-P15). The fallback set in " +
+      "docs/specs/SRT-Question-Sets-v1.md is retired and must not seed this.",
+  });
+
+  if (!res.ok) throw new Error(`freezing universal_v1 failed: ${res.error}`);
+}
+
+/**
+ * THE one writer of question_set_versions.
+ *
+ * ‼️ docs/2026-08-19-harvest.sql CALLS A SECOND WRITER OF THIS TABLE A BUILD STOP, and the rule it
+ * is really protecting is that a frozen set is never EDITED: "harvest -> custom question set ->
+ * approved on the call -> Day 0 => question_set_versions". A row may be written when a set is
+ * frozen and never again, which is exactly what ignoreDuplicates enforces here. So the answer to
+ * two callers needing to freeze something is one function they both go through, not two upserts.
+ *
+ * The callers: freezeUniversalV1 (the med spa twenty), universalSetFor (a vertical's first client
+ * derives and freezes its own), and photograph.ts (custom_v1 at the moment it is measured). The
+ * harvest still writes nothing here, and must not.
+ */
+export async function freezeQuestionSet(args: {
+  version: string;
+  vertical: string;
+  questions: readonly string[];
+  note: string;
+}): Promise<{ ok: boolean; error?: string }> {
   const { error } = await supabaseAdmin.from("question_set_versions").upsert(
     {
-      version: "universal_v1@med_spa",
-      vertical: "med_spa",
-      questions: UNIVERSAL_V1_MED_SPA,
+      version: args.version,
+      vertical: args.vertical,
+      questions: args.questions,
       materialization: "materialization_v1",
-      note:
-        "The 20 Questions PDF verbatim (A2 D-P15). The fallback set in " +
-        "docs/specs/SRT-Question-Sets-v1.md is retired and must not seed this.",
+      note: args.note,
     },
     { onConflict: "version", ignoreDuplicates: true }
   );
 
-  if (error) throw new Error(`freezing universal_v1 failed: ${error.message}`);
+  return error ? { ok: false, error: error.message } : { ok: true };
 }

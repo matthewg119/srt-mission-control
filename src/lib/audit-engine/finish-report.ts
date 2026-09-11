@@ -26,6 +26,7 @@ import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
 import { writeAuditToLead } from "@/lib/audit-engine/lead-writeback";
+import { isSuppliedRun } from "@/lib/audit-engine/run-labels";
 import { companiesConflict } from "@/lib/company-identity";
 import { microsoft } from "@/lib/microsoft";
 import { waitUntil } from "@vercel/functions";
@@ -60,6 +61,26 @@ export async function failReport(row: AuditReportRow, message: string): Promise<
     .from("audit_reports")
     .update({ status: "failed", error: message, updated_at: new Date().toISOString() })
     .eq("id", row.id);
+
+  // ‼️ A SUPPLIED RUN HAS NO SLACK THREAD, SO ITS FAILURE HAD NOWHERE TO GO. The block below
+  // posts into the audit thread, and a run fired for a client carries none: the whole failure
+  // would have been a row nobody looks at. It reports into the step's own thread instead, which is
+  // where the person who asked for it is waiting.
+  if (isSuppliedRun(row) && row.client_id) {
+    const [{ stepForLabel }, { notifyStep }] = await Promise.all([
+      import("./supplied-run"),
+      import("@/lib/clients/step-board"),
+    ]);
+    const { SUPPLIED_LABELS } = await import("./run-labels");
+    const label = (row.run_label ?? SUPPLIED_LABELS[0]) as (typeof SUPPLIED_LABELS)[number];
+    await notifyStep(
+      row.client_id,
+      stepForLabel(label),
+      `:x: The *${label}* run did not finish: ${message}\nNothing was recorded, and no keyword was ` +
+        `marked as "not named" off a question that never got an answer.`
+    ).catch(() => {});
+    return;
+  }
 
   if (row.slack_channel_id && row.slack_thread_ts) {
     await slack
@@ -184,6 +205,22 @@ export async function finishReport(row: AuditReportRow): Promise<void> {
     .single();
 
   const finalRow = (updated as AuditReportRow | null) ?? { ...row, status: "done" as const, score: weighted.score };
+
+  // ‼️ A SUPPLIED RUN ENDS HERE, AND THE EARLY RETURN IS THE POINT.
+  //
+  // Photograph II, the day 30/60/90 re-tests and a keyword measurement all ask questions a person
+  // already approved, for a client who is already onboarded. Everything below this line is written
+  // for a PROSPECT: the CRM writeback, the thread scorecard, the intake card, the Outlook draft.
+  // Most of it would no-op on null columns, and relying on that is how a later change that reads a
+  // different column starts emailing clients their own measurement. So the branch is explicit and
+  // it is on the LABEL, not on which fields happen to be null. See run-labels.ts.
+  if (isSuppliedRun(finalRow)) {
+    const { onSuppliedRunDone } = await import("./supplied-run");
+    await onSuppliedRunDone(finalRow).catch((e) =>
+      console.error("[finishReport] supplied run outcome failed:", (e as Error).message)
+    );
+    return;
+  }
 
   // Tell the CRM what the audit learned. Best effort, and a no-op when the report has no
   // contact_id (every cold /audit). Idempotent on report id, so the watchdog re-finishing

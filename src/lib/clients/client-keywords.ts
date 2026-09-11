@@ -28,6 +28,7 @@ import {
   compareKeywords,
   expansionUser,
   formatKeywordCard,
+  gapDelta,
   isHookShaped,
   keywordCsv,
   keywordFault,
@@ -756,8 +757,6 @@ export async function handleKeywordThreadReply(input: {
         : addManyCommand(input.clientId, cmd.phrases, input.by);
     case "more":
       return moreCommand(input.clientId, cmd.category);
-    case "check":
-      return checkCommand(input.clientId);
   }
 }
 
@@ -988,95 +987,116 @@ async function moreCommand(clientId: string, category: CategorySpec): Promise<Ke
   };
 }
 
-/** How many queries `keywords check` puts to an engine. */
-const CHECK_COUNT = 20;
-
 /**
  * An estimate, stated as one. The Responses API with web_search on the audit model is billed per
  * search call plus tokens; about three cents a question is the planning figure, not a quote.
+ *
+ * It is on the card because a person is deciding whether to spend it: the tracked set is the
+ * universal twenty plus custom_v1, so a Complete client's Photograph II is eighty questions.
  */
-const CHECK_COST_EACH = 0.03;
+export const COST_PER_QUESTION = 0.03;
 
-async function checkCommand(clientId: string): Promise<KeywordReply> {
-  const loaded = await loadKeywords(clientId);
-  if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
-
-  const picked = loaded.rows
-    .filter((r) => !r.dropped && r.use === "query" && r.currentlyNamed === null)
-    .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9))
-    .slice(0, CHECK_COUNT);
-  if (picked.length === 0) return { message: "Every query near the top has been put to an engine already." };
-
-  const model = process.env.OPENAI_AUDIT_MODEL || "gpt-4.1-mini";
-  return {
-    message:
-      `Putting the top ${picked.length} unmeasured queries to ChatGPT (${model} with web search), one call each: ` +
-      `*${picked.length} OpenAI calls, roughly $${(picked.length * CHECK_COST_EACH).toFixed(2)}*. ` +
-      "The answers post here when they are back.",
-    after: () => runKeywordCheck(clientId, picked),
-  };
+export interface MeasurementOutcome {
+  ok: boolean;
+  error?: string;
+  /** Rows whose currently_named actually moved. A re-run of the same result updates nothing. */
+  updated: number;
+  named: number;
+  notNamed: number;
+  /** Questions that came back with no answer. They record NOTHING. */
+  skipped: number;
 }
 
-async function runKeywordCheck(clientId: string, picked: readonly StoredKeyword[]): Promise<void> {
-  const c = await keywordContext(clientId);
-  if (!c.ok) return say(clientId, `:warning: Not checked. Missing: ${c.missing.join("; ")}.`);
+/**
+ * Write a finished audit run's answers back onto this client's keywords.
+ *
+ * ‼️ THIS REPLACED `keywords check` ON 2026-09-12, AND THE REPLACEMENT IS THE WHOLE POINT.
+ * That command put the top twenty phrases to ChatGPT on its own, in a second runner, with its own
+ * scoring and its own idea of what "not named" meant. Matthew: "this should be done after we do
+ * the visibility audit or simply use the results we got from the visibility audit from that
+ * profile specifically." So the approved keywords now join the tracked question set, ONE audit
+ * measures them, and this reads that audit's rows. There is no second engine caller left.
+ *
+ * ‼️ A no_data ANSWER RECORDS NOTHING, NEVER "not named". run-prompts.ts's header states the rule
+ * and the 2026-08-05 outage is why: twenty unanswered questions scored as twenty absences produced
+ * a fabricated 0/100. Only `status = 'ok'` rows are read here.
+ *
+ * ‼️ THE +15 GAP TERM IS APPLIED ON A TRANSITION, NOT ON A MEASUREMENT. The old command wrote
+ * `score + 15` every time it ran, so a re-test of a phrase that is still unnamed would have added
+ * fifteen again, and again at day 60 and day 90, until an unchanged fact outranked everything in
+ * the set. It is added when a row BECOMES unnamed and taken off when it stops being, so the score
+ * describes the state rather than counting how often it was looked at.
+ */
+export async function applyMeasurement(clientId: string, reportId: string): Promise<MeasurementOutcome> {
+  const empty = { updated: 0, named: 0, notNamed: 0, skipped: 0 };
 
-  const { runOpenAI, withMention } = await import("@/lib/audit-engine/run-prompts");
-  const { buildAliases } = await import("@/lib/audit-engine/mention-match");
-  const aliases = buildAliases(c.ctx.clientName, c.ctx.website);
+  const [{ data: report }, { data: runRows, error: runError }, loaded, c] = await Promise.all([
+    supabaseAdmin.from("audit_reports").select("prompts").eq("id", reportId).maybeSingle(),
+    supabaseAdmin.from("audit_runs").select("prompt, mentioned, status").eq("report_id", reportId),
+    loadKeywords(clientId),
+    keywordContext(clientId),
+  ]);
 
-  const results: Array<{ row: StoredKeyword; mentioned: boolean | null; error: string | null }> = [];
-  for (let i = 0; i < picked.length; i += 5) {
-    const wave = await Promise.all(
-      picked.slice(i, i + 5).map(async (row) => {
-        const res = withMention(await runOpenAI(row.phrase, c.ctx.city), aliases);
-        return res.status === "ok"
-          ? { row, mentioned: res.mentioned, error: null }
-          : { row, mentioned: null, error: res.error };
-      })
-    );
-    results.push(...wave);
+  if (runError) return { ok: false, error: `audit_runs could not be read: ${runError.message}`, ...empty };
+  if ("error" in loaded) return { ok: false, error: `${loaded.error}. ${TABLE_HINT}`, ...empty };
+
+  // The prompts carry the keyword id they were built from. Matching on the id rather than on the
+  // text is what survives a phrase being tidied in one place and not the other.
+  const idByPrompt = new Map<string, string>();
+  for (const p of ((report?.prompts as Array<Record<string, unknown>> | null) ?? [])) {
+    const text = typeof p.prompt === "string" ? p.prompt : "";
+    const keywordId = typeof p.keyword_id === "string" ? p.keyword_id : "";
+    if (text && keywordId) idByPrompt.set(normalizePhrase(text), keywordId);
   }
 
-  const answered = results.filter((r) => r.mentioned !== null);
-  const failed = results.filter((r) => r.mentioned === null);
-
-  // ‼️ A QUESTION NOBODY ANSWERED IS NOT A QUESTION THEY WERE NOT NAMED FOR. The same rule
-  // run-prompts.ts enforces: no_data is recorded as nothing, never as false. The audit engine has
-  // been blocked on OpenAI credits before, so an account problem says so instead of recording
-  // twenty misses.
-  if (answered.length === 0) {
-    return say(
-      clientId,
-      `:x: OpenAI did not answer any of the ${results.length}: ${failed[0]?.error ?? "no reason given"}. ` +
-        "Nothing was recorded. If that is a billing or quota error, top up the OpenAI account and run `keywords check` again."
-    );
+  const byId = new Map(loaded.rows.map((r) => [r.id, r]));
+  const byNormalized = new Map<string, StoredKeyword>();
+  for (const r of loaded.rows) {
+    if (r.use === "query" && !byNormalized.has(r.normalized)) byNormalized.set(r.normalized, r);
   }
 
   const now = new Date().toISOString();
-  for (const r of answered) {
-    const spec = c.ctx.categories.find((s) => s.key === r.row.category);
-    const origin: KeywordOrigin = r.row.origin === "expansion" ? "measured" : r.row.origin;
-    // An evidence row keeps its other terms, which are not stored per term, so the gap term is
-    // added to its score rather than the score being rebuilt without them.
+  const out = { ...empty };
+
+  for (const run of (runRows ?? []) as Array<{ prompt: string; mentioned: boolean | null; status: string }>) {
+    if (run.status !== "ok" || typeof run.mentioned !== "boolean") {
+      out.skipped += 1;
+      continue;
+    }
+
+    const key = normalizePhrase(run.prompt ?? "");
+    const row = byId.get(idByPrompt.get(key) ?? "") ?? byNormalized.get(key);
+    // A tracked question that is not a keyword (the universal twenty) measures the client, not a
+    // keyword row. It is counted below and written nowhere, which is correct.
+    if (!row) continue;
+
+    if (run.mentioned) out.named += 1;
+    else out.notNamed += 1;
+
+    if (row.currentlyNamed === run.mentioned) continue;
+
+    const spec = c.ok ? c.ctx.categories.find((s) => s.key === row.category) : undefined;
+    const intent = spec?.intent ?? 0;
+    const origin: KeywordOrigin = row.origin === "expansion" ? "measured" : row.origin;
+
+    // A measured row's score is rebuilt from its provenance. An evidence row keeps the terms that
+    // are not stored individually, so only the gap term moves, and only by the transition.
     const score =
       origin === "measured"
-        ? scoreKeyword({ origin, frequency: 0, intent: spec?.intent ?? 0, objection: false, currentlyNamed: r.mentioned }, spec?.intent ?? 0)
-        : r.row.score + (r.mentioned === false ? 15 : 0);
-    await supabaseAdmin
+        ? scoreKeyword(
+            { origin, frequency: 0, intent, objection: false, currentlyNamed: run.mentioned },
+            intent
+          )
+        : row.score + gapDelta(row.currentlyNamed, run.mentioned);
+
+    const { error } = await supabaseAdmin
       .from("client_keywords")
-      .update({ currently_named: r.mentioned, origin, score, updated_at: now })
-      .eq("id", r.row.id);
+      .update({ currently_named: run.mentioned, origin, score, updated_at: now })
+      .eq("id", row.id);
+
+    if (!error) out.updated += 1;
   }
 
-  const missed = answered.filter((r) => r.mentioned === false);
-  await say(
-    clientId,
-    [
-      `*Checked ${answered.length} of ${results.length}.* ChatGPT named ${c.ctx.clientName} in ${answered.length - missed.length}.`,
-      ...(missed.length ? ["Not named, and these now carry the gap term (:dart:):", ...missed.slice(0, 20).map((r) => `  ${r.row.rank}. ${r.row.phrase}`)] : []),
-      ...(failed.length ? [`_${failed.length} got no answer (${failed[0].error}) and were recorded as nothing._`] : []),
-    ].join("\n")
-  );
   await refreshKeywordCard(clientId);
+  return { ok: true, ...out };
 }

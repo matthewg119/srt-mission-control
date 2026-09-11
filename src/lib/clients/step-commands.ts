@@ -20,7 +20,10 @@ import { DELIVERY_STEPS, isStepKey, stepNumber, type StepKey } from "@/config/de
 const OWNERS: ReadonlyArray<{ test: RegExp; step: StepKey; what: string }> = [
   { test: /^\s*[`*_]*(offer|terms)\s*:/i, step: "offer_locked", what: "The offer and the words customers use for it" },
   {
-    test: /^\s*[`*_]*keywords\s+(approve\b|drop\s+\d|add\s*:|more\s+\S|check\b)/i,
+    // `check` is deliberately absent: `keywords check` was removed on 2026-09-12 and is dictation
+    // now, so pointing somebody at another thread for it would send them to a command that is not
+    // there any more.
+    test: /^\s*[`*_]*keywords\s+(approve\b|drop\s+\d|add\s*:|more\s+\S)/i,
     step: "keyword_set",
     what: "Keyword commands",
   },

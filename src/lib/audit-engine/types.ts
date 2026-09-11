@@ -73,6 +73,18 @@ export interface AuditReportRow {
    *  /audit runs. finishReport runs in a different request and only sees this row, so the
    *  funnel has to be persisted here rather than passed through in memory. */
   lead_source: string | null;
+  /** The client this run was fired FOR (docs/2026-08-19-artifact-plumbing.sql). Null on every
+   *  prospect run, which is why the baseline verifier resolves by it and nothing else. */
+  client_id: string | null;
+  /** Which KIND of run this is (docs/2026-08-18-measurement.sql): prospect_audit | test_run |
+   *  photograph_1 | photograph_2 | retest_30/60/90 | measurement. Null on every row written
+   *  before that migration. See run-labels.ts — readers of "the newest report" filter on it. */
+  run_label: string | null;
+  /** A2 D-P14, set from the label. TRUE keeps a run out of the scorecard arithmetic. */
+  excluded_from_scorecard: boolean | null;
+  /** What ACTUALLY ran, for the "N questions x M engines" fidelity footer (A2 D-P16). M is 1
+   *  today, which is why `photograph_2` cannot be written. Defaults to ['chatgpt_web']. */
+  engines: string[] | null;
   slack_channel_id: string | null;
   slack_thread_ts: string | null;
   // The last set of 3 choose-from email options posted to the thread; a "1/2/3" reply turns

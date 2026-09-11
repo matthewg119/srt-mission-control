@@ -23,6 +23,7 @@
 // unanswered questions left the week is SKIPPED rather than filled with invented ones.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { postDraft, recurringDraftKey, type RecurringDraft } from "@/lib/clients/client-drafts";
 import { filterPhrases } from "@/lib/clients/phrase-quality";
 
@@ -156,6 +157,9 @@ export async function pickQuestions(clientId: string, limit = QUESTIONS_PER_WEEK
   let q = supabaseAdmin
     .from("audit_reports")
     .select("id")
+    // Baseline runs only: the `website ilike` rung below would otherwise match a measurement we
+    // fired for this client ourselves. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1);
 

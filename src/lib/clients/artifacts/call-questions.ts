@@ -43,6 +43,7 @@
 // every other card already uses, the moment the call legitimately comes round.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { stepNumber } from "@/config/delivery-steps";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { spokenPromises } from "@/lib/audit-engine/delivery-guards";
@@ -215,6 +216,9 @@ export async function buildQuestionFacts(clientId: string): Promise<QuestionFact
     .from("audit_reports")
     .select("id, score, engines, robots_check, site_signals")
     .eq("client_id", clientId)
+    // The baseline. These questions are read out on the call as what the engines said BEFORE the
+    // work, so a later measurement standing in for it would misdate every number. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

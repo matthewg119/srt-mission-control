@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { waitUntil } from "@vercel/functions";
 import { rerunBaselineScan } from "@/lib/clients/baseline-scan";
 import { RUN_IN_FLIGHT_MINUTES } from "@/lib/audit-engine/run-audit-pipeline";
@@ -55,6 +56,10 @@ export async function POST(
     .select("id")
     .eq("client_id", id)
     .in("status", ["classifying", "running"])
+    // ‼️ A MEASUREMENT IN FLIGHT IS NOT A RESCAN IN FLIGHT. Photograph II and the re-tests are
+    // minutes long and carry this client's id, so without this filter starting one would lock the
+    // Rescan button for as long as it ran, with a message about a baseline nobody had started.
+    .or(BASELINE_ONLY)
     .gte("created_at", cutoff)
     .limit(1)
     .maybeSingle();

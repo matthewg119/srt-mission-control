@@ -221,7 +221,13 @@ const STEP_LIST = [
   { key: "keyword_set", phase: PHASE_BEFORE, label: "Keywords: 200+ ways the offer is said, approved by me", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "avatar_harvest"] },
   // Blocked by the LOCK, not the proposal, since 2026-09-11, and re-run when the lock lands (the
   // stale-blocker re-aim in delivery-checklist.ts). Before Day 0 only: the set is frozen after it.
-  { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_locked"] },
+  // ‼️ blockedBy keyword_set SINCE 2026-09-12, AND THAT IS D2 IN ONE LINE. The approved keywords
+  // JOIN this set, so drafting it before a person has approved them builds the MEASUREMENT set out
+  // of the shared corpus alone. Measured on SRT: its audit asked twenty classifier-invented
+  // questions and none of them matched a keyword or a page candidate, so the set being measured and
+  // the set the pages were written against had nothing in common. It already sat after keyword_set
+  // in this array, so nothing moved; the re-aim in delivery-checklist.ts re-runs it on approval.
+  { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_locked", "keyword_set"] },
   // ‼️ The label no longer promises a hundred. `prompt_library` does not exist -- the corpus is
   // question_bank plus this client's own twenty -- so 100 is the CEILING the artifact prints
   // against, not a number it can deliver. The KEY is unchanged, because renaming a key orphans

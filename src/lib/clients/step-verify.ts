@@ -31,6 +31,7 @@
 // absent answer is reported as absent and never guessed.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { slack } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
@@ -288,6 +289,11 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       .from("audit_reports")
       .select("id, status, score")
       .eq("client_id", ctx.clientId)
+      // ‼️ 4. AND THE SUPPLIED RUNS ARE EXCLUDED, WHICH IS THE FOURTH DELIBERATE THING HERE.
+      // Photograph II is fired FOR this client and carries its client_id, so without this filter
+      // the first Day 0 run would become "the newest report" and step 2 would start reporting the
+      // Day 0 score as the baseline it is supposed to be measured against. See run-labels.ts.
+      .or(BASELINE_ONLY)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1564,15 +1570,37 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   // setDeliveryStep calls stampDay0() after the row write, and this runs before it. So the
   // evidence has to be the archive itself, in the thread. That also makes this step stricter
   // than it was: it sits in front of the only hard rail in the repo and was a bare assertion.
-  day_zero_archive: async (ctx) =>
-    artifactInThread(
+  // ‼️ THERE ARE NOW TWO WAYS TO CONFIRM THIS, AND THEY ARE DIFFERENT KINDS OF FACT.
+  //
+  // A real `photograph_2` run is SYSTEM tier: the app fired the tracked set, stored every answer
+  // and can count them. That is the archive itself, not a picture of one, which is what this step
+  // has always been asking for and what nothing could produce until 2026-09-12.
+  //
+  // The thread tier stays underneath it, unchanged, because one engine is keyed and A2 D-P16 says a
+  // one-engine run is never a photograph. Until a second engine is keyed, `photograph` files a
+  // `measurement` and this step is still confirmed the old way, by a person posting the archive.
+  day_zero_archive: async (ctx) => {
+    const { day0PhotographFor } = await import("./photograph");
+    const taken = await day0PhotographFor(ctx.clientId);
+
+    if (taken && taken.answered > 0) {
+      return verified(
+        `Photograph II is archived: ${taken.questions} tracked questions, ${taken.answered} answered, ` +
+          `taken ${taken.takenAt.slice(0, 10)}`,
+        "The day 30, 60 and 90 re-tests re-ask exactly those questions, off the archived run"
+      );
+    }
+
+    return artifactInThread(
       ctx,
       "a Day-0 archive having been taken",
-      "Post the archived Day-0 scan into this thread before ticking. This is the baseline the " +
-        "day 30/60/90 numbers are measured against, and once a page is live it cannot be " +
-        "recovered by being careful afterwards. Ticking here stamps day_0_source as " +
-        "manual_step, which is an assertion the archive happened and is never a photograph."
-    ),
+      "Post the archived Day-0 scan into this thread before ticking, or reply `photograph` to run " +
+        "the tracked set from here. This is the baseline the day 30/60/90 numbers are measured " +
+        "against, and once a page is live it cannot be recovered by being careful afterwards. " +
+        "Ticking here stamps day_0_source as manual_step, which is an assertion the archive " +
+        "happened and is never a photograph."
+    );
+  },
 
   // ── BUILD ──────────────────────────────────────────────────────────────────
   gbp_buildout: async (ctx) =>

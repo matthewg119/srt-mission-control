@@ -501,9 +501,17 @@ export async function setDeliveryStep(args: {
   if (args.stepKey === DAY_ZERO_STEP_KEY) {
     try {
       if (complete) {
+        // ‼️ THE SOURCE IS OBSERVED, NEVER PASSED IN. A real `photograph_2` run for this client is
+        // the difference between "a run wrote this" and "somebody ticked a box", and the honest way
+        // to tell them apart is to look. A caller-supplied source would let a button assert a
+        // fidelity nothing measured, which is the exact thing day_0_source exists to prevent.
+        // With one engine keyed this always finds nothing and stamps manual_step, as before.
+        const { day0PhotographFor } = await import("@/lib/clients/photograph");
+        const photograph = await day0PhotographFor(args.clientId).catch(() => null);
+
         await stampDay0({
           clientId: args.clientId,
-          source: "manual_step",
+          source: photograph && photograph.answered > 0 ? "photograph_2" : "manual_step",
           by: args.actor ?? null,
         });
       } else {

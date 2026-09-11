@@ -190,8 +190,11 @@ const morePrice = parseKeywordCommand("keywords more price", patient);
 check('"keywords more price" resolves to the price category', morePrice?.kind === "more" && morePrice.category.key === "price");
 const moreNaming = parseKeywordCommand("keywords more naming", owner);
 check('"keywords more naming" resolves on the owner table', moreNaming?.kind === "more" && moreNaming.category.key === "direct_naming");
-check('"keywords check"', parseKeywordCommand("keywords check", patient)?.kind === "check");
+// ‼️ REMOVED 2026-09-12, AND THIS ASSERTS IT STAYS REMOVED. `keywords check` used to put the top
+// twenty to ChatGPT from this lane. The audit measures the approved set now, so the old command is
+// an ordinary sentence and must fall through to the assistant like any other.
 for (const d of [
+  "keywords check",
   "keywords drop everything",
   "keywords matter less than people think",
   "keywords more than ever",

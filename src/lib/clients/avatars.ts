@@ -589,6 +589,29 @@ export async function handleAvatarThreadReply(args: {
     };
   }
 
+  // ‼️ A RUN IN FLIGHT IS ALREADY ASKING THE QUESTIONS. The stamp lands only when the run
+  // finishes, so between `photograph` and the answers coming back the check above is still false
+  // while the tracked set is out being measured. Changing the avatar there would regenerate the
+  // custom set underneath a measurement of the old one, and the two halves of the day 30
+  // comparison would describe different customers.
+  const { data: inFlight } = await supabaseAdmin
+    .from("audit_reports")
+    .select("id")
+    .eq("client_id", args.clientId)
+    .eq("run_label", "photograph_2")
+    .eq("status", "running")
+    .limit(1)
+    .maybeSingle();
+
+  if (inFlight && existing) {
+    return {
+      ok: false,
+      message:
+        `:hourglass: A Day 0 measurement is running right now, against *${existing.label}*. The ` +
+        "avatar is frozen until it finishes, because the questions being asked were built from it.",
+    };
+  }
+
   const found = await avatarCandidatesFor(args.clientId);
   const slot = slotForTypedAvatar(label, found.candidates);
   const result = await confirmAvatar({ clientId: args.clientId, slot, label, by: args.by });

@@ -26,6 +26,7 @@
 // silently rewrite the questions in a report already sent to a client.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { canonicalFor, loadSweep, effectiveStatus, countByStatus } from "../presence-sweep";
 import { platformByKey } from "@/config/presence-platforms";
 import type { Canonical } from "../nap-compare";
@@ -559,6 +560,10 @@ export async function generateFindings(
     .from("audit_reports")
     .select("id, engines, robots_check, site_signals")
     .eq("client_id", clientId)
+    // The BASELINE, never a measurement we fired ourselves. Section 1 quotes this run's questions
+    // back to the client, and a Photograph II or a re-test would put the tracked set in a document
+    // describing what the engines said before any of the work started. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

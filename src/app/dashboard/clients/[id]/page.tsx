@@ -7,6 +7,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BarChart3, Network } from "lucide-react";
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { INTAKE_STEPS } from "@/config/client-intake";
 import { stepNumber } from "@/config/delivery-steps";
 import { ONBOARDING_STAGES } from "@/lib/clients/provision";
@@ -300,6 +301,8 @@ export default async function ClientDetailPage({
     .select("id, created_at")
     .eq("client_id", id)
     .eq("status", "done")
+    // The baseline photograph, not a measurement fired for this client. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

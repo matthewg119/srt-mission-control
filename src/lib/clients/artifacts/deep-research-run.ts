@@ -55,6 +55,7 @@
 // than one with fewer sections, because somebody builds pages off it.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { callClaudeText, type ClaudeModel } from "@/lib/claude-calls";
 import * as pdf from "@/lib/pdf/kit";
 import { deliverArtifact } from "./deliver";
@@ -1210,8 +1211,15 @@ async function measuredContext(
 ): Promise<{ citedDomains: string[]; namedInstead: string[] }> {
   const empty = { citedDomains: [], namedInstead: [] };
 
+  // Baseline runs only, on every rung. The website rung in particular would match a supplied run,
+  // which carries this client's domain and no contact_id at all. See run-labels.ts.
   const base = () =>
-    supabaseAdmin.from("audit_reports").select("id").order("created_at", { ascending: false }).limit(1);
+    supabaseAdmin
+      .from("audit_reports")
+      .select("id")
+      .or(BASELINE_ONLY)
+      .order("created_at", { ascending: false })
+      .limit(1);
 
   let { data: report } = await base().eq("client_id", clientId).maybeSingle();
 

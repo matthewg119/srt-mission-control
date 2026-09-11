@@ -737,6 +737,11 @@ async function instructionsFor(
         "numbers are measured against, and a target changed afterwards leaves the case study",
         "comparing two different questions. The universal twenty stay in place underneath either way.",
         "",
+        // The measurement itself, and what it costs, stated before anything is spent. Until
+        // 2026-09-12 this card could only ask somebody to go and take a scan by hand: nothing in
+        // the system could run the tracked set. See clients/photograph.ts.
+        ...(await (await import("./photograph")).photographCardLines(c.id)),
+        "",
         "*The one step that blocks rather than flags.* Nothing may be published until it is",
         "ticked, and ticking it stamps `clients.day_0_archived_at`.",
         "",

@@ -7,6 +7,7 @@
 // short of re-running the whole onboarding funnel.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { autoCompleteStep, setDeliveryStep } from "@/lib/clients/delivery-checklist";
 import { anchorTsFor, notifyStep } from "@/lib/clients/step-board";
@@ -80,6 +81,10 @@ export async function adoptAuditClassification(
     .from("audit_reports")
     .select("vertical_slug, business_type")
     .eq("client_id", clientId)
+    // The classifier's answer comes off the BASELINE. A supplied run copies its vertical from the
+    // client row, so adopting from one would be the client's own value making a round trip and
+    // arriving as though something had classified it. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

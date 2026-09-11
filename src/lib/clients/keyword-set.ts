@@ -47,6 +47,7 @@
 // keyword step, so both halves read the market the same way.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { SCORE_TERMS, scoreCandidate, themeOf, offerBonus } from "./artifacts/page-candidates";
 import { loadOffer, effectiveTreatment } from "./offers";
 import { filterPhrases, tidyPhrase, normalizePhrase } from "./phrase-quality";
@@ -197,7 +198,11 @@ export async function evidenceRows(clientId: string): Promise<EvidenceRead | { e
   // fragments, whole paragraphs of somebody's prose. See phrase-quality.ts for the rules.
   const bankFiltered = filterPhrases(bank ?? [], (r) => String(r.phrase ?? ""));
 
-  const named = await namedByPrompt(client.contact_id as string | null, client.domain as string | null);
+  const named = await namedByPrompt(
+    client.id as string,
+    client.contact_id as string | null,
+    client.domain as string | null
+  );
 
   const byNormal = new Map<string, EvidenceKeyword>();
   let deduped = 0;
@@ -422,23 +427,49 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
  * only one of them earns the largest term in the score.
  */
 async function namedByPrompt(
+  clientId: string,
   contactId: string | null,
   domain: string | null
 ): Promise<Map<string, boolean>> {
   const map = new Map<string, boolean>();
 
+  // ‼️ client_id FIRST SINCE 2026-09-12, AND IT USED NOT TO BE A RUNG AT ALL.
+  // audit_reports.client_id is the only key that says "this run was fired FOR this client";
+  // contact_id and the domain both match a `prospect_audit`, the one-engine run the audit bot
+  // fires at a lead, which A2 D-P14 says is never a photograph. The older rungs stay as the
+  // fallback for a client whose baseline predates that column being populated.
+  //
+  // Supplied runs are excluded on every rung: the whole point of this map is what the engines said
+  // at the BASELINE, and applyMeasurement is what writes a later measurement onto a keyword row.
   let q = supabaseAdmin
     .from("audit_reports")
     .select("id")
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1);
 
-  if (contactId) q = q.eq("contact_id", contactId);
+  if (clientId) q = q.eq("client_id", clientId);
+  else if (contactId) q = q.eq("contact_id", contactId);
   else if (domain) q = q.ilike("website", `%${domain}%`);
   else return map;
 
   const { data: reports } = await q;
-  const reportId = reports?.[0]?.id as string | undefined;
+  let reportId = reports?.[0]?.id as string | undefined;
+
+  // No run carries this client's id. Fall back to the older rungs rather than reporting that no
+  // engine has ever named them, which is what an empty map means to every caller.
+  if (!reportId && clientId && (contactId || domain)) {
+    let fallback = supabaseAdmin
+      .from("audit_reports")
+      .select("id")
+      .or(BASELINE_ONLY)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    fallback = contactId ? fallback.eq("contact_id", contactId) : fallback.ilike("website", `%${domain}%`);
+    const { data: older } = await fallback;
+    reportId = older?.[0]?.id as string | undefined;
+  }
+
   if (!reportId) return map;
 
   const { data: runs } = await supabaseAdmin

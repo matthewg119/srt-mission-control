@@ -28,6 +28,7 @@
 // number that moves on its own makes the day-30 comparison meaningless.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { stepNumber } from "@/config/delivery-steps";
 import { commercialIntent, isObjection, verticalFor } from "../harvest";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
@@ -223,7 +224,14 @@ async function namedByQuestion(clientId: string): Promise<Map<string, boolean>> 
   // Same two-rung join the rest of the client code uses. audit_reports.client_id is the better
   // key and is deliberately not used: docs/2026-08-19-artifact-plumbing.sql adds it, and
   // PostgREST fails the WHOLE query on one unknown column rather than ignoring it.
-  let q = supabaseAdmin.from("audit_reports").select("id").order("created_at", { ascending: false }).limit(1);
+  // The `website ilike` rung below can match a supplied run, which carries no contact_id but does
+  // carry the client's domain, so the filter goes on before either rung. See run-labels.ts.
+  let q = supabaseAdmin
+    .from("audit_reports")
+    .select("id")
+    .or(BASELINE_ONLY)
+    .order("created_at", { ascending: false })
+    .limit(1);
   if (client.contact_id) q = q.eq("contact_id", client.contact_id as string);
   else if (client.domain) q = q.ilike("website", `%${client.domain as string}%`);
   else return map;

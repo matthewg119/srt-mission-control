@@ -29,6 +29,7 @@
 // would make the day-30 comparison meaningless.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_PAGES = 40;
@@ -440,6 +441,9 @@ export async function runHarvest(
     .from("audit_reports")
     .select("id")
     .eq("client_id", clientId)
+    // The citation harvest reads the pages the engines cited at the BASELINE. A supplied run's
+    // citations describe what they cite now, which is not what this corpus is for. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

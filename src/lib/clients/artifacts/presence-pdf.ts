@@ -19,6 +19,7 @@
 // This PDF is findings section 2's evidence, and it is attached to it rather than folded in.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { platformByKey } from "@/config/presence-platforms";
 import { canonicalFor, loadSweep, effectiveStatus, countByStatus, worstFirst, type SweepRow } from "../presence-sweep";
 import { canonicalAddress, type Canonical } from "../nap-compare";
@@ -358,6 +359,9 @@ export async function generatePresencePdf(
     .from("audit_reports")
     .select("engines")
     .eq("client_id", clientId)
+    // The baseline's engine list, for the fidelity footer. A supplied run would print the engines
+    // of a measurement taken weeks later on a document about the starting state. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

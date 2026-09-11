@@ -437,6 +437,23 @@ export function tierOf(origin: KeywordOrigin): 0 | 1 {
  * of it). A measured one adds the gap term when an engine was asked and did not name them, which
  * is the only fact about it anybody has established.
  */
+/**
+ * How much the visibility-gap term moves when a measurement lands.
+ *
+ * ‼️ IT IS A TRANSITION, NOT A MEASUREMENT, AND THE OLD CODE GOT THIS WRONG.
+ * `keywords check` wrote `score + (mentioned === false ? 15 : 0)` every time it ran. Run it twice
+ * on a phrase nobody names them for and the row carried +30, then +45 at day 60 and +60 at day 90,
+ * until a fact that had not changed outranked everything in the set. The term describes a STATE
+ * ("no engine names them for this"), so it goes on when a row becomes unnamed and comes off when it
+ * stops being, and a re-test that measures the same answer moves nothing.
+ *
+ * 15 is SCORE_TERMS' "No engine names them for it" weight in page-candidates.ts, and it is the
+ * largest term in the model, which is exactly why stacking it was worth catching.
+ */
+export function gapDelta(previous: boolean | null, next: boolean): number {
+  return (next === false ? 15 : 0) - (previous === false ? 15 : 0);
+}
+
 export function scoreKeyword(
   row: Pick<KeywordCandidate, "origin" | "frequency" | "intent" | "objection" | "currentlyNamed">,
   categoryIntent: number
@@ -562,15 +579,20 @@ export const KEYWORDS_APPROVE = /^keywords\s+approve$/i;
 export const KEYWORDS_DROP = /^keywords\s+drop\s+(\d{1,4}(?:\s*,\s*\d{1,4})*)$/i;
 export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
 export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
-export const KEYWORDS_CHECK = /^keywords\s+check$/i;
+
+// ‼️ `keywords check` WAS HERE AND IS GONE (2026-09-12). It put the top twenty phrases to ChatGPT
+// from this lane, with its own scoring and its own second engine caller. The approved queries now
+// JOIN the tracked question set and the visibility audit measures them, which is what Matthew asked
+// for: "use the results we got from the visibility audit from that profile specifically". The
+// writeback is applyMeasurement in client-keywords.ts. `keywords check` is dictation now, and the
+// probe asserts exactly that, so the grammar cannot quietly grow it back.
 
 export type KeywordCommand =
   | { kind: "approve" }
   | { kind: "drop"; ranks: number[] }
   /** One phrase, or a pasted list: one per line, numbered or not. */
   | { kind: "add"; phrases: string[] }
-  | { kind: "more"; category: CategorySpec }
-  | { kind: "check" };
+  | { kind: "more"; category: CategorySpec };
 
 /**
  * `keywords more price`, `keywords more naming`, `keywords more direct_naming`. A key, a label, or
@@ -623,7 +645,6 @@ export function addList(body: string): string[] {
 export function parseKeywordCommand(raw: string, categories: readonly CategorySpec[]): KeywordCommand | null {
   const text = raw.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
   if (KEYWORDS_APPROVE.test(text)) return { kind: "approve" };
-  if (KEYWORDS_CHECK.test(text)) return { kind: "check" };
 
   const drop = KEYWORDS_DROP.exec(text);
   if (drop) {
@@ -847,7 +868,7 @@ export function formatKeywordCard(
     "  • `keywords drop 12` or `keywords drop 12, 15, 40` removes rows by number.",
     "  • `keywords add: <phrase>` adds your own. It ranks like evidence, because you said it.",
     "  • `keywords more <category>` writes more for one category, e.g. `keywords more price`.",
-    `  • \`keywords check\` asks ChatGPT the top 20 and records whether it names ${ctx.clientName}. It spends OpenAI calls; the count and the cost are posted first.`,
+    `  • Measuring is not a command here. The approved queries JOIN the tracked question set, and the visibility audit asks them: at Day 0 for the archived run, then again at day 30, 60 and 90. Roughly $0.03 a question, and the Day 0 card states the count before anything is spent.`,
     "",
     "_Every `expansion` row was proposed by a model. That is not evidence anybody searched it, which is why those rows rank below anything the market or you said. Hooks are kept for ads and emails and never become a page's keyword._"
   );

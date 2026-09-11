@@ -107,6 +107,8 @@ export interface SetProvenance {
   harvest: number;
   deepResearch: number;
   ownerIntake: number;
+  /** Approved, offer-relevant queries from the keyword step. See the push below. */
+  keywords: number;
   /** Buckets the corpus could not fill to target, with how short each ran. */
   shortfall: Array<{ bucket: Bucket; wanted: number; got: number }>;
 }
@@ -134,6 +136,58 @@ function ownerPhrases(idealPatient: Record<string, unknown>): string[] {
     .map((s) => (s.endsWith("?") ? s : `${s}?`));
 }
 
+/**
+ * The approved keyword queries that may join the tracked set, best first.
+ *
+ * ‼️ SPREAD ACROSS CATEGORIES, FOCUS FIRST, AND CAPPED PER CATEGORY. The keyword set is ranked by
+ * score, and score rewards the visibility gap, so the top of it can be twenty price phrases on a
+ * client nobody is named for. A tracked set of twenty price questions measures one thing twenty
+ * times. The four buying questions (price, fears, comparisons, how it works) are the `focus`
+ * categories the page plan already builds its supports from, so the same order is used here.
+ *
+ * Deterministic: same rows in, same questions out. The whole file depends on that (see the header).
+ */
+async function approvedKeywordQuestions(
+  clientId: string,
+  cap: number
+): Promise<Array<{ phrase: string; score: number; intent: number }>> {
+  if (cap <= 0) return [];
+
+  const { planKeywords } = await import("../client-keywords");
+  const { isRelevantKeyword } = await import("../keyword-expansion");
+
+  const plan = await planKeywords(clientId);
+  // No approved set yet is the normal case before the keyword step is worked. The set is still
+  // drafted from the corpus, and the stale-blocker re-aim re-runs this the moment it is approved.
+  if ("error" in plan) return [];
+
+  const PER_CATEGORY = 3;
+  const relevant = plan.rows
+    .filter((r) => isRelevantKeyword(r, plan.vocab))
+    .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
+
+  const focusKeys = new Set(plan.ctx.categories.filter((c) => c.focus).map((c) => c.key));
+  const ordered = [
+    ...relevant.filter((r) => focusKeys.has(r.category)),
+    ...relevant.filter((r) => !focusKeys.has(r.category)),
+  ];
+
+  const taken = new Map<string, number>();
+  const out: Array<{ phrase: string; score: number; intent: number }> = [];
+  for (const row of ordered) {
+    if (out.length >= cap) break;
+    const used = taken.get(row.category) ?? 0;
+    if (used >= PER_CATEGORY) continue;
+    taken.set(row.category, used + 1);
+    out.push({
+      phrase: row.phrase,
+      score: row.score,
+      intent: plan.ctx.categories.find((c) => c.key === row.category)?.intent ?? 0,
+    });
+  }
+  return out;
+}
+
 export async function generateCustomQuestionSet(clientId: string): Promise<AutoResult> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -142,6 +196,32 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     .maybeSingle();
 
   if (!client) return { ok: false, error: "Client not found." };
+
+  // ‼️ AN APPROVED SET IS FROZEN AND THIS MUST NOT WRITE OVER IT.
+  //
+  // The upsert below is unconditional on (client_id, version), and it writes status "draft". Once
+  // Photograph II has run, custom_v1 IS the tracked set: the day 30/60/90 numbers are scored
+  // against exactly those questions, and audit_reports.prompts on the archived run is the record of
+  // what was asked. Re-running this step afterwards would silently replace the questions while the
+  // measurement of the old ones stayed on the board, and every later comparison would be between
+  // two different sets presented as one trend.
+  const { data: frozen } = await supabaseAdmin
+    .from("client_question_sets")
+    .select("status, approved_at")
+    .eq("client_id", clientId)
+    .eq("version", "custom_v1")
+    .maybeSingle();
+
+  if ((frozen?.status as string | null) === "approved") {
+    return {
+      ok: false,
+      error:
+        `custom_v1 was approved${frozen?.approved_at ? ` on ${String(frozen.approved_at).slice(0, 10)}` : ""} and is ` +
+        `the frozen tracked set, so it cannot be redrafted. The day 30, 60 and 90 numbers are scored ` +
+        `against exactly those questions. A change of wording is a NEW version, never an edit of ` +
+        `this one.`,
+    };
+  }
 
   // ‼️ REFUSES RATHER THAN GUESSING, and this is the READ side of the same bug harvest.ts
   // documents. A wrong vertical here does not corrupt anything, it silently builds the client's
@@ -174,7 +254,7 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
   // do. See src/lib/clients/phrase-quality.ts for the rules and the numbers.
   const bankFiltered = filterPhrases(bank ?? [], (r) => String(r.phrase ?? ""));
 
-  const provenance: SetProvenance = { harvest: 0, deepResearch: 0, ownerIntake: 0, shortfall: [] };
+  const provenance: SetProvenance = { harvest: 0, deepResearch: 0, ownerIntake: 0, keywords: 0, shortfall: [] };
   const pool: CustomQuestion[] = [];
   const seen = new Set<string>();
 
@@ -186,6 +266,7 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     pool.push({ question, bucket: bucketOf(phrase), source, frequency, intent });
     if (source === "deep_research") provenance.deepResearch += 1;
     else if (source === "owner_intake") provenance.ownerIntake += 1;
+    else if (source === "keywords") provenance.keywords += 1;
     else provenance.harvest += 1;
   };
 
@@ -193,6 +274,27 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
   // near-duplicate. Given the highest frequency so they sort to the top of their bucket.
   for (const phrase of ownerPhrases((client.ideal_patient ?? {}) as Record<string, unknown>)) {
     push(phrase, "owner_intake", Number.MAX_SAFE_INTEGER, commercialIntent(phrase));
+  }
+
+  // ‼️ THE APPROVED KEYWORDS JOIN THE TRACKED SET (2026-09-12), AND THAT IS THE WHOLE OF D2.
+  //
+  // Measured on SRT, 2026-09-11: its one client-linked audit asked twenty classifier-invented
+  // questions and NOT ONE of them matched a keyword or a page candidate. So the set being measured
+  // from Day 0 and the set the pages were written against were different sets, and the day 30/60/90
+  // numbers would have described questions nobody chose. A person approved these phrases in the
+  // keyword step; the audit asks them; applyMeasurement writes the answers back onto the same rows.
+  //
+  // Relevance is the same test the page plan uses, so a phrase that cannot be a pillar or a support
+  // cannot become a tracked question either. Second in priority, after the owner's own words and
+  // before the shared corpus: the owner's sentences are the only thing here that came from the
+  // person who answers these questions all day.
+  //
+  // Capped at half the set. A tracked set made only of keywords would drop the market's own
+  // phrasings, which is the half that makes the day-30 comparison about the MARKET and not about
+  // what we chose to aim at.
+  const keywordSeeds = await approvedKeywordQuestions(clientId, Math.floor(target / 2));
+  for (const seed of keywordSeeds) {
+    push(seed.phrase, "keywords", seed.score, seed.intent);
   }
 
   for (const row of bankFiltered.kept) {
@@ -304,6 +406,10 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       { label: "Harvested", value: `${provenance.harvest} phrases from cited sources` },
       { label: "Deep research", value: `${provenance.deepResearch} from the pasted-back brief` },
       { label: "Owner's own words", value: `${provenance.ownerIntake} from intake, verbatim` },
+      {
+        label: "Approved keywords",
+        value: `${provenance.keywords} from the keyword step, each one approved by a person and about the offer`,
+      },
       // ‼️ THE SKIPPED COUNT IS PART OF THE PROVENANCE, NOT A FOOTNOTE. A set drawn from 169
       // usable rows out of 451 stored is a different artifact from one drawn from 451, and the
       // difference is invisible unless it is printed. Without this line a thin set looks like a
