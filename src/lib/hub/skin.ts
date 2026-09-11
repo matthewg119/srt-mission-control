@@ -92,6 +92,62 @@ export function templateInfo(key: HubTemplate): TemplateInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shape. Bounded words, never CSS.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How a page is arranged, as a handful of words that each have a fixed set of values.
+ *
+ * ‼️ MORE ENUMS, NOT MORE FREEDOM. Matthew asked for a screenshot to carry a reference's
+ * navigation look, its masthead and its background. The version of that which survives review is
+ * a model choosing from a union and hub.css holding a rule a person wrote for each value. The
+ * model never emits CSS, readSkin() REFUSES a value outside the union rather than mapping it to a
+ * nearby one, and the class written for it can only be one this file lists.
+ *
+ * ‼️ NOTHING HERE MOVES MEANING. Every value's rule sits below the TEMPLATES banner in hub.css,
+ * where _probe-hub-skin.ts forbids display:none, visibility:hidden, generated content and
+ * `order:`. A split masthead is a grid that places the children in DOM order; nothing is hidden,
+ * inserted or reordered, and hub-bodies.tsx is not touched by any of it. A layout these words
+ * cannot reach is a fifth TEMPLATE, which is a code change on purpose.
+ */
+export const NAV_STYLES = ["inline", "pill", "band"] as const;
+export const HERO_STYLES = ["left", "centered", "split"] as const;
+/** The CSS half of a background: every value is generated from the colour tokens. No asset. */
+export const SURFACES = ["flat", "glow", "gradient", "dots", "grid", "noise"] as const;
+export const HEADING_SCALES = ["compact", "standard", "display"] as const;
+export const HEADING_WEIGHTS = ["regular", "medium", "semibold", "bold", "heavy"] as const;
+export const HEADING_TRACKINGS = ["tight", "normal", "wide"] as const;
+
+export type NavStyle = (typeof NAV_STYLES)[number];
+export type HeroStyle = (typeof HERO_STYLES)[number];
+export type Surface = (typeof SURFACES)[number];
+export type HeadingScale = (typeof HEADING_SCALES)[number];
+export type HeadingWeight = (typeof HEADING_WEIGHTS)[number];
+export type HeadingTracking = (typeof HEADING_TRACKINGS)[number];
+
+/**
+ * Every trait in one table: the field, the class prefix hub.css uses, and the values.
+ *
+ * One table so the vision prompt, readSkin()'s gate, the class writer and the probe that checks
+ * hub.css has a rule for every value cannot disagree about what exists.
+ */
+export const SKIN_TRAITS = [
+  { field: "nav", prefix: "hub-nav", values: NAV_STYLES },
+  { field: "hero", prefix: "hub-hero", values: HERO_STYLES },
+  { field: "surface", prefix: "hub-surface", values: SURFACES },
+  { field: "headingScale", prefix: "hub-hs", values: HEADING_SCALES },
+  { field: "headingWeight", prefix: "hub-hw", values: HEADING_WEIGHTS },
+  { field: "headingTracking", prefix: "hub-ht", values: HEADING_TRACKINGS },
+] as const;
+
+export type SkinTraitField = (typeof SKIN_TRAITS)[number]["field"];
+
+/** A value from the list, or null. Refused, never matched: "centre" is not "centered" here. */
+export function oneOf<T extends string>(values: readonly T[], v: unknown): T | null {
+  return typeof v === "string" && (values as readonly string[]).includes(v) ? (v as T) : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The object
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -123,6 +179,13 @@ export interface HubSkin {
   subheadingFace: HubFace | null;
   /** The eyebrow, the NAP labels and the footer line. Where a mono or small-caps label lives. */
   labelFace: HubFace | null;
+  /** Shape words. Each is a class hub.css has a rule for, or null. See SKIN_TRAITS. */
+  nav: NavStyle | null;
+  hero: HeroStyle | null;
+  surface: Surface | null;
+  headingScale: HeadingScale | null;
+  headingWeight: HeadingWeight | null;
+  headingTracking: HeadingTracking | null;
   /** px. Corner radius for cards, inputs and buttons across the hub AND the review tool. */
   radius: number | null;
   /** rem. The measure: how wide the column is allowed to get. */
@@ -160,6 +223,12 @@ export const EMPTY_SKIN: StoredSkin = {
   headingFace: null,
   subheadingFace: null,
   labelFace: null,
+  nav: null,
+  hero: null,
+  surface: null,
+  headingScale: null,
+  headingWeight: null,
+  headingTracking: null,
   radius: null,
   measure: null,
   baseSize: null,
@@ -225,6 +294,14 @@ export function readSkin(raw: unknown): StoredSkin {
     headingFace: safeFace(s.headingFace),
     subheadingFace: safeFace(s.subheadingFace),
     labelFace: safeFace(s.labelFace),
+    // ‼️ A CLASS NAME SOMEBODY ELSE WOULD GET TO CHOOSE, if these were not gated: each becomes
+    // `hub-<trait>-<value>` in a class attribute. Same reason the template is gated above.
+    nav: oneOf(NAV_STYLES, s.nav),
+    hero: oneOf(HERO_STYLES, s.hero),
+    surface: oneOf(SURFACES, s.surface),
+    headingScale: oneOf(HEADING_SCALES, s.headingScale),
+    headingWeight: oneOf(HEADING_WEIGHTS, s.headingWeight),
+    headingTracking: oneOf(HEADING_TRACKINGS, s.headingTracking),
     radius: safeNumber(s.radius, RADIUS_RANGE[0], RADIUS_RANGE[1]),
     measure: safeNumber(s.measure, MEASURE_RANGE[0], MEASURE_RANGE[1]),
     baseSize: safeNumber(s.baseSize, BASE_SIZE_RANGE[0], BASE_SIZE_RANGE[1]),
@@ -251,6 +328,66 @@ export function readSkin(raw: unknown): StoredSkin {
  */
 export function skinClass(skin: StoredSkin | null): string {
   return `hub-tpl-${skin?.template ?? DEFAULT_TEMPLATE}`;
+}
+
+/**
+ * The trait classes, from values re-checked against the table here, so a class is always one
+ * hub.css has a rule for even if a caller hands over an object that skipped readSkin().
+ *
+ * Separate from skinClass() on purpose: that function's exact output is asserted by
+ * _probe-hub-skin.ts, and a template and a trait are different kinds of thing.
+ */
+export function skinTraits(skin: StoredSkin | null): string {
+  if (!skin) return "";
+  const out: string[] = [];
+  for (const t of SKIN_TRAITS) {
+    const v = oneOf(t.values as readonly string[], skin[t.field]);
+    if (v) out.push(`${t.prefix}-${v}`);
+  }
+  return out.join(" ");
+}
+
+/**
+ * .hub-root's whole class attribute, written once for all five renderers.
+ *
+ * ‼️ ONE FUNCTION BECAUSE FIVE HAND-WRITTEN CLASS STRINGS IS HOW A PREVIEW STARTS LYING. The live
+ * layout, both previews and the standalone preview file each spelled `hub-root ${skinClass(...)}`
+ * themselves; a trait added to four of them would render on a call and not on the client's domain.
+ */
+export function hubRootClass(skin: StoredSkin | null): string {
+  return ["hub-root", skinClass(skin), skinTraits(skin)].filter(Boolean).join(" ");
+}
+
+const TRAIT_WORDS: Record<SkinTraitField, Record<string, string>> = {
+  nav: { inline: "navigation as plain links", pill: "labels and links as pills", band: "navigation in a band" },
+  hero: { left: "masthead left-aligned", centered: "masthead centred", split: "masthead split in two" },
+  surface: {
+    flat: "a flat ground",
+    glow: "a soft glow behind the top",
+    gradient: "a gradient ground",
+    dots: "a dot-grid ground",
+    grid: "a line-grid ground",
+    noise: "a grain texture",
+  },
+  headingScale: { compact: "compact headlines", standard: "standard-size headlines", display: "display-size headlines" },
+  headingWeight: {
+    regular: "regular weight",
+    medium: "medium weight",
+    semibold: "semibold weight",
+    bold: "bold weight",
+    heavy: "heavy weight",
+  },
+  headingTracking: { tight: "tight tracking", normal: "normal tracking", wide: "wide tracking" },
+};
+
+/** The traits in words, for a card. Only set values, in table order. */
+export function traitWords(skin: StoredSkin): string[] {
+  const out: string[] = [];
+  for (const t of SKIN_TRAITS) {
+    const v = oneOf(t.values as readonly string[], skin[t.field]);
+    if (v) out.push(TRAIT_WORDS[t.field][v]);
+  }
+  return out;
 }
 
 /**
@@ -305,6 +442,10 @@ export function skinOverrides(skin: StoredSkin): string[] {
   if (skin.headingFamily || skin.headingFace || skin.subheadingFace || skin.labelFace) {
     out.push("fonts");
   }
+  if (skin.hero) out.push("masthead");
+  if (skin.nav) out.push("navigation");
+  if (skin.surface) out.push("background");
+  if (skin.headingScale || skin.headingWeight || skin.headingTracking) out.push("headline type");
   if (skin.radius !== null) out.push("corners");
   if (skin.measure !== null) out.push("width");
   if (skin.baseSize !== null) out.push("text size");

@@ -15,7 +15,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { themeStyle } from "@/lib/hub/theme";
-import { skinStyle, skinClass } from "@/lib/hub/skin";
+import { skinStyle, hubRootClass } from "@/lib/hub/skin";
 import "./hub.css";
 
 // Not force-dynamic. Every dashboard page and API route in this repo sets
@@ -75,7 +75,7 @@ export default async function HubLayout({ children, params }: Props) {
     // skinClass() always returns a class, including for the default template, so the live page
     // and both previews carry the same attribute.
     <div
-      className={`hub-root ${skinClass(resolved.client.skin)}`}
+      className={hubRootClass(resolved.client.skin)}
       lang={resolved.client.language}
       style={{ ...skinStyle(resolved.client.skin), ...themeStyle(resolved.client.theme) }}
     >

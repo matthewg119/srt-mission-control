@@ -38,6 +38,7 @@ import {
   templateInfo,
   templateMenu,
   skinLine,
+  traitWords,
   EMPTY_SKIN,
   type StoredSkin,
   type HubTemplate,
@@ -359,6 +360,7 @@ function readOffLine(set: SkinCandidateSet): string | null {
   }
   if (first?.labelFace) parts.push(`labels in ${faceName(first.labelFace)}`);
   if (set.bodyFace) parts.push(`body in ${faceName(set.bodyFace)}`);
+  if (first) parts.push(...traitWords(first));
   return parts.length ? `*Read off it:* ${parts.join(", ")}.` : null;
 }
 
@@ -443,8 +445,9 @@ function menuMessage(current: StoredSkin, clientId: string): string {
     templateMenu(),
     "",
     "Or paste a screenshot of a page whose look you want and I will read the colours, the " +
-      "accent, the fonts, the corner radius, the column width and the text size off it, and " +
-      "offer three versions of it. `skin reset` puts it back to Document with no overrides.",
+      "accent, the fonts, the masthead, the navigation style, the background treatment, the " +
+      "corners, the column width and the text size off it, and offer three versions of it. " +
+      "`skin reset` puts it back to Document with no overrides.",
     ...previewLines(clientId),
   ].join("\n");
 }
@@ -472,8 +475,9 @@ export async function designSection(clientId: string): Promise<string[]> {
     "*Do not like how it looks?* Reply in this thread:",
     templateMenu(),
     "Or paste a screenshot of a page whose look you want. I will read the colours, the accent, " +
-      "the fonts, the corner radius, the column width and the text size off it and offer THREE " +
-      "versions of it. Nothing is applied until you type `pick 1`, `pick 2` or `pick 3`.",
+      "the fonts, the masthead, the navigation style, the background treatment, the corners, " +
+      "the column width and the text size off it and offer THREE versions of it. Nothing is " +
+      "applied until you type `pick 1`, `pick 2` or `pick 3`.",
   ];
 }
 

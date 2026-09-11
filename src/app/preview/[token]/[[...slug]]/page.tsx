@@ -47,7 +47,7 @@ import {
 import { listReplica } from "@/lib/hub/replica-pages";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
-import { skinStyle, skinClass } from "@/lib/hub/skin";
+import { skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
 import "@/app/hub/[host]/hub.css";
 
@@ -130,7 +130,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
 
     return (
       <div
-        className={`hub-root ${skinClass(client.skin)}`}
+        className={hubRootClass(client.skin)}
         lang={client.language}
         style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
       >
@@ -160,7 +160,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
 
   return (
     <div
-      className={`hub-root ${skinClass(client.skin)}`}
+      className={hubRootClass(client.skin)}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}

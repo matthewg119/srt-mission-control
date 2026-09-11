@@ -22,7 +22,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { HubAnswerBody } from "@/components/hub/hub-bodies";
 import { activeTheme, readTheme, themeStyle } from "@/lib/hub/theme";
-import { activeSkin, readSkin, skinStyle, skinClass } from "@/lib/hub/skin";
+import { activeSkin, readSkin, skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import type { HubClient } from "@/lib/hub/resolve";
 
@@ -215,7 +215,7 @@ ${css}
 </head>
 <body>
 ${banner}
-<div class="hub-root ${skinClass(loaded.client.skin)}" lang="${escapeHtml(loaded.client.language ?? "en")}"${styleAttr(loaded.client)}>
+<div class="${hubRootClass(loaded.client.skin)}" lang="${escapeHtml(loaded.client.language ?? "en")}"${styleAttr(loaded.client)}>
 <div class="hub-wrap">${body}</div>
 </div>
 </body>

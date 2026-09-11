@@ -143,6 +143,12 @@ function baseSkinFrom(read: SkinRead): HubSkin {
     headingFace: read.headingFace ?? null,
     subheadingFace: read.subheadingFace ?? null,
     labelFace: read.labelFace ?? null,
+    nav: read.nav ?? null,
+    hero: read.hero ?? null,
+    surface: read.surface ?? null,
+    headingScale: read.headingScale ?? null,
+    headingWeight: read.headingWeight ?? null,
+    headingTracking: read.headingTracking ?? null,
     radius: read.radius,
     measure: read.measure,
     baseSize: read.baseSize,
@@ -164,7 +170,7 @@ function baseSkinFrom(read: SkinRead): HubSkin {
  * variation would be the one thing skin-vision.ts refuses, arriving by the back door: a colour
  * with no provenance, on a client's own domain, that somebody would then have to defend.
  *
- * ‼️ NOR ARE THE FACES. All three carry the faces as read, for the same reason: they are the
+ * ‼️ NOR ARE THE FACES OR THE SHAPE WORDS. All three carry them as read, for the same reason: they are the
  * evidence, and a variation that swapped the type would be a different reference, not a
  * different answer to this one. The three differ in shape, never in what was read.
  */

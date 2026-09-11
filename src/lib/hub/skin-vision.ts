@@ -14,6 +14,10 @@
 // order and the canonical NAP block in hub-bodies.tsx are what make that true. What is worth
 // taking from a reference is how it FEELS, never what it says.
 //
+// The SHAPE words (nav, hero, surface, heading scale, weight and tracking) are the same kind of
+// token: a value from a fixed list in skin.ts's SKIN_TRAITS, each with a rule in hub.css that a
+// person wrote. The model picks; it never writes the rule.
+//
 // ‼️ A FONT IS A KEY FROM faces.ts, NEVER A NAME.
 // This asked for a free-text `headingFamily` until 2026-09-11 and got null for srtagency.com,
 // whose headings are an obvious system sans, because "which font is that" is a question a model
@@ -65,12 +69,28 @@ import {
   MEASURE_RANGE,
   BASE_SIZE_RANGE,
   TEMPLATE_CATALOGUE,
+  SKIN_TRAITS,
   type HubTemplate,
+  type NavStyle,
+  type HeroStyle,
+  type Surface,
+  type HeadingScale,
+  type HeadingWeight,
+  type HeadingTracking,
 } from "./skin";
 import { FACE_CATALOGUE, HUB_FACES, isFace, type HubFace } from "./faces";
 
-/** Haiku. This is reading colours and kinds of type off a picture, not judging a design. */
-const MODEL = "claude-haiku-4-5-20251001" as const;
+/**
+ * Sonnet, since 2026-09-11. It was Haiku while this read eight colours and four numbers.
+ *
+ * Measured on a real srtagency.com screenshot with scripts/_probe-skin-vision.ts: Haiku read the
+ * colours, the accent, the faces, the centred masthead and the display headline correctly, and
+ * called the navigation "inline" twice, even with the prompt spelling out that one pill chip is
+ * enough, on a page whose most recognisable detail IS a teal pill chip above the headline. The
+ * shape words are judgement about a design, which is the part Haiku is weakest at. One read per
+ * pasted screenshot, so the cost difference is nothing next to a design that misses the point.
+ */
+const MODEL = "claude-sonnet-4-6" as const;
 
 export interface SkinRead {
   /** Which of the four shipped templates the reference is closest to. */
@@ -108,6 +128,17 @@ export interface SkinRead {
   labelFace?: HubFace | null;
   /** The body face. Goes to the theme on a pick, like the accent, because body text is brand. */
   bodyFace?: HubFace | null;
+  /** Shape words. Optional in the type for the same reason as the faces. See SKIN_TRAITS. */
+  nav?: NavStyle | null;
+  hero?: HeroStyle | null;
+  surface?: Surface | null;
+  headingScale?: HeadingScale | null;
+  headingWeight?: HeadingWeight | null;
+  headingTracking?: HeadingTracking | null;
+}
+
+function isTraitOrNull(values: readonly string[], v: unknown): boolean {
+  return v === undefined || v === null || (typeof v === "string" && values.includes(v));
 }
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -137,6 +168,7 @@ function isSkinRead(parsed: unknown): parsed is SkinRead {
   if (!isHexOrNull(p.accentSuggestion)) return false;
   if (p.headingFamily !== null && typeof p.headingFamily !== "string") return false;
   for (const f of FACE_FIELDS) if (!isFaceOrNull(p[f])) return false;
+  for (const t of SKIN_TRAITS) if (!isTraitOrNull(t.values, p[t.field])) return false;
   if (!isNumOrNull(p.radius, RADIUS_RANGE[0], RADIUS_RANGE[1])) return false;
   if (!isNumOrNull(p.measure, MEASURE_RANGE[0], MEASURE_RANGE[1])) return false;
   if (!isNumOrNull(p.baseSize, BASE_SIZE_RANGE[0], BASE_SIZE_RANGE[1])) return false;
@@ -166,6 +198,11 @@ function describeInvalid(parsed: unknown): string {
   for (const f of FACE_FIELDS) {
     if (!isFaceOrNull(p[f])) {
       return `${f} was ${JSON.stringify(p[f])}; it must be one of ${HUB_FACES.join(", ")}, or null`;
+    }
+  }
+  for (const t of SKIN_TRAITS) {
+    if (!isTraitOrNull(t.values, p[t.field])) {
+      return `${t.field} was ${JSON.stringify(p[t.field])}; it must be one of ${t.values.join(", ")}, or null`;
     }
   }
   if (!isNumOrNull(p.radius, RADIUS_RANGE[0], RADIUS_RANGE[1])) {
@@ -226,6 +263,30 @@ const SYSTEM = [
   "  cannot identify is \"system\". Return null for a face only when the screenshot has no text in",
   "  that role at all.",
   "",
+  "THE SHAPE. A few coarse words for how the page is arranged. Pick the closest value; null only",
+  "when the screenshot does not show that part of the page.",
+  "  nav              how the small text around the top is drawn: the navigation links and any",
+  "                   short label above the headline.",
+  "                     inline    plain text links and plain labels, with no pill shapes at all",
+  "                     pill      ANY pill shape near the top: a rounded chip holding a label",
+  "                               above the headline, or a pill-shaped button in the navigation.",
+  "                               One is enough; a page with a pill chip is recognisable by it.",
+  "                     band      a full-width bar or strip",
+  "  hero             how the headline block sits:",
+  "                     left      headline and text aligned left",
+  "                     centered  headline and text centred on the page",
+  "                     split     headline on one side, supporting text or a picture beside it",
+  "  surface          what the page stands on:",
+  "                     flat      a plain colour",
+  "                     glow      a soft coloured glow behind the top of the page",
+  "                     gradient  the colour shifts gradually down or across the page",
+  "                     dots      a regular pattern of dots",
+  "                     grid      a grid of fine lines",
+  "                     noise     a grainy, paper or film texture",
+  "  headingScale     compact (headline barely bigger than the text), standard, display (very large)",
+  "  headingWeight    regular, medium, semibold, bold, heavy",
+  "  headingTracking  tight (letters pulled close together), normal, wide (spaced apart)",
+  "",
   "THE NUMBERS:",
   `  radius    corner radius in PIXELS, ${RADIUS_RANGE[0]} to ${RADIUS_RANGE[1]}. 0 for hard corners.`,
   `  measure   how wide the text column runs, in REM, ${MEASURE_RANGE[0]} to ${MEASURE_RANGE[1]}. A typical`,
@@ -260,6 +321,7 @@ const SCHEMA_HINT = [
   `  "subheadingFace": ${FACE_UNION} | null,`,
   `  "labelFace": ${FACE_UNION} | null,`,
   `  "bodyFace": ${FACE_UNION} | null,`,
+  ...SKIN_TRAITS.map((t) => `  "${t.field}": ${t.values.map((v) => `"${v}"`).join(" | ")} | null,`),
   '  "radius": number | null,',
   '  "measure": number | null,',
   '  "baseSize": number | null',
@@ -303,9 +365,30 @@ function coerce(parsed: unknown): unknown {
     const t = v.trim().toLowerCase();
     p[f] = NOTHING.has(t) ? null : t;
   }
+  for (const { field } of SKIN_TRAITS) {
+    const v = p[field];
+    if (v === undefined) {
+      p[field] = null;
+      continue;
+    }
+    if (typeof v !== "string") continue;
+    const t = v.trim().toLowerCase();
+    p[field] = NOTHING.has(t) ? null : (SPELLINGS[t] ?? t);
+  }
   p.headingFamily = null;
   return p;
 }
+
+/**
+ * Other spellings of ONE value, and nothing that is a judgement. "centre" means "centered"; there
+ * is no entry mapping "middle-ish" anywhere, because that would be this file deciding.
+ */
+const SPELLINGS: Record<string, string> = {
+  center: "centered",
+  centre: "centered",
+  centred: "centered",
+  "left-aligned": "left",
+};
 
 /**
  * Read one or more reference images into a skin.

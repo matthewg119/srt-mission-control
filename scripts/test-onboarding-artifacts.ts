@@ -3210,6 +3210,59 @@ import * as visionT from "../src/lib/hub/skin-vision";
     "the screenshot reply no longer says the accent was not applied",
     !/was NOT applied/.test(hubSkinSrcT)
   );
+
+  // ── Shape traits: words from a list, each a class hub.css has a rule for ──
+  for (const t of skinT.SKIN_TRAITS) {
+    for (const v of t.values) {
+      eq(`readSkin keeps ${t.field} "${v}"`, (skinT.readSkin({ [t.field]: v }) as unknown as Record<string, unknown>)[t.field], v);
+    }
+    eq(
+      `readSkin refuses an unknown ${t.field} rather than matching it`,
+      (skinT.readSkin({ [t.field]: "brutalist" }) as unknown as Record<string, unknown>)[t.field],
+      null
+    );
+  }
+  const shaped = skinT.readSkin({
+    template: "bold", nav: "pill", hero: "split", surface: "dots",
+    headingScale: "display", headingWeight: "medium", headingTracking: "tight",
+  });
+  eq("skinClass is untouched by traits", skinT.skinClass(shaped), "hub-tpl-bold");
+  eq(
+    "hubRootClass carries the template and every trait",
+    skinT.hubRootClass(shaped),
+    "hub-root hub-tpl-bold hub-nav-pill hub-hero-split hub-surface-dots hub-hs-display hub-hw-medium hub-ht-tight"
+  );
+  eq("no skin is the root and the default template", skinT.hubRootClass(null), "hub-root hub-tpl-document");
+  eq(
+    "traits add nothing to the inline style: they are classes, never CSS a value wrote",
+    JSON.stringify(skinT.skinStyle(shaped)),
+    JSON.stringify(skinT.skinStyle(skinT.readSkin({ template: "bold" })))
+  );
+
+  const shapedCoerce = visionT._coerceForTest({ hero: " Centre ", nav: "PILL", surface: "none" }) as Record<string, unknown>;
+  eq("coerce maps the spellings of centred onto the one value", shapedCoerce.hero, "centered");
+  eq("and lowercases a trait", shapedCoerce.nav, "pill");
+  eq("and 'none' is null", shapedCoerce.surface, null);
+  eq("an absent trait is null, not undefined", shapedCoerce.headingScale, null);
+
+  for (const v of variantsT.skinVariants({ ...facedRead, hero: "centered", nav: "pill", surface: "glow" }, "test")) {
+    eq(`candidate ${v.slot} keeps the masthead that was read`, v.hero, "centered");
+    eq(`candidate ${v.slot} keeps the navigation that was read`, v.nav, "pill");
+    eq(`candidate ${v.slot} keeps the surface that was read`, v.surface, "glow");
+  }
+
+  // ‼️ ALL FIVE RENDERERS WRITE THE ROOT THROUGH ONE FUNCTION. A trait on four of them renders on a
+  // call and not on the client's own domain, which is the preview lying.
+  for (const file of [
+    ["app", "hub", "[host]", "layout.tsx"],
+    ["app", "dashboard", "clients", "[id]", "preview", "[[...slug]]", "page.tsx"],
+    ["app", "preview", "[token]", "[[...slug]]", "page.tsx"],
+    ["lib", "hub", "page-preview.ts"],
+  ]) {
+    const src = srcOf(...file);
+    ok(`${file.join("/")} renders .hub-root through hubRootClass`, /hubRootClass\(/.test(src));
+    ok(`${file.join("/")} spells no root class by hand`, !/hub-root \$\{skinClass\(/.test(src));
+  }
 }
 
 

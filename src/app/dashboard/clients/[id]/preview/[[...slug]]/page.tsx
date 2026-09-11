@@ -37,7 +37,7 @@ import { listAllForBoard } from "@/lib/hub/pages";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
-import { skinStyle, skinClass } from "@/lib/hub/skin";
+import { skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { ReviewTool, readLook } from "@/app/hub/[host]/reviews/review-tool";
 import type { ChatLook } from "@/app/hub/[host]/reviews/review-client";
 import { loadCandidates } from "@/lib/clients/hub-skin";
@@ -142,7 +142,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
 
   return (
     <div
-      className={`hub-root ${skinClass(skin)}`}
+      className={hubRootClass(skin)}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(skin), ...themeStyle(theme) }}

@@ -725,3 +725,171 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
   padding: 0.5rem 1.1rem;
   cursor: pointer;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SHAPE TRAITS (2026-09-11)
+   ───────────────────────────────────────────────────────────────────────────
+   One rule block per value in SKIN_TRAITS (src/lib/hub/skin.ts), selected by a
+   class skinTraits() writes onto .hub-root. The screenshot reader picks the
+   value; a person wrote every rule here. No model writes CSS.
+
+   SAME LAW AS THE TEMPLATES ABOVE, AND THIS BLOCK SITS UNDER THAT BANNER SO
+   _probe-hub-skin.ts ENFORCES IT: colour, type, spacing and shape may move;
+   nothing is hidden, inserted or reordered. The split masthead is a grid that
+   auto-places the children in DOM order, and a crawler reads the same page.
+
+   Selectors are `.hub-root.hub-<trait>-<value>` so a trait beats the template
+   rule it adjusts (`.hub-tpl-bold .hub-head h1`) on specificity rather than on
+   file order, which nobody would think to preserve.
+
+   The backgrounds are the CSS half of the "background treatment" ask and are
+   generated from the colour tokens with color-mix(): no image, no asset, no
+   provenance question. A raster lifted off a page is the other half, and it is
+   deferred (Matthew, 2026-09-11).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── nav: how the eyebrow row is drawn (the replica's own nav uses the same class) ── */
+.hub-root.hub-nav-inline {
+  /* The plain label every template already draws. Stated so the choice is a rule, not a gap. */
+}
+.hub-root.hub-nav-pill .hub-head .hub-eyebrow {
+  display: inline-block;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  background: var(--hub-accent-soft);
+  color: var(--hub-accent);
+  font-weight: 600;
+}
+.hub-root.hub-nav-pill .hub-head .hub-eyebrow a,
+.hub-root.hub-nav-pill .hub-head .hub-eyebrow strong {
+  color: inherit;
+  text-decoration: none;
+}
+/* ‼️ THE NEGATIVE MARGINS MATCH .hub-wrap's INLINE PADDING (1.25rem), the same arithmetic the
+   Bold band uses, or the strip stops short of the column's edges. */
+.hub-root.hub-nav-band .hub-head .hub-eyebrow {
+  margin-left: -1.25rem;
+  margin-right: -1.25rem;
+  padding: 0.7rem 1.25rem;
+  border-top: 1px solid var(--hub-rule);
+  border-bottom: 1px solid var(--hub-rule);
+  background: var(--hub-card);
+}
+
+/* ── hero: how the masthead sits ─────────────────────────────────────────── */
+.hub-root.hub-hero-left {
+  /* The default alignment, stated for the same reason as nav-inline. */
+}
+.hub-root.hub-hero-centered .hub-head {
+  text-align: center;
+}
+/* ‼️ THE EYEBROW AND THE LEDE NEED AUTO MARGINS, NOT JUST text-align. Both are <p>, and
+   `.hub-root p` caps a paragraph at 68ch with its box pinned left, so centring the text alone
+   centres it inside a box that is itself off to one side. Caught on the first render. */
+.hub-root.hub-hero-centered .hub-head .hub-logo,
+.hub-root.hub-hero-centered .hub-head .hub-eyebrow,
+.hub-root.hub-hero-centered .hub-head .hub-lede {
+  margin-left: auto;
+  margin-right: auto;
+}
+/* Headline on the left, standfirst beside it. Logo and eyebrow span the top row, then the h1 and
+   the lede flow into the two columns IN DOM ORDER. Below 48rem it is the ordinary stacked head. */
+@media (min-width: 48rem) {
+  .hub-root.hub-hero-split .hub-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    column-gap: 2.5rem;
+    align-items: end;
+  }
+  .hub-root.hub-hero-split .hub-head .hub-logo,
+  .hub-root.hub-hero-split .hub-head .hub-eyebrow {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .hub-root.hub-hero-split .hub-head h1 {
+    margin-bottom: 0;
+  }
+  .hub-root.hub-hero-split .hub-head .hub-lede {
+    margin: 0;
+  }
+}
+
+/* ── surface: what the page stands on. Generated from tokens, never an image. ── */
+.hub-root.hub-surface-flat {
+  /* A plain ground: --hub-bg and nothing over it. */
+}
+.hub-root.hub-surface-glow {
+  background-image: radial-gradient(
+    ellipse 80% 42% at 50% 0%,
+    color-mix(in srgb, var(--hub-accent) 18%, transparent),
+    transparent 72%
+  );
+  background-repeat: no-repeat;
+}
+.hub-root.hub-surface-gradient {
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--hub-accent) 10%, var(--hub-bg)) 0%,
+    var(--hub-bg) 36rem
+  );
+  background-repeat: no-repeat;
+}
+.hub-root.hub-surface-dots {
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--hub-fg) 14%, transparent) 1px,
+    transparent 1.5px
+  );
+  background-size: 22px 22px;
+}
+.hub-root.hub-surface-grid {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--hub-fg) 7%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--hub-fg) 7%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+/* An inline SVG turbulence filter, written here, at low opacity. A data: URI in OUR stylesheet,
+   not a fetched asset: nothing about it came off anybody's page. */
+.hub-root.hub-surface-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.08'/%3E%3C/svg%3E");
+}
+
+/* ── headline type ───────────────────────────────────────────────────────── */
+.hub-root.hub-hs-compact .hub-head h1 {
+  font-size: clamp(1.5rem, 4vw, 2rem);
+}
+.hub-root.hub-hs-standard {
+  /* The template's own headline size. */
+}
+.hub-root.hub-hs-display .hub-head h1 {
+  font-size: clamp(2.25rem, 7vw, 3.5rem);
+  line-height: 1.05;
+}
+.hub-root.hub-hs-display h2 {
+  font-size: 1.5rem;
+}
+
+.hub-root.hub-hw-regular h1,
+.hub-root.hub-hw-regular h2,
+.hub-root.hub-hw-regular h3 { font-weight: 400; }
+.hub-root.hub-hw-medium h1,
+.hub-root.hub-hw-medium h2,
+.hub-root.hub-hw-medium h3 { font-weight: 500; }
+.hub-root.hub-hw-semibold h1,
+.hub-root.hub-hw-semibold h2,
+.hub-root.hub-hw-semibold h3 { font-weight: 600; }
+.hub-root.hub-hw-bold h1,
+.hub-root.hub-hw-bold h2,
+.hub-root.hub-hw-bold h3 { font-weight: 700; }
+.hub-root.hub-hw-heavy h1,
+.hub-root.hub-hw-heavy h2,
+.hub-root.hub-hw-heavy h3 { font-weight: 800; }
+
+.hub-root.hub-ht-tight h1 { letter-spacing: -0.035em; }
+.hub-root.hub-ht-tight h2,
+.hub-root.hub-ht-tight h3 { letter-spacing: -0.02em; }
+.hub-root.hub-ht-normal h1,
+.hub-root.hub-ht-normal h2,
+.hub-root.hub-ht-normal h3 { letter-spacing: 0; }
+.hub-root.hub-ht-wide h1,
+.hub-root.hub-ht-wide h2,
+.hub-root.hub-ht-wide h3 { letter-spacing: 0.02em; }
