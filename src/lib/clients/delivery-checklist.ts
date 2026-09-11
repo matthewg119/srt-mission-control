@@ -776,7 +776,24 @@ export async function notifyThread(clientId: string, text: string): Promise<void
   const client = await loadClient(clientId);
   if (!client?.ops_thread_ts) return;
 
-  await slack.postThreadReply(channel, client.ops_thread_ts as string, text);
+  const res = (await slack.postThreadReply(channel, client.ops_thread_ts as string, text)) as {
+    ok?: boolean;
+    ts?: string;
+  };
+
+  // Client-level, so no step key: the intro draft, the day 30/60/90 reports and the workflow
+  // outputs all land here, and each one is something this client was told.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    source: "slack",
+    kind: "bot_post",
+    author: "Mission Control",
+    text,
+    slackChannel: channel,
+    slackTs: res?.ts ?? null,
+    slackThreadTs: client.ops_thread_ts as string,
+  });
 }
 
 /**

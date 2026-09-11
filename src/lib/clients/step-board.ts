@@ -292,6 +292,21 @@ export async function postStepAnchor(clientId: string, stepKey: string): Promise
     return { ok: true, ts: again?.slack_anchor_ts ?? res.ts };
   }
 
+  // The step appearing on the board is itself something that happened to this client.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    stepKey,
+    source: "system",
+    kind: "bot_post",
+    author: "Mission Control",
+    text: anchorText(client, step, row),
+    slackChannel: channel,
+    slackTs: res.ts,
+    slackThreadTs: res.ts,
+    payload: { anchor: true },
+  });
+
   return { ok: true, ts: res.ts };
 }
 
@@ -383,7 +398,13 @@ export async function notifyStep(
   clientId: string,
   stepKey: string,
   text: string,
-  blocks?: SlackBlock[]
+  blocks?: SlackBlock[],
+  /**
+   * What this post IS, for the client log. Almost everything through here is the system narrating
+   * its own work; the assistant answering a question in a step thread is the exception, and the
+   * two read very differently when somebody is going back over what happened.
+   */
+  kind: "bot_post" | "assistant_reply" = "bot_post"
 ): Promise<BoardResult> {
   const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
@@ -403,6 +424,22 @@ export async function notifyStep(
     console.error(`[step-board] reply failed on ${stepKey}:`, res?.error ?? "unknown");
     return { ok: false, error: res?.error ?? "post_failed" };
   }
+
+  // Every runner note, refusal, artifact line and assistant answer about a step goes through here,
+  // which is what makes this the right place to record them rather than fourteen call sites.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    stepKey,
+    source: "slack",
+    kind,
+    author: "Mission Control",
+    text,
+    slackChannel: channel,
+    slackTs: res.ts ?? null,
+    slackThreadTs: ts,
+  });
+
   return { ok: true, ts: res.ts };
 }
 

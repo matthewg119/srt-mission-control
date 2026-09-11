@@ -111,11 +111,27 @@ export async function deliverArtifact(args: {
     // { ok: false } instead of throwing, so a refused post was completely silent.
     const res = (await slack.postThreadReply(channel, threadTs, args.message)) as {
       ok?: boolean;
+      ts?: string;
       error?: string;
     };
     if (!res?.ok) {
       console.error(`[artifacts/deliver] ${args.stepKey} note did not post:`, res?.error ?? "unknown");
     }
+
+    const { logClientEvent } = await import("../client-events");
+    await logClientEvent({
+      clientId: args.clientId,
+      stepKey: args.stepKey,
+      source: "system",
+      kind: "bot_post",
+      author: "Mission Control",
+      text: args.message,
+      slackChannel: channel,
+      slackTs: res?.ts ?? null,
+      slackThreadTs: threadTs,
+      payload: { artifact: args.filename, docId: stored.docId },
+    });
+
     return { ok: true, docId: stored.docId, uploaded: true };
   }
 

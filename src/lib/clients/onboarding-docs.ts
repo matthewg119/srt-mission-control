@@ -237,6 +237,27 @@ export async function captureOnboardingFile(args: {
   }
   if (error) return { ok: false, error: error.message };
 
+  // A file arriving is one of the things that happens to a client, and it is the one kind of event
+  // that already had a home (client_docs) without being in the ORDER everything else happened in.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    stepKey: args.stepKey ?? null,
+    source: "slack",
+    kind: "file",
+    author: file.user ?? null,
+    text: filename,
+    slackChannel: null,
+    slackTs: null,
+    slackThreadTs: threadTs,
+    payload: {
+      slackFileId: file.id,
+      contentType: file.mimetype ?? null,
+      bytes: buf.byteLength,
+      ...(presencePlatform ? { presencePlatform } : {}),
+    },
+  });
+
   return { ok: true, presencePlatform };
 }
 

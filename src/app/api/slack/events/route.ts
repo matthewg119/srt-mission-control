@@ -823,12 +823,40 @@ export async function POST(request: NextRequest) {
       if (await isClientChannel(channel)) {
         const client = parentThreadTs ? await clientForThread(channel, parentThreadTs) : null;
 
+        // ‼️ EVERY MESSAGE IN A CLIENT'S THREAD, LOGGED ONCE, HERE. Matthew: "all of the data of
+        // each customer (inside Slack or Mission Control) needs to be saved with its specific
+        // dataset." Logged at the TOP of the lane rather than in each branch, because there are
+        // fourteen branches and the one that gets forgotten is the one somebody needed. A branch
+        // that HANDLES the message re-labels it `command` on its way out, which is what makes
+        // "what did he type that the system acted on" answerable.
+        if (client && (userText.trim().length > 0 || attachedFiles.length > 0)) {
+          const { logClientEvent } = await import("@/lib/clients/client-events");
+          await logClientEvent({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            source: "slack",
+            kind: "message",
+            author: (event.user as string | undefined) ?? null,
+            text: userText,
+            slackChannel: channel,
+            slackTs: event.ts as string,
+            slackThreadTs: parentThreadTs,
+          });
+        }
+
         // 1. A deep-research dump pasted into a client's thread. Explicit prefix only: see
         //    research-intake.ts for why sniffing is not acceptable here. This is the second
         //    half of the avatar harvest step — the brief went out, this is the answer back.
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { isResearchPaste } = await import("@/lib/clients/research-intake");
           if (isResearchPaste(userText)) {
+            const { markEventKind } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "research-intake",
+            });
             const { ingestResearch, formatIntakeReply } = await import("@/lib/clients/research-intake");
             const { extractPhrases, mergePhrases } = await import("@/lib/clients/harvest");
 
@@ -1007,7 +1035,20 @@ export async function POST(request: NextRequest) {
             (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText }));
           if (said) {
-            const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "keyword/plan/photograph",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: said.message,
+            });
             if (!slackOk(posted)) console.error("[slack/events] keyword/plan reply failed");
             if (said.after) {
               waitUntil(
@@ -1025,7 +1066,23 @@ export async function POST(request: NextRequest) {
           const { misroutedCommand } = await import("@/lib/clients/step-commands");
           const pointer = await misroutedCommand({ clientId: client.id, stepKey: client.stepKey, text: userText });
           if (pointer) {
-            const posted = await slack.postThreadReply(channel, parentThreadTs, pointer);
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            // A command in the wrong thread IS a command: it is recorded as one, with where it
+            // went, because "nothing was saved" is precisely the thing worth being able to read
+            // back later.
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "misrouted",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: pointer,
+            });
             if (!slackOk(posted)) console.error("[slack/events] misrouted-command pointer failed");
             return NextResponse.json({ ok: true });
           }
@@ -1040,7 +1097,20 @@ export async function POST(request: NextRequest) {
             by: event.user ? `<@${event.user as string}>` : "someone in Slack",
           });
           if (said) {
-            const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "avatar",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: said.message,
+            });
             if (!slackOk(posted)) console.error("[slack/events] avatar reply failed");
             return NextResponse.json({ ok: true });
           }
@@ -1145,7 +1215,13 @@ export async function POST(request: NextRequest) {
 
           if (client.stepKey) {
             const { notifyStep } = await import("@/lib/clients/step-board");
-            const res = await notifyStep(client.id, client.stepKey, toSlackMrkdwn(reply));
+            const res = await notifyStep(
+              client.id,
+              client.stepKey,
+              toSlackMrkdwn(reply),
+              undefined,
+              "assistant_reply"
+            );
             if (!res.ok) {
               console.error(
                 `[slack/events] assistant reply failed on ${client.stepKey}: ${res.error}`

@@ -443,6 +443,43 @@ export const slack = {
                   return data.messages ?? [];
         },
 
+        /**
+         *  Every message in a thread, following the cursor to the end.
+         *
+         *  ‼️ conversationsReplies ABOVE STOPS AT `limit` AND HAS NO CURSOR, which is right for
+         *  reading recent context and wrong for a backfill: a step thread with two hundred replies
+         *  would come back as thirty and the rest would never be recorded. Bounded by pages rather
+         *  than trusted to terminate, the same shape findChannel uses.
+         */
+        async conversationsRepliesAll(channel: string, threadTs: string, maxPages = 20): Promise<Array<Record<string, unknown>>> {
+                  const token = getToken();
+                  if (!token) return [];
+                  const out: Array<Record<string, unknown>> = [];
+                  let cursor = "";
+
+                  for (let page = 0; page < maxPages; page += 1) {
+                            const url =
+                                      `${SLACK_API}/conversations.replies?channel=${encodeURIComponent(channel)}` +
+                                      `&ts=${encodeURIComponent(threadTs)}&limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+                            const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+                            const data = (await res.json()) as {
+                                      ok: boolean;
+                                      messages?: Array<Record<string, unknown>>;
+                                      has_more?: boolean;
+                                      response_metadata?: { next_cursor?: string };
+                                      error?: string;
+                            };
+                            if (!data.ok) {
+                                      console.error("[slack] conversations.replies failed:", data.error);
+                                      return out;
+                            }
+                            out.push(...(data.messages ?? []));
+                            cursor = data.response_metadata?.next_cursor ?? "";
+                            if (!data.has_more || !cursor) return out;
+                  }
+                  return out;
+        },
+
         /** Fetch channel info. Returns null if not found or error.
          *
          *  ‼️ `is_member` IS WHY THIS RETURNS MORE THAN A NAME NOW. The bot can chat.postMessage

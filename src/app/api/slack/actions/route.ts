@@ -93,6 +93,59 @@ interface SlackInteractivePayload {
   container?: { message_ts?: string; channel_id?: string };
 }
 
+const UUID_PREFIX = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::(.*))?$/i;
+
+/**
+ * Record a button press against the client it was about.
+ *
+ * Never awaited by the handler and never able to fail it: a log that can delay or break the thing
+ * it is logging is worse than no log, and this one sits in front of every action in the switch.
+ */
+async function logButtonPress(
+  action: { action_id: string; value?: string },
+  channel: string,
+  slackTs: string,
+  userId: string
+): Promise<void> {
+  try {
+    const value = action.value ?? "";
+    const matched = UUID_PREFIX.exec(value);
+
+    let clientId = matched?.[1] ?? null;
+    let stepKey = matched?.[2] ?? null;
+
+    if (!clientId && channel) {
+      const { clientForThread } = await import("@/lib/clients/onboarding-docs");
+      const found = await clientForThread(channel, slackTs);
+      if (found) {
+        clientId = found.id;
+        stepKey = found.stepKey;
+      }
+    }
+
+    if (!clientId) return;
+
+    const { logClientEvent } = await import("@/lib/clients/client-events");
+    await logClientEvent({
+      clientId,
+      stepKey,
+      source: "slack",
+      kind: "button",
+      author: userId,
+      text: action.action_id,
+      slackChannel: channel,
+      // NOT slackTs: that is the CARD's timestamp, and a card is pressed more than once (Done,
+      // then Re-check). Using it would make the unique constraint drop every press after the
+      // first, which is exactly the history worth having.
+      slackTs: null,
+      slackThreadTs: slackTs,
+      payload: { actionId: action.action_id, value },
+    });
+  } catch (e) {
+    console.error("[slack/actions] button not logged:", (e as Error).message);
+  }
+}
+
 async function handleBlockAction(payload: SlackInteractivePayload): Promise<NextResponse> {
   const action = payload.actions?.[0];
   console.log("[slack/actions] hit", { type: payload.type, action: action?.action_id });
@@ -103,6 +156,15 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
   const userId = payload.user.id;
 
   if (!slackTs) return NextResponse.json({ ok: true });
+
+  // ‼️ EVERY BUTTON, BEFORE THE SWITCH DECIDES WHAT IT IS. A press is a decision somebody made
+  // about a client -- Done, Re-check, Skip, an avatar pick -- and it left no trace anywhere except
+  // in whatever the handler happened to write. Logged here rather than in forty cases, so a new
+  // button is recorded the day it is added rather than the day somebody remembers to log it.
+  //
+  // The client comes from the button's own value (`<clientId>:<stepKey>` on every step button) and
+  // falls back to the thread. A press on something that is not about a client logs nothing.
+  void logButtonPress(action, channel, slackTs, userId);
 
   switch (action.action_id) {
     case "ai_approve":
