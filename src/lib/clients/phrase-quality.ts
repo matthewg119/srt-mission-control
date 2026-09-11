@@ -104,6 +104,10 @@ const NAV_CHROME = new RegExp(
   "i"
 );
 
+/** A capitalised question word mid-phrase, right after a lowercase word. Case-sensitive on purpose. */
+const WELDED_QUESTION =
+  /[a-z0-9]\s+(How|What|Why|When|Where|Which|Who|Is|Are|Does|Do|Did|Can|Could|Should|Would|Will)\s+[a-z]/;
+
 /** Field names from a brief or a template. A label even when what follows is a question. */
 const LABEL_WORD = new RegExp(
   "^(headline|title|subject|hook|caption|note|summary|tldr|tl;dr|example|answer|question|" +
@@ -159,6 +163,64 @@ export function normalizePhrase(raw: string): string {
     .trim();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Is this phrase about the offer?
+//
+// ‼️ ONE DEFINITION, AND THE MEASURED PROBLEM IS WHY. Relevance used to be a +10 bonus when the
+// normalised phrase CONTAINED the whole normalised treatment. SRT's treatment is "AEO Services
+// for med spas", which almost no phrase contains verbatim, so in practice nothing was aimed at the
+// offer at all. For a med spa "Lip filler" works and "Russian lip technique" does not.
+//
+// The fix is a VOCABULARY rather than one string: the treatment, the words their customers use
+// for it (captured on the prep call as `terms:`), and the keyword step's naming variants. Pure
+// and deterministic, no model, so the page plan can be argued with and reproduced.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The offer's vocabulary in normal form. Entries under three characters are dropped: a two-letter
+ * term would match inside half the corpus.
+ */
+export function offerVocabulary(parts: {
+  treatment?: string | null;
+  terms?: readonly string[];
+  variants?: readonly string[];
+}): string[] {
+  const out = new Set<string>();
+  for (const raw of [parts.treatment ?? "", ...(parts.terms ?? []), ...(parts.variants ?? [])]) {
+    const n = normalizePhrase(raw);
+    if (n.length >= 3) out.add(n);
+  }
+  return [...out];
+}
+
+/** Does the phrase name the offer: any vocabulary entry, on word boundaries. */
+export function namesOffer(phrase: string, vocab: readonly string[]): boolean {
+  const padded = ` ${normalizePhrase(phrase)} `;
+  return vocab.some((v) => v && padded.includes(` ${v} `));
+}
+
+/**
+ * A phrase is ABOUT the offer when it names it (the treatment, a customer term, a naming variant),
+ * OR when it was asked about the offer.
+ *
+ * ‼️ "ASKED ABOUT THE OFFER" IS A FACT ABOUT WHERE THE ROW CAME FROM, NOT ABOUT ITS WORDS. The
+ * buying shapes (price, "is it worth it", "does it hurt", "near me", booking) say nothing about
+ * WHICH service on their own. "How much per syringe" written under the lip filler client's price
+ * category is about lip filler; "how much does it cost" harvested off a page about the whole
+ * vertical is not, because nothing says which service "it" is. So `askedAboutOffer` is set for
+ * rows the keyword step wrote under one of the offer's own categories, or a person added to it,
+ * and never for a harvested row. A harvested phrase that names none of the vocabulary is still
+ * stored and shown; it just cannot be a pillar or support keyword.
+ */
+export function isAboutOffer(
+  phrase: string,
+  vocab: readonly string[],
+  opts: { askedAboutOffer?: boolean } = {}
+): boolean {
+  if (namesOffer(phrase, vocab)) return true;
+  return opts.askedAboutOffer === true;
+}
+
 /** Decode what we broke, collapse whitespace, and change nothing else. */
 export function tidyPhrase(raw: string): string {
   let out = raw;
@@ -205,6 +267,13 @@ export function phraseFaults(raw: string): PhraseFault[] {
 
   if (/[<>]|\]\(|\*\*|&#\d|&[a-z]+;/i.test(phrase)) faults.push("markup");
   if (NAV_CHROME.test(phrase)) faults.push("nav_chrome");
+  // ‼️ A CALL TO ACTION WELDED ONTO A QUESTION, the other half of the same extraction fault, and it
+  // was measured before it was written: on 2026-09-11 "Request a free AEO audit What is Answer
+  // Engine Optimization for aesthetic practices?" came out of SRT's corpus and into the top of the
+  // live keyword run. A capitalised question word in the MIDDLE, straight after a lowercase word
+  // with no sentence break, is a button label and a heading run together. A person asking two
+  // things puts a ? or a . between them, and that phrase is kept.
+  else if (WELDED_QUESTION.test(phrase)) faults.push("nav_chrome");
   if (/[:;]\s*$/.test(phrase)) faults.push("dangling");
 
   const words = phrase.split(/\s+/).filter(Boolean).length;

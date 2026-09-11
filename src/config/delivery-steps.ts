@@ -1,8 +1,9 @@
-// The 41 delivery steps. One constant, one file — Runner v3 section 1.
+// The 43 delivery steps. One constant, one file — Runner v3 section 1.
 //
 // Was 33 until the AI Skin Concierge added `concierge_preview` and `concierge_live`, and 35
 // until the attribution stack added `tracking_installed` and `self_report_field`, and 38 with
-// the review workflow. `site_replica` is the 39th. The count is written down in prose here and
+// the review workflow. `site_replica` is the 39th, the offer pair made 41, and `keyword_set` and
+// `pre_call_pages` made 43 on 2026-09-11. The count is written down in prose here and
 // in step-verify.ts; if you add another step, both say so.
 //
 // ‼️ THE PROSE HAD DRIFTED AND THE TYPE HAD NOT, WHICH IS THE DESIGN WORKING. This said 37 and
@@ -175,21 +176,50 @@ const STEP_LIST = [
   // after them behind a proposal nobody had looked at. It is `auto` because proposing is a
   // reading of the intake form and not a decision: services.primary_treatment is REQUIRED and is
   // literally the answer to "which one service do you most want more appointments for". The
-  // decision is offer_locked, on the call, further down.
+  // decision is offer_locked, on the prep call, directly below.
   //
   // Matthew: "always need to have one preselected". This is that, and it costs nothing: no model
   // call, no network, and a provenance on every value. See src/lib/clients/offers.ts.
   { key: "offer_proposed", phase: PHASE_BEFORE, label: "One offer proposed from what they told us at intake", auto: true, mode: "auto", blockedBy: ["intake_received", "avatar_confirmed"] },
-  { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest and the deep research for the confirmed avatar", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan", "avatar_confirmed"] },
+  // ‼️ THE PREP CALL. MOVED HERE FROM THE MIDDLE OF THE CALL ON 2026-09-11.
+  //
+  // Matthew: "lets lock the offer before the call, give me a reminder to call the client ... and
+  // ask what the offer is and say we are getting prepared for our call, this will increase show
+  // rates." It used to be blocked by call_booked, so the keyword set, the page candidates and the
+  // page plan were all built on a PROPOSED offer read off an intake field. For SRT that proposal
+  // was the top line of a services menu. Everything below this line now waits for a person to
+  // have heard the answer, and for the words their customers use for it (`terms:`).
+  //
+  // ‼️ blockedBy avatar_confirmed, NOT offer_proposed. offer_proposed parks in `error` when intake
+  // names no service, and a manual step blocked by an errored one stops the whole board right
+  // here, because reachableCursor breaks on the first step that waits for a person. A lock needs
+  // no proposal: the card says nothing was proposed and the prep call asks. It still sits AFTER
+  // offer_proposed so the card opens with the proposal whenever there is one.
+  //
+  // The KEY is unchanged. Renaming it would orphan every client_delivery_steps row carrying it.
+  { key: "offer_locked", phase: PHASE_BEFORE, label: "Prep call: phone them, lock the one offer and the words their customers use for it", mode: "manual", blockedBy: ["avatar_confirmed"] },
+  // offer_locked as a blocker since 2026-09-11: the deep research brief and its KEYWORDS block
+  // are written about the LOCKED offer, so running it before the lock researched a proposal.
+  { key: "avatar_harvest", phase: PHASE_BEFORE, label: "Buyer-phrase harvest and the deep research for the confirmed avatar", auto: true, mode: "auto_then_manual", blockedBy: ["baseline_scan", "avatar_confirmed", "offer_locked"] },
   { key: "findings_doc", phase: PHASE_BEFORE, label: "Findings written up and attached", auto: true, mode: "auto", blockedBy: ["presence_pdf", "review_audit"] },
 
   // ── BEFORE THE CALL: prepare. None of it touches their properties ─────────
-  { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_proposed"] },
+  // ‼️ THE KEYWORD STEP (2026-09-11). Matthew: "In what step are we going to select the keywords?
+  // I don't see it in any step and we need to select them, right?" Nothing did. The studio's
+  // `keywords` printed a ranked list and nothing saved it, and the page plan picked from it on its
+  // own. This expands 200+ ways the LOCKED offer is said (model-written, labelled `expansion` and
+  // never scored as evidence), merges the market's own evidence, and waits for `keywords approve`
+  // in its thread. The page plan draws only from approved queries. auto_then_manual: the system
+  // writes the list and a person approves it. See src/lib/clients/keyword-expansion.ts.
+  { key: "keyword_set", phase: PHASE_BEFORE, label: "Keywords: 200+ ways the offer is said, approved by me", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "avatar_harvest"] },
+  // Blocked by the LOCK, not the proposal, since 2026-09-11, and re-run when the lock lands (the
+  // stale-blocker re-aim in delivery-checklist.ts). Before Day 0 only: the set is frozen after it.
+  { key: "custom_question_set", phase: PHASE_BEFORE, label: "Custom question set drafted for approval", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_locked"] },
   // ‼️ The label no longer promises a hundred. `prompt_library` does not exist -- the corpus is
   // question_bank plus this client's own twenty -- so 100 is the CEILING the artifact prints
   // against, not a number it can deliver. The KEY is unchanged, because renaming a key orphans
   // every row already carrying it; labels are free.
-  { key: "page_candidates", phase: PHASE_BEFORE, label: "Page candidates scored and ranked for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_proposed"] },
+  { key: "page_candidates", phase: PHASE_BEFORE, label: "Page candidates scored and ranked for the call", auto: true, mode: "auto", blockedBy: ["avatar_confirmed", "offer_locked", "keyword_set"] },
   { key: "citation_cleanup_list", phase: PHASE_BEFORE, label: "Citation cleanup list built and ranked", auto: true, mode: "auto", blockedBy: ["presence_pdf"] },
   // `auto: true` as of the hub runner: the system really does attach both hostnames to Vercel
   // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
@@ -229,28 +259,31 @@ const STEP_LIST = [
   // never clear itself and the only exit was the dashboard or SQL.
   //
   // The rule this encodes: a step must appear LATER in this array than everything it names in
-  // blockedBy. _probe-step-verify.ts:80-89 enforces it for all 41 steps and names the offender
+  // blockedBy. _probe-step-verify.ts enforces it for every step and names the offender
   // ("site_replica (#16) is blocked by concierge_preview (#18)"), so a reorder that breaks it
   // fails the probe rather than emptying the cursor in production. Read it anyway before you
   // reorder anything here: the probe tells you what broke, not what the order should be.
   { key: "site_replica", phase: PHASE_BEFORE, label: "Replica of their own site built, assistant on it, preview link ready to walk", auto: true, mode: "auto_then_manual", blockedBy: ["hub_preview", "concierge_preview"] },
   { key: "review_card_pdf", phase: PHASE_BEFORE, label: "Review card PDF generated", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
-  { key: "call_sheet", phase: PHASE_BEFORE, label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"] },
+  // ‼️ THE NINE PAGES, WRITTEN BEFORE THE CALL (2026-09-11). Matthew: "I want 9 pages ready before
+  // we actually even talk to the customer on the phone." One pillar (the offer page) and eight
+  // supports, drawn only from the approved keywords, each a FULL draft saved with its evidence map
+  // and a magnet that frames the anchor offer. Drafts only: the Day 0 wall and the evidence gate
+  // still stand between every one of them and a live domain. The studio is where a person finishes
+  // them; this is where they are started. See src/lib/clients/pre-call-pages.ts.
+  //
+  // ‼️ AFTER concierge_preview, AND THE ORDER IS LOAD BEARING. Minting a page's magnet
+  // (approveMagnetCandidate) and resolving it for the drafter both need a concierge_configs row,
+  // and provisionConcierge at concierge_preview is the only thing that creates one. Placed next to
+  // the keyword step, every magnet mint would refuse.
+  { key: "pre_call_pages", phase: PHASE_BEFORE, label: "Nine pages drafted before the call: one pillar for the offer, eight supports", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"] },
+  { key: "call_sheet", phase: PHASE_BEFORE, label: "Call sheet PDF generated and attached", auto: true, mode: "auto", blockedBy: ["findings_doc", "custom_question_set", "page_candidates", "hub_preview", "pre_call_pages"] },
 
   // ── DURING THE CALL ───────────────────────────────────────────────────────
+  // offer_locked used to sit here, between call_booked and call_held, so the offer was picked live
+  // on the call. It moved to the prep call on 2026-09-11; see its entry above.
   { key: "call_booked", phase: PHASE_DURING, label: "Call booked", mode: "manual" },
-  // ‼️ BEFORE call_held, NOT AFTER, AND THAT IS THE WHOLE POINT OF WHERE IT SITS.
-  //
-  // reachableCursor surfaces exactly one waiting step at a time, so placing this after call_held
-  // would mean the card only appeared once the call was already over: a place to RECORD what was
-  // agreed rather than a place to work it out. Matthew asked to pick it live with the customer,
-  // so the card has to be on screen while he is on the phone. call_booked resolves, this appears,
-  // and call_held comes after it.
-  //
-  // Manual, and it is the one step in this pair that waits for a person on purpose. A proposal is
-  // a reading of a form; a lock is somebody hearing the answer out loud.
-  { key: "offer_locked", phase: PHASE_DURING, label: "The one offer locked, live on the call, with its positioning", mode: "manual", blockedBy: ["call_booked", "offer_proposed"] },
-  { key: "call_held", phase: PHASE_DURING, label: "Call held: NAP aloud, question set approved, consent confirmed, preview walked, pages picked", mode: "manual", blockedBy: ["call_sheet"] },
+  { key: "call_held", phase: PHASE_DURING, label: "Call held: NAP aloud, question set approved, consent confirmed, preview and the drafted pages walked", mode: "manual", blockedBy: ["call_sheet"] },
   { key: "access_granted", phase: PHASE_DURING, label: "Access granted: GBP manager, Search Console, Analytics", mode: "manual", blockedBy: ["call_held"] },
   // THREE records, and the phrasing is deliberate. "CNAME and TXT" read as two, which is
   // where the two-versus-three drift came from: there are two CNAMEs, not one.

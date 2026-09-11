@@ -1097,7 +1097,11 @@ for (const key of IMPLEMENTED_THIS_SESSION) {
 // and a person reads the listings. That IS satisfiable; it just is not automatic.
 for (const [step, blockers] of [
   ["findings_doc", ["presence_pdf", "review_audit"]],
-  ["call_sheet", ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"]],
+  ["call_sheet", ["findings_doc", "custom_question_set", "page_candidates", "hub_preview", "pre_call_pages"]],
+  // 2026-09-11: the keyword step and the pre-call pages. Every blocker is a step a person or a
+  // runner can finish, so neither can deadlock the call sheet behind it.
+  ["keyword_set", ["offer_locked", "avatar_harvest"]],
+  ["pre_call_pages", ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"]],
 ] as const) {
   for (const b of blockers) {
     ok(`${step}: blocker ${b} can actually complete`, !unreachable.has(b));
@@ -2826,8 +2830,17 @@ import { pageSlug } from "../src/lib/hub/pages";
   // _probe-step-verify.ts DID. Both sat at 33 through the concierge lane's two additions, so
   // both suites were red and each one read as somebody else's problem. Keeping the literal is
   // deliberate: the check exists to make a person ACKNOWLEDGE a change to the step list, and
-  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica).
-  eq("the step count is what the last person to change it said", STEPS.length, 41);
+  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica) -> 41 (offer_proposed, offer_locked) -> 43 (keyword_set, pre_call_pages, 2026-09-11).
+  eq("the step count is what the last person to change it said", STEPS.length, 43);
+  // The prep call sits before the harvest and the keyword step, and blocks both. Moving it back
+  // behind call_booked would put every keyword and every pre-call page on a PROPOSED offer again.
+  ok("the offer is locked before the harvest",
+    keys.indexOf("offer_locked") < keys.indexOf("avatar_harvest") &&
+      (STEPS.find((s) => s.key === "avatar_harvest")?.blockedBy ?? []).includes("offer_locked"));
+  ok("and it no longer waits for the call to be booked",
+    !(STEPS.find((s) => s.key === "offer_locked")?.blockedBy ?? []).includes("call_booked"));
+  ok("the pre-call pages come after the concierge, whose row their magnets need",
+    keys.indexOf("pre_call_pages") > keys.indexOf("concierge_preview"));
 
   {
     const seenPhases = new Set<string>();

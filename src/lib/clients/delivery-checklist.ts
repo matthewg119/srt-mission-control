@@ -308,6 +308,97 @@ export async function refreshDeliveryChecklist(clientId: string): Promise<void> 
  */
 export type StepTransition = "complete" | "skipped" | "reopened";
 
+/**
+ * Generators re-run when a step they are blocked by completes AFTER they did, and when.
+ *
+ * ‼️ GENERATORS ONLY. Each of these overwrites its own artifact from the current record, so a
+ * re-run is the plainest way to aim it at a decision made since. A step a person approved
+ * (the keyword set, the page plan) is never here: re-running it would un-approve somebody's work.
+ *
+ *   custom_question_set  only before Day 0. After it the set is frozen as custom_v1 (A1 D-P12)
+ *                        and a re-run would rewrite the measurement it is the baseline of.
+ *   page_candidates      always. It is the publishing backlog and is regenerated freely.
+ *   call_sheet           only while call_held is outstanding. After the call it is a record.
+ */
+const RE_AIM: Record<string, (state: { day0: boolean; callHeld: boolean }) => boolean> = {
+  custom_question_set: (s) => !s.day0,
+  page_candidates: () => true,
+  call_sheet: (s) => !s.callHeld,
+};
+
+/** Reopen every RE_AIM step that names `completedKey` as a blocker and finished before it. */
+export async function reaimStaleDependents(
+  clientId: string,
+  completedKey: string,
+  completedAt: string
+): Promise<string[]> {
+  const dependents = DELIVERY_STEPS.filter(
+    (s) => RE_AIM[s.key] && (s.blockedBy ?? []).includes(completedKey)
+  );
+  if (dependents.length === 0) return [];
+
+  const [{ data: rows }, { data: client }] = await Promise.all([
+    supabaseAdmin
+      .from("client_delivery_steps")
+      .select("step_key, status, completed_at, slack_anchor_ts")
+      .eq("client_id", clientId)
+      .in("step_key", [...dependents.map((d) => d.key), "call_held"]),
+    supabaseAdmin.from("clients").select("day_0_archived_at").eq("id", clientId).maybeSingle(),
+  ]);
+
+  const byKey = new Map(((rows ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.step_key), r]));
+  const state = {
+    day0: Boolean((client as { day_0_archived_at?: string | null } | null)?.day_0_archived_at),
+    callHeld: byKey.get("call_held")?.status === "complete",
+  };
+  const blocker = stepByKey(completedKey);
+
+  const reopened: string[] = [];
+  for (const dep of dependents) {
+    const row = byKey.get(dep.key);
+    if (!row || row.status !== "complete") continue;
+    const at = (row.completed_at as string | null) ?? null;
+    if (at && at >= completedAt) continue;
+    if (!RE_AIM[dep.key](state)) continue;
+
+    // Conditional on still being complete, so two transitions landing together reopen it once.
+    const { data: written } = await supabaseAdmin
+      .from("client_delivery_steps")
+      .update({
+        status: "pending",
+        completed_at: null,
+        completed_by: null,
+        skipped_reason: null,
+        verified_source: null,
+        verified_detail: null,
+        verified_at: null,
+        error_detail: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("client_id", clientId)
+      .eq("step_key", dep.key)
+      .eq("status", "complete")
+      .select("id");
+    if (!written?.length) continue;
+
+    reopened.push(dep.key);
+    await refreshStepAnchor(clientId, dep.key).catch(() => {});
+    await markAnchor(clientId, dep.key, null).catch(() => {});
+    // Only into a thread that already exists: notifyStep creates a missing anchor, and a step
+    // appearing out of order is the one-at-a-time rule coming apart.
+    if (row.slack_anchor_ts) {
+      await notifyStep(
+        clientId,
+        dep.key,
+        `:repeat: Re-running: *${blocker?.label ?? completedKey}* was completed after this ran, ` +
+          "so what it produced was aimed at an earlier answer. The cascade picks it up as soon as " +
+          "everything it waits on is done."
+      ).catch(() => {});
+    }
+  }
+  return reopened;
+}
+
 export async function setDeliveryStep(args: {
   clientId: string;
   stepKey: string;
@@ -453,6 +544,19 @@ export async function setDeliveryStep(args: {
     if (!adopted.ok) {
       console.error("[delivery-checklist] adopting the audit classification failed:", adopted.error);
     }
+  }
+
+  // ‼️ A FINISHED STEP WHOSE BLOCKER FINISHES AFTER IT IS RE-RUN (2026-09-11).
+  //
+  // offer_locked moved in front of the question set, the page candidates and the call sheet, but
+  // on a client already past it (SRT is the live case) those ran against a PROPOSED offer weeks
+  // ago and a lock arriving now changed nothing about them, while three places said "rebuilt
+  // against this". Only the steps in RE_AIM are eligible: re-running a generator is safe because
+  // every runner is idempotent, and re-running anything a person approved is not.
+  if (complete) {
+    await reaimStaleDependents(args.clientId, args.stepKey, now).catch((e) =>
+      console.error("[delivery-checklist] re-aiming dependents failed:", (e as Error).message)
+    );
   }
 
   // The eight pilot stages on the board are DERIVED from these rows, so they are

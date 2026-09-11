@@ -32,7 +32,9 @@
 //
 //   offer_proposed  the system PROPOSES one, from what intake already said. Automatic, so there
 //                   is always one preselected and it never blocks the board.
-//   offer_locked    a person LOCKS one, on the call, having heard the answer. Manual.
+//   offer_locked    a person LOCKS one, having heard the answer. Manual. Since 2026-09-11 that
+//                   happens on the PREP CALL before the onboarding call, not on the call itself,
+//                   and the same call captures the words their customers use for it (`terms:`).
 //
 // Same split as every proposed_* slot in this repo, and the same reason: a proposal is a
 // reading of the record and a lock is a decision somebody made out loud.
@@ -46,6 +48,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { supabaseAdmin } from "@/lib/db";
+import { hasBannedDash } from "@/lib/copy-guard";
+import { normalizePhrase } from "./phrase-quality";
 
 /** Where a proposed treatment came from. Never absent: a value with no provenance is a guess. */
 export type OfferSource =
@@ -74,7 +78,22 @@ export interface StoredOffer {
   positioning: string | null;
   lockedAt: string | null;
   lockedBy: string | null;
+
+  /**
+   * The words their CUSTOMERS use for it, captured on the prep call: `terms: lip flip, lip
+   * filler, lip injections`.
+   *
+   * ‼️ THIS IS WHAT MAKES KEYWORD RELEVANCE REAL. The treatment is how the business names it
+   * ("AEO Services for med spas") and almost no phrase a buyer types contains that string, so a
+   * test built on the treatment alone aimed nothing at the offer. The terms, plus the keyword
+   * step's naming variants, are the offer vocabulary isAboutOffer() reads.
+   */
+  terms: string[];
+  termsAt: string | null;
 }
+
+/** More than this is a list of everything they do, which is the menu the lock exists to avoid. */
+export const TERMS_MAX = 30;
 
 export const EMPTY_OFFER: StoredOffer = {
   proposedTreatment: null,
@@ -85,6 +104,8 @@ export const EMPTY_OFFER: StoredOffer = {
   positioning: null,
   lockedAt: null,
   lockedBy: null,
+  terms: [],
+  termsAt: null,
 };
 
 const SOURCES: readonly OfferSource[] = [
@@ -178,7 +199,57 @@ export function readOffer(raw: unknown): StoredOffer {
     positioning: text(bag.positioning),
     lockedAt: text(bag.lockedAt),
     lockedBy: text(bag.lockedBy),
+    terms: readTerms(bag.terms),
+    termsAt: text(bag.termsAt),
   };
+}
+
+/** Stored terms, validated. An offer written before terms existed reads as an empty list. */
+export function readTerms(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((t) => text(t))
+    .filter((t): t is string => t !== null)
+    .slice(0, TERMS_MAX);
+}
+
+/**
+ * `terms: lip flip, lip filler, lip injections`, parsed.
+ *
+ * Commas, pipes, semicolons or new lines separate them, because a person dictating a list uses
+ * whichever comes out. Each is 2 to 60 characters, carries no dash (copy-guard), and duplicates on
+ * the normal form collapse to the first spelling given. Pure, so the probe proves it.
+ */
+export function parseTerms(raw: string): { ok: true; terms: string[] } | { ok: false; error: string } {
+  const parts = raw
+    .split(/[,|;\n]+/)
+    .map((p) => p.trim().replace(/^["'“”‘’]+|["'“”‘’.]+$/g, "").trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return { ok: false, error: "there are no terms in that. `terms: lip flip, lip filler, lip injections`" };
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const p of parts) {
+    if (p.length < 2 || p.length > 60) {
+      return { ok: false, error: `"${p}" is not a term somebody says. Keep each one between 2 and 60 characters.` };
+    }
+    if (hasBannedDash(p)) return { ok: false, error: `"${p}" has a dash in it. Use a space.` };
+    const key = normalizePhrase(p);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+
+  if (out.length > TERMS_MAX) {
+    return {
+      ok: false,
+      error: `that is ${out.length} terms. Keep it to the ${TERMS_MAX} or fewer their customers actually say.`,
+    };
+  }
+  return { ok: true, terms: out };
 }
 
 /** Locked, in the only sense anything downstream cares about: a person named the thing. */
@@ -329,7 +400,10 @@ export async function lockOffer(args: {
   magnetKey?: string | null;
   positioning?: string | null;
   by: string;
-}): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; offer: StoredOffer; treatmentChanged: boolean; wasLocked: boolean }
+  | { ok: false; error: string }
+> {
   const treatment = usableTreatment(args.treatment);
   if (!treatment) {
     return {
@@ -341,6 +415,37 @@ export async function lockOffer(args: {
   }
 
   const current = await loadOffer(args.clientId);
+  const wasLocked = isLocked(current);
+
+  // ‼️ WHAT CHANGED IS RETURNED, BECAUSE A RE-LOCK IS NOT ALWAYS A NEW DECISION. `offer: same
+  // thing | better positioning` re-stamps the lock and changes nothing anything downstream is
+  // aimed at, so re-running the keyword expansion over it would spend a model call and un-approve
+  // a set somebody already approved. Compared on the normal form: "Lip filler." is not a new offer.
+  const treatmentChanged =
+    !wasLocked || normalizePhrase(current.treatment ?? "") !== normalizePhrase(treatment);
+
+  // ‼️ AFTER DAY 0 THE TREATMENT CANNOT MOVE, THE SAME RULE THE AVATAR FOLLOWS (avatars.ts). The
+  // tracked question set is frozen at Day 0 and the day 30/60/90 numbers are read against it and
+  // against the pages aimed at this treatment. Changing what everything is aimed at afterwards
+  // moves the baseline under a measurement already taken. Positioning and terms can still change.
+  if (wasLocked && treatmentChanged) {
+    const { data: row } = await supabaseAdmin
+      .from("clients")
+      .select("day_0_archived_at")
+      .eq("id", args.clientId)
+      .maybeSingle();
+    const day0 = (row as { day_0_archived_at?: string | null } | null)?.day_0_archived_at ?? null;
+    if (day0) {
+      return {
+        ok: false,
+        error:
+          `Day 0 was archived on ${day0.slice(0, 10)}, and the tracked set and every page are measured ` +
+          `against "${current.treatment}". Changing what they are aimed at now would move the baseline ` +
+          "the day 30/60/90 numbers are read against. Positioning and terms can still change.",
+      };
+    }
+  }
+
   const next: StoredOffer = {
     ...current,
     treatment,
@@ -356,7 +461,39 @@ export async function lockOffer(args: {
     .eq("id", args.clientId);
 
   if (error) return { ok: false, error: error.message };
-  return { ok: true, offer: next };
+  return { ok: true, offer: next, treatmentChanged, wasLocked };
+}
+
+/**
+ * Store the words their customers use for the offer. Replaces the list; `terms:` again with the
+ * full list is how one is added or removed, which keeps the thread the record of what was said.
+ *
+ * Refuses on an unlocked offer: terms for an offer nobody agreed to are terms for a proposal.
+ */
+export async function setOfferTerms(args: {
+  clientId: string;
+  terms: string[];
+}): Promise<{ ok: true; offer: StoredOffer; changed: boolean } | { ok: false; error: string }> {
+  const current = await loadOffer(args.clientId);
+  if (!isLocked(current)) {
+    return {
+      ok: false,
+      error: "the offer is not locked yet. `offer: <what they sell>` first, then the words customers use for it.",
+    };
+  }
+
+  const before = new Set(current.terms.map(normalizePhrase));
+  const after = new Set(args.terms.map(normalizePhrase));
+  const changed = before.size !== after.size || [...after].some((t) => !before.has(t));
+
+  const next: StoredOffer = { ...current, terms: args.terms, termsAt: new Date().toISOString() };
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({ offer: next })
+    .eq("id", args.clientId);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, offer: next, changed };
 }
 
 /**
@@ -420,13 +557,76 @@ export function isOfferReply(text: string): boolean {
   return OFFER_PREFIX.test(text);
 }
 
+/** `terms: lip flip, lip filler` in the same thread. Its own prefix, never an `offer:` reply. */
+const TERMS_PREFIX = /^\s*terms\s*:/i;
+
+/** What the route posts, and what it runs after posting. */
+export interface OfferReply {
+  message: string;
+  /**
+   * The re-aim, when the lock or the terms changed after the step was already done.
+   *
+   * ‼️ RETURNED, NOT RUN. It reopens the keyword step, whose runner makes a model call inside the
+   * cascade, and the Slack events route has to answer inside three seconds. The route posts this
+   * reply first and runs `after` in waitUntil, the same shape the `run` command uses.
+   */
+  after?: () => Promise<void>;
+}
+
+async function offerStepDone(clientId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("status")
+    .eq("client_id", clientId)
+    .eq("step_key", "offer_locked")
+    .maybeSingle();
+  return (data as { status?: string } | null)?.status === "complete";
+}
+
+async function reaim(clientId: string, change: { treatmentChanged: boolean; termsChanged: boolean }) {
+  const { reaimDownstream } = await import("./offer-cascade");
+  await reaimDownstream(clientId, change);
+}
+
+async function termsReply(clientId: string, raw: string): Promise<OfferReply> {
+  const parsed = parseTerms(raw);
+  if (!parsed.ok) return { message: `:warning: Not saved: ${parsed.error}` };
+
+  const res = await setOfferTerms({ clientId, terms: parsed.terms });
+  if (!res.ok) return { message: `:warning: Not saved: ${res.error}` };
+
+  const { stepNumber } = await import("@/config/delivery-steps");
+  const done = await offerStepDone(clientId);
+  const n = res.offer.terms.length;
+
+  return {
+    message: [
+      `:white_check_mark: *${n} term${n === 1 ? "" : "s"} saved:* ${res.offer.terms.join(", ")}.`,
+      `Step ${stepNumber("keyword_set")} expands every way the offer is said from these and the ` +
+        "treatment, and tests every phrase's relevance against them.",
+      !res.changed
+        ? "_The same list as before, so nothing downstream changes._"
+        : done
+          ? "This step is already done, so the keyword set is re-run against the new terms now. It says so in its own thread."
+          : "*Next:* press [Done] on this step.",
+    ].join("\n"),
+    after:
+      res.changed && done
+        ? () => reaim(clientId, { treatmentChanged: false, termsChanged: true })
+        : undefined,
+  };
+}
+
 export async function handleOfferThreadReply(input: {
   clientId: string;
   stepKey: string | null;
   text: string;
   by: string;
-}): Promise<{ message: string } | null> {
+}): Promise<OfferReply | null> {
   if (!input.stepKey || !OFFER_STEPS.has(input.stepKey)) return null;
+  if (TERMS_PREFIX.test(input.text)) {
+    return termsReply(input.clientId, input.text.replace(TERMS_PREFIX, ""));
+  }
   if (!isOfferReply(input.text)) return null;
 
   const body = input.text.replace(OFFER_PREFIX, "").trim();
@@ -469,26 +669,48 @@ export async function handleOfferThreadReply(input: {
   if (!res.ok) return { message: `:warning: Could not lock that: ${res.error}` };
 
   const { stepNumber } = await import("@/config/delivery-steps");
+  const done = await offerStepDone(input.clientId);
+
+  // ‼️ "PRESS DONE" ONLY WHEN THERE IS A DONE TO PRESS. A re-lock on a finished step used to be
+  // told to press a button that had already been pressed, while nothing it fed was re-run.
+  const next: string[] = [];
+  if (!done) {
+    next.push(
+      `  • Press [Done] on this step. That opens step ${stepNumber("keyword_set")}'s keyword set ` +
+        "and re-runs anything that already ran against the proposal."
+    );
+  } else if (res.treatmentChanged) {
+    next.push(
+      "  • This step was already done, so what was aimed at the old offer is re-aimed now: the " +
+        "keyword set re-expands and the research prompt is posted again. Each says so in its own thread."
+    );
+  } else {
+    next.push("  • The treatment is the same, so nothing downstream changes.");
+  }
+  if (!res.offer.terms.length) {
+    next.push(
+      "  • `terms: <what their customers call it>, <another>` adds the words the keyword step matches against."
+    );
+  }
+  if (!res.offer.positioning) {
+    next.push(
+      "  • No positioning captured. `offer: " + res.offer.treatment + " | <how they want to be " +
+        "known for it>` adds it without changing the lock."
+    );
+  }
 
   return {
     message: [
       `:white_check_mark: *Locked on ${res.offer.treatment}.*`,
       ...(res.offer.positioning ? [`_Positioning: ${res.offer.positioning}_`] : []),
-      accepting ? "_Took the proposal, and it is a decision now rather than a reading._" : "",
+      ...(accepting ? ["_Took the proposal, and it is a decision now rather than a reading._"] : []),
       "",
       "*Next:*",
-      `  • Press [Done] on this step.`,
-      `  • Step ${stepNumber("custom_question_set")}'s tracked question set and step ` +
-        `${stepNumber("page_candidates")}'s page candidates rebuild against this offer, so they ` +
-        `stop being about the whole vertical.`,
-      "  • Every page drafted in the page studio from now on carries it, which is what makes a " +
-        "library magnet naming that treatment reachable at all.",
-      ...(res.offer.positioning
-        ? []
-        : ["  • No positioning captured. `offer: " + res.offer.treatment + " | <how they want it " +
-           "positioned>` adds it without changing the lock."]),
-    ]
-      .filter((line) => line !== "")
-      .join("\n"),
+      ...next,
+    ].join("\n"),
+    after:
+      done && res.treatmentChanged
+        ? () => reaim(input.clientId, { treatmentChanged: true, termsChanged: false })
+        : undefined,
   };
 }

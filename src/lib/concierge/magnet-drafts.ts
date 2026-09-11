@@ -668,6 +668,62 @@ There is no page yet. These sit on a rebuild of ` +
   return { ok: true, candidates: ((data ?? []) as unknown as Record<string, unknown>[]).map(toCandidate) };
 }
 
+/**
+ * One candidate from a plan row's APPROVED framing of the anchor, with no model call.
+ *
+ * ‼️ THE FRAME WAS ALREADY DECIDED, SO NOTHING IS DRAFTED. The pre-call plan words each page's
+ * framing (title, pill, opening line) and a person approves the plan with it on the card. Drafting
+ * five more framings per page would ask the same question again, nine times, and spend nine calls
+ * doing it. This stages exactly that one frame as a candidate row, and approveMagnetCandidate then
+ * mints it with every copy check it already runs. That function keeps the ONLY insert into
+ * lead_magnets anywhere in src/.
+ *
+ * The anchor's own promise is what the framing delivers, so it is the candidate's promise: a
+ * framing may narrow the focus, never add a deliverable.
+ */
+export async function stageFrameCandidate(args: {
+  clientId: string;
+  pageId: string;
+  frame: PlannedFrame;
+}): Promise<{ ok: true; candidateId: string } | { ok: false; error: string }> {
+  const tenant = await conciergeTenant(args.clientId);
+  if (!tenant) return { ok: false, error: "this client has no concierge row, so there is no catalogue to mint into" };
+
+  const anchor = await anchorFor(args.clientId, tenant.audience);
+  if (!anchor?.magnetKey) return { ok: false, error: "no anchor offer is set. `anchor: <key>` names it" };
+
+  const title = args.frame.title.trim();
+  const ctaLabel = args.frame.ctaLabel.trim();
+  const entry = args.frame.conciergeEntry.trim();
+  if (!title || !ctaLabel || !entry) return { ok: false, error: "the planned framing is incomplete" };
+  if (ctaLabel.length > CTA_MAX) return { ok: false, error: `the planned pill is ${ctaLabel.length} characters, the limit is ${CTA_MAX}` };
+  if ([title, ctaLabel, entry].some(hasBannedDash)) return { ok: false, error: "the planned framing contains a dash" };
+
+  const { data, error } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .insert({
+      client_id: args.clientId,
+      page_id: args.pageId,
+      audience: tenant.audience,
+      title,
+      promise: anchor.promise,
+      cta_label: ctaLabel,
+      concierge_entry: entry,
+      rationale: "The framing approved with the page plan.",
+      evidence_refs: [],
+      status: "draft",
+      // Null, because no model wrote this row: it is the plan's framing, copied.
+      model: null,
+      frames_key: anchor.magnetKey,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) return { ok: false, error: `the framing could not be staged: ${error.message}` };
+  if (!data?.id) return { ok: false, error: "the framing was not staged" };
+  return { ok: true, candidateId: String(data.id) };
+}
+
 // ---------------------------------------------------------------------------
 // Reading
 // ---------------------------------------------------------------------------

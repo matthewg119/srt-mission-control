@@ -53,7 +53,7 @@ import { deliverArtifact } from "./deliver";
 // itself reads, so a channel move cannot leave this pointing at the old one.
 import { pageStudioHint } from "../page-studio";
 import type { AutoResult } from "./registry";
-import { filterPhrases, droppedLine, normalizePhrase } from "../phrase-quality";
+import { filterPhrases, droppedLine, normalizePhrase, namesOffer, offerVocabulary } from "../phrase-quality";
 import { loadOffer, effectiveTreatment } from "../offers";
 
 /** Runner v3 asks for 100 for the call. It is the ceiling on what gets printed, not a target. */
@@ -204,9 +204,9 @@ export const OFFER_BONUS = 10;
 
 export function offerBonus(phrase: string, treatment: string | null): number {
   if (!treatment) return 0;
-  const needle = normalizePhrase(treatment);
-  if (!needle) return 0;
-  return normalizePhrase(phrase).includes(needle) ? OFFER_BONUS : 0;
+  // One definition of "names the offer" (namesOffer in phrase-quality.ts), on word boundaries, so
+  // this bonus and the keyword step's relevance test cannot disagree about the same phrase.
+  return namesOffer(phrase, offerVocabulary({ treatment })) ? OFFER_BONUS : 0;
 }
 
 /** Which of this client's audit questions did an engine actually name them for. */

@@ -14,12 +14,28 @@
 //  5. offerBonus is one definition, and it is a bonus rather than a filter.
 //  6. The dispatch grammar: the new commands fire, and the dictation they could swallow does not.
 
-import { isPlannable, selectPlan, frameFaults, formatPlan, MAX_PER_THEME, type PoolItem, type PlanRow } from "@/lib/clients/page-plan";
+import {
+  isPlannable,
+  selectPlan,
+  selectOfferPlan,
+  frameFaults,
+  formatPlan,
+  MAX_PER_THEME,
+  MAX_PER_CATEGORY,
+  PRE_CALL_SUPPORTS,
+  PLAN_COMMAND,
+  ANCHOR_COMMAND,
+  type OfferPoolItem,
+  type PoolItem,
+  type PlanRow,
+} from "@/lib/clients/page-plan";
 import { outlineFaults, OUTLINE_LIMITS } from "@/lib/hub/draft-page";
 import { readOutline } from "@/lib/hub/pages";
 import { readFrame, CTA_MAX } from "@/lib/concierge/magnet-drafts";
 import { offerBonus, OFFER_BONUS } from "@/lib/clients/artifacts/page-candidates";
-import { normalizePhrase } from "@/lib/clients/phrase-quality";
+import { normalizePhrase, isAboutOffer, offerVocabulary } from "@/lib/clients/phrase-quality";
+import { planLinksFor, orderIndexPages, type PlanLinkRow, type PublishedPageRef } from "@/lib/hub/plan-links";
+import { breadcrumbJsonLd } from "@/lib/hub/jsonld";
 import { hasBannedDash } from "@/lib/copy-guard";
 
 let failures = 0;
@@ -43,6 +59,8 @@ const DEBRIS = [
   "that agencies are either snake oil or too expensive.",
   '"The Acquisition Cost Trap: Why Doubling Your Marketing Budget Might Actually Hurt Profitability"',
   "Out of scope of $900: medical copywriting retainers, ad management, guaranteed ChatGPT inclusion, fake case studies, or security hardening.",
+  // Top of SRT's first live keyword run, 2026-09-11: a button label welded onto a heading.
+  "Request a free AEO audit What is Answer Engine Optimization for aesthetic practices?",
 ];
 
 for (const d of DEBRIS) check(`not plannable: ${d.slice(0, 60)}`, !isPlannable(d, "harvested"));
@@ -217,13 +235,14 @@ check("no offer, no bonus", offerBonus("lip filler near me", null) === 0);
 
 // ── 6. The dispatch grammar ──────────────────────────────────────────────────
 //
-// ‼️ A COPY OF THE PATTERNS IN page-studio.ts, for the reason _probe-page-studio.ts keeps one:
-// importing that file pulls the Slack client and the database in. If a pattern there changes,
-// change it here, and this section says whether the dictation is still safe.
+// ‼️ PLAN AND ANCHOR ARE THE REAL PATTERNS NOW, imported from page-plan.ts, which the studio and
+// the pre-call step's thread both read. They used to be hand copies of page-studio.ts's inline
+// regexes, which is how a probe goes green over a pattern nobody runs. OUTLINE and ADD are still
+// copies: they live inside page-studio.ts, and importing that pulls the Slack client in.
 console.log("\n6. The new commands fire, and the dictation they could swallow does not");
 
-const PLAN = /^plan(?:\s+(new|approve|(?:drop|swap)\s+[0-9]{1,2}|edit\s+[0-9]{1,2}\s*:\s*.+))?$/i;
-const ANCHOR = /^anchor(?:\s*:\s*(\S+))?$/i;
+const PLAN = PLAN_COMMAND;
+const ANCHOR = ANCHOR_COMMAND;
 const OUTLINE = /^outline(\s+new)?$/i;
 const ADD = /^\s*add\s*:\s*([\s\S]+)$/i;
 
@@ -258,10 +277,168 @@ const row: PlanRow = {
   status: "proposed",
   pageId: null,
   pageStatus: null,
+  role: null,
+  pillarId: null,
+  keywordCategory: null,
 };
 const card = formatPlan([row, { ...row, id: "y", rank: 2, status: "approved" }], "The AI Visibility Scan");
 check("no dash in the rendered card", !hasBannedDash(card), card);
 check("the card names the anchor", card.includes("The AI Visibility Scan"));
+const rolesCard = formatPlan([{ ...row, role: "pillar" }, { ...row, id: "z", rank: 2, role: "support" }], null);
+check("a pre-call card labels the pillar and the supports", rolesCard.includes("[Pillar]") && rolesCard.includes("[Support]"));
+
+// ── 8. The pre-call plan ─────────────────────────────────────────────────────
+console.log("\n8. The pre-call plan: one pillar, eight supports, strict spread, never padded");
+
+const op = (question: string, category: string, over: Partial<OfferPoolItem> = {}): OfferPoolItem => ({
+  question,
+  score: 30,
+  category,
+  categoryLabel: category,
+  tier: 1,
+  naming: category === "naming",
+  relevant: true,
+  ...over,
+});
+
+const CATS = ["price", "fear", "comparison", "process", "candidacy", "results", "provider", "local"];
+const offerPool: OfferPoolItem[] = [
+  op("lip filler", "naming", { score: 20 }),
+  op("lip injections", "naming", { score: 19 }),
+  ...CATS.flatMap((cat, i) => [
+    op(`${cat} question one about lip filler`, cat, { score: 40 - i }),
+    op(`${cat} question two about lip filler`, cat, { score: 39 - i }),
+    op(`${cat} question three about lip filler`, cat, { score: 38 - i }),
+  ]),
+  op("does botox hurt", "fear", { relevant: false, score: 99 }),
+];
+
+const full = selectOfferPlan(offerPool, { city: "Charlotte" });
+check("the pillar is the top naming variant", full.pillar?.item.question === "lip filler", full.pillar?.item.question);
+check("its keyword carries the city when the business is local", full.pillar?.keyword === "lip filler Charlotte", full.pillar?.keyword);
+check(`${PRE_CALL_SUPPORTS} supports`, full.supports.length === PRE_CALL_SUPPORTS, `got ${full.supports.length}`);
+const perCat = new Map<string, number>();
+for (const s of full.supports) perCat.set(s.category, (perCat.get(s.category) ?? 0) + 1);
+check(
+  `no category takes more than ${MAX_PER_CATEGORY}`,
+  [...perCat.values()].every((n) => n <= MAX_PER_CATEGORY),
+  [...perCat.entries()].map(([c, n]) => `${c}=${n}`).join(", ")
+);
+check("a row that is not about the offer never gets in, whatever its score", !full.supports.some((s) => s.question.includes("botox")));
+check("the pillar is not also a support", !full.supports.some((s) => s.question === "lip filler"));
+check("no naming variant is a support: the pillar owns that search", !full.supports.some((s) => s.naming));
+check(
+  "eight supports land in eight categories when the set has them",
+  new Set(full.supports.map((s) => s.category)).size === PRE_CALL_SUPPORTS,
+  full.supports.map((s) => s.category).join(", ")
+);
+check("a full plan names no fix", full.fix === null);
+check("no city, no city in the pillar keyword", selectOfferPlan(offerPool, { city: null }).pillar?.keyword === "lip filler");
+check(
+  "a naming variant that already carries the city is not given it twice",
+  selectOfferPlan([op("lip filler charlotte", "naming"), ...offerPool.slice(2)], { city: "Charlotte" }).pillar?.keyword === "lip filler charlotte"
+);
+
+const thin = selectOfferPlan(
+  [
+    op("lip filler", "naming"),
+    op("lip filler cost", "price"),
+    op("lip filler price per syringe", "price"),
+    op("lip filler price deals", "price"),
+    op("does lip filler hurt", "fear"),
+    op("how to choose a med spa", "provider", { relevant: false }),
+  ],
+  { city: null }
+);
+check("a thin set gives a SHORT plan", thin.supports.length === 3, `got ${thin.supports.length}`);
+check("it is not padded past the category cap", thin.supports.filter((s) => s.category === "price").length === MAX_PER_CATEGORY);
+check("or with a question about the vertical", !thin.supports.some((s) => s.question.includes("choose a med spa")));
+check("and it says what would fill it", thin.short === 5 && Boolean(thin.fix?.includes("KEYWORDS block")), thin.fix ?? "");
+
+const noPillar = selectOfferPlan([op("lip filler cost", "price")], { city: null });
+check("no naming variant means no pillar, and the fix says so", noPillar.pillar === null && Boolean(noPillar.fix?.includes("keywords more naming")));
+
+const tiers = selectOfferPlan(
+  [
+    op("lip filler", "naming"),
+    op("proposed price question lip filler", "price", { tier: 1, score: 90 }),
+    op("evidenced price question lip filler", "price", { tier: 0, score: 5 }),
+    op("another proposed price question lip filler", "price", { tier: 1, score: 80 }),
+  ],
+  { city: null }
+);
+check("an evidenced row is chosen before a proposal, whatever the scores", tiers.supports[0]?.question.startsWith("evidenced"));
+
+// ── 9. The offer-relevance test ──────────────────────────────────────────────
+console.log("\n9. The offer-relevance test (the full set is in _probe-keywords.ts)");
+
+const lipV = offerVocabulary({ treatment: "Lip filler", terms: ["lip flip"] });
+check("lip filler client: 'does lip filler hurt' is about the offer", isAboutOffer("does lip filler hurt", lipV));
+check("lip filler client: 'is botox safe' is not", !isAboutOffer("is botox safe", lipV));
+const srtV = offerVocabulary({ treatment: "AEO Services for med spas", terms: ["AEO", "answer engine optimization"] });
+check("SRT: 'best AEO agency for med spas' is about the offer", isAboutOffer("best AEO agency for med spas", srtV));
+check("SRT: 'how to choose a med spa' is not", !isAboutOffer("how to choose a med spa", srtV));
+check(
+  "the whole-string test on the treatment alone misses it, which was the measured problem",
+  offerBonus("best AEO agency for med spas", "AEO Services for med spas") === 0
+);
+
+// ── 10. The links a pillar and a support render ─────────────────────────────
+console.log("\n10. Links come from the plan, published pages only, plus BreadcrumbList");
+
+const linkPlan: PlanLinkRow[] = [
+  { planId: "P", pageId: "p-pillar", role: "pillar", pillarId: null, theme: "Naming", workingTitle: "Lip filler in Charlotte", rank: 1 },
+  { planId: "S1", pageId: "p-s1", role: "support", pillarId: "P", theme: "Price", workingTitle: "What lip filler costs", rank: 2 },
+  { planId: "S2", pageId: "p-s2", role: "support", pillarId: "P", theme: "Price", workingTitle: "Paying for lip filler over time", rank: 3 },
+  { planId: "S3", pageId: "p-s3", role: "support", pillarId: "P", theme: "Fear", workingTitle: "Does lip filler hurt", rank: 4 },
+  { planId: "S4", pageId: "p-s4", role: "support", pillarId: "P", theme: "Fear", workingTitle: "Is lip filler safe", rank: 5 },
+];
+const livePages: PublishedPageRef[] = [
+  { id: "p-pillar", slug: "lip-filler-charlotte", title: "Lip filler in Charlotte" },
+  { id: "p-s1", slug: "lip-filler-cost", title: "Cost" },
+  { id: "p-s2", slug: "lip-filler-financing", title: "Financing" },
+  { id: "p-s3", slug: "does-lip-filler-hurt", title: "Hurt" },
+  // p-s4 is a DRAFT: absent from the published list.
+];
+
+const pillarLinks = planLinksFor("p-pillar", linkPlan, livePages);
+check(
+  "the pillar lists its published supports in rank order",
+  pillarLinks.supports.map((s) => s.slug).join() === "lip-filler-cost,lip-filler-financing,does-lip-filler-hurt",
+  pillarLinks.supports.map((s) => s.slug).join()
+);
+check("a draft support is never linked", !pillarLinks.supports.some((s) => s.slug.includes("safe")));
+check("the anchor text is the working title", pillarLinks.supports[0]?.title === "What lip filler costs");
+const supportLinks = planLinksFor("p-s1", linkPlan, livePages);
+check("a support links its pillar", supportLinks.pillar?.slug === "lip-filler-charlotte");
+check(
+  "and two related siblings, same theme first",
+  supportLinks.related.length === 2 && supportLinks.related[0]?.slug === "lip-filler-financing",
+  supportLinks.related.map((r) => r.slug).join()
+);
+check("a support never lists itself", !supportLinks.related.some((r) => r.slug === "lip-filler-cost"));
+check(
+  "no pillar link while the pillar is a draft",
+  planLinksFor("p-s1", linkPlan, livePages.filter((p) => p.id !== "p-pillar")).pillar === null
+);
+const offPlan = planLinksFor("p-other", linkPlan, livePages);
+check("a page not on the plan carries nothing", offPlan.pillar === null && offPlan.supports.length === 0 && offPlan.related.length === 0);
+check("the index leads with the pillar", orderIndexPages([{ id: "p-s1" }, { id: "p-pillar" }], linkPlan)[0]?.id === "p-pillar");
+
+const crumbs = breadcrumbJsonLd([
+  { name: "Hub", url: "https://learn.example.com/" },
+  { name: "Lip filler in Charlotte", url: "https://learn.example.com/lip-filler-charlotte" },
+  { name: "What lip filler costs", url: "https://learn.example.com/lip-filler-cost" },
+]) as Record<string, unknown>;
+const crumbItems = (crumbs.itemListElement as Array<Record<string, unknown>> | undefined) ?? [];
+check(
+  "BreadcrumbList: three ListItems, positions 1 to 3",
+  crumbs["@type"] === "BreadcrumbList" &&
+    crumbItems.length === 3 &&
+    crumbItems.every((it, i) => it["@type"] === "ListItem" && it.position === i + 1),
+  JSON.stringify(crumbs)
+);
+check("with absolute URLs", crumbItems.every((it) => String(it.item).startsWith("https://")));
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 process.exit(failures === 0 ? 0 : 1);

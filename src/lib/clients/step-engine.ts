@@ -988,15 +988,19 @@ async function instructionsFor(
     }
 
     /**
-     * The one offer, locked live on the call.
+     * The prep call: phone them before the onboarding call and lock the one offer.
      *
-     * ‼️ THE CARD OPENS WITH A PROPOSAL SO THE CALL DOES NOT START FROM A BLANK FIELD. Matthew:
-     * "always need to have one preselected". Step 10 read their intake form and put a name in
-     * the proposed slot; this is where somebody hears the answer out loud and either takes it,
-     * replaces it, or names something new.
+     * ‼️ A CALL REMINDER FIRST AND A FORM SECOND (2026-09-11). Matthew: "give me a reminder to call
+     * the client in any step to call them and ask what the offer is and say we are getting
+     * prepared for our call, this will increase show rates." So the card leads with who to ring and
+     * what to say. The proposal from step 10 is still on it, so the call never starts from a blank
+     * field ("always need to have one preselected").
      */
     case "offer_locked": {
       const { loadOffer, offerLine, isLocked } = await import("./offers");
+      const { formatPhoneUS } = await import("./normalize");
+      const { guard } = await import("@/lib/copy-guard");
+      const { stepNumber } = await import("@/config/delivery-steps");
       const offer = await loadOffer(c.id);
 
       const { data: bag } = await supabaseAdmin
@@ -1007,44 +1011,64 @@ async function instructionsFor(
       const services = (bag?.services ?? {}) as Record<string, unknown>;
       const menu = typeof services.services_list === "string" ? services.services_list.trim() : "";
 
-      const { listMagnetsFor } = await import("@/lib/concierge/magnets");
-      const library = await listMagnetsFor("patient", null).catch(() => []);
+      // Guarded: it is read out loud to a client word for word, so a dash in it is a dash somebody
+      // says, and copy-guard is where this repo stops that.
+      const script = guard(
+        "prep call script",
+        [
+          "We are preparing your preview for our call, and I want it aimed at the right thing.",
+          "Which ONE service do you want more of?",
+          "What do your customers call it? The words they would say or type, not the menu name.",
+          "How do you want to be known for it?",
+        ].join("\n")
+      ).split("\n");
 
       return [
-        `*${offerLine(offer)}*`,
+        `*Phone ${c.name} before the onboarding call.*`,
+        c.phone
+          ? `<tel:${c.phone}|${formatPhoneUS(c.phone)}>   *Call now* below rings your phone first, then theirs.`
+          : ":warning: There is no phone on the client record, so there is nothing to dial. Add it on the board.",
         "",
-        "*This is the thing everything after it points at.* One offer, not a menu: the pages, the",
-        "sub-pages beneath them, the lead magnet on each one, the tracked question set and the",
-        "keyword set are all built around whatever is locked here. A menu cannot be interpolated",
-        "into a sentence, which is why intake asks for one service and not for the list.",
+        "*What to say:*",
+        ...script.map((line, i) => `  ${i + 1}. ${line}`),
+        "",
+        `*${offerLine(offer)}*`,
+        ...(offer.terms.length ? [`Their words for it: ${offer.terms.join(", ")}.`] : []),
         "",
         ...(menu
           ? ["*What they told us they offer, in their own words:*", "```", menu.slice(0, 700), "```", ""]
           : []),
-        "*Three ways to answer, in this thread:*",
+        "*Then, in this thread:*",
         "  • `offer: yes` takes the proposal above exactly as it stands.",
         "  • `offer: <what they sell>` names a different one. Their words, not a category.",
-        "  • `offer: <what they sell> | <how they want it positioned>` captures both at once.",
+        "  • `offer: <what they sell> | <how they want to be known for it>` captures both at once.",
+        "  • `terms: <what their customers call it>, <another>, <another>` is the vocabulary every",
+        `    keyword at step ${stepNumber("keyword_set")} is tested against.`,
         "",
-        ...(library.length
-          ? [
-              "*The free thing to give away for it* can be one of ours or a new one. Either way it",
-              "is drafted per page in the page studio, so it does not hold this step up. Ours:",
-              ...library.slice(0, 7).map((m) => `  • \`${m.magnetKey}\` — ${m.title}`),
-              "",
-            ]
-          : []),
-        "*Have a sample they liked?* Drop it in this thread. It files against this step the way",
-        "every other artifact does, and it is what the first magnet gets written from.",
+        "*Why before the call:* the keywords, the page plan and the pages drafted for the call are all",
+        "aimed at whatever is locked here, so they can only be ready to walk if the offer is known first.",
         "",
         isLocked(offer)
-          ? "*Next:* press [Done]. Locking rebuilds the question set and the page candidates " +
-            "against this offer, so they stop being about the whole vertical."
+          ? `*Next:* press [Done]. That opens step ${stepNumber("keyword_set")} and re-runs anything that ` +
+            "already ran against the proposal."
           : "*[Done] refuses until one is locked*, because everything downstream would otherwise " +
             "be aimed at whatever the intake form happened to say first.",
         "",
         `Board: ${boardUrl(c)}`,
       ];
+    }
+
+    // The keyword step's card: counts, the top 40 by frozen rank, and the thread grammar. The
+    // CSV of every row is posted by the runner into the same thread.
+    case "keyword_set": {
+      const { keywordCardLines } = await import("./client-keywords");
+      return keywordCardLines(c.id);
+    }
+
+    // The nine pages: the plan (1 pillar + 8 supports) until it is approved, then the drafts.
+    case "pre_call_pages": {
+      const { preCallPagesCardLines } = await import("./pre-call-pages");
+      return preCallPagesCardLines(c.id);
     }
 
     case "call_booked": {
@@ -1258,8 +1282,6 @@ async function instructionsFor(
     // this thread from concierge-setup.ts. Repeating them here would put two versions of the
     // same facts on one board, and the one that goes stale is always the copy.
     case "concierge_preview": {
-      const refs = await outputRefsFor(c.id);
-      const url = refs.get("concierge_preview");
 
       // ‼️ WHICH LANE THIS CLIENT IS ON CHANGES WHAT THE DEMO IS. The patient lane's demo is the
       // skin scan; the owner lane has no camera and demos a visibility answer built from the
@@ -1276,9 +1298,18 @@ async function instructionsFor(
       const lane = conciergeLaneName(audience);
       const ratified = Boolean(cfg?.audience_confirmed_at);
 
+      // ‼️ RE-MINTED WHEN THE CARD IS DRAWN, NOT READ FROM output_ref. The token lives 14 days, and
+      // rows written before 2026-09-11 hold the tokenless concierge-host URL, which 404s.
+      const { conciergePreviewUrlFor } = await import("./concierge-setup");
+      const url = cfg ? await conciergePreviewUrlFor(c.id) : null;
+
       return [
         `*${lane}.*`,
-        url ? `*Demo link:* ${url}` : "*The preview link is not on the row yet.* Hit Retry on the board.",
+        url
+          ? `*Demo link:* ${url}\nMinted when this card was drawn, on our own host, so it needs no DNS and works for 14 days.`
+          : cfg
+            ? "*No demo link could be minted.* CLIENT_LINK_SECRET is not set on this environment, or this client has no slug."
+            : "*The preview link is not on the row yet.* Hit Retry on the board.",
         ":lock: Not live on their site. `enabled` stays false until the concierge_live step.",
         "",
         // ‼️ THE AUDIENCE QUESTION IS ON THE CARD WHETHER OR NOT IT LOOKS WRONG, because the
@@ -1480,6 +1511,12 @@ async function instructionsFor(
         "",
         "Propagation is normally under an hour and can be several. A record added ninety seconds",
         "ago reading `not_found` is the normal state, not a fault, and nothing is written for it.",
+        "",
+        // SOP line 243: "the interlink is what passes authority in both directions". Hub to main
+        // is already there (NAP and sameAs); main to hub is theirs to add, so it is on the card.
+        "*Checklist: their homepage links to the pillar page.* Once the pillar is published, ask",
+        "whoever edits their site to link to it from the homepage. [Done] and Re-check fetch the",
+        "homepage and say whether the link is there. It is reported, not gated.",
       ];
     }
 
@@ -1714,6 +1751,12 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
         value: c.id,
       },
     ];
+  }
+
+  // [Call now] on the prep call. Only with a phone on the record: a button that can only refuse
+  // reads as broken. The handler re-reads the phone rather than trusting this card's value.
+  if (step.key === "offer_locked") {
+    return c.phone ? [{ label: "Call now", actionId: "step_ringout", value: c.id }] : [];
   }
 
   if (step.key !== "avatar_confirmed") return [];
@@ -2330,10 +2373,26 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
  * therefore never empty while anything is unresolved, and it never shows two things to do.
  */
 export async function reachableCursor(clientId: string): Promise<Set<string>> {
-  const { data } = await supabaseAdmin
+  let { data } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("step_key, status")
     .eq("client_id", clientId);
+
+  // ‼️ TOPPED UP HERE, BECAUSE ALL THREE SCHEDULERS COME THROUGH THIS FUNCTION. A client
+  // provisioned before a step existed has no row for it: runReadyAutoSteps skips a row with no
+  // status and postReadySteps waits for `ready`, so the board would stop at the new step with
+  // nothing on screen and nothing to press. loadRows in delivery-checklist.ts tops up as well, but
+  // only on the paths that happen to call it. seedDeliverySteps ignores rows that exist, so this
+  // adds the missing keys and touches no status. Guarded on > 0 for the reason loadRows gives.
+  if (data && data.length > 0 && data.length < DELIVERY_STEPS.length) {
+    const { seedDeliverySteps } = await import("./delivery-checklist");
+    await seedDeliverySteps(clientId);
+    const again = await supabaseAdmin
+      .from("client_delivery_steps")
+      .select("step_key, status")
+      .eq("client_id", clientId);
+    data = again.data ?? data;
+  }
 
   const done = new Set(
     (data ?? [])

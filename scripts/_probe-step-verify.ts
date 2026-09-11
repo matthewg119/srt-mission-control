@@ -49,7 +49,7 @@ const verifierKeys = Object.keys(STEP_VERIFIERS);
 // correct, it is here to make somebody ACKNOWLEDGE that the step list changed: deriving it from
 // DELIVERY_STEPS.length would assert nothing at all. It sat at 33 while the concierge lane
 // shipped two steps, so this probe was red for a whole session and read as somebody else's
-// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica) -> 41 (offer_proposed, offer_locked).
+// problem. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica) -> 41 (offer_proposed, offer_locked) -> 43 (keyword_set, pre_call_pages).
 //
 // Bumped to 39 on 2026-09-04 by the session that landed last. The two additions came from two
 // CONCURRENT sessions, and each correctly refused to bump this literal on the other's behalf:
@@ -63,9 +63,16 @@ const verifierKeys = Object.keys(STEP_VERIFIERS);
 // corpus with nothing tying them to the client, which is why step 13's PDF read as padding. The
 // pair splits proposing (a reading of the form, automatic) from locking (a decision on the call,
 // manual), and everything downstream reads the lock.
+//
+// Bumped to 43 on 2026-09-11 for keyword_set and pre_call_pages. What is being acknowledged: no
+// step selected keywords (the studio printed a ranked list and nothing saved it) and no step wrote
+// a page before the call. keyword_set expands 200+ ways the LOCKED offer is said and waits for a
+// person's approval; pre_call_pages plans one pillar and eight supports from that approved set and
+// drafts all of them in full. offer_locked moved in the same change, from the middle of the call
+// to the prep call before any of it. Keys unchanged, so no row was orphaned.
 // If you are reading this because it failed: update the number here, the prose count at the top of
 // src/config/delivery-steps.ts, and the one in step-verify.ts.
-ok(`${stepKeys.length} steps defined`, stepKeys.length === 41, `found ${stepKeys.length}, expected 41`);
+ok(`${stepKeys.length} steps defined`, stepKeys.length === 43, `found ${stepKeys.length}, expected 43`);
 
 const missing = stepKeys.filter((k) => !(k in STEP_VERIFIERS));
 ok("every step has a verifier", missing.length === 0, missing.join(", "));

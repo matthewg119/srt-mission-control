@@ -236,7 +236,7 @@ async function artifactOnRecord(ctx: VerifyCtx, label: string): Promise<Verdict>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 41.
+// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 43.
 //
 // (It said 33 for a long time while the array grew to 39. The NUMBER is prose and drifts; the
 // TYPE is the thing that actually holds, and adding site_replica to delivery-steps.ts broke this
@@ -727,21 +727,49 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         offer.proposedTreatment
           ? `only a proposal is on file ("${offer.proposedTreatment}"), and nobody has confirmed it`
           : "nothing is proposed and nothing is locked",
-        "On the call, reply in this thread with `offer: <what they sell>`, or `offer: yes` to " +
-          "take the proposal as it stands. Everything after this points at whatever is locked " +
-          "here: the tracked question set, the page candidates, the keyword set and the magnet " +
-          "on every page."
+        "On the prep call, reply in this thread with `offer: <what they sell>`, or `offer: yes` " +
+          "to take the proposal as it stands, then `terms: <what their customers call it>`. " +
+          "Everything after this points at whatever is locked here: the keyword set, the tracked " +
+          "question set, the page candidates, the pages drafted before the call and the magnet on " +
+          "every one."
       );
     }
 
     const parts = [`locked on "${offer.treatment}" by ${offer.lockedBy ?? "somebody"}`];
-    if (offer.magnetKey) parts.push(`offered with ${offer.magnetKey}`);
+    if (offer.magnetKey) parts.push(`anchored on ${offer.magnetKey}`);
     if (offer.positioning) parts.push("positioning captured");
+    parts.push(
+      offer.terms.length
+        ? `${offer.terms.length} customer term${offer.terms.length === 1 ? "" : "s"} captured`
+        : "no customer terms"
+    );
 
+    // ‼️ A LOCK WITH NO TERMS IS STILL A LOCK, and the line says what it costs rather than
+    // refusing. The keyword step can still expand from the treatment and its own naming variants;
+    // it just has less of the customers' own vocabulary to test relevance against.
     return verified(
       parts.join(", "),
-      `Step ${stepNumber("custom_question_set")}'s question set and step ${stepNumber("page_candidates")}'s page candidates are rebuilt against this.`
+      offer.terms.length
+        ? `Terms: ${offer.terms.join(", ")}.`
+        : "No customer terms, so the keyword match will be weaker. `terms: a, b, c` in this thread adds them.",
+      // True because setDeliveryStep re-runs a finished step whose blocker completes after it.
+      `Completing this re-runs step ${stepNumber("custom_question_set")}'s question set and step ` +
+        `${stepNumber("page_candidates")}'s page candidates wherever they already ran, and opens ` +
+        `step ${stepNumber("keyword_set")}.`
     );
+  },
+
+  // ‼️ SYSTEM TIER, OFF client_keywords: the floor of query rows, a person's approval, and enough
+  // approved queries about the offer to fill a pillar and eight supports. A set expanded for a
+  // different offer than the one locked now is refused, because an approval of that set is an
+  // approval of the wrong thing.
+  keyword_set: async (ctx) => {
+    const { verifyKeywordSet } = await import("./client-keywords");
+    const v = await verifyKeywordSet(ctx.clientId);
+    if (v.ok) return verified(...v.evidence);
+    return v.broken
+      ? broken("client_keywords for this client", v.found, v.todo)
+      : notYet("client_keywords for this client", v.found, v.todo);
   },
 
   custom_question_set: async (ctx) => {
@@ -986,7 +1014,24 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       );
     }
 
+    // ‼️ THE DEMO LINK IS FETCHED, NOT ASSUMED (2026-09-11). The row was always there while the link
+    // this step posted named concierge.srtagency.com, which does not resolve, with no token, which a
+    // switched-off widget refuses. A tick over a dead demo link is a tick over the one thing this
+    // step exists to hand over.
+    const { conciergePreviewUrlFor } = await import("./concierge-setup");
+    const { probeUrl } = await import("@/lib/concierge/host-check");
+    const demo = await conciergePreviewUrlFor(ctx.clientId);
+    const seen = demo ? await probeUrl(demo, 10_000) : null;
+    if (!seen?.ok) {
+      return notYet(
+        "a request for the demo link, made just now",
+        seen ? seen.detail : "no link could be minted (CLIENT_LINK_SECRET is unset or the client has no slug)",
+        "Re-run this step; its card names what failed."
+      );
+    }
+
     return verified(
+      `the demo link on ${new URL(demo as string).host} answered ${seen.status} to a request made just now`,
       `concierge_configs row present, ${origins.length} embed origin${origins.length === 1 ? "" : "s"} seeded (${origins.join(", ")})`,
       `analysis provider is \`${data.analysis_provider}\``,
       // ‼️ SAID, NOT REFUSED, AND THE LINE IS WHERE THE WIDGET IS. A preview answers on our own
@@ -1244,33 +1289,54 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
+  // ‼️ IT SAID "<host> answered a live request" HAVING MADE NO REQUEST (fixed 2026-09-11). The old
+  // check confirmed the theme and that a host row existed, then printed a sentence about a fetch
+  // that never happened, on a host that was NXDOMAIN. It now fetches: the client's own reviews host
+  // once its CNAME is verified, and before that the tokenised preview on our internal host, which
+  // needs no DNS at all. The evidence line names which one was asked and what it answered.
   review_tool_preview: async (ctx) => {
-    const { data, error } = await supabaseAdmin
-      .from("client_hosts")
-      .select("host, vercel_attached_at")
-      .eq("client_id", ctx.clientId)
-      .eq("kind", "reviews")
-      .maybeSingle();
-    if (error) return dbUnreachable("client_hosts");
-    if (!data?.vercel_attached_at) {
+    const { reviewToolPreviewReady, observeReviewTool } = await import("./review-preview");
+
+    const ready = await reviewToolPreviewReady(ctx.clientId);
+    if (!ready.ok) {
+      return notYet("a confirmed theme for the review tool", "the theme has not been confirmed", ready.error);
+    }
+
+    const seen = await observeReviewTool(ctx.clientId);
+    // Host only: the preview URL carries a 14-day token and evidence lines are kept.
+    const host = seen.url ? new URL(seen.url).host : null;
+
+    if (!seen.ok) {
       return notYet(
-        "the reviews host for this client",
-        data ? "a row exists but nothing was attached" : "no reviews host is registered",
-        `The reviews host is attached by the hub step. Confirm step ${stepNumber("hub_preview")} first.`
+        seen.via === "live"
+          ? `a request to ${host}, made just now`
+          : `a request for the review tool preview${host ? ` on ${host}` : ""}, made just now`,
+        seen.detail,
+        seen.via === "live"
+          ? "The reviews CNAME is verified, so their own host is what gets checked. A 404 there usually means the host is not attached on Vercel or its client_hosts row is off."
+          : "The preview needs no DNS. A 404 means the token or the client did not resolve; a timeout is usually a cold start, so Re-check once."
       );
     }
 
-    const { verifyReviewToolPreview } = await import("./review-preview");
-    const res = await verifyReviewToolPreview(ctx.clientId);
-    if (!res.ok) {
-      return notYet(
-        `a live request to ${data.host}`,
-        res.error ?? "the preview did not answer",
-        "An attached domain with no DNS record behind it does not resolve yet, which is normal " +
-          "before the client adds the CNAME. Re-check after the DNS step."
-      );
-    }
-    return verified(`${data.host} answered a live request`);
+    return verified(
+      seen.via === "live"
+        ? `${host} answered ${seen.status} to a request made just now`
+        : `the review tool preview on ${host} answered ${seen.status} to a request made just now (their reviews CNAME is not verified yet, so the preview link was checked)`,
+      ready.themed
+        ? "theme confirmed with overrides"
+        : "theme confirmed with no overrides, so SRT's defaults render deliberately"
+    );
+  },
+
+  // ‼️ SYSTEM TIER, AND IT IS OBSERVABLE STATE: the drafts exist as client_pages rows linked to the
+  // approved plan rows, each with a body. A thread-tier tick would be a person saying pages exist.
+  pre_call_pages: async (ctx) => {
+    const { verifyPreCallPages } = await import("./pre-call-pages");
+    const v = await verifyPreCallPages(ctx.clientId);
+    if (v.ok) return verified(...v.evidence);
+    return v.broken
+      ? broken("the pre-call plan and its drafts", v.found, v.todo)
+      : notYet("the pre-call plan and its drafts", v.found, v.todo);
   },
 
   review_card_pdf: async (ctx) => artifactOnRecord(ctx, "the review card PDF"),
@@ -1582,9 +1648,32 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     }
 
     const verifiedCount = rows.filter((r) => r.status === "verified").length;
+
+    // ‼️ THE MAIN SITE TO PILLAR LINK IS OBSERVED, AND IT IS A LINE, NOT A GATE (2026-09-11).
+    // The SOP: "the interlink is what passes authority in both directions". Hub to main already
+    // exists through the NAP and sameAs. This fetches their homepage and looks for a link to the
+    // published pillar, and says exactly what it saw. It cannot gate this step: first_page is
+    // blocked by subdomain_live, so the pillar cannot be live yet on the first pass, and gating
+    // would demand a link to a page that 404s. Every Re-check after publishing re-fetches, and the
+    // line never claims a link it did not fetch.
+    const { mainSiteLinksPillar } = await import("./main-site-link");
+    const link = await mainSiteLinksPillar(ctx.clientId).catch((e) => ({
+      checked: false,
+      found: false,
+      homepage: null,
+      pillarUrl: null,
+      detail: (e as Error).message,
+    }));
+    const linkLine = !link.checked
+      ? `main site to pillar link not checked: ${link.detail}`
+      : link.found
+        ? `${link.homepage} links to the pillar ${link.pillarUrl} (fetched just now)`
+        : `${link.homepage} was fetched just now and does NOT link to the pillar ${link.pillarUrl} yet. Ask whoever edits their site to add it`;
+
     return verified(
       `\`${hub.host}\` resolves to the hub target (record status verified)`,
-      `${verifiedCount} of ${rows.length} DNS records verified`
+      `${verifiedCount} of ${rows.length} DNS records verified`,
+      linkLine
     );
   },
 

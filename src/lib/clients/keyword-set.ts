@@ -38,11 +38,18 @@
 // be argued with rather than believed. That is the same reason custom-question-set.ts and
 // page-candidates.ts are deterministic: a model would re-rank on re-run and make a day-30 trend
 // a lie.
+//
+// ‼️ ONCE A PERSON HAS APPROVED A KEYWORD SET (the keyword_set delivery step, 2026-09-11), THAT
+// SET IS WHAT THIS RETURNS. The addendum: "buildKeywordSet and the studio's keywords command show
+// the approved set when one exists, with its provenance, rather than recomputing a different
+// ranking." Two rankings of one client's keywords is two answers to one question, and the page
+// plan would follow whichever it happened to read. The evidence reader below is shared with the
+// keyword step, so both halves read the market the same way.
 
 import { supabaseAdmin } from "@/lib/db";
 import { SCORE_TERMS, scoreCandidate, themeOf, offerBonus } from "./artifacts/page-candidates";
 import { loadOffer, effectiveTreatment } from "./offers";
-import { filterPhrases, tidyPhrase, normalizePhrase, type PhraseFilterResult } from "./phrase-quality";
+import { filterPhrases, tidyPhrase, normalizePhrase } from "./phrase-quality";
 
 // Re-exported so existing importers keep one name for it. The definition moved to
 // phrase-quality.ts, which imports nothing, so page-candidates.ts can share it without a cycle.
@@ -62,7 +69,16 @@ export type KeywordOrigin =
   /** One of the twenty this client's audit actually ran. */
   | "audit"
   /** A per-client page candidate, already substituted. */
-  | "candidate";
+  | "candidate"
+  // ── The four below only appear on an APPROVED set, read from client_keywords. ──
+  /** The deep research brief or its KEYWORDS block, as the keyword step files it. */
+  | "research"
+  /** Proposed by a model in the keyword step. Not evidence that anybody searched it. */
+  | "expansion"
+  /** An expansion phrase put to an engine by `keywords check`. */
+  | "measured"
+  /** Typed by a person with `keywords add:`. */
+  | "manual";
 
 export interface KeywordRow {
   phrase: string;
@@ -87,6 +103,8 @@ export interface KeywordSet {
   treatmentCertain: boolean;
   vertical: string | null;
   avatar: string | null;
+  /** True when these are the rows a person approved at the keyword step, not a computed ranking. */
+  approved: boolean;
   rows: KeywordRow[];
   /** What went in, so a short list can be explained rather than looking like a failure. */
   counts: { bank: number; audit: number; candidates: number; deduped: number };
@@ -100,16 +118,43 @@ export interface KeywordSet {
   quality: { bankTotal: number; bankKept: number; faults: Record<string, number> };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The market's evidence, read once, shared with the keyword step
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One distinct phrase the market used, with everything the database knows about it. */
+export interface EvidenceKeyword {
+  phrase: string;
+  normalized: string;
+  origin: "harvest" | "deep_research" | "keywords";
+  frequency: number;
+  intent: number;
+  objection: boolean;
+  /** ‼️ TRI-STATE: from this client's audit, and null when that question was never run. */
+  currentlyNamed: boolean | null;
+  sourceUrl: string | null;
+}
+
+export interface EvidenceRead {
+  vertical: string;
+  avatar: string | null;
+  rows: EvidenceKeyword[];
+  /** Normal form to named, for every audit question that answered. */
+  named: Map<string, boolean>;
+  deduped: number;
+  quality: { bankTotal: number; bankKept: number; faults: Record<string, number> };
+}
+
 /**
- * Every phrase this client's market uses, ranked.
+ * question_bank for this client's vertical and avatar, filtered and deduped, joined to whether
+ * their audit's engines named them for each phrase.
  *
- * ‼️ THE OFFER IS THE FILTER AND THE FALLBACK IS NOT SILENT. When an offer is locked, phrases
- * naming it sort above phrases that do not, which is what Matthew asked for: "start by selecting
- * the keywords of the selected offer to build every single link, question and lead magnet around
- * it". When nothing is locked the list still builds, and `treatmentCertain` is false so every
- * surface printing it can say the list is aimed at the whole menu.
+ * ‼️ IT REFUSES RATHER THAN FALLING BACK TO med_spa. verticalFor() in harvest.ts was changed to
+ * refuse for exactly this reason: forty correctly-extracted phrases about choosing an AEO agency
+ * were filed under med_spa because four readers took a `?? "med_spa"` default, and question_bank
+ * has no client_id to unpick them by. A wrong corpus is worse than no list.
  */
-export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { error: string }> {
+export async function evidenceRows(clientId: string): Promise<EvidenceRead | { error: string }> {
   const { data: client, error: clientError } = await supabaseAdmin
     .from("clients")
     .select("id, vertical_slug, primary_avatar_slug, contact_id, domain")
@@ -122,10 +167,6 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
   const vertical = (client.vertical_slug as string | null) ?? null;
   const avatar = (client.primary_avatar_slug as string | null) ?? null;
 
-  // ‼️ IT REFUSES RATHER THAN FALLING BACK TO med_spa. verticalFor() in harvest.ts was changed to
-  // refuse for exactly this reason: forty correctly-extracted phrases about choosing an AEO
-  // agency were filed under med_spa because four readers took a `?? "med_spa"` default, and
-  // question_bank has no client_id to unpick them by. A wrong corpus is worse than no list.
   if (!vertical) {
     return {
       error:
@@ -134,12 +175,6 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     };
   }
 
-  const offer = await loadOffer(clientId);
-  const effective = effectiveTreatment(offer);
-  const treatment = effective.value;
-
-  // ── question_bank, for this vertical and this avatar ──────────────────────
-  //
   // ‼️ AVATAR-SCOPED ROWS PLUS THE UNTAGGED ONES, NOT ONE OR THE OTHER. question_bank.avatar is
   // NULL on everything harvested before an avatar was confirmed, and those rows are still the
   // market's own wording. Excluding them would throw away the corpus on every client whose
@@ -159,13 +194,111 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
 
   // ‼️ TWO THIRDS OF THIS CORPUS IS NOT A PHRASE ANYBODY SAID, MEASURED. On SRT's own vertical
   // it is 172 usable rows out of 451: URLs glued to quotes, citation markers, headline
-  // fragments, whole paragraphs of somebody's prose. Ranking that produces a ranked list of
-  // debris, which is exactly what Matthew was looking at when he said most of the PDF is not
-  // usable. See src/lib/clients/phrase-quality.ts for the rules and the numbers.
+  // fragments, whole paragraphs of somebody's prose. See phrase-quality.ts for the rules.
   const bankFiltered = filterPhrases(bank ?? [], (r) => String(r.phrase ?? ""));
 
-  // ── The twenty this client's audit really ran ─────────────────────────────
   const named = await namedByPrompt(client.contact_id as string | null, client.domain as string | null);
+
+  const byNormal = new Map<string, EvidenceKeyword>();
+  let deduped = 0;
+
+  for (const r of bankFiltered.kept) {
+    const phrase = tidyPhrase(String(r.phrase ?? ""));
+    if (!phrase) continue;
+    // ‼️ RECOMPUTED, NOT READ OFF THE COLUMN. question_bank.normalized was written by more than
+    // one code path over time, so two rows holding the SAME question can carry different
+    // normalised forms and both survive the dedupe. Observed live: "How much does this cost?"
+    // came back twice, adjacent, in the same ranked list.
+    const normalized = normalizePhrase(phrase);
+    const source = String(r.source ?? "harvest");
+    const row: EvidenceKeyword = {
+      phrase,
+      normalized,
+      origin: source === "deep_research" ? "deep_research" : source === "keywords" ? "keywords" : "harvest",
+      frequency: Number(r.frequency_score ?? 1),
+      intent: Number(r.commercial_intent_score ?? 0),
+      objection: r.objection_phrase === true,
+      currentlyNamed: named.get(normalized) ?? null,
+      sourceUrl: (r.source_url as string | null) ?? null,
+    };
+
+    const existing = byNormal.get(normalized);
+    if (!existing) {
+      byNormal.set(normalized, row);
+      continue;
+    }
+    deduped += 1;
+    // The same phrase twice knows more than either copy: keep the strongest reading of each term.
+    byNormal.set(normalized, {
+      ...existing,
+      frequency: Math.max(existing.frequency, row.frequency),
+      intent: Math.max(existing.intent, row.intent),
+      objection: existing.objection || row.objection,
+      sourceUrl: existing.sourceUrl ?? row.sourceUrl,
+    });
+  }
+
+  return {
+    vertical,
+    avatar,
+    rows: [...byNormal.values()],
+    named,
+    deduped,
+    quality: {
+      bankTotal: (bank ?? []).length,
+      bankKept: bankFiltered.kept.length,
+      faults: bankFiltered.faults,
+    },
+  };
+}
+
+/**
+ * Every phrase this client's market uses, ranked, or the set a person approved.
+ *
+ * ‼️ THE OFFER IS A BONUS AND THE FALLBACK IS NOT SILENT. When an offer is locked, phrases
+ * naming it sort above phrases that do not, which is what Matthew asked for: "start by selecting
+ * the keywords of the selected offer to build every single link, question and lead magnet around
+ * it". When nothing is locked the list still builds, and `treatmentCertain` is false so every
+ * surface printing it can say the list is aimed at the whole menu.
+ */
+export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { error: string }> {
+  const offer = await loadOffer(clientId);
+  const effective = effectiveTreatment(offer);
+  const treatment = effective.value;
+
+  // ── The approved set, when there is one ─────────────────────────────────────
+  //
+  // Dynamic, because client-keywords.ts imports evidenceRows from here.
+  const { approvedKeywordSet } = await import("./client-keywords");
+  const approved = await approvedKeywordSet(clientId);
+  if (approved && approved.rows.length > 0) {
+    return {
+      clientId,
+      treatment,
+      treatmentCertain: effective.certain,
+      vertical: approved.vertical,
+      avatar: approved.avatar,
+      approved: true,
+      rows: approved.rows.map((r) => ({
+        phrase: r.phrase,
+        normalized: r.normalized,
+        score: Math.round(r.score * 100) / 100,
+        origin: r.origin,
+        theme: r.categoryLabel,
+        currentlyNamed: r.currentlyNamed,
+        objection: false,
+        intent: 0,
+        frequency: 0,
+        sourceUrl: r.sourceUrl,
+        treatment,
+      })),
+      counts: { bank: 0, audit: 0, candidates: 0, deduped: 0 },
+      quality: { bankTotal: 0, bankKept: 0, faults: {} },
+    };
+  }
+
+  const evidence = await evidenceRows(clientId);
+  if ("error" in evidence) return { error: evidence.error };
 
   // ── The per-client backlog ────────────────────────────────────────────────
   const { data: candidates } = await supabaseAdmin
@@ -177,7 +310,7 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
 
   // ── One row per distinct phrase, best evidence wins ───────────────────────
   const byNormal = new Map<string, KeywordRow>();
-  let deduped = 0;
+  let deduped = evidence.deduped;
 
   const put = (row: KeywordRow) => {
     const existing = byNormal.get(row.normalized);
@@ -187,9 +320,8 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     }
     deduped += 1;
     // ‼️ THE HIGHER SCORE WINS, AND currentlyNamed MERGES RATHER THAN OVERWRITING. A phrase
-    // that appears both in the bank and in the audit knows two different things about itself:
-    // how often the market said it, and whether an engine named this client for it. Dropping
-    // the duplicate outright would throw one of those away.
+    // that appears both in the bank and in the backlog knows two different things about itself:
+    // how often the market said it, and whether an engine named this client for it.
     const merged: KeywordRow = {
       ...(row.score > existing.score ? row : existing),
       currentlyNamed: existing.currentlyNamed ?? row.currentlyNamed,
@@ -201,59 +333,30 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     byNormal.set(row.normalized, merged);
   };
 
-  for (const r of bankFiltered.kept) {
-    const phrase = tidyPhrase(String(r.phrase ?? ""));
-    if (!phrase) continue;
-    // ‼️ RECOMPUTED, NOT READ OFF THE COLUMN. question_bank.normalized was written by more than
-    // one code path over time, so two rows holding the SAME question can carry different
-    // normalised forms and both survive the dedupe. Observed live: "How much does this cost?"
-    // came back twice, adjacent, in the same ranked list. The stored column is still what the
-    // table's unique index uses; this map needs one rule applied consistently at read time.
-    const normalized = normalizePhrase(phrase);
-    const source = String(r.source ?? "harvest");
-    const origin: KeywordOrigin =
-      source === "deep_research" ? "deep_research" : source === "keywords" ? "keywords" : "harvest";
-
-    const frequency = Number(r.frequency_score ?? 1);
-    const intent = Number(r.commercial_intent_score ?? 0);
-    const objection = r.objection_phrase === true;
-    const currentlyNamed = named.get(normalized) ?? null;
-
+  for (const e of evidence.rows) {
     put({
-      phrase,
-      normalized,
-      origin,
-      theme: themeOf(phrase),
+      phrase: e.phrase,
+      normalized: e.normalized,
+      origin: e.origin,
+      theme: themeOf(e.phrase),
       // ‼️ THE OFFER BONUS IS ADDED HERE, AT ROW CREATION, AND NOT OVER THE MERGED LIST. Page
       // candidates already carry it in their stored score (page-candidates.ts applies the same
       // offerBonus), so adding it after the merge would count it twice on every candidate row.
       score:
-        scoreCandidate({ frequency, intent, objection, currentlyNamed, inOwnReviews: false }) +
-        offerBonus(phrase, treatment),
-      currentlyNamed,
-      objection,
-      intent,
-      frequency,
-      sourceUrl: (r.source_url as string | null) ?? null,
+        scoreCandidate({
+          frequency: e.frequency,
+          intent: e.intent,
+          objection: e.objection,
+          currentlyNamed: e.currentlyNamed,
+          inOwnReviews: false,
+        }) + offerBonus(e.phrase, treatment),
+      currentlyNamed: e.currentlyNamed,
+      objection: e.objection,
+      intent: e.intent,
+      frequency: e.frequency,
+      sourceUrl: e.sourceUrl,
       treatment,
     });
-  }
-
-  // The audit's twenty, which carry the one term the bank cannot: whether an engine names them.
-  for (const [normalized, wasNamed] of named) {
-    const existing = byNormal.get(normalized);
-    if (existing) {
-      // Re-score with the measured answer rather than leaving it null.
-      const rescored =
-        scoreCandidate({
-          frequency: existing.frequency,
-          intent: existing.intent,
-          objection: existing.objection,
-          currentlyNamed: wasNamed,
-          inOwnReviews: false,
-        }) + offerBonus(existing.phrase, treatment);
-      byNormal.set(normalized, { ...existing, currentlyNamed: wasNamed, score: rescored });
-    }
   }
 
   // Page candidates are substituted from the same corpus, so they inherit the same debris.
@@ -263,7 +366,7 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     const phrase = tidyPhrase(String(c.question ?? ""));
     if (!phrase) continue;
     const normalized = normalizePhrase(phrase);
-    const currentlyNamed = (c.currently_named as boolean | null) ?? named.get(normalized) ?? null;
+    const currentlyNamed = (c.currently_named as boolean | null) ?? evidence.named.get(normalized) ?? null;
     put({
       phrase,
       normalized,
@@ -281,12 +384,6 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     });
   }
 
-  // ── The offer decides the order, when there is one ────────────────────────
-  //
-  // ‼️ A BONUS, NOT A FILTER, and it was already applied per row above through the shared
-  // offerBonus(). Dropping every phrase that does not name the treatment would throw away the
-  // objection-shaped questions that mention no service at all ("is it worth the money", "does it
-  // hurt"), which are the ones this whole product is built on.
   const rows = [...byNormal.values()].map((row) => ({
     ...row,
     score: Math.round(row.score * 100) / 100,
@@ -298,20 +395,17 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     clientId,
     treatment,
     treatmentCertain: effective.certain,
-    vertical,
-    avatar,
+    vertical: evidence.vertical,
+    avatar: evidence.avatar,
+    approved: false,
     rows: rows.slice(0, KEYWORD_CAP),
     counts: {
-      bank: bankFiltered.kept.length,
-      audit: named.size,
+      bank: evidence.quality.bankKept,
+      audit: evidence.named.size,
       candidates: candidateFiltered.kept.length,
       deduped,
     },
-    quality: {
-      bankTotal: (bank ?? []).length,
-      bankKept: bankFiltered.kept.length,
-      faults: bankFiltered.faults,
-    },
+    quality: evidence.quality,
   };
 }
 
@@ -371,14 +465,17 @@ async function namedByPrompt(
  * claim this list cannot make. The header is not decoration.
  */
 export function formatKeywordSet(set: KeywordSet, limit = 25): string[] {
-  const lines: string[] = [
-    `*${set.rows.length} phrases your market uses*, ranked by evidence and not by search volume.`,
-  ];
+  const lines: string[] = set.approved
+    ? [
+        `*${set.rows.length} approved keywords*, chosen at the keyword step and ranked evidence first. ` +
+          "The page plan draws only from these.",
+      ]
+    : [`*${set.rows.length} phrases your market uses*, ranked by evidence and not by search volume.`];
 
   if (set.treatment) {
     lines.push(
       set.treatmentCertain
-        ? `Aimed at *${set.treatment}*, locked on the call.`
+        ? `Aimed at *${set.treatment}*, locked on the prep call.`
         : `Aimed at *${set.treatment}*, which is only PROPOSED. Lock the offer and this re-ranks.`
     );
   } else {
@@ -389,13 +486,15 @@ export function formatKeywordSet(set: KeywordSet, limit = 25): string[] {
     "",
     "*The number is a score, not a volume.* It is commercial intent, how often the market said " +
       "it, whether it is an objection, whether any engine names them for it, and whether it " +
-      "names the offer. Every term is a fact already in the database.",
+      "names the offer. Every term is a fact already in the database" +
+      (set.approved ? ", except on an `expansion` row, which a model proposed and which ranks below evidence." : "."),
     ""
   );
 
   for (const [i, row] of set.rows.slice(0, limit).entries()) {
     const gap = row.currentlyNamed === false ? " :dart:" : row.currentlyNamed === null ? "" : " :white_check_mark:";
-    lines.push(`${String(i + 1).padStart(2, " ")}. ${row.phrase} _(${row.theme}, ${row.score})_${gap}`);
+    const origin = set.approved ? `, ${row.origin}` : "";
+    lines.push(`${String(i + 1).padStart(2, " ")}. ${row.phrase} _(${row.theme}${origin}, ${row.score})_${gap}`);
   }
 
   if (set.rows.length > limit) {
@@ -405,10 +504,15 @@ export function formatKeywordSet(set: KeywordSet, limit = 25): string[] {
   lines.push(
     "",
     ":dart: means no engine named them for it, which is the largest term in the score. A tick " +
-      "means one already does, so a page for it changes nothing.",
-    `_Read ${set.counts.bank} from the market corpus, ${set.counts.audit} measured questions and ` +
-      `${set.counts.candidates} page candidates; ${set.counts.deduped} were the same phrase twice._`
+      "means one already does, so a page for it changes nothing."
   );
+
+  if (!set.approved) {
+    lines.push(
+      `_Read ${set.counts.bank} from the market corpus, ${set.counts.audit} measured questions and ` +
+        `${set.counts.candidates} page candidates; ${set.counts.deduped} were the same phrase twice._`
+    );
+  }
 
   // ‼️ THE DROPPED COUNT GOES ON THE CARD. It is the difference between "your market only says
   // 172 things" and "279 stored rows are extraction debris", and those send somebody to two

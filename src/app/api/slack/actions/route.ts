@@ -193,6 +193,16 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         value: action.value ?? "",
       });
 
+    // ── The prep call: RingOut to the client, from the offer step's card ──
+    case "step_ringout":
+      return stepRingOutAction({
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        clientId: action.value ?? "",
+      });
+
     case "client_msg_sent":
       return clientMessageSentAction({
         channel,
@@ -1896,6 +1906,76 @@ async function cleanupConfirmAllAction(args: {
 // first real client the step came out `skipped`. The panel exists now; so does the button, in the
 // place the decision is actually being read.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * [Call now] on the prep call card (offer_locked).
+ *
+ * ‼️ initiateRingOut, NOT triggerSpeedToLead. The speed-to-lead path is lead-shaped: it checks the
+ * DNC list, a thirty minute cooldown and business hours, writes call_log as speed_to_lead and
+ * posts to the hot leads channel. A client being onboarded is none of those. RingOut itself dials
+ * any number: it rings RC_AGENT_NUMBER first and, once that is answered, rings the client from
+ * RC_BUSINESS_NUMBER. Checked 2026-09-11: no new permission and no new number was needed.
+ *
+ * The phone is read fresh from the client row, never from the button's value, so a card posted
+ * before somebody corrected the number dials the corrected one.
+ */
+async function stepRingOutAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  const clientId = args.clientId.trim();
+  if (!clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { supabaseAdmin } = await import("@/lib/db");
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("phone, legal_name, dba_name")
+        .eq("id", clientId)
+        .maybeSingle();
+
+      const phone = ((client?.phone as string | null) ?? "").trim();
+      const name = ((client?.dba_name as string | null) || (client?.legal_name as string | null)) ?? "the client";
+
+      if (!phone) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          ":warning: There is no phone on the client record, so there is nothing to dial. Add it on the board and press Call now again."
+        );
+        return;
+      }
+
+      const agent = (process.env.RC_AGENT_NUMBER ?? "").trim();
+      if (!agent) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          `:warning: RC_AGENT_NUMBER is not set, so RingOut has no phone of yours to ring first. Dial ${phone} by hand.`
+        );
+        return;
+      }
+
+      const { initiateRingOut } = await import("@/lib/ringcentral");
+      const res = await initiateRingOut(agent, phone, (process.env.RC_AGENT_EXTENSION ?? "").trim() || undefined);
+
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        res.success
+          ? `:telephone_receiver: Ringing your phone now, then ${name} at ${phone}. Started by ${actor}.`
+          : `:warning: RingOut did not start: ${res.error ?? "no reason given"}. Dial ${phone} by hand.`
+      );
+    })().catch((e) => console.error("[slack/actions] step_ringout failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
 
 /**
  * [Patient lane] and [Owner lane] on the concierge_preview card.

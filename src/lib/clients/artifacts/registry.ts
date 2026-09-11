@@ -155,11 +155,9 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
       note: [
         offerLine(res.offer),
         "",
-        `This is a reading of their intake form, not a decision. It is what step ` +
-          `${stepNumber("offer_locked")} opens with on the call, and it is what step ` +
-          `${stepNumber("custom_question_set")}'s question set and step ` +
-          `${stepNumber("page_candidates")}'s page candidates are built against until somebody ` +
-          `locks a different one.`,
+        `This is a reading of their intake form, not a decision. Step ` +
+          `${stepNumber("offer_locked")} is the prep call where somebody phones them and confirms ` +
+          `it or names a different one, and nothing after that step is built until they have.`,
       ].join("\n"),
     };
   },
@@ -318,6 +316,23 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
   concierge_preview: async (clientId) => {
     const { provisionConcierge } = await import("../concierge-setup");
     return provisionConcierge(clientId);
+  },
+
+  // The keyword step: 200+ ways the locked offer is said, merged with the market's evidence, and
+  // a card waiting on `keywords approve`. One or two model calls plus re-asks, bounded to about 150
+  // seconds so the cascade it runs inside can finish. A re-run of an existing set spends nothing.
+  // See client-keywords.ts.
+  keyword_set: async (clientId) => {
+    const { runKeywordStep } = await import("../client-keywords");
+    return runKeywordStep(clientId);
+  },
+
+  // The pre-call plan: 1 pillar + 8 supports from the approved keywords, one framing call, and a
+  // card waiting on `plan approve`. The DRAFTING is not done here: nine model calls do not fit in
+  // a cascade, so `plan approve` starts it in waves. See pre-call-pages.ts.
+  pre_call_pages: async (clientId) => {
+    const { runPreCallPlan } = await import("../pre-call-pages");
+    return runPreCallPlan(clientId);
   },
 
   // The replica of their own site, plus the preview link the call is walked on. Produces no

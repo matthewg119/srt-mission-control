@@ -977,6 +977,40 @@ export async function POST(request: NextRequest) {
           if (locked) {
             const posted = await slack.postThreadReply(channel, parentThreadTs, locked.message);
             if (!slackOk(posted)) console.error("[slack/events] offer reply failed");
+            // The re-aim reopens the keyword step, whose runner makes a model call inside the
+            // cascade, so it runs after the reply and after the ack, the same shape `run` uses.
+            if (locked.after) {
+              waitUntil(
+                locked.after().catch((e) =>
+                  console.error("[slack/events] offer re-aim failed:", (e as Error).message)
+                )
+              );
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 1a-quinquies. The keyword step's grammar (`keywords approve`, `keywords drop 12`, ...) and
+        // the pre-call plan's (`plan approve`, `plan swap 4`, `anchor: <key>`), each only in its own
+        // step's thread. Exact forms only; a sentence that merely starts with the word falls
+        // through. Model calls and the drafting run after the reply, in waitUntil.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+          const { handleKeywordThreadReply } = await import("@/lib/clients/client-keywords");
+          const { handlePreCallThreadReply } = await import("@/lib/clients/pre-call-pages");
+          const said =
+            (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by }));
+          if (said) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
+            if (!slackOk(posted)) console.error("[slack/events] keyword/plan reply failed");
+            if (said.after) {
+              waitUntil(
+                said.after().catch((e) =>
+                  console.error("[slack/events] keyword/plan follow-up failed:", (e as Error).message)
+                )
+              );
+            }
             return NextResponse.json({ ok: true });
           }
         }

@@ -335,7 +335,9 @@ function planMenu(rows: readonly PlanRow[]): MenuItem[] {
     .map((r) => ({
       question: r.question,
       score: 0,
-      origin: r.origin,
+      // A keyword-origin row is a phrase from the approved set, which the menu labels like a
+      // harvested one: only a DERIVED idea gets the "we proposed this" label.
+      origin: r.origin === "derived" ? "derived" : "harvested",
       planId: r.id,
       rank: r.rank,
       workingTitle: r.workingTitle,
@@ -2139,6 +2141,16 @@ async function offerCommand(session: Session, arg: string): Promise<void> {
     "*Next:* `keywords` for the phrases this offer earns, `avatar` for who buys it, or pick a " +
       "number from the menu to claim a page.",
   ].join("\n"));
+
+  // ‼️ THE SAME RE-AIM THE STEP THREAD RUNS, because this is the second door to the same lock and
+  // SRT was locked through this one. Already inside waitUntil (the events route runs the studio
+  // there), so it is awaited. reaimDownstream does nothing while the offer step is not done.
+  if (res.treatmentChanged) {
+    const { reaimDownstream } = await import("./offer-cascade");
+    await reaimDownstream(session.clientId, { treatmentChanged: true, termsChanged: false }).catch((e) =>
+      console.error("[page-studio] re-aim after offer change failed:", (e as Error).message)
+    );
+  }
 }
 
 /**
@@ -2394,15 +2406,15 @@ export async function handlePageStudioEvent(args: {
   }
 
   // Exact forms only; see planCommand. "plan ahead for your first visit" is dictation.
-  const planCmd =
-    /^plan(?:\s+(new|approve|(?:drop|swap)\s+[0-9]{1,2}|edit\s+[0-9]{1,2}\s*:\s*.+))?$/i.exec(command);
+  const { PLAN_COMMAND, ANCHOR_COMMAND } = await import("./page-plan");
+  const planCmd = PLAN_COMMAND.exec(command);
   if (planCmd) {
     await planCommand(session, planCmd[1] ?? "");
     return true;
   }
 
   // A colon for the argument, like `avatar`: "anchor text" is a phrase an SEO page uses.
-  const anchorCmd = /^anchor(?:\s*:\s*(\S+))?$/i.exec(command);
+  const anchorCmd = ANCHOR_COMMAND.exec(command);
   if (anchorCmd) {
     await anchorCommand(session, anchorCmd[1] ?? "");
     return true;

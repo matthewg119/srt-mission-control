@@ -423,6 +423,32 @@ async function main() {
       ok("review_audit skips", res.ok, res.error);
     }
 
+    // ── The prep call: the offer is locked BEFORE the harvest (2026-09-11) ──
+    //
+    // ‼️ offer_locked MOVED from the middle of the call to right after offer_proposed, and the
+    // harvest now waits on it, because the deep research is written about the LOCKED offer. It is
+    // manual, so the walk stops on it exactly as it stops on the avatar, and the harvest is not
+    // anchored until it resolves.
+    rows = await stepRows(clientId);
+    console.log("\nAt the prep call");
+    ok("exactly one step is waiting", waiting(rows).length === 1, waiting(rows).join(", "));
+    eq("and it is the prep call", waiting(rows)[0] ?? "none", "offer_locked");
+    ok("offer_locked got its card", Boolean(rows.get("offer_locked")?.slack_message_ts));
+    ok("avatar_harvest is STILL not anchored", !rows.get("avatar_harvest")?.slack_anchor_ts);
+    {
+      const { lockOffer } = await import("@/lib/clients/offers");
+      const locked = await lockOffer({ clientId, treatment: "cascade probe treatment", by: "cascade probe" });
+      ok("the offer locks", locked.ok, locked.ok ? "" : locked.error);
+      const done = await setDeliveryStep({
+        clientId,
+        stepKey: "offer_locked",
+        transition: "complete",
+        actor: "cascade probe",
+      });
+      ok("offer_locked confirms off the column", done.ok, done.error);
+      eq("and its evidence is system tier", done.verdict?.ok ? done.verdict.kind : "refused", "system");
+    }
+
     rows = await stepRows(clientId);
     console.log("\nAt the harvest");
 
