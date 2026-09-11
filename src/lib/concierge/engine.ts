@@ -22,7 +22,8 @@ import type { AmmoCandidate } from "@/lib/ammo/supply";
 import { conciergeAmmo } from "./ammo";
 import type { ConciergeConfig } from "./config";
 import {
-  assetUrlFor,
+  deliveryUrlFor,
+  framesKeysOf,
   magnetByKey,
   nextInChain,
   resolveMagnet,
@@ -251,7 +252,9 @@ export function makeExecutor(ctx: ExecutorContext) {
       const asked = String(input.magnet_key ?? "");
       const overridden = asked.length > 0 && asked !== magnet.magnetKey;
 
-      const url = assetUrlFor(magnet);
+      // A framing of the client's anchor hands over the ANCHOR's asset: the page named it
+      // "Check my citations now", and what the visitor receives is the audit itself.
+      const url = await deliveryUrlFor(magnet);
       if (magnet.magnetKey) {
         await recordDelivered(ctx.session, magnet.magnetKey, magnet.id);
         ctx.attachments.push({ kind: "magnet", key: magnet.magnetKey, title: magnet.title, url });
@@ -428,8 +431,14 @@ async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
     );
   }
 
+  // ‼️ WHAT WAS HANDED OVER INCLUDES WHAT IT FRAMED. Delivering "Check my citations now" on an
+  // anchored client delivered the audit, so the audit, and every other page's framing of it, is
+  // excluded from here on. Without this the ladder would offer the same deliverable again under a
+  // different pill as the "second" free thing.
+  const exclude = [...delivered, ...(await framesKeysOf(delivered, ctx.config.audience))];
+
   const last = await magnetByKey(delivered[delivered.length - 1], ctx.config.audience);
-  const chained = last ? await nextInChain(last, { exclude: delivered }) : null;
+  const chained = last ? await nextInChain(last, { exclude }) : null;
   if (chained) return chained;
 
   // The chain ended or its target was already given. Fall back to the ladder, still excluding
@@ -442,7 +451,7 @@ async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
       treatment: null,
       category: ctx.session.pageCategory,
     },
-    { exclude: delivered }
+    { exclude }
   );
 }
 

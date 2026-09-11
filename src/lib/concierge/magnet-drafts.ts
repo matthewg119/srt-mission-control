@@ -29,7 +29,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { conciergeTenant } from "./for-client";
-import { listMagnetsFor, type Audience } from "./magnets";
+import { listMagnetsFor, magnetByKey, type Audience, type LeadMagnet } from "./magnets";
 
 /** The pill wraps into a paragraph past this. docs/2026-09-03-page-magnet.sql names the number. */
 export const CTA_MAX = 28;
@@ -82,15 +82,55 @@ const SCHEMA_HINT = `{
   ]
 }`;
 
-const SYSTEM = `You write lead magnet offers for one page on one small business's website.
+const INTRO = `You write lead magnet offers for one page on one small business's website.
 
 A lead magnet here is NOT a downloadable file. It is a thing the business's own chat widget can
 hand over inside the conversation: a list it can pull, a check it can run, a set of questions it
 can send, an assessment it can walk somebody through. You have no way to create a PDF, so you must
 never promise one, and you must never promise anything that would need a file, a login, a coupon
-code, a physical item, or a member of staff to do something.
+code, a physical item, or a member of staff to do something.`;
 
-You are given the question this page answers, the sources on file for this business, the customer
+/**
+ * The anchored task: five framings of ONE offer, instead of five different offers.
+ *
+ * ‼️ RULES 3 AND 4 OF THE OPEN TASK ARE THE OPPOSITE OF WHAT AN ANCHORED CLIENT WANTS, which is
+ * why this is a second task block rather than an extra paragraph. "Vary what is being offered"
+ * and "write past what already exists" are exactly how SRT's citations page got a checklist, a
+ * vetting guide and a category walkthrough when Matthew wanted every door to open onto the audit.
+ * An extra line saying "but frame the anchor" would sit under a rule saying "offer something
+ * different", and the model follows whichever it read with more emphasis.
+ *
+ * The HARD RULES are shared, not copied, so the pill limit, the dash ban and the orphan-number
+ * rule cannot drift between the two.
+ */
+const TASK_ANCHORED = `You are given the question this page answers, the sources on file for this business, the customer
+it is aimed at, and THE ANCHOR OFFER: the one free thing this business gives away on every page of
+its site. Write ${MIN_CANDIDATES} FRAMINGS OF THAT ONE OFFER for this page.
+
+A framing is a door into the anchor, shaped by what the reader of THIS page is already thinking
+about. The reader receives exactly what the anchor delivers, nothing more and nothing different.
+What changes between framings is the name, the pill, the promise and the opening line: which part
+of this page's question the anchor is presented as answering.
+
+WHAT MAKES THESE GOOD, in order:
+
+1. THEY FOLLOW FROM THE QUESTION. Somebody reading this page has a specific thing on their mind.
+   Each framing presents the anchor as the obvious next step from THAT, in the reader's terms.
+
+2. THEY ARE ABOUT THIS BUSINESS. Use the sources. Name what these people actually do and who for.
+
+3. THEY NEVER PROMISE WHAT THE ANCHOR DOES NOT DELIVER. Read the anchor's promise. A framing may
+   narrow its focus to the part of the anchor this page is about, but it may not add a deliverable:
+   no separate report, no checklist or list the anchor does not produce, no human follow-up. If the
+   anchor would not hand it over, the framing does not offer it.
+
+4. THEY ENTER THROUGH DIFFERENT DOORS. Five different parts of this page's topic, not one framing
+   worded five ways.
+
+5. IF A PLANNED FRAMING IS GIVEN, candidate 1 IS that framing, changed only as far as the hard
+   rules below require.`;
+
+const SYSTEM_TASK_OPEN = `You are given the question this page answers, the sources on file for this business, the customer
 it is aimed at, and the offers that already exist. Write ${MIN_CANDIDATES} DIFFERENT offers.
 
 WHAT MAKES THESE GOOD, in order:
@@ -107,9 +147,9 @@ WHAT MAKES THESE GOOD, in order:
    a walkthrough, a set of questions to ask elsewhere.
 
 4. THEY DO NOT REPEAT WHAT ALREADY EXISTS. The offers already in the catalogue are listed. Write
-   past them.
+   past them.`;
 
-HARD RULES, and a batch breaking any of them is rejected whole:
+const HARD_RULES = `HARD RULES, and a batch breaking any of them is rejected whole:
 
 - ctaLabel is ${CTA_MAX} characters or fewer. It is a button in the corner of a page, read by a
   stranger who has agreed to nothing. "Free AI visibility scan" works. A truncated title does not.
@@ -124,6 +164,16 @@ HARD RULES, and a batch breaking any of them is rejected whole:
   the sources give you no numbers, write five offers that contain no numbers.
 - evidenceRefs lists only S-numbers that appear in the sources given. An empty array is honest and
   is better than a wrong one.`;
+
+const SYSTEM = [INTRO, SYSTEM_TASK_OPEN, HARD_RULES].join("\n\n");
+const SYSTEM_ANCHORED = [INTRO, TASK_ANCHORED, HARD_RULES].join("\n\n");
+
+/** How a page's planned framing of the anchor is stored on page_plan.magnet_frame. */
+export interface PlannedFrame {
+  title: string;
+  ctaLabel: string;
+  conciergeEntry: string;
+}
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -267,6 +317,35 @@ interface Ground {
   avatarBlock: string;
   existingBlock: string;
   clientName: string;
+  /** The client's anchor offer, when one is set. Switches the whole task to framings. */
+  anchor: LeadMagnet | null;
+  /** This page's planned framing of the anchor, from page_plan, when there is one. */
+  plannedFrame: PlannedFrame | null;
+}
+
+/** A stored frame, validated. Drop, never repair, same as readOffer. */
+export function readFrame(raw: unknown): PlannedFrame | null {
+  if (!raw || typeof raw !== "object") return null;
+  const bag = raw as Record<string, unknown>;
+  const title = trimmed(bag.title);
+  const ctaLabel = trimmed(bag.ctaLabel);
+  const conciergeEntry = trimmed(bag.conciergeEntry);
+  if (!title || !ctaLabel || !conciergeEntry) return null;
+  return { title, ctaLabel, conciergeEntry };
+}
+
+/**
+ * The anchor for this client and this audience, or null.
+ *
+ * Exported because the page studio prints it on the card. Reads offer.magnetKey, which
+ * setAnchorMagnet in offers.ts writes, and resolves it audience-scoped exactly like every other
+ * keyed lookup, so an owner anchor can never be framed into the patient catalogue.
+ */
+export async function anchorFor(clientId: string, audience: Audience): Promise<LeadMagnet | null> {
+  const { loadOffer } = await import("@/lib/clients/offers");
+  const offer = await loadOffer(clientId);
+  if (!offer.magnetKey) return null;
+  return magnetByKey(offer.magnetKey, audience);
 }
 
 async function gather(
@@ -331,8 +410,31 @@ async function gather(
   const evidence = await loadNumberedEvidence(clientId, pageId);
   const validRefs = new Set(evidence.map((e) => e.ref));
 
-  // Same normalisation page-gate.ts uses, so 1,200 and 1200 are the same number.
-  const numberHaystack = evidence.map((e) => e.content).join(" ").replace(/[,$]/g, "");
+  const anchor = await anchorFor(clientId, tenant.audience);
+
+  // The planned framing, when this page came off an approved plan. Read tolerantly: a missing
+  // page_plan table (docs/2026-09-11-page-plan.sql not yet run) degrades to "no plan", which is
+  // how every page behaved before plans existed, rather than failing the five.
+  let plannedFrame: PlannedFrame | null = null;
+  if (pageId && anchor) {
+    const { data: planRow, error: planError } = await supabaseAdmin
+      .from("page_plan")
+      .select("magnet_frame")
+      .eq("client_id", clientId)
+      .eq("page_id", pageId)
+      .maybeSingle();
+    if (!planError) plannedFrame = readFrame(planRow?.magnet_frame);
+  }
+
+  // Same normalisation page-gate.ts uses, so 1,200 and 1200 are the same number. The anchor's own
+  // words are in the haystack when there is one: a framing may repeat what the anchor promises,
+  // and "Twenty questions" on the audit is not a number the framing invented.
+  const numberHaystack = [
+    ...evidence.map((e) => e.content),
+    anchor ? `${anchor.title} ${anchor.promise}` : "",
+  ]
+    .join(" ")
+    .replace(/[,$]/g, "");
 
   const evidenceBlock = evidence.length
     ? evidence
@@ -379,6 +481,8 @@ async function gather(
       avatarBlock,
       existingBlock,
       clientName,
+      anchor,
+      plannedFrame,
     },
   };
 }
@@ -478,15 +582,30 @@ There is no page yet. These sit on a rebuild of ` +
     "THE SOURCES, and there are no others:",
     g.evidenceBlock,
     "",
-    "OFFERS THAT ALREADY EXIST, do not restate these:",
-    g.existingBlock,
+    ...(g.anchor
+      ? [
+          "THE ANCHOR OFFER, which every framing hands over and nothing else:",
+          `Name: ${g.anchor.title}`,
+          `What it delivers: ${g.anchor.promise}`,
+          `Its own pill: ${g.anchor.ctaLabel ?? g.anchor.title}`,
+          ...(g.plannedFrame
+            ? [
+                "",
+                "THE PLANNED FRAMING FOR THIS PAGE, which is candidate 1:",
+                `Name: ${g.plannedFrame.title}`,
+                `Pill: ${g.plannedFrame.ctaLabel}`,
+                `Opening line: ${g.plannedFrame.conciergeEntry}`,
+              ]
+            : []),
+        ]
+      : ["OFFERS THAT ALREADY EXIST, do not restate these:", g.existingBlock]),
   ].join("\n");
 
   let batch: DraftedBatch;
   try {
     const res = await callClaudeJSON<DraftedBatch>({
       model: MODEL,
-      system: SYSTEM,
+      system: g.anchor ? SYSTEM_ANCHORED : SYSTEM,
       user,
       maxTokens: 3000,
       temperature: 0.4,
@@ -525,6 +644,10 @@ There is no page yet. These sit on a rebuild of ` +
     evidence_refs: c.evidenceRefs ?? [],
     status: "draft",
     model: MODEL,
+    // Only when anchored, so an unanchored client's insert names no column that
+    // docs/2026-09-11-page-plan.sql adds. That keeps every other client's drafting working in the
+    // window between a deploy and the migration.
+    ...(g.anchor?.magnetKey ? { frames_key: g.anchor.magnetKey } : {}),
   }));
 
   const { data, error } = await supabaseAdmin
@@ -692,7 +815,14 @@ function mintKey(clientSlug: string, title: string, attempt: number): string {
 }
 
 export type ApproveResult =
-  | { ok: true; magnetKey: string; title: string; ctaLabel: string }
+  | {
+      ok: true;
+      magnetKey: string;
+      title: string;
+      ctaLabel: string;
+      /** The anchor this offer frames, when it was drafted as a framing. */
+      framesKey?: string | null;
+    }
   | { ok: false; error: string };
 
 /**
@@ -798,6 +928,19 @@ export async function approveMagnetCandidate(args: {
 
   const clientSlug = ((client?.slug as string | null) ?? "client").trim() || "client";
 
+  // Which anchor this draft was written as a framing of, if any. Read on its own and tolerantly,
+  // for the reason magnets.ts gives for frames_key: CANDIDATE_COLUMNS feeds every read of this
+  // table, and one unknown column there fails all of them before the migration has run.
+  const { data: frameRow, error: frameError } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .select("frames_key")
+    .eq("id", cand.id)
+    .maybeSingle();
+  const framesKey =
+    !frameError && typeof frameRow?.frames_key === "string" && frameRow.frames_key.trim()
+      ? frameRow.frames_key.trim()
+      : null;
+
   // ── Mint. The loop exists because mintKey is deterministic and two drafts on two pages can
   // legitimately share a title, which would otherwise trip lead_magnets_placement_key.
   let magnetKey = "";
@@ -819,10 +962,13 @@ export async function approveMagnetCandidate(args: {
       promise: cand.promise,
       cta_label: cand.ctaLabel,
       // Never env-backed and never a URL, so isDeliverable() is unconditionally true. See header.
+      // A framing hands over its anchor's asset through frames_key at delivery time, which is why
+      // the anchor's URL is still not copied here.
       asset_url: null,
       concierge_entry: cand.conciergeEntry,
       active: true,
       sort_order: 50,
+      ...(framesKey ? { frames_key: framesKey } : {}),
     });
 
     if (!error) {
@@ -881,7 +1027,7 @@ export async function approveMagnetCandidate(args: {
     ? siblings.eq("page_id", args.pageId)
     : siblings.eq("client_id", args.clientId).is("page_id", null));
 
-  return { ok: true, magnetKey, title: cand.title, ctaLabel: cand.ctaLabel };
+  return { ok: true, magnetKey, title: cand.title, ctaLabel: cand.ctaLabel, framesKey };
 }
 
 /**

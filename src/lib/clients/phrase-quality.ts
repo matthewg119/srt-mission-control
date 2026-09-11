@@ -144,6 +144,21 @@ const ENTITIES: ReadonlyArray<readonly [RegExp, string]> = [
   [/&hellip;/gi, "..."],
 ];
 
+/**
+ * One normal form for comparing phrases, never for storing them.
+ *
+ * Lives here rather than in keyword-set.ts because page-candidates.ts needs it too and
+ * keyword-set already imports page-candidates. This file imports nothing, so anything can use it.
+ */
+export function normalizePhrase(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[^a-z0-9' ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Decode what we broke, collapse whitespace, and change nothing else. */
 export function tidyPhrase(raw: string): string {
   let out = raw;

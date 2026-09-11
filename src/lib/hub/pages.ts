@@ -318,11 +318,19 @@ export async function startPageDraft(input: {
   clientId: string;
   question: string;
   sourceReportId?: string | null;
+  /**
+   * The plan row's working title, when the page came off an approved plan. It becomes the title
+   * AND the source of the slug, because a slug built from a harvested question carries the
+   * question's quote marks and length into a public URL a crawler indexes. Without one the
+   * question is the working title, as before.
+   */
+  title?: string | null;
 }): Promise<{ ok: true; id: string; slug: string; resumed: boolean } | { ok: false; error: string }> {
   const question = input.question.trim();
   if (!question) return { ok: false, error: "There is no question to open a page for." };
 
-  const slug = pageSlug(question);
+  const workingTitle = input.title?.trim() || question;
+  const slug = pageSlug(workingTitle);
   if (!slug) return { ok: false, error: "That question does not produce a usable web address." };
 
   const { data: existing, error: readError } = await supabaseAdmin
@@ -346,9 +354,9 @@ export async function startPageDraft(input: {
     .insert({
       client_id: input.clientId,
       slug,
-      // The question is the working title. A page whose title is still its question is a page
-      // nobody has finished, which is a more useful thing for the board to show than a blank.
-      title: question.slice(0, 200),
+      // The plan's working title, or the question when there is no plan. A page whose title is
+      // still its question is a page nobody has finished, which beats a blank on the board.
+      title: workingTitle.slice(0, 200),
       question,
       answer_md: "",
       source_report_id: input.sourceReportId ?? null,
@@ -428,6 +436,149 @@ export async function appendPageBody(
 
   bustPages(clientId);
   return { ok: true, words: next.split(/\s+/).filter(Boolean).length };
+}
+
+/**
+ * Take the last appended chunk back out of a draft.
+ *
+ * ‼️ THE ONE WAY OUT OF A WRONG APPEND THAT DOES NOT NEED THE BOARD. Matthew typed "1" meaning
+ * "magnet 1", the lane appended it verbatim (correctly: a bare digit after a claim is dictation),
+ * and the only way to get it back out was the board's Edit form. The chunk boundary is the blank
+ * line appendPageBody itself writes between appends. A single message that itself contained a
+ * blank line therefore comes back out one paragraph per `undo`, which errs toward removing too
+ * little rather than too much.
+ *
+ * Refuses on a published page for the reason appendPageBody does. Drops the evidence map for the
+ * reason it does too: the map described a body that no longer exists.
+ */
+export async function undoLastAppend(
+  clientId: string,
+  pageId: string
+): Promise<{ ok: true; removed: string; words: number } | { ok: false; error: string }> {
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from("client_pages")
+    .select("id, answer_md, status")
+    .eq("id", pageId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (readError) return { ok: false, error: readError.message };
+  if (!existing) return { ok: false, error: "That page does not exist." };
+  if (existing.status === "published") {
+    return { ok: false, error: "That page is published. Edit it on the client board instead." };
+  }
+
+  const chunks = ((existing.answer_md as string | null) ?? "").trim().split(/\n{2,}/);
+  const removed = (chunks.pop() ?? "").trim();
+  if (!removed) return { ok: false, error: "The page is already empty, so there is nothing to undo." };
+
+  const next = chunks.join("\n\n");
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ answer_md: next, evidence_map: null, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  bustPages(clientId);
+  return { ok: true, removed, words: next.split(/\s+/).filter(Boolean).length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The outline a page is written from
+//
+// ‼️ IT LIVES IN client_pages.outline AND NEVER IN answer_md. A model writes it, and machine text in
+// the body with no evidence map behind it is the one thing the gate cannot see: a null map reads
+// as hand-written and skips unbacked_claims. The gaps are answered as page_sources and `draft`
+// writes the body from those, with a map, so the gate keeps working on every page.
+//
+// ‼️ READ AND WRITTEN SEPARATELY FROM COLUMNS, for blast radius. COLUMNS feeds the published hub
+// on every client's domain, and PostgREST fails a whole select on one unknown column, so adding
+// outline there would take live pages down in the window before docs/2026-09-11-page-plan.sql runs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OutlineSection {
+  heading: string;
+  bullets: string[];
+}
+
+export interface OutlineGap {
+  /** "G1", "G2"... referenced in the bullets as [G1]. */
+  id: string;
+  /** Asked out loud, in the second person, the same way an interview topic is. */
+  prompt: string;
+  /** "client" files the answer in the client library, for every later page. */
+  scope: "page" | "client";
+}
+
+export interface PageOutline {
+  sections: OutlineSection[];
+  gaps: OutlineGap[];
+  writtenAt: string;
+}
+
+/** The stored outline, validated. Drop, never repair: a half-valid outline is no outline. */
+export function readOutline(raw: unknown): PageOutline | null {
+  if (!raw || typeof raw !== "object") return null;
+  const bag = raw as Record<string, unknown>;
+  if (!Array.isArray(bag.sections) || !Array.isArray(bag.gaps)) return null;
+
+  const sections = bag.sections
+    .map((s) => s as Record<string, unknown>)
+    .filter((s) => typeof s?.heading === "string" && Array.isArray(s?.bullets))
+    .map((s) => ({
+      heading: String(s.heading).trim(),
+      bullets: (s.bullets as unknown[]).filter((b): b is string => typeof b === "string" && b.trim() !== ""),
+    }))
+    .filter((s) => s.heading !== "");
+
+  const gaps = bag.gaps
+    .map((g) => g as Record<string, unknown>)
+    .filter((g) => typeof g?.id === "string" && typeof g?.prompt === "string")
+    .map((g) => ({
+      id: String(g.id).trim(),
+      prompt: String(g.prompt).trim(),
+      scope: (g.scope === "client" ? "client" : "page") as "page" | "client",
+    }))
+    .filter((g) => g.id !== "" && g.prompt !== "");
+
+  if (sections.length === 0) return null;
+  return { sections, gaps, writtenAt: typeof bag.writtenAt === "string" ? bag.writtenAt : "" };
+}
+
+export async function readPageOutline(clientId: string, pageId: string): Promise<PageOutline | null> {
+  const { data, error } = await supabaseAdmin
+    .from("client_pages")
+    .select("outline")
+    .eq("id", pageId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      `[hub/pages] outline read failed (${error.message}). If this names outline, ` +
+        `docs/2026-09-11-page-plan.sql has not been run on this database.`
+    );
+    return null;
+  }
+  return readOutline(data?.outline);
+}
+
+/** Not gated. An outline is not published and never reaches the hub. */
+export async function setPageOutline(
+  clientId: string,
+  pageId: string,
+  outline: PageOutline | null
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ outline, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 /**

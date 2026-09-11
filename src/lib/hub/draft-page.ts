@@ -27,6 +27,7 @@ import {
 } from "@/lib/clients/page-evidence";
 import { magnetByKey, type LeadMagnet } from "@/lib/concierge/magnets";
 import { audienceForClient } from "@/lib/concierge/for-client";
+import type { PageOutline, OutlineGap, OutlineSection } from "@/lib/hub/pages";
 
 /**
  * One assertion the page makes, and what it rests on.
@@ -77,6 +78,12 @@ interface Grounding {
    * which question to leave standing at the end.
    */
   magnet: LeadMagnet | null;
+  /**
+   * The approved skeleton, when the page was outlined first. Its headings become the page's
+   * subheadings and its gaps were answered as evidence, so `draft` fills a structure a person
+   * already agreed to instead of inventing one.
+   */
+  outline: PageOutline | null;
 }
 
 const SYSTEM = `You write one answer page for a local business's own website.
@@ -316,7 +323,8 @@ async function gather(
   question: string,
   existingBody: string | null,
   pageId: string | null,
-  magnetKey: string | null
+  magnetKey: string | null,
+  outline: PageOutline | null = null
 ): Promise<Grounding | { error: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -384,6 +392,7 @@ async function gather(
     existingBody,
     evidence,
     magnet: await magnetFor(clientId, magnetKey),
+    outline,
     city: (client.city as string | null) ?? (report?.city as string | null) ?? null,
     state: (client.state as string | null) ?? null,
     phone: (client.phone as string | null) ?? null,
@@ -521,6 +530,28 @@ function userPrompt(g: Grounding): string {
     lines.push(g.existingBody.slice(0, 12000));
   }
 
+  // ‼️ THE OUTLINE IS STRUCTURE, NOT EVIDENCE, AND THE PROMPT SAYS SO. It was written by a model,
+  // so nothing in it may be asserted as a fact about the business. What it contributes is the
+  // shape somebody approved and the gaps they answered, and those answers are already numbered in
+  // the EVIDENCE block above, where they can be cited.
+  if (g.outline && !g.existingBody) {
+    lines.push("");
+    lines.push("THE APPROVED OUTLINE. Follow it:");
+    lines.push("  - Use these headings as your ## subheadings, in this order. This overrides the");
+    lines.push("    two-subheading limit. Write 300 to 750 words instead of 250 to 500.");
+    lines.push("  - Cover what each bullet says, in your own sentences.");
+    lines.push("  - A [Gn] mark is a gap the business was asked to fill. Its answer is in the EVIDENCE");
+    lines.push("    under a topic beginning \"Gap Gn\". Use it and cite it. Where a gap has no answer,");
+    lines.push("    leave that point out rather than filling it.");
+    lines.push("  - The bullets are notes, not facts. Assert nothing from them that no source carries.");
+    lines.push("");
+    for (const section of g.outline.sections) {
+      lines.push(`## ${section.heading}`);
+      for (const bullet of section.bullets) lines.push(`  - ${bullet}`);
+    }
+    lines.push("");
+  }
+
   // ‼️ LAST, SO IT CANNOT BECOME THE BRIEF. Everything above decides what the page says; this
   // only decides what it deliberately leaves open. Placed before the evidence it would read as
   // the goal, and a model given a goal writes toward it.
@@ -563,7 +594,12 @@ function userPrompt(g: Grounding): string {
 export async function draftPage(
   clientId: string,
   question: string,
-  opts?: { existingBody?: string | null; pageId?: string | null; magnetKey?: string | null }
+  opts?: {
+    existingBody?: string | null;
+    pageId?: string | null;
+    magnetKey?: string | null;
+    outline?: PageOutline | null;
+  }
 ): Promise<{ ok: true; page: DraftedPage } | { ok: false; error: string }> {
   if (!question.trim()) return { ok: false, error: "No question was given." };
 
@@ -572,7 +608,8 @@ export async function draftPage(
     question.trim(),
     opts?.existingBody?.trim() || null,
     opts?.pageId ?? null,
-    opts?.magnetKey ?? null
+    opts?.magnetKey ?? null,
+    opts?.outline ?? null
   );
   if ("error" in g) return { ok: false, error: g.error };
 
@@ -600,6 +637,245 @@ export async function draftPage(
     });
 
     return { ok: true, page: res.data };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The skeleton: headings, bullets and the gaps only the business can fill
+//
+// Matthew, 2026-09-11: "can't we simply have one version drafted, delete 80%, leave bullet
+// points and we can fill the gaps?" This is that, built the other way round: instead of a full
+// draft somebody cuts down, the model writes ONLY the skeleton and names the gaps, the gaps are
+// answered out loud as evidence, and `draft` then writes the body from those answers.
+//
+// ‼️ WHY NOT WRITE THE FULL PAGE AND LET HIM DELETE. A full draft is assembled from what anybody
+// could say about the topic, which is the one kind of page this product says is worth nothing to
+// an engine. Deleting 80% of it leaves 20% of generic text with his name on it. The skeleton puts
+// the model's work where it is good (structure, what to cover) and asks him for the only part an
+// engine cannot get anywhere else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What the plan decided about this page, when it came off one. All optional. */
+export interface OutlineContext {
+  workingTitle: string | null;
+  targetKeyword: string | null;
+  angle: string | null;
+}
+
+export const OUTLINE_LIMITS = {
+  minSections: 2,
+  maxSections: 5,
+  minBullets: 2,
+  maxBullets: 4,
+  minGaps: 3,
+  maxGaps: 8,
+  maxBulletChars: 180,
+  maxHeadingChars: 80,
+} as const;
+
+const OUTLINE_SYSTEM = `You plan one answer page for a local business's own website. You do NOT write the page.
+
+You write its SKELETON: the headings it will have, a few short bullet points under each saying what
+that part covers, and the GAPS, which are the specific things only the business can supply. A person
+reads the skeleton, answers every gap out loud, and the page is then written from their answers.
+
+So every bullet is a note about what to cover, not finished copy. And every place the page would
+need a fact about this business that the evidence does not already carry is a gap.
+
+THE RULES:
+
+1. ANSWER FIRST. The first section answers the question directly. Its heading names the answer's
+   subject. Never "Introduction", never "Overview".
+2. ${OUTLINE_LIMITS.minSections} to ${OUTLINE_LIMITS.maxSections} sections. ${OUTLINE_LIMITS.minBullets} to ${OUTLINE_LIMITS.maxBullets} bullets each, each one short.
+3. ${OUTLINE_LIMITS.minGaps} to ${OUTLINE_LIMITS.maxGaps} GAPS. Each has an id (G1, G2, ...), a prompt asked in the second person
+   ("What do you charge for ...?"), and a scope: "client" when the answer is about the business as
+   a whole (pricing, where they serve, their credentials, their policies), "page" when it is about
+   this one question. Write [G1] inside the bullet that needs that answer. Every gap is referenced
+   by at least one bullet, and no bullet references a gap that does not exist.
+4. NOTHING INVENTED. No fact about this business that the evidence does not carry: where you would
+   need one, that is a gap. No numbers that are not in the evidence. No statistics.
+5. A GAP THE EVIDENCE ALREADY ANSWERS IS NOT A GAP. If a source already gives their price, pricing
+   is covered; write the bullet and cite nothing, do not ask again.
+6. No competitor named. No outcome promises. No links. No markdown inside headings or bullets.
+7. NO EM DASHES, EN DASHES OR DOUBLE HYPHENS, anywhere. This is checked in code.`;
+
+interface DraftedOutline {
+  sections: OutlineSection[];
+  gaps: OutlineGap[];
+}
+
+/** Numbers of two or more digits that no source contains. Same rule as the magnet drafter. */
+function outlineOrphans(text: string, haystack: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\$?\d[\d,]*(?:\.\d+)?%?/g)) {
+    const bare = m[0].replace(/[,$%]/g, "");
+    if (bare.length < 2) continue;
+    if (!haystack.includes(bare)) out.push(m[0]);
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Everything wrong with a proposed skeleton, in words, for the correction retry.
+ *
+ * Exported for scripts/_probe-page-plan.ts, which proves the limits without a model call.
+ */
+export function outlineFaults(v: unknown, numberHaystack: string): string[] {
+  const out: string[] = [];
+  const d = v as Partial<DraftedOutline>;
+  const L = OUTLINE_LIMITS;
+
+  if (!Array.isArray(d?.sections)) return ['Return { "sections": [...], "gaps": [...] }.'];
+  if (!Array.isArray(d?.gaps)) return ['"gaps" is missing. Return it as an array, even though it has to have entries.'];
+
+  if (d.sections.length < L.minSections || d.sections.length > L.maxSections) {
+    out.push(`There are ${d.sections.length} sections. Write ${L.minSections} to ${L.maxSections}.`);
+  }
+  if (d.gaps.length < L.minGaps || d.gaps.length > L.maxGaps) {
+    out.push(`There are ${d.gaps.length} gaps. Name ${L.minGaps} to ${L.maxGaps}.`);
+  }
+
+  const gapIds = new Set<string>();
+  d.gaps.forEach((g, i) => {
+    const gap = g as Partial<OutlineGap>;
+    const id = typeof gap?.id === "string" ? gap.id.trim() : "";
+    const prompt = typeof gap?.prompt === "string" ? gap.prompt.trim() : "";
+    if (!/^G[1-9]$/.test(id)) out.push(`gap ${i + 1} has id "${id}". Use G1 to G9.`);
+    else if (gapIds.has(id)) out.push(`gap id ${id} is used twice.`);
+    else gapIds.add(id);
+    if (!prompt) out.push(`gap ${id || i + 1} has no prompt.`);
+    if (prompt && hasBannedDash(prompt)) out.push(`gap ${id}'s prompt contains a dash.`);
+    if (gap?.scope !== "page" && gap?.scope !== "client") {
+      out.push(`gap ${id || i + 1} needs scope "page" or "client".`);
+    }
+    for (const n of outlineOrphans(prompt, numberHaystack)) {
+      out.push(`gap ${id}'s prompt states ${n}, which no source contains.`);
+    }
+  });
+
+  const referenced = new Set<string>();
+  d.sections.forEach((s, i) => {
+    const section = s as Partial<OutlineSection>;
+    const heading = typeof section?.heading === "string" ? section.heading.trim() : "";
+    if (!heading) out.push(`section ${i + 1} has no heading.`);
+    if (heading.length > L.maxHeadingChars) out.push(`section ${i + 1}'s heading is over ${L.maxHeadingChars} characters.`);
+    if (/[#*_`]/.test(heading)) out.push(`section ${i + 1}'s heading contains markdown.`);
+    if (hasBannedDash(heading)) out.push(`section ${i + 1}'s heading contains a dash.`);
+    for (const n of outlineOrphans(heading, numberHaystack)) {
+      out.push(`section ${i + 1}'s heading states ${n}, which no source contains.`);
+    }
+
+    const bullets = Array.isArray(section?.bullets) ? section.bullets : [];
+    if (bullets.length < L.minBullets || bullets.length > L.maxBullets) {
+      out.push(`section ${i + 1} has ${bullets.length} bullets. Write ${L.minBullets} to ${L.maxBullets}.`);
+    }
+    bullets.forEach((b, j) => {
+      const text = typeof b === "string" ? b.trim() : "";
+      const where = `section ${i + 1} bullet ${j + 1}`;
+      if (!text) out.push(`${where} is empty.`);
+      if (text.length > L.maxBulletChars) out.push(`${where} is over ${L.maxBulletChars} characters. It is a note, not copy.`);
+      if (hasBannedDash(text)) out.push(`${where} contains a dash.`);
+      if (/\]\(|https?:\/\//i.test(text)) out.push(`${where} contains a link.`);
+      for (const m of text.matchAll(/\[(G\d+)\]/g)) {
+        referenced.add(m[1]);
+        if (!gapIds.has(m[1])) out.push(`${where} references ${m[1]}, which is not one of the gaps.`);
+      }
+      for (const n of outlineOrphans(text.replace(/\[G\d+\]/g, ""), numberHaystack)) {
+        out.push(`${where} states ${n}, which no source contains. Make it a gap instead.`);
+      }
+    });
+  });
+
+  for (const id of gapIds) {
+    if (!referenced.has(id)) out.push(`gap ${id} is never referenced. Put [${id}] in the bullet that needs it.`);
+  }
+
+  return out;
+}
+
+/**
+ * Write the skeleton for one page. Returns it for the caller to store; never touches answer_md.
+ */
+export async function draftOutline(
+  clientId: string,
+  question: string,
+  opts: { pageId: string; context?: OutlineContext | null }
+): Promise<{ ok: true; outline: PageOutline } | { ok: false; error: string }> {
+  if (!question.trim()) return { ok: false, error: "No question was given." };
+
+  const g = await gather(clientId, question.trim(), null, opts.pageId, null);
+  if ("error" in g) return { ok: false, error: g.error };
+
+  const ctx = opts.context ?? null;
+
+  const numberHaystack = [
+    ...g.evidence.map((e) => e.content),
+    question,
+    ctx?.targetKeyword ?? "",
+    ctx?.angle ?? "",
+    ctx?.workingTitle ?? "",
+  ]
+    .join(" ")
+    .replace(/[,$]/g, "");
+
+  const lines: string[] = [
+    "THE QUESTION THIS PAGE ANSWERS:",
+    question.trim(),
+    "",
+    `THE BUSINESS: ${g.clientName}`,
+  ];
+  if (g.city) lines.push(`Location: ${[g.city, g.state].filter(Boolean).join(", ")}`);
+  if (g.businessType) lines.push(`What they are: ${g.businessType}`);
+  if (g.buyerPersona) lines.push(`Who buys and what hurts: ${g.buyerPersona}`);
+  if (ctx?.workingTitle) lines.push(`Working title: ${ctx.workingTitle}`);
+  if (ctx?.targetKeyword) lines.push(`The phrase this page is aimed at: ${ctx.targetKeyword}`);
+  if (ctx?.angle) lines.push(`What this page gives the reader: ${ctx.angle}`);
+  lines.push("");
+
+  if (g.evidence.length) {
+    lines.push("EVIDENCE ALREADY ON FILE. Anything answered here is not a gap:");
+    for (const e of g.evidence) {
+      lines.push(`[${e.ref}] ${e.label}${e.topic ? `, on ${e.topic}` : ""}`);
+      lines.push(e.content.slice(0, 1500));
+      lines.push("");
+    }
+  } else {
+    lines.push("NO EVIDENCE IS ON FILE FOR THIS BUSINESS YET. Every fact the page needs is a gap.");
+  }
+
+  try {
+    const res = await callClaudeJSON<DraftedOutline>({
+      model: "claude-sonnet-4-6",
+      system: OUTLINE_SYSTEM,
+      user: lines.join("\n"),
+      maxTokens: 2000,
+      temperature: 0.3,
+      schemaHint:
+        '{ "sections": [{ "heading": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }] }',
+      validate: (v): v is DraftedOutline => outlineFaults(v, numberHaystack).length === 0,
+      describeInvalid: (v) =>
+        `Fix these and return the whole skeleton again:\n${outlineFaults(v, numberHaystack)
+          .map((f) => `  - ${f}`)
+          .join("\n")}`,
+    });
+
+    return {
+      ok: true,
+      outline: {
+        sections: res.data.sections.map((s) => ({
+          heading: s.heading.trim(),
+          bullets: s.bullets.map((b) => b.trim()),
+        })),
+        gaps: res.data.gaps.map((gap) => ({
+          id: gap.id.trim(),
+          prompt: gap.prompt.trim(),
+          scope: gap.scope === "client" ? "client" : "page",
+        })),
+        writtenAt: new Date().toISOString(),
+      },
+    };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

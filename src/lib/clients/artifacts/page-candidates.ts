@@ -53,7 +53,8 @@ import { deliverArtifact } from "./deliver";
 // itself reads, so a channel move cannot leave this pointing at the old one.
 import { pageStudioHint } from "../page-studio";
 import type { AutoResult } from "./registry";
-import { filterPhrases, droppedLine } from "../phrase-quality";
+import { filterPhrases, droppedLine, normalizePhrase } from "../phrase-quality";
+import { loadOffer, effectiveTreatment } from "../offers";
 
 /** Runner v3 asks for 100 for the call. It is the ceiling on what gets printed, not a target. */
 export const CANDIDATE_CAP = 100;
@@ -184,6 +185,28 @@ export function scoreCandidate(args: {
   if (args.inOwnReviews) score += w("Their own reviews use the phrase");
 
   return Math.round(score * 100) / 100;
+}
+
+/**
+ * How much naming the offer is worth.
+ *
+ * Deliberately smaller than the visibility gap (15) and larger than an objection (12) is not:
+ * it sits between "their own reviews say it" (8) and "it is an objection" (12), so a phrase that
+ * names the offer sorts above an equivalent one that does not, and an objection about something
+ * else still beats a bland phrase that happens to contain the treatment name. A filter would
+ * have thrown the objections away entirely.
+ *
+ * ‼️ ONE DEFINITION, READ BY BOTH RANKINGS. keyword-set.ts had this as a private constant and
+ * this file ignored the offer entirely, so the keyword list and the page backlog ranked the same
+ * phrase differently. Both call offerBonus() now.
+ */
+export const OFFER_BONUS = 10;
+
+export function offerBonus(phrase: string, treatment: string | null): number {
+  if (!treatment) return 0;
+  const needle = normalizePhrase(treatment);
+  if (!needle) return 0;
+  return normalizePhrase(phrase).includes(needle) ? OFFER_BONUS : 0;
 }
 
 /** Which of this client's audit questions did an engine actually name them for. */
@@ -426,6 +449,12 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   const named = await namedByQuestion(clientId);
   const reviewText = await ownReviewText(clientId);
 
+  // ‼️ THE OFFER NOW REACHES THIS RANKING. It never did: the locked offer re-ranked the keyword
+  // list and left the page backlog aimed at the whole vertical, so the pages somebody picked
+  // from were ranked without the one decision the whole build is aimed at. Locked outranks
+  // proposed through effectiveTreatment, same as everywhere else.
+  const treatment = effectiveTreatment(await loadOffer(clientId)).value;
+
   const seen = new Set<string>();
   const scored: ScoredCandidate[] = [];
   // Kept so deriveIdeas can score a CLUSTER through the same scoreCandidate the phrases went
@@ -462,7 +491,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       theme: themeOf(question),
       origin: "harvested",
       derivedFrom: null,
-      score: scoreCandidate({ ...input, currentlyNamed }),
+      score: Math.round((scoreCandidate({ ...input, currentlyNamed }) + offerBonus(question, treatment)) * 100) / 100,
     });
   }
 
@@ -505,6 +534,40 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   );
 
   if (writeError) return { ok: false, error: `Writing page_candidates failed: ${writeError.message}` };
+
+  // ── Prune what this run did not produce ───────────────────────────────────
+  //
+  // ‼️ AN UPSERT NEVER DELETES, AND THAT IS HOW THE STUDIO MENU FILLED WITH DEBRIS. The quality
+  // filter arrived on 2026-09-08 and every run since has scored clean phrases, but the rows
+  // written before it kept their scores forever: "Why: Vendor lock-in fear", a lone quote mark,
+  // a citation marker, all still ranked at the top of SRT's menu on 2026-09-11. Re-running this
+  // step could never fix it. Now the table is exactly what the last run produced.
+  //
+  // Read then delete by id, rather than a NOT IN over question text: the questions carry quotes,
+  // commas and brackets, and PostgREST's `in` list has to quote every one of them correctly.
+  // A row somebody selected for a month is kept, since that is a decision rather than a reading.
+  // Nothing references page_candidates by id: client_pages and page_plan store the question
+  // verbatim for exactly this reason.
+  const produced = new Set([...top, ...derived].map((c) => c.question));
+  const { data: existingRows } = await supabaseAdmin
+    .from("page_candidates")
+    .select("id, question, selected_for_month")
+    .eq("client_id", clientId);
+
+  const stale = (existingRows ?? [])
+    .filter((r) => !produced.has(r.question as string) && r.selected_for_month == null)
+    .map((r) => r.id as string);
+
+  let pruned = 0;
+  for (let i = 0; i < stale.length; i += 100) {
+    const chunk = stale.slice(i, i + 100);
+    const { error: pruneError } = await supabaseAdmin.from("page_candidates").delete().in("id", chunk);
+    if (pruneError) {
+      console.error(`[page-candidates] prune failed: ${pruneError.message}`);
+      break;
+    }
+    pruned += chunk.length;
+  }
 
   // ── The document ──────────────────────────────────────────────────────────
   const name = (client.dba_name || client.legal_name || "Client") as string;
@@ -673,6 +736,9 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   return {
     ok: true,
     docId: delivered.docId,
-    note: `Page candidates scored: ${top.length} ranked${unmeasured ? `, ${unmeasured} of them unmeasured` : ""}.`,
+    note:
+      `Page candidates scored: ${top.length} ranked${unmeasured ? `, ${unmeasured} of them unmeasured` : ""}` +
+      `${treatment ? `, aimed at ${treatment}` : ""}` +
+      `${pruned ? `. ${pruned} stale row${pruned === 1 ? "" : "s"} from earlier runs removed` : ""}.`,
   };
 }

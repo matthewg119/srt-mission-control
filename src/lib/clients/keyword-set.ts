@@ -40,9 +40,13 @@
 // a lie.
 
 import { supabaseAdmin } from "@/lib/db";
-import { SCORE_TERMS, scoreCandidate, themeOf } from "./artifacts/page-candidates";
+import { SCORE_TERMS, scoreCandidate, themeOf, offerBonus } from "./artifacts/page-candidates";
 import { loadOffer, effectiveTreatment } from "./offers";
-import { filterPhrases, tidyPhrase, type PhraseFilterResult } from "./phrase-quality";
+import { filterPhrases, tidyPhrase, normalizePhrase, type PhraseFilterResult } from "./phrase-quality";
+
+// Re-exported so existing importers keep one name for it. The definition moved to
+// phrase-quality.ts, which imports nothing, so page-candidates.ts can share it without a cycle.
+export { normalizePhrase };
 
 /** Matthew's number. A ceiling, not a target: a client whose market says less gets less. */
 export const KEYWORD_CAP = 99;
@@ -94,16 +98,6 @@ export interface KeywordSet {
    * harvest when the truth is that 279 rows of debris are already stored.
    */
   quality: { bankTotal: number; bankKept: number; faults: Record<string, number> };
-}
-
-/** Same normalisation question_bank uses, so a phrase from two sources dedupes to one row. */
-export function normalizePhrase(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/[‘’]/g, "'")
-    .replace(/[^a-z0-9' ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 /**
@@ -230,7 +224,12 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
       normalized,
       origin,
       theme: themeOf(phrase),
-      score: scoreCandidate({ frequency, intent, objection, currentlyNamed, inOwnReviews: false }),
+      // ‼️ THE OFFER BONUS IS ADDED HERE, AT ROW CREATION, AND NOT OVER THE MERGED LIST. Page
+      // candidates already carry it in their stored score (page-candidates.ts applies the same
+      // offerBonus), so adding it after the merge would count it twice on every candidate row.
+      score:
+        scoreCandidate({ frequency, intent, objection, currentlyNamed, inOwnReviews: false }) +
+        offerBonus(phrase, treatment),
       currentlyNamed,
       objection,
       intent,
@@ -245,13 +244,14 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     const existing = byNormal.get(normalized);
     if (existing) {
       // Re-score with the measured answer rather than leaving it null.
-      const rescored = scoreCandidate({
-        frequency: existing.frequency,
-        intent: existing.intent,
-        objection: existing.objection,
-        currentlyNamed: wasNamed,
-        inOwnReviews: false,
-      });
+      const rescored =
+        scoreCandidate({
+          frequency: existing.frequency,
+          intent: existing.intent,
+          objection: existing.objection,
+          currentlyNamed: wasNamed,
+          inOwnReviews: false,
+        }) + offerBonus(existing.phrase, treatment);
       byNormal.set(normalized, { ...existing, currentlyNamed: wasNamed, score: rescored });
     }
   }
@@ -283,15 +283,14 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
 
   // ── The offer decides the order, when there is one ────────────────────────
   //
-  // ‼️ A BONUS, NOT A FILTER. Dropping every phrase that does not name the treatment would throw
-  // away the objection-shaped questions that mention no service at all ("is it worth the money",
-  // "does it hurt"), which are the ones this whole product is built on.
-  const needle = treatment ? normalizePhrase(treatment) : null;
-  const rows = [...byNormal.values()].map((row) =>
-    needle && row.normalized.includes(needle)
-      ? { ...row, score: Math.round((row.score + OFFER_BONUS) * 100) / 100 }
-      : row
-  );
+  // ‼️ A BONUS, NOT A FILTER, and it was already applied per row above through the shared
+  // offerBonus(). Dropping every phrase that does not name the treatment would throw away the
+  // objection-shaped questions that mention no service at all ("is it worth the money", "does it
+  // hurt"), which are the ones this whole product is built on.
+  const rows = [...byNormal.values()].map((row) => ({
+    ...row,
+    score: Math.round(row.score * 100) / 100,
+  }));
 
   rows.sort((a, b) => b.score - a.score || a.phrase.localeCompare(b.phrase));
 
@@ -315,17 +314,6 @@ export async function buildKeywordSet(clientId: string): Promise<KeywordSet | { 
     },
   };
 }
-
-/**
- * How much naming the locked offer is worth.
- *
- * Deliberately smaller than the visibility gap (15) and larger than an objection (12) is not:
- * it sits between "their own reviews say it" (8) and "it is an objection" (12), so a phrase that
- * names the offer sorts above an equivalent one that does not, and an objection about something
- * else still beats a bland phrase that happens to contain the treatment name. A filter would
- * have thrown the objections away entirely.
- */
-const OFFER_BONUS = 10;
 
 /**
  * Which of this client's audit questions an engine actually named them for, keyed by normalised

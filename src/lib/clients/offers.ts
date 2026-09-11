@@ -359,6 +359,46 @@ export async function lockOffer(args: {
   return { ok: true, offer: next };
 }
 
+/**
+ * Name the ANCHOR: the one offer every page's lead magnet is a framing of.
+ *
+ * ‼️ THIS IS THE FIRST WRITER `magnetKey` HAS EVER HAD. It was declared, displayed by offerLine
+ * and read by a verifier, and nothing set it, so the step card promising "the lead magnet on each
+ * one built around whatever is locked here" described code that did not exist. Matthew,
+ * 2026-09-11: every page's magnet should lead back to one core offer (for SRT, the AI visibility
+ * audit), so the anchor is now a real decision with a real writer.
+ *
+ * ‼️ IT DOES NOT RE-LOCK. lockOffer stamps lockedAt and lockedBy, which record when the offer
+ * was agreed. Choosing which magnet anchors it is a separate decision made later, in the page
+ * studio, and re-stamping the lock would rewrite when the offer itself was decided.
+ *
+ * Refuses on an unlocked offer: an anchor for an offer nobody agreed to is a pitch aimed at a
+ * reading of the intake form.
+ */
+export async function setAnchorMagnet(args: {
+  clientId: string;
+  magnetKey: string | null;
+}): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
+  const current = await loadOffer(args.clientId);
+  const key = text(args.magnetKey);
+
+  if (key && !isLocked(current)) {
+    return {
+      ok: false,
+      error: "the offer is not locked yet. `offer: <what they sell>` first, then the anchor.",
+    };
+  }
+
+  const next: StoredOffer = { ...current, magnetKey: key };
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({ offer: next })
+    .eq("id", args.clientId);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, offer: next };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The thread reply
 //
