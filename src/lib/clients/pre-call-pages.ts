@@ -131,6 +131,7 @@ async function offerPool(clientId: string): Promise<
     categoryLabel: labels(r.category),
     tier: tierOf(r.origin),
     naming: r.category === naming,
+    focus: pk.ctx.categories.find((c) => c.key === r.category)?.focus === true,
     relevant: isRelevantKeyword(r, pk.vocab),
   }));
   return { pool, keywords: pk.rows.map((r) => r.phrase), city: pk.ctx.city, namingKey: naming, labels };

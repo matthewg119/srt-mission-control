@@ -291,6 +291,8 @@ check("a pre-call card labels the pillar and the supports", rolesCard.includes("
 // ── 8. The pre-call plan ─────────────────────────────────────────────────────
 console.log("\n8. The pre-call plan: one pillar, eight supports, strict spread, never padded");
 
+// The four buying questions, as the patient table flags them: price, fears, comparisons, how it works.
+const FOCUS = new Set(["price", "fear", "comparison", "process"]);
 const op = (question: string, category: string, over: Partial<OfferPoolItem> = {}): OfferPoolItem => ({
   question,
   score: 30,
@@ -298,6 +300,7 @@ const op = (question: string, category: string, over: Partial<OfferPoolItem> = {
   categoryLabel: category,
   tier: 1,
   naming: category === "naming",
+  focus: FOCUS.has(category),
   relevant: true,
   ...over,
 });
@@ -329,9 +332,34 @@ check("a row that is not about the offer never gets in, whatever its score", !fu
 check("the pillar is not also a support", !full.supports.some((s) => s.question === "lip filler"));
 check("no naming variant is a support: the pillar owns that search", !full.supports.some((s) => s.naming));
 check(
-  "eight supports land in eight categories when the set has them",
-  new Set(full.supports.map((s) => s.category)).size === PRE_CALL_SUPPORTS,
-  full.supports.map((s) => s.category).join(", ")
+  "the eight supports are the four buying questions, two each: price, fears, comparisons, how it works",
+  perCat.size === 4 && [...perCat.entries()].every(([c, n]) => FOCUS.has(c) && n === 2),
+  [...perCat.entries()].map(([c, n]) => `${c}=${n}`).join(", ")
+);
+const lean = selectOfferPlan(
+  [
+    op("lip filler", "naming"),
+    op("lip filler cost", "price"),
+    op("does lip filler hurt", "fear"),
+    op("lip flip vs lip filler", "comparison"),
+    op("am i a good candidate for lip filler", "candidacy"),
+    op("lip filler at 40", "candidacy"),
+    op("how long does lip filler last", "results"),
+    op("lip filler before and after", "results"),
+    op("best lip filler injector", "provider"),
+    op("lip filler near me", "local"),
+  ],
+  { city: null }
+);
+check(
+  "when the four cannot fill eight, they go first and the rest come from the offer's other questions",
+  lean.supports.length === 8 && lean.supports.slice(0, 3).every((s) => s.focus) && lean.supports.slice(3).every((s) => !s.focus),
+  lean.supports.map((s) => s.category).join(", ")
+);
+check(
+  "one per other category before any gets a second",
+  lean.supports.slice(3, 7).map((s) => s.category).sort().join() === "candidacy,local,provider,results",
+  lean.supports.map((s) => s.category).join(", ")
 );
 check("a full plan names no fix", full.fix === null);
 check("no city, no city in the pillar keyword", selectOfferPlan(offerPool, { city: null }).pillar?.keyword === "lip filler");

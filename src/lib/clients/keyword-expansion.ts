@@ -66,6 +66,13 @@ export interface CategorySpec {
   intent: number;
   /** The one category the pillar's keyword is chosen from. */
   naming?: boolean;
+  /**
+   * One of the four buying questions the supports are built on first: price, fears, comparisons,
+   * how it works. Matthew, 2026-09-11: "make sure for the posts we focus on this questions: price,
+   * fears, comparisons, how it works". selectOfferPlan fills the supports from these, two each,
+   * before it reaches any other category.
+   */
+  focus?: boolean;
   /** What to write, said to the model. */
   shape: string;
   /** Examples to seed from. The owner seeds are Matthew's own list, 2026-09-11. */
@@ -108,6 +115,7 @@ const PATIENT: readonly CategorySpec[] = [
   {
     key: "price",
     label: "Price and financing",
+    focus: true,
     target: 20,
     intent: 3,
     shape: "what it costs, per syringe or per unit, specials, payment plans, financing, memberships",
@@ -117,6 +125,7 @@ const PATIENT: readonly CategorySpec[] = [
   {
     key: "fear",
     label: "Fear, safety, objections",
+    focus: true,
     target: 25,
     intent: 1,
     shape: "pain, safety, side effects, what goes wrong, whether it can be undone",
@@ -128,6 +137,7 @@ const PATIENT: readonly CategorySpec[] = [
     label: "Comparison",
     target: 20,
     intent: 2,
+    focus: true,
     shape: "this against the alternatives, brand against brand, where to have it done",
     seeds: ["lip flip vs filler", "juvederm vs restylane lips", "med spa vs dermatologist for filler"],
     match: /\b(vs|versus|compared?|comparison|difference between|better than|instead of)\b/,
@@ -135,6 +145,7 @@ const PATIENT: readonly CategorySpec[] = [
   {
     key: "process",
     label: "Process, what to expect, aftercare",
+    focus: true,
     target: 20,
     intent: 1,
     shape: "the first appointment, how long it takes, swelling, recovery, aftercare",
@@ -243,6 +254,7 @@ const OWNER: readonly CategorySpec[] = [
   {
     key: "price_roi",
     label: "Price and ROI",
+    focus: true,
     target: 20,
     intent: 3,
     shape: "what it costs and whether it pays back",
@@ -254,6 +266,7 @@ const OWNER: readonly CategorySpec[] = [
     label: "Comparison",
     target: 20,
     intent: 2,
+    focus: true,
     shape: "this against SEO, against paid ads, against doing it in house",
     seeds: ["AEO vs SEO", "AEO agency vs doing it myself", "AEO vs paid ads"],
     match: /\b(vs|versus|compared?|difference between|better than|instead of|diy|do it myself|in house)\b/,
@@ -261,6 +274,7 @@ const OWNER: readonly CategorySpec[] = [
   {
     key: "how_it_works",
     label: "How it works and timeline",
+    focus: true,
     target: 20,
     intent: 1,
     shape: "what the work is and how long it takes to show",
@@ -270,6 +284,7 @@ const OWNER: readonly CategorySpec[] = [
   {
     key: "trust",
     label: "Trust and objections",
+    focus: true,
     target: 20,
     intent: 1,
     shape: "the doubts: is it a scam, what happens if they leave, patient data",
@@ -552,7 +567,8 @@ export const KEYWORDS_CHECK = /^keywords\s+check$/i;
 export type KeywordCommand =
   | { kind: "approve" }
   | { kind: "drop"; ranks: number[] }
-  | { kind: "add"; phrase: string }
+  /** One phrase, or a pasted list: one per line, numbered or not. */
+  | { kind: "add"; phrases: string[] }
   | { kind: "more"; category: CategorySpec }
   | { kind: "check" };
 
@@ -575,6 +591,35 @@ export function resolveCategory(arg: string, categories: readonly CategorySpec[]
   return null;
 }
 
+/** How many phrases one `keywords add:` takes. A list longer than this is a file, not a paste. */
+export const ADD_MAX = 100;
+
+/**
+ * The phrases in a `keywords add:` body.
+ *
+ * ‼️ A PASTED LIST IS THE NORMAL CASE, NOT THE EDGE. Matthew's first real use was two numbered
+ * lists of thirty with headings between them ("Mechanism-led (AEO / visibility angle)"). One per
+ * line; when any line is numbered, ONLY the numbered lines are taken, so the headings are skipped
+ * rather than added as keywords. A single line is one phrase, commas and all, because a comma is
+ * something a real search phrase contains.
+ */
+export function addList(body: string): string[] {
+  const lines = body.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const numbered = lines.filter((l) => /^\d+[.)]\s+/.test(l));
+  const taken = (numbered.length ? numbered : lines).filter((l) => !/:\s*$/.test(l));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const l of taken) {
+    const phrase = cleanPhrase(l);
+    const key = normalizePhrase(phrase);
+    if (!phrase || !key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(phrase);
+    if (out.length >= ADD_MAX) break;
+  }
+  return out;
+}
+
 export function parseKeywordCommand(raw: string, categories: readonly CategorySpec[]): KeywordCommand | null {
   const text = raw.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
   if (KEYWORDS_APPROVE.test(text)) return { kind: "approve" };
@@ -588,8 +633,8 @@ export function parseKeywordCommand(raw: string, categories: readonly CategorySp
 
   const add = KEYWORDS_ADD.exec(text);
   if (add) {
-    const phrase = cleanPhrase(add[1]);
-    return phrase ? { kind: "add", phrase } : null;
+    const phrases = addList(add[1]);
+    return phrases.length ? { kind: "add", phrases } : null;
   }
 
   const more = KEYWORDS_MORE.exec(text);

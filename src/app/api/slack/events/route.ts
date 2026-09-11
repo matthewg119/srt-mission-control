@@ -1013,6 +1013,17 @@ export async function POST(request: NextRequest) {
             }
             return NextResponse.json({ ok: true });
           }
+
+          // ‼️ A COMMAND FOR ANOTHER STEP GETS A POINTER, NEVER THE ASSISTANT. On 2026-09-11 a
+          // `terms:` and two keyword lists went into older cards' threads by their stale numbers,
+          // the assistant answered both, and nothing was saved. See clients/step-commands.ts.
+          const { misroutedCommand } = await import("@/lib/clients/step-commands");
+          const pointer = await misroutedCommand({ clientId: client.id, stepKey: client.stepKey, text: userText });
+          if (pointer) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, pointer);
+            if (!slackOk(posted)) console.error("[slack/events] misrouted-command pointer failed");
+            return NextResponse.json({ ok: true });
+          }
         }
 
         if (client && parentThreadTs && userText.trim().length > 0) {

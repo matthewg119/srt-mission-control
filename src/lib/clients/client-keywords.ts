@@ -751,7 +751,9 @@ export async function handleKeywordThreadReply(input: {
     case "drop":
       return dropCommand(input.clientId, cmd.ranks);
     case "add":
-      return addCommand(input.clientId, cmd.phrase, input.by);
+      return cmd.phrases.length === 1
+        ? addCommand(input.clientId, cmd.phrases[0], input.by)
+        : addManyCommand(input.clientId, cmd.phrases, input.by);
     case "more":
       return moreCommand(input.clientId, cmd.category);
     case "check":
@@ -908,6 +910,46 @@ async function addCommand(clientId: string, phrase: string, by: string): Promise
         : setApproved
           ? " The set was already approved, so this is approved with it."
           : ""),
+    after: () => refreshKeywordCard(clientId),
+  };
+}
+
+/**
+ * A pasted list. Each line goes through the SAME single-phrase add, so a list follows exactly the
+ * rules one phrase does (the filter, query or hook, approved with an approved set), and the reply
+ * is one summary rather than thirty messages.
+ */
+async function addManyCommand(clientId: string, phrases: readonly string[], by: string): Promise<KeywordReply> {
+  const added: string[] = [];
+  const hooks: string[] = [];
+  const already: string[] = [];
+  const refused: string[] = [];
+
+  for (const phrase of phrases) {
+    const res = await addCommand(clientId, phrase, by);
+    const m = res.message;
+    if (m.startsWith(":white_check_mark:")) {
+      const label = m.match(/\*([^*]+)\*/)?.[1] ?? phrase;
+      (m.includes("stored as a hook") ? hooks : added).push(label);
+    } else if (m.startsWith("Already in the set")) {
+      already.push(phrase);
+    } else {
+      refused.push(`${phrase} (${m.replace(/^:warning:\s*/, "").slice(0, 80)})`);
+      if (m.includes("Missing:") || m.includes(TABLE_HINT)) break;
+    }
+  }
+
+  const list = (items: string[]) => items.slice(0, 40).map((i) => `  • ${i}`).concat(items.length > 40 ? [`  • and ${items.length - 40} more`] : []);
+  return {
+    message: [
+      `*${added.length + hooks.length} of ${phrases.length} added*, each ranked like evidence because you said it.`,
+      ...(added.length ? ["*Queries* (can become a page's keyword):", ...list(added)] : []),
+      ...(hooks.length
+        ? ["*Hooks* (marketing lines: kept for ads and emails, never a page's keyword):", ...list(hooks)]
+        : []),
+      ...(already.length ? [`_Already in the set: ${already.join("; ")}._`] : []),
+      ...(refused.length ? ["*Not added:*", ...list(refused)] : []),
+    ].join("\n"),
     after: () => refreshKeywordCard(clientId),
   };
 }

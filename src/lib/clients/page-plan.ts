@@ -206,6 +206,8 @@ export interface OfferPoolItem {
   /** 0 when the market or a person said it, 1 when a model proposed it. Sorted first. */
   tier: 0 | 1;
   naming: boolean;
+  /** One of the four buying questions (price, fears, comparisons, how it works). Filled first. */
+  focus: boolean;
   /** isAboutOffer, computed by the caller with the offer's vocabulary. */
   relevant: boolean;
 }
@@ -261,17 +263,25 @@ export function selectOfferPlan(
   // a pillar aimed at "AEO agency for medical spas". Three pages answering one search split the
   // one page that should win it.
   //
-  // ‼️ TWO PASSES, ONE PER CATEGORY BEFORE ANY CATEGORY GETS A SECOND. The same run filled two
-  // vendor pages and two naming pages before Problem, Outcome, Trust or Treatment ever got one.
-  // "At most two per category" is a ceiling; the spread comes from taking one each first.
+  // ‼️ THE FOUR BUYING QUESTIONS FIRST: PRICE, FEARS, COMPARISONS, HOW IT WORKS. Matthew,
+  // 2026-09-11: "make sure for the posts we focus on this questions". Two each fills all eight.
+  // Only when those four cannot supply eight does a support come from another category of the
+  // offer, and then one per category before any gets a second (the first live run had filled two
+  // vendor pages and two naming pages before most categories got one).
   const perCategory = new Map<string, number>();
   const supports: OfferPoolItem[] = [];
-  for (const cap of [1, MAX_PER_CATEGORY]) {
+  const passes: Array<{ focus: boolean; cap: number }> = [
+    { focus: true, cap: 1 },
+    { focus: true, cap: MAX_PER_CATEGORY },
+    { focus: false, cap: 1 },
+    { focus: false, cap: MAX_PER_CATEGORY },
+  ];
+  for (const pass of passes) {
     for (const p of unique) {
       if (supports.length >= PRE_CALL_SUPPORTS) break;
-      if (p.naming || supports.includes(p)) continue;
+      if (p.naming || p.focus !== pass.focus || supports.includes(p)) continue;
       const n = perCategory.get(p.category) ?? 0;
-      if (n >= cap) continue;
+      if (n >= pass.cap) continue;
       perCategory.set(p.category, n + 1);
       supports.push(p);
     }

@@ -36,6 +36,7 @@ import {
 } from "@/lib/clients/keyword-expansion";
 import { isAboutOffer, offerVocabulary } from "@/lib/clients/phrase-quality";
 import { parseTerms } from "@/lib/clients/offers";
+import { commandOwner } from "@/lib/clients/step-commands";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -164,7 +165,27 @@ check('"keywords drop 12"', drop1?.kind === "drop" && drop1.ranks.join() === "12
 const dropMany = parseKeywordCommand("keywords drop 12, 15, 40", patient);
 check('"keywords drop 12, 15, 40"', dropMany?.kind === "drop" && dropMany.ranks.join() === "12,15,40");
 const add = parseKeywordCommand("keywords add: lip filler charlotte", patient);
-check('"keywords add: lip filler charlotte"', add?.kind === "add" && add.phrase === "lip filler charlotte");
+check('"keywords add: lip filler charlotte"', add?.kind === "add" && add.phrases.length === 1 && add.phrases[0] === "lip filler charlotte");
+const pasted = parseKeywordCommand(
+  "keywords add:\n1. Get more filler patients from ChatGPT\n2. 5 filler patients in 30 days\nMechanism-led (AEO / visibility angle)\n8. ChatGPT visibility for med spas",
+  owner
+);
+check(
+  "a pasted numbered list adds every numbered line and skips the heading between them",
+  pasted?.kind === "add" && pasted.phrases.length === 3 && !pasted.phrases.some((p) => p.startsWith("Mechanism")),
+  JSON.stringify(pasted)
+);
+check(
+  "and each line is still classified on its own: the outcome promise is a hook",
+  pasted?.kind === "add" && classifyUse("query", pasted.phrases[1]) === "hook" && classifyUse("query", pasted.phrases[2]) === "query"
+);
+{
+  check("`terms:` belongs to the prep call", commandOwner("terms: AEO, ChatGPT SEO")?.step === "offer_locked");
+  check("a pasted keyword list belongs to the keyword step", commandOwner("keywords add:\n1. x")?.step === "keyword_set");
+  check("`plan approve` belongs to the pre-call pages", commandOwner("plan approve")?.step === "pre_call_pages");
+  check("a sentence about keywords is not a command", commandOwner("keywords matter less than people think") === null);
+  check("a sentence about a plan is not a command", commandOwner("plan ahead for the call") === null);
+}
 const morePrice = parseKeywordCommand("keywords more price", patient);
 check('"keywords more price" resolves to the price category', morePrice?.kind === "more" && morePrice.category.key === "price");
 const moreNaming = parseKeywordCommand("keywords more naming", owner);
@@ -261,6 +282,7 @@ async function live(slug: string): Promise<void> {
       categoryLabel: categoryLabel(ctx.categories, r.category),
       tier: tierOf(r.origin),
       naming: r.category === naming,
+      focus: ctx.categories.find((cat) => cat.key === r.category)?.focus === true,
       relevant: isRelevantKeyword(r, vocab),
     })),
     { city: ctx.city }
