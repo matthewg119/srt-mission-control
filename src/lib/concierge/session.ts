@@ -49,12 +49,23 @@ export interface ConciergeSession {
   turns: number;
   outcome: string;
   bookingClickedAt: string | null;
+  /**
+   * The Origin header /start arrived with, which is the FRAME's origin, not the host page's.
+   *
+   * ‼️ READ BACK BECAUSE THE BOOKING HOP HAS TO FOLLOW THE FRAME. A preview frame is served from
+   * Mission Control and a live one from the concierge host; engine.ts uses this to keep the
+   * booking link on whichever of the two actually served the conversation. See bookingHopOrigin().
+   */
+  embedOrigin: string | null;
 }
 
+// ‼️ embed_origin IS SAFE IN THIS LIST, WHERE AN UNKNOWN COLUMN WOULD FAIL EVERY SELECT. The insert
+// in startConciergeSession has always written it, so a database without the column already fails
+// there first and this select adds no new way to break. Confirmed present in production 2026-09-11.
 const SESSION_COLUMNS =
   "id, client_id, session_token, page_category, page_magnet_key, entry_page_id, entry_path, " +
   "contact_id, first_name, email, phone, ammo_used, magnets_delivered, turns, outcome, " +
-  "booking_clicked_at";
+  "booking_clicked_at, embed_origin";
 
 function toSession(row: Record<string, unknown>): ConciergeSession {
   const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
@@ -77,6 +88,7 @@ function toSession(row: Record<string, unknown>): ConciergeSession {
     turns: typeof row.turns === "number" ? row.turns : 0,
     outcome: typeof row.outcome === "string" ? row.outcome : "open",
     bookingClickedAt: str(row.booking_clicked_at),
+    embedOrigin: str(row.embed_origin),
   };
 }
 

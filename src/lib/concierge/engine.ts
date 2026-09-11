@@ -38,6 +38,7 @@ import {
 } from "./session";
 import { resolveBooking } from "./booking";
 import { conciergeOrigin } from "./origin";
+import { classifyHost } from "@/lib/hub/host-classify";
 import { safeTimeZone } from "@/lib/calendly";
 import { MAX_REPLY_WORDS, systemPrompt, toolsFor } from "./tools";
 
@@ -90,6 +91,34 @@ function onboardingUrl(session: ConciergeSession, place: Place | null, business:
 }
 
 /**
+ * Which host the booking hop goes through.
+ *
+ * ‼️ THE FRAME'S OWN ORIGIN WHEN THAT IS OUR INTERNAL HOST, OTHERWISE THE CONCIERGE HOST. A preview
+ * frame is served from Mission Control (previewOrigin() in ./origin.ts), and a hop through the
+ * concierge host would be the one dead button in a demo that otherwise needs no DNS. /start
+ * recorded the frame's Origin on the session, so the hop follows the frame that actually served
+ * this conversation instead of a guess about what kind of page it was on.
+ *
+ * ‼️ ONLY AN INTERNAL CLASSIFICATION IS TRUSTED, AND THAT IS WHAT MAKES A FORGED Origin HARMLESS.
+ * A browser cannot set Origin but a script calling /start can, and *.vercel.app classifies
+ * internal. The worst that buys is that script's OWN session getting a booking link on a host it
+ * chose: the link is returned only to the holder of that session token, and /booked still
+ * allowlists the destination. A live frame on the concierge host classifies "concierge" and keeps
+ * conciergeOrigin(), so live pages are unchanged.
+ */
+function bookingHopOrigin(session: ConciergeSession): string {
+  if (session.embedOrigin) {
+    try {
+      const frame = new URL(session.embedOrigin);
+      if (classifyHost(frame.host) === "internal") return frame.origin;
+    } catch {
+      // A malformed or opaque ("null") Origin falls back to the concierge host, same as none.
+    }
+  }
+  return conciergeOrigin();
+}
+
+/**
  * Wrap an outbound booking link so the click is recorded before the browser leaves.
  *
  * ‼️ THE HOP IS WHAT MAKES "SOMEBODY WENT TO BOOK" MEASURABLE. A slot button is a link to
@@ -99,7 +128,7 @@ function onboardingUrl(session: ConciergeSession, place: Place | null, business:
  * redirect until it does.
  */
 function trackedUrl(session: ConciergeSession, target: string): string {
-  const url = new URL("/api/concierge/booked", conciergeOrigin());
+  const url = new URL("/api/concierge/booked", bookingHopOrigin(session));
   url.searchParams.set("t", session.sessionToken);
   url.searchParams.set("u", target);
   return url.toString();
