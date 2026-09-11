@@ -47,6 +47,12 @@ body:has(.hub-root) {
   --hub-band-fg: #ffffff;
 
   --hub-heading-family: inherit;
+  /* h2 and h3 follow the heading unless a skin names its own face; labels follow the body. */
+  --hub-subheading-family: var(--hub-heading-family);
+  --hub-label-family: inherit;
+  /* Text ON an accent fill. themeStyle() computes it from the accent's luminance, so a bright
+     accent read off a reference gets dark button text instead of unreadable white. */
+  --hub-on-accent: #ffffff;
   --hub-measure: 44rem;
   --hub-base: 17px;
   --hub-radius: 8px;
@@ -97,10 +103,20 @@ body:has(.hub-root) {
   margin: 0 0 0.75rem;
 }
 
-.hub-root h1,
+.hub-root h1 {
+  font-family: var(--hub-heading-family);
+}
 .hub-root h2,
 .hub-root h3 {
-  font-family: var(--hub-heading-family);
+  font-family: var(--hub-subheading-family);
+}
+
+/* The small print: eyebrow, NAP labels, footer line. A reference whose labels are set in mono
+   or small caps is recognisable by exactly this, so it is a face of its own. */
+.hub-eyebrow,
+.hub-nap dt,
+.hub-foot {
+  font-family: var(--hub-label-family);
 }
 
 .hub-root h1 {
@@ -194,7 +210,7 @@ body:has(.hub-root) {
   margin-top: 1.5rem;
   font: inherit;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--hub-on-accent);
   background: var(--hub-accent);
   border: none;
   border-radius: var(--hub-radius);
@@ -230,7 +246,7 @@ body:has(.hub-root) {
   cursor: pointer;
 }
 .rev-mic.is-live {
-  color: #ffffff;
+  color: var(--hub-on-accent);
   background: var(--hub-accent);
 }
 
@@ -340,7 +356,7 @@ body:has(.hub-root) {
 .rev-msg.is-her {
   align-self: flex-end;
   background: var(--hub-accent);
-  color: #ffffff;
+  color: var(--hub-on-accent);
   border-bottom-right-radius: 4px;
 }
 
@@ -406,7 +422,7 @@ body:has(.hub-root) {
 .rev-send {
   font: inherit;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--hub-on-accent);
   background: var(--hub-accent);
   border: none;
   border-radius: var(--hub-radius);

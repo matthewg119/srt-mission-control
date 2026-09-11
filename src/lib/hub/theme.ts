@@ -32,6 +32,31 @@ export interface HubTheme {
   fontFamily: string | null;
 }
 
+/**
+ * The last time a reference screenshot PICK wrote into this theme, and exactly what it wrote.
+ *
+ * ‼️ THIS IS THE ONE WAY A VALUE THAT DID NOT COME OFF THE CLIENT'S OWN SITE GETS HERE, AND IT
+ * IS RECORDED BECAUSE THE ACCENT'S VALUE IS ITS PROVENANCE. confirmSkinPick() writes the accent
+ * and the body face read off a reference into this object's parent, because a person picking one
+ * of three rendered previews is saying "make it look like that", not "this is their brand". The
+ * reasoning is in the header of src/lib/hub/skin-vision.ts.
+ *
+ * `accent` and `fontFamily` are what the pick WROTE, not what is there now. The Theme panel only
+ * claims "set from a reference" for a field that still holds that value, so somebody typing over
+ * it afterwards makes the claim disappear without anything having to remember to clear it.
+ */
+export interface ReferenceProvenance {
+  /** "a reference screenshot, design 2". For the panel only, never rendered on a page. */
+  from: string;
+  at: string;
+  by: string | null;
+  accent: string | null;
+  fontFamily: string | null;
+  /** What was there before the pick, so it can be typed back. Null when nothing was. */
+  replacedAccent: string | null;
+  replacedFontFamily: string | null;
+}
+
 export interface StoredTheme extends HubTheme {
   /** Where the extraction read from, so a wrong colour is traceable to a page. */
   extractedFrom: string | null;
@@ -39,6 +64,8 @@ export interface StoredTheme extends HubTheme {
   /** 5f: "Theme confirmed by me in the dashboard before the preview is shown." */
   confirmedAt: string | null;
   confirmedBy: string | null;
+  /** Set by a reference pick and by nothing else. See ReferenceProvenance. */
+  fromReference: ReferenceProvenance | null;
 }
 
 export const EMPTY_THEME: StoredTheme = {
@@ -50,6 +77,7 @@ export const EMPTY_THEME: StoredTheme = {
   extractedAt: null,
   confirmedAt: null,
   confirmedBy: null,
+  fromReference: null,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,7 +137,78 @@ export function readTheme(raw: unknown): StoredTheme {
     extractedAt: typeof t.extractedAt === "string" ? t.extractedAt : null,
     confirmedAt: typeof t.confirmedAt === "string" ? t.confirmedAt : null,
     confirmedBy: typeof t.confirmedBy === "string" ? t.confirmedBy : null,
+    fromReference: readReferenceProvenance(t.fromReference),
   };
+}
+
+/** The provenance object, or null. The colours and stacks in it go through the same gates. */
+function readReferenceProvenance(raw: unknown): ReferenceProvenance | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.from !== "string" || typeof r.at !== "string") return null;
+  return {
+    from: r.from.slice(0, 120),
+    at: r.at,
+    by: typeof r.by === "string" ? r.by : null,
+    accent: safeColor(r.accent),
+    fontFamily: safeFontFamily(r.fontFamily),
+    replacedAccent: safeColor(r.replacedAccent),
+    replacedFontFamily: safeFontFamily(r.replacedFontFamily),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Colour arithmetic. Pure, over hexes that have already passed safeColor().
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rgbOf(hex: string): [number, number, number] | null {
+  const v = safeColor(hex);
+  if (!v) return null;
+  const h = v.length === 4 ? v.slice(1).split("").map((c) => c + c).join("") : v.slice(1);
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
+}
+
+/**
+ * `a` laid over `b` at `weight` (0 to 1), as a hex. Null if either is not a hex.
+ *
+ * Used for accentSoft on a pick: a reference gives one accent, and the soft tint behind a note or
+ * a highlighted sentence has to be that accent on THIS page's ground, which on a dark ground is a
+ * dark tint and not the pale one a light template assumes.
+ */
+export function mixHex(a: string, b: string, weight: number): string | null {
+  const x = rgbOf(a);
+  const y = rgbOf(b);
+  if (!x || !y) return null;
+  const w = Math.min(1, Math.max(0, weight));
+  return `#${x
+    .map((c, i) => Math.round(c * w + y[i] * (1 - w)).toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function luminance(hex: string): number | null {
+  const rgb = rgbOf(hex);
+  if (!rgb) return null;
+  const [r, g, b] = rgb.map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * The text colour that goes ON an accent fill: white or near-black, whichever reads better.
+ *
+ * ‼️ DERIVED, NEVER STORED, AND NEEDED THE MOMENT A PICK CAN WRITE A BRIGHT ACCENT. Every button
+ * in the review tool was `color: #ffffff` on the accent, which is fine on the default #00705f and
+ * about 1.9:1 on srtagency.com's teal: a button nobody can read. Computed from the accent rather
+ * than read off the reference, so it is never a colour a model chose.
+ */
+export function onAccent(accent: string): string | null {
+  const l = luminance(accent);
+  if (l === null) return null;
+  const onWhite = 1.05 / (l + 0.05);
+  const onInk = (l + 0.05) / (0.0032 + 0.05);
+  return onInk > onWhite ? "#0a0a0a" : "#ffffff";
 }
 
 /**
@@ -137,7 +236,11 @@ export function activeTheme(stored: StoredTheme): HubTheme | null {
 export function themeStyle(theme: HubTheme | null): React.CSSProperties {
   if (!theme) return {};
   const style: Record<string, string> = {};
-  if (theme.accent) style["--hub-accent"] = theme.accent;
+  if (theme.accent) {
+    style["--hub-accent"] = theme.accent;
+    const ink = onAccent(theme.accent);
+    if (ink) style["--hub-on-accent"] = ink;
+  }
   if (theme.accentSoft) style["--hub-accent-soft"] = theme.accentSoft;
   if (theme.fontFamily) style["fontFamily"] = theme.fontFamily;
   return style as React.CSSProperties;

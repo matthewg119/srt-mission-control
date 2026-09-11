@@ -1,29 +1,62 @@
 // Reading a design reference screenshot into a SKIN.
 //
 // Paste a picture of a page whose look you want, and this returns the template it is closest
-// to plus the ground colours, corner radius, measure and text size to move. It is the second
-// of the two ways into `hub_skin`; the first is naming one of the four templates, which costs
-// nothing and is meant to be the common path.
+// to plus the tokens to move: the ground colours, the accent, the KIND of face used for the
+// headline, the subheadings, the labels and the body, the corner radius, the measure and the
+// text size. It is the second of the two ways into `hub_skin`; the first is naming one of the
+// four templates, which costs nothing and is meant to be the common path.
 //
 // ‼️ IT RETURNS TOKENS. IT CANNOT RETURN MARKUP, COPY OR A LAYOUT, AND THE SCHEMA IS WHY.
-// `SkinRead` has no field for HTML, no field for a headline, no field for a section order and
-// no field for a CSS rule. This is the same enforcement `HubTheme` uses — the type, not a
-// sentence in a prompt — and it is load-bearing for the same reason: the hub's entire product
-// is being crawled and quoted, and the JSON-LD, the heading order and the canonical NAP block
-// in hub-bodies.tsx are what make that true. A reference image is somebody else's page. What
-// is worth taking from it is how it FEELS, never what it says.
+// `SkinRead` has no field for HTML, no field for a headline, no field for a section order, no
+// field for a CSS rule, and no field for a URL or an asset. This is the same enforcement
+// `HubTheme` uses — the type, not a sentence in a prompt — and it is load-bearing for the same
+// reason: the hub's entire product is being crawled and quoted, and the JSON-LD, the heading
+// order and the canonical NAP block in hub-bodies.tsx are what make that true. What is worth
+// taking from a reference is how it FEELS, never what it says.
 //
-// ‼️ IT DOES NOT READ AN ACCENT, DELIBERATELY.
-// The accent and the body font are the CLIENT's brand and live in theme.ts, extracted from
-// their own homepage. A colour lifted off a reference screenshot has no claim to be a
-// business's brand colour, and writing one there would silently overwrite a value whose whole
-// value is its provenance. It is REPORTED as a suggestion in `accentSuggestion` so a person
-// can type it into the Theme panel, and it is never written anywhere by this file.
+// ‼️ A FONT IS A KEY FROM faces.ts, NEVER A NAME.
+// This asked for a free-text `headingFamily` until 2026-09-11 and got null for srtagency.com,
+// whose headings are an obvious system sans, because "which font is that" is a question a model
+// rightly declines to guess at. "Which of these ten kinds of face" is one it can answer, and the
+// answer cannot carry anything into a style attribute. coerce() drops any headingFamily a model
+// sends anyway, so the free-text path is closed from this side.
+//
+// ‼️ THE ACCENT AND THE BODY FACE ARE READ HERE, AND A PICK APPLIES THEM. (Reversed 2026-09-11.)
+// This file used to report the accent and write it nowhere: the accent is the client's brand,
+// it lives in theme.ts, and its whole value is that it came off their own homepage. That is
+// right for the Theme panel and INVERTED for a reference. Somebody who pastes a screenshot and
+// picks one of three rendered previews is not claiming the colour is the client's brand, they
+// are saying "make it look like that". Measured 2026-09-11: srtagency.com was read correctly as
+// dark with a #2dd4bf accent and came back as three black-and-grey designs, because the one
+// colour that made it recognisable was the one colour thrown away.
+//
+// So they are still not written by this file and still not skin fields. confirmSkinPick() writes
+// them INTO THE THEME, the accent's one home, recording where they came from and what they
+// replaced under theme.fromReference, and the candidate preview renders them first so that what
+// is picked is what was seen.
+//
+// ‼️ WHOSE PAGE IT IS, AND WHY THAT DOES NOT CHANGE WHAT IS READ HERE.
+// A reference can be the client's own site, SRT's own, or a page somebody liked, a competitor's
+// included. This file treats all of them the same, on purpose, because everything it can return
+// is vocabulary rather than expression: a hex colour, one of ten face categories from our own
+// list, a radius, a column width, a type size, and a few coarse shape words. No set of those can
+// reproduce another business's page, because the markup, the copy and every CSS rule that
+// renders them are ours and are identical for every client.
+//
+// What IS somebody's expression is their words, their pictures and their logo, and those come
+// from the client's OWN site or SRT's and from nowhere else: through the snapshot path that
+// records provenance in page_sources (site_replica), with words restated rather than rehosted,
+// which is the refusal draft-replica.ts records. This lane cannot carry any of them. SkinRead has
+// no URL, no asset and no text field, and readSkin() drops keys it does not know.
+//
+// A background IMAGE lifted off a page sits between the two, and Matthew deferred it on
+// 2026-09-11. When it is built it is own-site only, fetched through the snapshot, and never
+// cropped out of a screenshot, because a screenshot cannot prove whose picture it is.
 //
 // ‼️ EVERY FIELD IS RE-VALIDATED BY readSkin() BEFORE IT IS STORED.
 // Nothing here is trusted. A hex that is not a hex, a radius of 200, a template name we do not
-// ship: all dropped by skin.ts, which is the one gate, rather than checked twice in two places
-// that can disagree.
+// ship, a face we do not list: all dropped by skin.ts, which is the one gate, rather than checked
+// twice in two places that can disagree.
 
 import { callClaudeJSON, camelizeKeys, type ClaudeImageInput } from "@/lib/claude-calls";
 import {
@@ -34,8 +67,9 @@ import {
   TEMPLATE_CATALOGUE,
   type HubTemplate,
 } from "./skin";
+import { FACE_CATALOGUE, HUB_FACES, isFace, type HubFace } from "./faces";
 
-/** Haiku. This is reading colours off a picture, not judging a design. */
+/** Haiku. This is reading colours and kinds of type off a picture, not judging a design. */
 const MODEL = "claude-haiku-4-5-20251001" as const;
 
 export interface SkinRead {
@@ -51,16 +85,29 @@ export interface SkinRead {
   card: string | null;
   band: string | null;
   bandFg: string | null;
+  /** Always null from this lane: coerce() drops it. Kept for the shape rows already stored. */
   headingFamily: string | null;
   radius: number | null;
   measure: number | null;
   baseSize: number | null;
   /**
-   * A brand colour the image seems to use, for a HUMAN to type into the Theme panel.
+   * The reference's accent: buttons, links, a logo mark.
    *
-   * Reported and never written. See the header: the accent's value is its provenance.
+   * Applied on a PICK, into the theme, with its provenance recorded. See the header.
    */
   accentSuggestion: string | null;
+  /**
+   * The faces, as keys.
+   *
+   * ‼️ OPTIONAL IN THE TYPE AND NOT IN THE PROMPT. `scripts/` is typechecked by `next build`, and
+   * the artifacts test builds a SkinRead by hand from before faces existed. Absent reads as null
+   * everywhere downstream, which is what a face nobody read should mean.
+   */
+  headingFace?: HubFace | null;
+  subheadingFace?: HubFace | null;
+  labelFace?: HubFace | null;
+  /** The body face. Goes to the theme on a pick, like the accent, because body text is brand. */
+  bodyFace?: HubFace | null;
 }
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -74,7 +121,12 @@ function isNumOrNull(v: unknown, min: number, max: number): boolean {
   return typeof v === "number" && Number.isFinite(v) && v >= min && v <= max;
 }
 
+function isFaceOrNull(v: unknown): boolean {
+  return v === undefined || v === null || isFace(v);
+}
+
 const COLOR_FIELDS = ["bg", "fg", "muted", "faint", "rule", "card", "band", "bandFg"] as const;
+const FACE_FIELDS = ["headingFace", "subheadingFace", "labelFace", "bodyFace"] as const;
 
 function isSkinRead(parsed: unknown): parsed is SkinRead {
   if (!parsed || typeof parsed !== "object") return false;
@@ -84,6 +136,7 @@ function isSkinRead(parsed: unknown): parsed is SkinRead {
   for (const f of COLOR_FIELDS) if (!isHexOrNull(p[f])) return false;
   if (!isHexOrNull(p.accentSuggestion)) return false;
   if (p.headingFamily !== null && typeof p.headingFamily !== "string") return false;
+  for (const f of FACE_FIELDS) if (!isFaceOrNull(p[f])) return false;
   if (!isNumOrNull(p.radius, RADIUS_RANGE[0], RADIUS_RANGE[1])) return false;
   if (!isNumOrNull(p.measure, MEASURE_RANGE[0], MEASURE_RANGE[1])) return false;
   if (!isNumOrNull(p.baseSize, BASE_SIZE_RANGE[0], BASE_SIZE_RANGE[1])) return false;
@@ -110,8 +163,10 @@ function describeInvalid(parsed: unknown): string {
   if (!isHexOrNull(p.accentSuggestion)) {
     return `accentSuggestion was ${JSON.stringify(p.accentSuggestion)}; it must be a #rrggbb hex or null`;
   }
-  if (p.headingFamily !== null && typeof p.headingFamily !== "string") {
-    return "headingFamily must be a font stack string or null";
+  for (const f of FACE_FIELDS) {
+    if (!isFaceOrNull(p[f])) {
+      return `${f} was ${JSON.stringify(p[f])}; it must be one of ${HUB_FACES.join(", ")}, or null`;
+    }
   }
   if (!isNumOrNull(p.radius, RADIUS_RANGE[0], RADIUS_RANGE[1])) {
     return `radius was ${JSON.stringify(p.radius)}; it must be null or ${RADIUS_RANGE[0]} to ${RADIUS_RANGE[1]} (px)`;
@@ -126,21 +181,22 @@ function describeInvalid(parsed: unknown): string {
 }
 
 const TEMPLATE_LINES = TEMPLATE_CATALOGUE.map((t) => `  ${t.key}: ${t.blurb}`).join("\n");
+const FACE_LINES = FACE_CATALOGUE.map((f) => `  ${f.key.padEnd(10)} ${f.looks}`).join("\n");
+const FACE_UNION = HUB_FACES.map((f) => `"${f}"`).join(" | ");
 
 const SYSTEM = [
   "You are looking at a screenshot of a web page somebody likes the look of. You are extracting",
   "a small set of DESIGN TOKENS from it so a different page, with completely different content,",
-  "can be given a similar feel.",
+  "can be given the same feel.",
   "",
   "WHAT YOU ARE NOT DOING:",
-  "  You are not copying the page. You are not reading its words, its headings, its sections or",
-  "  its navigation. You are not describing its layout. None of that has anywhere to go.",
-  "  Report only the values named in the schema.",
+  "  You are not copying the page. You are not reading its words, its pictures, its logo or its",
+  "  section order. None of that has anywhere to go. Report only the values named in the schema.",
   "",
   "PICK THE CLOSEST TEMPLATE. These are the only four that exist:",
   TEMPLATE_LINES,
   "",
-  "THE COLOURS ARE GROUND COLOURS, NOT BRAND COLOURS:",
+  "THE GROUND COLOURS:",
   "  bg      the page background",
   "  fg      the main body text colour",
   "  muted   secondary text: a standfirst, a caption",
@@ -150,8 +206,25 @@ const SYSTEM = [
   "  band    a header band's background behind the masthead, if the reference has one",
   "  bandFg  the text colour ON that band",
   "",
-  "  Do NOT report the brand or accent colour in any of those fields. If the page has an obvious",
-  "  accent (buttons, links, a logo mark), put it in accentSuggestion and nowhere else.",
+  "THE ACCENT:",
+  "  accentSuggestion is the page's brand colour: its buttons, its links, a highlighted word, its",
+  "  logo mark. It goes here and in NONE of the ground colours above. Most pages have one; a page",
+  "  that is genuinely all greys has none, and then it is null.",
+  "",
+  "THE FACES. Every headline, subheading, label and paragraph on a web page is set in SOME kind",
+  "of face. Your job is to name the KIND, not the font. Pick the closest of these ten:",
+  FACE_LINES,
+  "",
+  "  headingFace     the main headline, the biggest text on the page",
+  "  subheadingFace  the section headings under it; the same key as headingFace if they match",
+  "  labelFace       small labels, eyebrows above a headline, navigation links, captions. Pages",
+  "                  that set these in monospace or small capitals are recognisable by it.",
+  "  bodyFace        paragraphs",
+  "",
+  "  ‼️ A FACE IS ALMOST NEVER null. Not knowing the exact font is NOT a reason for null: that is",
+  "  exactly why you are choosing between ten kinds instead of naming one. A clean modern sans you",
+  "  cannot identify is \"system\". Return null for a face only when the screenshot has no text in",
+  "  that role at all.",
   "",
   "THE NUMBERS:",
   `  radius    corner radius in PIXELS, ${RADIUS_RANGE[0]} to ${RADIUS_RANGE[1]}. 0 for hard corners.`,
@@ -159,11 +232,7 @@ const SYSTEM = [
   "            article column is about 40. This is NOT the width of the screenshot.",
   `  baseSize  body text size in PIXELS, ${BASE_SIZE_RANGE[0]} to ${BASE_SIZE_RANGE[1]}.`,
   "",
-  "  headingFamily is a CSS font stack for the headings only, and only when the reference clearly",
-  "  uses a different kind of face for them (a serif over a sans, say). Letters, digits, spaces,",
-  "  commas, dots, hyphens and quotes only. Otherwise null.",
-  "",
-  "‼️ A VALUE YOU CANNOT READ IS null. NEVER A GUESS.",
+  "‼️ A COLOUR OR NUMBER YOU CANNOT READ IS null. NEVER A GUESS.",
   "  A null renders the template's own value, which is a considered default. A guessed hex is a",
   "  colour nobody chose, on a real business's website, and it looks like a decision.",
   "  A screenshot that is not a web page at all: return the closest template, a reading that says",
@@ -186,21 +255,30 @@ const SCHEMA_HINT = [
   '  "card": "#rrggbb" | null,',
   '  "band": "#rrggbb" | null,',
   '  "bandFg": "#rrggbb" | null,',
-  '  "headingFamily": "font stack" | null,',
+  '  "accentSuggestion": "#rrggbb" | null,',
+  `  "headingFace": ${FACE_UNION} | null,`,
+  `  "subheadingFace": ${FACE_UNION} | null,`,
+  `  "labelFace": ${FACE_UNION} | null,`,
+  `  "bodyFace": ${FACE_UNION} | null,`,
   '  "radius": number | null,',
   '  "measure": number | null,',
-  '  "baseSize": number | null,',
-  '  "accentSuggestion": "#rrggbb" | null',
+  '  "baseSize": number | null',
   "}",
 ].join("\n");
 
+const NOTHING = new Set(["", "null", "none", "n/a"]);
+
 /**
- * Coerce the two near-misses worth repairing, and nothing else.
+ * Coerce the near-misses worth repairing, and nothing else.
  *
  * A three-digit hex is correct CSS that the validator would reject, and a hex written without
- * its `#` is the single most common way a model returns a colour. Both are unambiguous. A
- * radius of 200 is NOT repaired: that is a misunderstood unit, and clamping it would hide the
- * misunderstanding behind a page that looks merely a bit round.
+ * its `#` is the single most common way a model returns a colour. A face written "System" or
+ * " mono " is the same key in a different case. All unambiguous. A radius of 200 is NOT
+ * repaired: that is a misunderstood unit, and clamping it would hide the misunderstanding behind
+ * a page that looks merely a bit round. A face we do not list is NOT mapped to a nearby one.
+ *
+ * ‼️ AND IT DROPS headingFamily, WHATEVER IT SAYS. The free-text font path is closed from this
+ * side: a stack a model wrote is exactly the untrusted string faces.ts exists to keep out of CSS.
  */
 function coerce(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== "object") return parsed;
@@ -209,12 +287,23 @@ function coerce(parsed: unknown): unknown {
     const v = p[f];
     if (typeof v !== "string") continue;
     const t = v.trim();
-    if (!t || t.toLowerCase() === "null" || t.toLowerCase() === "none") {
+    if (NOTHING.has(t.toLowerCase())) {
       p[f] = null;
       continue;
     }
     p[f] = HEX.test(t) ? t : HEX.test(`#${t}`) ? `#${t}` : t;
   }
+  for (const f of FACE_FIELDS) {
+    const v = p[f];
+    if (v === undefined) {
+      p[f] = null;
+      continue;
+    }
+    if (typeof v !== "string") continue;
+    const t = v.trim().toLowerCase();
+    p[f] = NOTHING.has(t) ? null : t;
+  }
+  p.headingFamily = null;
   return p;
 }
 
@@ -237,7 +326,7 @@ export async function readSkinFromImages(
       ? `Read the design tokens out of this reference. The person who sent it added: ${note.trim()}`
       : "Read the design tokens out of this reference.",
     images,
-    maxTokens: 900,
+    maxTokens: 1400,
     temperature: 0,
     schemaHint: SCHEMA_HINT,
     coerce: (p) => coerce(camelizeKeys(p)),
@@ -247,3 +336,6 @@ export async function readSkinFromImages(
 
   return data;
 }
+
+/** Exported for the artifacts test, which has to prove the free-text font path is closed. */
+export const _coerceForTest = coerce;

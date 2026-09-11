@@ -20,6 +20,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { stepNumber } from "@/config/delivery-steps";
 import { TEMPLATE_CATALOGUE, type StoredSkin } from "@/lib/hub/skin";
+import type { ReferenceProvenance } from "@/lib/hub/theme";
 
 export interface ThemeView {
   logoUrl: string | null;
@@ -30,6 +31,8 @@ export interface ThemeView {
   extractedAt: string | null;
   confirmedAt: string | null;
   confirmedBy: string | null;
+  /** Set when a reference screenshot pick wrote the accent or font. See theme.ts. */
+  fromReference: ReferenceProvenance | null;
 }
 
 export function ThemeForm({
@@ -164,7 +167,8 @@ export function ThemeForm({
           theme, so look at the preview before confirming again. To go further than these four,
           paste a screenshot of a reference into this client&apos;s step{" "}
           {stepNumber("hub_preview")} thread in Slack and
-          the colours, corners, column width and text size are read off it.
+          the colours, accent, fonts, corners, column width and text size are read off it.
+          Picking one of the three it offers also writes the accent and body font below.
         </p>
         <div className="flex flex-wrap gap-2">
           {TEMPLATE_CATALOGUE.map((t) => {
@@ -281,6 +285,31 @@ export function ThemeForm({
             {new Date(theme.extractedAt).toLocaleDateString()}.
           </p>
         )}
+        {/*
+          ‼️ ONLY CLAIMED FOR A FIELD THAT STILL HOLDS WHAT THE PICK WROTE. Somebody typing over
+          the accent afterwards makes this line stop saying the accent came from a reference,
+          without the route having to remember to clear anything.
+        */}
+        {(() => {
+          const ref = theme.fromReference;
+          if (!ref) return null;
+          const fields = [
+            ref.accent && theme.accent === ref.accent ? "Accent" : null,
+            ref.fontFamily && theme.fontFamily === ref.fontFamily ? "font" : null,
+          ].filter(Boolean);
+          if (fields.length === 0) return null;
+          const replaced = [
+            ref.replacedAccent ? `accent ${ref.replacedAccent}` : null,
+            ref.replacedFontFamily ? `font ${ref.replacedFontFamily}` : null,
+          ].filter(Boolean);
+          return (
+            <p className="text-xs text-[rgba(255,255,255,0.35)]">
+              {fields.join(" and ")} set from {ref.from}, picked by {ref.by ?? "someone"} on{" "}
+              {new Date(ref.at).toLocaleDateString()}, not read off their site.
+              {replaced.length ? ` It replaced ${replaced.join(" and ")}.` : ""}
+            </p>
+          );
+        })()}
       </div>
 
       {/* ── The confirmation gate ─────────────────────────────────────────── */}

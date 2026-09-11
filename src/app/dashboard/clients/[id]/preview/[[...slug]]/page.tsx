@@ -41,7 +41,12 @@ import { skinStyle, skinClass } from "@/lib/hub/skin";
 import { ReviewTool, readLook } from "@/app/hub/[host]/reviews/review-tool";
 import type { ChatLook } from "@/app/hub/[host]/reviews/review-client";
 import { loadCandidates } from "@/lib/clients/hub-skin";
-import { candidateAt, type SkinCandidateSet } from "@/lib/hub/skin-variants";
+import {
+  brandFromReference,
+  candidateAt,
+  withReferenceBrand,
+  type SkinCandidateSet,
+} from "@/lib/hub/skin-variants";
 import "@/app/hub/[host]/hub.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
@@ -115,6 +120,18 @@ export default async function HubPreview({ params, searchParams }: Props) {
   // broken page rather than as a bad link.
   const skin = candidate ?? client.skin;
 
+  // ‼️ AND THE CANDIDATE'S ACCENT AND BODY FONT, LAID OVER THE THEME, THROUGH THE SAME FUNCTION
+  // THE PICK STORES THEM WITH. A pick writes the reference's accent into the theme; a preview that
+  // did not show it would ask somebody to choose a design without its most recognisable colour,
+  // which is exactly how srtagency.com came back as three black-and-grey pages on 2026-09-11.
+  const theme =
+    candidate && candidateSet
+      ? withReferenceBrand(
+          client.theme ?? { logoUrl: null, accent: null, accentSoft: null, fontFamily: null },
+          brandFromReference(candidateSet, candidate)
+        )
+      : client.theme;
+
   const host =
     wanted.find((w) => w.kind === kind)?.host ??
     // No domain on the record yet. Say so in the hostname rather than rendering a
@@ -128,7 +145,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
       className={`hub-root ${skinClass(skin)}`}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
-      style={{ ...skinStyle(skin), ...themeStyle(client.theme) }}
+      style={{ ...skinStyle(skin), ...themeStyle(theme) }}
     >
       <PreviewBanner
         clientId={params.id}

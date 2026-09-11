@@ -45,13 +45,17 @@ import {
 import { stepNumber } from "@/config/delivery-steps";
 import { readSkinFromImages } from "@/lib/hub/skin-vision";
 import {
+  brandFromReference,
   candidateAt,
   readCandidateSet,
   skinVariants,
+  themeFromPick,
   type SkinCandidate,
   type SkinCandidateSet,
 } from "@/lib/hub/skin-variants";
 import type { ClaudeImageInput } from "@/lib/claude-calls";
+import { faceName, type HubFace } from "@/lib/hub/faces";
+import type { ReferenceProvenance } from "@/lib/hub/theme";
 
 /**
  * The steps where a design conversation belongs.
@@ -233,7 +237,15 @@ export async function confirmSkinPick(
   clientId: string,
   slot: number,
   by: string
-): Promise<{ ok: boolean; error?: string; skin?: StoredSkin; blurb?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  skin?: StoredSkin;
+  blurb?: string;
+  /** What the pick wrote into the theme, or null when the reference read no accent or face. */
+  reference?: ReferenceProvenance | null;
+  bodyFace?: HubFace | null;
+}> {
   const { data: row, error: readErr } = await supabaseAdmin
     .from("clients")
     .select("theme, hub_skin_candidates")
@@ -257,41 +269,46 @@ export async function confirmSkinPick(
   const theme = readTheme((row as { theme?: unknown }).theme);
   const now = new Date().toISOString();
 
-  // The candidate's own slot and blurb are card furniture, not part of the skin. Stripped so
-  // hub_skin holds exactly the shape readSkin() produces and nothing extra.
+  // The candidate's own slot and blurb are card furniture, not part of the skin. readSkin()
+  // rebuilds the object field by field, so hub_skin holds exactly its shape and nothing extra,
+  // and a field added to HubSkin later cannot be forgotten in a hand-written copy here.
   const skin: StoredSkin = {
-    template: picked.template,
-    bg: picked.bg,
-    fg: picked.fg,
-    muted: picked.muted,
-    faint: picked.faint,
-    rule: picked.rule,
-    card: picked.card,
-    band: picked.band,
-    bandFg: picked.bandFg,
-    headingFamily: picked.headingFamily,
-    radius: picked.radius,
-    measure: picked.measure,
-    baseSize: picked.baseSize,
+    ...readSkin(picked),
     source: "screenshot",
     sourceNote: picked.sourceNote ? picked.sourceNote.slice(0, 300) : null,
     updatedAt: now,
     updatedBy: by,
   };
 
+  // ‼️ AND THE REFERENCE'S ACCENT AND BODY FACE GO INTO THE THEME, IN THIS SAME UPDATE.
+  // Their one home is the theme, not the skin, and this is the one place that writes a value
+  // there that did not come off the client's own site. It may because a pick is a person looking
+  // at a rendered reference and saying "make it look like that", which is a different claim from
+  // "this is their brand", and it is recorded as that claim in theme.fromReference, with what it
+  // replaced. The preview rendered exactly these values through the same brandFromReference(),
+  // so what is stored is what was seen. The reasoning is the header of skin-vision.ts.
+  const brand = brandFromReference(set as SkinCandidateSet, skin);
+  const nextTheme = themeFromPick(theme, brand, slot, by, now);
+
   const { error } = await supabaseAdmin
     .from("clients")
     .update({
       hub_skin: skin,
       hub_skin_candidates: null,
-      theme: { ...theme, confirmedAt: now, confirmedBy: by },
+      theme: { ...nextTheme, confirmedAt: now, confirmedBy: by },
     })
     .eq("id", clientId);
 
   if (error) return { ok: false, error: error.message };
 
   revalidateClientHub();
-  return { ok: true, skin, blurb: picked.blurb };
+  return {
+    ok: true,
+    skin,
+    blurb: picked.blurb,
+    reference: nextTheme === theme ? null : nextTheme.fromReference,
+    bodyFace: set?.bodyFace ?? null,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,31 +343,95 @@ export function candidatePreviewUrl(clientId: string, slot: number, kind: "hub" 
  * the exact bug that criterion names. The pick is also what closes the step, so this is the only
  * place the two are joined.
  */
+/**
+ * What was read off the reference that all three share, said once.
+ *
+ * The faces and the accent are the same in every candidate by construction (skin-variants.ts),
+ * so repeating them per candidate would be three lines saying one thing.
+ */
+function readOffLine(set: SkinCandidateSet): string | null {
+  const first = set.candidates[0];
+  const parts: string[] = [];
+  if (set.accentSuggestion) parts.push(`accent \`${set.accentSuggestion}\``);
+  if (first?.headingFace) parts.push(`headlines in ${faceName(first.headingFace)}`);
+  if (first?.subheadingFace && first.subheadingFace !== first.headingFace) {
+    parts.push(`subheadings in ${faceName(first.subheadingFace)}`);
+  }
+  if (first?.labelFace) parts.push(`labels in ${faceName(first.labelFace)}`);
+  if (set.bodyFace) parts.push(`body in ${faceName(set.bodyFace)}`);
+  return parts.length ? `*Read off it:* ${parts.join(", ")}.` : null;
+}
+
 function candidateLines(clientId: string, set: SkinCandidateSet): string[] {
   const lines: string[] = [
     ":art: *Three designs off that reference.* Nothing has changed yet.",
   ];
 
   if (set.reading) lines.push(`_${set.reading}_`);
+  const readOff = readOffLine(set);
+  if (readOff) lines.push(readOff);
   lines.push("");
 
   for (const candidate of set.candidates) {
-    lines.push(`*${candidate.slot}. ${templateInfo(candidate.template).name}* — ${candidate.blurb}`);
+    lines.push(`*${candidate.slot}. ${templateInfo(candidate.template).name}:* ${candidate.blurb}`);
     lines.push(`    ${skinLine(candidate)}`);
     lines.push(`    Hub: ${candidatePreviewUrl(clientId, candidate.slot)}`);
     lines.push(`    Reviews: ${candidatePreviewUrl(clientId, candidate.slot, "reviews")}`);
   }
 
+  // ‼️ IT SAYS BEFORE THE PICK THAT THE PICK WRITES THE THEME. Every other skin write in this
+  // file leaves the accent alone, so a pick quietly changing it would be a surprise found later on
+  // the board. Said here, where the choice is made, and again in the reply that confirms it.
+  const brand = brandFromReference(set, set.candidates[0] ?? EMPTY_SKIN);
+  const brandNote =
+    brand.accent || brand.fontFamily
+      ? ` It also writes the ${[brand.accent ? "accent" : "", brand.fontFamily ? "body font" : ""]
+          .filter(Boolean)
+          .join(" and ")} read off this reference into the Theme panel, which the previews ` +
+        "above already show."
+      : "";
+
   lines.push(
     "",
     "*Type `pick 1`, `pick 2` or `pick 3` in this thread.* That stores the design AND confirms " +
       "the theme, which is what [Done] is waiting on. Every page drafted for this client after " +
-      "that is rendered in it.",
+      `that is rendered in it.${brandNote}`,
     "",
     "Or paste another reference to replace these three, or name one of the four by hand:",
     templateMenu(),
   );
 
+  return lines;
+}
+
+/**
+ * The pick reply's account of what it wrote into the theme, and why a pick may.
+ *
+ * ‼️ OUT LOUD, WITH THE OLD VALUE. The Theme panel's accent is normally a fact read off the
+ * client's own site and nothing else writes it. Somebody reading this thread next week needs to
+ * see that a pick did, why, and what to type to put it back.
+ */
+function referenceBrandLines(ref: ReferenceProvenance | null, bodyFace: HubFace | null): string[] {
+  if (!ref) return [];
+  const lines: string[] = [];
+  if (ref.accent) {
+    lines.push(
+      `*Accent:* \`${ref.accent}\`${ref.replacedAccent ? `, replacing \`${ref.replacedAccent}\`` : ""}.`
+    );
+  }
+  if (ref.fontFamily) {
+    lines.push(
+      `*Body font:* ${bodyFace ? faceName(bodyFace) : "the reference's"}` +
+        `${ref.replacedFontFamily ? `, replacing \`${ref.replacedFontFamily}\`` : ""}.`
+    );
+  }
+  if (lines.length === 0) return [];
+  lines.push(
+    `${lines.length > 1 ? "Both are" : "That is"} in the Theme panel now. That panel is normally ` +
+      "filled from the client's own site and nothing else writes it. A pick is different: you " +
+      "looked at a rendered reference and said make it look like that, so the pick wrote it and " +
+      "recorded where it came from. To undo it, type the old value back in the Theme panel."
+  );
   return lines;
 }
 
@@ -362,8 +443,8 @@ function menuMessage(current: StoredSkin, clientId: string): string {
     templateMenu(),
     "",
     "Or paste a screenshot of a page whose look you want and I will read the colours, the " +
-      "corner radius, the column width and the text size off it, and pick the closest template. " +
-      "`skin reset` puts it back to Document with no overrides.",
+      "accent, the fonts, the corner radius, the column width and the text size off it, and " +
+      "offer three versions of it. `skin reset` puts it back to Document with no overrides.",
     ...previewLines(clientId),
   ].join("\n");
 }
@@ -390,9 +471,9 @@ export async function designSection(clientId: string): Promise<string[]> {
     skinLine(skin),
     "*Do not like how it looks?* Reply in this thread:",
     templateMenu(),
-    "Or paste a screenshot of a page whose look you want. I will read the colours, the corner " +
-      "radius, the column width and the text size off it and offer THREE versions of it. " +
-      "Nothing is applied until you type `pick 1`, `pick 2` or `pick 3`.",
+    "Or paste a screenshot of a page whose look you want. I will read the colours, the accent, " +
+      "the fonts, the corner radius, the column width and the text size off it and offer THREE " +
+      "versions of it. Nothing is applied until you type `pick 1`, `pick 2` or `pick 3`.",
   ];
 }
 
@@ -461,9 +542,11 @@ export async function handleSkinThreadReply(input: {
     const stored = res.skin as StoredSkin;
     return {
       message: [
-        `:white_check_mark: *Design ${slot} it is* — ${res.blurb ?? ""}`.trimEnd() + ".",
+        `:white_check_mark: *Design ${slot} it is:* ${res.blurb ?? ""}`.trimEnd() + ".",
         skinLine(stored),
         "",
+        ...referenceBrandLines(res.reference ?? null, res.bodyFace ?? null),
+        ...(res.reference ? [""] : []),
         // ‼️ IT SAYS WHAT THE PICK DID TO THE CONFIRMATION, OUT LOUD. Every other skin write in
         // this file UN-confirms the theme, and somebody reading this thread a week later needs to
         // know why this one did the opposite. The reasoning is in confirmSkinPick's header and in
@@ -686,6 +769,7 @@ export async function handleSkinScreenshot(input: {
     generatedBy: input.by,
     reading: read.reading ?? null,
     accentSuggestion: read.accentSuggestion ?? null,
+    bodyFace: read.bodyFace ?? null,
     candidates,
   };
 
@@ -722,17 +806,9 @@ export async function handleSkinScreenshot(input: {
     );
   }
 
-  // The accent is REPORTED and never written, and that is unchanged by there being three of
-  // them. See skin-vision.ts: the accent is the client's brand and its whole value is that it
-  // came off their own homepage, not off a reference they liked the look of.
-  if (read.accentSuggestion) {
-    lines.push(
-      "",
-      `The reference's own accent looks like \`${read.accentSuggestion}\`. It was NOT applied to ` +
-        "any of the three: the accent is the client's brand colour and it lives in the Theme " +
-        "panel, where it is recorded as read off their site. Paste it there if you want it."
-    );
-  }
+  // The accent and body face used to be REPORTED here and written nowhere. They are now shown in
+  // all three previews and written by the pick, and candidateLines() says so above the choice.
+  // See skin-vision.ts's header for why a pick may write into the theme and nothing else here does.
 
   return { message: lines.join("\n") };
 }

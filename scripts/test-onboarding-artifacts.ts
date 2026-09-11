@@ -3034,6 +3034,185 @@ import { pageSlug } from "../src/lib/hub/pages";
 }
 
 
+// ---- SKIN DESIGN TOKENS (2026-09-11) ----------------------------------------
+//
+// The screenshot lane was widened: a pick now writes the reference's accent and body face into
+// the THEME, and the skin grew face keys. The SkinCandidate check above greps only the text
+// between `interface SkinCandidate` and `interface SkinCandidateSet`, and SkinCandidate EXTENDS
+// StoredSkin, so every field this change added to HubSkin sits outside it. It is not edited and
+// still passes. It is RESTATED here, deliberately, over every type the widening touched.
+import * as skinT from "../src/lib/hub/skin";
+import * as facesT from "../src/lib/hub/faces";
+import * as themeT from "../src/lib/hub/theme";
+import * as variantsT from "../src/lib/hub/skin-variants";
+import * as visionT from "../src/lib/hub/skin-vision";
+{
+  const srcOf = (...p: string[]): string =>
+    fs.readFileSync(path.join(__dirname, "..", "src", ...p), "utf8");
+
+  /** One interface's body, comments stripped, braces matched so a nested object cannot end it. */
+  const interfaceBody = (src: string, name: string): string => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const start = code.search(new RegExp(`interface ${name}\\b`));
+    if (start === -1) return "";
+    const open = code.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < code.length; i += 1) {
+      if (code[i] === "{") depth += 1;
+      if (code[i] === "}" && --depth === 0) return code.slice(open, i + 1);
+    }
+    return "";
+  };
+
+  // Same pattern as the check above, word for word, so the two cannot mean different things.
+  const MARKUP = /\b(html|markup|body|headline|sections?|order|css)\s*[?]?\s*:/i;
+  // ‼️ AND THE WHOSE-PAGE LINE, AS A TYPE. skin-vision.ts's header says a reference may give us
+  // tokens and never an asset, a logo or a link. A field whose name carries one of those words is
+  // how that would start, so the skin side of the schema may not have one.
+  const ASSET = /\b\w*(url|src|href|image|asset|logo)\w*\s*[?]?\s*:/i;
+
+  const types: Array<[string[], string, boolean]> = [
+    [["lib", "hub", "skin.ts"], "HubSkin", true],
+    [["lib", "hub", "skin.ts"], "StoredSkin", true],
+    [["lib", "hub", "skin-vision.ts"], "SkinRead", true],
+    [["lib", "hub", "skin-variants.ts"], "SkinCandidateSet", true],
+    // The theme legitimately has logoUrl, so only the markup half applies to it.
+    [["lib", "hub", "theme.ts"], "StoredTheme", false],
+    [["lib", "hub", "theme.ts"], "ReferenceProvenance", false],
+  ];
+  for (const [file, name, assetsBanned] of types) {
+    const body = interfaceBody(srcOf(...file), name);
+    ok(`${name} exists to be checked`, body.length > 2);
+    ok(`${name} cannot carry markup, copy or a section order`, !MARKUP.test(body));
+    if (assetsBanned) ok(`${name} cannot carry a URL, an image or a logo`, !ASSET.test(body));
+  }
+
+  // ── Faces: a key from our list, never a name from a model ─────────────────
+  for (const face of facesT.HUB_FACES) {
+    const stack = facesT.FACE_STACKS[face];
+    // ‼️ THE PICK WRITES THE BODY STACK INTO theme.fontFamily, WHICH IS GATED BY safeFontFamily().
+    // A stack that fails it is dropped on the way in and the pick silently applies no font.
+    eq(`the ${face} stack survives safeFontFamily unchanged`, themeT.safeFontFamily(stack), stack);
+    ok(`the ${face} face is in the catalogue the prompt is built from`,
+      facesT.FACE_CATALOGUE.some((f) => f.key === face));
+  }
+  eq("an unlisted face is refused, not matched to a nearby one", skinT.readSkin({ headingFace: "comic-sans" }).headingFace, null);
+  eq("a listed face is kept", skinT.readSkin({ labelFace: "mono" }).labelFace, "mono");
+  eq("a face carrying a CSS breakout is refused", skinT.readSkin({ headingFace: "mono; } body {" }).headingFace, null);
+
+  const faced = skinT.skinStyle(
+    skinT.readSkin({ headingFace: "system", subheadingFace: "serif", labelFace: "mono", headingFamily: "Georgia, serif" })
+  ) as Record<string, string>;
+  eq("a heading face wins over the legacy free-text stack", faced["--hub-heading-family"], facesT.FACE_STACKS.system);
+  eq("the subheading face has its own variable", faced["--hub-subheading-family"], facesT.FACE_STACKS.serif);
+  eq("the label face has its own variable", faced["--hub-label-family"], facesT.FACE_STACKS.mono);
+  ok("every key is still a --hub-* custom property", Object.keys(faced).every((k) => k.startsWith("--hub-")));
+  ok("the skin still never writes a body font", !("fontFamily" in faced));
+
+  const hubCssT = srcOf("app", "hub", "[host]", "hub.css");
+  for (const v of ["--hub-subheading-family", "--hub-label-family", "--hub-on-accent"]) {
+    ok(`hub.css declares ${v} on .hub-root`, hubCssT.includes(`${v}:`));
+  }
+
+  // ── The vision lane cannot hand CSS a font name ────────────────────────────
+  const coerced = visionT._coerceForTest({
+    headingFamily: 'Poppins; } .hub-root { display: none } .x {',
+    headingFace: " System ",
+  }) as Record<string, unknown>;
+  eq("coerce drops any free-text font stack the model sends", coerced.headingFamily, null);
+  eq("and normalises the case of a face key", coerced.headingFace, "system");
+  eq("an absent face reads as null, not undefined", coerced.bodyFace, null);
+
+  // ── The pick's brand write: only what was read, never the logo, and on the record ──
+  const brand = variantsT.brandFromReference({ accentSuggestion: "#2dd4bf", bodyFace: "system" }, { bg: "#0a0a0a" });
+  eq("the reference's accent is what gets written", brand.accent, "#2dd4bf");
+  eq("the body face becomes its code-owned stack", brand.fontFamily, facesT.FACE_STACKS.system);
+  ok(
+    "the soft tint is mixed onto THIS page's dark ground, so it is darker than the accent",
+    typeof brand.accentSoft === "string" && brand.accentSoft < "#2dd4bf" && brand.accentSoft !== "#2dd4bf"
+  );
+  eq(
+    "a stored accent that is not a hex is not written",
+    variantsT.brandFromReference({ accentSuggestion: "red; }", bodyFace: null }, { bg: null }).accent,
+    null
+  );
+
+  const before: themeT.StoredTheme = {
+    ...themeT.EMPTY_THEME,
+    logoUrl: "https://example.com/logo.png",
+    accent: "#00705f",
+    accentSoft: "#e6f3f0",
+  };
+  const after = variantsT.themeFromPick(before, brand, 2, "test", "2026-09-11T00:00:00.000Z");
+  eq("the pick never touches the logo", after.logoUrl, before.logoUrl);
+  eq("the accent is the reference's", after.accent, "#2dd4bf");
+  eq("the soft tint came with it rather than staying paired with the old accent", after.accentSoft, brand.accentSoft);
+  eq("it records what it wrote", after.fromReference?.accent, "#2dd4bf");
+  eq("and what it replaced, so it can be typed back", after.fromReference?.replacedAccent, "#00705f");
+  ok("and that it came from a pick", /design 2/.test(after.fromReference?.from ?? ""));
+  ok(
+    "a reference that read nothing writes nothing and claims nothing",
+    variantsT.themeFromPick(before, { accent: null, accentSoft: null, fontFamily: null }, 1, "test", "x") === before
+  );
+
+  const round = themeT.readTheme(JSON.parse(JSON.stringify({ ...after, fromReference: { ...after.fromReference, replacedAccent: "red; }" } })));
+  eq("the provenance survives the jsonb round trip", round.fromReference?.accent, "#2dd4bf");
+  eq("and every colour in it is re-gated on the way back", round.fromReference?.replacedAccent, null);
+
+  // ── Text on an accent is computed, and readable ────────────────────────────
+  eq("dark text on a bright teal", themeT.onAccent("#2dd4bf"), "#0a0a0a");
+  eq("white text on the default green", themeT.onAccent("#00705f"), "#ffffff");
+  eq(
+    "themeStyle writes it beside the accent",
+    (themeT.themeStyle({ logoUrl: null, accent: "#2dd4bf", accentSoft: null, fontFamily: null }) as Record<string, string>)["--hub-on-accent"],
+    "#0a0a0a"
+  );
+
+  // ── All three candidates carry the faces that were read ────────────────────
+  const facedRead = {
+    template: "bold" as const,
+    reading: "dark, teal accent, system sans headings, mono labels",
+    bg: "#0a0a0a", fg: "#e8e8e8", muted: "#999999", faint: "#666666", rule: "#333333",
+    card: "#1a1a1a", band: "#0a0a0a", bandFg: "#e8e8e8", headingFamily: null,
+    radius: 10, measure: 48, baseSize: 16, accentSuggestion: "#2dd4bf",
+    headingFace: "system" as const, subheadingFace: "system" as const, labelFace: "mono" as const, bodyFace: "system" as const,
+  };
+  for (const v of variantsT.skinVariants(facedRead, "test")) {
+    eq(`candidate ${v.slot} keeps the heading face that was read`, v.headingFace, "system");
+    eq(`candidate ${v.slot} keeps the label face that was read`, v.labelFace, "mono");
+  }
+
+  // ── The stale set is still pickable: confirmed, not assumed ────────────────
+  // SRT's hub_skin_candidates on 2026-09-11 predates faces. readCandidateSet() is permissive about
+  // missing fields (readSkin fills them with null), so the set does NOT disappear on this change:
+  // it stays pickable, renders as it did, and its set-level accent is applied on a pick.
+  const stale = variantsT.readCandidateSet({
+    reading: "Dark website for a medical marketing agency with a bright teal accent.",
+    accentSuggestion: "#2dd4bf",
+    candidates: [
+      { slot: 1, template: "bold", bg: "#0a0a0a", fg: "#e8e8e8", radius: 4, measure: 48, baseSize: 16, source: "screenshot", headingFamily: null },
+    ],
+  });
+  eq("a set stored before faces existed still reads", stale?.candidates.length, 1);
+  eq("with no body face, which is what it has", stale?.bodyFace, null);
+  eq("and its accent is still there for the pick", stale?.accentSuggestion, "#2dd4bf");
+
+  // ── The pick still writes skin, theme and confirmation in ONE update ───────
+  const hubSkinSrcT = srcOf("lib", "clients", "hub-skin.ts");
+  const pickStart = hubSkinSrcT.indexOf("export async function confirmSkinPick");
+  const pickSrcT = hubSkinSrcT.slice(pickStart, hubSkinSrcT.indexOf("\nexport ", pickStart + 1));
+  ok(
+    "the reference's brand lands in the same update as the skin and the confirmation",
+    /\.update\(\{[\s\S]*?hub_skin:\s*skin[\s\S]*?theme:\s*\{\s*\.\.\.nextTheme,\s*confirmedAt:\s*now/.test(pickSrcT)
+  );
+  ok("through the one function the preview renders with", /brandFromReference\(/.test(pickSrcT));
+  ok(
+    "the screenshot reply no longer says the accent was not applied",
+    !/was NOT applied/.test(hubSkinSrcT)
+  );
+}
+
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 //

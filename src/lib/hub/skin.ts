@@ -13,6 +13,16 @@
 // puzzle that gets resolved differently in three renderers. If you want to change a client's
 // accent, that is the Theme panel, and it stays that way.
 //
+// ‼️ ONE THING WRITES A REFERENCE'S ACCENT AND BODY FACE, AND IT WRITES THEM INTO THE THEME.
+// confirmSkinPick() (clients/hub-skin.ts), since 2026-09-11. The skin still has no accent and no
+// body font; a pick puts them in their one home and records it as theme.fromReference. Why a pick
+// is allowed to, and where the line sits on whose page a reference may be, is the header of
+// skin-vision.ts. Short version: tokens from any page, assets and words from the client's own.
+//
+// ‼️ FONTS ARE KEYS. headingFace, subheadingFace and labelFace name one of the ten faces in
+// faces.ts, and skinStyle() looks the stack up. `headingFamily` is the older free-text field,
+// still honoured for rows that have one, and no longer written by the screenshot lane.
+//
 // ‼️ THE MARKUP IS NOT THEMABLE AND MUST NEVER BECOME THEMABLE.
 // Every field below lands in a CSS custom property or a class name. Nothing here is markup,
 // nothing here is copy, and there is nowhere to put either. That is not squeamishness: the
@@ -27,6 +37,7 @@
 // anything that does not match is discarded rather than cleaned up and used anyway.
 
 import { safeFontFamily } from "./theme";
+import { safeFace, faceStack, type HubFace } from "./faces";
 
 /** The templates that exist. Adding one is a code change, on purpose. */
 export const HUB_TEMPLATES = ["document", "clinic", "editorial", "bold"] as const;
@@ -104,7 +115,14 @@ export interface HubSkin {
   /** The header band, where a template has one. */
   band: string | null;
   bandFg: string | null;
+  /** Legacy free-text stack. A headingFace, when set, wins over it. */
   headingFamily: string | null;
+  /** The h1's face, by key. See faces.ts: a model supplies the key, never the stack. */
+  headingFace: HubFace | null;
+  /** h2 and h3. Null means "the same as the heading", which hub.css declares as the default. */
+  subheadingFace: HubFace | null;
+  /** The eyebrow, the NAP labels and the footer line. Where a mono or small-caps label lives. */
+  labelFace: HubFace | null;
   /** px. Corner radius for cards, inputs and buttons across the hub AND the review tool. */
   radius: number | null;
   /** rem. The measure: how wide the column is allowed to get. */
@@ -139,6 +157,9 @@ export const EMPTY_SKIN: StoredSkin = {
   band: null,
   bandFg: null,
   headingFamily: null,
+  headingFace: null,
+  subheadingFace: null,
+  labelFace: null,
   radius: null,
   measure: null,
   baseSize: null,
@@ -199,6 +220,11 @@ export function readSkin(raw: unknown): StoredSkin {
     band: safeSkinColor(s.band),
     bandFg: safeSkinColor(s.bandFg),
     headingFamily: safeFontFamily(s.headingFamily),
+    // A face is a key or nothing. An unknown name is refused rather than matched to a nearby one,
+    // for the reason safeNumber gives: a repaired value hides that the reader got it wrong.
+    headingFace: safeFace(s.headingFace),
+    subheadingFace: safeFace(s.subheadingFace),
+    labelFace: safeFace(s.labelFace),
     radius: safeNumber(s.radius, RADIUS_RANGE[0], RADIUS_RANGE[1]),
     measure: safeNumber(s.measure, MEASURE_RANGE[0], MEASURE_RANGE[1]),
     baseSize: safeNumber(s.baseSize, BASE_SIZE_RANGE[0], BASE_SIZE_RANGE[1]),
@@ -246,7 +272,13 @@ export function skinStyle(skin: StoredSkin | null): React.CSSProperties {
   if (skin.card) style["--hub-card"] = skin.card;
   if (skin.band) style["--hub-band"] = skin.band;
   if (skin.bandFg) style["--hub-band-fg"] = skin.bandFg;
-  if (skin.headingFamily) style["--hub-heading-family"] = skin.headingFamily;
+  // The stacks come from faces.ts, keyed by a validated face. Nothing a model wrote is in them.
+  const heading = faceStack(skin.headingFace) ?? skin.headingFamily;
+  if (heading) style["--hub-heading-family"] = heading;
+  const subheading = faceStack(skin.subheadingFace);
+  if (subheading) style["--hub-subheading-family"] = subheading;
+  const label = faceStack(skin.labelFace);
+  if (label) style["--hub-label-family"] = label;
   if (skin.radius !== null) style["--hub-radius"] = `${skin.radius}px`;
   if (skin.measure !== null) style["--hub-measure"] = `${skin.measure}rem`;
   if (skin.baseSize !== null) style["--hub-base"] = `${skin.baseSize}px`;
@@ -270,7 +302,9 @@ export function skinOverrides(skin: StoredSkin): string[] {
   const out: string[] = [];
   if (skin.bg || skin.fg || skin.card || skin.band) out.push("colours");
   if (skin.rule || skin.muted || skin.faint) out.push("greys");
-  if (skin.headingFamily) out.push("heading font");
+  if (skin.headingFamily || skin.headingFace || skin.subheadingFace || skin.labelFace) {
+    out.push("fonts");
+  }
   if (skin.radius !== null) out.push("corners");
   if (skin.measure !== null) out.push("width");
   if (skin.baseSize !== null) out.push("text size");

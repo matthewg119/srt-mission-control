@@ -41,6 +41,14 @@ import {
   type StoredSkin,
 } from "./skin";
 import type { SkinRead } from "./skin-vision";
+import { faceStack, safeFace, type HubFace } from "./faces";
+import {
+  mixHex,
+  safeColor,
+  type HubTheme,
+  type ReferenceProvenance,
+  type StoredTheme,
+} from "./theme";
 
 /** How many go on the card. Three is Matthew's number and also as many as anyone compares. */
 export const VARIANT_COUNT = 3;
@@ -58,8 +66,17 @@ export interface SkinCandidateSet {
   generatedBy: string;
   /** The model's one-line reading of the reference, carried once rather than per candidate. */
   reading: string | null;
-  /** The accent the reference appears to use. REPORTED, never applied. See skin-vision.ts. */
+  /**
+   * The accent the reference uses. Shown in all three previews and written INTO THE THEME by the
+   * pick, with its provenance. See the header of skin-vision.ts for why a pick may and nothing
+   * else here does. The name predates that and is kept so stored sets still read.
+   */
   accentSuggestion: string | null;
+  /**
+   * The reference's body face. Carried once rather than per candidate, like the accent, because
+   * it goes to the theme and not the skin: body text is brand, and the skin has no body font.
+   */
+  bodyFace: HubFace | null;
   candidates: SkinCandidate[];
 }
 
@@ -123,6 +140,9 @@ function baseSkinFrom(read: SkinRead): HubSkin {
     band: read.band,
     bandFg: read.bandFg,
     headingFamily: read.headingFamily,
+    headingFace: read.headingFace ?? null,
+    subheadingFace: read.subheadingFace ?? null,
+    labelFace: read.labelFace ?? null,
     radius: read.radius,
     measure: read.measure,
     baseSize: read.baseSize,
@@ -143,6 +163,10 @@ function baseSkinFrom(read: SkinRead): HubSkin {
  * off the reference, or null where the model could not read one. Making up a palette for a
  * variation would be the one thing skin-vision.ts refuses, arriving by the back door: a colour
  * with no provenance, on a client's own domain, that somebody would then have to defend.
+ *
+ * ‼️ NOR ARE THE FACES. All three carry the faces as read, for the same reason: they are the
+ * evidence, and a variation that swapped the type would be a different reference, not a
+ * different answer to this one. The three differ in shape, never in what was read.
  */
 export function skinVariants(read: SkinRead, by: string): SkinCandidate[] {
   const base = baseSkinFrom(read);
@@ -167,7 +191,7 @@ export function skinVariants(read: SkinRead, by: string): SkinCandidate[] {
         radius: clamp(Math.round(radius + 8), RADIUS.min, RADIUS.max),
         measure: clamp(Math.round(measure + 4), MEASURE.min, MEASURE.max),
       },
-      blurb: "softer: same colours, rounder corners, a wider column",
+      blurb: "softer: same colours and type, rounder corners, a wider column",
     },
     {
       skin: {
@@ -177,7 +201,7 @@ export function skinVariants(read: SkinRead, by: string): SkinCandidate[] {
         measure: clamp(Math.round(measure - 6), MEASURE.min, MEASURE.max),
         baseSize: clamp(Math.round(baseSize + 1), BASE.min, BASE.max),
       },
-      blurb: "sharper: same colours, square corners, narrower and larger",
+      blurb: "sharper: same colours and type, square corners, narrower and larger",
     },
   ];
 
@@ -225,8 +249,99 @@ export function readCandidateSet(raw: unknown): SkinCandidateSet | null {
     generatedBy: typeof bag.generatedBy === "string" ? bag.generatedBy : "",
     reading: typeof bag.reading === "string" ? bag.reading : null,
     accentSuggestion: typeof bag.accentSuggestion === "string" ? bag.accentSuggestion : null,
+    // A set stored before faces existed has none, and reads as "no body face read", which is
+    // what it is. It stays pickable: see the stale-set note in docs/prompts or the brief.
+    bodyFace: safeFace(bag.bodyFace),
     candidates,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The brand half of a reference: what a pick writes into the THEME
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The accent, its soft tint and the body stack a reference would put in the theme. */
+export interface ReferenceBrand {
+  accent: string | null;
+  accentSoft: string | null;
+  fontFamily: string | null;
+}
+
+/**
+ * How much of the accent goes into accentSoft, over the page's own ground.
+ *
+ * Low, because the soft tint sits behind reading text (a note, a highlighted sentence), and on
+ * srtagency.com's near-black ground anything stronger turns a highlight into a slab of teal.
+ */
+const SOFT_WEIGHT = 0.16;
+
+/**
+ * What a reference would write into the theme, derived from the set and the candidate's ground.
+ *
+ * ‼️ ONE FUNCTION, CALLED BY THE PREVIEW AND BY THE PICK, AND THAT IS THE WHOLE POINT OF IT.
+ * The candidate preview renders these values and confirmSkinPick() stores them. If the two
+ * computed them separately, the design somebody picked would not be the design they saw.
+ *
+ * Every value is re-gated here (safeColor, a face key to a code-owned stack) because the set is
+ * read back out of a jsonb column, and a colour does not become trustworthy by having been stored.
+ */
+export function brandFromReference(
+  set: Pick<SkinCandidateSet, "accentSuggestion" | "bodyFace">,
+  skin: Pick<HubSkin, "bg">
+): ReferenceBrand {
+  const accent = safeColor(set.accentSuggestion);
+  return {
+    accent,
+    // A null ground means the template's own, which for every template is white or near it.
+    accentSoft: accent ? mixHex(accent, skin.bg ?? "#ffffff", SOFT_WEIGHT) : null,
+    fontFamily: faceStack(safeFace(set.bodyFace)),
+  };
+}
+
+/**
+ * A theme with a reference's brand laid over it. Only what was READ moves; the logo never does.
+ *
+ * Generic so the preview can apply it to the HubTheme it renders and the pick to the StoredTheme
+ * it writes, with one precedence rule between them.
+ */
+export function withReferenceBrand<T extends HubTheme>(theme: T, brand: ReferenceBrand): T {
+  return {
+    ...theme,
+    accent: brand.accent ?? theme.accent,
+    // The soft tint belongs to the accent it was mixed from. A new accent brings its own; no new
+    // accent leaves the old pair together.
+    accentSoft: brand.accent ? brand.accentSoft : theme.accentSoft,
+    fontFamily: brand.fontFamily ?? theme.fontFamily,
+  };
+}
+
+/**
+ * The theme a pick stores: the brand laid over it, and a record of exactly what changed.
+ *
+ * Returns the theme UNCHANGED, provenance and all, when the reference read no accent and no body
+ * face. A pick that wrote nothing must not claim to have written something.
+ */
+export function themeFromPick(
+  stored: StoredTheme,
+  brand: ReferenceBrand,
+  slot: number,
+  by: string,
+  at: string
+): StoredTheme {
+  if (!brand.accent && !brand.fontFamily) return stored;
+
+  const provenance: ReferenceProvenance = {
+    from: `a reference screenshot, design ${slot}`,
+    at,
+    by,
+    accent: brand.accent,
+    fontFamily: brand.fontFamily,
+    replacedAccent: brand.accent && stored.accent !== brand.accent ? stored.accent : null,
+    replacedFontFamily:
+      brand.fontFamily && stored.fontFamily !== brand.fontFamily ? stored.fontFamily : null,
+  };
+
+  return { ...withReferenceBrand(stored, brand), fromReference: provenance };
 }
 
 /** The candidate a person typed, or null. Out of range and "not a number" are one answer. */
