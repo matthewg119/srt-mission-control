@@ -134,6 +134,35 @@ export const CLIENT_TOOLS = [
       required: ["client"],
     },
   },
+  // ── The workflows, which are the one thing here that is not a read ──────────
+  {
+    name: "list_client_workflows",
+    description:
+      "The workflows that can be run for any client, with what each one needs before it can run. A workflow is written once and works for every client.",
+    input_schema: { type: "object" as const, properties: {}, required: [] as string[] },
+  },
+  {
+    name: "run_client_workflow",
+    description:
+      "Start a workflow for one client. It runs in the background and posts its DRAFTS into that client's Slack thread; nothing it produces is sent or published. Returns as soon as it has started, so report that it is running rather than claiming it is finished.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ...CLIENT_ARG,
+        workflow: { type: "string", description: "The workflow key from list_client_workflows." },
+      },
+      required: ["client", "workflow"],
+    },
+  },
+  {
+    name: "get_client_workflow_runs",
+    description: "What has been run for a client, newest first: which workflow, whether it finished, and what it produced.",
+    input_schema: {
+      type: "object" as const,
+      properties: { ...CLIENT_ARG, limit: { type: "number", description: "How many runs. Default 10." } },
+      required: ["client"],
+    },
+  },
 ];
 
 export const CLIENT_TOOL_NAMES = new Set(CLIENT_TOOLS.map((t) => t.name));
@@ -163,6 +192,11 @@ function isRefusal(v: unknown): v is ToolExecutionResult {
 
 export async function executeClientTool(toolName: string, input: Input): Promise<ToolExecutionResult> {
   try {
+    if (toolName === "list_client_workflows") {
+      const { listClientWorkflows } = await import("./clients/workflows/registry");
+      return result({ tool: "list_client_workflows", workflows: listClientWorkflows() });
+    }
+
     if (toolName === "find_client") {
       const query = s(input.query);
       if (!query) return fail("Say what to search for.");
@@ -237,6 +271,38 @@ export async function executeClientTool(toolName: string, input: Input): Promise
           limit: n(input.limit) ?? 50,
         });
         return result({ tool: "search_client_events", client: client.name, count: events.length, events });
+      }
+
+      case "run_client_workflow": {
+        const key = s(input.workflow);
+        if (!key) return fail("Say which workflow. list_client_workflows has the keys.");
+        const { startClientWorkflow } = await import("./clients/workflows/registry");
+        const started = await startClientWorkflow({
+          clientId: client.id,
+          workflowKey: key,
+          requestedBy: "the assistant",
+        });
+        if (!started.ok) return fail(started.error);
+        return result({
+          tool: "run_client_workflow",
+          client: client.name,
+          run_id: started.runId,
+          workflow: started.label,
+          status: "running",
+          note:
+            `The ${started.label} workflow is running for ${client.name}. Its drafts post into that ` +
+            "client's Slack thread when it finishes. Say it has STARTED, not that it is done, and " +
+            "do not describe output you have not seen.",
+        });
+      }
+
+      case "get_client_workflow_runs": {
+        const { workflowRuns } = await import("./clients/workflows/registry");
+        return result({
+          tool: "get_client_workflow_runs",
+          client: client.name,
+          runs: await workflowRuns(client.id, n(input.limit) ?? 10),
+        });
       }
 
       default:
