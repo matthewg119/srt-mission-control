@@ -111,14 +111,14 @@ interface Props {
 // The browser's SpeechRecognition keeps the audio on her phone. Nothing reaches our servers,
 // nothing is recorded, and there is nothing to delete afterwards.
 //
-// ‼️ AND NO MediaRecorder, EVER, NOT EVEN TO ASK FOR THE PERMISSION. The priming screen below
-// primes by constructing a recogniser and aborting it in the same tick, or by asking
-// getUserMedia and stopping every track immediately. Neither holds an open stream, because an
-// open microphone behind a spinner is a recording device by every definition that matters.
+// ‼️ AND NO MediaRecorder, EVER, NOT EVEN TO ASK FOR THE PERMISSION. The Next tap off the stars
+// asks getUserMedia and stops every track the instant the browser answers (see leaveStars()).
+// Nothing holds an open stream, because an open microphone behind a spinner is a recording
+// device by every definition that matters.
 //
 // Feature-detected on the client only. Chrome and Safari have it behind two different names;
 // Firefox has neither. Where it is absent the button is simply not rendered, the priming screen
-// is SKIPPED ENTIRELY rather than shown and dismissed, and the keyboard is exactly as it was —
+// is SKIPPED ENTIRELY rather than shown and dismissed, and the keyboard is exactly as it was:
 // no fallback, no upload path, no apology, and no permission asked for a thing that cannot run.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -154,14 +154,16 @@ function speechRecognition(): SpeechRecognitionCtor | null {
 const BUBBLE_GAP_MS = { min: 400, max: 900 } as const;
 
 /**
- * How long the priming screen waits before it offers a way past.
+ * How long the priming screen stays up if the browser never answers the microphone request.
  *
- * ‼️ IT IS A FLOOR, NOT A CONDITION. It runs whether the permission was granted, denied,
- * dismissed, blocked by policy, or never asked because the browser has no such API. Anything
- * that only appears on success is a wall for everybody else, and the one thing a page held by a
- * customer doing somebody a favour cannot be is stuck.
+ * ‼️ getUserMedia IS ALLOWED TO STAY PENDING FOREVER, AND SOME BROWSERS DO. Chrome's quiet
+ * permission UI (a crossed-out icon in the address bar, no box at all) and some in-app webviews
+ * leave the promise unsettled until somebody interacts with a prompt she may never see. Anything
+ * that only moves on when the browser answers is a wall for those people, and the one thing a
+ * page held by a customer doing somebody a favour cannot be is stuck. Started from the Next tap,
+ * cleared the moment the promise settles, and it moves her to the chat on its own.
  */
-const PRIMING_ESCAPE_MS = 3000;
+const PRIMING_ESCAPE_MS = 6000;
 
 type Stage = "stars" | "priming" | "chat";
 
@@ -236,8 +238,11 @@ export function ReviewClient({
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [typing, setTyping] = useState(false);
   const [composed, setComposed] = useState("");
-  const [micDecided, setMicDecided] = useState(false);
-  const [escapeReady, setEscapeReady] = useState(false);
+  // True from the Next tap until the browser answers the microphone request. A second tap while
+  // it is true must not open a second request. See leaveStars().
+  const askingMicRef = useRef(false);
+  // Cleared on unmount, so a permission answer that lands after she has left sets no state.
+  const aliveRef = useRef(false);
 
   // ‼️ THE COMPOSER'S VALUE, MIRRORED IN A REF, AND IT IS NOT A CONVENIENCE. SpeechRecognition's
   // onend fires outside React's world, long after the render that installed it. Reading the text
@@ -260,9 +265,11 @@ export function ReviewClient({
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    aliveRef.current = true;
     setMicAvailable(speechRecognition() !== null);
     const pending = timers.current;
     return () => {
+      aliveRef.current = false;
       recognitionRef.current?.stop();
       recognitionRef.current = null;
       for (const t of pending) clearTimeout(t);
@@ -326,84 +333,66 @@ export function ReviewClient({
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [bubbles, typing]);
 
-  // ── The priming screen ─────────────────────────────────────────────────────
-  //
-  // Two ways out and they race: she grants (or refuses) and the permission query tells us, or
-  // the timer runs out. Whichever happens first, she moves on.
-  useEffect(() => {
-    if (stage !== "priming") return;
-
-    let live = true;
-
-    // ‼️ PRIME WITHOUT HOLDING ANYTHING OPEN. Start a recogniser and abort it in the same tick.
-    // The browser shows its permission prompt on start(); abort() tears the session down before
-    // a single result can arrive. Nothing is captured, nothing is buffered, nothing is kept.
-    const Ctor = speechRecognition();
-    if (Ctor) {
-      try {
-        const probe = new Ctor();
-        probe.lang = language === "es" ? "es-ES" : "en-US";
-        probe.onresult = null;
-        probe.onend = null;
-        probe.onerror = null;
-        probe.start();
-        if (probe.abort) probe.abort();
-        else probe.stop();
-      } catch {
-        // A browser that refuses to start one is a browser she will answer by keyboard. The
-        // timer below is the whole recovery.
-      }
-    }
-
-    // Where the Permissions API knows, it resolves the spinner the moment she taps Allow rather
-    // than making her wait out a timer she has already satisfied. Unsupported is "unknown", not
-    // "denied": Safari has no microphone descriptor and throws on the query.
-    const perms = (navigator as unknown as {
-      permissions?: { query: (d: { name: string }) => Promise<{ state: string; onchange: (() => void) | null }> };
-    }).permissions;
-
-    if (perms?.query) {
-      perms
-        .query({ name: "microphone" })
-        .then((status) => {
-          if (!live) return;
-          const settle = () => {
-            if (!live) return;
-            if (status.state === "granted" || status.state === "denied") setMicDecided(true);
-          };
-          settle();
-          status.onchange = settle;
-        })
-        .catch(() => {
-          // Unknown. The timer is the answer.
-        });
-    }
-
-    const escape = later(() => {
-      if (live) setEscapeReady(true);
-    }, PRIMING_ESCAPE_MS);
-
-    return () => {
-      live = false;
-      clearTimeout(escape);
-    };
-  }, [stage, language, later]);
-
-  // A decision, either way, moves her on. Denial is not a failure state: the keyboard was
-  // always there and the next screen is the same screen.
-  useEffect(() => {
-    if (stage === "priming" && micDecided) setStage("chat");
-  }, [stage, micDecided]);
-
   /**
-   * Leave the stars.
+   * Leave the stars, and ask for the microphone ON THIS TAP.
+   *
+   * ‼️ THE PERMISSION IS REQUESTED INSIDE THE CLICK, NEVER ON A LATER SCREEN. Measured
+   * 2026-09-11: the old priming screen started a SpeechRecognition and aborted it in the same
+   * tick from a useEffect. Chrome never showed its prompt for that, the "waiting on microphone
+   * approval" spinner hung, and the real prompt only appeared later on "Tap and speak". A
+   * browser shows a permission box for a request made during a user gesture, so getUserMedia is
+   * called synchronously here with nothing awaited before it, and the "One moment" screen is
+   * only what she sees while that box is open. Allowed or denied, she goes straight to the chat:
+   * denial is not a failure state, the keyboard was always there and it is the same screen.
+   *
+   * ‼️ EVERY TRACK IS STOPPED THE INSTANT THE PROMISE RESOLVES, even after she has left the page,
+   * because this tool stores no voice. The stream exists only so the browser asks the question.
+   * Nothing is read from it, nothing records it, and dictate() later uses SpeechRecognition,
+   * which keeps the audio on her phone.
    *
    * ‼️ WHERE THERE IS NO SpeechRecognition THIS SKIPS THE PRIMING SCREEN ENTIRELY. Firefox has
    * neither name for the API. Showing a permission interstitial for a capability that cannot
    * run would be asking somebody to grant access to nothing, and then taking it away again.
    */
   function leaveStars() {
-    setStage(micAvailable ? "priming" : "chat");
+    if (askingMicRef.current) return;
+
+    const media = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
+    if (!micAvailable || typeof media?.getUserMedia !== "function") {
+      setStage("chat");
+      return;
+    }
+
+    let request: Promise<MediaStream>;
+    try {
+      request = media.getUserMedia({ audio: true });
+    } catch {
+      // A browser that throws instead of rejecting is a browser she will answer by keyboard.
+      setStage("chat");
+      return;
+    }
+
+    askingMicRef.current = true;
+    setStage("priming");
+
+    // Only ever moves priming to chat, so an answer that lands late cannot pull her backwards.
+    const toChat = () => {
+      if (aliveRef.current) setStage((current) => (current === "priming" ? "chat" : current));
+    };
+    const escape = later(toChat, PRIMING_ESCAPE_MS);
+    const settle = () => {
+      askingMicRef.current = false;
+      clearTimeout(escape);
+      toChat();
+    };
+
+    request.then(
+      (stream) => {
+        stream.getTracks().forEach((track) => track.stop());
+        settle();
+      },
+      () => settle()
+    );
   }
 
   function commit(value: string) {
@@ -666,13 +655,15 @@ export function ReviewClient({
       )}
 
       {!revealed && stage === "priming" && (
-        // ‼️ ONLY REACHABLE WHERE SpeechRecognition EXISTS. leaveStars() sends everyone else
-        // straight to the chat, so this screen never asks for a permission it cannot use.
+        // ‼️ ONLY REACHABLE WHERE SpeechRecognition AND getUserMedia EXIST, AND ONLY WHILE THE
+        // BROWSER'S BOX IS OPEN. leaveStars() asked on the Next tap and moves her to the chat
+        // the moment it is answered, or after PRIMING_ESCAPE_MS if it never is. This screen
+        // asks for nothing itself.
         <section className="rev-prime" aria-live="polite">
           <h2>One moment</h2>
           <p>
             Next you will speak your review. It helps us understand what our clients actually
-            need. Please accept the microphone permission on the next screen.
+            need. Please allow the microphone in the box your browser just opened.
           </p>
           <p className="rev-hint">
             Your voice stays on your phone. Nothing is recorded and nothing is sent to us. You
@@ -682,11 +673,6 @@ export function ReviewClient({
             <span className="rev-spinner" aria-hidden="true" />
             waiting on microphone approval
           </p>
-          {escapeReady && (
-            <button type="button" className="rev-primary" onClick={() => setStage("chat")}>
-              Next
-            </button>
-          )}
         </section>
       )}
 
