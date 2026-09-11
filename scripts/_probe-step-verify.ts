@@ -6,13 +6,13 @@
  * With no client id it runs the STRUCTURAL half only, which needs no database and is the half
  * worth running in a hurry:
  *
- *   1. Every one of the 33 steps has an entry in STEP_VERIFIERS, and STEP_VERIFIERS has no
+ *   1. Every one of the 41 steps has an entry in STEP_VERIFIERS, and STEP_VERIFIERS has no
  *      entry that is not a step. The Record<StepKey, Verifier> type already proves the first
  *      direction at compile time; this proves it again at runtime, which is what catches a
  *      cast or a widened map.
  *   2. The refusal and confirmation renderers never claim a tier they were not given.
  *
- * With a client id it also runs all 33 verifiers against that client and prints the verdict
+ * With a client id it also runs all 41 verifiers against that client and prints the verdict
  * table. Nothing is written: verifyStep only reads, and the one exception (dns_records re-runs
  * the resolver check) writes DNS statuses, which is the same thing the panel does on every
  * page load.
@@ -70,9 +70,17 @@ const verifierKeys = Object.keys(STEP_VERIFIERS);
 // person's approval; pre_call_pages plans one pillar and eight supports from that approved set and
 // drafts all of them in full. offer_locked moved in the same change, from the middle of the call
 // to the prep call before any of it. Keys unchanged, so no row was orphaned.
+//
+// ‼️ DOWN to 41 on 2026-09-12, for the call pack, and this is the first time the number has gone
+// backwards. presence_pdf (#6) and findings_doc (#13) are merged into call_sheet: one runner
+// generates all four documents, files them against that one step and posts them in its one
+// thread, and one verifier counts all four. Matthew: "we can merge everything that goes in the
+// call pack and keep the rest." Nothing else on the board moved. Their orphaned rows are deleted
+// AFTER the deploy by docs/2026-09-12-call-pack-orphans.sql, because loadRows and reachableCursor
+// both re-seed a client whose row count is short, so an early delete puts them straight back.
 // If you are reading this because it failed: update the number here, the prose count at the top of
 // src/config/delivery-steps.ts, and the one in step-verify.ts.
-ok(`${stepKeys.length} steps defined`, stepKeys.length === 43, `found ${stepKeys.length}, expected 43`);
+ok(`${stepKeys.length} steps defined`, stepKeys.length === 41, `found ${stepKeys.length}, expected 41`);
 
 const missing = stepKeys.filter((k) => !(k in STEP_VERIFIERS));
 ok("every step has a verifier", missing.length === 0, missing.join(", "));

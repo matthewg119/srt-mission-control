@@ -2835,10 +2835,17 @@ worse than a record idle for a fortnight.
   newer projects, so correct it per record from the Vercel dashboard.
 
 ### The audit gates the call
-`headerText` (step-board.ts) warns when `call_booked`/`call_held` is ticked while `baseline_scan`
-or `findings_doc` is not. The call is where the screenshots and the avatar decision come from,
-so holding it first means opinions instead of evidence. **Flags, never blocks** — same
-doctrine as the market-overlap check and the Day-0 gate.
+`headerText` (step-board.ts) warns when `call_booked`/`call_held` is ticked while `baseline_scan`,
+`presence_sweep_manual` or `review_audit` is not. The call is where the screenshots and the avatar
+decision come from, so holding it first means opinions instead of evidence. **Flags, never
+blocks** — same doctrine as the market-overlap check and the Day-0 gate.
+
+> It named `findings_doc` until the call pack merged that step away (2026-09-12). Re-pointing it at
+> `call_sheet` would have been the obvious move and it is wrong: that step now also waits on the
+> nine drafted pages, the hub and the question set, so the gate would warn about the baseline over
+> work that has nothing to do with it. These three are what `findings_doc` was built from, which is
+> what the gate was always really asking about. The same three keys are repeated on the
+> `call_booked` card in `step-engine.ts`.
 
 Day 30/60/90 reminders ride on `/api/cron/followup-digest` (`report-reminders.ts`) rather
 than a new cron: `vercel.json` already carries 14 entries against a Hobby plan that

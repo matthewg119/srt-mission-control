@@ -73,6 +73,13 @@ export interface VerifyCtx {
     output_ref: string | null;
     error_detail: string | null;
     slack_anchor_ts: string | null;
+    /**
+     * When the runner last CLAIMED this step, which is what makes "from this run" checkable.
+     * storeGeneratedDoc inserts a new row every time, so a document filed weeks ago still
+     * matches a filename. Null on rows that predate the column, and a null is treated as "no
+     * opinion" rather than as a refusal.
+     */
+    started_at: string | null;
   };
   client: Record<string, unknown>;
 }
@@ -426,50 +433,6 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
-  // ‼️ A FILE EXISTING IS NOT THE SAME AS THE FILE SAYING ANYTHING, AND THIS IS THE STEP
-  // WHERE THAT GAP SHOWS. This was artifactOnRecord(), which proves exactly one thing: a
-  // client_docs row carries this step key.
-  //
-  // Measured on SRT 2026-09-07 with presence_sweep_manual skipped: all 19 listings sat at
-  // confirmed_status null, the PDF said so on its own cover in amber ("a skipped step reads as
-  // not checked everywhere, and that is an absence of evidence, never evidence of
-  // correctness"), and the board line read "the presence and consistency PDF is filed against
-  // this client (1 file)". Every layer was honest except the one a human actually reads, and
-  // the card is what gets read.
-  //
-  // ‼️ IT STILL TICKS RATHER THAN REFUSING, AND THAT IS NOT A SOFTENING. `skipped` is a
-  // decision somebody is allowed to make, and findings_doc and citation_cleanup_list are both
-  // blockedBy this step, so refusing over a legitimate skip deadlocks the board with no way
-  // out. What changes is that the line can no longer imply content the document does not have.
-  // citation_cleanup, further down, is the step that DOES refuse on not_checked, because
-  // ticking "the cleanup was executed" over rows nobody opened is a different claim entirely.
-  presence_pdf: async (ctx) => {
-    const filed = await artifactOnRecord(ctx, "the presence and consistency PDF");
-    if (!filed.ok) return filed;
-
-    // Counted separately from loadSweep for the reason citation_cleanup already records:
-    // loadSweep swallows a query error into an empty array, and "the query failed" must never
-    // render as "no rows exist". If the two reads disagree, say nothing rather than a number.
-    const total = await countRows("nap_discrepancies", ctx.clientId);
-    if (total === null) return dbUnreachable("nap_discrepancies");
-
-    const { loadSweep, countByStatus } = await import("./presence-sweep");
-    const rows = await loadSweep(ctx.clientId);
-    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
-
-    const counts = countByStatus(rows);
-    const checked = rows.length - counts.not_checked;
-
-    return verified(
-      `the presence and consistency PDF is filed against this client, reporting ${checked} of ` +
-        `${rows.length} platform${rows.length === 1 ? "" : "s"} checked` +
-        (counts.not_checked
-          ? `. The other ${counts.not_checked} print as "not checked", which is an absence of ` +
-            `evidence and not a finding of correctness`
-          : "")
-    );
-  },
-
   competitor_shortlist: async (ctx) => {
     const total = await countRows("competitor_candidates", ctx.clientId);
     if (total === null) return dbUnreachable("competitor_candidates");
@@ -645,7 +608,6 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
-  findings_doc: async (ctx) => artifactOnRecord(ctx, "the findings document"),
 
   // ── PREPARE ────────────────────────────────────────────────────────────────
   // ‼️ THIS VERIFIER WAS CORRECT AND UNSATISFIABLE FOR THE WHOLE LIFE OF THE COLUMN.
@@ -1341,7 +1303,94 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
   review_card_pdf: async (ctx) => artifactOnRecord(ctx, "the review card PDF"),
 
-  call_sheet: async (ctx) => artifactOnRecord(ctx, "the call sheet PDF"),
+  // ‼️ FOUR DOCUMENTS, AND artifactOnRecord CANNOT TELL THEM APART. It proves exactly one thing:
+  // that some client_docs row carries this step key. That was true the moment the call sheet
+  // landed, even with the findings and the presence PDF both refused, so the merged step would
+  // have gone green over a pack that was missing half of itself.
+  //
+  // ‼️ FROM THIS RUN, NOT FROM ANY RUN. storeGeneratedDoc INSERTS on every pass, so a filename
+  // match alone passes on a document generated weeks ago against a sweep that has since changed.
+  // started_at is when the runner claimed the step. A row with no started_at (one that predates
+  // the column) is not refused over it: the check falls back to "is it filed at all", which is
+  // what this verifier used to do for all four.
+  //
+  // `source = generated` because a screenshot somebody drops in this thread is also a client_docs
+  // row against this step, and a screenshot is not the findings document.
+  call_sheet: async (ctx) => {
+    if (!ctx.row.output_ref) {
+      return notYet(
+        "the step's output_ref",
+        "empty, so the call pack has not been generated for this step",
+        "Un-tick and re-tick the step to run the pack. All four generators are idempotent, so " +
+          "re-running is safe."
+      );
+    }
+
+    const { CALL_PACK_DOCS, callPackDocOf } = await import("./artifacts/call-pack");
+
+    const { data, error } = await supabaseAdmin
+      .from("client_docs")
+      .select("filename, uploaded_at")
+      .eq("client_id", ctx.clientId)
+      .eq("delivery_step_key", ctx.stepKey)
+      .eq("source", "generated");
+
+    if (error) return dbUnreachable("client_docs");
+
+    // A minute of slack between the app clock that stamps started_at and the one that stamps
+    // uploaded_at. Without it a document filed in the same second reads as older than the run
+    // that produced it.
+    const since = ctx.row.started_at ? Date.parse(ctx.row.started_at) - 60_000 : null;
+    const fromThisRun = (data ?? []).filter((d) => {
+      if (since === null) return true;
+      const at = Date.parse((d.uploaded_at as string | null) ?? "");
+      return Number.isNaN(at) ? true : at >= since;
+    });
+
+    const present = new Set(
+      fromThisRun.map((d) => callPackDocOf((d.filename as string | null) ?? "")).filter(Boolean)
+    );
+    const missing = (Object.keys(CALL_PACK_DOCS) as Array<keyof typeof CALL_PACK_DOCS>).filter(
+      (k) => !present.has(k)
+    );
+
+    if (missing.length > 0) {
+      const names = missing.map((k) => CALL_PACK_DOCS[k].label);
+      return notYet(
+        "the four call pack documents filed against this step",
+        `${4 - missing.length} of 4 are on file. Missing: ${names.join(", ")}`,
+        "Un-tick and re-tick the step to re-run the pack. Anything that keeps refusing prints " +
+          "its own reason in this thread, and that reason is what to fix: the presence PDF needs " +
+          "the sweep, the findings need the review audit."
+      );
+    }
+
+    // The presence PDF's own line, kept through the merge. A skipped sweep reads as "not checked"
+    // everywhere, and that is an absence of evidence rather than a finding of correctness.
+    // Counted separately from loadSweep because loadSweep swallows a query error into an empty
+    // array, and "the query failed" must never render as "no rows exist".
+    const total = await countRows("nap_discrepancies", ctx.clientId);
+    if (total === null) return dbUnreachable("nap_discrepancies");
+
+    const { loadSweep, countByStatus } = await import("./presence-sweep");
+    const rows = await loadSweep(ctx.clientId);
+    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
+
+    const counts = countByStatus(rows);
+    const checked = rows.length - counts.not_checked;
+
+    return verified(
+      "all four call pack documents are filed against this step: " +
+        Object.values(CALL_PACK_DOCS)
+          .map((d) => d.label.toLowerCase())
+          .join(", "),
+      `the presence PDF reports ${checked} of ${rows.length} platform${rows.length === 1 ? "" : "s"} checked` +
+        (counts.not_checked
+          ? `. The other ${counts.not_checked} print as "not checked", which is an absence of ` +
+            `evidence and not a finding of correctness`
+          : "")
+    );
+  },
 
   // ── THE CALL ───────────────────────────────────────────────────────────────
   call_booked: async (ctx) => {
@@ -1917,7 +1966,7 @@ export async function verifyStep(clientId: string, stepKey: string): Promise<Ver
     supabaseAdmin.from("clients").select(CLIENT_COLUMNS).eq("id", clientId).maybeSingle(),
     supabaseAdmin
       .from("client_delivery_steps")
-      .select("status, output_ref, error_detail, slack_anchor_ts")
+      .select("status, output_ref, error_detail, slack_anchor_ts, started_at")
       .eq("client_id", clientId)
       .eq("step_key", stepKey)
       .maybeSingle(),

@@ -1,4 +1,5 @@
-// The presence and consistency report — delivery step 6, Runner v3 section 3c.
+// The presence and consistency report — one of the four call pack documents (it was delivery
+// step 6 until the 2026-09-12 merge), Runner v3 section 3c.
 //
 // "Same generator and visual treatment as the AI visibility audit report" — that is
 // @/lib/pdf/kit, which is the audit scorecard's own primitives lifted out so there is one
@@ -41,6 +42,7 @@ import {
   type TableRow,
 } from "@/lib/pdf/kit";
 import { deliverArtifact } from "./deliver";
+import { CALL_PACK_STEP_KEY, callPackFilename } from "./call-pack";
 
 const STATUS_WORDS: Record<SweepRow["status"], string> = {
   match: "matches",
@@ -334,9 +336,15 @@ export async function renderPresencePdf(args: {
   return finishDoc(state);
 }
 
-/** Step 6. */
+/**
+ * One of the four call pack documents.
+ *
+ * `stepKey` is which step the file is filed against. It defaults to the pack, so a caller that
+ * does not care gets the current board's behaviour, and the runner passes it explicitly.
+ */
 export async function generatePresencePdf(
-  clientId: string
+  clientId: string,
+  opts: { stepKey?: string } = {}
 ): Promise<{ ok: boolean; error?: string; docId?: string }> {
   const canonical = await canonicalFor(clientId);
   if (!canonical) return { ok: false, error: "client not found" };
@@ -400,8 +408,8 @@ export async function generatePresencePdf(
 
   const result = await deliverArtifact({
     clientId,
-    stepKey: "presence_pdf",
-    filename: `Presence and consistency - ${canonical.name}.pdf`,
+    stepKey: opts.stepKey ?? CALL_PACK_STEP_KEY,
+    filename: callPackFilename("presence", canonical.name),
     buffer,
     message,
   });

@@ -525,11 +525,15 @@ function headerText(client: BoardClient, rows: BoardRow[], channel: string): str
   // The MEASURE gate. The call is where we tell them what the engines are saying and agree who
   // we are going after, and both come out of the baseline. Held first, it is opinions instead
   // of screenshots and the question set gets picked against a guess at their ideal customer.
-  const measureDone = ["baseline_scan", "findings_doc"].every(isDone);
+  // ‼️ IT NAMED findings_doc UNTIL THE CALL PACK MERGE (2026-09-12), and re-pointing it at
+  // `call_sheet` would have been wrong: that step also waits on the nine drafted pages, the hub
+  // and the question set, so it would warn about the baseline over work that has nothing to do
+  // with it. These three are what findings_doc itself was built from.
+  const measureDone = ["baseline_scan", "presence_sweep_manual", "review_audit"].every(isDone);
   if (!measureDone && (isDone("call_booked") || isDone("call_held"))) {
     lines.push(
-      ":warning: The call is on the board but the baseline is not finished. Run the audit and " +
-        "write the findings up first, or the call is opinions instead of screenshots."
+      ":warning: The call is on the board but the baseline is not finished. Run the audit, the " +
+        "presence sweep and the review audit first, or the call is opinions instead of screenshots."
     );
   }
 

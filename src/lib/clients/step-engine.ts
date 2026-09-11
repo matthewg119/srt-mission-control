@@ -1075,13 +1075,17 @@ async function instructionsFor(
       // ‼️ THE MEASURE GATE IS REPEATED HERE, not left to the pinned header. The header states
       // it about the run as a whole; this is the card he is looking at when he books, which is
       // the moment the warning is actionable.
+      // The same three keys as the pinned header's gate, and for the same reason: findings_doc
+      // was merged into the call pack on 2026-09-12, and these are what it was built from.
+      const MEASURE_STEPS = ["baseline_scan", "presence_sweep_manual", "review_audit"];
+
       const { data: steps } = await supabaseAdmin
         .from("client_delivery_steps")
         .select("step_key, status")
         .eq("client_id", c.id)
-        .in("step_key", ["baseline_scan", "findings_doc"]);
+        .in("step_key", MEASURE_STEPS);
 
-      const missing = ["baseline_scan", "findings_doc"].filter(
+      const missing = MEASURE_STEPS.filter(
         (k) => (steps ?? []).find((s) => s.step_key === k)?.status !== "complete"
       );
 
@@ -1107,10 +1111,10 @@ async function instructionsFor(
     case "call_held": {
       const refs = await outputRefsFor(c.id);
       const sheet = docLink(c.id, refs.get("call_sheet"), "the call sheet PDF");
-      // ‼️ THIS STEP'S OWN output_ref, WRITTEN BY THE call_sheet RUNNER. generateCallQuestions files the
-      // closing questions here rather than posting them, because deliverArtifact would have
-      // created THIS anchor two steps early and put a second thing on the board while the call
-      // sheet was still the one to work on. This line is where they surface.
+      // ‼️ THIS STEP'S OWN output_ref, WRITTEN BY THE call_sheet RUNNER. The closing questions are
+      // one of the four call pack documents: since 2026-09-12 the FILE is filed against
+      // `call_sheet` with the rest of the pack and posted in that thread, and only the pointer is
+      // written here, so this card can link it without the pack creating THIS anchor early.
       const closing = docLink(c.id, refs.get("call_held"), "the 33 closing questions");
 
       return [

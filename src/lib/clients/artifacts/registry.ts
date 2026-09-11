@@ -104,11 +104,6 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return { ok: r.ok, error: r.error, note: r.note };
   },
 
-  presence_pdf: async (clientId) => {
-    const { generatePresencePdf } = await import("./presence-pdf");
-    return generatePresencePdf(clientId);
-  },
-
   // Both halves of the avatar harvest, and ONE OF THEM SPENDS NOTHING NOW (2026-08-28).
   //
   // The citations harvest still runs on every pass: it is a scrape, no model touches it, and the
@@ -228,42 +223,92 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     };
   },
 
-  findings_doc: async (clientId) => {
-    const { generateFindings } = await import("./findings");
-    return generateFindings(clientId);
-  },
-
   review_card_pdf: async (clientId) => {
     const { generateReviewCard } = await import("./review-card");
     return generateReviewCard(clientId);
   },
 
-  // ‼️ TWO DOCUMENTS, ONE RUNNER, AND THE SECOND ONE IS FILED AGAINST A DIFFERENT STEP.
+  // ‼️ THE CALL PACK: FOUR DOCUMENTS, ONE RUNNER, ONE THREAD (2026-09-12).
   //
-  // This runner is `call_sheet`. generateCallQuestions writes `call_held`'s closing questions and files
-  // them against `call_held`, because they are built from the SAME reports and there is no point
-  // spending a second pass over them. No AUTO_RUNNERS key is added: `call_held` is a manual step
-  // and giving it a runner would put it in unreachableAutoSteps()'s sights for no reason.
+  // `presence_pdf` and `findings_doc` were steps of their own until this merge. Each produced a
+  // PDF nobody reads on its own and all four are picked up together when the call is prepared, so
+  // one tick over the bundle says more than three over its parts. Filenames and labels come from
+  // call-pack.ts, which the verifier reads too.
   //
-  // ‼️ A FAILURE IN THE SECOND HALF NEVER FAILS THE FIRST. The call sheet is what the call
-  // cannot happen without; the questions are what makes it a better call. generateCallQuestions
-  // posts nothing to Slack on purpose (it would create `call_held`'s anchor two steps early and break
-  // one-anchor-at-a-time), so the only place its outcome can be reported is this note.
+  // ‼️ THE ORDER IS LOAD BEARING, TWICE OVER.
+  //  - The findings document LINKS the presence PDF, so presence runs first and hands its docId
+  //    straight over rather than going back to client_docs to guess which row it was.
+  //  - The call sheet runs LAST because deliverArtifact rewrites this step's output_ref on every
+  //    call. The last document to run is the one the step ends up pointing at, and that should be
+  //    the sheet the step is named for.
+  //
+  // ‼️ ONE FAILURE NEVER HIDES THE OTHER THREE. Each generator is caught by name, the note lists
+  // what failed and why, and the step parks in `error` when any of them did. The verifier does not
+  // trust this return either: it counts the four documents itself.
+  //
+  // The closing questions still write `call_held.output_ref`, so that step's card links them. What
+  // changed is where the FILE is filed: against this step, with the rest of the pack.
   call_sheet: async (clientId) => {
-    const { generateCallSheet } = await import("./call-sheet");
-    const sheet = await generateCallSheet(clientId);
-
+    const { CALL_PACK_DOCS, CALL_PACK_STEP_KEY } = await import("./call-pack");
+    const { generatePresencePdf } = await import("./presence-pdf");
+    const { generateFindings } = await import("./findings");
     const { generateCallQuestions } = await import("./call-questions");
-    const questions = await generateCallQuestions(clientId).catch((e) => ({
-      ok: false as const,
-      error: (e as Error).message,
-    }));
+    const { generateCallSheet } = await import("./call-sheet");
 
-    const note = questions.ok
-      ? questions.note
-      : `:warning: The closing questions for \`call_held\` were not generated: ${questions.error}`;
+    interface PackResult {
+      label: string;
+      ok: boolean;
+      error?: string;
+      docId?: string;
+    }
 
-    return { ...sheet, note };
+    const safely = async (
+      label: string,
+      run: () => Promise<{ ok: boolean; error?: string; docId?: string }>
+    ): Promise<PackResult> => {
+      try {
+        const r = await run();
+        return { label, ok: r.ok, error: r.error, docId: r.docId };
+      } catch (e) {
+        return { label, ok: false, error: (e as Error).message };
+      }
+    };
+
+    const presence = await safely(CALL_PACK_DOCS.presence.label, () =>
+      generatePresencePdf(clientId, { stepKey: CALL_PACK_STEP_KEY })
+    );
+    const findings = await safely(CALL_PACK_DOCS.findings.label, () =>
+      generateFindings(clientId, {
+        stepKey: CALL_PACK_STEP_KEY,
+        presenceDocId: presence.docId ?? null,
+      })
+    );
+    const questions = await safely(CALL_PACK_DOCS.questions.label, () =>
+      generateCallQuestions(clientId, { stepKey: CALL_PACK_STEP_KEY })
+    );
+    const sheet = await safely(CALL_PACK_DOCS.sheet.label, () =>
+      generateCallSheet(clientId, { stepKey: CALL_PACK_STEP_KEY })
+    );
+
+    const results = [presence, findings, questions, sheet];
+    const failed = results.filter((r) => !r.ok);
+
+    const note = [
+      `:card_index_dividers: *Call pack:* ${results.length - failed.length} of ${results.length} documents generated.`,
+      ...failed.map((f) => `:warning: ${f.label}: ${f.error ?? "no reason given"}`),
+      failed.length
+        ? "The ones that worked are in this thread. Fix what is named above and re-tick the step: every generator is idempotent."
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return {
+      ok: failed.length === 0,
+      error: failed.length ? failed.map((f) => `${f.label}: ${f.error ?? "no reason given"}`).join("; ") : undefined,
+      docId: sheet.docId,
+      note,
+    };
   },
 
   // ── The five added when the `auto` tag was made true across the board ──────
@@ -471,9 +516,10 @@ export function unimplementedAutoSteps(): string[] {
 export const IMPLEMENTED_THIS_SESSION = [
   "site_dns_intel",
   "nap_sweep",
-  "presence_pdf",
   "avatar_harvest",
-  "findings_doc",
   "review_card_pdf",
+  // `presence_pdf` and `findings_doc` were here until 2026-09-12. Their generators still run, as
+  // two of the four documents this one produces. The test asserts every name here is a step in
+  // DELIVERY_STEPS, so a merged-away key left in this list fails the suite rather than drifting.
   "call_sheet",
 ] as const;

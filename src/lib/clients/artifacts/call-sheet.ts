@@ -34,6 +34,7 @@ import { selectedCompetitors } from "../competitors";
 import { platformByKey } from "@/config/presence-platforms";
 import { clickPathFor } from "../dns-records";
 import { subdomainLabel } from "../normalize";
+import { CALL_PACK_STEP_KEY, callPackFilename } from "./call-pack";
 import type { SiteIntel } from "../site-intel";
 import {
   startDoc,
@@ -537,8 +538,15 @@ export function renderCallSheet(d: CallSheetData): Buffer {
   return finishDoc(state);
 }
 
+/**
+ * The call sheet, and the document the call pack is named for.
+ *
+ * It runs LAST in the pack: deliverArtifact rewrites the step's output_ref on every call, so the
+ * last document generated is the one the step points at, and that should be this one.
+ */
 export async function generateCallSheet(
-  clientId: string
+  clientId: string,
+  opts: { stepKey?: string } = {}
 ): Promise<{ ok: boolean; error?: string; docId?: string }> {
   // The select list is wide enough that supabase-js gives up on inferring a row type and hands
   // back GenericStringError. Read it as a plain record and pull fields explicitly, which is what
@@ -675,8 +683,8 @@ export async function generateCallSheet(
 
   const result = await deliverArtifact({
     clientId,
-    stepKey: "call_sheet",
-    filename: `Call sheet (internal) - ${data.clientName}.pdf`,
+    stepKey: opts.stepKey ?? CALL_PACK_STEP_KEY,
+    filename: callPackFilename("sheet", data.clientName),
     buffer,
     message: [
       `:memo: Call sheet for *${data.clientName}*. Internal — do not send this to the client.`,

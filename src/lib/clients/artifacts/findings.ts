@@ -1,4 +1,5 @@
-// The findings report — delivery step 10, Runner v3 section 10, Artifact Templates section 2.
+// The findings report — one of the four call pack documents (it was a delivery step of its own
+// until the 2026-09-12 merge), Runner v3 section 10, Artifact Templates section 2.
 //
 // This is the document the whole onboarding exists to produce. Six sections, in that order, no
 // deviation. It is assembled from what steps 2 to 4c already wrote; it computes nothing new and
@@ -32,6 +33,7 @@ import { selectedCompetitors, tallyRecommended, type CandidateRow } from "../com
 import { loadReviewAudit, isRecorded, reviewPlatformLabel, type ReviewAuditRow } from "../review-audit";
 import type { SiteIntel } from "../site-intel";
 import { signedDocUrl } from "../onboarding-docs";
+import { CALL_PACK_DOCS, CALL_PACK_STEP_KEY, callPackFilename } from "./call-pack";
 import {
   startDoc,
   finishDoc,
@@ -532,8 +534,15 @@ function sectionSix(state: PageState, args: { intel: SiteIntel | null; domain: s
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * One of the four call pack documents.
+ *
+ * `presenceDocId` comes from the runner, which generated the presence PDF moments earlier.
+ * `stepKey` is which step this is filed against and defaults to the pack.
+ */
 export async function generateFindings(
-  clientId: string
+  clientId: string,
+  opts: { stepKey?: string; presenceDocId?: string | null } = {}
 ): Promise<{ ok: boolean; error?: string; docId?: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -583,15 +592,25 @@ export async function generateFindings(
     .eq("source", "slack")
     .limit(5);
 
-  const { data: presenceDoc } = await supabaseAdmin
-    .from("client_docs")
-    .select("id")
-    .eq("client_id", clientId)
-    .eq("delivery_step_key", "presence_pdf")
-    .eq("source", "generated")
-    .order("uploaded_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // ‼️ THE RUNNER HANDS THIS OVER. Both documents come out of the same pass now, so looking the
+  // presence PDF up would mean querying for a row the caller wrote seconds ago. The query below
+  // is the fallback for a call that passed nothing: it matches the pack's filename prefix under
+  // this step, and under the legacy `presence_pdf` key for clients whose documents were filed
+  // before the merge.
+  let presenceDocId = opts.presenceDocId ?? null;
+  if (!presenceDocId) {
+    const { data: presenceDoc } = await supabaseAdmin
+      .from("client_docs")
+      .select("id")
+      .eq("client_id", clientId)
+      .in("delivery_step_key", [opts.stepKey ?? CALL_PACK_STEP_KEY, "presence_pdf"])
+      .eq("source", "generated")
+      .like("filename", `${CALL_PACK_DOCS.presence.prefix}%`)
+      .order("uploaded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    presenceDocId = (presenceDoc?.id as string | null) ?? null;
+  }
 
   const { data: versions } = await supabaseAdmin
     .from("question_set_versions")
@@ -629,7 +648,7 @@ export async function generateFindings(
   sectionTwo(state, {
     canonical,
     rows,
-    presenceDocUrl: presenceDoc ? `${appBase}/api/clients/${clientId}/docs/${presenceDoc.id}` : null,
+    presenceDocUrl: presenceDocId ? `${appBase}/api/clients/${clientId}/docs/${presenceDocId}` : null,
   });
 
   sectionThree(state, { clientName, competitors, reviewRows });
@@ -668,8 +687,8 @@ export async function generateFindings(
 
   const result = await deliverArtifact({
     clientId,
-    stepKey: "findings_doc",
-    filename: `Findings - ${clientName}.pdf`,
+    stepKey: opts.stepKey ?? CALL_PACK_STEP_KEY,
+    filename: callPackFilename("findings", clientName),
     buffer,
     message,
   });
