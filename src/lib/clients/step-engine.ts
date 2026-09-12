@@ -2056,13 +2056,24 @@ export async function presenceCoverageFor(
     .maybeSingle();
 
   const ts = (row?.slack_anchor_ts as string | null) ?? null;
-  if (!ts) return empty;
+
+  // ‼️ BY THREAD **OR** BY STEP KEY, AND THE SECOND RUNG IS WHAT SURVIVES A NEW CHANNEL.
+  //
+  // The anchor ts IS the thread, which makes the first rung exact. But a board that is reset into a
+  // fresh channel gets NEW anchors, and every screenshot already filed carries the old thread's ts,
+  // so counting by thread alone reports zero platforms for a client whose nineteen listings were
+  // swept last week. delivery_step_key is not a guess either: clientForThread fills it from WHICH
+  // THREAD the file was dropped in, so a row carrying `presence_sweep_manual` was dropped in some
+  // incarnation of this step's thread by a person. That is the same claim, one board older.
+  const filter = ts
+    ? `slack_thread_ts.eq.${ts},delivery_step_key.eq.${stepKey}`
+    : `delivery_step_key.eq.${stepKey}`;
 
   const { data, error } = await supabaseAdmin
     .from("client_docs")
     .select("presence_platform, presence_attributed_by")
     .eq("client_id", clientId)
-    .eq("slack_thread_ts", ts);
+    .or(filter);
 
   if (error) {
     console.error("[step-engine] presence coverage query failed:", error.message);

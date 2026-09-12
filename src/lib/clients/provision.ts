@@ -635,19 +635,33 @@ async function linkToCrm(
  * calls conversations.create is a member of what it creates. That is also why nothing here
  * invites anybody. Humans join from the channel browser.
  */
-async function createOpsChannel(clientId: string, slug: string): Promise<void> {
+export async function createOpsChannel(
+  clientId: string,
+  slug: string,
+  /**
+   * `name` overrides the srt-<slug> convention, which reads badly for a client whose slug already
+   * starts with srt (srt-srt-agency-llc). `invite` is a Slack member id.
+   *
+   * ‼️ THE INVITE IS NOT OPTIONAL IN PRACTICE, WHATEVER THE TYPE SAYS. This creates a PRIVATE
+   * channel, and a private channel is invisible to everybody who is not in it: there is no channel
+   * browser entry to find, so a board posted into one nobody was added to is a board nobody can
+   * read. The comment below used to say humans join from the browser, which is true of public
+   * channels and false of these.
+   */
+  opts: { name?: string; invite?: string | null } = {}
+): Promise<{ channelId: string; name: string } | null> {
   const { data: existing } = await supabaseAdmin
     .from("clients")
     .select("ops_channel_id")
     .eq("id", clientId)
     .maybeSingle();
 
-  if (existing?.ops_channel_id) return;
+  if (existing?.ops_channel_id) return null;
 
   // Slack channel names: lower case, no spaces, 80 chars. The slug is already that shape (the
   // DDL comment on clients.slug says it IS the channel name) but it is truncated here anyway,
   // because "srt-" plus an 80-character slug is not.
-  const name = `srt-${slug}`.slice(0, 78).replace(/-+$/, "");
+  const name = (opts.name?.trim() || `srt-${slug}`).slice(0, 78).replace(/-+$/, "");
 
   const created = await slack.createChannel(name, true);
 
@@ -683,11 +697,25 @@ async function createOpsChannel(clientId: string, slug: string): Promise<void> {
 
   if (error) throw new Error(`could not record the channel: ${error.message}`);
 
+  // Into the channel it just made, so the person who owns this board can see it at all.
+  if (opts.invite) {
+    const invited = (await slack.inviteToChannel(channelId, opts.invite)) as {
+      ok?: boolean;
+      error?: string;
+    };
+    // already_in_channel is the normal answer on a re-run and is not a failure.
+    if (!invited?.ok && invited?.error !== "already_in_channel") {
+      console.error(`[clients/provision] could not invite ${opts.invite}:`, invited?.error ?? "unknown");
+    }
+  }
+
   // channelFor memoises on the assumption the column never changes. It is changing right now,
   // from null to a real channel, and anything earlier in this same provisioning run that asked
   // would have cached the null. Dropping the entry is cheaper than reasoning about who asked.
   const { forgetChannel } = await import("./step-board");
   forgetChannel(clientId);
+
+  return { channelId, name: channelName ?? name };
 }
 
 /**

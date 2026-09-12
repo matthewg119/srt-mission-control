@@ -465,6 +465,42 @@ export async function lockOffer(args: {
 }
 
 /**
+ * Take the lock off, and keep the proposal.
+ *
+ * ‼️ FOR A REHEARSAL, NOT FOR A CHANGE OF MIND. `offer: something else` is how an offer changes;
+ * that re-locks and fires the re-aim, which is the honest path. This is for _reset-client-board,
+ * where the whole point is to walk the prep call again from a clean start: a board that was reset
+ * while still holding a locked offer skips straight past the one step the reset exists to rehearse.
+ *
+ * ‼️ THE PROPOSAL SURVIVES ON PURPOSE. proposedTreatment is a reading of the intake form, not a
+ * decision, so it is still true after a reset and it is what the prep call's card opens with.
+ * Everything the LOCK carries goes: the treatment, the positioning, the customer terms and the
+ * anchor magnet, because each of those is something a person said on a call that is about to be
+ * held again.
+ *
+ * It fires no cascade. The caller is deleting the board rows anyway, so re-aiming steps that are
+ * about to be re-seeded would post notes about work nobody has done yet.
+ */
+export async function unlockOffer(clientId: string): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
+  const current = await loadOffer(clientId);
+
+  const next: StoredOffer = {
+    ...current,
+    treatment: null,
+    magnetKey: null,
+    positioning: null,
+    lockedAt: null,
+    lockedBy: null,
+    terms: [],
+    termsAt: null,
+  };
+
+  const { error } = await supabaseAdmin.from("clients").update({ offer: next }).eq("id", clientId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, offer: next };
+}
+
+/**
  * Store the words their customers use for the offer. Replaces the list; `terms:` again with the
  * full list is how one is added or removed, which keeps the thread the record of what was said.
  *

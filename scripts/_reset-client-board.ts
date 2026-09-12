@@ -1,11 +1,24 @@
 /**
- * Put one client's delivery board back to step 1 so the whole onboarding can be walked again.
+ * Put one client's delivery board back to the PREP CALL so the rest of the onboarding can be
+ * walked again.
  *
  * ‼️ THIS IS A REHEARSAL TOOL, NOT A DELETE. The `clients` row survives, and so does everything
  * that is a RECORD rather than board state: the executed agreement, the Day 0 audit, the
- * attribution numbers, the concierge conversation logs, the CRM link. What goes is the board and
- * the artifacts each step verifies itself against, because a step that ticks green off work a
- * previous run did is not a rehearsal, it is the exact bug this design exists to prevent.
+ * attribution numbers, the concierge conversation logs, the CRM link, the avatar history and every
+ * client_event. What goes is the board and the artifacts each step verifies itself against, because
+ * a step that ticks green off work a previous run did is not a rehearsal, it is the exact bug this
+ * design exists to prevent.
+ *
+ * ‼️ IT DOES NOT GO BACK TO ZERO, AND THAT IS THE 2026-09-12 CHANGE. It used to wipe every
+ * artifact, which meant the board reopened at step 5 asking for nineteen presence screenshots that
+ * had already been taken, a competitor shortlist already picked, and a review audit already read.
+ * The measurement work is EVIDENCE about the business: it is still true after a reset, and asking
+ * somebody to redo it is how a rehearsal turns into a week. So everything before the prep call is
+ * KEPT and re-confirmed through its own verifier, and the board lands on the prep call, which is
+ * where the strategy actually starts.
+ *
+ * What that means in practice: steps 1 to 9 tick themselves off evidence that is still on file, and
+ * anything that cannot honestly re-confirm stays open and says so. Nothing is ticked by assertion.
  *
  * ‼️ RESOLVE BY SLUG, NEVER BY A PINNED ID. docs/lanes/CONTRACT.md:17-21: SRT Agency has been
  * re-onboarded twice, `clients.slug` is the unique provisioning claim, and every id written down
@@ -13,49 +26,40 @@
  *
  * ── The three things that make this harder than a DELETE ──
  *
- * 1. seedDeliverySteps() upserts with ignoreDuplicates (delivery-checklist.ts:66-72), so it
- *    CANNOT reset a row that already exists. The 39 rows are deleted and re-seeded. Reopening
- *    them one at a time instead would fire refreshStages, postStepAnchor, refreshStepAnchor,
- *    markAnchor, refreshHeader, offerDraftsFor and the whole ensureReachableAnchors cascade
- *    thirty-nine times over (delivery-checklist.ts:440-547).
+ * 1. seedDeliverySteps() upserts with ignoreDuplicates (delivery-checklist.ts), so it CANNOT reset
+ *    a row that already exists. The rows are deleted and re-seeded. Reopening them one at a time
+ *    instead would fire refreshStages, postStepAnchor, refreshStepAnchor, markAnchor, refreshHeader,
+ *    offerDraftsFor and the whole ensureReachableAnchors cascade forty-one times over.
  *
- * 2. The Slack columns must be cleared or the board edits the OLD cards in place. postStep
- *    branches on slack_message_ts (step-engine.ts:1640,1664): with it set, a "repost" silently
- *    becomes a chat.update against a message that no longer exists. postStepAnchor
- *    short-circuits on slack_anchor_ts (step-board.ts:202). Deleting the rows clears both.
+ * 2. The Slack columns must be cleared or the board edits the OLD cards in place. postStep branches
+ *    on slack_message_ts: with it set, a "repost" silently becomes a chat.update against a message
+ *    that no longer exists. postStepAnchor short-circuits on slack_anchor_ts. Deleting the rows
+ *    clears both.
  *
- * 3. THE OLD MESSAGES ARE DELETED BY STORED ts, NOT BY READING THE CHANNEL. The bot is not a
- *    member of #onboarding-srt-aeo and conversations.history returns not_in_channel there
- *    (clients/artifacts/deliver.ts:8-11). So every ts is collected from the database BEFORE
- *    anything is wiped. joinChannel runs first anyway, because it is idempotent and it is the
- *    difference between chat.delete working and not.
+ * 3. THE OLD MESSAGES ARE DELETED BY STORED ts, NOT BY READING THE CHANNEL. The bot is not a member
+ *    of #onboarding-srt-aeo and conversations.history returns not_in_channel there. So every ts is
+ *    collected from the database BEFORE anything is wiped. joinChannel runs first anyway, because
+ *    it is idempotent and it is the difference between chat.delete working and not.
+ *
+ * ‼️ RUN scripts/_backfill-client-events.ts FIRST. This deletes the bot's cards, and their anchors
+ * are the only way to find those threads again. Once they are gone the history is unreadable.
  *
  * ‼️ WHAT chat.delete CAN AND CANNOT REMOVE. A bot token only deletes the bot's own messages.
- * Anything Matthew typed comes back `cant_delete_message` and is left exactly where it is, which
- * is the behaviour you want: his words are not this script's to remove. Those lines in the output
- * are correct, not failures.
+ * Anything Matthew typed comes back `cant_delete_message` and is left exactly where it is, which is
+ * the behaviour you want: his words are not this script's to remove.
  *
- * ‼️ clients.intake_completed_at IS KEPT, AND THIS IS THE ONE DECISION MOST LIKELY TO BE
- * "TIDIED UP" LATER. The intake_received verifier reads exactly that column (step-verify.ts:243)
- * and NOTHING but a fresh onboarding2 signing ever writes it. Nulling it deadlocks the board at
- * step 1, permanently, with no override: there is no manual tier for a system verifier. The board
- * is reopened here by calling openOpsThread + postDeliveryChecklist directly, which is what
- * startDelivery does after its claim, so the claim itself is not needed and must not be faked.
- *
- * The baseline scan is NOT re-fired, and step 2 is ticked against the kept report instead.
- * audit_reports survives the reset and baseline_scan resolves by client_id only, so the
- * verifier confirms it off the photograph that already exists. Firing a fresh audit would spend
- * a real run to prove something already proven AND mint a newer report that replaces the very
- * thing this reset preserves. Ticking it is not optional politeness: baseline_scan has no card
- * and no runner, so a board that leaves it pending cannot be advanced from Slack at all.
+ * ‼️ clients.intake_completed_at IS KEPT, AND THIS IS THE ONE DECISION MOST LIKELY TO BE "TIDIED UP"
+ * LATER. The intake_received verifier reads exactly that column and NOTHING but a fresh onboarding2
+ * signing ever writes it. Nulling it deadlocks the board at step 1, permanently, with no override.
  *
  *   SLACK_CLIENT_ONBOARDING_CHANNEL=C0BLK797PNU \
  *     bunx tsx --env-file=.env.local scripts/_reset-client-board.ts <slug> --dry
  *   SLACK_CLIENT_ONBOARDING_CHANNEL=C0BLK797PNU \
- *     bunx tsx --env-file=.env.local scripts/_reset-client-board.ts <slug> --yes
+ *     bunx tsx --env-file=.env.local scripts/_reset-client-board.ts <slug> --yes \
+ *       --channel=srt-agency-onboarding --invite=U074ZQ1K0UE
  *
- * SLACK_CLIENT_ONBOARDING_CHANNEL lives only in Vercel, so pass it inline. Without
- * --env-file=.env.local the probes and this script return nothing at all, silently.
+ * SLACK_CLIENT_ONBOARDING_CHANNEL is where the OLD cards are deleted from. --channel is the NEW
+ * private channel the rehearsed board is posted into; without it the board reopens where it was.
  */
 import fs from "fs";
 import path from "path";
@@ -67,14 +71,19 @@ const SLUG = process.argv[2];
 const DRY = process.argv.includes("--dry");
 const CONFIRMED = process.argv.includes("--yes");
 const OUT_ARG = process.argv.find((a) => a.startsWith("--out="))?.slice("--out=".length) ?? null;
+const CHANNEL_ARG = process.argv.find((a) => a.startsWith("--channel="))?.slice("--channel=".length) ?? null;
+const INVITE_ARG = process.argv.find((a) => a.startsWith("--invite="))?.slice("--invite=".length) ?? null;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 if (!SLUG || (!DRY && !CONFIRMED)) {
-  console.error("usage: _reset-client-board.ts <slug> --dry | --yes [--out=<backup.json>]");
+  console.error("usage: _reset-client-board.ts <slug> --dry | --yes [--channel=<name>] [--invite=<U…>] [--out=<backup.json>]");
   console.error("");
-  console.error("--dry  reads everything, writes nothing, prints exactly what it would touch.");
-  console.error("--yes  does it. A backup is written first and its path is printed.");
+  console.error("--dry      reads everything, writes nothing, prints exactly what it would touch.");
+  console.error("--yes      does it. A backup is written first and its path is printed.");
+  console.error("--channel  create a fresh PRIVATE channel and post the rehearsed board into it.");
+  console.error("--invite   Slack member id to add to that channel. A private channel is invisible");
+  console.error("           to anybody who is not in it, so without this nobody can read the board.");
   process.exit(1);
 }
 
@@ -87,54 +96,52 @@ if (UUID.test(SLUG)) {
 }
 
 /**
- * Everything deleted, child-first so a foreign key never refuses.
+ * Everything before the prep call. Their evidence is KEPT and these steps re-confirm themselves.
  *
- * ‼️ EACH ONE IS HERE BECAUSE A VERIFIER READS IT. Leaving one behind does not leave a harmless
- * stale row: it makes that step tick green the instant it is reached. client_hosts is the sharpest
- * example, because hub_preview verifies off a client_hosts row carrying vercel_attached_at, so
- * step 15 would pass without the runner having done anything. Deleting the ROW detaches nothing
- * from Vercel: the domains stay on the project, which is exactly why re-attaching works
- * (attachHost GETs first and finds them).
+ * ‼️ DERIVED FROM THE ARRAY, NOT WRITTEN DOWN. Inserting a step renumbers the board, and a hardcoded
+ * list of nine keys would quietly start meaning something else the next time one moves.
+ */
+const PREP_CALL_STEP = "offer_locked";
+const PRE_LOCK_STEPS = DELIVERY_STEPS.slice(
+  0,
+  DELIVERY_STEPS.findIndex((s) => s.key === PREP_CALL_STEP)
+).map((s) => s.key);
+
+/**
+ * Deleted, child-first so a foreign key never refuses.
  *
- * client_messages is the other one that is easy to miss. It is unique on (client_id, draft_key),
- * so offerDraftsFor re-emits NOTHING while the old rows stand.
+ * ‼️ EACH ONE IS HERE BECAUSE A VERIFIER READS IT AND THE STEP IT BELONGS TO IS BEING RE-WALKED.
+ * Leaving one behind does not leave a harmless stale row: it makes that step tick green the instant
+ * it is reached. client_hosts is the sharpest example, because hub_preview verifies off a
+ * client_hosts row carrying vercel_attached_at, so that step would pass without the runner having
+ * done anything. Deleting the ROW detaches nothing from Vercel: the domains stay on the project,
+ * which is exactly why re-attaching works.
  *
- * ‼️ avatar_briefs IS DELIBERATELY ABSENT FROM BOTH LISTS, AND IT LOOKS LIKE AN OMISSION.
- * It has no client_id at all: it is keyed (vertical, avatar_slug) and shared ACROSS clients on
- * purpose (docs/2026-08-25-lane-2-avatar.sql:31-49), so the second med spa aiming at laser hair
- * removal gets the first one's deep research instead of paying for the run again. A reset that
- * deleted from it would take another client's work with it, and a reset that merely tried would
- * error on a column that does not exist. clients.primary_avatar and primary_avatar_slug are kept
- * for the same reason the intake timestamp is: step 11's verifier reads them and its writer is
- * thin, so clearing them makes a step nobody can tick.
+ * client_messages is the other one that is easy to miss. It is unique on (client_id, draft_key), so
+ * offerDraftsFor re-emits NOTHING while the old rows stand.
+ *
+ * ‼️ avatar_briefs IS DELIBERATELY ABSENT. It has no client_id: it is keyed (vertical, avatar_slug)
+ * and shared ACROSS clients on purpose, so the second med spa aiming at laser hair removal gets the
+ * first one's deep research instead of paying for the run again.
  */
 const WIPE = [
   "page_gate_runs",
   "page_sources",
   "page_magnet_candidates",
   "page_studio_sessions",
-  // ‼️ client_id is NOT NULL on every row this touches, and the filter below is what keeps it
-  // that way. The seven LIBRARY magnets carry client_id null; deleting those breaks the widget
-  // for every client alive, not just this one.
+  // ‼️ client_id is NOT NULL on every row this touches, and the filter below is what keeps it that
+  // way. The seven LIBRARY magnets carry client_id null; deleting those breaks the widget for every
+  // client alive, not just this one.
   "lead_magnets",
   "client_pages",
   "page_candidates",
   "client_question_sets",
-  "competitor_candidates",
-  "nap_discrepancies",
-  "review_audit_rows",
+  // The keyword set and the page plan are downstream of the LOCK, which is being cleared. A set
+  // approved against an offer nobody has agreed to again is an approval of nothing.
+  "client_keywords",
+  "page_plan",
   "harvest_runs",
-  // ‼️ client_avatar_runs IS NOT HERE ANY MORE, AND ITS ABSENCE IS THE POINT (2026-09-12).
-  //
-  // Measured: SRT has a confirmed avatar and ZERO rows in this table, which read as "the writer is
-  // broken". The writer is fine. This reset deleted the history on 2026-09-07 while deliberately
-  // KEEPING clients.primary_avatar*, so the confirmation survived and the record of it did not.
-  //
-  // It is history rather than board state: it says which buyer this client was aimed at and when
-  // it changed, which is exactly the kind of per-client record this script's own header says it
-  // preserves. Nothing verifies off it, so keeping it cannot make a step tick green.
   "client_dns_records",
-  "client_docs",
   "client_messages",
   "client_replica_pages",
   "concierge_configs",
@@ -142,11 +149,23 @@ const WIPE = [
 ];
 
 /**
- * Read for the backup but never deleted. Named rather than omitted, so the backup is a full
- * picture of the client at reset time and so the next person can see the decision was made
- * rather than forgotten.
+ * Read for the backup, never deleted.
+ *
+ * ‼️ THE FIRST THREE ARE THE 2026-09-12 CHANGE AND THEY USED TO BE IN THE WIPE LIST. They are the
+ * measurement half of the onboarding: nineteen swept listings, a competitor shortlist somebody
+ * picked, and review counts somebody read off the listings by hand because no platform here has an
+ * API. None of it is board state and none of it stops being true because the board was reset.
+ * Deleting them is what made a rehearsal cost a week.
+ *
+ * client_avatar_runs left the WIPE list on the same day, for the same reason: it is the record of
+ * which buyer this client was aimed at and when it changed.
  */
 const KEEP = [
+  "nap_discrepancies",
+  "competitor_candidates",
+  "review_audit_rows",
+  "client_avatar_runs",
+  "client_events",
   "client_onboarding_steps", // the eight-stage rollup; refreshStages recomputes it
   "audit_reports", // the Day 0 photograph. baseline_scan has no fallback without it
   "concierge_sessions",
@@ -161,11 +180,11 @@ const KEEP = [
 ];
 
 async function main() {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!channel) {
+  const oldChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  if (!oldChannel) {
     throw new Error(
-      "SLACK_CLIENT_ONBOARDING_CHANNEL is not set. It lives only in Vercel; pass it inline. " +
-        "Production is C0BLK797PNU."
+      "SLACK_CLIENT_ONBOARDING_CHANNEL is not set. It is where the OLD cards are deleted from, it " +
+        "lives only in Vercel, so pass it inline. Production is C0BLK797PNU."
     );
   }
 
@@ -186,7 +205,12 @@ async function main() {
   console.log(`  id                  ${clientId}`);
   console.log(`  intake_completed_at ${String(c.intake_completed_at ?? "null")}  (KEPT)`);
   console.log(`  ops_thread_ts       ${String(c.ops_thread_ts ?? "null")}`);
+  console.log(`  ops_channel_id      ${String(c.ops_channel_id ?? "null")}`);
   console.log(`  day_0_archived_at   ${String(c.day_0_archived_at ?? "null")}`);
+  console.log(`  offer locked        ${(c.offer as { lockedAt?: string } | null)?.lockedAt ?? "no"}`);
+  console.log("");
+  console.log(`re-walking from: *${PREP_CALL_STEP}* (step ${PRE_LOCK_STEPS.length + 1} of ${DELIVERY_STEPS.length})`);
+  console.log(`kept and re-confirmed: ${PRE_LOCK_STEPS.join(", ")}`);
   console.log("");
 
   // ── 2. The Slack ts values, collected BEFORE anything is wiped ────────────
@@ -197,8 +221,8 @@ async function main() {
   if (stepErr) throw new Error(`could not read the board: ${stepErr.message}`);
 
   const rows = stepRows ?? [];
-  // Cards first, then anchors, then the ops header. Deleting a parent before its replies is
-  // legal, but it leaves the log reading backwards when a delete fails halfway.
+  // Cards first, then anchors, then the ops header. Deleting a parent before its replies is legal,
+  // but it leaves the log reading backwards when a delete fails halfway.
   const cardTs = rows.map((r) => r.slack_message_ts as string | null).filter(Boolean) as string[];
   const anchorTs = rows.map((r) => r.slack_anchor_ts as string | null).filter(Boolean) as string[];
   const opsTs = (c.ops_thread_ts as string | null) ?? null;
@@ -210,17 +234,38 @@ async function main() {
   );
   console.log(
     `slack: ${cardTs.length} card(s), ${anchorTs.length} anchor(s)` +
-      `${opsTs ? ", 1 ops header" : ""} = ${toDelete.length} message(s) to delete`
+      `${opsTs ? ", 1 ops header" : ""} = ${toDelete.length} message(s) to delete from ${oldChannel}`
   );
+
+  // ── 3. The documents, split by which half of the board they belong to ─────
+  //
+  // ‼️ EVIDENCE IS KEPT, ARTIFACTS ARE NOT. A screenshot filed against the presence sweep is a
+  // picture of a listing somebody opened: still true, and re-taking nineteen of them is the cost
+  // this whole change exists to remove. A GENERATED document is this system's own output about a
+  // board that is being re-walked, so it goes and is written again.
+  const { data: docRows } = await supabaseAdmin
+    .from("client_docs")
+    .select("id, filename, delivery_step_key, source")
+    .eq("client_id", clientId);
+
+  const docs = docRows ?? [];
+  const docKept = docs.filter(
+    (d) => d.source !== "generated" && PRE_LOCK_STEPS.includes((d.delivery_step_key as string) ?? "")
+  );
+  const docGone = docs.filter((d) => !docKept.includes(d));
+
+  console.log(`docs:  ${docKept.length} kept (evidence before the prep call), ${docGone.length} deleted`);
   console.log("");
 
-  // ── 3. The backup, before anything ────────────────────────────────────────
+  // ── 4. The backup, before anything ────────────────────────────────────────
   const backup: Record<string, unknown> = {
     reset_at: new Date().toISOString(),
     slug: SLUG,
     client_id: clientId,
     client,
     delivery_steps: rows,
+    docs_kept: docKept,
+    docs_deleted: docGone,
     deleted: {} as Record<string, unknown>,
     kept: {} as Record<string, unknown>,
   };
@@ -233,8 +278,8 @@ async function main() {
   ] as Array<[Record<string, unknown>, string[]]>) {
     for (const t of tables) {
       const { data, error } = await supabaseAdmin.from(t).select("*").eq("client_id", clientId);
-      // NOT swallowed. _delete-client.ts hides these, which is how `client_drafts` survived in
-      // its table list for months while existing nowhere in the schema.
+      // NOT swallowed. _delete-client.ts hides these, which is how `client_drafts` survived in its
+      // table list for months while existing nowhere in the schema.
       if (error) {
         bucket[t] = { error: error.message };
         console.log(`  !! ${t.padEnd(26)} ${error.message.slice(0, 70)}`);
@@ -253,8 +298,15 @@ async function main() {
   console.log(`would keep:   ${counts(kept).join(", ") || "nothing"}`);
   console.log("");
 
+  if (CHANNEL_ARG) {
+    console.log(`would create private channel #${CHANNEL_ARG}${INVITE_ARG ? ` and invite ${INVITE_ARG}` : ""}`);
+    if (!INVITE_ARG) {
+      console.log("  !! no --invite: a private channel is invisible to anybody who is not in it.");
+    }
+  }
+
   if (DRY) {
-    console.log("--dry: nothing written, no Slack message touched, no backup file.");
+    console.log("\n--dry: nothing written, no Slack message touched, no backup file.");
     console.log("Re-run with --yes to do it.");
     return;
   }
@@ -266,19 +318,18 @@ async function main() {
   fs.writeFileSync(out, JSON.stringify(backup, null, 2), "utf8");
   console.log(`Backup written: ${out} (${(fs.statSync(out).size / 1024).toFixed(1)} KB)\n`);
 
-  // ── 4. Slack, by stored ts ────────────────────────────────────────────────
-  // Idempotent, and the difference between chat.delete working and not on a channel the bot
-  // did not create. slackFetch returns { ok:false } and never throws: read the body.
-  const joined = await slack.joinChannel(channel);
+  // ── 5. Slack, by stored ts ────────────────────────────────────────────────
+  // Idempotent, and the difference between chat.delete working and not on a channel the bot did
+  // not create. slackFetch returns { ok:false } and never throws: read the body.
+  const joined = await slack.joinChannel(oldChannel);
   if (!joined.ok) console.log(`joinChannel: ${joined.error ?? "refused"} (continuing)`);
 
   let gone = 0;
   let refused = 0;
   for (const ts of toDelete) {
-    const res = (await slack.deleteMessage(channel, ts)) as { ok?: boolean; error?: string };
-    if (res.ok === true) {
-      gone += 1;
-    } else {
+    const res = (await slack.deleteMessage(oldChannel, ts)) as { ok?: boolean; error?: string };
+    if (res.ok === true) gone += 1;
+    else {
       refused += 1;
       console.log(`  kept  ${ts}  ${res.error ?? "unknown"}`);
     }
@@ -287,7 +338,7 @@ async function main() {
   }
   console.log(`slack: ${gone} deleted, ${refused} left in place\n`);
 
-  // ── 5. The board ──────────────────────────────────────────────────────────
+  // ── 6. The board ──────────────────────────────────────────────────────────
   const { error: wipeStepsErr } = await supabaseAdmin
     .from("client_delivery_steps")
     .delete()
@@ -295,7 +346,7 @@ async function main() {
   if (wipeStepsErr) throw new Error(`could not clear the board: ${wipeStepsErr.message}`);
   console.log(`deleted ${rows.length} client_delivery_steps rows`);
 
-  // ── 6. The artifacts every verifier reads ─────────────────────────────────
+  // ── 7. The artifacts the re-walked steps verify against ───────────────────
   for (const t of WIPE) {
     const had = Array.isArray(deleted[t]) ? (deleted[t] as unknown[]).length : 0;
     if (!had) continue;
@@ -307,18 +358,29 @@ async function main() {
     console.log(`  deleted ${String(had).padStart(4)} from ${t}`);
   }
 
-  // ── 7. The client columns that gate a re-walk ─────────────────────────────
-  // ops_thread_ts must be null: openOpsThread claims with .is("ops_thread_ts", null) and
-  // postDeliveryChecklist refuses to open a board without one.
+  if (docGone.length) {
+    const { error } = await supabaseAdmin
+      .from("client_docs")
+      .delete()
+      .in("id", docGone.map((d) => d.id as string));
+    if (error) console.log(`  !! client_docs: ${error.message}`);
+    else console.log(`  deleted ${String(docGone.length).padStart(4)} from client_docs (${docKept.length} evidence rows kept)`);
+  }
+
+  // ── 8. The client columns that gate a re-walk ─────────────────────────────
   //
-  // ‼️ THE day_0 QUARTET CLEARS TOGETHER OR NOT AT ALL. docs/2026-08-18-day-zero-wall.sql:84
-  // holds a CHECK that (day_0_archived_at is null) = (day_0_source is null), and day_0_source is
-  // itself constrained to ('photograph_2','manual_step','waived'). Clearing one of them is a
-  // constraint violation, not a partial reset.
+  // ops_thread_ts must be null: openOpsThread claims with .is("ops_thread_ts", null) and
+  // postDeliveryChecklist refuses to open a board without one. ops_index_ts goes with it, or the
+  // pinned index points at a message in the old channel.
+  //
+  // ‼️ THE day_0 QUARTET CLEARS TOGETHER OR NOT AT ALL. docs/2026-08-18-day-zero-wall.sql holds a
+  // CHECK that (day_0_archived_at is null) = (day_0_source is null), and day_0_source is itself
+  // constrained. Clearing one of them is a constraint violation, not a partial reset.
   const { error: patchErr } = await supabaseAdmin
     .from("clients")
     .update({
       ops_thread_ts: null,
+      ops_index_ts: null,
       day_0_archived_at: null,
       day_0_source: null,
       day_0_archived_by: null,
@@ -327,9 +389,37 @@ async function main() {
     })
     .eq("id", clientId);
   if (patchErr) throw new Error(`could not clear the client columns: ${patchErr.message}`);
-  console.log("cleared ops_thread_ts and the day_0 quartet (intake_completed_at KEPT)\n");
+  console.log("cleared ops_thread_ts, ops_index_ts and the day_0 quartet (intake_completed_at KEPT)");
 
-  // ── 8. Reopen, in the order startDelivery uses ────────────────────────────
+  // ── 9. The offer lock ─────────────────────────────────────────────────────
+  //
+  // The prep call is the step being rehearsed, and a board that reopens holding a locked offer
+  // walks straight past it. The PROPOSAL survives: it is a reading of the intake form, still true,
+  // and it is what the prep call's card opens with.
+  const { unlockOffer } = await import("../src/lib/clients/offers");
+  const unlocked = await unlockOffer(clientId);
+  console.log(unlocked.ok ? "offer lock cleared, proposal kept" : `!! offer not unlocked: ${unlocked.error}`);
+
+  // ── 10. The fresh channel, BEFORE anything is seeded ──────────────────────
+  //
+  // ops_channel_id is write-once (a conditional update guarded on `is null`), and channelFor
+  // memoises it, so this has to happen before openOpsThread or the board posts into the old
+  // channel and can never be moved.
+  if (CHANNEL_ARG) {
+    const { createOpsChannel } = await import("../src/lib/clients/provision");
+    try {
+      const made = await createOpsChannel(clientId, SLUG, { name: CHANNEL_ARG, invite: INVITE_ARG });
+      console.log(
+        made
+          ? `channel: #${made.name} (${made.channelId})${INVITE_ARG ? `, invited ${INVITE_ARG}` : ""}`
+          : "channel: ops_channel_id was already set, so it was left alone"
+      );
+    } catch (e) {
+      console.log(`!! channel not created: ${(e as Error).message}. The board will reopen where it was.`);
+    }
+  }
+
+  // ── 11. Reopen, in the order startDelivery uses ───────────────────────────
   const { openOpsThread } = await import("../src/lib/onboarding2/delivery");
   const { seedDeliverySteps, autoCompleteStep, postDeliveryChecklist } = await import(
     "../src/lib/clients/delivery-checklist"
@@ -341,44 +431,28 @@ async function main() {
   console.log(`ops thread posted and claimed: ${opened.ts}`);
 
   await seedDeliverySteps(clientId);
-  console.log(`seeded ${DELIVERY_STEPS.length} steps`);
+  console.log(`seeded ${DELIVERY_STEPS.length} steps\n`);
 
-  // The same call startDelivery makes, and it goes through the same verifier the button does:
-  // it ticks because clients.intake_completed_at is still there, which is the whole reason that
-  // column was kept.
-  const ticked = await autoCompleteStep(clientId, "intake_received");
-  console.log(`intake_received: ${ticked.ok ? "ticked" : `REFUSED (${ticked.error})`}`);
-
-  // ‼️ baseline_scan TOO, OR THE BOARD STOPS DEAD AT STEP 2 WITH NOTHING THAT CAN MOVE IT.
-  // Measured on the first real run of this script, 2026-09-07. baseline_scan is `mode: auto`,
-  // so the board gives it an ANCHOR and no card, which means no [Done] button in Slack. And it
-  // is in ROUTE_COMPLETED rather than AUTO_RUNNERS (artifacts/registry.ts), so no board runner
-  // will ever fire it either: in a real onboarding startDelivery calls startBaselineScan as a
-  // separate step of its own. This script deliberately does not, because audit_reports is KEPT
-  // and a fresh scan would mint a NEWER report that replaces the Day 0 photograph the whole
-  // reset went out of its way to preserve.
+  // ── 12. Re-confirm everything before the prep call ────────────────────────
   //
-  // So the step was left reachable, uncompletable, and blocking competitor_shortlist,
-  // avatar_confirmed, review_audit and avatar_harvest behind it. The only exit was the
-  // dashboard checkbox, which nothing told you about.
+  // ‼️ EVERY ONE OF THESE GOES THROUGH ITS OWN VERIFIER. autoCompleteStep routes into
+  // setDeliveryStep, which runs verifyStep BEFORE the row write and writes nothing on a refusal.
+  // So this is not a list of steps being ticked, it is a list of steps being ASKED, and a step
+  // whose evidence did not survive says so and stays open. That is the whole difference between
+  // keeping the evidence and asserting the work was done.
   //
-  // This is NOT a free tick. autoCompleteStep routes through the same verifier the button
-  // does, and that verifier reads audit_runs and the report status. With no kept report it
-  // REFUSES and says so in the thread, which is the correct outcome: a client with no
-  // photograph genuinely has not had step 2 done.
-  const scanned = await autoCompleteStep(clientId, "baseline_scan");
-  console.log(
-    `baseline_scan:   ${scanned.ok ? "ticked off the kept audit report" : `not ticked (${scanned.error})`}`
-  );
-  if (!scanned.ok) {
-    console.log("    No usable audit on file. Fire a fresh one, or the board stops at step 2:");
-    console.log("      startBaselineScan(clientId) in src/lib/clients/baseline-scan.ts");
+  // In order, because a later verifier can read what an earlier one adopted: baseline_scan is what
+  // writes clients.vertical_slug through adoptAuditClassification, and the harvest refuses without it.
+  console.log("re-confirming the steps before the prep call:");
+  for (const key of PRE_LOCK_STEPS) {
+    const res = await autoCompleteStep(clientId, key);
+    console.log(`  ${res.ok ? "ok    " : "OPEN  "}${key}${res.ok ? "" : `  (${res.error ?? "refused"})`}`);
   }
 
   await postDeliveryChecklist(clientId);
-  console.log("board reopened\n");
+  console.log("\nboard reopened");
 
-  // ── 9. What it looks like now ─────────────────────────────────────────────
+  // ── 13. What it looks like now ────────────────────────────────────────────
   const { data: after } = await supabaseAdmin
     .from("client_delivery_steps")
     .select("step_key, status, slack_anchor_ts")
@@ -389,9 +463,13 @@ async function main() {
   const byStatus = new Map<string, number>();
   for (const r of now) byStatus.set(r.status as string, (byStatus.get(r.status as string) ?? 0) + 1);
 
-  console.log(`${now.length} rows, ${anchored} anchored`);
+  console.log(`\n${now.length} rows, ${anchored} anchored`);
   console.log([...byStatus.entries()].map(([s, n]) => `  ${s}: ${n}`).join("\n"));
-  console.log(`\nBackup: ${out}`);
+
+  const { reachableCursor } = await import("../src/lib/clients/step-engine");
+  const cursor = [...(await reachableCursor(clientId))];
+  console.log(`\ncursor: ${cursor.join(", ") || "(empty)"}`);
+  console.log(`Backup: ${out}`);
 }
 
 main().catch((e) => {
