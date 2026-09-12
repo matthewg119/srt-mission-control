@@ -2561,8 +2561,7 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
   const byKey = new Map(rows.map((r) => [r.step_key as string, r.status as string]));
 
   for (const step of DELIVERY_STEPS) {
-    const runner = AUTO_RUNNERS[step.key];
-    if (!runner) continue;
+    if (!AUTO_RUNNERS[step.key]) continue;
     if (!cursor.has(step.key)) continue;
 
     const status = byKey.get(step.key);
@@ -2581,74 +2580,106 @@ export async function runReadyAutoSteps(clientId: string): Promise<void> {
       );
     }
 
-    // The claim. `.in("status", ...)` makes this conditional: the loser of a race updates zero
-    // rows and gets no data back, so exactly one caller runs the generator.
-    const { data: claimed } = await supabaseAdmin
-      .from("client_delivery_steps")
-      .update({ status: "running", started_at: new Date().toISOString(), error_detail: null })
-      .eq("client_id", clientId)
-      .eq("step_key", step.key)
-      .in("status", ["pending", "blocked", "ready"])
-      .select("id");
-
-    if (!claimed?.length) continue;
-
-    let result: { ok: boolean; error?: string; note?: string };
-    try {
-      result = await runner(clientId);
-    } catch (e) {
-      result = { ok: false, error: (e as Error).message };
-    }
-
-    if (!result.ok) {
-      await supabaseAdmin
-        .from("client_delivery_steps")
-        .update({ status: "error", error_detail: result.error ?? "unknown", updated_at: new Date().toISOString() })
-        .eq("client_id", clientId)
-        .eq("step_key", step.key);
-
-      // Into THIS STEP'S thread, not ops_thread_ts. A failure is the single most important
-      // thing a step's thread can say, and it used to be a reply in a stream of eighteen.
-      await notifyStep(
-        clientId,
-        step.key,
-        `:warning: *${step.label}* failed: ${result.error ?? "unknown"}`
-      );
-      await refreshStepAnchor(clientId, step.key);
-
-      // ‼️ A FAILED RUNNER'S NOTE IS POSTED TOO, and it used to be thrown away. `note` is the
-      // runner's own account of what it found, and on the failure paths that is precisely
-      // where the diagnosis lives: registerHubAndSeedDns builds a full readout of which host
-      // attached, which did not and why, and then returns ok:false when neither did. Printing
-      // one line of `error` and discarding the readout leaves the thread saying a step failed
-      // with no way to tell whether the cause is a missing token or a domain someone else owns.
-      if (result.note) await notifyStep(clientId, step.key, result.note);
-      continue;
-    }
-
-    if (result.note) {
-      await notifyStep(clientId, step.key, result.note);
-    }
-
-    if (step.mode === "auto_then_manual") {
-      // Generated, now waiting on a person. Post the card and stop.
-      await supabaseAdmin
-        .from("client_delivery_steps")
-        .update({ status: "ready", updated_at: new Date().toISOString() })
-        .eq("client_id", clientId)
-        .eq("step_key", step.key);
-      await postStep(clientId, step.key).catch((e) =>
-        console.error(`[step-engine] card for ${step.key} failed:`, (e as Error).message)
-      );
-      await refreshStepAnchor(clientId, step.key);
-      continue;
-    }
-
-    const { autoCompleteStep } = await import("./delivery-checklist");
-    await autoCompleteStep(clientId, step.key).catch((e) =>
-      console.error(`[step-engine] completing ${step.key} failed:`, (e as Error).message)
-    );
+    await runOneStep(clientId, step.key);
   }
+}
+
+/**
+ * Claim one auto step, run its generator, and do what its outcome requires.
+ *
+ * ‼️ EXTRACTED SO THERE IS ONE ANSWER TO "WHAT HAPPENS AFTER A RUNNER" (2026-09-12). The sweep
+ * above decides WHICH steps may run (the cursor, the blockers, the status); this decides what
+ * running one MEANS: the conditional claim, the error state and its two thread messages, the
+ * `ready` park for auto_then_manual, the auto-complete for the rest. A second copy of that in the
+ * ops route below would be a second place for "a failed runner's note is posted too" to be
+ * forgotten, which is a defect this file has already fixed once.
+ *
+ * ‼️ IT DELIBERATELY DOES NOT CHECK THE CURSOR OR THE BLOCKERS. The caller does. That is what lets
+ * an ops lever re-run a single step whose card is already on the board without walking the whole
+ * thing, and it is why the route that does so refuses a step with no anchor: creating one out of
+ * order is the leak one-anchor-at-a-time exists to prevent.
+ */
+export async function runOneStep(
+  clientId: string,
+  stepKey: string
+): Promise<{ ran: boolean; ok?: boolean; error?: string; note?: string; status?: string }> {
+  const { AUTO_RUNNERS } = await import("./artifacts/registry");
+  const step = DELIVERY_STEPS.find((s) => s.key === stepKey);
+  if (!step) return { ran: false, error: `unknown step ${stepKey}` };
+
+  const runner = AUTO_RUNNERS[step.key];
+  if (!runner) return { ran: false, error: `${step.key} has no runner: nothing generates it` };
+
+  // The claim. `.in("status", ...)` makes this conditional: the loser of a race updates zero
+  // rows and gets no data back, so exactly one caller runs the generator.
+  const { data: claimed } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .update({ status: "running", started_at: new Date().toISOString(), error_detail: null })
+    .eq("client_id", clientId)
+    .eq("step_key", step.key)
+    .in("status", ["pending", "blocked", "ready", "error"])
+    .select("id");
+
+  if (!claimed?.length) {
+    return { ran: false, error: `${step.key} is not in a startable state, so nothing was claimed` };
+  }
+
+  let result: { ok: boolean; error?: string; note?: string };
+  try {
+    result = await runner(clientId);
+  } catch (e) {
+    result = { ok: false, error: (e as Error).message };
+  }
+
+  if (!result.ok) {
+    await supabaseAdmin
+      .from("client_delivery_steps")
+      .update({ status: "error", error_detail: result.error ?? "unknown", updated_at: new Date().toISOString() })
+      .eq("client_id", clientId)
+      .eq("step_key", step.key);
+
+    // Into THIS STEP'S thread, not ops_thread_ts. A failure is the single most important
+    // thing a step's thread can say, and it used to be a reply in a stream of eighteen.
+    await notifyStep(
+      clientId,
+      step.key,
+      `:warning: *${step.label}* failed: ${result.error ?? "unknown"}`
+    );
+    await refreshStepAnchor(clientId, step.key);
+
+    // ‼️ A FAILED RUNNER'S NOTE IS POSTED TOO, and it used to be thrown away. `note` is the
+    // runner's own account of what it found, and on the failure paths that is precisely
+    // where the diagnosis lives: registerHubAndSeedDns builds a full readout of which host
+    // attached, which did not and why, and then returns ok:false when neither did. Printing
+    // one line of `error` and discarding the readout leaves the thread saying a step failed
+    // with no way to tell whether the cause is a missing token or a domain someone else owns.
+    if (result.note) await notifyStep(clientId, step.key, result.note);
+    return { ran: true, ok: false, error: result.error, note: result.note, status: "error" };
+  }
+
+  if (result.note) {
+    await notifyStep(clientId, step.key, result.note);
+  }
+
+  if (step.mode === "auto_then_manual") {
+    // Generated, now waiting on a person. Post the card and stop.
+    await supabaseAdmin
+      .from("client_delivery_steps")
+      .update({ status: "ready", updated_at: new Date().toISOString() })
+      .eq("client_id", clientId)
+      .eq("step_key", step.key);
+    await postStep(clientId, step.key).catch((e) =>
+      console.error(`[step-engine] card for ${step.key} failed:`, (e as Error).message)
+    );
+    await refreshStepAnchor(clientId, step.key);
+    return { ran: true, ok: true, note: result.note, status: "ready" };
+  }
+
+  const { autoCompleteStep } = await import("./delivery-checklist");
+  await autoCompleteStep(clientId, step.key).catch((e) =>
+    console.error(`[step-engine] completing ${step.key} failed:`, (e as Error).message)
+  );
+  return { ran: true, ok: true, note: result.note, status: "complete" };
 }
 
 /**
