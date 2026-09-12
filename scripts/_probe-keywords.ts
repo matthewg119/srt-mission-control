@@ -36,7 +36,7 @@ import {
 } from "@/lib/clients/keyword-expansion";
 import { isAboutOffer, offerVocabulary } from "@/lib/clients/phrase-quality";
 import { parseTerms } from "@/lib/clients/offers";
-import { commandOwner } from "@/lib/clients/step-commands";
+import { commandOwner, looksLikePastedList } from "@/lib/clients/step-commands";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -179,6 +179,42 @@ check(
   "and each line is still classified on its own: the outcome promise is a hook",
   pasted?.kind === "add" && classifyUse("query", pasted.phrases[1]) === "hook" && classifyUse("query", pasted.phrases[2]) === "query"
 );
+{
+  // ‼️ THE PASTED LIST, WHICH IS WHAT ACTUALLY HAPPENED TWICE. A list with no `keywords add:` in
+  // front of it matches no command grammar, so it used to fall through to the general assistant,
+  // which answered a keyword list with a strategic assessment and stored nothing.
+  const pastedList = [
+    "AEO for med spas",
+    "answer engine optimization med spa",
+    "why isn't my med spa on ChatGPT",
+    "ChatGPT not recommending my clinic",
+    "best AEO agency for med spas",
+    "how much does AEO cost",
+  ].join("\n");
+  check("a pasted list of phrases is recognised", looksLikePastedList(pastedList)?.lines.length === 6);
+  check(
+    "a numbered list with a heading skips the heading",
+    looksLikePastedList("Mechanism-led (AEO angle):\n1. AEO for med spas\n2. AI visibility audit\n3. get cited by ChatGPT\n4. answer engine optimization\n5. LLM optimization clinics")?.lines.length === 5
+  );
+  check("four lines is not a list", looksLikePastedList("one phrase\ntwo phrase\nthree phrase\nfour phrase") === null);
+  check(
+    "a paragraph with line breaks is not a list",
+    looksLikePastedList(
+      [
+        "I spoke to them this morning and they were happy with the preview.",
+        "They want to know whether the booking bot is included in the price.",
+        "I said I would check and come back to them tomorrow afternoon.",
+        "They also asked about the guarantee and how the five patients are counted.",
+        "Worth reading the notes before the next call because there is a lot in there.",
+      ].join("\n")
+    ) === null
+  );
+  check(
+    "a list that IS a command is left to the command handler",
+    looksLikePastedList("keywords add:\n1. AEO for med spas\n2. AI visibility\n3. get cited\n4. LLM SEO\n5. answer engines") !== null &&
+      commandOwner("keywords add:\n1. AEO for med spas") !== null
+  );
+}
 {
   check("`terms:` belongs to the prep call", commandOwner("terms: AEO, ChatGPT SEO")?.step === "offer_locked");
   check("a pasted keyword list belongs to the keyword step", commandOwner("keywords add:\n1. x")?.step === "keyword_set");

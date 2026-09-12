@@ -1086,6 +1086,34 @@ export async function POST(request: NextRequest) {
             if (!slackOk(posted)) console.error("[slack/events] misrouted-command pointer failed");
             return NextResponse.json({ ok: true });
           }
+
+          // ‼️ A PASTED LIST IS NOT A COMMAND ANYWHERE, AND IT USED TO REACH THE ASSISTANT.
+          // Matthew pasted two keyword lists into the prep call's thread and got a strategic
+          // assessment of them back. Nothing was stored. See clients/step-commands.ts.
+          const { pastedListPointer } = await import("@/lib/clients/step-commands");
+          const listHint = await pastedListPointer({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+          });
+          if (listHint) {
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "pasted-list",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: listHint,
+            });
+            if (!slackOk(posted)) console.error("[slack/events] pasted-list pointer failed");
+            return NextResponse.json({ ok: true });
+          }
         }
 
         if (client && parentThreadTs && userText.trim().length > 0) {

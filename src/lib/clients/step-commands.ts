@@ -40,6 +40,24 @@ export function commandOwner(text: string): { step: StepKey; what: string } | nu
   return hit ? { step: hit.step, what: hit.what } : null;
 }
 
+/** Where a step's thread is, in words a person can click. Shared by both pointers below. */
+async function whereStepLives(clientId: string, stepKey: StepKey): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("slack_anchor_ts")
+    .eq("client_id", clientId)
+    .eq("step_key", stepKey)
+    .maybeSingle();
+
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(clientId);
+  const ts = (data as { slack_anchor_ts?: string | null } | null)?.slack_anchor_ts ?? null;
+
+  return ts && channel
+    ? `Its thread: ${slackThreadLink(channel, ts)}`
+    : "That step has not been posted yet. Its card appears in this channel when the board reaches it.";
+}
+
 /** The pointer to post, or null when the command is in the right thread or is not a command. */
 export async function misroutedCommand(input: {
   clientId: string;
@@ -50,22 +68,120 @@ export async function misroutedCommand(input: {
   if (!owner || input.stepKey === owner.step) return null;
 
   const label = DELIVERY_STEPS.find((s) => s.key === owner.step)?.label ?? owner.step;
-  const { data } = await supabaseAdmin
-    .from("client_delivery_steps")
-    .select("slack_anchor_ts")
-    .eq("client_id", input.clientId)
-    .eq("step_key", owner.step)
-    .maybeSingle();
-
-  const { channelFor } = await import("./step-board");
-  const channel = await channelFor(input.clientId);
-  const ts = (data as { slack_anchor_ts?: string | null } | null)?.slack_anchor_ts ?? null;
   const here = input.stepKey && isStepKey(input.stepKey) ? ` This thread is step ${stepNumber(input.stepKey)}.` : "";
 
   return [
     `:point_right: *Nothing was saved.* ${owner.what} go in *step ${stepNumber(owner.step)}, ${label}*, not here.${here}`,
-    ts && channel
-      ? `Its thread: ${slackThreadLink(channel, ts)}`
-      : "That step has not been posted yet. Its card appears in this channel when the board reaches it.",
+    await whereStepLives(input.clientId, owner.step),
+  ].join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A pasted LIST, which is not a command anywhere and used to reach the assistant
+//
+// ‼️ MEASURED ON SRT, 2026-09-11 AND AGAIN 2026-09-12. Matthew pasted two lists of keyword and
+// hook ideas into the PREP CALL's thread. `commandOwner` matches the anchored command forms
+// (`keywords add:`, `keywords approve`, ...) and a bare list matches none of them, so nothing
+// claimed it, it fell through to the general assistant, and the answer was a "Strategic
+// Assessment" essay about his own list. Nothing was stored: client_keywords still had zero rows.
+//
+// The failure is not that the guard was wrong, it is that a list with no prefix is unmistakable in
+// INTENT and lands nowhere. So it gets the same treatment a misrouted command gets: say plainly
+// that nothing was saved, and say where it goes.
+//
+// ‼️ IT NEVER SAVES THE LIST ITSELF, and that is deliberate rather than lazy. `keywords add:` runs
+// inside the keyword step's context: this client's audience, the offer fingerprint the expansion
+// was written for, and the ranked set a person then approves. Storing phrases from another
+// thread would put rows in client_keywords that belong to no fingerprint and that nobody approved,
+// which is the one thing the whole keyword step exists to prevent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Five is a list. Fewer is a sentence with line breaks in it. */
+const LIST_MIN_LINES = 5;
+
+/** Longer than this is prose, whatever else it looks like. */
+const PHRASE_MAX_CHARS = 90;
+const PHRASE_MAX_WORDS = 14;
+
+export interface PastedList {
+  /** The lines with their bullets and numbers stripped, in order. */
+  lines: string[];
+  numbered: boolean;
+}
+
+/**
+ * Does this message look like a pasted list of phrases?
+ *
+ * ‼️ CONSERVATIVE ON PURPOSE. This thread also takes dictation: research pastes, call notes, and
+ * questions somebody is actually asking the assistant. A false positive answers a real question
+ * with a pointer, which is worse than the essay this exists to prevent. So it wants FIVE or more
+ * phrase-shaped lines, and at least seventy per cent of what was pasted has to be phrase-shaped
+ * before it will claim the message at all.
+ *
+ * A line ending in a full stop or an exclamation mark is somebody TALKING. A question mark is not:
+ * half the keyword set is questions ("why isn't my med spa on ChatGPT").
+ */
+export function looksLikePastedList(text: string): PastedList | null {
+  const raw = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (raw.length < LIST_MIN_LINES) return null;
+
+  // A heading ("Mechanism-led (AEO / visibility angle):") is not a phrase and is not counted
+  // against the list either. addList() in keyword-expansion.ts drops these the same way.
+  const body = raw.filter((l) => !/:\s*$/.test(l));
+  if (body.length < LIST_MIN_LINES) return null;
+
+  const bulletted = body.filter((l) => /^(\d+[.)]|[-*•])\s+/.test(l)).length;
+  const stripped = body.map((l) => l.replace(/^(\d+[.)]|[-*•])\s+/, "").trim()).filter(Boolean);
+
+  const phrases = stripped.filter(
+    (l) =>
+      l.length >= 4 &&
+      l.length <= PHRASE_MAX_CHARS &&
+      !/[.!]$/.test(l) &&
+      l.split(/\s+/).length <= PHRASE_MAX_WORDS
+  );
+
+  if (phrases.length < LIST_MIN_LINES) return null;
+  if (phrases.length < Math.ceil(stripped.length * 0.7)) return null;
+
+  return { lines: stripped, numbered: bulletted >= LIST_MIN_LINES };
+}
+
+/**
+ * The pointer for a pasted list, or null when the message is not one.
+ *
+ * In the keyword step's OWN thread it is a missing prefix rather than a wrong room, and the answer
+ * says so: the list is right, put three words in front of it.
+ */
+export async function pastedListPointer(input: {
+  clientId: string;
+  stepKey: string | null;
+  text: string;
+}): Promise<string | null> {
+  // Anything that IS a command is already handled, including in the wrong thread.
+  if (commandOwner(input.text)) return null;
+
+  const list = looksLikePastedList(input.text);
+  if (!list) return null;
+
+  const count = list.lines.length;
+  const label = DELIVERY_STEPS.find((s) => s.key === "keyword_set")?.label ?? "Keywords";
+
+  if (input.stepKey === "keyword_set") {
+    return [
+      `:point_right: *Nothing was saved.* That looks like ${count} phrases, and a list on its own is ` +
+        `dictation even here.`,
+      "Put `keywords add:` on the line above it and every one of them is stored, ranked against " +
+        "this client's offer, and waiting for `keywords approve`.",
+    ].join("\n");
+  }
+
+  const here =
+    input.stepKey && isStepKey(input.stepKey) ? ` This thread is step ${stepNumber(input.stepKey)}.` : "";
+
+  return [
+    `:point_right: *Nothing was saved.* That looks like ${count} phrases. Keyword lists go in ` +
+      `*step ${stepNumber("keyword_set")}, ${label}*, with \`keywords add:\` in front of them.${here}`,
+    await whereStepLives(input.clientId, "keyword_set"),
   ].join("\n");
 }
