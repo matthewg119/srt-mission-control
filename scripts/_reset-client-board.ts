@@ -216,7 +216,7 @@ async function main() {
   // ── 2. The Slack ts values, collected BEFORE anything is wiped ────────────
   const { data: stepRows, error: stepErr } = await supabaseAdmin
     .from("client_delivery_steps")
-    .select("step_key, status, slack_anchor_ts, slack_message_ts")
+    .select("step_key, status, skipped_reason, slack_anchor_ts, slack_message_ts")
     .eq("client_id", clientId);
   if (stepErr) throw new Error(`could not read the board: ${stepErr.message}`);
 
@@ -255,6 +255,19 @@ async function main() {
   const docGone = docs.filter((d) => !docKept.includes(d));
 
   console.log(`docs:  ${docKept.length} kept (evidence before the prep call), ${docGone.length} deleted`);
+
+  // ‼️ A SKIP IS A DECISION AND IT SURVIVES, the same way intake_completed_at, the confirmed avatar
+  // and the payment stamp survive. "Marked not applicable" is a judgement a person made about this
+  // business; a reset that threw it away would stop the board on the first step he had already
+  // ruled out and ask him to rule it out again. Verified ticks are re-EARNED, decisions are kept.
+  const priorSkips = rows.filter(
+    (r) => r.status === "skipped" && PRE_LOCK_STEPS.includes(r.step_key as string)
+  );
+  if (priorSkips.length) {
+    console.log(
+      `skips: ${priorSkips.length} carried over (${priorSkips.map((r) => r.step_key as string).join(", ")})`
+    );
+  }
   console.log("");
 
   // ── 4. The backup, before anything ────────────────────────────────────────
@@ -421,7 +434,7 @@ async function main() {
 
   // ── 11. Reopen, in the order startDelivery uses ───────────────────────────
   const { openOpsThread } = await import("../src/lib/onboarding2/delivery");
-  const { seedDeliverySteps, autoCompleteStep, postDeliveryChecklist } = await import(
+  const { seedDeliverySteps, autoCompleteStep, setDeliveryStep, postDeliveryChecklist } = await import(
     "../src/lib/clients/delivery-checklist"
   );
 
@@ -444,7 +457,28 @@ async function main() {
   // In order, because a later verifier can read what an earlier one adopted: baseline_scan is what
   // writes clients.vertical_slug through adoptAuditClassification, and the harvest refuses without it.
   console.log("re-confirming the steps before the prep call:");
+  const before = new Map(rows.map((r) => [r.step_key as string, r] as const));
+
   for (const key of PRE_LOCK_STEPS) {
+    const prior = before.get(key);
+
+    // ‼️ A SKIP IS RE-APPLIED, NOT RE-ASKED, and setDeliveryStep does not gate it: "A SKIP is a
+    // decision, not a claim about work, and there is nothing to verify about deciding a step does
+    // not apply." The reason is his own words, carried over verbatim, because the artifacts read
+    // it and a reset is not a new opinion about why something was skipped.
+    if ((prior?.status as string | undefined) === "skipped") {
+      const reason = (prior?.skipped_reason as string | null) ?? "Marked not applicable before the board was reset";
+      const res = await setDeliveryStep({
+        clientId,
+        stepKey: key,
+        transition: "skipped",
+        skippedReason: reason,
+        actor: "Mission Control",
+      });
+      console.log(`  ${res.ok ? "skip  " : "OPEN  "}${key}  (carried over: ${reason})`);
+      continue;
+    }
+
     const res = await autoCompleteStep(clientId, key);
     console.log(`  ${res.ok ? "ok    " : "OPEN  "}${key}${res.ok ? "" : `  (${res.error ?? "refused"})`}`);
   }
