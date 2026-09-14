@@ -52,17 +52,24 @@ export interface PlacementResult {
 }
 
 /**
- * Words that are noise in a URL.
+ * Words that carry no meaning of their own in a keyword phrase.
  *
  * ‼️ STOPWORDS IS IMPORTED, NOT RETYPED. gbp-audit.ts owns the one list in this repo and its
- * header says why it is mechanical. A second copy would drift, and then a slug and a scoring
+ * header says why it is mechanical. A second copy would drift, and then a slug and a placement
  * check would disagree about what a content word is.
  *
- * The question words are added HERE and not there, because they are the opposite of noise in a
- * category match and pure noise in a URL: every one of these pages answers a question, so a slug
- * that keeps them reads "how-long-does-it-take-to-work" on all seven.
+ * ‼️ THE QUESTION AND FUNCTION WORDS ARE ADDED HERE AND NOT THERE, and adding them matters twice.
+ * In a URL they are pure noise: every one of these pages answers a question, so a slug that keeps
+ * them reads "how-long-does-it-take-to-work" on all seven. And in a placement check they are what
+ * makes a true match look false, which is the sharper problem. "How long does lip filler last"
+ * against a title reading "Lip filler: how long will it actually last?" is plainly the same
+ * subject, and holding out for the word "does" would fail it and push the drafter into welding
+ * the phrase in whole.
+ *
+ * gbp-audit.ts's own list is correct to EXCLUDE these: there, a category is being matched and a
+ * question word never appears in one. The difference is the input, not the opinion.
  */
-const SLUG_NOISE = new Set([
+const CONTENT_NOISE = new Set([
   ...STOPWORDS,
   "how", "what", "why", "when", "where", "which", "who", "does", "do", "did", "is", "it", "to",
   "a", "an", "of", "in", "on", "at", "by", "or", "if", "my", "me", "i", "be", "am",
@@ -88,7 +95,7 @@ export function keywordSlug(keyword: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .split(" ")
-    .filter((w) => w.length > 0 && !SLUG_NOISE.has(w));
+    .filter((w) => w.length > 0 && !CONTENT_NOISE.has(w));
 
   return pageSlug(kept.length ? kept.join(" ") : keyword);
 }
@@ -117,7 +124,7 @@ export function carriesKeyword(text: string | null | undefined, keyword: string)
   const words = flat(keyword)
     .replace(/[^a-z0-9 ]+/g, " ")
     .split(" ")
-    .filter((w) => w.length > 0 && !STOPWORDS.has(w));
+    .filter((w) => w.length > 0 && !CONTENT_NOISE.has(w));
 
   if (!words.length) return haystack.includes(flat(keyword));
 
