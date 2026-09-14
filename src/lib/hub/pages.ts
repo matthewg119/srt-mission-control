@@ -559,6 +559,15 @@ export async function undoLastAppend(
 export interface OutlineSection {
   heading: string;
   bullets: string[];
+  /**
+   * The long-tail phrase this one section is the answer to.
+   *
+   * ‼️ OPTIONAL ON THE TYPE, AND IT HAS TO STAY THAT WAY. Every outline written before
+   * 2026-09-14 is stored without it, and readOutline is the path those come back through. A
+   * required field here would make every one of them fail validation and drop to null, which
+   * readOutline's own contract says means "no outline" and would silently un-outline live pages.
+   */
+  keyword?: string;
 }
 
 export interface OutlineGap {
@@ -588,6 +597,9 @@ export function readOutline(raw: unknown): PageOutline | null {
     .map((s) => ({
       heading: String(s.heading).trim(),
       bullets: (s.bullets as unknown[]).filter((b): b is string => typeof b === "string" && b.trim() !== ""),
+      // Absent on every outline written before 2026-09-14. Left undefined rather than "" so a
+      // reader can tell "this outline predates per-section keywords" from "this one has none".
+      ...(typeof s.keyword === "string" && s.keyword.trim() !== "" ? { keyword: String(s.keyword).trim() } : {}),
     }))
     .filter((s) => s.heading !== "");
 

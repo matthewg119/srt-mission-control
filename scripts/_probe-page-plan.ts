@@ -175,19 +175,105 @@ check("readFrame drops a frame missing a field", readFrame({ title: "x", ctaLabe
 // ── 4. The skeleton validator ────────────────────────────────────────────────
 console.log("\n4. outlineFaults holds the skeleton to its limits");
 
+// ‼️ SEVEN SECTIONS, NOT TWO, AND THE SHAPE IS THE FIXTURE. Rewritten 2026-09-14 when
+// OUTLINE_LIMITS went from 2..5 to 6..14. Every property the new validator checks is deliberately
+// present here: a keyword per section, six of the seven headings about something other than price,
+// fear, comparison or process, and a What, a Why and a How among the first words. A fixture that
+// only just cleared the bar would go red on an unrelated change and teach nobody anything.
 const goodOutline = {
   sections: [
-    { heading: "What it costs", bullets: ["The range you quote out loud [G1]", "What moves the price"] },
-    { heading: "What you get for it", bullets: ["What the first month covers [G2]", "Who does the work [G3]"] },
+    {
+      heading: "What an AI answer engine actually reads on your site",
+      keyword: "what does chatgpt read on a med spa website",
+      bullets: ["Which pages it fetches and in what order", "What it does with a page that has no answer on it"],
+    },
+    {
+      heading: "Why your clinic is missing from those answers",
+      keyword: "why is my clinic not showing up in ai answers",
+      bullets: ["The gap between being online and being quotable", "What you already publish that it cannot use [G1]"],
+    },
+    {
+      heading: "How a citation gets built in the first place",
+      keyword: "how does an ai citation work",
+      bullets: ["What has to exist before anything can be quoted", "Why the wording on the page decides it"],
+    },
+    {
+      heading: "What it costs to get started",
+      keyword: "how much does aeo cost for a med spa",
+      bullets: ["The range you quote out loud [G2]", "What moves it up or down"],
+    },
+    {
+      heading: "Which pages earn a mention first",
+      keyword: "which pages get cited by ai first",
+      bullets: ["Why the narrow question beats the broad one", "What your own patients already ask you [G3]"],
+    },
+    {
+      heading: "What happens to your existing search rankings",
+      keyword: "does aeo hurt my existing google rankings",
+      bullets: ["Why nothing already working gets moved", "What the new pages sit alongside"],
+    },
+    {
+      heading: "How long before anything shows up",
+      keyword: "how long does aeo take to work",
+      bullets: ["What changes in the first weeks", "What is still true months later"],
+    },
   ],
   gaps: [
-    { id: "G1", prompt: "What do you charge per month?", scope: "client" },
-    { id: "G2", prompt: "What happens in the first month?", scope: "page" },
-    { id: "G3", prompt: "Who on your team does the work?", scope: "client" },
+    { id: "G1", prompt: "What do you already publish about your treatments?", scope: "client" },
+    { id: "G2", prompt: "What do you charge per month?", scope: "client" },
+    { id: "G3", prompt: "What do your patients ask you most often?", scope: "page" },
   ],
 };
 
+/** Swap one section and keep the other six, so a targeted fixture stays a legal outline. */
+function withSection(index: number, section: Record<string, unknown>) {
+  return { ...goodOutline, sections: goodOutline.sections.map((s, i) => (i === index ? section : s)) };
+}
+
 check("a correct skeleton passes", outlineFaults(goodOutline, "").length === 0, outlineFaults(goodOutline, "").join(" | "));
+check(
+  `fewer than ${OUTLINE_LIMITS.minSections} sections is rejected`,
+  outlineFaults({ ...goodOutline, sections: goodOutline.sections.slice(0, 3) }, "").some((f) => f.includes("sections"))
+);
+check(
+  "a section with no keyword is rejected",
+  outlineFaults(withSection(0, { heading: goodOutline.sections[0].heading, bullets: goodOutline.sections[0].bullets }), "")
+    .some((f) => f.includes("has no keyword"))
+);
+check(
+  "a one-word keyword is not a long tail",
+  outlineFaults(withSection(0, { ...goodOutline.sections[0], keyword: "aeo" }), "")
+    .some((f) => f.includes("under three words"))
+);
+check(
+  "two sections carrying the same keyword is rejected",
+  outlineFaults(withSection(0, { ...goodOutline.sections[0], keyword: goodOutline.sections[1].keyword }), "")
+    .some((f) => f.includes("same keyword"))
+);
+check(
+  `fewer than ${OUTLINE_LIMITS.minDivergent} divergent headings is rejected`,
+  outlineFaults(
+    {
+      ...goodOutline,
+      sections: goodOutline.sections.map((s, i) =>
+        i === 0 ? s : { ...s, heading: `What it costs to compare option ${"x".repeat(i)}` }
+      ),
+    },
+    ""
+  ).some((f) => f.includes("something other than price"))
+);
+check(
+  "an outline with no How is rejected",
+  outlineFaults(
+    {
+      ...goodOutline,
+      sections: goodOutline.sections.map((s) =>
+        s.heading.startsWith("How") ? { ...s, heading: `What ${s.heading.slice(4)}` } : s
+      ),
+    },
+    ""
+  ).some((f) => f.includes('"How"'))
+);
 check(
   `fewer than ${OUTLINE_LIMITS.minGaps} gaps is rejected`,
   outlineFaults({ ...goodOutline, gaps: goodOutline.gaps.slice(0, 2) }, "").length > 0
@@ -201,28 +287,23 @@ check(
 );
 check(
   "a bullet naming a gap that does not exist is rejected",
-  outlineFaults(
-    { ...goodOutline, sections: [{ heading: "X", bullets: ["See [G9]", "Other"] }, goodOutline.sections[1]] },
-    ""
-  ).some((f) => f.includes("G9"))
+  outlineFaults(withSection(0, { ...goodOutline.sections[0], bullets: ["See [G9]", "Other"] }), "").some((f) => f.includes("G9"))
 );
+
+// The invented-number pair, on the one section that is allowed to talk about price.
+const pricedSection = { ...goodOutline.sections[3], bullets: ["Usually 499 a month [G2]", "What moves it"] };
 check(
   "an invented number in a bullet is rejected",
-  outlineFaults(
-    { ...goodOutline, sections: [{ heading: "What it costs", bullets: ["Usually 499 a month [G1]", "What moves it"] }, goodOutline.sections[1]] },
-    ""
-  ).some((f) => f.includes("499"))
+  outlineFaults(withSection(3, pricedSection), "").some((f) => f.includes("499"))
 );
 check(
   "the same number is fine when a source carries it",
-  outlineFaults(
-    { ...goodOutline, sections: [{ heading: "What it costs", bullets: ["Usually 499 a month [G1]", "What moves it"] }, goodOutline.sections[1]] },
-    "we charge 499 a month"
-  ).length === 0
+  outlineFaults(withSection(3, pricedSection), "we charge 499 a month").length === 0,
+  outlineFaults(withSection(3, pricedSection), "we charge 499 a month").join(" | ")
 );
 check(
   "a dash in a heading is rejected",
-  outlineFaults({ ...goodOutline, sections: [{ ...goodOutline.sections[0], heading: "Cost — explained" }, goodOutline.sections[1]] }, "").some((f) => f.includes("dash"))
+  outlineFaults(withSection(0, { ...goodOutline.sections[0], heading: "Cost — explained" }), "").some((f) => f.includes("dash"))
 );
 check("readOutline keeps a valid outline", readOutline({ ...goodOutline, writtenAt: "x" })?.gaps.length === 3);
 check("readOutline drops an outline with no sections", readOutline({ sections: [], gaps: [] }) === null);

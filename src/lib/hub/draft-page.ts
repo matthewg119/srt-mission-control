@@ -86,6 +86,23 @@ interface Grounding {
   outline: PageOutline | null;
 }
 
+/**
+ * How long one section is, in CHARACTERS.
+ *
+ * ‼️ CHARACTERS AND NOT WORDS, AND THE UNIT IS THE POINT. Matthew, 2026-09-14. The old rule was
+ * "250 to 500 words" for a whole page, which at 6 to 14 sections is somewhere between 18 and 83
+ * words a section: a caption. Measuring per section instead makes the floor mean something no
+ * matter how many sections the subject wanted, and characters rather than words because a word
+ * count is the thing a model pads to hit.
+ *
+ * Declared HERE, above SYSTEM, because SYSTEM interpolates it and OUTLINE_LIMITS further down
+ * reads the same bounds. A const cannot be read before its own declaration is evaluated.
+ */
+export const SECTION_CHARS = { min: 250, max: 600 } as const;
+
+/** Sections per page. OUTLINE_LIMITS carries the same numbers and the reasoning behind them. */
+const SECTION_COUNT = { min: 6, max: 14 } as const;
+
 const SYSTEM = `You write one answer page for a local business's own website.
 
 WHO IS READING IT. A person who typed that question into ChatGPT, Google or a search box, has
@@ -140,9 +157,14 @@ THE RULES, and every one of them exists because breaking it is worse than a thin
    only write three paragraphs from what you were given, write three paragraphs. Never add a
    section because a page of this kind usually has one.
 
-SHAPE. Markdown. 250 to 500 words. Short paragraphs, one idea each. At most two "##" subheadings
-and only if the answer genuinely has parts. No H1: the title is rendered separately. No links,
-no images, no tables, no bullet list longer than five items.
+8. WHAT, WHY AND HOW, ON EVERY PAGE. Say what the thing is, why it matters to the person who
+   asked, and how it actually works. A page that only defines something has answered a dictionary
+   question, not the one that was typed. This is checked in code against the subheadings.
+
+SHAPE. Markdown. One "##" subheading per section, and ${SECTION_COUNT.min} to ${SECTION_COUNT.max} of them: the subject decides
+how many. ${SECTION_CHARS.min} TO ${SECTION_CHARS.max} CHARACTERS UNDER EACH ONE, counted as characters and not words, so a
+section is a real answer and not a caption. Short paragraphs, one idea each. No H1: the title is
+rendered separately. No links, no images, no tables, no bullet list longer than five items.
 
 TITLE. How a person would say the question, not the raw prompt string. Under 60 characters.
 
@@ -224,6 +246,66 @@ function flat(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Split a body into its "## " sections, each with the prose under it.
+ *
+ * Anything before the first heading is the answer-first opening paragraph, which rule 6 asks for
+ * and which has no heading by design. It is returned as a section with an empty heading so the
+ * length rule applies to it too: an opening line that trails off is the same fault as a thin
+ * section, and it is the first thing a reader sees.
+ */
+export function bodySections(answerMd: string): Array<{ heading: string; body: string }> {
+  const out: Array<{ heading: string; body: string }> = [];
+  let heading = "";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    const body = buffer.join("\n").trim();
+    if (heading || body) out.push({ heading, body });
+    buffer = [];
+  };
+
+  for (const line of answerMd.split(/\r?\n/)) {
+    const m = /^##\s+(.+?)\s*$/.exec(line);
+    if (m) {
+      flush();
+      heading = m[1];
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return out.filter((s) => s.heading !== "" || s.body !== "");
+}
+
+/**
+ * Every section that is outside SECTION_CHARS, in words, for the correction retry.
+ *
+ * ‼️ THIS REPLACED A FLAT `>= 120 words` ON THE WHOLE PAGE, and the old rule was passing exactly
+ * the page this one catches: four full sections and six one-line ones clears 120 words easily
+ * while being mostly captions. The floor only means something when it is per section.
+ *
+ * The MAXIMUM is a fault too, which the old rule had no equivalent of. A section that runs long
+ * is one that answered two questions, and the second one deserved its own heading and its own
+ * long tail.
+ */
+export function sectionLengthFaults(answerMd: string): string[] {
+  const out: string[] = [];
+  for (const [i, section] of bodySections(answerMd).entries()) {
+    const where = section.heading ? `"${section.heading}"` : `the opening paragraph`;
+    const n = section.body.length;
+    if (n < SECTION_CHARS.min) {
+      out.push(`Section ${i + 1}, ${where}, is ${n} characters. Every section needs at least ${SECTION_CHARS.min}.`);
+    } else if (n > SECTION_CHARS.max) {
+      out.push(
+        `Section ${i + 1}, ${where}, is ${n} characters and the limit is ${SECTION_CHARS.max}. ` +
+          `It is answering two questions. Keep the one the heading asks.`
+      );
+    }
+  }
+  return out;
+}
+
 function isDrafted(v: unknown, valid: Set<string>, reviews: Map<string, string>): v is DraftedPage {
   const d = v as DraftedPage;
   return (
@@ -238,7 +320,8 @@ function isDrafted(v: unknown, valid: Set<string>, reviews: Map<string, string>)
     d.title.trim().length > 0 &&
     d.title.length <= 90 &&
     typeof d.answerMd === "string" &&
-    d.answerMd.trim().split(/\s+/).length >= 120 &&
+    // Per section, not per page. See sectionLengthFaults for why the flat word floor went.
+    sectionLengthFaults(d.answerMd).length === 0 &&
     typeof d.metaDescription === "string" &&
     d.metaDescription.trim().length > 0 &&
     d.metaDescription.length <= 200 &&
@@ -287,8 +370,15 @@ function whyInvalid(v: unknown, valid: Set<string>, reviews: Map<string, string>
     );
   }
 
-  const words = d.answerMd.trim().split(/\s+/).length;
-  if (words < 120) return `answerMd is ${words} words. It needs at least 120.`;
+  // ‼️ EVERY BAD SECTION AT ONCE, NOT THE FIRST. Returned one at a time this costs one correction
+  // retry per thin section, and a 14-section page would exhaust the retries before it was right.
+  const lengths = sectionLengthFaults(d.answerMd);
+  if (lengths.length) {
+    return (
+      `Every "##" section has to be ${SECTION_CHARS.min} to ${SECTION_CHARS.max} characters of prose. Fix all of these ` +
+      `and return the whole page again:\n${lengths.map((f) => `  - ${f}`).join("\n")}`
+    );
+  }
   if (hasBannedDash(d.answerMd) || hasBannedDash(d.title) || hasBannedDash(d.metaDescription)) {
     return "An em dash is present. Rewrite those sentences with commas, periods or plain hyphens.";
   }
@@ -537,8 +627,10 @@ function userPrompt(g: Grounding): string {
   if (g.outline && !g.existingBody) {
     lines.push("");
     lines.push("THE APPROVED OUTLINE. Follow it:");
-    lines.push("  - Use these headings as your ## subheadings, in this order. This overrides the");
-    lines.push("    two-subheading limit. Write 300 to 750 words instead of 250 to 500.");
+    lines.push("  - Use these headings as your ## subheadings, in this order, VERBATIM. A person");
+    lines.push("    approved these words and each one is the search that section has to win.");
+    lines.push(`  - ${SECTION_CHARS.min} to ${SECTION_CHARS.max} characters under each heading, as SHAPE says. That rule is per`);
+    lines.push("    section and this outline is what tells you how many sections there are.");
     lines.push("  - Cover what each bullet says, in your own sentences.");
     lines.push("  - A [Gn] mark is a gap the business was asked to fill. Its answer is in the EVIDENCE");
     lines.push("    under a topic beginning \"Gap Gn\". Use it and cite it. Where a gap has no answer,");
@@ -547,6 +639,11 @@ function userPrompt(g: Grounding): string {
     lines.push("");
     for (const section of g.outline.sections) {
       lines.push(`## ${section.heading}`);
+      // ‼️ PRINTED AS THE SEARCH, NOT AS A TARGET. A model told to "include this phrase" welds it
+      // in twice a paragraph, which is what keyword_shaped in page-gate.ts fails a page for. What
+      // it needs to know is what the reader typed, so the section answers THAT rather than the
+      // heading's nearest paraphrase.
+      if (section.keyword) lines.push(`     (what the reader typed to get here: ${section.keyword})`);
       for (const bullet of section.bullets) lines.push(`  - ${bullet}`);
     }
     lines.push("");
@@ -664,16 +761,86 @@ export interface OutlineContext {
   angle: string | null;
 }
 
+/**
+ * ‼️ THE SUBJECT DECIDES, BETWEEN 6 AND 14. Matthew, 2026-09-14.
+ *
+ * It was 2 to 5, which is a page that answers one question and stops. What these pages are for is
+ * being the thing an engine cites on a long-tail query, and an engine picks the section that
+ * matches, not the page. Five sections is five chances; twelve is twelve. The floor is 6 because
+ * below it the page is an answer rather than a resource, and the ceiling is 14 because past that
+ * the model starts splitting one idea in two to reach a number.
+ *
+ * ‼️ THE GAP CAP STAYS AT 8, AND IT IS NOT AN OVERSIGHT. outlineFaults pins gap ids to G1..G9, and
+ * at 7 pages a batch this is already up to 56 questions in the ONE research prompt W1d sends. The
+ * [Pn] page tag is what separates them, not a wider gap numbering.
+ */
 export const OUTLINE_LIMITS = {
-  minSections: 2,
-  maxSections: 5,
+  minSections: SECTION_COUNT.min,
+  maxSections: SECTION_COUNT.max,
   minBullets: 2,
   maxBullets: 4,
   minGaps: 3,
   maxGaps: 8,
   maxBulletChars: 180,
   maxHeadingChars: 80,
+  /** How many headings must be about something other than price, fear, comparison or process. */
+  minDivergent: 5,
 } as const;
+
+/**
+ * The four subjects a page drifts to when nobody stops it, and the words that give each away.
+ *
+ * ‼️ THIS IS A DIVERGENCE FLOOR, NOT A BAN. A page about a treatment SHOULD cover what it costs
+ * and what it is like. What it must not be is four sections of pricing, two of "X vs Y" and one
+ * about what to expect, which is the shape every competitor already published and the exact page
+ * an engine has no reason to prefer. Five headings have to be about something else.
+ *
+ * Matched on whole words against the lowercased heading, so "processing" does not count as
+ * "process" and "compared" does not count as "compare".
+ */
+const CONVERGENT_VOCABULARY: Readonly<Record<string, readonly string[]>> = {
+  price: ["price", "prices", "pricing", "cost", "costs", "afford", "affordable", "cheap", "expensive", "fee", "fees", "payment", "payments", "financing", "worth", "budget"],
+  fear: ["safe", "safety", "risk", "risks", "risky", "danger", "dangerous", "harm", "harmful", "pain", "painful", "hurt", "hurts", "side", "effects", "complication", "complications", "scared", "afraid", "worry", "worried"],
+  comparison: ["vs", "versus", "compare", "compares", "comparison", "better", "best", "worse", "difference", "differences", "alternative", "alternatives", "instead", "against", "rather"],
+  process: ["process", "step", "steps", "procedure", "expect", "during", "appointment", "session", "consultation", "book", "booking", "prepare", "preparation", "aftercare", "recovery", "downtime"],
+};
+
+const MANDATORY_SHAPES = ["what", "why", "how"] as const;
+
+/** Whole words of a heading, lowercased. Punctuation and markdown are not words. */
+function headingWords(heading: string): string[] {
+  return heading
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+}
+
+/** Which of the four convergent subjects this heading is about, or null when it is about its own. */
+export function convergentSubject(heading: string): string | null {
+  const words = new Set(headingWords(heading));
+  for (const [subject, vocabulary] of Object.entries(CONVERGENT_VOCABULARY)) {
+    if (vocabulary.some((w) => words.has(w))) return subject;
+  }
+  return null;
+}
+
+/**
+ * Which of what / why / how the outline covers.
+ *
+ * ‼️ READ OFF THE FIRST WORD, NOT ANYWHERE IN THE HEADING. "What does it cost" is a what-section;
+ * "the cost of knowing what to expect" is not, and matching loosely would let a single heading
+ * satisfy all three and turn rule 8 into nothing. A long-tail question heading starts with its
+ * question word, so the first word is the honest place to read it.
+ */
+export function shapesCovered(headings: readonly string[]): Set<string> {
+  const found = new Set<string>();
+  for (const heading of headings) {
+    const first = headingWords(heading)[0];
+    if (first && (MANDATORY_SHAPES as readonly string[]).includes(first)) found.add(first);
+  }
+  return found;
+}
 
 const OUTLINE_SYSTEM = `You plan one answer page for a local business's own website. You do NOT write the page.
 
@@ -688,7 +855,22 @@ THE RULES:
 
 1. ANSWER FIRST. The first section answers the question directly. Its heading names the answer's
    subject. Never "Introduction", never "Overview".
-2. ${OUTLINE_LIMITS.minSections} to ${OUTLINE_LIMITS.maxSections} sections. ${OUTLINE_LIMITS.minBullets} to ${OUTLINE_LIMITS.maxBullets} bullets each, each one short.
+2. ${OUTLINE_LIMITS.minSections} to ${OUTLINE_LIMITS.maxSections} sections, AND THE SUBJECT DECIDES HOW MANY. Do not pad to reach a number and
+   do not split one idea into two sections to get there. ${OUTLINE_LIMITS.minBullets} to ${OUTLINE_LIMITS.maxBullets} bullets each, each one short.
+2a. EVERY HEADING IS A LONG-TAIL QUESTION IN HER OWN WORDS. Write the heading the way the person
+   who typed the question would say it out loud, not the way a brochure would label a section.
+   "How long does it take before I see anything?" and not "Timeline". No heading is one noun.
+2b. EVERY SECTION CARRIES ITS OWN KEYWORD: the long-tail phrase that section is the answer to.
+   Return it as "keyword" on the section. It is the search this heading wins, so it is a phrase a
+   person would actually type, three words or more, and it is NOT the page's own phrase repeated.
+   Two sections may not carry the same keyword.
+2c. AT LEAST ${OUTLINE_LIMITS.minDivergent} HEADINGS ARE ABOUT SOMETHING OTHER than what it costs, whether it is safe or
+   painful, how it compares to something else, or what the appointment is like. Those four are
+   what every competing page already covers, so a page made only of them gives an engine no
+   reason to pick it. Cover them where they belong, then go past them.
+2d. WHAT, WHY AND HOW ARE ALL PRESENT. At least one heading begins with "What", at least one with
+   "Why", and at least one with "How". A page that only explains what a thing is has not told the
+   reader why it matters to them or how it actually works.
 3. ${OUTLINE_LIMITS.minGaps} to ${OUTLINE_LIMITS.maxGaps} GAPS. Each has an id (G1, G2, ...), a prompt asked in the second person
    ("What do you charge for ...?"), and a scope: "client" when the answer is about the business as
    a whole (pricing, where they serve, their credentials, their policies), "page" when it is about
@@ -756,10 +938,32 @@ export function outlineFaults(v: unknown, numberHaystack: string): string[] {
   });
 
   const referenced = new Set<string>();
+  const headings: string[] = [];
+  const sectionKeywords = new Map<string, number>();
+
   d.sections.forEach((s, i) => {
     const section = s as Partial<OutlineSection>;
     const heading = typeof section?.heading === "string" ? section.heading.trim() : "";
     if (!heading) out.push(`section ${i + 1} has no heading.`);
+    else headings.push(heading);
+
+    // ‼️ THE PER-SECTION KEYWORD IS CHECKED, NOT ASKED FOR, same doctrine as the dash rule. It is
+    // written to client_pages.section_keywords and read back by keyword-placement.ts weeks later,
+    // so a missing one is not a cosmetic gap: it is a placement check that silently measures
+    // nothing.
+    const keyword = typeof section?.keyword === "string" ? section.keyword.trim() : "";
+    if (!keyword) {
+      out.push(`section ${i + 1} has no keyword. Give it the long-tail phrase that section answers.`);
+    } else {
+      if (keyword.split(/\s+/).filter(Boolean).length < 3) {
+        out.push(`section ${i + 1}'s keyword "${keyword}" is under three words. A long tail is a phrase somebody types.`);
+      }
+      if (hasBannedDash(keyword)) out.push(`section ${i + 1}'s keyword contains a dash.`);
+      const seen = sectionKeywords.get(keyword.toLowerCase());
+      if (seen) out.push(`sections ${seen} and ${i + 1} carry the same keyword "${keyword}". Each section wins its own search.`);
+      else sectionKeywords.set(keyword.toLowerCase(), i + 1);
+    }
+
     if (heading.length > L.maxHeadingChars) out.push(`section ${i + 1}'s heading is over ${L.maxHeadingChars} characters.`);
     if (/[#*_`]/.test(heading)) out.push(`section ${i + 1}'s heading contains markdown.`);
     if (hasBannedDash(heading)) out.push(`section ${i + 1}'s heading contains a dash.`);
@@ -790,6 +994,36 @@ export function outlineFaults(v: unknown, numberHaystack: string): string[] {
 
   for (const id of gapIds) {
     if (!referenced.has(id)) out.push(`gap ${id} is never referenced. Put [${id}] in the bullet that needs it.`);
+  }
+
+  // ‼️ DIVERGENCE AND SHAPE ARE CHECKED ACROSS THE WHOLE OUTLINE, NOT PER SECTION, because both
+  // are properties of the set. No single heading can be "not convergent enough" and no single
+  // heading can supply what, why and how. Only counted when the section count is already legal,
+  // so a 3-section outline gets one clear fault about its size rather than three about its shape.
+  if (headings.length >= L.minSections) {
+    const divergent = headings.filter((h) => convergentSubject(h) === null);
+    if (divergent.length < L.minDivergent) {
+      const converged = headings
+        .map((h) => ({ h, subject: convergentSubject(h) }))
+        .filter((x): x is { h: string; subject: string } => x.subject !== null);
+      const tally = [...new Set(converged.map((c) => c.subject))]
+        .map((subject) => `${subject} (${converged.filter((c) => c.subject === subject).length})`)
+        .join(", ");
+      out.push(
+        `Only ${divergent.length} of ${headings.length} headings are about something other than price, ` +
+          `fear, comparison or process. At least ${L.minDivergent} must be. Covered now: ${tally}. ` +
+          `Keep those and replace the surplus with what this subject specifically involves.`
+      );
+    }
+
+    const covered = shapesCovered(headings);
+    const missing = MANDATORY_SHAPES.filter((shape) => !covered.has(shape));
+    if (missing.length) {
+      out.push(
+        `No heading begins with ${missing.map((m) => `"${m[0].toUpperCase()}${m.slice(1)}"`).join(" or ")}. ` +
+          `Every page needs a what, a why and a how.`
+      );
+    }
   }
 
   return out;
@@ -850,10 +1084,13 @@ export async function draftOutline(
       model: "claude-sonnet-4-6",
       system: OUTLINE_SYSTEM,
       user: lines.join("\n"),
-      maxTokens: 2000,
+      // 14 sections with a keyword each is roughly triple the old ceiling of 5, so the old 2000
+      // would truncate the JSON on a long outline and fail validation for a reason the correction
+      // retry cannot fix by rewriting.
+      maxTokens: 6000,
       temperature: 0.3,
       schemaHint:
-        '{ "sections": [{ "heading": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }] }',
+        '{ "sections": [{ "heading": string, "keyword": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }] }',
       validate: (v): v is DraftedOutline => outlineFaults(v, numberHaystack).length === 0,
       describeInvalid: (v) =>
         `Fix these and return the whole skeleton again:\n${outlineFaults(v, numberHaystack)
@@ -866,6 +1103,7 @@ export async function draftOutline(
       outline: {
         sections: res.data.sections.map((s) => ({
           heading: s.heading.trim(),
+          keyword: (s.keyword ?? "").trim(),
           bullets: s.bullets.map((b) => b.trim()),
         })),
         gaps: res.data.gaps.map((gap) => ({
