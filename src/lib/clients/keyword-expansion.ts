@@ -48,8 +48,14 @@ export type KeywordOrigin = "harvest" | "research" | "expansion" | "measured" | 
 /** The addendum's floor: this many query-shaped phrases after dedupe and the filter. */
 export const KEYWORD_FLOOR = 200;
 
-/** One pillar plus eight supports. The verifier refuses a set that cannot fill them. */
-export const PLAN_KEYWORDS_NEEDED = 9;
+/**
+ * One pillar plus six supports. The verifier refuses a set that cannot fill them.
+ *
+ * Was 9 (one pillar plus eight supports) until 2026-09-13, when Matthew set the onboarding batch
+ * at 1 pillar + 6 supports. Kept in step with PRE_CALL_SUPPORTS in `page-plan.ts`: this is the
+ * number of DISTINCT relevant keywords the plan needs, so it is 1 + PRE_CALL_SUPPORTS.
+ */
+export const PLAN_KEYWORDS_NEEDED = 7;
 
 /** How many queries the card prints. The CSV carries every row. */
 export const CARD_TOP = 40;
@@ -560,7 +566,7 @@ export function keywordVerdict(t: KeywordTally): KeywordVerdict {
   if (t.relevantApproved < PLAN_KEYWORDS_NEEDED) {
     return {
       ok: false,
-      found: `only ${t.relevantApproved} approved queries are about the offer, and a pillar plus eight supports needs ${PLAN_KEYWORDS_NEEDED}`,
+      found: `only ${t.relevantApproved} approved queries are about the offer, and a pillar plus six supports needs ${PLAN_KEYWORDS_NEEDED}`,
       todo: "`keywords more <category>`, or add your own with `keywords add:`.",
     };
   }
@@ -796,9 +802,28 @@ export interface KeywordCardContext {
   vocab: readonly string[];
 }
 
-/** Rows that pass the relevance test, with the rule for model-written rows applied once. */
+/**
+ * Rows that pass the relevance test, with the rule for model-written rows applied once.
+ *
+ * !! CHANGED 2026-09-13, AND THE OLD RULE POINTED THE WRONG WAY. This used to pass
+ * `askedAboutOffer` for everything except `harvest` and `research`, so an EXPANSION row was
+ * automatically "about the offer" while a RESEARCHED one had to actually name the vocabulary.
+ * Invented phrases cleared a LOWER bar than evidenced ones. Combined with KEYWORD_FLOOR, which
+ * only the model can realistically fill, that is the whole reason a set could pass on 200 rows
+ * nobody has evidence anybody ever searched.
+ *
+ * !! ONLY `manual` KEEPS THE PASS, AND ONLY BECAUSE A PERSON TYPED IT. That is a decision, not a
+ * guess, which is the same reason `manual` already outranks everything in PRECEDENCE. A model
+ * proposing a phrase under the offer's price category is not the same act as somebody saying
+ * "this is one of ours".
+ *
+ * What this costs, and it is the point: these rows become PILLAR AND SUPPORT PAGE keywords. A
+ * page keyword that never names the offer cannot carry a page, whoever wrote it: "how much does
+ * it cost" is not an H1 because nothing in it says which service "it" is. So the bar is now the
+ * same for every origin but one, and a short set says it is short instead of passing on filler.
+ */
 export function isRelevantKeyword(row: Pick<StoredKeyword, "phrase" | "origin">, vocab: readonly string[]): boolean {
-  return isAboutOffer(row.phrase, vocab, { askedAboutOffer: row.origin !== "harvest" && row.origin !== "research" });
+  return isAboutOffer(row.phrase, vocab, { askedAboutOffer: row.origin === "manual" });
 }
 
 export function tallyKeywords(rows: readonly StoredKeyword[], vocab: readonly string[]): KeywordTally {

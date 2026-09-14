@@ -23,12 +23,14 @@
 import {
   KEYWORD_CATEGORIES,
   KEYWORD_FLOOR,
+  PLAN_KEYWORDS_NEEDED,
   classifyUse,
   cleanPhrase,
   compareKeywords,
   isHookShaped,
   keywordFault,
   keywordVerdict,
+  isRelevantKeyword,
   mergeKeywords,
   parseKeywordCommand,
   scoreKeyword,
@@ -76,8 +78,17 @@ console.log("\n2. The verifier's floor, approval and relevance");
 check(`150 query rows refuse (floor ${KEYWORD_FLOOR})`, !keywordVerdict({ queries: 150, approvedQueries: 150, relevantApproved: 150 }).ok);
 check("200 approved, relevant query rows pass", keywordVerdict({ queries: 200, approvedQueries: 200, relevantApproved: 200 }).ok);
 check("200 rows nobody approved refuse", !keywordVerdict({ queries: 200, approvedQueries: 0, relevantApproved: 0 }).ok);
-const eight = keywordVerdict({ queries: 210, approvedQueries: 210, relevantApproved: 8 });
-check("8 relevant approved queries refuse, with the fix named", !eight.ok && !eight.ok && eight.todo.includes("keywords more"));
+// Pinned to PLAN_KEYWORDS_NEEDED rather than a literal, because that constant moved once already
+// (9 -> 7 on 2026-09-13, following PRE_CALL_SUPPORTS 8 -> 6) and a hardcoded fixture just breaks.
+const short = keywordVerdict({ queries: 210, approvedQueries: 210, relevantApproved: PLAN_KEYWORDS_NEEDED - 1 });
+check(
+  `${PLAN_KEYWORDS_NEEDED - 1} relevant approved queries refuse, with the fix named`,
+  !short.ok && short.todo.includes("keywords more")
+);
+check(
+  `exactly ${PLAN_KEYWORDS_NEEDED} passes, so the plan's 1 pillar + ${PLAN_KEYWORDS_NEEDED - 1} supports can be filled`,
+  keywordVerdict({ queries: 210, approvedQueries: 210, relevantApproved: PLAN_KEYWORDS_NEEDED }).ok
+);
 check(
   "both category tables ask for at least the floor",
   (["patient", "owner"] as const).every((a) => KEYWORD_CATEGORIES[a].reduce((n, c) => n + c.target, 0) >= KEYWORD_FLOOR),
@@ -152,6 +163,33 @@ check(
   isAboutOffer("why isn't my med spa on ChatGPT", srt, { askedAboutOffer: true })
 );
 check("a harvested buying shape with no name in it is not", !isAboutOffer("how much does it cost", srt));
+
+// !! THE ASYMMETRY THAT LET THE MODEL WIN, PINNED SO IT CANNOT COME BACK (2026-09-13).
+// `isRelevantKeyword` used to hand `askedAboutOffer` to every origin except harvest and research,
+// so an INVENTED phrase was relevant by provenance while a RESEARCHED one had to prove itself by
+// its words. Only `manual` keeps the pass now, because a person typed it. These rows become pillar
+// and support page keywords: "how much does it cost" cannot carry a page whoever wrote it.
+const NAMES_IT = "best AEO agency for med spas";
+const NAMES_NOTHING = "how much does it cost";
+for (const origin of ["expansion", "measured", "harvest", "research"] as const) {
+  check(
+    `a ${origin} row that names nothing is NOT relevant`,
+    !isRelevantKeyword({ phrase: NAMES_NOTHING, origin }, srt)
+  );
+  check(
+    `a ${origin} row that names the offer IS relevant`,
+    isRelevantKeyword({ phrase: NAMES_IT, origin }, srt)
+  );
+}
+check(
+  "only a phrase a PERSON typed is relevant without naming the offer",
+  isRelevantKeyword({ phrase: NAMES_NOTHING, origin: "manual" }, srt)
+);
+check(
+  "so an expansion no longer clears a lower bar than research",
+  isRelevantKeyword({ phrase: NAMES_NOTHING, origin: "expansion" }, srt) ===
+    isRelevantKeyword({ phrase: NAMES_NOTHING, origin: "research" }, srt)
+);
 
 // ── 5. The thread grammar ────────────────────────────────────────────────────
 console.log("\n5. The five commands fire; the dictation they could swallow does not");

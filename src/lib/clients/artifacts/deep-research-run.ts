@@ -110,6 +110,16 @@ export interface ResearchContext {
   /** The prose one ("AI visibility (AEO) marketing agency for local businesses"), not the slug. */
   trade: string | null;
   primaryTreatment: string | null;
+  /**
+   * The customer's own words for the offer, from `terms:` on the prep call. Absent until the offer
+   * is locked. Section 9 uses them so the keyword ask is phrased in the buyer's vocabulary rather
+   * than in ours, which is the whole point of asking for HER search phrases.
+   *
+   * Optional, and read through `terms()` rather than directly, for the reason `spoken()` gives
+   * below: buildContext is one caller of several, the others assemble a context by hand, and a
+   * field they cannot forget to handle is one handled where it is USED.
+   */
+  offerTerms?: string[];
   services: string[];
   /** The owner's own words. Never summarised, never corrected. */
   objections: string | null;
@@ -289,10 +299,13 @@ const SECTIONS: SectionSpec[] = [
     key: "keywords",
     title: "Las 100 frases de busqueda del comprador",
     brief: (c) =>
+      // The pipe format is NOT described here any more. It is shown as a worked row at the foot
+      // of buildCompactPrompt instead, because a format described in prose comes back as prose
+      // (measured: zero keyword rows ever parsed for SRT's vertical) and because saying it twice
+      // costs this prompt its 2,000 character Slack budget.
       `The 100 search phrases this buyer types or dictates when they are ready to book `
       + `${spoken(c.primaryTreatment) ?? "this"}${c.city ? ` in ${c.city}` : ""}, ranked `
-      + `most commercial first. Return them as a block titled KEYWORDS, one per line, as `
-      + `phrase | monthly volume or unknown | ready|comparing|researching|price | source URL.`,
+      + `most commercial first, as the KEYWORDS block described at the end.`,
     instruction: (c) =>
       `The search phrases ${c.avatarLabel} actually uses on the way to buying ` +
       `${val(spoken(c.primaryTreatment))}${c.city ? ` in ${c.city}` : ""}. Aim for 100. Include the ` +
@@ -310,8 +323,30 @@ const SECTIONS: SectionSpec[] = [
       `in the source column, and then link it. An estimate is worse than "unknown" here, ` +
       `because "unknown" is handled and an estimate is ranked on as though somebody measured ` +
       `it. Ranking by how ready the phrase sounds is what we want anyway.\n\n` +
+      // ‼️ THE WORKED ROW IS NOT DECORATION, IT IS THE WHOLE PARSER CONTRACT. Measured
+      // 2026-09-13: `question_bank` held 306 deep_research rows for SRT's vertical and ZERO with
+      // source='keywords', which is the only source `extractKeywords` writes. The block had never
+      // arrived in the pipe-delimited shape, so every phrase fell through to the prose scraper,
+      // landed with no source URL, and had its frequency capped at 1. The model expansion then
+      // outnumbered it and the set read like a list nobody searched. An ask stated in prose is
+      // answered in prose; an ask with a row in it is answered in rows.
       `Return them as a block titled KEYWORDS, one per line, as: phrase | monthly volume or ` +
-      `unknown | ready|comparing|researching|price | source URL.`,
+      `unknown | ready|comparing|researching|price | source URL.
+
+` +
+      `The block must look EXACTLY like this, starting with the word KEYWORDS on its own line ` +
+      `and with four pipes on every row, including when a column is unknown:
+
+` +
+      `KEYWORDS
+` +
+      `${termExample(c)} | unknown | ready | https://example.com/page-where-you-saw-it
+` +
+      `${termExample(c)} cost | 1900 | price | https://example.com/the-page-with-the-number
+
+` +
+      `No numbering, no bullets, no bold, no table pipes at the start or end of a line, and no ` +
+      `commentary between the rows. A row missing its pipes is a row we cannot read.`,
     searches: 8,
   },
 ];
@@ -469,6 +504,20 @@ function spoken(v: string | null | undefined): string | null {
   return answered(v) ? (v ?? "").trim() : null;
 }
 
+/**
+ * The phrase the worked KEYWORDS row is written with: one of HER words for the offer when the
+ * prep call captured any, otherwise the offer itself. Never a placeholder like "your service",
+ * because a model shown a placeholder returns placeholders.
+ */
+function termExample(c: ResearchContext): string {
+  return terms(c)[0] ?? spoken(c.primaryTreatment) ?? "the treatment";
+}
+
+/** The locked offer's customer terms, however the context was assembled. See `spoken()`. */
+function terms(c: ResearchContext): string[] {
+  return (c.offerTerms ?? []).map((t) => t.trim()).filter(Boolean);
+}
+
 function clipFact(v: string | null | undefined): string {
   const t = (v ?? "").replace(/\s+/g, " ").trim();
   if (!t) return NOT_RECORDED;
@@ -532,6 +581,19 @@ export function buildCompactPrompt(ctx: ResearchContext): string {
     "",
     "Finish with the 25 phrases worth building pages around, most urgent first, each with its " +
       "source and one line on why.",
+    "",
+    // !! THIS IS THE PROMPT A PERSON ACTUALLY RUNS, AND THE KEYWORDS BLOCK IS THE PART THAT
+    // WENT MISSING. Measured 2026-09-13: 306 deep_research rows in SRT vertical and ZERO rows
+    // with source='keywords', the only source the pipe parser writes. Section 9's brief above
+    // asks for the block in words; asked in words it comes back as prose, is scraped by the
+    // fallback extractor, arrives with no source URL and is capped at frequency 1. Showing the
+    // shape costs about 180 characters of an otherwise compact prompt and is worth it: this
+    // block is the only path into the corpus that carries real commercial intent.
+    `Section ${SECTIONS.findIndex((x) => x.key === "keywords") + 1} must be literal rows, not prose. ` +
+      "Four pipes per row, \"unknown\" where you have no number, no link where you have no source:",
+    "KEYWORDS",
+    `${termExample(ctx)} | unknown | ready | https://example.com/where-you-saw-it`,
+    `${termExample(ctx)} cost | 1900 | price | https://example.com/page-with-the-number`,
   ].join("\n");
 }
 
@@ -1128,6 +1190,9 @@ export async function buildContext(clientId: string): Promise<BuildResult> {
   const resolved = await verticalFor(clientId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
+  const { loadOffer, isLocked } = await import("../offers");
+  const offer = await loadOffer(clientId);
+
   const services = (client.services ?? {}) as Record<string, unknown>;
   const ideal = (client.ideal_patient ?? {}) as Record<string, unknown>;
 
@@ -1176,10 +1241,19 @@ export async function buildContext(clientId: string): Promise<BuildResult> {
     // funnels write to ideal_patient.highest_margin, and buildContext already loads that bag.
     // Intake now also asks for primary_treatment directly, so the chain is: the explicit answer,
     // the camelCase spelling some older rows carry, then the margin answer.
+    // ‼️ THE LOCKED OFFER COMES FIRST, AND IT DID NOT USED TO BE HERE AT ALL (added 2026-09-13).
+    // Everything below this line is a reading of the INTAKE FORM. The offer agreed on the prep
+    // call lives in `clients.offer` and was never in this chain, so the research was about
+    // whatever the form said and not about what the client and Matthew settled on. That also made
+    // `offer-cascade.ts`'s promise to re-post a prompt "written about the new offer" untrue:
+    // changing the offer re-posted the same prompt. Only a LOCKED offer wins; a proposal is a
+    // reading of the same form and is already represented by the entries under it.
     primaryTreatment:
+      (isLocked(offer) ? offer.treatment : null) ??
       real(services.primary_treatment) ??
       real(services.primaryTreatment) ??
       real(ideal.highest_margin),
+      offerTerms: isLocked(offer) ? [...offer.terms] : [],
       services: serviceList,
       objections: str(ideal.objections),
       targetPatient: str(ideal.target),

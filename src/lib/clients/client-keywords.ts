@@ -448,24 +448,65 @@ export async function expandKeywords(
   const notes: string[] = [];
   const cats = only ? [only] : ctx.categories;
 
-  const halves = only ? [cats] : [cats.filter((_, i) => i % 2 === 0), cats.filter((_, i) => i % 2 === 1)];
+  // ‼️ RESEARCH FIRST, THE MODEL FILLS WHAT IS LEFT (2026-09-13). This used to ask every category
+  // for its FULL target no matter how much evidence was already sitting in `existing`, so a
+  // category the market had already answered got a second, invented answer of the same size, and
+  // the proposals outnumbered the evidence from the first run onwards. Matthew: "why are they
+  // lifted straight from my list if this is not how people would google it".
+  //
+  // The shortfall is counted in QUERY rows, the same unit `target` is written in and the same one
+  // KEYWORD_FLOOR and the re-ask below count. A category already at its target is not asked at
+  // all, which is also the only way this step ever spends less than a full expansion.
+  //
+  // `only` (a `keywords more <category>` by hand) is deliberately exempt: he asked for more of
+  // that category knowing what is in it, and second-guessing that with a count would ignore him.
+  const alreadyHave = (key: string): number =>
+    existing.filter((r) => r.category === key && r.use === "query").length;
+  const asks = (only ? [{ category: only, count: only.target }] : cats.map((c) => ({ category: c, count: c.target - alreadyHave(c.key) }))).filter(
+    (a) => a.count > 0
+  );
+
+  if (!asks.length) {
+    return {
+      rows: [],
+      notes: [
+        "The market's evidence already fills every category, so the model was not asked for any. " +
+          "Every row in this set came from research, the harvest, or you.",
+      ],
+    };
+  }
+
+  const filled = cats.filter((c) => !asks.some((a) => a.category.key === c.key));
+  if (!only && filled.length) {
+    notes.push(
+      `Evidence already filled ${filled.length} of ${cats.length} categories, so the model was not asked for those: ` +
+        `${filled.map((c) => c.label).join(", ")}.`
+    );
+  }
+
+  const halves = only ? [asks] : [asks.filter((_, i) => i % 2 === 0), asks.filter((_, i) => i % 2 === 1)];
   const first = await Promise.all(
-    halves.map((half) =>
-      askModel(
-        ctx,
-        half.map((c) => ({ category: c, count: c.target })),
-        only ? existing.filter((r) => r.category === only.key).map((r) => r.phrase) : [],
-        deadline
+    halves
+      .filter((half) => half.length > 0)
+      .map((half) =>
+        askModel(
+          ctx,
+          half,
+          only ? existing.filter((r) => r.category === only.key).map((r) => r.phrase) : [],
+          deadline
+        )
       )
-    )
   );
   for (const f of first) if (f.error) notes.push(`:warning: One expansion call failed: ${f.error}`);
   const accepted = acceptRows(first.flatMap((f) => f.rows), ctx, seen);
 
   // A category that came back short is re-asked for that category alone, not the whole batch.
   if (!only) {
-    const count = (key: string) => accepted.filter((r) => r.category === key && r.use === "query").length;
-    const short = cats.filter((c) => count(c.key) < c.target);
+    // Counts EVIDENCE PLUS what the model just wrote, for the same reason the ask above does: a
+    // category the market answered is not short just because the model added nothing to it.
+    const count = (key: string) =>
+      alreadyHave(key) + accepted.filter((r) => r.category === key && r.use === "query").length;
+    const short = asks.map((a) => a.category).filter((c) => count(c.key) < c.target);
     if (short.length) {
       const again = await Promise.all(
         short.map((c) =>
@@ -480,8 +521,8 @@ export async function expandKeywords(
       for (const a of again) if (a.error) notes.push(`:warning: A re-ask failed: ${a.error}`);
       accepted.push(...acceptRows(again.flatMap((a) => a.rows), ctx, seen));
     }
-    const stillShort = cats
-      .map((c) => [c, count(c.key)] as const)
+    const stillShort = asks
+      .map((a) => [a.category, count(a.category.key)] as const)
       .filter(([c, n]) => n < c.target)
       .map(([c, n]) => `${c.label} ${n} of ${c.target}`);
     if (stillShort.length) {
@@ -576,8 +617,17 @@ export async function runKeywordStep(clientId: string): Promise<AutoResult> {
   return {
     ok: true,
     note: [
-      `:mag: *Keyword set written for ${ctx.treatment}.* ${tally.queries} queries (the floor is ${KEYWORD_FLOOR}) ` +
-        `and ${hooks} hooks. ${expansion.length} proposed by the model this run, ${ev.rows.length} read from the market's evidence.`,
+      // ‼️ THE SPLIT IS THE FIRST THING SAID, NOT THE LAST. The totals used to lead and the
+      // provenance trailed, which reads as "213 queries" when the truth was "13 from the market
+      // and 200 a model made up". Research first is only a real rule if the card shows when it
+      // did not happen.
+      `:mag: *Keyword set written for ${ctx.treatment}.* ${ev.rows.length} read from the market's evidence, ` +
+        `${expansion.length} proposed by the model to fill what was left.`,
+      `${tally.queries} queries in all (the floor is ${KEYWORD_FLOOR}) and ${hooks} hooks.` +
+        (expansion.length > ev.rows.length
+          ? " *More of this set was invented than evidenced.* That is worth knowing before you approve it: " +
+            "the deep research KEYWORDS block is what moves the balance, and `keywords add:` ranks like evidence."
+          : ""),
       ...notes,
       uploaded
         ? "The whole list is the CSV above. The card has the top 40 and the commands."
@@ -620,7 +670,7 @@ export type KeywordCheck =
 
 /**
  * System tier. At least the floor of query rows, approved, and enough of the approved ones about
- * the offer to fill a pillar and eight supports, all written for the offer as it is locked now.
+ * the offer to fill a pillar and six supports, all written for the offer as it is locked now.
  */
 export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> {
   const c = await keywordContext(clientId);

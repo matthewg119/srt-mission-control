@@ -207,10 +207,15 @@ export function namesOffer(phrase: string, vocab: readonly string[]): boolean {
  * buying shapes (price, "is it worth it", "does it hurt", "near me", booking) say nothing about
  * WHICH service on their own. "How much per syringe" written under the lip filler client's price
  * category is about lip filler; "how much does it cost" harvested off a page about the whole
- * vertical is not, because nothing says which service "it" is. So `askedAboutOffer` is set for
- * rows the keyword step wrote under one of the offer's own categories, or a person added to it,
- * and never for a harvested row. A harvested phrase that names none of the vocabulary is still
- * stored and shown; it just cannot be a pillar or support keyword.
+ * vertical is not, because nothing says which service "it" is.
+ *
+ * !! WHO GETS THE PASS NARROWED ON 2026-09-13: ONLY A PHRASE A PERSON TYPED. It used to be set
+ * for anything the keyword step wrote under one of the offer's own categories, which handed it to
+ * the model's own expansion rows and left the RESEARCHED ones to prove themselves by their words.
+ * Invented phrases cleared a lower bar than evidenced ones. `isRelevantKeyword` in
+ * `keyword-expansion.ts` is the only caller that sets this and carries the full reasoning.
+ * A phrase that names none of the vocabulary is still stored and shown; it just cannot be a
+ * pillar or support keyword.
  */
 export function isAboutOffer(
   phrase: string,

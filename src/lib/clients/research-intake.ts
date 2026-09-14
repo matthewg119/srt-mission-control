@@ -78,6 +78,16 @@ export interface ResearchIntakeResult {
    * message for a MISSING block to somebody who had just pasted a hundred keywords.
    */
   keywordsError?: string;
+  /**
+   * How many of those keyword rows arrived with a source URL beside them.
+   *
+   * ‼️ THE ONLY NUMBER THAT SAYS WHETHER THE VOLUME COLUMN MEANS ANYTHING. `extractKeywords`
+   * trusts a volume only when the row cites where it came from and otherwise pins it to 1, so a
+   * block of 100 rows with no URLs ranks exactly like a block of 100 rows that all said
+   * "unknown". Measured 2026-09-13 on SRT's vertical: 306 research phrases, 0 with a source URL,
+   * and nothing in the thread ever said so. Reported now, every run.
+   */
+  keywordsWithUrl?: number;
   runId?: string;
   /**
    * What the quality filter refused at the door, so a short result explains itself.
@@ -270,6 +280,7 @@ export async function ingestResearch(args: {
   // A failure here does NOT fail the intake: the eight sections are already filed at this point
   // and returning an error would tell the operator nothing landed when most of it did.
   let keywordsStored = 0;
+  let keywordsWithUrl = 0;
   let keywordsFailed: string | undefined;
   if (keywords.length) {
     const { error: kwError } = await supabaseAdmin.from("question_bank").upsert(
@@ -292,6 +303,7 @@ export async function ingestResearch(args: {
       keywordsFailed = kwError.message;
     } else {
       keywordsStored = keywords.length;
+      keywordsWithUrl = keywords.filter((k) => Boolean(k.sourceUrl)).length;
     }
   }
 
@@ -305,6 +317,7 @@ export async function ingestResearch(args: {
     stored: fresh.length,
     seen: phrases.length - fresh.length,
     keywords: keywordsStored,
+    keywordsWithUrl,
     keywordsError: keywordsFailed,
     runId,
     droppedPhrases: phraseFilter.dropped,
@@ -324,11 +337,36 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
     // that did, and section 9 is the half the page candidates rank on.
     r.keywords
       ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.` +
-        (r.droppedKeywords ? ` ${r.droppedKeywords} were dropped as extraction debris.` : "")
+        (r.droppedKeywords ? ` ${r.droppedKeywords} were dropped as extraction debris.` : "") +
+        // ‼️ THE URL COUNT IS THE HONEST HALF OF THIS LINE. A row without one has its volume pinned
+        // to 1, so "97 keywords" and "97 keywords, none of them sourced" are the same set as far as
+        // ranking is concerned, and only the second one is true.
+        (r.keywordsWithUrl === r.keywords
+          ? " Every row cites a source URL, so the volumes are used as given."
+          : r.keywordsWithUrl
+            ? ` ${r.keywordsWithUrl} of them cite a source URL; the rest rank by intent alone, because ` +
+              "an unsourced volume is an estimate and an estimate in a ranking column is " +
+              "indistinguishable from a measurement."
+            : " *None of them cite a source URL*, so every volume was pinned to 1 and these rank by " +
+              "intent alone. That is the rule working rather than a fault, but it means the block is " +
+              "worth less than its size suggests.")
       : r.keywordsError
         ? `:x: *The KEYWORDS block was there and the database refused it:* ${r.keywordsError}\n` +
           "The phrases above still landed. This is a schema problem, not something you pasted wrong."
-        : ":mag: No KEYWORDS block found. Section 9 asks for 100 search phrases as `phrase | volume | intent | source`; paste that block and this reply will count them.",
+        : // ‼️ THIS IS THE MESSAGE THAT WOULD HAVE CAUGHT THE LIVE BUG, SO IT SHOWS THE SHAPE.
+          // SRT's vertical, measured 2026-09-13: 306 research phrases and ZERO keyword rows, ever.
+          // The block had never once arrived in the pipe-delimited form. The old line said "No
+          // KEYWORDS block found" in prose and read as a shrug, which is the same mistake the ask
+          // itself was making: a format described in prose comes back as prose.
+          ":rotating_light: *No KEYWORDS block found, and that is the half that matters.*\n" +
+          "Section 9 asks for the 100 phrases this buyer actually searches, and it is the only path " +
+          "into the corpus that carries real commercial intent. Everything else in the paste landed.\n\n" +
+          "It has to be literal rows, not prose. Ask again for just this block:\n" +
+          "```\nKEYWORDS\n" +
+          "lip filler near me | unknown | ready | https://example.com/where-you-saw-it\n" +
+          "lip filler cost | 1900 | price | https://example.com/the-page-with-the-number\n```\n" +
+          "Four pipes on every row, `unknown` where there is no number, no link where there is no " +
+          "source. Re-paste it with `research:` and this reply will count them.",
   ];
 
   // ‼️ WHAT THE FILTER REFUSED IS PRINTED, NEVER SWALLOWED. A paste that quietly loses two
