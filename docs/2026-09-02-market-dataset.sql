@@ -12,11 +12,19 @@
 -- an enum in a transaction with a running app is not.
 --
 -- ‼️ WHY A NEW TABLE AND NOT ONE OF THE FIVE EMPTY ONES. client_datasets, query_index,
--- fanout_citations, client_url_inventory and report_snapshots are all empty and all unreferenced
--- from this repo, so reusing one looked right. Four of them are defined in the SIBLING checkout
--- srt-mc-colony (docs/2026-08-31-colony-and-fanout.sql) against this same database, so they belong
--- to a live lane rather than being abandoned. The decisive one is fanout_citations: its run_id is
--- NOT NULL with an FK to fanout_runs, and every mention here is evidenced by an audit_runs row.
+-- fanout_citations, client_url_inventory and report_snapshots were all empty and all unreferenced
+-- from this repo, so reusing one looked right.
+--
+-- ‼️ AMENDED 2026-09-14. This paragraph used to say four of them were defined in the SIBLING
+-- checkout srt-mc-colony, "so they belong to a live lane rather than being abandoned". That half
+-- was WRONG, and it is corrected here rather than deleted because the mistake is the instructive
+-- part: fourteen days passed with zero inserts into any of them and no deploy, so "a live lane"
+-- described an intention and not a fact. A table nothing writes is not evidence of ownership.
+-- The lane has now been adopted onto this branch, docs/2026-08-31-colony-and-fanout.sql defines
+-- those tables HERE, and the sibling-checkout reading is retired outright.
+--
+-- The decisive reason was never the sibling checkout, and it still holds: fanout_citations.run_id
+-- is NOT NULL with an FK to fanout_runs, and every mention here is evidenced by an audit_runs row.
 -- Storing this data there would mean inventing a fanout run for each one, which is exactly the
 -- thing this lane exists to make impossible. None of the five is dropped or altered by this file.
 --
