@@ -841,6 +841,50 @@ export function canonicalVerticalId(id: string): string {
   return LEGACY_IDS[id] ?? id;
 }
 
+// ---------------------------------------------------------------------------------------
+// The CLIENT lane's vertical slug -> this lane's avatar id
+// ---------------------------------------------------------------------------------------
+//
+// ‼️ TWO NAMESPACES, AND THEY ARE NOT THE SAME ONE. `verticals.id` is a REEL/DROP avatar id
+// (`medspa_owner_ai`, `pest_control`), written by hand and owned by this file. A CLIENT carries
+// `clients.vertical_slug`, kebab-case free text written by classify.ts (`aeo-agency-med-spa`,
+// `aeo-agency`), and that is also the key `question_bank.vertical` is filed under. Nothing has
+// ever mapped between them.
+//
+// ‼️ THE SILENT FALLBACK IS THE BUG. `loadVertical` finds no `verticals` row for
+// `aeo-agency-med-spa`, so `seedFor` lands on DEFAULT_VERTICAL_ID and returns PEST CONTROL. That
+// is the exact failure LEGACY_IDS above was written to prevent, one namespace over. Measured
+// 2026-09-13 on srt-agency-llc: loadVertical("aeo-agency-med-spa") resolved to `pest_control`,
+// so the headline lane read 0 voice-of-customer quotes and 0 approved numbers. With an empty
+// approved-numbers list EVERY figure is unbacked, so "backed, not banned" collapsed straight back
+// into "banned" and Matthew's 2026-09-13 rule change was disarmed at the source.
+//
+// ABSENT MEANS NO SHARED BANK, NEVER A GUESS. Same direction `OWNER_VERTICALS` takes in
+// `concierge/audience-proposal.ts`, and the same reason "Pest control owners and med spa owners
+// are not interchangeable sources of pain" is written twice in the drop lane: an unmapped client
+// generates with no quotes and no numbers, and the prompt already says so out loud. A wrong bank
+// is worse than an empty one, because an empty one is visible.
+const CLIENT_VERTICAL_AVATARS: Readonly<Record<string, string>> = {
+  "aeo-agency": "medspa_owner_ai",
+  "aeo-agency-med-spa": "medspa_owner_ai",
+  "aeo-marketing-agency": "medspa_owner_ai",
+};
+
+/**
+ * The avatar whose shared quote and number bank a client may draw on, or null when nobody has
+ * said. Takes `clients.vertical_slug` (i.e. whatever `verticalFor()` returned), NOT a
+ * `verticals.id`; an id that is already one of ours passes through so either namespace is safe
+ * to hand in.
+ */
+export function clientAvatarVerticalId(clientVerticalSlug: string): string | null {
+  const key = clientVerticalSlug.trim().toLowerCase();
+  if (!key) return null;
+  const mapped = CLIENT_VERTICAL_AVATARS[key];
+  if (mapped) return mapped;
+  const canonical = canonicalVerticalId(key);
+  return SEED_VERTICALS[canonical] ? canonical : null;
+}
+
 function seedFor(id: string): Vertical {
   return SEED_VERTICALS[canonicalVerticalId(id)] ?? SEED_VERTICALS[DEFAULT_VERTICAL_ID];
 }
