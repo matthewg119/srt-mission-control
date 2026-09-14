@@ -362,6 +362,8 @@ const row: PlanRow = {
   role: null,
   pillarId: null,
   keywordCategory: null,
+  headline: null,
+  secondaryKeywords: null,
 };
 const card = formatPlan([row, { ...row, id: "y", rank: 2, status: "approved" }], "The AI Visibility Scan");
 check("no dash in the rendered card", !hasBannedDash(card), card);

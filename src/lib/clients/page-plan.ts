@@ -101,6 +101,17 @@ export interface PlanRow {
   /** Which pillar a support belongs to. A client may one day have more than one offer. */
   pillarId: string | null;
   keywordCategory: string | null;
+  /**
+   * The direct-response H1, from client_headlines. Null until a headline is picked for this page.
+   *
+   * ‼️ NOT workingTitle, AND THE TWO MUST NOT BE COLLAPSED. workingTitle carries the KEYWORD and is
+   * the anchor text the pillar links this page with (plan-links.ts anchorFor); headline carries the
+   * PAIN and is what the reader sees at the top of the page. One of them has to be in the anchor
+   * and the other has to be the H1, and merging them puts the wrong one in both.
+   */
+  headline: string | null;
+  /** 3 to 5 approved variations of targetKeyword, each verbatim from client_keywords. */
+  secondaryKeywords: string[] | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -536,6 +547,9 @@ function toPlanRow(r: Record<string, unknown>): PlanRow {
     role: null,
     pillarId: null,
     keywordCategory: null,
+    // Merged on afterwards by withHeadlines, for the blast-radius reason it documents.
+    headline: null,
+    secondaryKeywords: null,
   };
 }
 
@@ -566,6 +580,35 @@ async function withRoles(rows: PlanRow[]): Promise<PlanRow[]> {
 }
 
 /**
+ * The headline-first columns, merged the same tolerant way and for the same reason.
+ *
+ * ‼️ A THIRD SELECT RATHER THAN TWO, because docs/2026-09-12-client-headlines.sql lands AFTER
+ * docs/2026-09-11-one-strategy.sql and a database can sit between any two of the three. Folding
+ * `headline` into withRoles would mean a plan with no roles AND no headlines on a database that
+ * actually has roles, which sends somebody to fix the wrong migration.
+ *
+ * Missing columns read as a plan whose pages have no headline yet, which is exactly what it is.
+ */
+async function withHeadlines(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, headline, secondary_keywords")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.headline = ((extra.headline as string | null) ?? "").trim() || null;
+    row.secondaryKeywords = Array.isArray(extra.secondary_keywords)
+      ? (extra.secondary_keywords as string[]).filter((k) => typeof k === "string" && k.trim() !== "")
+      : null;
+  }
+  return rows;
+}
+
+/**
  * The plan, in rank order, with each page's live status read through page_id.
  *
  * ‼️ A READ FAILURE IS RETURNED, NOT SWALLOWED INTO AN EMPTY PLAN. "No plan" and "the table is not
@@ -587,7 +630,9 @@ export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | 
     };
   }
 
-  const rows = await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow));
+  const rows = await withHeadlines(
+    await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow))
+  );
   const pageIds = rows.map((r) => r.pageId).filter((id): id is string => Boolean(id));
 
   if (pageIds.length) {

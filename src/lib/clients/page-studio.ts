@@ -57,6 +57,7 @@ import {
   type EvidenceTopic,
 } from "./page-evidence";
 import type { PlanRow, FrameContext } from "./page-plan";
+import { BATCH_COMMAND, HEADLINE_COMMAND, SKELETON_COMMAND } from "./page-batch";
 
 /**
  * The channel this lane owns.
@@ -1046,6 +1047,314 @@ async function undoCommand(session: Session): Promise<void> {
 
   const preview = res.removed.length > 120 ? `${res.removed.slice(0, 120)}…` : res.removed;
   await say(session.threadTs, `Took back out: "${preview}". The page is now ${res.words} words.`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `batch`, `headline N pick M`, `skeleton N more`
+//
+// ‼️ THE ORDER IS D3 AND THE CARDS ENFORCE IT: pillar, headlines, skeletons, ONE research, then
+// seven drafts. Each command refuses politely when the batch is not at its stage, rather than
+// doing the work out of order, because a skeleton written before its headline is a skeleton for a
+// page that does not know what it is promising.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function batchCommand(session: Session, arg: string | null): Promise<void> {
+  const { readBatch, existingPillars, pillarQuestionLines, stageLine, headlineCardLines, skeletonCardLines } =
+    await import("./page-batch");
+
+  const verb = (arg ?? "").trim().toLowerCase();
+
+  // ‼️ THE PILLAR QUESTION IS ASKED HERE AND NEVER IN THE ONBOARDING CHANNEL (D2). An onboarding
+  // always starts one pillar plus six supports, so there is nothing to ask; runPreCallPlan keeps
+  // the behaviour it has. A later batch in this channel may sit under a pillar that exists.
+  if (!verb) {
+    const state = await readBatch(session.clientId);
+    if ("error" in state) {
+      await say(session.threadTs, `:warning: ${state.error}`);
+      return;
+    }
+
+    if (state.stage === "no_plan") {
+      const pillars = await existingPillars(session.clientId);
+      await say(session.threadTs, pillarQuestionLines(pillars).join("\n"));
+      return;
+    }
+
+    // A batch already underway: say where it is and show the card for that stage.
+    const lines = [stageLine(state)];
+    if (state.stage === "headlines") {
+      lines.push("", ...headlineCardLines(state.rows, await keywordOptionsFor(session.clientId, state.rows)));
+    } else if (state.stage === "skeletons" || state.stage === "research") {
+      lines.push("", ...skeletonCardLines(state.rows, state.outlines));
+    }
+    await say(session.threadTs, lines.join("\n"));
+    return;
+  }
+
+  if (verb === "new" || verb.startsWith("under")) {
+    await say(
+      session.threadTs,
+      "Building the plan for this batch. One pillar and six supports, from the approved keywords."
+    );
+    await planCommand(session, "new");
+    await say(session.threadTs, "Now `batch` again to write the headlines.");
+    return;
+  }
+
+  if (verb === "approve") {
+    await batchApprove(session);
+    return;
+  }
+}
+
+/**
+ * The three options per page, read back from the bank.
+ *
+ * ‼️ READ FROM client_headlines RATHER THAN HELD IN THE THREAD. A Slack thread is not storage: the
+ * candidate numbering has to survive a restart, a second person opening the thread, and the gap
+ * between writing the options and picking one, which at 14 onboardings a day is hours.
+ */
+async function keywordOptionsFor(
+  clientId: string,
+  rows: readonly PlanRow[]
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const { data, error } = await supabaseAdmin
+    .from("client_headlines")
+    .select("headline, used_page_id, dropped_at")
+    .eq("client_id", clientId)
+    .eq("origin", "keyword")
+    .is("dropped_at", null)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error(`[page-studio] headline options read failed: ${error.message}`);
+    return out;
+  }
+
+  // used_page_id holds the PLAN ROW id, which is what approveHeadlineForPage writes. Options
+  // written for a page are the ones claimed by it, plus the unclaimed ones written alongside.
+  for (const row of rows) {
+    const mine = (data ?? []).filter((r) => r.used_page_id === row.id).map((r) => String(r.headline));
+    out.set(row.id, mine);
+  }
+  return out;
+}
+
+async function headlineCommand(session: Session, page: number, pick: number | null): Promise<void> {
+  const { readBatch, headlineCardLines } = await import("./page-batch");
+  const state = await readBatch(session.clientId);
+  if ("error" in state) {
+    await say(session.threadTs, `:warning: ${state.error}`);
+    return;
+  }
+
+  const row = state.rows[page - 1];
+  if (!row) {
+    await say(session.threadTs, `There is no page ${page} in this batch. There are ${state.rows.length}.`);
+    return;
+  }
+
+  const { generateKeywordHeadlines, storeHeadlines, approveHeadlineForPage } = await import("./client-headlines");
+
+  if (pick === null) {
+    // `headline N more`.
+    if (!row.targetKeyword) {
+      await say(session.threadTs, `Page ${page} has no target keyword, so there is nothing to aim a headline at.`);
+      return;
+    }
+    await say(session.threadTs, `Writing three new headlines for page ${page}.`);
+    const got = await generateKeywordHeadlines({ clientId: session.clientId, keyword: row.targetKeyword });
+    if (!got.ok) {
+      await say(session.threadTs, `:warning: ${got.error}`);
+      return;
+    }
+    const stored = await storeHeadlines({
+      clientId: session.clientId,
+      headlines: got.headlines,
+      origin: "keyword",
+    });
+    if (!stored.ok) {
+      await say(session.threadTs, `:warning: ${stored.error}`);
+      return;
+    }
+    // Claimed for this plan row immediately, so the numbering on the card is per page.
+    for (const h of stored.stored) {
+      await supabaseAdmin
+        .from("client_headlines")
+        .update({ used_page_id: row.id })
+        .eq("id", h.id)
+        .eq("client_id", session.clientId);
+    }
+    const options = await keywordOptionsFor(session.clientId, state.rows);
+    await say(session.threadTs, headlineCardLines(state.rows, options).join("\n"));
+    return;
+  }
+
+  const options = (await keywordOptionsFor(session.clientId, state.rows)).get(row.id) ?? [];
+  const chosen = options[pick - 1];
+  if (!chosen) {
+    await say(session.threadTs, `Page ${page} has ${options.length} options, so there is no ${pick}.`);
+    return;
+  }
+
+  const { data: match } = await supabaseAdmin
+    .from("client_headlines")
+    .select("id")
+    .eq("client_id", session.clientId)
+    .eq("headline", chosen)
+    .maybeSingle();
+
+  if (!match?.id) {
+    await say(session.threadTs, ":warning: That headline is no longer on file.");
+    return;
+  }
+
+  const res = await approveHeadlineForPage({
+    clientId: session.clientId,
+    headlineId: String(match.id),
+    planRowId: row.id,
+    by: "page studio",
+  });
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  const after = await readBatch(session.clientId);
+  const left = "error" in after ? 0 : after.needHeadline.length;
+  await say(
+    session.threadTs,
+    `Page ${page} is now "${res.headline}". ${
+      left ? `${left} page${left === 1 ? "" : "s"} still need one.` : "All pages have a headline. `skeleton` writes the outlines."
+    }`
+  );
+}
+
+async function skeletonCommand(session: Session, page: number | null): Promise<void> {
+  const { readBatch, skeletonCardLines } = await import("./page-batch");
+  const state = await readBatch(session.clientId);
+  if ("error" in state) {
+    await say(session.threadTs, `:warning: ${state.error}`);
+    return;
+  }
+
+  if (state.needHeadline.length) {
+    await say(
+      session.threadTs,
+      `:warning: ${state.needHeadline.length} page${state.needHeadline.length === 1 ? "" : "s"} still need a headline. ` +
+        "A skeleton written before its headline is an outline for a page that does not know what it is promising."
+    );
+    return;
+  }
+
+  const targets = page === null ? state.rows.filter((r) => !state.outlines.get(r.id)) : [state.rows[page - 1]];
+  if (!targets[0]) {
+    await say(session.threadTs, `There is no page ${page} in this batch. There are ${state.rows.length}.`);
+    return;
+  }
+
+  await say(session.threadTs, `Writing ${targets.length} skeleton${targets.length === 1 ? "" : "s"}. This takes a moment.`);
+
+  const { draftOutline } = await import("@/lib/hub/draft-page");
+  const { setPageOutline, startPageDraft } = await import("@/lib/hub/pages");
+
+  for (const row of targets) {
+    let pageId = row.pageId;
+    if (!pageId) {
+      const started = await startPageDraft({
+        clientId: session.clientId,
+        question: row.question,
+        title: row.workingTitle,
+      });
+      if (!started.ok) {
+        await say(session.threadTs, `:warning: page ${row.rank}: ${started.error}`);
+        continue;
+      }
+      pageId = started.id;
+      await supabaseAdmin.from("page_plan").update({ page_id: pageId, status: "claimed" }).eq("id", row.id);
+    }
+
+    const outline = await draftOutline(session.clientId, row.question, {
+      pageId,
+      context: { workingTitle: row.workingTitle, targetKeyword: row.targetKeyword, angle: row.angle },
+    });
+    if (!outline.ok) {
+      await say(session.threadTs, `:warning: page ${row.rank}: ${outline.error}`);
+      continue;
+    }
+    await setPageOutline(session.clientId, pageId, outline.outline);
+  }
+
+  const after = await readBatch(session.clientId);
+  if ("error" in after) {
+    await say(session.threadTs, `:warning: ${after.error}`);
+    return;
+  }
+  await say(session.threadTs, skeletonCardLines(after.rows, after.outlines).join("\n"));
+}
+
+/**
+ * `batch approve`: build the ONE research prompt.
+ *
+ * ‼️ IT POSTS A PROMPT AND STOPS. D10: the research stays a manual paste-back. Matthew was asked
+ * directly on 2026-09-14 and chose it over automating this by API, because he reads every answer.
+ * Nothing here calls a research model.
+ */
+async function batchApprove(session: Session): Promise<void> {
+  const { readBatch, batchIdFor } = await import("./page-batch");
+  const { loadBatchPages, buildBatchResearchPrompt } = await import("./batch-research");
+
+  const state = await readBatch(session.clientId);
+  if ("error" in state) {
+    await say(session.threadTs, `:warning: ${state.error}`);
+    return;
+  }
+  if (state.needSkeleton.length || state.needHeadline.length) {
+    await say(session.threadTs, ":warning: Every page needs a headline and a skeleton before the research is built.");
+    return;
+  }
+
+  const pages = await loadBatchPages(session.clientId, state.rows.map((r) => r.id));
+
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("legal_name, dba_name, city, state")
+    .eq("id", session.clientId)
+    .maybeSingle();
+
+  const { loadOffer } = await import("./offers");
+  const offer = await loadOffer(session.clientId).catch(() => null);
+  const { confirmedAvatarFor } = await import("./avatars");
+  const avatar = await confirmedAvatarFor(session.clientId).catch(() => null);
+
+  const built = buildBatchResearchPrompt({
+    clientName: ((client?.dba_name as string) || (client?.legal_name as string)) ?? "this client",
+    city: (client?.city as string | null) ?? null,
+    state: (client?.state as string | null) ?? null,
+    avatarLabel: avatar?.label ?? "the buyer",
+    offer: offer?.treatment ?? null,
+    pages,
+  });
+
+  if (!built.ok) {
+    await say(session.threadTs, `:warning: ${built.error}`);
+    return;
+  }
+
+  const batchId = batchIdFor(state);
+  if (batchId) {
+    const { attachResearchPrompt } = await import("./page-dataset");
+    void attachResearchPrompt({ clientId: session.clientId, batchId, prompt: built.prompt });
+  }
+
+  await say(
+    session.threadTs,
+    `*One prompt, ${built.questions} questions across ${pages.length} pages.* Run it, then paste the whole ` +
+      "answer back here with `research:` in front of it.\n```\n" +
+      built.prompt +
+      "\n```"
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2629,6 +2938,27 @@ export async function handlePageStudioEvent(args: {
   const outlineCmd = /^outline(\s+new)?$/i.exec(command);
   if (outlineCmd) {
     await outlineCommand(session, Boolean(outlineCmd[1]));
+    return true;
+  }
+
+  // ‼️ BEFORE `undo` AND AFTER `plan`, WHICH IS WHERE THE BATCH SITS IN THE ORDER OF WORK. `plan`
+  // decides which pages exist; `batch` walks those pages through headline, skeleton, one research
+  // and seven drafts. Each grammar is exported from its own module and shared with the step thread
+  // and the probe, the precedent PLAN_COMMAND set.
+  if (BATCH_COMMAND.test(command)) {
+    await batchCommand(session, BATCH_COMMAND.exec(command)?.[1] ?? null);
+    return true;
+  }
+
+  const headlineCmd = HEADLINE_COMMAND.exec(command);
+  if (headlineCmd) {
+    await headlineCommand(session, Number(headlineCmd[1]), headlineCmd[2] ? Number(headlineCmd[2]) : null);
+    return true;
+  }
+
+  const skeletonCmd = SKELETON_COMMAND.exec(command);
+  if (skeletonCmd) {
+    await skeletonCommand(session, skeletonCmd[1] ? Number(skeletonCmd[1]) : null);
     return true;
   }
 

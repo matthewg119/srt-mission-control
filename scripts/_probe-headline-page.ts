@@ -35,6 +35,7 @@ import {
   shapesCovered,
 } from "../src/lib/hub/draft-page";
 import { splitTaggedResearch, batchIngestLine } from "../src/lib/clients/batch-research";
+import { BATCH_COMMAND, HEADLINE_COMMAND, SKELETON_COMMAND } from "../src/lib/clients/page-batch";
 
 let failures = 0;
 
@@ -276,6 +277,53 @@ check(
   "a healthy run raises nothing",
   !batchIngestLine({ routed: 41, library: 2, unknownTags: [], withUrl: 38, silentPages: [] }, 7).includes(":warning:")
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n7. The batch grammar, and the dictation it must not swallow");
+
+// ‼️ COPIES OF THE PRODUCTION REGEXES, imported rather than retyped. page-studio.ts's dispatch
+// appends anything that is not a command to the page VERBATIM, so a pattern one character too
+// loose does not throw: it eats a sentence and puts nothing on screen to say it did. Three
+// separate live captures are recorded in that file's comments. These three verbs are new, and
+// `batch` and `skeleton` are both ordinary words in a channel about writing pages.
+const batchCases: Array<[string, boolean]> = [
+  ["batch", true],
+  ["batch new", true],
+  ["batch approve", true],
+  ["batch under 3", true],
+  ["batch the next seven pages tomorrow", false],
+  ["batching these together would be faster", false],
+  ["we should batch approve everything at once", false],
+];
+for (const [typed, expected] of batchCases) {
+  check(`BATCH_COMMAND on ${JSON.stringify(typed)} is ${expected}`, BATCH_COMMAND.test(typed) === expected);
+}
+
+const headlineCases: Array<[string, boolean]> = [
+  ["headline 3 pick 2", true],
+  ["headline 12 more", true],
+  ["headline 3", false],
+  ["headlines are the hardest part", false],
+  ["headline the pillar page differently", false],
+];
+for (const [typed, expected] of headlineCases) {
+  check(`HEADLINE_COMMAND on ${JSON.stringify(typed)} is ${expected}`, HEADLINE_COMMAND.test(typed) === expected);
+}
+
+const skeletonCases: Array<[string, boolean]> = [
+  ["skeleton", true],
+  ["skeleton 3 more", true],
+  ["skeletons take longer than drafts", false],
+  ["skeleton of the page is fine", false],
+];
+for (const [typed, expected] of skeletonCases) {
+  check(`SKELETON_COMMAND on ${JSON.stringify(typed)} is ${expected}`, SKELETON_COMMAND.test(typed) === expected);
+}
+
+const pick = HEADLINE_COMMAND.exec("headline 3 pick 2");
+check("headline 3 pick 2 captures page 3 and option 2", pick?.[1] === "3" && pick?.[2] === "2");
+const more = HEADLINE_COMMAND.exec("headline 3 more");
+check("headline 3 more captures page 3 and no option", more?.[1] === "3" && more?.[2] === undefined);
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 process.exit(failures === 0 ? 0 : 1);
