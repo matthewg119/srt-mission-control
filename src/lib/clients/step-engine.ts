@@ -1070,7 +1070,7 @@ async function instructionsFor(
       return keywordCardLines(c.id);
     }
 
-    // The nine pages: the plan (1 pillar + 8 supports) until it is approved, then the drafts.
+    // The seven pages: the plan (1 pillar + 6 supports) until it is approved, then the drafts.
     case "pre_call_pages": {
       const { preCallPagesCardLines } = await import("./pre-call-pages");
       return preCallPagesCardLines(c.id);

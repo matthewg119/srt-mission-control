@@ -1,9 +1,9 @@
-// The pages drafted before the call: one pillar for the offer and eight supports, written by the
+// The pages drafted before the call: one pillar for the offer and six supports, written by the
 // onboarding workflow rather than only by hand in the studio.
 //
 // Matthew, 2026-09-11: "I want 9 pages ready before we actually even talk to the customer on the
 // phone." And the decisions that shape this file:
-//   - 1 pillar + 8 supports. The pillar is the offer page.
+//   - 1 pillar + 6 supports. The pillar is the offer page.
 //   - FULL drafts, no gaps, written from what is on file. Drafts only: nothing publishes before
 //     Day 0 and the evidence gate, and both still stand.
 //   - Every page's magnet is the anchor offer in disguise.
@@ -13,7 +13,7 @@
 // ‼️ THE PLAN DRAWS ONLY FROM THE APPROVED KEYWORD SET, AND ONLY FROM WHAT IS ABOUT THE OFFER.
 // selectOfferPlan in page-plan.ts is pure and never pads: a short plan says what would fill it.
 //
-// ‼️ THE DRAFTING RUNS IN WAVES AND CAN BE RESUMED. Nine drafts are nine model calls, more than a
+// ‼️ THE DRAFTING RUNS IN WAVES AND CAN BE RESUMED. Seven drafts are seven model calls, more than a
 // 300 second route can hold, so `plan approve` drafts three at a time until the time budget is
 // spent and then hands the rest to a fresh request (/api/internal/pre-call-pages). Each plan row is
 // LEASED while it is drafted, so two waves never write the same page, and a page that already has
@@ -50,7 +50,7 @@ const PAGE_BUDGET_MS = 80_000;
 const CONCURRENCY = 3;
 /** Longer than the route's 300 second limit, so a live wave never loses its lease to another. */
 const LEASE_MS = 6 * 60_000;
-/** A chain that makes no progress stops; this bounds one that does. Nine pages need three or four. */
+/** A chain that makes no progress stops; this bounds one that does. Seven pages need three. */
 const MAX_HOPS = 6;
 
 function appUrl(): string {
@@ -164,7 +164,7 @@ async function orderPlan(clientId: string): Promise<void> {
 }
 
 /**
- * Propose the pre-call plan, or fill it back up to one pillar and eight supports.
+ * Propose the pre-call plan, or fill it back up to one pillar and six supports.
  *
  * Approved and claimed rows are kept; only proposed pre-call rows are replaced. Studio rows (no
  * role) are never touched.
@@ -458,6 +458,12 @@ async function draftOne(
 
     // A1 D-P5a: Core sells 4 new + 4 refreshed a month, so the ninth page of month one is above
     // the sold count and is tagged, never hidden. A separate write, tolerant of the column missing.
+    //
+    // !! THIS 9 IS THE CONTRACT, NOT THE BATCH SIZE. It is 1 + the 8 pages core sells in a month.
+    // It is NOT 1 + PRE_CALL_SUPPORTS and must not be rewritten to track it: dropping the pre-call
+    // batch to 7 pages on 2026-09-13 did not change what was sold, and tying them together would
+    // tag the EIGHTH page, which the client paid for, as over-delivery. The pre-call wave simply
+    // no longer reaches rank 9; later waves still do.
     if (env.tier === "core" && row.rank >= 9) {
       await supabaseAdmin.from("client_pages").update({ scope: "over_delivery" }).eq("id", page.id);
     }

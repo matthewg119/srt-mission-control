@@ -572,10 +572,32 @@ ok("the sections are numbered in order",
   brief.indexOf("1. Who BUYS") < brief.indexOf("7. Their EXACT words"));
 
 // Section 9 has to ask for a SHAPE, not just for keywords, because extractKeywords parses it.
+//
+// ‼️ THE SHAPE MOVED OUT OF SECTION 9 ON 2026-09-13, AND SO DID THIS TEST'S TEETH. It used to
+// match the prose ("block titled KEYWORDS", "phrase | monthly volume") inside the section brief.
+// Measured that day: `question_bank` held 306 deep_research rows for SRT's vertical and ZERO with
+// source='keywords', so the block described in prose had NEVER ONCE come back in a shape the
+// parser could read, and every one of those string assertions passed the whole time. A test that
+// matches the ask cannot catch an ask that does not work.
+//
+// So the prompt now ends with a worked KEYWORDS row, and this runs the REAL parser over the real
+// prompt. If the example we hand people stops parsing, or somebody reformats it, this fails.
 ok("section 9 asks for 100 search phrases", /100 search phrases/.test(brief));
-ok("section 9 names the KEYWORDS block", /block titled KEYWORDS/.test(brief));
-ok("section 9 asks for the pipe shape", /phrase \| monthly volume/.test(brief));
-ok("section 9 asks for an intent word", /ready\|comparing\|researching\|price/.test(brief));
+ok("the prompt names the KEYWORDS block", /KEYWORDS/.test(brief));
+
+const workedRows = extractKeywords(brief);
+ok(`the prompt's own worked example parses (${workedRows.length} rows)`, workedRows.length === 2);
+// Both worked rows use a top-intent word ("ready" and "price" both map to MAX_INTENT_SCORE), so
+// an example whose intent column stopped being recognised would land them at the default 1.
+ok(
+  "the worked rows' intent words are recognised, not defaulted",
+  workedRows.every((r) => r.commercialIntentScore === MAX_INTENT_SCORE)
+);
+ok(
+  "the sourced row keeps its volume and the unknown one does not invent a number",
+  workedRows.some((r) => r.frequencyScore === 1900) && workedRows.some((r) => r.frequencyScore === 1)
+);
+ok("both worked rows cite a source URL", workedRows.every((r) => Boolean(r.sourceUrl)));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The funnel lead's first email

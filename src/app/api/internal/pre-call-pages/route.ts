@@ -1,6 +1,6 @@
 // The next pass of the pre-call drafting, started by the pass before it.
 //
-// ‼️ WHY A ROUTE AND NOT A LOOP. Nine full drafts are nine model calls, more than one 300 second
+// ‼️ WHY A ROUTE AND NOT A LOOP. Seven full drafts are seven model calls, more than one 300 second
 // request can hold. continueDrafting() drafts until its budget is spent and then POSTs here, and
 // this starts a fresh request with its own 300 seconds. Each plan row is leased while it is drafted
 // (pre-call-pages.ts), so a pass that overlaps another never writes the same page twice.

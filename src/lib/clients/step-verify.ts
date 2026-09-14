@@ -728,7 +728,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   },
 
   // ‼️ SYSTEM TIER, OFF client_keywords: the floor of query rows, a person's approval, and enough
-  // approved queries about the offer to fill a pillar and eight supports. A set expanded for a
+  // approved queries about the offer to fill a pillar and six supports. A set expanded for a
   // different offer than the one locked now is refused, because an approval of that set is an
   // approval of the wrong thing.
   keyword_set: async (ctx) => {

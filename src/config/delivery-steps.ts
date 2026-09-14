@@ -292,7 +292,7 @@ const STEP_LIST = [
   // (approveMagnetCandidate) and resolving it for the drafter both need a concierge_configs row,
   // and provisionConcierge at concierge_preview is the only thing that creates one. Placed next to
   // the keyword step, every magnet mint would refuse.
-  { key: "pre_call_pages", phase: PHASE_BEFORE, label: "Nine pages drafted before the call: one pillar for the offer, eight supports", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"] },
+  { key: "pre_call_pages", phase: PHASE_BEFORE, label: "Seven pages drafted before the call: one pillar for the offer, six supports", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"] },
   // ‼️ THE CALL PACK (2026-09-12): four documents, one step, one thread. The call sheet, the
   // findings, the presence and consistency PDF and the closing questions are generated together
   // by one runner and all four are filed against this step. See artifacts/call-pack.ts.

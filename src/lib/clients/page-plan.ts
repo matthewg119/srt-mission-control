@@ -179,20 +179,26 @@ export function selectPlan(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pure: the pre-call plan, one pillar and eight supports from the approved keywords
+// Pure: the pre-call plan, one pillar and six supports from the approved keywords
 //
 // Matthew, 2026-09-11: "I want 9 pages ready before we actually even talk to the customer on the
 // phone." "We need to make sure the keywords are directly correlated with the offer that the
 // customer wants to sell."
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const PRE_CALL_SUPPORTS = 8;
+// Matthew, 2026-09-13, revising the count DOWN: "Ideally we want 6 posts ready for each
+// onboarding", then settled as 1 pillar + 6 supports = 7 pages. The batch is now decided in full
+// before any research fires, so the number it has to one-shot is the number that matters.
+//
+// !! KEEP PLAN_KEYWORDS_NEEDED IN `keyword-expansion.ts` IN STEP: it is 1 + this number, and it
+// is what the keyword verifier refuses a short set against.
+export const PRE_CALL_SUPPORTS = 6;
 
 /**
- * No keyword category may take more than this many of the eight supports.
+ * No keyword category may take more than this many of the six supports.
  *
  * ‼️ STRICT, UNLIKE selectPlan's MAX_PER_THEME. The addendum: "at most 2 per category, so the 9
- * pages are not nine price pages." selectPlan bends its cap to fill twenty slots; this one does
+ * pages are not all price pages." selectPlan bends its cap to fill twenty slots; this one does
  * not bend, because a short honest plan beats a padded one and the card says what would fill it.
  */
 export const MAX_PER_CATEGORY = 2;
@@ -215,7 +221,7 @@ export interface OfferPoolItem {
 export interface OfferPlan {
   pillar: { item: OfferPoolItem; keyword: string } | null;
   supports: OfferPoolItem[];
-  /** How many of the eight supports could not be filled. */
+  /** How many of the six supports could not be filled. */
   short: number;
   /** What to do about it, in words, when the plan is short or has no pillar. */
   fix: string | null;

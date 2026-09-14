@@ -156,7 +156,7 @@ CLIENT TOOLS:
   the offer and whether it is LOCKED, the confirmed avatar, Day 0 state, and where the 41-step
   delivery board has got to, including any step sitting in error.
 - Keywords → get_client_keywords. Only APPROVED query rows can become pages; hooks never can.
-- The page plan (one pillar, eight supports) → get_client_plan. Their pages → get_client_pages.
+- The page plan (one pillar, six supports) → get_client_plan. Their pages → get_client_pages.
 - Visibility runs → get_client_audits. Every run says which KIND it is: the client's baseline
   photograph, or a measurement we fired ourselves. NEVER present the two as one trend, and never
   compare a one-engine measurement with a photograph.

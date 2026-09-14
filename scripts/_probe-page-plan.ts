@@ -331,9 +331,16 @@ check(
 check("a row that is not about the offer never gets in, whatever its score", !full.supports.some((s) => s.question.includes("botox")));
 check("the pillar is not also a support", !full.supports.some((s) => s.question === "lip filler"));
 check("no naming variant is a support: the pillar owns that search", !full.supports.some((s) => s.naming));
+// !! EXPRESSED AS THE RULE, NOT AS A COUNT. This used to assert "two each" because 8 supports and
+// a cap of 2 made the four buying questions divide exactly. At PRE_CALL_SUPPORTS = 6 (2026-09-13)
+// the passes give 2, 2, 1, 1: pass one takes ONE of each buying question, so all four are still
+// represented, and pass two doubles up until the batch is full. All four present still matters
+// ("so the pages are not all price pages"); the even split never did.
 check(
-  "the eight supports are the four buying questions, two each: price, fears, comparisons, how it works",
-  perCat.size === 4 && [...perCat.entries()].every(([c, n]) => FOCUS.has(c) && n === 2),
+  `every support is one of the four buying questions, all four represented, at most ${MAX_PER_CATEGORY} each`,
+  perCat.size === 4 &&
+    [...perCat.entries()].every(([c, n]) => FOCUS.has(c) && n >= 1 && n <= MAX_PER_CATEGORY) &&
+    [...perCat.values()].reduce((a, b) => a + b, 0) === PRE_CALL_SUPPORTS,
   [...perCat.entries()].map(([c, n]) => `${c}=${n}`).join(", ")
 );
 const lean = selectOfferPlan(
@@ -352,13 +359,16 @@ const lean = selectOfferPlan(
   { city: null }
 );
 check(
-  "when the four cannot fill eight, they go first and the rest come from the offer's other questions",
-  lean.supports.length === 8 && lean.supports.slice(0, 3).every((s) => s.focus) && lean.supports.slice(3).every((s) => !s.focus),
+  `when the four cannot fill ${PRE_CALL_SUPPORTS}, they go first and the rest come from the offer's other questions`,
+  lean.supports.length === PRE_CALL_SUPPORTS &&
+    lean.supports.slice(0, 3).every((s) => s.focus) &&
+    lean.supports.slice(3).every((s) => !s.focus),
   lean.supports.map((s) => s.category).join(", ")
 );
 check(
   "one per other category before any gets a second",
-  lean.supports.slice(3, 7).map((s) => s.category).sort().join() === "candidacy,local,provider,results",
+  new Set(lean.supports.slice(3).map((s) => s.category)).size === lean.supports.length - 3 &&
+    lean.supports.slice(3).every((s) => ["candidacy", "local", "provider", "results"].includes(s.category)),
   lean.supports.map((s) => s.category).join(", ")
 );
 check("a full plan names no fix", full.fix === null);
@@ -382,7 +392,11 @@ const thin = selectOfferPlan(
 check("a thin set gives a SHORT plan", thin.supports.length === 3, `got ${thin.supports.length}`);
 check("it is not padded past the category cap", thin.supports.filter((s) => s.category === "price").length === MAX_PER_CATEGORY);
 check("or with a question about the vertical", !thin.supports.some((s) => s.question.includes("choose a med spa")));
-check("and it says what would fill it", thin.short === 5 && Boolean(thin.fix?.includes("KEYWORDS block")), thin.fix ?? "");
+check(
+  "and it says what would fill it",
+  thin.short === PRE_CALL_SUPPORTS - 3 && Boolean(thin.fix?.includes("KEYWORDS block")),
+  `short=${thin.short}: ${thin.fix ?? ""}`
+);
 
 const noPillar = selectOfferPlan([op("lip filler cost", "price")], { city: null });
 check("no naming variant means no pillar, and the fix says so", noPillar.pillar === null && Boolean(noPillar.fix?.includes("keywords more naming")));

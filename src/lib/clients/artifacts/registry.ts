@@ -372,8 +372,8 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return runKeywordStep(clientId);
   },
 
-  // The pre-call plan: 1 pillar + 8 supports from the approved keywords, one framing call, and a
-  // card waiting on `plan approve`. The DRAFTING is not done here: nine model calls do not fit in
+  // The pre-call plan: 1 pillar + 6 supports from the approved keywords, one framing call, and a
+  // card waiting on `plan approve`. The DRAFTING is not done here: seven model calls do not fit in
   // a cascade, so `plan approve` starts it in waves. See pre-call-pages.ts.
   pre_call_pages: async (clientId) => {
     const { runPreCallPlan } = await import("../pre-call-pages");
