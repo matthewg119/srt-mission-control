@@ -25,6 +25,7 @@
 // migration this feature shipped is one text column for the signer's name.
 
 import { supabaseAdmin } from "@/lib/db";
+import { adoptPriorAudit } from "@/lib/clients/adopt-audit";
 import { slack } from "@/lib/slack-bot";
 import { normalizeTarget } from "@/lib/scan/normalize";
 import { normalizeAddress, normalizeState } from "@/lib/clients/normalize";
@@ -364,6 +365,14 @@ export async function startDelivery(
   await seedDeliverySteps(clientId).catch((e) =>
     warn(`seeding the delivery steps failed: ${(e as Error).message}`)
   );
+  // ‼️ BEFORE THE TICK, AND BEFORE Photograph I fires below. Same reasoning as the v1 path:
+  // the client row now carries the website and the contact, the baseline has not been inserted,
+  // and step 1 has always claimed to attach an existing audit without anything doing it.
+  await adoptPriorAudit(clientId)
+    // Success is a console line, never warn(): warn pushes onto the delivery result and
+    // would put "linked audit from ..." on the card as though something had gone wrong.
+    .then((r) => console.log(`[onboarding2/delivery] prior audit: ${r.detail}`))
+    .catch((e) => warn(`prior audit adopt failed: ${(e as Error).message}`));
   await autoCompleteStep(clientId, "intake_received").catch((e) =>
     warn(`intake_received could not be ticked: ${(e as Error).message}`)
   );

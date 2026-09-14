@@ -350,3 +350,36 @@ export function describeFailure(reason: CrawlBlock["reason"], detail: string): s
       return `the site returned an error (${detail})`;
   }
 }
+
+/**
+ * The crawl, shaped for audit_reports.site_crawl.
+ *
+ * ‼️ TWO FIELDS ARE DROPPED AND BOTH ARE DROPPED FOR SIZE, NOT PREFERENCE.
+ *
+ * `homepageHtml` is raw uncapped markup. A page-builder homepage runs 150KB to 2MB, one to two
+ * orders of magnitude above every other blob this system persists, and detectSiteSignals has
+ * already distilled the only thing it was kept for into audit_reports.site_signals.
+ *
+ * `pages[].text` is the less obvious one. MAX_PAGES is 3, but there is NO per-page character cap:
+ * each entry holds that page's full extracted text, and TEXT_BUDGET_CHARS applies only to the
+ * joined `bodyText`. So `pages` can be several times larger than the field it feeds. What is worth
+ * keeping is which URLs were read and how much text each had, which is what makes a thin crawl
+ * visible after the fact; the text itself is already in bodyText up to the budget.
+ *
+ * Everything else is kept verbatim, including `blocked` and `source`, because a reader asking
+ * "what did we actually see" needs to know we saw nothing just as much as it needs the text.
+ */
+export function storableCrawl(research: SiteResearch): Record<string, unknown> {
+  return {
+    website: research.website,
+    title: research.title,
+    metaDescription: research.metaDescription,
+    siteName: research.siteName,
+    headings: research.headings,
+    bodyText: research.bodyText,
+    schemaHints: research.schemaHints,
+    source: research.source,
+    blocked: research.blocked,
+    pages: research.pages.map((p) => ({ url: p.url, chars: p.text.length })),
+  };
+}

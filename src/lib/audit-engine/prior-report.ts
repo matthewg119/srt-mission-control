@@ -109,8 +109,18 @@ function shape(row: Record<string, unknown>): PriorReport {
     // conversation about a Loom has already happened with this person.
     loomSent: Boolean(row.loom_url) || loomState?.stage === "done",
     pitchSent: row.auto_send_state === "sent",
+    // ‼️ THESE ARE OBJECTS, NOT STRINGS, AND map(String) TURNED ALL FIVE INTO "[object Object]".
+    // audit_reports.competitors holds [{name, domain, hypothesis}] per its own schema comment and
+    // per what run-audit-pipeline writes into it. filter(Boolean) did not catch it either, because
+    // "[object Object]" is a truthy string. It went unnoticed because nothing reads this field: the
+    // only caller of priorReportFor that uses the result is scan-running-email.ts, which reads four
+    // other fields. The doc comment above says these are "for the chat to quote back", so the first
+    // thing to read it would have pasted [object Object] into a message to a prospect.
     competitors: Array.isArray(row.competitors)
-      ? (row.competitors as unknown[]).map(String).filter(Boolean).slice(0, 5)
+      ? (row.competitors as Array<{ name?: unknown }>)
+          .map((c) => (typeof c?.name === "string" ? c.name.trim() : ""))
+          .filter(Boolean)
+          .slice(0, 5)
       : [],
   };
 }

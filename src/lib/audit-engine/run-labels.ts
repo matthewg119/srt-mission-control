@@ -115,3 +115,47 @@ export const BASELINE_ONLY = `run_label.is.null,run_label.not.in.(${SUPPLIED_LAB
 export function baselineReportsOnly<T extends { or(filter: string): T }>(query: T): T {
   return query.or(BASELINE_ONLY);
 }
+
+/** The client_link_source value meaning "this run was fired FOR this client". */
+export const FIRED_FOR_CLIENT = "fired_for_client";
+
+/**
+ * Restrict a query to the client's own baseline PHOTOGRAPH, not merely to a report it is linked to.
+ *
+ * ‼️ BASELINE_ONLY ALONE STOPPED BEING ENOUGH ON 2026-09-14, AND NOTHING ABOUT IT LOOKS WRONG.
+ * It filters by EXCLUSION (`run_label` is not one of the runs we fire ourselves), which was
+ * sufficient while client_id could only mean "fired for this client". On 2026-09-14 a backfill
+ * linked 13 prospect audits to clients by matching the website host, which is the exact domain
+ * fallback step-verify.ts refuses in capitals, applied in SQL instead of in code. `prospect_audit`
+ * is not in SUPPLIED_LABELS, so every one of those rows passes BASELINE_ONLY. See
+ * docs/2026-09-14-audit-foundation.sql section 4.
+ *
+ * ‼️ THIS IS NOT APPLIED TO EVERY BASELINE_ONLY CALLER, AND THE ONES LEFT ALONE ARE THE POINT OF
+ * THE BACKFILL. Fifteen call sites use BASELINE_ONLY. For most of them "any audit we hold for this
+ * client" is the RIGHT answer and is the improvement Matthew asked for: the keyword set, the
+ * harvest, the competitor shortlist, page candidates, the content digest and the evidence layer all
+ * get better when they can read the scan we already ran on that business. Narrowing those would
+ * throw away the thing the link was created for.
+ *
+ * It is applied where the report is a MEASUREMENT THE BUSINESS IS JUDGED AGAINST, where reading a
+ * prospecting run instead is not merely imprecise but wrong:
+ *
+ *   - step-verify.ts's baseline_scan verifier, which reports that score AS the baseline the day
+ *     30/60/90 numbers are measured against.
+ *   - question-sets.ts's universalSetFor, whose own comment calls its filter the most load-bearing
+ *     in the set: the tracked set is DERIVED from that report and then FROZEN forever, and every
+ *     later client in the vertical inherits it.
+ *
+ * ‼️ DELIBERATELY NOT APPLIED TO adoptAuditClassification, and that one is worth the sentence.
+ * It reads vertical_slug and business_type and writes them only over NULL. An adopted prospect
+ * audit classified the same business independently, so its answer is a real classification rather
+ * than a round trip. Requiring fired_for_client there would make it refuse for every client whose
+ * only audit was adopted, which is now the common case, leaving vertical_slug NULL and breaking
+ * verticalFor() and the harvest behind it. The fix would cause a worse regression than the one it
+ * repairs.
+ */
+export function ownBaselineOnly<
+  T extends { or(filter: string): T; eq(column: string, value: string): T },
+>(query: T): T {
+  return query.or(BASELINE_ONLY).eq("client_link_source", FIRED_FOR_CLIENT);
+}

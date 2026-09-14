@@ -31,7 +31,7 @@
 // absent answer is reported as absent and never guessed.
 
 import { supabaseAdmin } from "@/lib/db";
-import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
+import { BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
 import { slack } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
@@ -293,7 +293,14 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       // Photograph II is fired FOR this client and carries its client_id, so without this filter
       // the first Day 0 run would become "the newest report" and step 2 would start reporting the
       // Day 0 score as the baseline it is supposed to be measured against. See run-labels.ts.
+      //
+      // ‼️ 5. AND THE ADOPTED PROSPECT AUDITS ARE EXCLUDED TOO. Point 3 above says client_id ONLY,
+      // with no contact_id or domain fallback, BECAUSE either can match a prospect_audit. On
+      // 2026-09-14 a backfill performed exactly that domain match in SQL, so client_id stopped
+      // carrying the meaning point 3 depends on and BASELINE_ONLY cannot tell the difference:
+      // it filters by exclusion and prospect_audit is not excluded. This is the half that does.
       .or(BASELINE_ONLY)
+      .eq("client_link_source", FIRED_FOR_CLIENT)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();

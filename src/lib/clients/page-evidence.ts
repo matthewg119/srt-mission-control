@@ -310,11 +310,21 @@ export async function recordSource(
  * Returns the page_sources id, or null when there was nothing to file. site-replica.ts stores it
  * on the replica row so the page it generated can be traced back to the exact snapshot it was
  * written from, which is what its step verifier checks rather than trusting that a crawl ran.
+ *
+ * ‼️ sourceDate IS THE DATE THE CRAWL HAPPENED, NOT THE DATE IT WAS FILED, and it is optional
+ * only because every caller until now filed its crawl the moment it ran. A prospect audit
+ * promoted at intake did NOT: its crawl can be weeks old, and stamping it with today's date is
+ * exactly the failure the paragraph above describes. Pass the audit's own created_at for that
+ * path; omit it when the crawl just happened and today is the truth.
  */
 export async function recordWebsiteSnapshot(args: {
   clientId: string;
   url: string;
   content: string;
+  /** YYYY-MM-DD the content was CRAWLED. Defaults to today, which is right only for a live crawl. */
+  sourceDate?: string;
+  /** How it reached us. 'crawl' is a live read; 'audit' is a promoted prospect scan. */
+  collectedVia?: CollectedVia;
 }): Promise<string | null> {
   const content = args.content.trim();
   if (!content) return null;
@@ -329,13 +339,15 @@ export async function recordWebsiteSnapshot(args: {
     .maybeSingle();
 
   const now = new Date().toISOString();
+  // The crawl date, which is only today when nobody told us otherwise.
+  const crawledOn = args.sourceDate ?? now.slice(0, 10);
 
   if (existing?.id) {
     await supabaseAdmin
       .from("page_sources")
       .update({
         source_content: content,
-        source_date: now.slice(0, 10),
+        source_date: crawledOn,
         updated_at: now,
       })
       .eq("id", existing.id as string);
@@ -349,8 +361,8 @@ export async function recordWebsiteSnapshot(args: {
     sourceContent: content,
     topic: "What their own website says",
     sourceUrl: args.url,
-    sourceDate: now.slice(0, 10),
-    collectedVia: "crawl",
+    sourceDate: crawledOn,
+    collectedVia: args.collectedVia ?? "crawl",
   });
 
   return filed.ok ? filed.id : null;

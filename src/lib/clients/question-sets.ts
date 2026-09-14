@@ -25,7 +25,7 @@
 // `freezeUniversalV1()` below are untouched by it.
 
 import { supabaseAdmin } from "@/lib/db";
-import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
+import { BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
 import { readOffer, usableTreatment } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
@@ -689,7 +689,13 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
     // Photograph II asks universal_v1 plus custom_v1, so without this the first Day 0 run would
     // become the source of the very set it was measuring, and every later client in the vertical
     // would inherit it. See run-labels.ts.
+    //
+    // ‼️ AND NOT AN ADOPTED PROSPECT AUDIT EITHER, WHICH MATTERS MORE HERE THAN ANYWHERE. The
+    // 2026-09-14 host-match backfill put prospect audits behind client_id, and they pass
+    // BASELINE_ONLY because it filters by exclusion. Freezing a vertical's universal set from a
+    // prospecting run would hand that set to every later client in the vertical, permanently.
     .or(BASELINE_ONLY)
+    .eq("client_link_source", FIRED_FOR_CLIENT)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

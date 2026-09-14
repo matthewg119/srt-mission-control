@@ -6,7 +6,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { isThinResearch, researchWebsite, SiteFetchError, type SiteResearch } from "./site-research";
+import { isThinResearch, researchWebsite, storableCrawl, SiteFetchError, type SiteResearch } from "./site-research";
 import { researchProfile, describeTarget, type ResearchTarget } from "./search-research";
 import { isOwnDomain, type BusinessIdentity } from "./claude-research";
 import { normalizeTarget } from "@/lib/scan/normalize";
@@ -428,6 +428,26 @@ export async function runAuditPipeline(params: RunAuditPipelineParams): Promise<
       robots_check: robotsCheck,
       crawl_block: research.blocked,
       research_source: research.source,
+
+      // ‼️ THREE THINGS THIS FUNCTION ALREADY COMPUTED AND USED TO DROP ON THE FLOOR. None of
+      // these costs a fetch: all three are locals a few lines up that died at the return.
+      //
+      // storableCrawl drops homepageHtml and pages[].text, both uncapped upstream. See its own
+      // header for why, and docs/2026-09-14-audit-foundation.sql for the column comment.
+      site_crawl: storableCrawl(research),
+      // Null after an OpenAI-backup run, which returns prose rather than structure. That null is
+      // meaningful and must not be coalesced to {}: it says nobody produced a structured identity.
+      identity,
+      // ‼️ THE WHOLE RETURN, INCLUDING is_local AND city_confidence, WHICH HAVE NO COLUMNS.
+      // Without them a null `city` on this row means three different things at once: not local,
+      // not found, or a name-mode run, and nothing downstream can tell them apart.
+      classification,
+      // ‼️ WHAT client_id MEANS, RECORDED AT THE MOMENT IT IS SET. A row inserted with a
+      // clientId was fired FOR that client; a row linked later by matching website host was not.
+      // Four readers depend on the first meaning and the 2026-09-14 host-match backfill made the
+      // column answer both questions with one value. Recording it here is what lets them separate
+      // the two again. Null when there is no client, where the question does not arise.
+      client_link_source: params.clientId ? "fired_for_client" : null,
     })
     .select("*")
     .single();

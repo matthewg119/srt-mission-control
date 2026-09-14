@@ -11,10 +11,10 @@
 //
 // NOTHING PRICED. This route reads and writes intake answers and consent. It touches no
 // billing column and imports no price constant.
-
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { verifyOnboardingToken } from "@/lib/clients/token";
+import { adoptPriorAudit } from "@/lib/clients/adopt-audit";
 import { slack } from "@/lib/slack-bot";
 import { revalidateClientHub } from "@/lib/hub/resolve";
 import {
@@ -316,6 +316,14 @@ async function onIntakeComplete(args: {
 
   // ── The internal delivery checklist ──
   await seedDeliverySteps(args.clientId);
+  // ‼️ BEFORE THE TICK, AND BEFORE startBaselineScan. Step 1's own label promises "audit
+  // attached if one exists" and nothing kept that promise until now. Here the website, the
+  // domain and the contact are all on the client row, and the baseline has not been inserted
+  // yet, so the attach cannot race it. Never throws: a client with no prior audit is the
+  // ordinary case and must not be stopped from onboarding.
+  await adoptPriorAudit(args.clientId)
+    .then((r) => console.log(`[onboarding/save] prior audit: ${r.detail}`))
+    .catch((e) => console.error("[onboarding/save] prior audit adopt failed:", (e as Error).message));
   await autoCompleteStep(args.clientId, "intake_received").catch(() => {});
   await postDeliveryChecklist(args.clientId).catch((e) =>
     console.error("[onboarding/save] checklist post failed:", (e as Error).message)
