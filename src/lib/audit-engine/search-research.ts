@@ -16,6 +16,7 @@
 // produce 20 confident questions about a company that does not exist.
 
 import { runOpenAI } from "./run-prompts";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 import { researchViaClaude, type BusinessIdentity } from "./claude-research";
 import type { SiteResearch } from "./site-research";
 import type { CrawlBlock } from "./types";
@@ -132,6 +133,53 @@ function buildProfilePrompt(target: ResearchTarget): string {
   ].join("\n");
 }
 
+// --- the search profile, bought once ---------------------------------------------------------
+//
+// The OpenAI backup that runs when the Claude identity call cannot identify the business. Same
+// kind of answer, same caching rules: a fact about a business, shared across every client, and
+// never cached when it failed.
+
+const SEARCH_PROFILE_KIND = "openai.search_profile";
+const SEARCH_PROFILE_TTL_DAYS = 30;
+
+/** The model that actually answered, so a model change is a different cache key. */
+function openAiAuditModel(): string {
+  return process.env.OPENAI_AUDIT_MODEL || "gpt-4.1-mini";
+}
+
+/** Thrown to buy an answer and decline to keep it. getOrFetch writes nothing when fetch throws. */
+class UnusableProfile extends Error {
+  constructor(readonly result: Awaited<ReturnType<typeof runOpenAI>>) {
+    super("search profile not worth caching");
+    this.name = "UnusableProfile";
+  }
+}
+
+/**
+ * Why this profile must never be served again, or null when it is good.
+ *
+ * ‼️ ONE DEFINITION, READ BY BOTH THE CACHE AND THE CALLER. These were three inline checks that
+ * each returned null with their own log line. They are one function now because a cache that kept
+ * an answer the caller rejects would serve that rejection back on every later audit of the same
+ * business, for free, until the TTL expired.
+ */
+function searchFault(
+  result: Awaited<ReturnType<typeof runOpenAI>>,
+  target: ResearchTarget
+): string | null {
+  if (result.status !== "ok" || !result.raw) {
+    return `engine returned no data (${result.status === "ok" ? "empty answer" : result.error})`;
+  }
+  const profile = result.raw.trim();
+  if (profile.includes(NOT_FOUND) || profile.length < MIN_PROFILE_CHARS) {
+    return "no identifiable business in the answer";
+  }
+  if (target.kind === "website" && !hasThirdPartySource(result.citations, target.website)) {
+    return "answer cited no third-party source";
+  }
+  return null;
+}
+
 /**
  * Build a SiteResearch from search instead of from the page.
  *
@@ -151,22 +199,60 @@ export async function researchViaSearch(
   // Reuses the audit engine call itself: same 45s timeout, same one retry, same web_search
   // tool, same url_citation parsing, and the same no_data contract. A second implementation
   // of this request is a second thing to keep in step.
-  const result = await runOpenAI(buildProfilePrompt(target), null);
+  // ‼️ THE OPENAI BACKUP WAS ALSO BOUGHT EVERY TIME. Same fact about the same business, same
+  // reasoning as the Claude identity call in claude-research.ts: clientId is null because the
+  // answer belongs to the BUSINESS, and the key is the target plus the model that answered.
+  //
+  // ‼️ cost_usd IS RECORDED AS ZERO HERE, AND THAT IS A KNOWN GAP RATHER THAN A MEASUREMENT.
+  // model-costs.ts prices Anthropic models from a published rate card; there is no OpenAI rate
+  // on file in this repo and inventing one would put a fabricated figure into a spend ledger.
+  // The row is tagged provider 'openai' so the gap is visible in
+  // `select provider, kind, sum(cost_usd) from client_datasets group by 1,2` instead of hiding
+  // inside an Anthropic total. Add the rate card and this becomes one line.
+  let result: Awaited<ReturnType<typeof runOpenAI>>;
+  try {
+    const { payload, cached } = await getOrFetch<Awaited<ReturnType<typeof runOpenAI>>>({
+      clientId: null,
+      kind: SEARCH_PROFILE_KIND,
+      cacheKey: cacheKeyOf({ target, model: openAiAuditModel() }),
+      ttlDays: SEARCH_PROFILE_TTL_DAYS,
+      provider: "openai",
+      params: { kind: target.kind, target: label },
+      fetch: async () => {
+        // Reuses the audit engine call itself: same 45s timeout, same one retry, same web_search
+        // tool, same url_citation parsing, and the same no_data contract. A second implementation
+        // of this request is a second thing to keep in step.
+        const fresh = await runOpenAI(buildProfilePrompt(target), null);
+        // A rejected answer is bought and deliberately not kept, the same mechanism the Claude
+        // identity cache uses: getOrFetch writes what fetch returns and does not catch what it
+        // throws. Caching a no_data, an unidentifiable profile or a sourceless one would serve
+        // that failure back for free on every later audit of this business.
+        if (searchFault(fresh, target)) throw new UnusableProfile(fresh);
+        return { payload: fresh, costUsd: 0 };
+      },
+    });
+    if (cached) {
+      console.log(`[search-research] ${label}: profile read from client_datasets, nothing bought`);
+    }
+    result = payload;
+  } catch (e) {
+    if (e instanceof UnusableProfile) {
+      result = e.result;
+    } else {
+      console.error(`[search-research] ${label}: call failed - ${(e as Error).message}`);
+      return null;
+    }
+  }
 
-  if (result.status !== "ok") {
-    console.error(`[search-research] ${label}: engine returned no data (${result.error})`);
+  // searchFault has already rejected every status but ok and every empty raw. Repeating those two
+  // conditions is what lets TypeScript see the narrowing; neither can actually fire here.
+  const fault = searchFault(result, target);
+  if (fault || result.status !== "ok" || !result.raw) {
+    console.error(`[search-research] ${label}: ${fault ?? "engine returned no usable answer"}`);
     return null;
   }
 
   const profile = result.raw.trim();
-  if (profile.includes(NOT_FOUND) || profile.length < MIN_PROFILE_CHARS) {
-    console.error(`[search-research] ${label}: no identifiable business in the answer`);
-    return null;
-  }
-  if (target.kind === "website" && !hasThirdPartySource(result.citations, target.website)) {
-    console.error(`[search-research] ${label}: answer cited no third-party source`);
-    return null;
-  }
 
   const sources = result.citations.join(", ") || "none listed";
   const header =
