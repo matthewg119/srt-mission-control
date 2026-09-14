@@ -1186,6 +1186,12 @@ async function replaceCommand(session: Session, body: string, messageTs: string)
     slackTs: messageTs,
   }).catch((e) => console.error("[page-studio] replace source filing failed:", (e as Error).message));
 
+  // ‼️ THE EDIT, CAPTURED AS ITS OWN SNAPSHOT. This is the row that says what a person changed
+  // about a model's draft, which is the whole reason the dataset keeps more than the final
+  // version. Fire and forget: capturePage swallows its own failures.
+  const { capturePage } = await import("@/lib/clients/page-dataset");
+  void capturePage({ clientId: session.clientId, pageId: session.pageId, reason: "edited" });
+
   await say(
     session.threadTs,
     `Replaced. The page is now ${res.words} words. \`undo\` puts the old body back, \`check\` runs the gate.`

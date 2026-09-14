@@ -499,6 +499,22 @@ async function draftOne(
       await supabaseAdmin.from("client_pages").update({ scope: "over_delivery" }).eq("id", page.id);
     }
 
+    // ‼️ THE DRAFT AS THE MODEL LEFT IT, BEFORE ANYBODY EDITS IT. This row and the `published`
+    // one are a pair: the difference between them is what a person changed, which is the only
+    // thing in this corpus that teaches what the model got wrong. Capturing only the final
+    // version would record the answer and throw away the correction.
+    //
+    // Fire and forget. capturePage swallows its own failures, and a research row must never cost
+    // a page that is already saved.
+    const { capturePage } = await import("@/lib/clients/page-dataset");
+    void capturePage({
+      clientId,
+      pageId: page.id,
+      planRowId: row.id,
+      role: row.role,
+      reason: "drafted",
+    });
+
     await release(null);
     return { status: "drafted", rank: row.rank, detail: magnetNote ? `drafted, but no magnet: ${magnetNote}` : "drafted" };
   } catch (e) {
