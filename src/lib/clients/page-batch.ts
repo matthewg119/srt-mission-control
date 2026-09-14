@@ -287,3 +287,236 @@ export function stageLine(state: BatchState): string {
       return `All ${state.rows.length} pages drafted.`;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The work, shared by both doors
+//
+// ‼️ ONE IMPLEMENTATION, TWO DOORS, THE PRECEDENT PLAN_COMMAND SET. The batch is reachable from
+// the drafting channel (a page studio session) and from step 21's own thread in the client's
+// onboarding channel. Those two post through completely different machinery, so what is shared is
+// the WORK and what differs is only how the text gets out.
+//
+// Writing this twice is how the two doors end up disagreeing about what `headline 3 pick 2` does,
+// and a person would be right either time.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Three new candidates for one page, filed and claimed for it. */
+export async function writeHeadlinesFor(
+  clientId: string,
+  row: PlanRow
+): Promise<{ ok: true; headlines: string[] } | { ok: false; error: string }> {
+  if (!row.targetKeyword?.trim()) {
+    return { ok: false, error: `page ${row.rank} has no target keyword, so there is nothing to aim a headline at` };
+  }
+
+  const { generateKeywordHeadlines, storeHeadlines } = await import("./client-headlines");
+
+  const got = await generateKeywordHeadlines({ clientId, keyword: row.targetKeyword });
+  if (!got.ok) return got;
+
+  const stored = await storeHeadlines({ clientId, headlines: got.headlines, origin: "keyword" });
+  if (!stored.ok) return stored;
+
+  // ‼️ CLAIMED FOR THIS PLAN ROW IMMEDIATELY, which is what makes the card's per-page numbering
+  // mean anything. used_page_id holds the PLAN ROW id, the same id approveHeadlineForPage writes,
+  // so a claimed-but-unapproved row is "an option offered for this page" and an approved one is
+  // "the option taken". One column, two states, no second table.
+  for (const h of stored.stored) {
+    await supabaseAdmin
+      .from("client_headlines")
+      .update({ used_page_id: row.id })
+      .eq("id", h.id)
+      .eq("client_id", clientId);
+  }
+
+  return { ok: true, headlines: stored.stored.map((h) => h.headline) };
+}
+
+/**
+ * The options offered for each page, read back from the bank.
+ *
+ * ‼️ READ FROM client_headlines RATHER THAN HELD IN A THREAD. A Slack thread is not storage: the
+ * numbering has to survive a restart, a second person opening the thread, and the hours between
+ * writing the options and picking one. At 14 onboardings a day that gap is normal, not an edge.
+ */
+export async function optionsFor(
+  clientId: string,
+  rows: readonly PlanRow[]
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const { data, error } = await supabaseAdmin
+    .from("client_headlines")
+    .select("id, headline, used_page_id")
+    .eq("client_id", clientId)
+    .eq("origin", "keyword")
+    .is("dropped_at", null)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error(`[page-batch] options read failed: ${error.message}`);
+    for (const row of rows) out.set(row.id, []);
+    return out;
+  }
+
+  for (const row of rows) {
+    out.set(
+      row.id,
+      (data ?? []).filter((r) => r.used_page_id === row.id).map((r) => String(r.headline))
+    );
+  }
+  return out;
+}
+
+/** Take option `pick` (1-based) for one page. */
+export async function pickHeadlineFor(
+  clientId: string,
+  row: PlanRow,
+  pick: number,
+  by: string
+): Promise<{ ok: true; headline: string } | { ok: false; error: string }> {
+  const options = (await optionsFor(clientId, [row])).get(row.id) ?? [];
+  const chosen = options[pick - 1];
+  if (!chosen) {
+    return {
+      ok: false,
+      error: `page ${row.rank} has ${options.length} option${options.length === 1 ? "" : "s"}, so there is no ${pick}`,
+    };
+  }
+
+  const { data: match } = await supabaseAdmin
+    .from("client_headlines")
+    .select("id")
+    .eq("client_id", clientId)
+    .eq("headline", chosen)
+    .maybeSingle();
+
+  if (!match?.id) return { ok: false, error: "that headline is no longer on file" };
+
+  const { approveHeadlineForPage } = await import("./client-headlines");
+  return approveHeadlineForPage({
+    clientId,
+    headlineId: String(match.id),
+    planRowId: row.id,
+    by,
+  });
+}
+
+/**
+ * Write the skeleton for each of `rows`, opening a page for any row that has none yet.
+ *
+ * Returns one note per row that failed, so a caller can report the failures without losing the
+ * ones that worked. A batch where six of seven skeletons landed is six pages further on, and
+ * failing the whole call would throw those away.
+ */
+export async function writeSkeletonsFor(
+  clientId: string,
+  rows: readonly PlanRow[]
+): Promise<{ written: number; failures: string[] }> {
+  const { draftOutline } = await import("@/lib/hub/draft-page");
+  const { setPageOutline, startPageDraft } = await import("@/lib/hub/pages");
+
+  let written = 0;
+  const failures: string[] = [];
+
+  for (const row of rows) {
+    let pageId = row.pageId;
+
+    if (!pageId) {
+      const started = await startPageDraft({
+        clientId,
+        question: row.question,
+        title: row.workingTitle,
+      });
+      if (!started.ok) {
+        failures.push(`page ${row.rank}: ${started.error}`);
+        continue;
+      }
+      pageId = started.id;
+      // Linked and claimed now, so the page stays tied to its plan row even if the outline call
+      // below dies. Same reasoning draftOne's markClaimed carries.
+      await supabaseAdmin
+        .from("page_plan")
+        .update({ page_id: pageId, status: "claimed" })
+        .eq("id", row.id)
+        .eq("client_id", clientId);
+    }
+
+    const outline = await draftOutline(clientId, row.question, {
+      pageId,
+      context: {
+        workingTitle: row.workingTitle,
+        targetKeyword: row.targetKeyword,
+        angle: row.angle,
+      },
+    });
+    if (!outline.ok) {
+      failures.push(`page ${row.rank}: ${outline.error}`);
+      continue;
+    }
+
+    const saved = await setPageOutline(clientId, pageId, outline.outline);
+    if (!saved.ok) {
+      failures.push(`page ${row.rank}: ${saved.error}`);
+      continue;
+    }
+    written += 1;
+  }
+
+  return { written, failures };
+}
+
+/**
+ * The one research prompt for the whole batch.
+ *
+ * ‼️ IT RETURNS A PROMPT. IT DOES NOT RUN ONE (D10). Matthew was asked directly on 2026-09-14 and
+ * chose the manual paste-back over automating this by API, because he reads every answer. Nothing
+ * on this path calls a research model, and nothing should be added that does.
+ */
+export async function buildBatchPrompt(
+  clientId: string
+): Promise<{ ok: true; prompt: string; questions: number; pages: number } | { ok: false; error: string }> {
+  const state = await readBatch(clientId);
+  if ("error" in state) return { ok: false, error: state.error };
+
+  if (state.needHeadline.length || state.needSkeleton.length) {
+    const parts: string[] = [];
+    if (state.needHeadline.length) parts.push(`${state.needHeadline.length} need a headline`);
+    if (state.needSkeleton.length) parts.push(`${state.needSkeleton.length} need a skeleton`);
+    return { ok: false, error: `not yet: ${parts.join(", ")}` };
+  }
+
+  const { loadBatchPages, buildBatchResearchPrompt } = await import("./batch-research");
+  const pages = await loadBatchPages(clientId, state.rows.map((r) => r.id));
+
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("legal_name, dba_name, city, state")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  const { loadOffer } = await import("./offers");
+  const offer = await loadOffer(clientId).catch(() => null);
+  const { confirmedAvatarFor } = await import("./avatars");
+  const avatar = await confirmedAvatarFor(clientId).catch(() => null);
+
+  const built = buildBatchResearchPrompt({
+    clientName: ((client?.dba_name as string) || (client?.legal_name as string)) ?? "this client",
+    city: (client?.city as string | null) ?? null,
+    state: (client?.state as string | null) ?? null,
+    avatarLabel: avatar?.label ?? "the buyer",
+    offer: offer?.treatment ?? null,
+    pages,
+  });
+
+  if (!built.ok) return built;
+
+  // The prompt belongs to the batch, so it is attached to every dataset row of that batch rather
+  // than carried through each capture. See attachResearchPrompt.
+  const batchId = batchIdFor(state);
+  if (batchId) {
+    const { attachResearchPrompt } = await import("./page-dataset");
+    void attachResearchPrompt({ clientId, batchId, prompt: built.prompt });
+  }
+
+  return { ok: true, prompt: built.prompt, questions: built.questions, pages: pages.length };
+}

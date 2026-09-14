@@ -40,6 +40,7 @@ import {
   type PlanRow,
   type PoolItem,
 } from "./page-plan";
+import { HEADLINE_COMMAND, SKELETON_COMMAND } from "./page-batch";
 import { categoryLabel, isRelevantKeyword, tierOf } from "./keyword-expansion";
 import { normalizePhrase } from "./phrase-quality";
 
@@ -789,11 +790,140 @@ export async function handlePreCallThreadReply(input: {
   const anchor = ANCHOR_COMMAND.exec(command);
   if (anchor) return anchorReply(input.clientId, anchor[1] ?? "");
 
+  const { clientId, by } = input;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // The batch, in step 21's own thread
+  //
+  // ‼️ THE SAME FUNCTIONS THE DRAFTING CHANNEL CALLS, never a second implementation. page-batch.ts
+  // owns the work and these two doors own only how the text gets out. Written twice, the two
+  // doors eventually disagree about what `headline 3 pick 2` does and a person would be right
+  // either time. Same precedent PLAN_COMMAND set for the grammar itself.
+  //
+  // ‼️ THE ONBOARDING CHANNEL NEVER ASKS WHICH PILLAR (D2). An onboarding is always one pillar and
+  // six supports, so there is nothing to ask. `batch` in the drafting channel asks; this does not.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const headlineBatch = HEADLINE_COMMAND.exec(command);
+  if (headlineBatch) {
+    const page = Number(headlineBatch[1]);
+    const pick = headlineBatch[2] ? Number(headlineBatch[2]) : null;
+    const { readBatch, writeHeadlinesFor, pickHeadlineFor, optionsFor, headlineCardLines } =
+      await import("./page-batch");
+
+    const state = await readBatch(clientId);
+    if ("error" in state) return { message: `:warning: ${state.error}` };
+
+    const row = state.rows[page - 1];
+    if (!row) {
+      return { message: `There is no page ${page} in this batch. There are ${state.rows.length}.` };
+    }
+
+    if (pick === null) {
+      return {
+        message: `Writing three new headlines for page ${page}.`,
+        after: async () => {
+          const got = await writeHeadlinesFor(clientId, row);
+          if (!got.ok) return say(clientId, `:warning: ${got.error}`);
+          await say(clientId, headlineCardLines(state.rows, await optionsFor(clientId, state.rows)).join("\n"));
+        },
+      };
+    }
+
+    const res = await pickHeadlineFor(clientId, row, pick, by);
+    if (!res.ok) return { message: `:warning: ${res.error}` };
+
+    const after = await readBatch(clientId);
+    const left = "error" in after ? 0 : after.needHeadline.length;
+    return {
+      message:
+        `Page ${page} is now "${res.headline}". ` +
+        (left
+          ? `${left} page${left === 1 ? "" : "s"} still need one.`
+          : "All pages have a headline. `skeleton` writes the outlines."),
+    };
+  }
+
+  const skeletonBatch = SKELETON_COMMAND.exec(command);
+  if (skeletonBatch) {
+    const page = skeletonBatch[1] ? Number(skeletonBatch[1]) : null;
+    const { readBatch, writeSkeletonsFor, skeletonCardLines } = await import("./page-batch");
+
+    const state = await readBatch(clientId);
+    if ("error" in state) return { message: `:warning: ${state.error}` };
+
+    if (state.needHeadline.length) {
+      return {
+        message:
+          `:warning: ${state.needHeadline.length} page${state.needHeadline.length === 1 ? "" : "s"} still need a ` +
+          "headline. A skeleton written before its headline is an outline for a page that does not know what " +
+          "it is promising.",
+      };
+    }
+
+    const targets =
+      page === null ? state.rows.filter((r) => !state.outlines.get(r.id)) : [state.rows[page - 1]];
+    if (!targets[0]) {
+      return { message: `There is no page ${page} in this batch. There are ${state.rows.length}.` };
+    }
+
+    return {
+      message: `Writing ${targets.length} skeleton${targets.length === 1 ? "" : "s"}. This takes a moment.`,
+      after: async () => {
+        const res = await writeSkeletonsFor(clientId, targets);
+        for (const f of res.failures) await say(clientId, `:warning: ${f}`);
+        const done = await readBatch(clientId);
+        if ("error" in done) return say(clientId, `:warning: ${done.error}`);
+        await say(clientId, skeletonCardLines(done.rows, done.outlines).join("\n"));
+        await refreshCard(clientId);
+      },
+    };
+  }
+
+  // `headlines`: the whole card in one go, which is what step 21 needs after `plan approve`.
+  if (/^headlines$/i.test(command)) {
+    const { readBatch, writeHeadlinesFor, optionsFor, headlineCardLines } = await import("./page-batch");
+    const state = await readBatch(clientId);
+    if ("error" in state) return { message: `:warning: ${state.error}` };
+    if (!state.rows.length) {
+      return { message: "No approved pages yet. `plan approve` locks them in first." };
+    }
+
+    return {
+      message: `Writing three headline options for each of ${state.rows.length} pages. This takes a couple of minutes.`,
+      after: async () => {
+        for (const row of state.rows) {
+          const existing = (await optionsFor(clientId, [row])).get(row.id) ?? [];
+          // ‼️ SKIPPED WHEN OPTIONS ALREADY EXIST, so re-running this after a partial failure does
+          // not bury the three somebody has already read under three more.
+          if (existing.length) continue;
+          const got = await writeHeadlinesFor(clientId, row);
+          if (!got.ok) await say(clientId, `:warning: ${got.error}`);
+        }
+        await say(clientId, headlineCardLines(state.rows, await optionsFor(clientId, state.rows)).join("\n"));
+      },
+    };
+  }
+
+  // `research`: the one prompt for the whole batch. It posts a prompt and stops (D10).
+  if (/^research$/i.test(command)) {
+    const { buildBatchPrompt } = await import("./page-batch");
+    const built = await buildBatchPrompt(clientId);
+    if (!built.ok) return { message: `:warning: ${built.error}` };
+
+    return {
+      message:
+        `*One prompt, ${built.questions} questions across ${built.pages} pages.* Run it, then paste the ` +
+        "whole answer back in this thread with `research:` in front of it.\n```\n" +
+        built.prompt +
+        "\n```",
+    };
+  }
+
   const plan = PLAN_COMMAND.exec(command);
   if (!plan) return null;
   const sub = (plan[1] ?? "").trim();
   const lower = sub.toLowerCase();
-  const { clientId, by } = input;
 
   if (lower === "") {
     const card = await preCallPagesCardLines(clientId);
@@ -816,11 +946,51 @@ export async function handlePreCallThreadReply(input: {
   if (lower === "approve") {
     const res = await approvePlan(clientId, by, { roleOnly: true });
     if (!res.ok) return { message: `:warning: ${res.error}` };
+
+    // ‼️ APPROVING THE PLAN NO LONGER DRAFTS, AND THAT IS THE 2026-09-14 CHANGE. It used to go
+    // straight to continueDrafting, which wrote seven pages off the keyword and the question
+    // alone: no headline, no approved skeleton, and no research behind any of it. D3 puts every
+    // decision before the drafting, so approving the plan is now the START of the batch rather
+    // than the end of the decisions.
+    //
+    // The drafting is NOT unreachable from here: `draft` in this thread still runs it, for the
+    // case where the skeletons and the research are already done. What went away is doing it by
+    // accident.
     return {
       message: res.count
-        ? `:white_check_mark: Approved ${res.count} page${res.count === 1 ? "" : "s"}. Drafting every one in full now, three at a time. ` +
-          "Each lands on the board as a draft; the summary posts here when the last one is done."
-        : "Nothing was waiting on approval. Resuming the drafting of anything not written yet.",
+        ? `:white_check_mark: Approved ${res.count} page${res.count === 1 ? "" : "s"}. Next is a headline for each one, ` +
+          "then a skeleton, then ONE research prompt for the whole batch. `headlines` writes the first card."
+        : "Nothing was waiting on approval. `headlines` writes a headline card for the approved pages.",
+      after: async () => {
+        await refreshCard(clientId);
+      },
+    };
+  }
+
+  // ‼️ THE DRAFTING DOOR, KEPT AND MADE EXPLICIT. Somebody has to be able to say "the skeletons
+  // and the research are done, write them", and after the change above `plan approve` is no
+  // longer that sentence. It refuses when the batch is not ready rather than drafting a page off
+  // nothing, which is the failure the whole reordering exists to prevent.
+  if (lower === "draft") {
+    const { readBatch } = await import("./page-batch");
+    const state = await readBatch(clientId);
+    if ("error" in state) return { message: `:warning: ${state.error}` };
+
+    if (state.needHeadline.length || state.needSkeleton.length) {
+      const parts: string[] = [];
+      if (state.needHeadline.length) parts.push(`${state.needHeadline.length} need a headline`);
+      if (state.needSkeleton.length) parts.push(`${state.needSkeleton.length} need a skeleton`);
+      return {
+        message:
+          `:warning: Not yet: ${parts.join(", ")}. A page drafted before its skeleton is written off the ` +
+          "keyword alone, which is the page this batch exists to stop being written.",
+      };
+    }
+
+    return {
+      message:
+        "Drafting every approved page in full, three at a time. Each lands on the board as a draft; " +
+        "the summary posts here when the last one is done.",
       after: async () => {
         await refreshCard(clientId);
         await continueDrafting(clientId, by, 0);

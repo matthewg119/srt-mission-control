@@ -44,7 +44,7 @@ export const PLAN_SIZE = 20;
  * first visit" is dictation and must reach the page.
  */
 export const PLAN_COMMAND =
-  /^plan(?:\s+(new|approve|(?:drop|swap)\s+[0-9]{1,2}|edit\s+[0-9]{1,2}\s*:\s*.+))?$/i;
+  /^plan(?:\s+(new|approve|draft|(?:drop|swap)\s+[0-9]{1,2}|edit\s+[0-9]{1,2}\s*:\s*.+))?$/i;
 
 /** `anchor`, `anchor: <key>`. A colon for the argument: "anchor text" is a phrase an SEO page uses. */
 export const ANCHOR_COMMAND = /^anchor(?:\s*:\s*(\S+))?$/i;
