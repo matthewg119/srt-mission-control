@@ -153,18 +153,29 @@ THE RULES, and every one of them exists because breaking it is worse than a thin
    a person asked it out loud. Everything after that is detail. Never open with a greeting,
    never open with "when it comes to", never open by restating the question.
 
-7. WHERE THE EVIDENCE IS THIN, SAY LESS. A short honest page beats a padded one. If you can
-   only write three paragraphs from what you were given, write three paragraphs. Never add a
-   section because a page of this kind usually has one.
+7. WHERE THE EVIDENCE IS THIN, DROP THE SECTION. DO NOT THIN IT. A short honest page beats a
+   padded one, and this is the one rule that decides what "short" means: if you cannot fill a
+   section to the length in SHAPE from what you were given, leave that section OUT entirely
+   rather than writing two lines under its heading. Fewer, complete sections is the correct
+   outcome and nothing here penalises it. A heading with a sentence under it is worse than no
+   heading: it promises an answer and delivers a caption, and both the reader and the engine
+   reading it can tell. Never add a section because a page of this kind usually has one.
 
 8. WHAT, WHY AND HOW, ON EVERY PAGE. Say what the thing is, why it matters to the person who
    asked, and how it actually works. A page that only defines something has answered a dictionary
    question, not the one that was typed. This is checked in code against the subheadings.
 
-SHAPE. Markdown. One "##" subheading per section, and ${SECTION_COUNT.min} to ${SECTION_COUNT.max} of them: the subject decides
-how many. ${SECTION_CHARS.min} TO ${SECTION_CHARS.max} CHARACTERS UNDER EACH ONE, counted as characters and not words, so a
-section is a real answer and not a caption. Short paragraphs, one idea each. No H1: the title is
-rendered separately. No links, no images, no tables, no bullet list longer than five items.
+SHAPE. Markdown. Open with the direct answer, before any subheading, and that opening is held to
+the same length as a section. Then ${SECTION_COUNT.min} to ${SECTION_COUNT.max} "##" subheadings: the subject decides how many, and
+each one is a question phrased the way the reader would ask it out loud.
+
+${SECTION_CHARS.min} TO ${SECTION_CHARS.max} CHARACTERS UNDER EVERY HEADING, AND UNDER THE OPENING. Characters, not words, and it
+is checked in code on each one separately rather than across the page, so a full section cannot
+carry six thin ones. Under the floor the section is a caption; over the ceiling it is answering
+two questions and the second one needs its own heading.
+
+Short paragraphs, one idea each. No H1: the title is rendered separately. No links, no images, no
+tables, no bullet list longer than five items.
 
 TITLE. How a person would say the question, not the raw prompt string. Under 60 characters.
 
@@ -635,6 +646,9 @@ function userPrompt(g: Grounding): string {
     lines.push("  - A [Gn] mark is a gap the business was asked to fill. Its answer is in the EVIDENCE");
     lines.push("    under a topic beginning \"Gap Gn\". Use it and cite it. Where a gap has no answer,");
     lines.push("    leave that point out rather than filling it.");
+    lines.push("  - A SECTION YOU CANNOT FILL TO LENGTH IS DROPPED, HEADING AND ALL. Rule 7. The");
+    lines.push("    outline is what was planned; the evidence decides what survives. Returning six");
+    lines.push("    complete sections out of eleven planned is a correct answer.");
     lines.push("  - The bullets are notes, not facts. Assert nothing from them that no source carries.");
     lines.push("");
     for (const section of g.outline.sections) {

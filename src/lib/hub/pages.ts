@@ -704,6 +704,34 @@ export async function setPageOutline(
     .eq("client_id", clientId);
 
   if (error) return { ok: false, error: error.message };
+
+  // ‼️ WRITTEN HERE BECAUSE THE OUTLINE IS WHERE THE KEYWORDS COME FROM, and written in its OWN
+  // update for the reason the column above gets its own select: one unknown column fails the
+  // whole statement, and section_keywords is newer than outline. A database missing it should
+  // cost the placement check, not the outline.
+  //
+  // The shape is fixed by docs/2026-09-12-client-headlines.sql: [{heading, keyword}] in section
+  // order. That ORDER is load bearing, because keyword-placement.ts checks the primary keyword
+  // against the page's sections in the order they appear.
+  const sectionKeywords = outline
+    ? outline.sections
+        .filter((s) => (s.keyword ?? "").trim() !== "")
+        .map((s) => ({ heading: s.heading, keyword: (s.keyword as string).trim() }))
+    : null;
+
+  const { error: kwError } = await supabaseAdmin
+    .from("client_pages")
+    .update({ section_keywords: sectionKeywords?.length ? sectionKeywords : null })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (kwError) {
+    console.error(
+      `[hub/pages] section_keywords write failed (${kwError.message}). If this names ` +
+        `section_keywords, docs/2026-09-12-client-headlines.sql has not been run on this database.`
+    );
+  }
+
   return { ok: true };
 }
 

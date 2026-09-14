@@ -685,6 +685,17 @@ export async function stageFrameCandidate(args: {
   clientId: string;
   pageId: string;
   frame: PlannedFrame;
+  /**
+   * The finished page body, when there is one.
+   *
+   * ‼️ OPTIONAL, AND IT ONLY BECAME AVAILABLE ON 2026-09-14. The pre-call wave used to mint the
+   * magnet BEFORE drafting, so at this point the page had no body and there was nothing to check
+   * a framing against. Now the magnet is minted after savePage and this is the page that exists.
+   *
+   * It is used as the number haystack and nothing else. The framing itself is still the one a
+   * person approved with the plan: this validates it, it does not rewrite it.
+   */
+  body?: string | null;
 }): Promise<{ ok: true; candidateId: string } | { ok: false; error: string }> {
   const tenant = await conciergeTenant(args.clientId);
   if (!tenant) return { ok: false, error: "this client has no concierge row, so there is no catalogue to mint into" };
@@ -698,6 +709,26 @@ export async function stageFrameCandidate(args: {
   if (!title || !ctaLabel || !entry) return { ok: false, error: "the planned framing is incomplete" };
   if (ctaLabel.length > CTA_MAX) return { ok: false, error: `the planned pill is ${ctaLabel.length} characters, the limit is ${CTA_MAX}` };
   if ([title, ctaLabel, entry].some(hasBannedDash)) return { ok: false, error: "the planned framing contains a dash" };
+
+  // ‼️ THE FRAMING IS CHECKED AGAINST THE PAGE IT SITS ON, which only became possible when the
+  // mint moved after the draft. orphanNumbers is the same rule draftInto applies to a model's
+  // five candidates and page-gate.ts applies to a body: a figure in a promise is read by a
+  // stranger in the widget and is exactly as publishable-and-false as one in the copy.
+  //
+  // The anchor's own promise is part of the haystack because the framing is allowed to restate
+  // what the anchor offers; that number was approved once already, on the anchor.
+  if (args.body?.trim()) {
+    const haystack = `${args.body} ${anchor.promise} ${anchor.title}`.replace(/[,$]/g, "");
+    const invented = orphanNumbers(`${title} ${ctaLabel} ${entry}`, haystack);
+    if (invented.length) {
+      return {
+        ok: false,
+        error:
+          `the planned framing states ${invented.join(", ")}, which the finished page does not carry. ` +
+          `Fix the framing on the plan row, or say it on the page.`,
+      };
+    }
+  }
 
   const { data, error } = await supabaseAdmin
     .from("page_magnet_candidates")

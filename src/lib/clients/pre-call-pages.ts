@@ -412,26 +412,28 @@ async function draftOne(
     // Linked now, so the page stays tied to its plan row even if the model call below dies.
     await markClaimed(row.id, page.id);
 
-    // ‼️ THE MAGNET FIRST, SO THE DRAFT KNOWS WHERE TO STOP. The frame was approved with the plan;
-    // stageFrameCandidate copies it and approveMagnetCandidate mints it (the one insert into
-    // lead_magnets). Guarded on the PAGE's key, not the candidate: a re-entered wave that staged
-    // a second candidate would otherwise mint a second magnet.
-    let magnetKey = page.leadMagnetKey;
-    let magnetNote = "";
-    if (!magnetKey && row.frame) {
-      const { stageFrameCandidate, approveMagnetCandidate } = await import("@/lib/concierge/magnet-drafts");
-      const staged = await stageFrameCandidate({ clientId, pageId: page.id, frame: row.frame });
-      if (staged.ok) {
-        const minted = await approveMagnetCandidate({ clientId, pageId: page.id, candidateId: staged.candidateId, by: env.by });
-        if (minted.ok) magnetKey = minted.magnetKey;
-        else magnetNote = minted.error;
-      } else {
-        magnetNote = staged.error;
-      }
-    }
+    // ‼️ THE OUTLINE IS WHAT TELLS THE DRAFT WHERE TO STOP, AND IT REPLACED THE MAGNET IN THAT
+    // JOB ON 2026-09-14. This used to read "THE MAGNET FIRST, SO THE DRAFT KNOWS WHERE TO STOP",
+    // and that was true when nothing else bounded the page: draft-page.ts's own note on magnetKey
+    // says it never appears in the body and exists to say where to leave off, so the thing the
+    // widget hands over is still worth having.
+    //
+    // An approved skeleton does that better and does it explicitly. It names every section, in
+    // order, with the long tail each one has to win, so the page ends where the outline ends
+    // rather than where a model guessed the offer began. That frees the magnet to move AFTER the
+    // body, which is the point: it is now framed against a page that exists.
+    //
+    // This is the ONLY draftPage call site that was not passing the outline. The studio always
+    // has.
+    const { readPageOutline } = await import("@/lib/hub/pages");
+    const outline = await readPageOutline(clientId, page.id);
 
     const { draftPage } = await import("@/lib/hub/draft-page");
-    const drafted = await draftPage(clientId, row.question, { pageId: page.id, magnetKey });
+    const drafted = await draftPage(clientId, row.question, {
+      pageId: page.id,
+      magnetKey: page.leadMagnetKey,
+      outline,
+    });
     if (!drafted.ok) {
       await release(drafted.error);
       return { status: "failed", rank: row.rank, detail: drafted.error };
@@ -454,6 +456,35 @@ async function draftOne(
     if (!saved.ok) {
       await release(saved.error);
       return { status: "failed", rank: row.rank, detail: saved.error };
+    }
+
+    // ‼️ THE MAGNET IS MINTED HERE, AFTER THE BODY, AND THE ORDER IS THE 2026-09-14 CHANGE.
+    // The frame was approved with the plan; stageFrameCandidate copies it and
+    // approveMagnetCandidate mints it (the one insert into lead_magnets). What is new is that the
+    // page now HAS a body when that happens, so the framing can be checked against what the page
+    // actually says instead of against a question and an intention. A frame promising a number
+    // the finished page does not carry is the failure this catches, and before the move it was
+    // not catchable at all: there was nothing to compare against.
+    //
+    // Guarded on the PAGE's key, not the candidate: a re-entered wave that staged a second
+    // candidate would otherwise mint a second magnet. Non-fatal, and deliberately so. The page is
+    // already saved by this point, so a failure here costs an offer and never the draft, which is
+    // the right way round.
+    let magnetNote = "";
+    if (!page.leadMagnetKey && row.frame) {
+      const { stageFrameCandidate, approveMagnetCandidate } = await import("@/lib/concierge/magnet-drafts");
+      const staged = await stageFrameCandidate({
+        clientId,
+        pageId: page.id,
+        frame: row.frame,
+        body: drafted.page.answerMd,
+      });
+      if (staged.ok) {
+        const minted = await approveMagnetCandidate({ clientId, pageId: page.id, candidateId: staged.candidateId, by: env.by });
+        if (!minted.ok) magnetNote = minted.error;
+      } else {
+        magnetNote = staged.error;
+      }
     }
 
     // A1 D-P5a: Core sells 4 new + 4 refreshed a month, so the ninth page of month one is above
