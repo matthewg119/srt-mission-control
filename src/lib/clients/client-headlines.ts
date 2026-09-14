@@ -24,7 +24,20 @@ import { vocBlock } from "@/lib/reel/voc-quotes";
 import { loadAeoHeadlineEngine } from "@/data/reel/aeo-headline-engine";
 import { approvedNumbersBlock, repeatedOpenings } from "@/lib/reel/creative-director";
 import { carriesKeyword } from "@/lib/hub/keyword-placement";
-import type { VocQuote } from "@/config/verticals";
+import { audienceFor, sharedBankFor } from "./audiences";
+
+/**
+ * A quote as the headline prompt consumes it.
+ *
+ * ‼️ DECLARED HERE RATHER THAN IMPORTED FROM @/config/verticals, WHICH IS THE WHOLE CUT.
+ * That file still owns this shape for the reel and drop lanes, where voc-quotes.ts writes it and
+ * a camera kit defaulting to pest control is defensible. The client path no longer imports from
+ * it at all, so DEFAULT_VERTICAL_ID can no longer reach anything that writes a client's copy.
+ */
+interface VocQuote {
+  text: string;
+  source?: string;
+}
 
 function model(): ClaudeModel {
   return (process.env.ANTHROPIC_MODEL as ClaudeModel) || "claude-sonnet-4-6";
@@ -206,21 +219,21 @@ export async function clientVocQuotes(clientId: string): Promise<VocQuote[]> {
 
   if (own.length >= MAX_QUOTES) return own.slice(0, MAX_QUOTES);
 
-  const { verticalFor } = await import("./harvest");
-  const v = await verticalFor(clientId);
-  if (!v.ok) return own;
+  // ‼️ TIER 2, AND THERE IS NO TIER 3. The client's own reviews above always win; behind them
+  // sits the bank shared by every client selling to this same audience; and behind THAT sits
+  // nothing. No seed, no default, nothing inherited from another audience. verticals.ts's own
+  // doctrine, which survives this cut intact: a wrong bank is worse than an empty one, because
+  // an empty one is visible.
+  //
+  // This used to resolve through clientAvatarVerticalId + loadVertical, translating a CLIENT
+  // slug into a reel-avatar id, and an untranslatable one fell through to DEFAULT_VERTICAL_ID.
+  // Two namespaces pretending to be one. The audience row IS the namespace now, so there is
+  // nothing left to translate and nothing left to fall through to.
+  const aud = await audienceFor(clientId);
+  if (!aud.ok) return own;
 
-  // ‼️ RESOLVE, NEVER loadVertical(v.vertical) DIRECTLY. `verticalFor` returns a CLIENT slug
-  // (`aeo-agency-med-spa`); `loadVertical` wants an avatar id (`medspa_owner_ai`) and silently
-  // returns PEST CONTROL for anything else. That is how this client read 0 quotes on 2026-09-13
-  // while 20 sat in the row next to it. An unmapped vertical gets the client's own reviews and
-  // nothing else, which the prompt already reports out loud.
-  const { clientAvatarVerticalId, loadVertical } = await import("@/config/verticals");
-  const avatarId = clientAvatarVerticalId(v.vertical);
-  if (!avatarId) return own;
-
-  const vertical = await loadVertical(avatarId);
-  const shared = (vertical.voc_quotes ?? []).filter((q) => q?.text?.trim());
+  const bank = await sharedBankFor(aud.audience);
+  const shared = bank.vocQuotes.map((q) => ({ text: q.text, source: q.source }));
   return [...own, ...shared].slice(0, MAX_QUOTES);
 }
 
@@ -282,15 +295,17 @@ async function headlineContext(
 
   // The approved-number list is per avatar, and an absent one means NO figure is allowed,
   // which is exactly the rule this lane wants anyway.
+  // ‼️ THE FIGURES COME OFF THE AUDIENCE ROW NOW, AND AN EMPTY LIST STILL BANS EVERY NUMBER.
+  // In verticals.ts approved_numbers is one of SEVEN fields hard-assigned from the seed and
+  // never settable from the database, so it existed on exactly one seed and every other avatar
+  // read []. An empty list forbids all figures, so "backed, not banned" collapsed back into
+  // "banned" for every audience but one. A row can carry it, which is what fixes that for the
+  // NEXT audience rather than for this one.
   let approvedNumbers: string[] = [];
-  const { verticalFor } = await import("./harvest");
-  const v = await verticalFor(clientId);
-  if (v.ok) {
-    // Same two-namespace trap as clientVocQuotes above: the client slug must be resolved to an
-    // avatar id first, or this reads pest control's list and an absent entry bans every figure.
-    const { clientAvatarVerticalId, loadVertical } = await import("@/config/verticals");
-    const avatarId = clientAvatarVerticalId(v.vertical);
-    if (avatarId) approvedNumbers = (await loadVertical(avatarId)).approved_numbers ?? [];
+  const audience = await audienceFor(clientId);
+  if (audience.ok) {
+    const bank = await sharedBankFor(audience.audience);
+    approvedNumbers = bank.approvedNumbers.map((n) => n.value);
   }
 
   return {
