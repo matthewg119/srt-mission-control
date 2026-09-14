@@ -23,6 +23,7 @@ import { stripEmDashes } from "@/lib/reel/text";
 import { vocBlock } from "@/lib/reel/voc-quotes";
 import { loadAeoHeadlineEngine } from "@/data/reel/aeo-headline-engine";
 import { approvedNumbersBlock, repeatedOpenings } from "@/lib/reel/creative-director";
+import { carriesKeyword } from "@/lib/hub/keyword-placement";
 import type { VocQuote } from "@/config/verticals";
 
 function model(): ClaudeModel {
@@ -419,4 +420,291 @@ export async function generateClientHeadlines(args: {
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
+}
+
+/**
+ * Is the keyword actually in the line?
+ *
+ * ‼️ CONTENT WORDS, NOT THE STRING, and it is the same rule keyword-placement.ts applies for the
+ * same reason. A headline carrying "lip filler" for the keyword "how long does lip filler last"
+ * is carrying the keyword; an exact-substring test would refuse it and the model would be pushed
+ * into welding the phrase in whole, which is what produces the headlines nobody would say out
+ * loud. This is the one thing generateKeywordHeadlines checks that the weekly run does not.
+ */
+export function headlineCarriesKeyword(headline: string, keyword: string): boolean {
+  return carriesKeyword(headline, keyword);
+}
+
+/**
+ * Write `count` headline candidates for ONE planned page, each carrying that page's keyword.
+ *
+ * ‼️ THE SAME ENGINE, PROMPT AND VALIDATORS AS THE WEEKLY RUN, plus one rule. A second headline
+ * engine would drift from this one within a month, and the page gate depends on the query shape
+ * and the outcome-promise ban that only the shared engine states. So this adds to
+ * headlinePrompt's output rather than replacing it.
+ *
+ * The keyword requirement is enforced in CODE and not only asked for in prose, the same doctrine
+ * the dash rule and the per-section length are held to. A failed line goes into callClaudeJSON's
+ * correction retry naming which headline missed the phrase.
+ */
+export async function generateKeywordHeadlines(args: {
+  clientId: string;
+  keyword: string;
+  count?: number;
+}): Promise<{ ok: true; headlines: string[] } | { ok: false; error: string }> {
+  const count = args.count ?? 3;
+  const keyword = args.keyword.trim();
+  if (!keyword) return { ok: false, error: "No keyword was given, so there is nothing to aim the headlines at." };
+
+  const got = await headlineContext(args.clientId);
+  if (!got.ok) return got;
+  const ctx = got.ctx;
+
+  const numberHaystack = [...ctx.approvedNumbers, ...ctx.quotes.map((q) => q.text)].join(" ");
+
+  const faultsFor = (headlines: string[]): string[] => {
+    const out = headlineFaults(headlines, count, numberHaystack).map((f) =>
+      f.headline ? `"${f.headline}" has ${f.why}` : f.why
+    );
+    for (const h of headlines) {
+      if (!carriesKeyword(h, keyword)) out.push(`"${h}" does not carry "${keyword}". Every one of them must.`);
+    }
+    return out;
+  };
+
+  try {
+    const { data } = await callClaudeJSON<HeadlinesResult>({
+      model: model(),
+      system: [
+        headlinePrompt(ctx, count),
+        "",
+        "‼️ THIS BATCH IS FOR ONE PAGE, AND EVERY HEADLINE MUST CARRY ITS PHRASE.",
+        `The phrase: ${keyword}`,
+        "",
+        "That phrase is what a person typed to arrive at this page, so the headline has to be",
+        "recognisably about it. Use its words. You may reorder them and you may write around them,",
+        "and you should: a headline that reads like the phrase pasted into a sentence is worse than",
+        "one that answers it. What you may not do is write three headlines about the topic in",
+        "general and leave the phrase out. This is checked in code.",
+        "",
+        `Give ${count} genuinely different angles on it, not ${count} rewrites of one line.`,
+      ].join("\n"),
+      user: `Return JSON with exactly ${count} AEO direct-response headlines, in English, every one carrying "${keyword}".`,
+      maxTokens: 2000,
+      temperature: 0.9,
+      schemaHint: '{ "headlines": [string] }',
+      validate: (v): v is HeadlinesResult => {
+        const d = v as HeadlinesResult;
+        if (!d || !Array.isArray(d.headlines)) return false;
+        if (!d.headlines.every((h) => typeof h === "string" && h.trim().length > 0)) return false;
+        return faultsFor(d.headlines.map((h) => h.trim())).length === 0;
+      },
+      describeInvalid: (v) => {
+        const p = v as HeadlinesResult;
+        if (typeof v !== "object" || v === null) return "the response was not a JSON object";
+        if (!Array.isArray(p.headlines)) return 'the "headlines" key was missing or was not an array';
+        const bad = p.headlines.findIndex((h) => typeof h !== "string" || !h.trim());
+        if (bad >= 0) return `headlines[${bad}] was not a non-empty string`;
+        return faultsFor(p.headlines.map((h) => h.trim())).slice(0, 6).join("; ");
+      },
+    });
+
+    const seen = new Set<string>();
+    const headlines = data.headlines
+      .map((h) => stripEmDashes(h).trim())
+      .filter((h) => h && !seen.has(h.toLowerCase()) && seen.add(h.toLowerCase()))
+      .slice(0, count);
+
+    return { ok: true, headlines };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The bank
+//
+// ‼️ client_headlines HAD NO READER AND NO WRITER IN CODE UNTIL 2026-09-14. The table and its
+// unique index were created on 2026-09-12 against a lane that was still being built. Everything
+// below is its first one, so the constraints are the design and not a discovery: one row per
+// phrasing per client FOREVER, which is what stops week six re-proposing week two's line.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Where a headline came from. Matches the check constraint on client_headlines.origin. */
+export type HeadlineOrigin = "weekly" | "pre_call" | "manual" | "keyword";
+
+export interface StoredHeadline {
+  id: string;
+  headline: string;
+  origin: HeadlineOrigin;
+  isoWeek: string | null;
+  approved: boolean;
+  usedPageId: string | null;
+}
+
+/**
+ * The dedupe key: case folded, punctuation stripped, whitespace collapsed.
+ *
+ * ‼️ IT MUST MATCH WHAT THE UNIQUE INDEX WAS BUILT FOR. client_headlines_unique is on
+ * (client_id, normalized), so this function IS the uniqueness rule. "How long does it last?" and
+ * "How long does it last" are one line, which is the whole point: a model asked for twenty
+ * questions a week will eventually re-punctuate an old one and call it new.
+ */
+export function normalizeHeadline(headline: string): string {
+  return headline
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * File headlines, skipping any this client has already been shown.
+ *
+ * ‼️ ON CONFLICT DO NOTHING, AND THE SKIP IS THE FEATURE. A row that already exists may have been
+ * approved, dropped or turned into a page, and every one of those is a decision somebody made.
+ * Upserting would overwrite a rejection with a fresh proposal and re-offer a line he has already
+ * said no to, which is the exact behaviour the dropped_at column exists to prevent.
+ *
+ * Returns what was actually stored, so a caller can say "18 new, 2 you have seen before" rather
+ * than reporting twenty and quietly showing eighteen.
+ */
+export async function storeHeadlines(args: {
+  clientId: string;
+  headlines: readonly string[];
+  origin: HeadlineOrigin;
+  isoWeek?: string | null;
+}): Promise<{ ok: true; stored: StoredHeadline[]; duplicates: number } | { ok: false; error: string }> {
+  const rows = args.headlines
+    .map((h) => h.trim())
+    .filter(Boolean)
+    .map((headline) => ({
+      client_id: args.clientId,
+      headline,
+      normalized: normalizeHeadline(headline),
+      origin: args.origin,
+      iso_week: args.isoWeek ?? null,
+    }))
+    .filter((r) => r.normalized !== "");
+
+  if (!rows.length) return { ok: true, stored: [], duplicates: 0 };
+
+  const { data, error } = await supabaseAdmin
+    .from("client_headlines")
+    .upsert(rows, { onConflict: "client_id,normalized", ignoreDuplicates: true })
+    .select("id, headline, origin, iso_week, approved, used_page_id");
+
+  if (error) {
+    return {
+      ok: false,
+      error:
+        `the headlines could not be filed: ${error.message}. If this names origin, the ` +
+        `2026-09-14 migration widening client_headlines_origin_check has not been run.`,
+    };
+  }
+
+  const stored = (data ?? []).map(toStoredHeadline);
+  return { ok: true, stored, duplicates: rows.length - stored.length };
+}
+
+function toStoredHeadline(row: Record<string, unknown>): StoredHeadline {
+  return {
+    id: String(row.id),
+    headline: (row.headline as string) ?? "",
+    origin: ((row.origin as string) ?? "weekly") as HeadlineOrigin,
+    isoWeek: (row.iso_week as string | null) ?? null,
+    approved: row.approved === true,
+    usedPageId: (row.used_page_id as string | null) ?? null,
+  };
+}
+
+/**
+ * Approve one headline and mark it as this page's.
+ *
+ * ‼️ A HEADLINE IS USED AT MOST ONCE, which is what used_page_id is for. Two pages sharing an H1
+ * is two pages competing for the same query, and the one thing this whole lane exists to avoid is
+ * writing a page an engine has no reason to prefer over another of ours.
+ */
+export async function approveHeadlineForPage(args: {
+  clientId: string;
+  headlineId: string;
+  planRowId: string;
+  by: string;
+}): Promise<{ ok: true; headline: string } | { ok: false; error: string }> {
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from("client_headlines")
+    .select("id, headline, used_page_id")
+    .eq("id", args.headlineId)
+    .eq("client_id", args.clientId)
+    .maybeSingle();
+
+  if (readError) return { ok: false, error: readError.message };
+  if (!existing) return { ok: false, error: "That headline does not exist." };
+  if (existing.used_page_id && existing.used_page_id !== args.planRowId) {
+    return { ok: false, error: "That headline is already the H1 of another page." };
+  }
+
+  const { error } = await supabaseAdmin
+    .from("client_headlines")
+    .update({
+      approved: true,
+      approved_at: new Date().toISOString(),
+      approved_by: args.by,
+      used_page_id: args.planRowId,
+    })
+    .eq("id", args.headlineId)
+    .eq("client_id", args.clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  // ‼️ THE PLAN ROW IS WHERE THE PAGE READS IT FROM. page_plan.headline is what becomes the H1
+  // and what articleJsonLd puts in `headline`; working_title stays as it was, because it carries
+  // the KEYWORD and is the anchor text the pillar links this page with. Two artifacts, two rules,
+  // and collapsing them would put the pain in the anchor or the keyword in the H1.
+  const { error: planError } = await supabaseAdmin
+    .from("page_plan")
+    .update({ headline: existing.headline as string })
+    .eq("id", args.planRowId)
+    .eq("client_id", args.clientId);
+
+  if (planError) {
+    return {
+      ok: false,
+      error:
+        `the headline was approved but the plan row was not updated: ${planError.message}. ` +
+        `If this names headline, docs/2026-09-12-client-headlines.sql has not been run.`,
+    };
+  }
+
+  return { ok: true, headline: existing.headline as string };
+}
+
+/** Everything already proposed to this client, so a new run can be told not to repeat it. */
+export async function existingHeadlines(clientId: string): Promise<Set<string>> {
+  const { data, error } = await supabaseAdmin
+    .from("client_headlines")
+    .select("normalized")
+    .eq("client_id", clientId);
+
+  if (error) {
+    console.error(`[client-headlines] existing read failed: ${error.message}`);
+    return new Set();
+  }
+  return new Set((data ?? []).map((r) => String(r.normalized)));
+}
+
+/** This week's rows for one client, newest first. The idempotency read for the weekly run. */
+export async function headlinesForWeek(clientId: string, isoWeek: string): Promise<StoredHeadline[]> {
+  const { data, error } = await supabaseAdmin
+    .from("client_headlines")
+    .select("id, headline, origin, iso_week, approved, used_page_id")
+    .eq("client_id", clientId)
+    .eq("iso_week", isoWeek)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error(`[client-headlines] week read failed: ${error.message}`);
+    return [];
+  }
+  return (data ?? []).map(toStoredHeadline);
 }
