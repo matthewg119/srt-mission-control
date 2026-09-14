@@ -13,6 +13,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { slack } from "@/lib/slack-bot";
 import type { Audience } from "@/lib/concierge/magnets";
+import type { AudienceVocabulary } from "./audiences";
 import type { AutoResult } from "./artifacts/registry";
 import { evidenceRows, type KeywordOrigin as SetOrigin } from "./keyword-set";
 import { normalizePhrase, offerVocabulary } from "./phrase-quality";
@@ -20,6 +21,7 @@ import {
   EXPANSION_SCHEMA,
   EXPANSION_SYSTEM,
   KEYWORD_CATEGORIES,
+  categoriesFor,
   KEYWORD_FLOOR,
   categoryLabel,
   classifyCategory,
@@ -83,16 +85,66 @@ export function offerFingerprint(treatment: string, terms: readonly string[], au
  * the row with, and the card says it is a proposal. `?? "patient"` would have expanded an agency's
  * offer into lip filler questions, because the agency verticals propose `owner`.
  */
-export async function keywordAudience(
-  clientId: string
-): Promise<{ audience: Audience; confirmed: boolean; vertical: string | null }> {
+export async function keywordAudience(clientId: string): Promise<{
+  audience: Audience;
+  confirmed: boolean;
+  vertical: string | null;
+  /** The preset this client's audience was seeded from, when it has one. */
+  seededFrom: string | null;
+  /** The audience's own nouns, used to derive a category table when no preset names one. */
+  vocabulary: AudienceVocabulary | null;
+}> {
+  const { audienceFor } = await import("./audiences");
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
   const { verticalFor } = await import("./harvest");
   const { proposeAudience } = await import("@/lib/concierge/audience-proposal");
+
+  // ‼️ THE AUDIENCE ROW FIRST, AND IT ANSWERS ALL FOUR QUESTIONS AT ONCE. When it resolves,
+  // nothing below it runs: the stance, the vertical, the preset and the nouns all come off one
+  // row a person owns, rather than off a widget row plus a harvest lookup plus a proposal.
+  const own = await audienceFor(clientId);
+  if (own.ok) {
+    return {
+      audience: own.audience.stance,
+      confirmed: own.audience.confirmedAt !== null,
+      vertical: own.audience.researchVertical,
+      seededFrom: own.audience.seededFrom,
+      vocabulary: own.audience.vocabulary,
+    };
+  }
+
+  // The legacy path, for a client with no audience row yet. Unchanged in behaviour, and it
+  // still never defaults the stance: proposeAudience refuses to decide and says so.
   const [tenant, resolved] = await Promise.all([conciergeTenant(clientId), verticalFor(clientId)]);
   const vertical = resolved.ok ? resolved.vertical : null;
-  if (tenant) return { audience: tenant.audience, confirmed: true, vertical };
-  return { audience: proposeAudience(vertical).audience, confirmed: false, vertical };
+  if (tenant) {
+    return { audience: tenant.audience, confirmed: true, vertical, seededFrom: null, vocabulary: null };
+  }
+  return {
+    audience: proposeAudience(vertical).audience,
+    confirmed: false,
+    vertical,
+    seededFrom: null,
+    vocabulary: null,
+  };
+}
+
+/**
+ * The category table for whatever keywordAudience could work out.
+ *
+ * ‼️ THE STANCE TABLE IS THE FALLBACK, NOT THE ANSWER. A client with an audience row gets the
+ * table its preset names, or one derived from its own nouns. A client without one falls back to
+ * the two written tables, which is what every caller got before audiences existed.
+ */
+function categoriesForAudience(aud: {
+  audience: Audience;
+  seededFrom: string | null;
+  vocabulary: AudienceVocabulary | null;
+}): readonly CategorySpec[] {
+  if (aud.vocabulary) {
+    return categoriesFor({ seededFrom: aud.seededFrom, vocabulary: aud.vocabulary });
+  }
+  return KEYWORD_CATEGORIES[aud.audience];
 }
 
 export async function keywordContext(
@@ -136,7 +188,7 @@ export async function keywordContext(
       vertical: aud.vertical,
       website: ((client.website as string | null) || (client.domain as string | null)) ?? null,
       fingerprint: offerFingerprint(offer.treatment, offer.terms, aud.audience),
-      categories: KEYWORD_CATEGORIES[aud.audience],
+      categories: categoriesForAudience(aud),
     },
   };
 }
@@ -732,7 +784,7 @@ export async function approvedKeywordSet(clientId: string): Promise<{
   if (approved.length === 0) return null;
 
   const aud = await keywordAudience(clientId);
-  const categories = KEYWORD_CATEGORIES[aud.audience];
+  const categories = categoriesForAudience(aud);
   return {
     vertical: aud.vertical,
     avatar: null,
@@ -793,7 +845,7 @@ export async function handleKeywordThreadReply(input: {
   if (!/^\s*[`*_]*keywords\b/i.test(input.text)) return null;
 
   const aud = await keywordAudience(input.clientId);
-  const cmd = parseKeywordCommand(input.text, KEYWORD_CATEGORIES[aud.audience]);
+  const cmd = parseKeywordCommand(input.text, categoriesForAudience(aud));
   if (!cmd) return null;
 
   switch (cmd.kind) {

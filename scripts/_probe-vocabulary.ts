@@ -61,8 +61,16 @@ const CUT_OVER: ReadonlyArray<{ path: string; step: string }> = [
 
 /** Known to still carry the vocabulary. Reported, never failed, with the step that clears it. */
 const PENDING: ReadonlyArray<{ path: string; step: string }> = [
-  { path: "src/lib/clients/keyword-expansion.ts", step: "6 (the keyword categories)" },
-  { path: "src/lib/clients/question-sets.ts", step: "7 (the question sets)" },
+  // ‼️ STEP 6 IS DONE AND THIS FILE STILL SAYS "lip filler" THIRTY TIMES, WHICH IS CORRECT.
+  // What remains is the PATIENT table itself: ten categories of lip filler with /per syringe/ in
+  // its price match. That is Matthew's own seed list and it is preset DATA, not leakage, and this
+  // probe's own header says a preset data file may name its own trade.
+  //
+  // What step 6 removed was the Record<Audience, ...> that made those two tables the only two
+  // possible answers, in a file whose header claimed "a third audience is a third table rather
+  // than a third function" while the type made a third table impossible. categoriesFor() keys on
+  // the PRESET now, and derives a set from the audience's own nouns when no preset names one.
+  { path: "src/lib/clients/keyword-expansion.ts", step: "6 (DONE: what remains is preset data)" },
   { path: "src/config/presence-platforms.ts", step: "8 (the presence sweep)" },
 ];
 

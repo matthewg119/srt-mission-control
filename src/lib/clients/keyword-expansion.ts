@@ -31,6 +31,7 @@
 // outcome promises on pages and CLAUDE.md's pitch doctrine gates any guarantee to the ads tier.
 
 import { hasBannedDash } from "@/lib/copy-guard";
+import type { AudienceVocabulary } from "./audiences";
 import type { Audience } from "@/lib/concierge/magnets";
 import { scoreCandidate } from "./artifacts/page-candidates";
 import {
@@ -317,10 +318,153 @@ const OWNER: readonly CategorySpec[] = [
   },
 ];
 
+/**
+ * The two written tables, still keyed by stance, for the probe and for anything that has only a
+ * stance to go on.
+ *
+ * ‼️ THIS TYPE WAS THE SHARPEST SELF-CONTRADICTION IN THE FILE. The header two hundred lines up
+ * says "a third audience is a third table rather than a third function", and
+ * Record<Audience, ...> made a third table IMPOSSIBLE: Audience has exactly two members, so there
+ * was nowhere to put one. categoriesFor() below is the fix, and it is keyed on the PRESET rather
+ * than on the stance, because a diner and a patient share a stance and share no vocabulary at all.
+ */
 export const KEYWORD_CATEGORIES: Readonly<Record<Audience, readonly CategorySpec[]>> = {
   patient: PATIENT,
   owner: OWNER,
 };
+
+/**
+ * Preset key to written table. ADDING A THIRD IS ONE LINE HERE, which is what the header always
+ * claimed and could not deliver. An audience with no entry gets a set derived from its own nouns.
+ */
+const BY_PRESET: Readonly<Record<string, readonly CategorySpec[]>> = {
+  med_spa_patient: PATIENT,
+  aeo_agency_owner: OWNER,
+};
+
+/**
+ * A category set built from an audience's OWN words, for an audience nobody has written a table
+ * for yet.
+ *
+ * ‼️ DERIVE, NEVER ENUMERATE. This is classify.ts's own rule applied to the one table that most
+ * needed it. The written PATIENT table is honestly ten categories of lip filler: its price match
+ * is /per syringe|per unit/ and its fear match is /dissolve[ds]?|botched/, neither of which means
+ * anything to a restaurant. The generic price match is /\b(cost|price|how much|per\b)/, which is
+ * what the question actually looks like in any trade.
+ *
+ * ‼️ THE FOUR focus CATEGORIES SURVIVE BY NAME. price, fear, comparison and process are Matthew's
+ * four buying questions and selectOfferPlan fills the supports from them two each, so a generic
+ * set that dropped them would quietly change how every page plan is built.
+ */
+export function genericCategories(v: AudienceVocabulary): readonly CategorySpec[] {
+  const buyer = v.buyerSingular;
+  const offer = v.offerSingular;
+  const offers = v.offerPlural;
+  const place = v.business;
+
+  return [
+    {
+      key: "naming",
+      label: "Naming variants",
+      target: 25,
+      intent: 2,
+      naming: true,
+      shape: `the ${offer}, its synonyms, the brand and product names ${v.buyerPlural} use, common misspellings, with and without the city`,
+      seeds: [offer, offers],
+      match: null,
+    },
+    {
+      key: "local",
+      label: "Near me, local, voice",
+      target: 25,
+      intent: 3,
+      shape: "near me, the city and its neighbourhoods, open on a given day, said out loud to a phone",
+      seeds: [`${offer} near me`, `best ${offer} near me`],
+      match: /\b(near me|nearby|closest|walk ?in|same day|open (today|now|late|on)|open (saturday|sunday))\b/,
+    },
+    {
+      key: "price",
+      label: "Price and financing",
+      focus: true,
+      target: 20,
+      intent: 3,
+      shape: `what a ${offer} costs, specials, payment plans, financing, memberships`,
+      seeds: [`how much is ${offer}`, `${offer} cost`],
+      match: /\b(cost|costs|price|prices|pricing|how much|afford|affordable|financing|payment plans?|per\b|specials?|membership|cheap)\b/,
+    },
+    {
+      key: "fear",
+      label: "Fear, safety, objections",
+      focus: true,
+      target: 25,
+      intent: 1,
+      shape: `what a ${buyer} worries about before buying a ${offer}, and what they think goes wrong`,
+      seeds: [`is ${offer} safe`, `${offer} gone wrong`],
+      match: /\b(safe|safety|risks?|dangerous|side effects?|gone wrong|went wrong|bad|scared|afraid|nervous|worried|regret|complaints?)\b/,
+    },
+    {
+      key: "comparison",
+      label: "Comparisons",
+      focus: true,
+      target: 20,
+      intent: 2,
+      shape: `this ${offer} against the alternatives a ${buyer} is weighing it against`,
+      seeds: [`${offer} vs`, `best ${offer}`],
+      match: /\b(vs|versus|compare[ds]?|comparison|better than|instead of|alternatives?|difference between)\b/,
+    },
+    {
+      key: "process",
+      label: "How it works",
+      focus: true,
+      target: 20,
+      intent: 1,
+      shape: `what actually happens, start to finish, when a ${buyer} buys a ${offer}`,
+      seeds: [`how does ${offer} work`, `what to expect ${offer}`],
+      match: /\b(how (does|do|it) works?|what to expect|step by step|process|before and after|how long)\b/,
+    },
+    {
+      key: "provider",
+      label: "Choosing who to buy from",
+      target: 15,
+      intent: 2,
+      shape: `how a ${buyer} decides which ${place} to go to`,
+      seeds: [`best ${place}`, `how to choose a ${place}`],
+      match: /\b(best|top|reviews?|rated|trusted|licen[cs]ed|certified|experienced|how to choose)\b/,
+    },
+    {
+      key: "results",
+      label: "Results and how long they last",
+      target: 15,
+      intent: 1,
+      shape: `what a ${buyer} gets out of a ${offer} and how long it lasts`,
+      seeds: [`${offer} results`, `how long does ${offer} last`],
+      match: /\b(results?|worth it|last|lasts|lasting|how long|before and after)\b/,
+    },
+    {
+      key: "conversational",
+      label: "Asked out loud",
+      target: 15,
+      intent: 2,
+      shape: `full questions a ${buyer} would type into ChatGPT rather than into a search box`,
+      seeds: [`what should i know before buying ${offer}`],
+      match: null,
+    },
+  ];
+}
+
+/**
+ * The category table for one audience.
+ *
+ * ‼️ KEYED ON THE PRESET, NOT ON THE STANCE. A diner and a patient are the same stance and share
+ * no vocabulary, so the stance was never the thing that decided this.
+ */
+export function categoriesFor(audience: {
+  seededFrom: string | null;
+  vocabulary: AudienceVocabulary;
+}): readonly CategorySpec[] {
+  const named = audience.seededFrom ? BY_PRESET[audience.seededFrom] : undefined;
+  return named ?? genericCategories(audience.vocabulary);
+}
 
 /** A category's label, including the evidence-only fallback. */
 export function categoryLabel(categories: readonly CategorySpec[], key: string): string {

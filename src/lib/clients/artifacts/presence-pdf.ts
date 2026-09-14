@@ -19,6 +19,7 @@
 // This PDF is findings section 2's evidence, and it is attached to it rather than folded in.
 
 import { supabaseAdmin } from "@/lib/db";
+import { verticalFor } from "@/lib/clients/harvest";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { platformByKey } from "@/config/presence-platforms";
 import { canonicalFor, loadSweep, effectiveStatus, countByStatus, worstFirst, type SweepRow } from "../presence-sweep";
@@ -366,10 +367,18 @@ export async function generatePresencePdf(
     .limit(1)
     .maybeSingle();
 
-  const { data: versions } = await supabaseAdmin
-    .from("question_set_versions")
-    .select("version")
-    .eq("vertical", "med_spa");
+  // ‼️ THE CLIENT'S OWN VERTICAL, NOT THE LITERAL "med_spa". freezeUniversalV1 stores the version
+  // as `universal_v1@${vertical}` where vertical is clients.vertical_slug, which classify.ts writes
+  // as kebab-case free text and is instructed never to emit as snake_case. So this filter matched
+  // only a client whose slug was literally `med_spa`, a spelling nothing produces, and the footer
+  // has printed "question set not frozen" for every real client since it was written.
+  const ownVertical = await verticalFor(clientId);
+  const { data: versions } = ownVertical.ok
+    ? await supabaseAdmin
+        .from("question_set_versions")
+        .select("version")
+        .eq("vertical", ownVertical.vertical)
+    : { data: null };
 
   // The manual sweep STEP, not its rows. A skipped step and an unfinished one leave the
   // eighteen rows looking identical, and this document is shown to the client on the call.

@@ -26,6 +26,7 @@
 // silently rewrite the questions in a report already sent to a client.
 
 import { supabaseAdmin } from "@/lib/db";
+import { verticalFor } from "@/lib/clients/harvest";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { canonicalFor, loadSweep, effectiveStatus, countByStatus } from "../presence-sweep";
 import { platformByKey } from "@/config/presence-platforms";
@@ -617,10 +618,18 @@ export async function generateFindings(
     presenceDocId = (presenceDoc?.id as string | null) ?? null;
   }
 
-  const { data: versions } = await supabaseAdmin
-    .from("question_set_versions")
-    .select("version")
-    .eq("vertical", "med_spa");
+  // ‼️ THE CLIENT'S OWN VERTICAL, NOT THE LITERAL "med_spa". freezeUniversalV1 stores the version
+  // as `universal_v1@${vertical}` where vertical is clients.vertical_slug, which classify.ts writes
+  // as kebab-case free text and is instructed never to emit as snake_case. So this filter matched
+  // only a client whose slug was literally `med_spa`, a spelling nothing produces, and the footer
+  // has printed "question set not frozen" for every real client since it was written.
+  const ownVertical = await verticalFor(clientId);
+  const { data: versions } = ownVertical.ok
+    ? await supabaseAdmin
+        .from("question_set_versions")
+        .select("version")
+        .eq("vertical", ownVertical.vertical)
+    : { data: null };
 
   const clientName = ((client.dba_name || client.legal_name) as string) ?? "";
   const city = [client.city, client.state].filter(Boolean).join(", ") || "your area";

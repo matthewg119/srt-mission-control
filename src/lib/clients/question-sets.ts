@@ -415,13 +415,46 @@ const RESIDUAL_PLACEHOLDER = /\[[^\]]+\]/;
  * dropped question is honest and the fidelity note names it; a question materialized with the
  * wrong noun is read out loud to a client who then stops believing the rest of the document.
  */
+/**
+ * Does this client use the shipped med spa universal set?
+ *
+ * ‼️ THIS REPLACES THREE `vertical === "med_spa"` TESTS THAT COULD NEVER FIRE FOR A REAL CLIENT.
+ * classify.ts writes clients.vertical_slug as KEBAB-CASE free text and its own prompt instructs it
+ * never to emit snake_case, so `med_spa` is a spelling nothing in the pipeline produces. A genuine
+ * med spa classified `med-spa` missed all three branches and was handed a universal set derived
+ * from its own audit and then FROZEN forever under universal_v1@med-spa, which every later med spa
+ * in that spelling then inherited.
+ *
+ * ‼️ THE PRESET WINS WHEN THERE IS ONE, BECAUSE IT IS A VALUE A PERSON WROTE ON A ROW rather than
+ * a string a classifier had to happen to guess. The spelling list is the fallback for a client
+ * with no audience row yet, and it lists what classify.ts actually emits. Normalising at
+ * adoptAuditClassification, the single writer, is the real fix and is owed separately;
+ * PRESET_BY_VERTICAL carries the same note for the same reason.
+ */
+export const MED_SPA_QUESTION_SET = "universal_v1_med_spa";
+
+const MED_SPA_SPELLINGS: ReadonlySet<string> = new Set([
+  "med_spa",
+  "med-spa",
+  "medspa",
+  "medical-spa",
+  "aesthetics-clinic",
+]);
+
+export function usesMedSpaUniversalSet(opts: {
+  vertical: string;
+  questionSetPreset?: string | null;
+}): boolean {
+  if (opts.questionSetPreset) return opts.questionSetPreset === MED_SPA_QUESTION_SET;
+  return MED_SPA_SPELLINGS.has((opts.vertical ?? "").trim().toLowerCase());
+}
 export function materializeSet(
   questions: readonly string[],
   s: Substitutions,
   provenance: SubProvenance,
-  opts: { vertical: string }
+  opts: { vertical: string; questionSetPreset?: string | null }
 ): MaterializedSet {
-  const isMedSpa = opts.vertical === "med_spa";
+  const isMedSpa = usesMedSpaUniversalSet(opts);
   const out: MaterializedQuestion[] = [];
   const dropped: DroppedQuestion[] = [];
   const fallbacksUsed = new Set<string>();
@@ -554,11 +587,11 @@ export function composeTrackedSet(
   universal: readonly string[],
   s: Substitutions,
   provenance: SubProvenance,
-  opts: { vertical: string; size?: number }
+  opts: { vertical: string; questionSetPreset?: string | null; size?: number }
 ): MaterializedSet {
   const size = opts.size ?? 20;
 
-  if (opts.vertical === "med_spa") {
+  if (usesMedSpaUniversalSet(opts)) {
     return materializeSet(universal, s, provenance, opts);
   }
 
@@ -634,7 +667,7 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
   const vertical = resolved.vertical;
   const version = `universal_v1@${vertical}`;
 
-  if (vertical === "med_spa") {
+  if (usesMedSpaUniversalSet({ vertical })) {
     // ‼️ THIS IS freezeUniversalV1's FIRST CALLER. It has existed since the measurement migration
     // and nothing has ever invoked it, so question_set_versions is empty and every fidelity
     // footer has printed "question set not frozen". A2 §6 is explicit that a code constant alone
