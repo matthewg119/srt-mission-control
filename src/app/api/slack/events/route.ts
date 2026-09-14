@@ -857,6 +857,54 @@ export async function POST(request: NextRequest) {
               kind: "command",
               handler: "research-intake",
             });
+            // ‼️ WHICH TABLE A PASTE REACHES DEPENDS ON WHICH STEP'S THREAD IT LANDED IN, and the
+            // two are not interchangeable. Step 11 (avatar_harvest) is research about the BUYER,
+            // shared by every client in the vertical, and question_bank is keyed (vertical,
+            // avatar) with no client_id for exactly that reason. Step 21 (pre_call_pages) is
+            // research about SEVEN SPECIFIC PAGES of one client, tagged [P1] to [P7], and there
+            // is nowhere in question_bank to put a page id.
+            //
+            // Routing both to ingestResearch is what the door did until 2026-09-14, and it would
+            // file a batch answer as vertical-wide buyer phrases: every clinic in the vertical
+            // would inherit one clinic's pricing answer, and the seven pages it was written for
+            // would draft with nothing new behind them.
+            if (client.stepKey === "pre_call_pages") {
+              const { readBatch } = await import("@/lib/clients/page-batch");
+              const { loadBatchPages, ingestBatchResearch, batchIngestLine } = await import(
+                "@/lib/clients/batch-research"
+              );
+
+              const state = await readBatch(client.id);
+              if ("error" in state) {
+                await slack.postThreadReply(channel, parentThreadTs, `:warning: ${state.error}`);
+                return NextResponse.json({ ok: true });
+              }
+
+              const pages = await loadBatchPages(
+                client.id,
+                state.rows.map((r) => r.id)
+              );
+
+              const filed = await ingestBatchResearch({
+                clientId: client.id,
+                pages,
+                text: userText,
+                collectedBy: event.user ? `<@${event.user as string}>` : "someone in Slack",
+                slackTs: event.ts as string,
+              });
+
+              const reply = filed.ok
+                ? batchIngestLine(filed.report, pages.length) +
+                  "\n`plan draft` writes all of them from this."
+                : `:warning: ${filed.error}`;
+
+              const postedBatch = await slack.postThreadReply(channel, parentThreadTs, reply);
+              if (!slackOk(postedBatch)) {
+                console.error("[slack/events] batch research reply failed in", parentThreadTs);
+              }
+              return NextResponse.json({ ok: true });
+            }
+
             const { ingestResearch, formatIntakeReply } = await import("@/lib/clients/research-intake");
             const { extractPhrases, mergePhrases } = await import("@/lib/clients/harvest");
 
