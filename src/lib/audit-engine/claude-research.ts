@@ -26,6 +26,7 @@ import type { SiteResearch } from "./site-research";
 import type { CrawlBlock } from "./types";
 import type { ResearchTarget } from "./search-research";
 import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
+import { tokensOnly } from "@/lib/data/model-costs";
 
 /** Under this, the profile is a shrug dressed as prose rather than an identification.
  *  Same floor as search-research.ts, and deliberately the same number. */
@@ -583,7 +584,7 @@ export async function researchViaClaudeDetailed(
       provider: "anthropic",
       params: { kind: target.kind, target: label },
       fetch: async () => {
-        const { data } = await callClaudeJSON<RawIdentity>({
+        const { data, usage, model } = await callClaudeJSON<RawIdentity>({
           model: IDENTITY_MODEL,
           system: SYSTEM,
           user: buildUserPrompt(target),
@@ -621,7 +622,11 @@ export async function researchViaClaudeDetailed(
         // no_sources reply is a confident hallucination rather than a fact that ages well.
         // findCachedSession excludes its `failed` rows for exactly this reason.
         if (unusableReason(toIdentity(data))) throw new UnusableIdentity(data);
-        return { payload: data };
+        // ‼️ A FLOOR, NOT THE TOTAL. tokensOnly cannot see the per-search charge for the up to
+        // MAX_SEARCHES server-side web searches this call makes, and no per-search rate is on
+        // file here. Recording the token cost understates by a known amount; recording nothing
+        // recorded a zero, and a zero in a spend ledger reads as a measurement.
+        return { payload: data, costUsd: tokensOnly(model, usage) };
       },
     });
     if (cached) {

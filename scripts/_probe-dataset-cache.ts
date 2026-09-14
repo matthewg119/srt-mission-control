@@ -1,4 +1,4 @@
-// Proves the two claims getOrFetch is not allowed to be wrong about.
+// Proves the claims getOrFetch and the spend ledger are not allowed to be wrong about.
 //
 // Run: bunx tsx --env-file=.env.local scripts/_probe-dataset-cache.ts [--live]
 //
@@ -19,10 +19,14 @@
 //      rejects would be stored and then served back for free on every audit of that business until
 //      the TTL ran out. `no_sources` is the one that matters most: found=true with no sources is a
 //      confident hallucination, and caching it would make one bad minute permanent.
-//   3. (--live) A THROWN fetch() WRITES NOTHING, which is the mechanism claim 2 rests on, and a
+//   3. THE LEDGER RECORDS DOLLARS. Every model in ClaudeModel has a published rate, so no call
+//      silently records $0. A zero in a spend ledger reads as a measurement, which is worse than
+//      recording nothing, and that is exactly what every row held before model-costs.ts existed.
+//   4. (--live) A THROWN fetch() WRITES NOTHING, which is the mechanism claim 2 rests on, and a
 //      second call for the same key does not call fetch at all.
 
 import { cacheKeyOf, getOrFetch } from "@/lib/data/dataset-cache";
+import { isPriced, pricedModels, tokensOnly, RATES_READ_ON } from "@/lib/data/model-costs";
 import { unusableReason } from "@/lib/audit-engine/claude-research";
 import type { BusinessIdentity } from "@/lib/audit-engine/claude-research";
 import { supabaseAdmin } from "@/lib/db";
@@ -135,7 +139,7 @@ function usability(): void {
 class Decline extends Error {}
 
 async function roundTrip(): Promise<void> {
-  console.log("\n3. getOrFetch against client_datasets (--live)");
+  console.log("\n5. getOrFetch against client_datasets (--live)");
 
   const key = cacheKeyOf({ probe: "round-trip", at: Date.now() });
   const declinedKey = cacheKeyOf({ probe: "declined", at: Date.now() });
@@ -232,11 +236,63 @@ async function roundTrip(): Promise<void> {
   }
 }
 
+
+// ── 4. The ledger records dollars, not zeroes ────────────────────────────────────────────────
+
+function costs(): void {
+  console.log(`\n4. model-costs: cost_usd is a real number (rates read ${RATES_READ_ON})`);
+
+  // ‼️ EXHAUSTIVE OVER ClaudeModel. If somebody adds a model to the union and not to the rate
+  // table, every call on it silently records $0 and the ledger quietly understates. TypeScript
+  // catches that at the Record type; this catches it if the Record is ever loosened.
+  const union = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
+  for (const m of union) check(`${m} has a published rate`, isPriced(m));
+  check(
+    `the table prices exactly the ${union.length} models in ClaudeModel`,
+    pricedModels().length === union.length,
+    `table has ${pricedModels().length}: ${pricedModels().join(", ")}`
+  );
+
+  // Sonnet 4.6 is $3/MTok in, $15/MTok out. 1M in + 1M out = $18.
+  const round = (n: number) => Math.round(n * 1e6) / 1e6;
+  check(
+    "1M in + 1M out on sonnet-4-6 is $18",
+    round(tokensOnly("claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 1_000_000 })) === 18,
+    String(tokensOnly("claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 1_000_000 }))
+  );
+  check(
+    "a realistic identity call (12k in, 1.5k out) is about 5.9 cents",
+    round(tokensOnly("claude-sonnet-4-6", { input_tokens: 12_000, output_tokens: 1_500 })) === 0.0585,
+    String(tokensOnly("claude-sonnet-4-6", { input_tokens: 12_000, output_tokens: 1_500 }))
+  );
+  check(
+    "output is priced higher than input, so the two are not transposed",
+    tokensOnly("claude-sonnet-4-6", { input_tokens: 0, output_tokens: 1000 }) >
+      tokensOnly("claude-sonnet-4-6", { input_tokens: 1000, output_tokens: 0 })
+  );
+  check(
+    "opus costs more than haiku for identical usage",
+    tokensOnly("claude-opus-4-7", { input_tokens: 1000, output_tokens: 1000 }) >
+      tokensOnly("claude-haiku-4-5-20251001", { input_tokens: 1000, output_tokens: 1000 })
+  );
+
+  // Bookkeeping must never fail a call whose money is already spent.
+  check(
+    "an unpriced model returns 0 rather than throwing",
+    tokensOnly("claude-something-unreleased" as never, { input_tokens: 10, output_tokens: 10 }) === 0
+  );
+  check(
+    "missing usage returns 0 rather than throwing",
+    tokensOnly("claude-sonnet-4-6", undefined) === 0
+  );
+}
+
 async function main(): Promise<void> {
   keyIdentity();
   usability();
+  costs();
   if (LIVE) await roundTrip();
-  else console.log("\n3. skipped. Pass --live to exercise client_datasets (still no paid call).");
+  else console.log("\n5. skipped. Pass --live to exercise client_datasets (still no paid call).");
 
   console.log(failures === 0 ? "\nall checks passed\n" : `\n${failures} CHECK(S) FAILED\n`);
   process.exit(failures === 0 ? 0 : 1);
