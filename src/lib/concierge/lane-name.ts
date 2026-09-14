@@ -18,14 +18,35 @@
 // Pure and dependency free, so both the server and any client component can read it.
 
 import type { Audience } from "./magnets";
+import type { ResolvedAudience } from "@/lib/clients/audiences";
 
-/** The product name for this audience, as it is said to a person. */
-export function conciergeLaneName(audience: Audience): string {
+/**
+ * The product name for this audience, as it is said to a person.
+ *
+ * ‼️ TAKES EITHER A ROW OR A BARE STANCE, AND THE ROW ALWAYS WINS. Given a ResolvedAudience it
+ * returns that audience's own lane_name, so a restaurant reads "AI Menu Concierge" rather than
+ * a name picked by a ternary that only knows two answers.
+ *
+ * ‼️ THE STANCE FORM IS A LEGACY PATH AND IT IS KEPT ON PURPOSE. Five callers hold only an
+ * Audience today (step-engine, concierge-setup, concierge-audience), and widening all of them
+ * inside the concierge cut would have put five board surfaces in a deploy that is already
+ * changing a live widget. They upgrade as they gain a row. Until then this answers with the two
+ * names that were true when there were only two lanes.
+ */
+export function conciergeLaneName(audience: Audience | ResolvedAudience): string {
+  if (typeof audience !== "string") {
+    return audience.laneName ?? (audience.stance === "owner" ? "AI Visibility Concierge" : "AI Skin Concierge");
+  }
   return audience === "owner" ? "AI Visibility Concierge" : "AI Skin Concierge";
 }
 
 /** One line on what this lane actually does, for a card that has just named it. */
-export function conciergeLaneBlurb(audience: Audience): string {
+export function conciergeLaneBlurb(audience: Audience | ResolvedAudience): string {
+  if (typeof audience !== "string") {
+    return audience.stance === "owner"
+      ? "It answers a business owner from the market dataset and books a call with us."
+      : `It answers a ${audience.vocabulary.buyerSingular} and books them a ${audience.vocabulary.visit}.`;
+  }
   return audience === "owner"
     ? "It answers a business owner from the market dataset and books a call with us."
     : "It reads one photo, returns a skin assessment, and books the visitor an appointment.";

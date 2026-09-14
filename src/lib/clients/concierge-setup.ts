@@ -33,6 +33,7 @@ import { notifyStep } from "./step-board";
 import type { AutoResult } from "./artifacts/registry";
 import { proposeAudience } from "@/lib/concierge/audience-proposal";
 import { conciergeLaneName } from "@/lib/concierge/lane-name";
+import { audienceFor } from "./audiences";
 import { verticalFor } from "./harvest";
 import { signOnboardingToken } from "./token";
 import { PREVIEW_TOKEN_TTL_DAYS, previewLinkLine } from "./review-preview";
@@ -183,13 +184,39 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
   const resolved = await verticalFor(clientId);
   const proposal = proposeAudience(resolved.ok ? resolved.vertical : null);
 
+  // ‼️ THE THIRD INDEPENDENT ROUTE TO "THIS CLIENT IS A MED SPA", AND IT WAS THE LIVE ONE.
+  // This file's own header records that a `?? "med_spa"` literal was removed from here once
+  // already. It came back one line down as `|| "medspa"`, writing a med-spa vertical onto every
+  // widget whose client had no vertical_slug. The other two routes were closed on 2026-09-14:
+  // concierge_configs.vertical lost its `default 'medspa'` in the migration, and config.ts lost
+  // its `?? "medspa"` coalesce. This is the last of the three.
+  //
+  // ‼️ IT REFUSES INSTEAD. A widget cannot be provisioned before somebody has said who the client
+  // sells to, because everything it says is written in that buyer's words. The refusal names the
+  // repair and the step card shows it, which is the whole reason audienceFor returns a sentence.
+  const aud = await audienceFor(clientId);
+  if (!aud.ok) {
+    return {
+      ok: false,
+      error:
+        `The concierge cannot be set up yet. ${aud.error} ` +
+        `Seed the audience first, then run this step again.`,
+    };
+  }
+
   const seeded: Record<string, unknown> = {
     client_id: clientId,
-    vertical: (client.vertical_slug as string | null) || "medspa",
+    // From the audience row, which is the only thing that knows. No literal, no coalesce.
+    vertical: aud.audience.researchVertical,
+    audience_id: aud.audience.id,
     allowed_origins: origins,
     updated_at: new Date().toISOString(),
   };
-  if (!existing) seeded.audience = proposal.audience;
+  // ‼️ THE STANCE MIRROR STAYS, AND IT IS WRITTEN FROM THE ROW RATHER THAN FROM THE PROPOSAL.
+  // concierge_configs.audience keeps its CHECK and is still what rungOf()'s magnet firewall and
+  // for-client.ts read, so the two must not drift. Writing both in one statement is what keeps
+  // them one fact. An existing row is left alone: a person may have confirmed it.
+  if (!existing) seeded.audience = aud.audience.stance;
 
   const { error: upsertError } = await supabaseAdmin
     .from("concierge_configs")

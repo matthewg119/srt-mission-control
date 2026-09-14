@@ -164,7 +164,7 @@ export function openingFor(args: {
   }
   if (args.evidence) return args.evidence.detail;
   if (args.degradeLine) return args.degradeLine;
-  return "Tell me your city and I will show you which clinics ChatGPT actually names there, or tell you plainly that we have not measured it yet.";
+  return "Tell me your city and I will show you which businesses ChatGPT actually names there, or tell you plainly that we have not measured it yet.";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -224,10 +224,19 @@ export function makeExecutor(ctx: ExecutorContext) {
       }
       ctx.place = place;
 
-      // ‼️ THE SERVICE DEFAULTS, IT IS NEVER INFERRED FROM THEIR WEBSITE. This lane is published to
-      // med spa owners, so medspa is the honest default. Guessing a vertical from a domain is the
-      // inference for-prospect.ts calls out as the one that puts a med spa's rivals in a plumber's
-      // inbox.
+      // ‼️ THE SERVICE DEFAULTS, IT IS NEVER INFERRED FROM THEIR WEBSITE. Guessing a vertical from
+      // a domain is the inference for-prospect.ts calls out as the one that puts a med spa's rivals
+      // in a plumber's inbox.
+      //
+      // ‼️ KNOWN GAP, LEFT HARDCODED ON PURPOSE 2026-09-14. This is the market the BUYER'S OWN
+      // BUSINESS operates in, and client_audiences has no noun for it. Its vocabulary describes the
+      // buyer (buyer_noun "med spa owner") and what the CLIENT sells them (offer_noun "service"),
+      // neither of which is the market to look rivals up in. Deriving it by stripping " owner" off
+      // the buyer noun would be string surgery on copy a person typed.
+      //
+      // It is correct today because this lane is published to med spa owners and to nobody else.
+      // The day SRT sells AEO to restaurants it is wrong, and the fix is a column on the audience
+      // row, not a cleverer default here. Recorded rather than papered over.
       const service = String(input.service ?? "").slice(0, 60).trim() || "medspa";
 
       const ammo = await conciergeAmmo({
@@ -399,7 +408,7 @@ export function makeExecutor(ctx: ExecutorContext) {
       if (offer.mode === "link") {
         ctx.attachments.push({
           kind: "booking",
-          key: ctx.config.audience === "owner" ? "onboarding2" : "clinic",
+          key: ctx.config.audience === "owner" ? "onboarding2" : "client",
           title: offer.label,
           url: trackedUrl(ctx.session, offer.url),
         });
@@ -413,13 +422,13 @@ export function makeExecutor(ctx: ExecutorContext) {
         return ok({
           offered: true,
           phone: offer.phone,
-          say: `Tell them the clinic books by phone on ${offer.phone}.`,
+          say: `Tell them the ${ctx.config.vocabulary.business} books by phone on ${offer.phone}.`,
         });
       }
 
       return ok({
         offered: true,
-        say: "Ask for their name and the best number, and tell them the clinic will call them back.",
+        say: `Ask for their name and the best number, and tell them the ${ctx.config.vocabulary.business} will call them back.`,
       });
     }
 
@@ -533,6 +542,10 @@ export async function runConciergeTurn(args: RunTurnArgs): Promise<TurnResult> {
 
   const prompt = systemPrompt({
     audience: args.config.audience,
+    // Loaded once in config.ts from the client's own audience row. There is no fallback behind
+    // these: loadConciergeConfig refuses to serve a widget whose audience will not resolve.
+    vocabulary: args.config.vocabulary,
+    hardLines: args.config.hardLines,
     tenantName: args.config.clientName,
     delivered: args.session.magnetsDelivered,
     spentDetails: args.session.ammoUsed.map((a) => a.detail),

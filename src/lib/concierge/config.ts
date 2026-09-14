@@ -11,6 +11,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { isAudience, type Audience } from "./magnets";
+import { audienceById, type AudienceVocabulary } from "@/lib/clients/audiences";
 
 export type BookingMode = "link" | "calendly" | "none";
 
@@ -19,7 +20,22 @@ export interface ConciergeConfig {
   slug: string;
   enabled: boolean;
   audience: Audience;
+  /**
+   * The SHARED research namespace, from the audience row.
+   *
+   * ‼️ NO LONGER `?? "medspa"`. That fallback sat on a column whose own database default was
+   * also 'medspa', so a client that never chose anything read as a med spa twice over. Both are
+   * gone: the default was dropped in docs/2026-09-14-client-audiences.sql and the coalesce here
+   * was the other half of the same silent answer.
+   */
   vertical: string;
+  /** The nouns every prompt interpolates. Loaded once, here, from client_audiences. */
+  vocabulary: AudienceVocabulary;
+  /** The guards that are this audience's and not universal. Empty is legitimate. */
+  hardLines: string[];
+  /** What this lane is called in front of a person, from the row rather than from a ternary. */
+  laneName: string | null;
+  launcherLabel: string | null;
   greeting: string | null;
   allowedOrigins: string[];
   bookingMode: BookingMode;
@@ -36,7 +52,7 @@ export interface ConciergeConfig {
 }
 
 const CONFIG_COLUMNS =
-  "client_id, enabled, audience, vertical, greeting, allowed_origins, booking_mode, booking_url, " +
+  "client_id, enabled, audience, audience_id, vertical, greeting, allowed_origins, booking_mode, booking_url, " +
   "booking_phone, analysis_provider, daily_scan_cap, consent_version, " +
   "clients!inner(slug, legal_name, dba_name, domain, website, city, state)";
 
@@ -76,12 +92,37 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
 
   const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
+  // ‼️ THE WORDS COME FROM A ROW, AND A WIDGET WITH NO ROW DOES NOT SERVE.
+  // This file already refuses on an unreadable audience and says why in the log, for the same
+  // reason: the widget speaks in a client's own voice on a client's own domain, and the failure
+  // it is guarding against is confidently saying the wrong word to a stranger. A missing
+  // audience is the same class of fault as an unreadable stance, so it gets the same answer.
+  const audienceId = str(row.audience_id);
+  if (!audienceId) {
+    console.error(
+      `[concierge] ${clean} has no audience_id, refusing to serve. ` +
+        `Seed one with seedClientAudience() so the widget knows what to call the buyer.`
+    );
+    return null;
+  }
+
+  const resolved = await audienceById(audienceId);
+  if (!resolved.ok) {
+    console.error(`[concierge] ${clean} refusing to serve: ${resolved.error}`);
+    return null;
+  }
+  const aud = resolved.audience;
+
   return {
     clientId: String(row.client_id),
     slug: clean,
     enabled: row.enabled === true,
     audience: row.audience,
-    vertical: str(row.vertical) ?? "medspa",
+    vertical: aud.researchVertical,
+    vocabulary: aud.vocabulary,
+    hardLines: aud.hardLines,
+    laneName: aud.laneName,
+    launcherLabel: aud.launcherLabel,
     greeting: str(row.greeting),
     allowedOrigins: Array.isArray(row.allowed_origins)
       ? (row.allowed_origins as unknown[]).filter((o): o is string => typeof o === "string" && !!o.trim())

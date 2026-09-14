@@ -282,6 +282,13 @@ function promptIsEmpty(): void {
 
   const prompt = systemPrompt({
     audience: "owner",
+    // SRT's own audience row: business is "agency", and it carries NO clinical hard lines.
+    vocabulary: {
+      buyerSingular: "med spa owner", buyerPlural: "med spa owners",
+      offerSingular: "service", offerPlural: "services",
+      business: "agency", visit: "call",
+    },
+    hardLines: [],
     tenantName: "SRT Agency LLC",
     delivered: [],
     spentDetails: [],
@@ -312,13 +319,53 @@ function promptIsEmpty(): void {
 
   const patient = systemPrompt({
     audience: "patient",
+    // A clinic's audience row. The three clinical guards arrive as DATA now, not from code.
+    vocabulary: {
+      buyerSingular: "patient", buyerPlural: "patients",
+      offerSingular: "treatment", offerPlural: "treatments",
+      business: "clinic", visit: "consultation",
+    },
+    hardLines: [
+      "You are not a doctor and this is not medical advice. Never diagnose, never name a condition, and never say a treatment will work for them.",
+      "Never quote a price for a treatment. Pricing is something the clinic confirms.",
+      "Never name another clinic, and never compare this clinic to one.",
+    ],
     tenantName: "A Clinic",
     delivered: [],
     spentDetails: [],
     magnetsStillNeeded: 2,
   });
   check("the patient prompt carries no banned dash", !hasBannedDash(patient));
+  // ‼️ THIS STILL PASSES, BUT FROM A ROW RATHER THAN FROM CODE. The three clinical guards moved
+  // out of PATIENT_HARD_LINES and onto client_audiences.hard_lines on 2026-09-14. The check is
+  // unchanged on purpose: a clinic must lose nothing in the move.
   check("the patient prompt forbids naming another clinic", /never name another clinic/i.test(patient));
+  check("and still forbids quoting a price", /never quote a price/i.test(patient));
+  check("and still says it is not a doctor", /not a doctor/i.test(patient));
+
+  // ‼️ AND THE OTHER HALF, WHICH IS THE WHOLE POINT OF THE SPLIT. A non-clinical end customer
+  // inherits NONE of the three. p3 in particular has been silently forbidding every such client
+  // from answering their customer's most common question, which is what things cost.
+  const diner = systemPrompt({
+    audience: "patient",
+    vocabulary: {
+      buyerSingular: "diner", buyerPlural: "diners",
+      offerSingular: "dish", offerPlural: "dishes",
+      business: "restaurant", visit: "table",
+    },
+    hardLines: ["Never promise a dish is free of an allergen. Tell them to ask the kitchen when they order."],
+    tenantName: "La Casita",
+    delivered: [],
+    spentDetails: [],
+    magnetsStillNeeded: 2,
+  });
+  check("a diner is never told the widget is not a doctor", !/not a doctor/i.test(diner));
+  check("a diner may be told what a dish costs", !/never quote a price/i.test(diner));
+  check("a diner is not warned off naming another clinic", !/another clinic/i.test(diner));
+  check("a diner gets its OWN guard instead", /allergen/i.test(diner));
+  check("and is asked about a table, not a consultation", /table/i.test(diner) && !/consultation/i.test(diner));
+  check("the universal guards still apply to a diner", /never state a number/i.test(diner) && /one question per message/i.test(diner));
+  check("the diner prompt carries no banned dash", !hasBannedDash(diner));
 
   // ‼️ WITHHOLDING BEATS FORBIDDING. The patient lane is not told to avoid market evidence, it is
   // handed no tool that can produce any.
@@ -581,6 +628,15 @@ async function booking(): Promise<void> {
     bookingMode: "none", bookingUrl: null, bookingPhone: null,
     analysisProvider: "mock", dailyScanCap: 200, consentVersion: "v1",
     clientName: "SRT Agency LLC", clientCity: null, clientState: null, clientWebsite: null,
+    // The audience row SRT backfilled to. business is "agency" and NOT "clinic": SRT sells to
+    // clinics and is not one, which is the whole reason the noun lives on a row.
+    vocabulary: {
+      buyerSingular: "med spa owner", buyerPlural: "med spa owners",
+      offerSingular: "service", offerPlural: "services",
+      business: "agency", visit: "call",
+    },
+    hardLines: [],
+    laneName: "AI Visibility Concierge", launcherLabel: "Check my visibility",
   };
 
   const fallback = "https://srtagency.com/onboarding2?utm_source=concierge";

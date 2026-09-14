@@ -52,14 +52,15 @@ const BANNED = [
 /** Files that have completed the cutover. Adding one here is how a step is finished. */
 const CUT_OVER: ReadonlyArray<{ path: string; step: string }> = [
   { path: "src/lib/clients/client-headlines.ts", step: "4 (the headline lane)" },
-];
-
-/** Known to still carry the vocabulary. Reported, never failed, with the step that clears it. */
-const PENDING: ReadonlyArray<{ path: string; step: string }> = [
+  { path: "src/lib/concierge/config.ts", step: "5 (the concierge)" },
   { path: "src/lib/concierge/tools.ts", step: "5 (the concierge)" },
   { path: "src/lib/concierge/engine.ts", step: "5 (the concierge)" },
   { path: "src/lib/concierge/for-client.ts", step: "5 (the concierge)" },
   { path: "src/lib/concierge/lane-name.ts", step: "5 (the concierge)" },
+];
+
+/** Known to still carry the vocabulary. Reported, never failed, with the step that clears it. */
+const PENDING: ReadonlyArray<{ path: string; step: string }> = [
   { path: "src/lib/clients/keyword-expansion.ts", step: "6 (the keyword categories)" },
   { path: "src/lib/clients/question-sets.ts", step: "7 (the question sets)" },
   { path: "src/config/presence-platforms.ts", step: "8 (the presence sweep)" },
