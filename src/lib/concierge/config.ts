@@ -36,6 +36,8 @@ export interface ConciergeConfig {
   /** What this lane is called in front of a person, from the row rather than from a ternary. */
   laneName: string | null;
   launcherLabel: string | null;
+  /** The market the ammo lookup is about. Null is honest and competitorAmmo says so. */
+  buyerMarket: string | null;
   greeting: string | null;
   allowedOrigins: string[];
   bookingMode: BookingMode;
@@ -123,6 +125,7 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
     hardLines: aud.hardLines,
     laneName: aud.laneName,
     launcherLabel: aud.launcherLabel,
+    buyerMarket: aud.buyerMarket,
     greeting: str(row.greeting),
     allowedOrigins: Array.isArray(row.allowed_origins)
       ? (row.allowed_origins as unknown[]).filter((o): o is string => typeof o === "string" && !!o.trim())

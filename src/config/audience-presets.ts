@@ -51,6 +51,15 @@ export interface AudiencePreset {
   hardLines: readonly string[];
   /** RealSelf and the NPI Registry are not facts about a restaurant. */
   presence: readonly string[];
+  /**
+   * The market this audience is ABOUT, as a slug matching market_mentions.service.
+   *
+   * ‼️ NOT THE CLIENT'S OWN MARKET. For an owner audience it is the market the BUYER'S
+   * business competes in: SRT is an agency and its buyer_market is med-spa. Conflating the two
+   * is how an agency's pages get aimed at other agencies. serviceKey() normalises it and
+   * marketKeys() expands it to its synonym cluster, so the spelling need only be recognisable.
+   */
+  buyerMarket: string | null;
   /** Matched instead of `vertical === "med_spa"`, which classify.ts is told never to emit. */
   questionSet: string | null;
 }
@@ -80,6 +89,8 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     launcher: "Check my visibility",
     hardLines: [],
     presence: ["google", "facebook", "bbb", "trustpilot"],
+    // SRT is an agency; its BUYERS run med spas, and that is the market its content is about.
+    buyerMarket: "med-spa",
     questionSet: null,
   },
 
@@ -96,6 +107,7 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     launcher: "Start my free scan",
     hardLines: [NOT_A_DOCTOR, NO_TREATMENT_PRICE, NO_OTHER_CLINIC],
     presence: ["google", "apple", "bing", "yelp", "realself", "facebook"],
+    buyerMarket: "med-spa",
     questionSet: "universal_v1_med_spa",
   },
 
@@ -111,6 +123,8 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     launcher: "See tonight's menu",
     hardLines: [NO_ALLERGEN_PROMISE],
     presence: ["google", "apple", "bing", "yelp", "facebook", "foursquare"],
+    // A diner shops the restaurant market. market_mentions already holds mexican-restaurant.
+    buyerMarket: "restaurant",
     questionSet: null,
   },
 };

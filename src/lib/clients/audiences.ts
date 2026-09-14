@@ -59,6 +59,14 @@ export interface ResolvedAudience {
   hardLines: string[];
   presencePlatformKeys: string[];
   questionSetPreset: string | null;
+  /**
+   * The market this audience is ABOUT, for the competitor and content layers.
+   *
+   * ‼️ NULL IS A REAL ANSWER AND MUST NOT BE COALESCED. competitorAmmo already refuses with
+   * "we do not know what this business sells yet", which is the honest failure. A default here
+   * would file a second avatar's evidence under the first one's market, permanently.
+   */
+  buyerMarket: string | null;
 
   seededFrom: string | null;
   confirmedAt: string | null;
@@ -74,7 +82,7 @@ const COLUMNS =
   "buyer_noun_singular, buyer_noun_plural, offer_noun_singular, offer_noun_plural, " +
   "business_noun, visit_noun, vocabulary, vocabulary_source, vocabulary_confirmed_at, " +
   "lane_name, launcher_label, hard_lines, presence_platform_keys, question_set_preset, " +
-  "seeded_from, confirmed_at";
+  "seeded_from, confirmed_at, buyer_market";
 
 type Row = Record<string, unknown>;
 
@@ -159,6 +167,7 @@ function resolve(row: Row): AudienceResult {
         ? (row.presence_platform_keys as string[])
         : [],
       questionSetPreset: str(row.question_set_preset),
+      buyerMarket: str(row.buyer_market),
       seededFrom: str(row.seeded_from),
       confirmedAt: str(row.confirmed_at),
     },
@@ -293,6 +302,7 @@ export async function seedClientAudience(args: {
       hard_lines: preset.hardLines,
       presence_platform_keys: preset.presence,
       question_set_preset: preset.questionSet,
+      buyer_market: preset.buyerMarket,
       vocabulary_source: "preset",
       seeded_from: args.presetKey,
       seeded_at: new Date().toISOString(),

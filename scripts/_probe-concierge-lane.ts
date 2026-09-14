@@ -637,6 +637,8 @@ async function booking(): Promise<void> {
     },
     hardLines: [],
     laneName: "AI Visibility Concierge", launcherLabel: "Check my visibility",
+    // SRT is an agency and its buyers run med spas. The two are different on purpose.
+    buyerMarket: "med-spa",
   };
 
   const fallback = "https://srtagency.com/onboarding2?utm_source=concierge";

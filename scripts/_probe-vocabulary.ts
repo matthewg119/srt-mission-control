@@ -223,6 +223,29 @@ function presets(): void {
     !AUDIENCE_PRESETS.aeo_agency_owner.presence.includes("realself")
   );
 
+  // ‼️ THE MARKET IS NOT THE CLIENT. This is the axis a second avatar accumulates its own
+  // competitor data and posts under, so getting it wrong does not fail loudly, it files one
+  // avatar's evidence under another's market and keeps doing it.
+  check(
+    "the agency preset is ABOUT the med spa market, though the business is an agency",
+    AUDIENCE_PRESETS.aeo_agency_owner.buyerMarket === "med-spa" &&
+      AUDIENCE_PRESETS.aeo_agency_owner.business === "agency"
+  );
+  check(
+    "a restaurant audience is about a different market entirely",
+    AUDIENCE_PRESETS.restaurant_diner.buyerMarket !== AUDIENCE_PRESETS.aeo_agency_owner.buyerMarket
+  );
+  check(
+    "every preset that decides a stance also names its market",
+    Object.values(AUDIENCE_PRESETS).every((x) => !x.stance || Boolean(x.buyerMarket))
+  );
+  // serviceKey() folds the stored slug before marketKeys() expands it to the synonym cluster, so
+  // the spelling only has to be recognisable. med-spa and medspa both fold to medspa.
+  check(
+    "the stored market slug normalises into the market data",
+    AUDIENCE_PRESETS.aeo_agency_owner.buyerMarket!.toLowerCase().replace(/[^a-z0-9]+/g, "") === "medspa"
+  );
+
   console.log("\n4. proposePreset proposes. It does not decide.");
 
   const agency = proposePreset("aeo-agency-med-spa");

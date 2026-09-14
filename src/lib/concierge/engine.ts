@@ -228,16 +228,19 @@ export function makeExecutor(ctx: ExecutorContext) {
       // a domain is the inference for-prospect.ts calls out as the one that puts a med spa's rivals
       // in a plumber's inbox.
       //
-      // ‼️ KNOWN GAP, LEFT HARDCODED ON PURPOSE 2026-09-14. This is the market the BUYER'S OWN
-      // BUSINESS operates in, and client_audiences has no noun for it. Its vocabulary describes the
-      // buyer (buyer_noun "med spa owner") and what the CLIENT sells them (offer_noun "service"),
-      // neither of which is the market to look rivals up in. Deriving it by stripping " owner" off
-      // the buyer noun would be string surgery on copy a person typed.
+      // ‼️ THE GAP RECORDED HERE ON 2026-09-14 IS CLOSED. This is the market the BUYER'S OWN
+      // BUSINESS competes in, and it is now client_audiences.buyer_market, seeded from the preset
+      // and read through the config. It was the fourth and last of four independent routes to
+      // "this client is a med spa", and the only one that could not be fixed without a column:
+      // the vocabulary describes the buyer and what the client sells them, and neither of those
+      // is a market to look rivals up in.
       //
-      // It is correct today because this lane is published to med spa owners and to nobody else.
-      // The day SRT sells AEO to restaurants it is wrong, and the fix is a column on the audience
-      // row, not a cleverer default here. Recorded rather than papered over.
-      const service = String(input.service ?? "").slice(0, 60).trim() || "medspa";
+      // ‼️ NO FALLBACK, AND THE EMPTY STRING IS DELIBERATE. competitorAmmo already answers a
+      // blank service with "we do not know what this business sells yet", which is true. A
+      // default would file a second avatar's evidence under the first avatar's market and keep
+      // doing it silently, which is the opposite of what the market layer is being built for.
+      const service =
+        String(input.service ?? "").slice(0, 60).trim() || (ctx.config.buyerMarket ?? "");
 
       const ammo = await conciergeAmmo({
         audience: "owner",
