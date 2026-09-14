@@ -37,7 +37,9 @@ import {
   isFirstParty,
   type EvidenceRef,
 } from "@/lib/clients/page-evidence";
-import type { EvidenceClaim } from "@/lib/hub/draft-page";
+import { bodySections, type EvidenceClaim } from "@/lib/hub/draft-page";
+import { checkPlacement } from "@/lib/hub/keyword-placement";
+import { schemaForPage } from "@/lib/hub/jsonld";
 import { offerForPage } from "@/lib/concierge/for-client";
 
 /**
@@ -370,6 +372,21 @@ function checkThin(answerMd: string): GateCheck {
 }
 
 /**
+ * How much of the page one question term is allowed to be.
+ *
+ * ‼️ RAISED FROM 3.5% TO 6% ON 2026-09-14, AND IT IS NOT A WEAKENING. It was written when nothing
+ * placed a keyword deliberately: any repetition was drift, so a low bar cost nothing. As of the
+ * same day the primary keyword is REQUIRED in the title, the H1, the meta, the first sentence and
+ * at least one H2, and the sections each carry their own long tail. That is placement somebody
+ * chose, and at 3.5% the check fired on pages that were doing exactly what they were told, which
+ * trains a person to ignore it.
+ *
+ * 6% is still roughly one in every sixteen words. Stuffing looks nothing like that: the live case
+ * this check was built for ran past 9%.
+ */
+const KEYWORD_RATE_LIMIT = 0.06;
+
+/**
  * Is the question's own wording hammered into the body?
  *
  * The tell of a page written to rank rather than to answer. Measured on the rarest word in the
@@ -396,7 +413,7 @@ function checkKeywordShaped(question: string, answerMd: string): GateCheck {
     }
   }
 
-  if (worstRate <= 0.035) {
+  if (worstRate <= KEYWORD_RATE_LIMIT) {
     return {
       key: "keyword_shaped",
       tier: "warn",
@@ -415,6 +432,63 @@ function checkKeywordShaped(question: string, answerMd: string): GateCheck {
       `"${worstWord}" is ${(worstRate * 100).toFixed(1)}% of the page. That reads as written for a ` +
       `search engine rather than for the person who asked, and an engine reading it will think so too.`,
   };
+}
+
+/**
+ * Did the phrase this page was planned around actually reach the page?
+ *
+ * ‼️ WARN, AND IT MUST NEVER BECOME A BLOCK. It sits directly beside keyword_shaped and the two
+ * pull in opposite directions on purpose: one says the keyword has to be present in eight specific
+ * places, the other says it must not be everywhere. Between them is a page aimed at a phrase and
+ * written for a person. Blocking on either would make the pair a trap, because satisfying one
+ * fully breaks the other, and evidence is the only thing that blocks here.
+ *
+ * ‼️ NO KEYWORD IS A SKIP, NOT A FAILURE. A page dictated straight into the body by the person who
+ * does the work never went through the plan and has no target phrase. That is the best case this
+ * product has, exactly as the null evidence_map note says, and failing it for missing a field the
+ * planner writes would punish the behaviour the lane exists to encourage.
+ */
+function checkKeywordPlacement(args: {
+  keyword: string | null;
+  slug: string | null;
+  title: string | null;
+  h1: string | null;
+  metaDescription: string | null;
+  answerMd: string;
+  pillarAnchor: string | null;
+  schema: string | null;
+}): GateCheck {
+  if (!args.keyword?.trim()) {
+    return {
+      key: "keyword_placement",
+      tier: "warn",
+      status: "skip",
+      detail: "This page is not aimed at a planned keyword, so there is nothing to place.",
+    };
+  }
+
+  const res = checkPlacement({
+    keyword: args.keyword.trim(),
+    slug: args.slug,
+    title: args.title,
+    h1: args.h1,
+    metaDescription: args.metaDescription,
+    answerMd: args.answerMd,
+    pillarAnchor: args.pillarAnchor,
+    schema: args.schema,
+  });
+
+  if (!res.missing.length) {
+    return { key: "keyword_placement", tier: "warn", status: "pass", detail: res.detail };
+  }
+
+  // The slug is called out separately because it is the one slot that stops being fixable. Every
+  // other place can be edited on a published page; the URL cannot, without a 404.
+  const published = res.missing.includes("slug")
+    ? " The slug can only be changed before this page is published."
+    : "";
+
+  return { key: "keyword_placement", tier: "warn", status: "fail", detail: `${res.detail}${published}` };
 }
 
 function checkFirstPartyRatio(
@@ -632,10 +706,54 @@ interface PageRow {
   id: string;
   title: string;
   question: string;
+  slug: string;
   answer_md: string;
   meta_description: string | null;
   evidence_map: EvidenceClaim[] | null;
   lead_magnet_key: string | null;
+}
+
+/** What the plan decided this page was aimed at. Null for a page that was never on a plan. */
+interface PlanAim {
+  targetKeyword: string | null;
+  headline: string | null;
+  /** The pillar links a support using the support's own working title. See plan-links.ts. */
+  workingTitle: string | null;
+  role: "pillar" | "support" | null;
+}
+
+/**
+ * The plan row behind this page, if there is one.
+ *
+ * ‼️ ITS OWN SELECT, AND IT DEGRADES TO NULL. Same rule pages.ts states over `outline`: PostgREST
+ * fails a WHOLE select on one unknown column, so folding headline and target_keyword into the
+ * page read above would take the entire gate down on any database where
+ * docs/2026-09-12-client-headlines.sql has not run. Separate, a missing column costs one warn-tier
+ * check that says "not aimed at a keyword" instead.
+ */
+async function planAimFor(clientId: string, pageId: string): Promise<PlanAim | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("target_keyword, headline, working_title, role")
+    .eq("client_id", clientId)
+    .eq("page_id", pageId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      `[hub/page-gate] plan aim read failed (${error.message}). If this names headline, ` +
+        `docs/2026-09-12-client-headlines.sql has not been run on this database.`
+    );
+    return null;
+  }
+  if (!data) return null;
+
+  return {
+    targetKeyword: (data.target_keyword as string | null) ?? null,
+    headline: (data.headline as string | null) ?? null,
+    workingTitle: (data.working_title as string | null) ?? null,
+    role: (data.role as "pillar" | "support" | null) ?? null,
+  };
 }
 
 /**
@@ -651,7 +769,7 @@ export async function runGate(
 ): Promise<{ ok: true; run: GateRun } | { ok: false; error: string }> {
   const { data: pageData, error: pageError } = await supabaseAdmin
     .from("client_pages")
-    .select("id, title, question, answer_md, meta_description, evidence_map, lead_magnet_key")
+    .select("id, title, question, slug, answer_md, meta_description, evidence_map, lead_magnet_key")
     .eq("id", pageId)
     .eq("client_id", clientId)
     .maybeSingle();
@@ -674,6 +792,30 @@ export async function runGate(
 
   const evidence = await loadNumberedEvidence(clientId, pageId);
   const evidenceMap = Array.isArray(page.evidence_map) ? page.evidence_map : null;
+  const aim = await planAimFor(clientId, pageId);
+
+  // ‼️ THE REAL SCHEMA, BUILT BY THE FUNCTION THAT RENDERS IT, never an approximation of it. The
+  // point of the schema slot is that the keyword survives into the markup an engine parses, and a
+  // second implementation here would eventually check markup no page emits.
+  //
+  // The host is deliberately a placeholder: schemaForPage puts the URL in `url` and `@id`, and a
+  // check about which WORDS reached the markup must not depend on which domain it was rendered
+  // for, or every gate run before DNS would read differently from every one after.
+  const schema = JSON.stringify(
+    schemaForPage({
+      sections: bodySections(body),
+      question: page.question ?? "",
+      headline: aim?.headline ?? null,
+      title: page.title ?? "",
+      answerText: body,
+      metaDescription: page.meta_description,
+      url: `https://hub.invalid/${page.slug ?? ""}`,
+      authorName: clientName,
+      datePublished: null,
+      dateModified: null,
+      targetKeyword: aim?.targetKeyword ?? null,
+    })
+  );
 
   const checks: GateCheck[] = [
     checkNoEvidence(evidence),
@@ -683,6 +825,19 @@ export async function runGate(
     await checkDuplicate(clientId, pageId, body),
     checkThin(body),
     checkKeywordShaped(page.question ?? "", body),
+    checkKeywordPlacement({
+      keyword: aim?.targetKeyword ?? null,
+      slug: page.slug ?? null,
+      title: page.title ?? null,
+      h1: aim?.headline ?? null,
+      metaDescription: page.meta_description,
+      answerMd: body,
+      // Only a support is linked FROM a pillar, and the anchor it is linked with is its own
+      // working title (plan-links.ts anchorFor). A pillar has no such anchor, so the slot
+      // does not apply to it and is skipped rather than failed.
+      pillarAnchor: aim?.role === "support" ? aim.workingTitle : null,
+      schema,
+    }),
     checkFirstPartyRatio(evidenceMap, evidence),
     checkHouseStyle({
       title: page.title ?? "",

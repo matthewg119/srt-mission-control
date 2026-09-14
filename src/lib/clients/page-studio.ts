@@ -39,6 +39,7 @@ import {
   appendPageBody,
   listAllForBoard,
   undoLastAppend,
+  replacePageBody,
   readPageOutline,
   setPageOutline,
   type ClientPage,
@@ -375,7 +376,8 @@ function howToLines(): string[] {
     "  3. A number claims an approved page, and five framings of the anchor are written for it. `magnet 1` picks one.",
     "  4. `outline` writes the skeleton and asks for the gaps one at a time. Talk or type; `next` skips one.",
     "  5. `draft` writes the page from your answers, `check` runs the quality gate, `done` finishes.",
-    "`keywords` shows the ranked phrases. `undo` takes the last thing added to the page back out. `cancel` drops this thread.",
+    "  6. To edit it outside Slack: `text` prints the whole body to copy, `replace: <the edited body>` puts it back, `preview` opens it.",
+    "`keywords` shows the ranked phrases. `undo` takes the last thing added back out, or undoes a whole `replace:`. `cancel` drops this thread.",
   ];
 }
 
@@ -1001,6 +1003,26 @@ async function undoCommand(session: Session): Promise<void> {
     return;
   }
 
+  // ‼️ A PARKED BODY WINS, AND undoLastAppend CANNOT DO THIS JOB. It splits answer_md on blank
+  // lines and pops the LAST PARAGRAPH, which is right after an append and actively wrong after a
+  // `replace:`: it would strip a paragraph off the NEW body and the old one would be gone for
+  // good. So a replace parks what it overwrote and `undo` puts that back whole, clearing the park
+  // so a second `undo` means what it has always meant.
+  const parked = await readUndoBody(session.threadTs);
+  if (parked !== null) {
+    const restored = await replacePageBody(session.clientId, session.pageId, parked);
+    if (!restored.ok) {
+      await say(session.threadTs, `:warning: ${restored.error}`);
+      return;
+    }
+    await writeUndoBody(session.threadTs, null);
+    await say(
+      session.threadTs,
+      `Put the body back as it was before the replace. The page is now ${restored.words} words.`
+    );
+    return;
+  }
+
   const res = await undoLastAppend(session.clientId, session.pageId);
   if (!res.ok) {
     await say(session.threadTs, `:warning: ${res.error}`);
@@ -1024,6 +1046,184 @@ async function undoCommand(session: Session): Promise<void> {
 
   const preview = res.removed.length > 120 ? `${res.removed.slice(0, 120)}…` : res.removed;
   await say(session.threadTs, `Took back out: "${preview}". The page is now ${res.words} words.`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The round trip: `text` out, edit anywhere, `replace:` back in, `preview` to look
+//
+// ‼️ THE LANE COULD ONLY EVER ADD. Everything a person typed was appended and `undo` popped the
+// last paragraph, so the only way to restructure a page was the board's Edit form in a browser.
+// That is fine for a dictated sentence and hopeless for a 14-section page somebody wants to
+// rewrite in an editor. These three verbs are the way out and back.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where `undo` gets the body back from after a `replace:`.
+ *
+ * ‼️ READ AND WRITTEN IN ITS OWN SELECT, NEVER ADDED TO readSession's COLUMN LIST. Same rule the
+ * `outline` column is held to in pages.ts: PostgREST fails a WHOLE select on one unknown column,
+ * and readSession is what every message in this channel goes through. Folding undo_body in there
+ * would make the entire lane go silent on any database where this migration has not run, which is
+ * exactly the failure the studio_mode note above it describes.
+ */
+async function readUndoBody(threadTs: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_studio_sessions")
+    .select("undo_body")
+    .eq("thread_ts", threadTs)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      `[page-studio] undo_body read failed (${error.message}). If this names undo_body, ` +
+        `the 2026-09-14 migration has not been run on this database.`
+    );
+    return null;
+  }
+  return (data?.undo_body as string | null) ?? null;
+}
+
+async function writeUndoBody(threadTs: string, body: string | null): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("page_studio_sessions")
+    .update({ undo_body: body, updated_at: new Date().toISOString() })
+    .eq("thread_ts", threadTs);
+  if (error) console.error(`[page-studio] undo_body write failed: ${error.message}`);
+}
+
+/**
+ * The whole body, in one block somebody can select and copy.
+ *
+ * ‼️ ONE MESSAGE AND ONE FENCE, NOT A PRETTY RENDER. The entire point is that what comes out can
+ * be pasted into an editor and sent back through `replace:` unchanged. Slack renders markdown
+ * inside a normal message, so a body posted plainly comes back with its "##" turned into
+ * formatting and its structure gone. A fence is the only thing that survives the round trip.
+ */
+async function textCommand(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `text` prints that page's body.");
+    return;
+  }
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("answer_md, title")
+    .eq("id", session.pageId)
+    .eq("client_id", session.clientId)
+    .maybeSingle();
+
+  const body = ((page?.answer_md as string | null) ?? "").trim();
+  if (!body) {
+    await say(session.threadTs, "That page has no body yet, so there is nothing to copy out.");
+    return;
+  }
+
+  // ‼️ SLACK REFUSES A MESSAGE OVER 40k CHARACTERS AND SAYS msg_too_long. A 14-section page at the
+  // top of its range is around 8k, so this is headroom rather than a real limit, but a body that
+  // somehow exceeded it would fail with an error naming nothing a person here can act on.
+  const LIMIT = 38_000;
+  if (body.length > LIMIT) {
+    await say(
+      session.threadTs,
+      `:warning: That body is ${body.length} characters, which is too long for one Slack message. ` +
+        `Edit it on the client board instead.`
+    );
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    `*${(page?.title as string) ?? "This page"}*, ${body.split(/\s+/).filter(Boolean).length} words. ` +
+      `Copy it out, edit it anywhere, and send it back with \`replace:\` and the whole thing after it.\n` +
+      "```\n" +
+      body +
+      "\n```"
+  );
+}
+
+/**
+ * Put an edited body back, word for word.
+ *
+ * ‼️ IT DOES NOT CALL savePage, AND replacePageBody EXISTS SO IT NEVER HAS TO. See that function's
+ * own note: test-onboarding-artifacts.ts asserts the literal string does not appear in this file,
+ * because savePage is the path a MODEL's output takes and it can write a title, a question, a meta
+ * description and an evidence map. This writes one field from text a person pasted.
+ *
+ * ‼️ READ OFF THE RAW TEXT, exactly as `add:` is, so backticks, "##" and everything else land as
+ * typed. Going through unwrapFormatting here would eat the fence a person pasted back from `text`.
+ */
+async function replaceCommand(session: Session, body: string, messageTs: string): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `replace:` puts an edited body back.");
+    return;
+  }
+
+  // A body pasted out of `text`'s fence usually comes back inside one. Strip a fence that wraps
+  // the WHOLE message and nothing else: a fence in the middle is part of what he wrote.
+  const fenced = /^\s*```(?:[a-z]*\n)?([\s\S]*?)```\s*$/i.exec(body);
+  const next = (fenced ? fenced[1] : body).trim();
+
+  const res = await replacePageBody(session.clientId, session.pageId, next);
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  // Parked BEFORE anything else can fail, so `undo` is armed even if the source filing below
+  // throws. Losing the ability to undo a replace is the worst outcome available here.
+  await writeUndoBody(session.threadTs, res.previous);
+
+  // ‼️ FILED AS A SOURCE FOR THE REASON append() FILES ONE. Without this row the gate reads a page
+  // he wrote himself as a page with nothing behind it, and orphan_numbers would refuse a price he
+  // put there on purpose. Fire and forget: a missing source row must not lose the edit.
+  void recordSource({
+    clientId: session.clientId,
+    pageId: session.pageId,
+    sourceType: "CLIENT_VOICE",
+    sourceContent: next,
+    topic: "Dictated straight into the page",
+    collectedVia: "slack_typed",
+    slackTs: messageTs,
+  }).catch((e) => console.error("[page-studio] replace source filing failed:", (e as Error).message));
+
+  await say(
+    session.threadTs,
+    `Replaced. The page is now ${res.words} words. \`undo\` puts the old body back, \`check\` runs the gate.`
+  );
+}
+
+/** Where to look at the page as a reader would. */
+async function previewCommand(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `preview` links to that page.");
+    return;
+  }
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("slug, answer_md, status")
+    .eq("id", session.pageId)
+    .eq("client_id", session.clientId)
+    .maybeSingle();
+
+  const slug = (page?.slug as string | null) ?? "";
+  if (!slug) {
+    await say(session.threadTs, "That page has no slug yet, so there is nothing to open.");
+    return;
+  }
+
+  // The same URL the pre-call draft summary posts. Built through appUrl() so a local run does not
+  // put a localhost link in a production channel, which has happened once already.
+  const url = `${appUrl()}/dashboard/clients/${session.clientId}/preview/${slug}`;
+  const body = ((page?.answer_md as string | null) ?? "").trim();
+  const state =
+    page?.status === "published"
+      ? "It is published."
+      : body
+        ? "It is still a draft, and nothing here publishes it."
+        : "It has no body yet, so the page will be empty.";
+
+  await say(session.threadTs, `${url}\n${state}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2439,6 +2639,14 @@ export async function handlePageStudioEvent(args: {
     return true;
   }
 
+  // `replace: <whole body>`, beside `add:` and read off the RAW text for the same reason: what
+  // follows the colon is the page, verbatim, fences and "##" included.
+  const replaceCmd = /^\s*replace\s*:\s*([\s\S]+)$/i.exec(text);
+  if (replaceCmd && session.mode === "body") {
+    await replaceCommand(session, replaceCmd[1], args.messageTs);
+    return true;
+  }
+
   if (/^ask$/i.test(command)) {
     await startInterview(session);
     return true;
@@ -2454,6 +2662,14 @@ export async function handlePageStudioEvent(args: {
     return true;
   }
 
+  // ‼️ ANCHORED AT BOTH ENDS, like everything else in this dispatch. "text me the draft" and
+  // "text her back" are both things somebody types into a channel about writing, and an unanchored
+  // /text/ would swallow them into the page. _probe-page-studio.ts holds those as fixtures.
+  if (/^text$/i.test(command)) {
+    await textCommand(session);
+    return true;
+  }
+
   if (/^draft$/i.test(command)) {
     await draft(session);
     return true;
@@ -2461,6 +2677,11 @@ export async function handlePageStudioEvent(args: {
 
   if (/^check$/i.test(command)) {
     await check(session);
+    return true;
+  }
+
+  if (/^preview$/i.test(command)) {
+    await previewCommand(session);
     return true;
   }
 

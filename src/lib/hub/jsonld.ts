@@ -48,12 +48,23 @@ export function localBusinessJsonLd(client: HubClient, host: string): Json {
 }
 
 /**
- * A QAPage, not an FAQPage.
+ * A QAPage, for a page that genuinely answers ONE question.
  *
- * Google restricted FAQPage rich results to authoritative government and health sites in
- * 2023, and a page that answers exactly one question is a QAPage by definition. The markup
- * still parses as a question-and-answer pair for engines that read it directly, which is
- * the audience that matters here.
+ * ‼️ THIS USED TO BE THE ONLY CHOICE HERE, AND THE 2023 REASONING THAT MADE IT SO IS STILL TRUE.
+ * It read: Google restricted FAQPage RICH RESULTS to authoritative government and health sites in
+ * 2023, and a page that answers exactly one question is a QAPage by definition. Both halves still
+ * hold. What changed on 2026-09-14 is the page, not the rule: an outline is now 6 to 14 sections,
+ * each one a long-tail question with its own keyword, so most pages are no longer one question
+ * with one answer and calling them a QAPage would describe something that is not there.
+ *
+ * ‼️ THE RICH-RESULT RESTRICTION IS NOT A REASON TO AVOID FAQPage HERE, and reading it as one was
+ * the trap. The audience for this markup is an engine PARSING the page to answer somebody, not
+ * Google deciding whether to draw an accordion in a blue link. Losing a rich result we were never
+ * eligible for costs nothing; describing fourteen question-and-answer pairs as one costs the thing
+ * the markup exists for.
+ *
+ * So: multi-section pages get Article plus FAQPage, single-question pages keep QAPage, and
+ * `schemaForPage` below is the one place that decides which.
  */
 export function questionAnswerJsonLd(args: {
   question: string;
@@ -78,6 +89,130 @@ export function questionAnswerJsonLd(args: {
     }),
     datePublished: args.datePublished,
   });
+}
+
+/** One "## " heading and the prose under it. Mirrors bodySections() in draft-page.ts. */
+export interface SchemaSection {
+  heading: string;
+  body: string;
+}
+
+/**
+ * The page itself, as a thing with an author, a subject and a date.
+ *
+ * ‼️ `headline` IS THE H1 AND `name` IS THE TITLE, AND THEY ARE DIFFERENT STRINGS ON PURPOSE.
+ * page_plan carries both for the reason the migration comment gives: working_title carries the
+ * KEYWORD and is what internal link anchors show, headline carries the PAIN and is what the reader
+ * sees. Collapsing them here would tell an engine the page is called something no link calls it.
+ *
+ * No `image`, no `Person` author. Same refusal hub-bodies.tsx already records for Person: nothing
+ * structured is on file, and a name pulled from intake's free-text credentials would be invented.
+ */
+export function articleJsonLd(args: {
+  headline: string;
+  name: string;
+  description: string | null;
+  url: string;
+  authorName: string;
+  datePublished: string | null;
+  dateModified: string | null;
+  about: string | null;
+}): Json {
+  return prune({
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: args.headline,
+    name: args.name,
+    description: args.description,
+    url: args.url,
+    mainEntityOfPage: { "@type": "WebPage", "@id": args.url },
+    author: { "@type": "Organization", name: args.authorName },
+    publisher: { "@type": "Organization", name: args.authorName },
+    datePublished: args.datePublished,
+    dateModified: args.dateModified ?? args.datePublished,
+    about: args.about,
+  });
+}
+
+/**
+ * Every "## " heading as a question, with the prose under it as its answer.
+ *
+ * ‼️ THE HEADINGS ARE ALREADY LONG-TAIL QUESTIONS, WHICH IS THE ONLY REASON THIS IS HONEST.
+ * OUTLINE_SYSTEM requires each heading to be phrased as a question a person would type, so an
+ * FAQPage here describes the page that exists rather than dressing up a list of topics as
+ * questions. If that rule is ever relaxed, this has to go with it: an "FAQ" whose questions are
+ * nouns is markup asserting something false.
+ *
+ * Returns null below two pairs, because a "frequently asked questions" block with one entry is a
+ * QAPage wearing the wrong type.
+ */
+export function faqJsonLd(sections: readonly SchemaSection[]): Json | null {
+  const pairs = sections
+    .map((s) => ({ heading: s.heading.trim(), body: s.body.trim() }))
+    .filter((s) => s.heading !== "" && s.body !== "");
+
+  if (pairs.length < 2) return null;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: pairs.map((s) => ({
+      "@type": "Question",
+      name: s.heading,
+      acceptedAnswer: { "@type": "Answer", text: s.body },
+    })),
+  };
+}
+
+/**
+ * Which schema this page gets. The ONE place that decides.
+ *
+ * ‼️ THE SECTION COUNT DECIDES, NOT THE PAGE'S ORIGIN. A page dictated straight into the body by
+ * the provider can have twelve headings and a planned page can end up with one. What the markup
+ * has to describe is the document that exists, so it is read off the body every time.
+ *
+ * Two or more answerable sections: Article plus FAQPage, because the page is a resource made of
+ * question-and-answer pairs and both facts are worth stating. Fewer: QAPage, unchanged since 2023.
+ */
+export function schemaForPage(args: {
+  sections: readonly SchemaSection[];
+  question: string;
+  headline: string | null;
+  title: string;
+  answerText: string;
+  metaDescription: string | null;
+  url: string;
+  authorName: string;
+  datePublished: string | null;
+  dateModified: string | null;
+  targetKeyword: string | null;
+}): Json[] {
+  const faq = faqJsonLd(args.sections);
+  if (!faq) {
+    return [
+      questionAnswerJsonLd({
+        question: args.question,
+        answerText: args.answerText,
+        url: args.url,
+        authorName: args.authorName,
+        datePublished: args.datePublished,
+      }),
+    ];
+  }
+
+  return [
+    articleJsonLd({
+      headline: args.headline?.trim() || args.question,
+      name: args.title,
+      description: args.metaDescription,
+      url: args.url,
+      authorName: args.authorName,
+      datePublished: args.datePublished,
+      dateModified: args.dateModified,
+      about: args.targetKeyword,
+    }),
+    faq,
+  ];
 }
 
 /**

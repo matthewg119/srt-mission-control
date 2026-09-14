@@ -497,6 +497,62 @@ export async function appendPageBody(
 }
 
 /**
+ * Replace a draft's whole body with text somebody wrote outside Slack.
+ *
+ * ‼️ THIS EXISTS SO THE PAGE STUDIO NEVER HAS TO NAME savePage, AND THAT IS NOT A STYLE CHOICE.
+ * scripts/test-onboarding-artifacts.ts asserts the literal string `savePage` does not appear in
+ * page-studio.ts, under the heading "nothing a model returns can be written to the page from
+ * here". savePage is the path a MODEL's output takes: it carries a title, a question, a meta
+ * description and an evidence map, and wiring the studio to it would give the studio a way to
+ * write all of them. This writes one field, from text a person pasted, and can do nothing else.
+ *
+ * ‼️ NOTHING IN THIS FUNCTION READS THE TEXT, same as appendPageBody. It is his words, verbatim,
+ * including whatever he decided to leave in.
+ *
+ * The evidence map is dropped for the reason appendPageBody drops it: the map described a body
+ * that no longer exists, and a stale map is worse than none because `unbacked_claims` would keep
+ * passing on text it never described.
+ *
+ * Returns the body it replaced, so the caller can park it for `undo`. That is the caller's job and
+ * not this function's: page_studio_sessions.undo_body belongs to a thread, and this is also
+ * reachable from places that have no thread.
+ */
+export async function replacePageBody(
+  clientId: string,
+  pageId: string,
+  text: string
+): Promise<{ ok: true; previous: string; words: number } | { ok: false; error: string }> {
+  const body = text.trim();
+  if (!body) return { ok: false, error: "There was nothing to put in its place." };
+
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from("client_pages")
+    .select("id, answer_md, status")
+    .eq("id", pageId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (readError) return { ok: false, error: readError.message };
+  if (!existing) return { ok: false, error: "That page does not exist." };
+  if (existing.status === "published") {
+    return { ok: false, error: "That page is published. Edit it on the client board instead." };
+  }
+
+  const previous = ((existing.answer_md as string | null) ?? "").trim();
+
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ answer_md: body, evidence_map: null, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  bustPages(clientId);
+  return { ok: true, previous, words: body.split(/\s+/).filter(Boolean).length };
+}
+
+/**
  * Take the last appended chunk back out of a draft.
  *
  * ‼️ THE ONE WAY OUT OF A WRONG APPEND THAT DOES NOT NEED THE BOARD. Matthew typed "1" meaning

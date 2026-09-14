@@ -75,6 +75,8 @@ async function main(): Promise<void> {
     ["`body`", /^body$/i],
     ["`draft`", /^draft$/i],
     ["`check`", /^check$/i],
+    ["`text`", /^text$/i],
+    ["`preview`", /^preview$/i],
     ["`magnet more`", /^magnet(?:\s+(.+))?$/i],
     ["`review`", /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i],
     ["`review quotes`", /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i],
@@ -104,8 +106,15 @@ async function main(): Promise<void> {
   // before it ships", "our review tool is live". Anchored at both ends and the plural is
   // deliberately not a command, so all three of those reach the page untouched.
   const REVIEW_CMD = /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i;
+  // ‼️ THE ROUND TRIP, ADDED 2026-09-14, AND `text` IS AS RISKY AS `review` WAS. It is an ordinary
+  // English verb in a channel about writing: "text me the draft", "text her back". Anchored at
+  // both ends like everything else. `replace:` needs the colon for the same reason `add:` does,
+  // so "replace the second paragraph" stays dictation rather than blanking the whole page.
+  const TEXT_CMD = /^text$/i;
+  const PREVIEW_CMD = /^preview$/i;
+  const REPLACE_CMD = /^\s*replace\s*:\s*([\s\S]+)$/i;
 
-  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "review" | "body"]> = [
+  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "review" | "text" | "preview" | "replace" | "body"]> = [
     ["offer", "offer"],
     ["offer: lip filler", "offer"],
     ["offer: lip filler | the one they rebook", "offer"],
@@ -133,20 +142,43 @@ async function main(): Promise<void> {
     ["our review tool is live", "body"],
     ["reviewed it with her yesterday", "body"],
     ["review quotes from last month were better", "body"],
+    // ── the round trip ──
+    ["text", "text"],
+    ["`text`", "text"],
+    ["preview", "preview"],
+    ["replace: ## What it costs\n\nAround 400 a month.", "replace"],
+    ["  replace:   the whole body  ", "replace"],
+    // ‼️ EVERY ONE OF THESE IS DICTATION IN A CHANNEL ABOUT WRITING PAGES, and `replace` blanking
+    // a page it was never asked to blank is the most destructive thing in this dispatch.
+    ["text me the draft when it is done", "body"],
+    ["text her back about the photos", "body"],
+    ["texting is better than calling her", "body"],
+    ["preview night is Thursday", "body"],
+    ["previews go out to the client first", "body"],
+    ["replace the second paragraph with something shorter", "body"],
+    ["replacing the hero image tomorrow", "body"],
   ];
 
   for (const [typed, expected] of argCommands) {
     const c = unwrapFormatting(typed);
-    // The same precedence order as the real dispatch in page-studio.ts.
-    const got = OFFER_CMD.test(c)
-      ? "offer"
-      : AVATAR_CMD.test(c)
-        ? "avatar"
-        : KEYWORDS_CMD.test(c)
-          ? "keywords"
-          : REVIEW_CMD.test(c)
-            ? "review"
-            : "body";
+    // The same precedence order as the real dispatch in page-studio.ts. `replace:` is tested
+    // against the RAW text rather than the unwrapped copy, because that is what the dispatch
+    // does: a body pasted back carries its own backticks and must not be unwrapped.
+    const got = REPLACE_CMD.test(typed)
+      ? "replace"
+      : OFFER_CMD.test(c)
+        ? "offer"
+        : AVATAR_CMD.test(c)
+          ? "avatar"
+          : KEYWORDS_CMD.test(c)
+            ? "keywords"
+            : REVIEW_CMD.test(c)
+              ? "review"
+              : TEXT_CMD.test(c)
+                ? "text"
+                : PREVIEW_CMD.test(c)
+                  ? "preview"
+                  : "body";
     check(got === expected, `${JSON.stringify(typed)} is ${expected}`, got === expected ? undefined : `read as ${got}`);
   }
 
