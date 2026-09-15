@@ -3366,6 +3366,55 @@ import * as visionT from "../src/lib/hub/skin-vision";
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- W4 ---- the five stages of awareness (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { AWARENESS_STAGES, awarenessOf, awarenessTarget, isAwarenessStage } =
+    require("../src/lib/audit-engine/awareness") as typeof import("../src/lib/audit-engine/awareness");
+
+  // ‼️ MATTHEW'S NUMBERING RUNS BACKWARDS FROM THE USUAL FUNNEL: 5 is unaware, 1 is most aware.
+  // A stage list that got "tidied" into 1..5 ascending would invert every label silently.
+  eq("the stages run 5 down to 1", AWARENESS_STAGES.map((s) => s.stage), [5, 4, 3, 2, 1]);
+  eq("5 is unaware", AWARENESS_STAGES[0].name, "unaware");
+  eq("1 is most aware", AWARENESS_STAGES[4].name, "most aware");
+  ok("no em dash in the definitions the classifier is shown",
+    AWARENESS_STAGES.every((s) => !s.means.includes("—") && !s.name.includes("—")));
+
+  ok("a stage is a whole number from 1 to 5", [1, 2, 3, 4, 5].every(isAwarenessStage));
+  ok("and nothing else is", ![0, 6, 2.5, "3", null, undefined].some(isAwarenessStage));
+
+  // The rule, for questions the classifier never saw.
+  eq("a brand query is most aware", awarenessOf("acme med spa reviews", "MARCA"), 1);
+  eq("a comparison is product aware", awarenessOf("botox vs dysport", "COMPARATIVO"), 2);
+  eq("a category search is solution aware", awarenessOf("best med spa in greensboro", "SERVICIO"), 3);
+  eq("how it works is solution aware", awarenessOf("how does morpheus8 work", "INFO"), 3);
+  eq("their own situation is problem aware", awarenessOf("why do i have dark spots on my face", "INFO"), 4);
+  // ‼️ A rule cannot tell "noticed a symptom" from "does not know it is a problem". Only the
+  // classifier, reading the whole business, may say 5.
+  ok("the rule never claims stage 5", (["MARCA", "COMPARATIVO", "INFO", "SERVICIO"] as const).every(
+    (b) => ["is it normal to feel tired", "what causes this", "x", "why am i like this"].every((q) => awarenessOf(q, b) !== 5)
+  ));
+  ok("the rule is deterministic", awarenessOf("what causes acne scars", "INFO") === awarenessOf("what causes acne scars", "INFO"));
+
+  // Lower is closer to buying, so moving a reader forward is the number going DOWN.
+  eq("a page for the unaware leaves them problem aware", awarenessTarget(5), 4);
+  eq("a page moves a reader one stage", awarenessTarget(3), 2);
+  eq("a reader who knows the business has nowhere closer to go", awarenessTarget(1), 1);
+
+  // ‼️ ONE GATE, AND IT SHIPPED WITH THE PROMPT THAT ASKS. A validator demanding a field the prompt
+  // never requested rejects the classification after the crawl and the research are paid for.
+  const classifySrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "audit-engine", "classify.ts"), "utf8");
+  ok("the classifier's schema hint asks for awareness", /"awareness": 1 \| 2 \| 3 \| 4 \| 5/.test(classifySrc));
+  ok("the classifier's system prompt shows the stages", /AWARENESS_STAGES\.map/.test(classifySrc));
+  ok("the awareness check is inside isAuditClassification", /isAwarenessStage\(\(p as AuditPrompt\)\.awareness\)/.test(classifySrc));
+  ok("a rejection tells the retry what was wrong", /describeInvalid: whyNotClassification/.test(classifySrc));
+  const suppliedSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "audit-engine", "supplied-run.ts"), "utf8");
+  ok("the supplied path labels by rule and says so", /awarenessOf\(p\.prompt, block\)/.test(suppliedSrc) && /"rule"/.test(suppliedSrc));
+  const photoSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "photograph.ts"), "utf8");
+  ok("a retest carries the archived label", /awareness: p\.awareness/.test(photoSrc));
+}
+
 
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.

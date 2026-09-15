@@ -27,6 +27,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { normalizePhrase } from "./phrase-quality";
 import { runSuppliedAudit, type SuppliedPrompt } from "@/lib/audit-engine/supplied-run";
+import { isAwarenessStage } from "@/lib/audit-engine/awareness";
 import { COST_PER_QUESTION } from "./client-keywords";
 import {
   KEYED_ENGINES,
@@ -294,6 +295,10 @@ export async function day0PhotographFor(clientId: string): Promise<Day0Photograp
     .map((p) => ({
       prompt: String(p.prompt ?? "").trim(),
       ...(typeof p.keyword_id === "string" ? { keywordId: p.keyword_id } : {}),
+      // The archived label rides along, so a retest is asked at the stage Day 0 was, not relabelled.
+      ...(isAwarenessStage(p.awareness)
+        ? { awareness: p.awareness, awarenessBy: p.awareness_by === "classifier" ? ("classifier" as const) : ("rule" as const) }
+        : {}),
     }))
     .filter((p) => p.prompt.length > 0);
 

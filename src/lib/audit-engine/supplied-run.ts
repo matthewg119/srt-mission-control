@@ -31,6 +31,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { generateSlug } from "./slug";
 import type { AuditBlock, AuditPrompt } from "./classify";
+import { awarenessOf, isAwarenessStage, type AwarenessSource, type AwarenessStage } from "./awareness";
 import type { AuditReportRow } from "./types";
 import {
   KEYED_ENGINES,
@@ -56,6 +57,15 @@ export interface SuppliedPrompt {
    * because a phrase can be re-worded in one place and not the other.
    */
   keywordId?: string;
+  /**
+   * The stage this question was already labelled with, when it has one.
+   *
+   * ‼️ CARRIED SO A RETEST ASKS THE ARCHIVED LABEL, NOT A FRESH ONE. awarenessOf() is deterministic
+   * today, but a rule gets tuned, and a Day 30 comparison by stage would then be measuring the
+   * relabelling as well as the change. Same reason the prompts themselves come off the archived row.
+   */
+  awareness?: AwarenessStage;
+  awarenessBy?: AwarenessSource;
 }
 
 /**
@@ -124,11 +134,19 @@ export async function runSuppliedAudit(args: {
   const website = ((client.website as string | null) || (client.domain as string | null)) ?? null;
   const city = args.city === undefined ? ((client.city as string | null) ?? null) : args.city;
 
-  const rows: AuditPrompt[] = prompts.map((p) => ({
-    block: p.block ?? blockFor(p.prompt, clientName),
-    prompt: p.prompt.trim(),
-    ...(p.keywordId ? { keyword_id: p.keywordId } : {}),
-  })) as AuditPrompt[];
+  const rows: AuditPrompt[] = prompts.map((p) => {
+    const block = p.block ?? blockFor(p.prompt, clientName);
+    // ‼️ THIS PATH NEVER SEES THE CLASSIFIER, so without a rule label half the awareness dataset
+    // (every tracked set, every retest) would be silently null. The label says it is a rule.
+    const labelled = isAwarenessStage(p.awareness);
+    return {
+      block,
+      prompt: p.prompt.trim(),
+      awareness: labelled ? p.awareness : awarenessOf(p.prompt, block),
+      awareness_by: labelled ? (p.awarenessBy ?? "rule") : "rule",
+      ...(p.keywordId ? { keyword_id: p.keywordId } : {}),
+    };
+  }) as AuditPrompt[];
 
   const slug = await generateSlug();
 
