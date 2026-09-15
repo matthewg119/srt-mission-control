@@ -204,17 +204,22 @@ export function headlineFaults(
  */
 export async function clientVocQuotes(clientId: string): Promise<VocQuote[]> {
   const own: VocQuote[] = [];
-  const { data } = await supabaseAdmin
+  // ‼️ `source_content` AND `topic`, THE COLUMNS page_sources ACTUALLY HAS. This selected `content,
+  // label`, which do not exist (docs/2026-08-26-evidence-and-gate.sql), and the error was never read,
+  // so a client's own reviews never reached a single headline: every run fell through to the shared
+  // bank as if the client had no reviews at all. The error is read now, and said.
+  const { data, error } = await supabaseAdmin
     .from("page_sources")
-    .select("content, label")
+    .select("source_content, topic")
     .eq("client_id", clientId)
     .eq("source_type", "CUSTOMER_REVIEW")
     .order("created_at", { ascending: false })
     .limit(MAX_QUOTES);
+  if (error) console.error("[client-headlines] the client's own reviews could not be read:", error.message);
 
   for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-    const text = String(row.content ?? "").trim();
-    if (text) own.push({ text, source: String(row.label ?? "their own customer") });
+    const text = String(row.source_content ?? "").trim();
+    if (text) own.push({ text, source: String(row.topic ?? "their own customer") });
   }
 
   if (own.length >= MAX_QUOTES) return own.slice(0, MAX_QUOTES);

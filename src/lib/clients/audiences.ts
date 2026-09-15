@@ -411,7 +411,7 @@ export async function ensurePrimaryAudienceForAvatar(args: {
         ok: false,
         note:
           `:warning: No audience was created, so the concierge and the headline bank have nothing ` +
-          `to work from. ${proposal.reason}`,
+          `to work from. ${proposal.reason} ${AUDIENCE_REPAIR}`,
       };
     }
 
@@ -449,6 +449,131 @@ export async function ensurePrimaryAudienceForAvatar(args: {
   } catch (e) {
     return { ok: false, note: `:warning: The audience could not be recorded: ${(e as Error).message}` };
   }
+}
+
+/** The sentence every "no audience" refusal ends with, so the repair is always named the same way. */
+export const AUDIENCE_REPAIR =
+  `Reply \`audience: <preset>\` in the avatar step's thread to create it by hand (one of ` +
+  `${Object.keys(AUDIENCE_PRESETS).join(", ")}).`;
+
+/** `audience: restaurant_diner`. Its own prefix; `avatar:` names a buyer, this names the words for them. */
+export const AUDIENCE_PREFIX = /^\s*audience\s*:/i;
+
+/**
+ * Create the client's primary audience from a preset a PERSON named, for the confirmed avatar.
+ *
+ * ‼️ THE REPAIR THAT DID NOT EXIST. ensurePrimaryAudienceForAvatar creates an audience only when
+ * proposePreset maps the client's vertical, so a client whose vertical is not in PRESET_BY_VERTICAL
+ * got no audience and no command could ever create one. Every later step that needs an audience (the
+ * concierge today, the offer from the client_offers cutover on) would then refuse with nowhere to go.
+ *
+ * ‼️ IT NEVER OVERWRITES AN EXISTING AUDIENCE'S WORDS. If this avatar already has an audience seeded
+ * from a different preset, somebody may have edited its nouns since, so this refuses and says so
+ * rather than re-seeding over them. Same preset: it is only promoted.
+ */
+export async function seedAudienceByHand(args: {
+  clientId: string;
+  presetKey: string;
+  by: string;
+}): Promise<{ ok: boolean; message: string }> {
+  const key = args.presetKey.trim();
+  const preset = AUDIENCE_PRESETS[key];
+  if (!preset || key === GENERIC_PRESET_KEY) {
+    return { ok: false, message: `:warning: "${key}" is not a preset. ${AUDIENCE_REPAIR}` };
+  }
+
+  const { confirmedAvatarFor } = await import("./avatars");
+  const avatar = await confirmedAvatarFor(args.clientId);
+  if (!avatar) {
+    return {
+      ok: false,
+      message:
+        ":warning: No avatar is confirmed yet, and an audience is a client aiming at an avatar. " +
+        "Confirm the avatar first (`avatar: <who>`), then this.",
+    };
+  }
+
+  const { data: existing, error: readErr } = await supabaseAdmin
+    .from("client_audiences")
+    .select("id, is_primary, seeded_from")
+    .eq("client_id", args.clientId)
+    .eq("slug", avatar.slug)
+    .maybeSingle();
+  if (readErr) {
+    return { ok: false, message: `:warning: client_audiences is unreadable (${readErr.message}).` };
+  }
+
+  if (existing) {
+    if ((existing.seeded_from as string | null) !== key) {
+      return {
+        ok: false,
+        message:
+          `:warning: *${avatar.label}* already has an audience, seeded from \`${String(existing.seeded_from)}\`. ` +
+          "Nothing was changed: re-seeding would overwrite its words, which somebody may have edited.",
+      };
+    }
+    if (existing.is_primary) {
+      return { ok: true, message: `*${avatar.label}* already has this audience, and it is primary.` };
+    }
+    const failed = await promote(args.clientId, existing.id as string);
+    return failed
+      ? { ok: false, message: `:warning: The audience is on file but could not be made primary: ${failed}` }
+      : { ok: true, message: `:white_check_mark: *${avatar.label}* is now the primary audience.` };
+  }
+
+  const { verticalFor } = await import("./harvest");
+  const resolved = await verticalFor(args.clientId);
+  if (!resolved.ok) {
+    return { ok: false, message: `:warning: No audience was created: ${resolved.error}` };
+  }
+
+  const seeded = await seedClientAudience({
+    clientId: args.clientId,
+    presetKey: key,
+    slug: avatar.slug,
+    label: avatar.label,
+    researchVertical: resolved.vertical,
+    researchAvatarSlug: avatar.slug,
+    isPrimary: false,
+    by: args.by,
+  });
+  if (!seeded.ok || !seeded.audienceId) {
+    return { ok: false, message: `:warning: The audience could not be created: ${seeded.error ?? "no id returned"}` };
+  }
+
+  const failed = await promote(args.clientId, seeded.audienceId);
+  if (failed) {
+    return {
+      ok: false,
+      message: `:warning: The audience was created but could not be made primary: ${failed} Send the same command again to retry.`,
+    };
+  }
+
+  return {
+    ok: true,
+    message:
+      `:white_check_mark: Audience created by hand: *${avatar.label}*, spoken to as a ${preset.buyer[0]}, ` +
+      `from the \`${key}\` preset, by ${args.by}.`,
+  };
+}
+
+/** `audience: <preset>` in the avatar step's thread. Null on a miss, so conversation falls through. */
+export async function handleAudienceThreadReply(args: {
+  clientId: string;
+  stepKey: string | null;
+  text: string;
+  by: string;
+}): Promise<{ ok: boolean; message: string } | null> {
+  if (args.stepKey !== "avatar_confirmed") return null;
+  const lines = args.text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length || !AUDIENCE_PREFIX.test(lines[0])) return null;
+  // One command per message, like offer: and terms: (e9b0f3e).
+  if (lines.length > 1) {
+    return { ok: false, message: ":warning: Nothing changed. `audience:` takes one preset on one line, on its own." };
+  }
+  const key = lines[0].replace(AUDIENCE_PREFIX, "").trim();
+  if (!key) return { ok: false, message: `:warning: Which preset? ${AUDIENCE_REPAIR}` };
+  return seedAudienceByHand({ clientId: args.clientId, presetKey: key, by: args.by });
 }
 
 /** Demote whatever is primary, then promote this one. Returns an error sentence, or null. */

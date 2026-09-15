@@ -1167,6 +1167,36 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // `audience: <preset>` in the avatar step's thread: the hand repair for a client whose vertical
+        // maps to no preset, which otherwise gets no audience and no way to create one.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleAudienceThreadReply } = await import("@/lib/clients/audiences");
+          const seeded = await handleAudienceThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (seeded) {
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "audience",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: seeded.message,
+            });
+            if (!slackOk(posted)) console.error("[slack/events] audience reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { handleAvatarThreadReply } = await import("@/lib/clients/avatars");
           const said = await handleAvatarThreadReply({

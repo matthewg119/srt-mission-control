@@ -642,6 +642,28 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     }
     const label = (ctx.client.primary_avatar_label as string | null) ?? avatar;
     const by = (ctx.client.primary_avatar_confirmed_by as string | null) ?? null;
+
+    // ‼️ CONFIRMING THE AVATAR CAN SUCCEED WITH NO AUDIENCE, AND THE BLOCK BELONGS HERE, WHERE THE FIX
+    // IS. confirmAvatar returns ok even when its audience could not be created (no preset maps this
+    // client's vertical). The concierge needs an audience, and the offer lives under one, so without
+    // this the board would stall several steps later with nothing to point at. `audience: <preset>` is
+    // the repair, typed in this thread.
+    const { data: primary, error: audErr } = await supabaseAdmin
+      .from("client_audiences")
+      .select("id")
+      .eq("client_id", ctx.clientId)
+      .eq("is_primary", true)
+      .maybeSingle();
+    if (audErr) return dbUnreachable("client_audiences");
+    if (!primary) {
+      const { AUDIENCE_REPAIR } = await import("./audiences");
+      return notYet(
+        "a primary client_audiences row for this client",
+        `the avatar ${label} is confirmed, but no audience was created for it, so nothing knows what to call this client's buyers`,
+        `No preset matched this client's vertical. ${AUDIENCE_REPAIR}`
+      );
+    }
+
     return verified(
       `primary avatar ${avatar} (${label}) confirmed${by ? ` by ${by}` : ""}`,
       "Everything downstream is aimed at this customer: the phrase harvest, the tracked question " +

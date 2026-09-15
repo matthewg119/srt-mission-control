@@ -3464,6 +3464,41 @@ import * as visionT from "../src/lib/hub/skin-vision";
 }
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C0 ---- a client with no preset can still get an audience (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { AUDIENCE_PREFIX, AUDIENCE_REPAIR, handleAudienceThreadReply, seedAudienceByHand } =
+    require("../src/lib/clients/audiences") as typeof import("../src/lib/clients/audiences");
+
+  ok("`audience:` is its own prefix", AUDIENCE_PREFIX.test("audience: restaurant_diner"));
+  ok("and `avatar:` is not it", !AUDIENCE_PREFIX.test("avatar: taco lovers"));
+  ok("the repair names every preset", ["aeo_agency_owner", "med_spa_patient", "restaurant_diner"].every((k) => AUDIENCE_REPAIR.includes(k)));
+  ok("the repair has no em dash", !AUDIENCE_REPAIR.includes("—"));
+
+  // Every path below returns before touching the database.
+  const wrongStep = await handleAudienceThreadReply({ clientId: "x", stepKey: "offer_locked", text: "audience: restaurant_diner", by: "t" });
+  ok("only the avatar step's thread takes it", wrongStep === null);
+  const chat = await handleAudienceThreadReply({ clientId: "x", stepKey: "avatar_confirmed", text: "the audience: is diners", by: "t" });
+  ok("a sentence is conversation", chat === null);
+  const two = await handleAudienceThreadReply({ clientId: "x", stepKey: "avatar_confirmed", text: "audience: restaurant_diner\navatar: diners", by: "t" });
+  ok("one command per message", two !== null && !two.ok && /on its own/.test(two.message));
+  const bogus = await seedAudienceByHand({ clientId: "x", presetKey: "taco_people", by: "t" });
+  ok("an unknown preset is refused and the repair named", !bogus.ok && bogus.message.includes("restaurant_diner"));
+  const generic = await seedAudienceByHand({ clientId: "x", presetKey: "GENERIC", by: "t" });
+  ok("GENERIC decides nothing, so nothing seeds from it", !generic.ok);
+
+  const verifySrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "step-verify.ts"), "utf8");
+  const avatarVerifier = verifySrc.slice(verifySrc.indexOf("avatar_confirmed: async"), verifySrc.indexOf("offer_proposed: async"));
+  ok("the avatar step refuses [Done] without a primary audience", /is_primary", true/.test(avatarVerifier) && /AUDIENCE_REPAIR/.test(avatarVerifier));
+  ok("and a failed read is a fault, not missing work", /dbUnreachable\("client_audiences"\)/.test(avatarVerifier));
+
+  const headlineSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-headlines.ts"), "utf8");
+  const vocFn = headlineSrc.slice(headlineSrc.indexOf("export async function clientVocQuotes"), headlineSrc.indexOf("interface HeadlineContext"));
+  // ‼️ page_sources has source_content and topic. `content, label` failed silently for weeks.
+  ok("a client's own reviews are read from the columns that exist", /select\("source_content, topic"\)/.test(vocFn) && !/select\("content/.test(vocFn));
+}
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 //
