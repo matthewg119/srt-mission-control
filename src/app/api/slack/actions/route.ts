@@ -226,6 +226,9 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         reportId: action.value ?? "",
       });
+    case "client_import_archive":
+    case "client_import_fresh":
+      return duplicateImportAction({ actionId: action.action_id, channel, slackTs, userId, value: action.value ?? "" });
     case "fo_track":
     case "fo_ignore":
       return followupTrackAction({
@@ -1174,6 +1177,47 @@ async function auditPitchAction(args: {
  * with no audit behind it. Tracking is what makes a row schedulable — until
  * this fires, an unconfirmed prospect is never drafted for and never due.
  */
+/**
+ * Import data from duplicate / Keep it fresh, on the duplicate onboarding card (src/lib/clients/duplicate-card.ts).
+ *
+ * ‼️ ANSWERED IN THE CARD'S THREAD, AND THE IMPORT RUNS AFTER THE ACK. An import is a few dozen writes and
+ * Slack gives three seconds, so the press is acknowledged at once and the result is posted when it is done.
+ * Pressing it twice is safe: an archive is claimed before it is imported and refuses every import after that.
+ */
+async function duplicateImportAction(args: {
+  actionId: string; channel: string; slackTs: string; userId: string; value: string;
+}): Promise<NextResponse> {
+  const { readImportValue } = await import("@/lib/clients/duplicate-card");
+  const target = readImportValue(args.value);
+  if (!target) return NextResponse.json({ ok: true });
+
+  if (args.actionId === "client_import_fresh") {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      `:seedling: <@${args.userId}> kept this onboarding fresh. The archive stays where it is and can still be imported.`
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  waitUntil(
+    (async () => {
+      const { importFromArchive } = await import("@/lib/clients/archive");
+      const res = await importFromArchive({ archiveId: target.archiveId, clientId: target.clientId, by: `<@${args.userId}>` }).catch(
+        (e) => ({ ok: false as const, error: (e as Error).message })
+      );
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        res.ok
+          ? [`:recycle: <@${args.userId}> imported the archived data into this onboarding:`, ...res.lines.map((l) => `  • ${l}`)].join("\n")
+          : `:warning: The import did not run: ${res.error}`
+      );
+    })()
+  );
+  return NextResponse.json({ ok: true });
+}
+
 async function followupTrackAction(args: {
   actionId: string; channel: string; slackTs: string; prospectId: string;
 }): Promise<NextResponse> {

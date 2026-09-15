@@ -582,6 +582,25 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
  * and a phrase that reaches question_bank can end up in a set frozen at Day 0. Dropping a file
  * into a step's thread is not something anybody does by accident, and it is scoped to THAT step.
  */
+/**
+ * ‼️ ANY READABLE DOCUMENT, NOT ONLY A PDF (2026-09-15). SRT's deep research came back from ChatGPT as a
+ * .txt file dropped into step 11 with no words typed, and this read PDFs only, so it was filed and nothing
+ * answered. A research tool exports whatever it exports: PDF, Word, text and Markdown all read here.
+ */
+/** PDF, Word, text or Markdown: what extractFileText reads. */
+export function isResearchDocument(filename: string, contentType: string): boolean {
+  return (
+    /pdf|wordprocessingml|^text\//i.test(contentType) || /\.(pdf|docx|txt|md|markdown)$/i.test(filename)
+  );
+}
+
+export async function ingestResearchFile(args: {
+  clientId: string;
+  slackFileId: string;
+}): Promise<ResearchIntakeResult & { filename?: string; extraLines?: string[] }> {
+  return ingestResearchPdf(args);
+}
+
 export async function ingestResearchPdf(args: {
   clientId: string;
   slackFileId: string;
@@ -598,8 +617,8 @@ export async function ingestResearchPdf(args: {
 
   const filename = (doc.filename as string | null) ?? "that file";
   const contentType = (doc.content_type as string | null) ?? "";
-  if (!/pdf/i.test(contentType) && !/\.pdf$/i.test(filename)) {
-    return { ok: false, error: "that is not a PDF", filename };
+  if (!isResearchDocument(filename, contentType)) {
+    return { ok: false, error: "that is not a document I can read. Drop the research as a PDF, Word, .txt or .md file", filename };
   }
 
   const dl = await supabaseAdmin.storage.from("onboarding").download(doc.storage_ref as string);
@@ -607,13 +626,14 @@ export async function ingestResearchPdf(args: {
     return { ok: false, error: dl.error?.message ?? "the stored file could not be read", filename };
   }
 
-  const { extractPdfText } = await import("@/lib/deck/extract");
+  const { extractFileText } = await import("@/lib/deck/extract");
   let text: string;
   try {
-    text = await extractPdfText(Buffer.from(await dl.data.arrayBuffer()));
+    text = (await extractFileText(Buffer.from(await dl.data.arrayBuffer()), filename, contentType)) ?? "";
   } catch (e) {
-    return { ok: false, error: `that PDF could not be read: ${(e as Error).message}`, filename };
+    return { ok: false, error: `that file could not be read: ${(e as Error).message}`, filename };
   }
+  if (!text.trim()) return { ok: false, error: "that file has no text in it", filename };
 
   // The prefix is added HERE rather than relaxing the trigger, so ingestResearch keeps exactly
   // one rule about what counts as research and there is no second, looser door into it.

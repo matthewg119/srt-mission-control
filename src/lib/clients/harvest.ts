@@ -613,11 +613,16 @@ export const KEYWORD_SOURCE = "keywords" as const;
  * how much), `comparing` is its 2 (vs, compare, best, which clinic), and `researching` is its 1
  * (safe, licensed, reviews).
  */
+// ‼️ STEMS, AND THE WORDS A TOOL ACTUALLY WRITES. The prompt asks for ready | price | comparing | researching,
+// and ChatGPT deep research answered SRT's with "purchase" and "research" (2026-09-15): every row read as
+// the lowest intent. Matched with includes(), so a stem covers "compare", "comparing" and "comparison".
 const KEYWORD_INTENT_SCORE: Record<string, number> = {
   ready: 3,
   price: 3,
-  comparing: 2,
-  researching: 1,
+  purchas: 3,
+  buy: 3,
+  compar: 2,
+  research: 1,
 };
 
 /** The ceiling `question_bank_intent_check` enforces. Nothing here may emit above it. */

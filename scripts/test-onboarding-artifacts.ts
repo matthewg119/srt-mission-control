@@ -3834,6 +3834,120 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("headlines still file on a database without audience_id", /\/audience_id\/\.test\(error\.message\)/.test(headSrc));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- Step 11 intake ---- research as a plain-text file with named headings (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const profile = require("../src/lib/clients/avatar-profile") as typeof import("../src/lib/clients/avatar-profile");
+  const drr = require("../src/lib/clients/artifacts/deep-research-run") as typeof import("../src/lib/clients/artifacts/deep-research-run");
+  const intake = require("../src/lib/clients/research-intake") as typeof import("../src/lib/clients/research-intake");
+  const harvest = require("../src/lib/clients/harvest") as typeof import("../src/lib/clients/harvest");
+
+  eq("every research section has a name the fallback reads, in the same order", profile.SECTION_NAMES.map((s) => s.key), [...drr.RESEARCH_SECTION_KEYS]);
+
+  // The shape SRT's ChatGPT deep research came back in: plain headings, no numbers, no markdown.
+  const para = (s: string) => `${s} `.repeat(12).trim() + ".";
+  const plain = [
+    "Med Spa Owner Profile",
+    para("Owners are mid-career nurses and physicians running small clinics"),
+    "",
+    "Current Solutions (DIY, Cheap, Nothing)",
+    para("Most have tried Meta ads, Google Ads and agencies"),
+    "Conversion dropouts: Customers from deal sites rarely rebook (e.g. Groupon failures).",
+    "What Owners Like About Existing Options",
+    para("They like control and low monthly cost"),
+    "What Goes Wrong (Failures/Why They Quit)",
+    para("Agencies overpromise and leads dry up"),
+    "Beliefs (True or False)",
+    para("They believe SEO takes a year"),
+    "Blame for Being Stuck",
+    para("They blame the algorithm and their staff"),
+    "Buyer’s Own Words",
+    "“We’re about 30 days out from making the call on whether to shut down our med spa.”",
+    para("More quotes from forums about marketing"),
+    "KEYWORDS",
+    "med spa marketing agency Greensboro | unknown | purchase | [46†L173-L180]",
+    "social media calendar for med spa | unknown | research | [48†L90-L99]",
+  ].join("\n");
+  const sections = profile.parseResearchSections(plain);
+  const answered = sections.filter(profile.sectionAnswered).map((s) => s.number);
+  eq("a plain-text answer with named headings reads its sections by name", answered, [1, 2, 3, 4, 5, 6, 7]);
+  ok("so it is full research, not a fragment", profile.looksLikeFullResearch(plain));
+  ok("a labelled sentence inside a section is body, not a heading", sections.find((s) => s.number === 2)!.body.includes("Conversion dropouts"));
+  ok("\"What Goes Wrong (Failures...)\" is section 4, not 11", sections.some((s) => s.number === 4 && /Goes Wrong/.test(s.title)) && !sections.some((s) => s.number === 11));
+
+  const numberedText = [1, 2, 3, 4].map((n) => `## ${n}. Section ${n}\n${para(`finding ${n}`)}`).join("\n\n");
+  eq("a numbered answer still reads by number", profile.parseResearchSections(numberedText).map((s) => s.title), ["Section 1", "Section 2", "Section 3", "Section 4"]);
+
+  const kw = harvest.extractKeywords(plain);
+  eq("\"purchase\" is the highest intent, not the lowest", kw[0].commercialIntentScore, 3);
+  eq("\"research\" stays the lowest", kw[1].commercialIntentScore, 1);
+
+  ok("a .txt, .md, .docx and .pdf are all read as research", ["a.txt", "a.md", "a.docx", "a.pdf"].every((f) => intake.isResearchDocument(f, "")));
+  ok("a Slack text snippet is read by its type", intake.isResearchDocument("untitled", "text/plain"));
+  ok("an image is not", !intake.isResearchDocument("screenshot.png", "image/png"));
+
+  const routeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "api", "slack", "events", "route.ts"), "utf8");
+  ok("step 11 still refuses a file with nothing to read, by type", !intake.isResearchDocument("clip.mp4", "video/mp4"));
+  ok("step 11 no longer drops a non-PDF file without a reply",/const rest = args\.files\.filter\(\(f\) => !handled\.has\(f\.id\)\)/.test(routeSrc) && !/const pdfs = args\.files\.filter/.test(routeSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- Archive and reactivation ---- a duplicate onboarding is caught, an archive re-onboards (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const ar = require("../src/lib/clients/archive") as typeof import("../src/lib/clients/archive");
+  const card = require("../src/lib/clients/duplicate-card") as typeof import("../src/lib/clients/duplicate-card");
+
+  eq("an LLC suffix and punctuation are not identity", ar.nameKey("SRT Agency, LLC"), ar.nameKey("srt agency"));
+  eq("a name too short to mean anything is no key", ar.nameKey("Co"), null);
+  eq("the website's domain, however it was typed", ar.domainKey("https://www.SRTagency.com/about?x=1"), "srtagency.com");
+  eq("a phone matches on its last ten digits", ar.phoneKey("+1 (336) 555-0142"), ar.phoneKey("3365550142"));
+
+  const srt = { legalName: "SRT Agency LLC", website: "srtagency.com", email: "matthew@srtagency.com", phone: "+13365550142" };
+  eq("the same business matches on everything it shares",
+    ar.duplicateReasons(srt, { legalName: "SRT Agency", domain: "srtagency.com", email: "MATTHEW@srtagency.com", phone: "336-555-0142" }).length, 4);
+  eq("a different business at a free email domain does not match",
+    ar.duplicateReasons({ legalName: "Glow Med Spa", email: "glow@gmail.com" }, { legalName: "Luxe Aesthetics", email: "luxe@gmail.com" }), []);
+  eq("a self-serve placeholder name (the email) is not a name match",
+    ar.duplicateReasons({ legalName: "a@x.com" }, { legalName: "a@x.com", email: "b@y.com" }), []);
+
+  const patch = ar.clientFieldsToImport(
+    { legal_name: "SRT Agency LLC", city: "Greensboro", services: ["AEO"], ops_channel_id: "C1", billing_status: "active", phone: "+1336" },
+    { email: "matthew@srtagency.com", legal_name: "matthew@srtagency.com", city: "Raleigh", services: [], phone: null }
+  );
+  eq("an import fills only what the new client has nothing in, and never the channel or billing",
+    patch, { legal_name: "SRT Agency LLC", phone: "+1336", services: ["AEO"] });
+  ok("every table that holds client knowledge is in the archive list", ["client_offers", "audience_documents", "client_audiences", "page_sources", "client_docs", "audit_reports", "client_avatar_runs"].every((t) => (ar.CLIENT_TABLES as readonly string[]).includes(t)));
+
+  // ‼️ A REACTIVATION RE-DECIDES THE OFFER.
+  const proposal = ar.offerAsProposal(
+    { treatment: "AEO Services for med spas", proposed_source: "services_list", terms: ["ai visibility"], locked_at: "2026-09-14", locked_by: "x", is_primary: true, outcome_promise: "more patients" },
+    "new-client", "new-aud", "2026-09-15T00:00:00Z"
+  );
+  eq("the old lock comes back as the proposal", proposal.proposed_treatment, "AEO Services for med spas");
+  ok("and is not locked", proposal.treatment === null && proposal.locked_at === null && proposal.locked_by === null);
+  ok("its terms and outcome come with it", (proposal.terms as string[])[0] === "ai visibility" && proposal.outcome_promise === "more patients");
+
+  const matches = [
+    { kind: "archive" as const, id: "11111111-1111-1111-1111-111111111111", name: "SRT Agency LLC", detail: "archived 2026-09-15", reasons: ["the website srtagency.com"], carries: 'offer "AEO"' },
+    { kind: "client" as const, id: "22222222-2222-2222-2222-222222222222", name: "Other", detail: "https://x/board", reasons: ["the phone number"], carries: null },
+  ];
+  const built = card.duplicateCardBlocks({ clientId: "33333333-3333-3333-3333-333333333333", name: "SRT Agency LLC", board: "https://x/b", matches });
+  const buttons = built.blocks.flatMap((b) => b.elements ?? []).filter((e) => e.type === "button");
+  eq("an archived match gets Import data from duplicate and Keep it fresh; a live one gets no import", buttons.map((b) => b.action_id), [card.IMPORT_ARCHIVE_ACTION, card.KEEP_FRESH_ACTION]);
+  eq("the button carries the new client and the archive", card.readImportValue(buttons[0].value as string), { clientId: "33333333-3333-3333-3333-333333333333", archiveId: "11111111-1111-1111-1111-111111111111" });
+  eq("a malformed value is ignored", card.readImportValue("x:y"), null);
+  ok("no em dash on the card", !/[—–]/.test(JSON.stringify(built)));
+
+  const routeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "api", "clients", "start-pilot", "route.ts"), "utf8");
+  ok("the Start pilot route refuses with the matches until a choice is sent", /status: 409/.test(routeSrc) && /if \(!decision\)/.test(routeSrc));
+  const provSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "provision.ts"), "utf8");
+  ok("the import runs before the ops channel and board are created", provSrc.indexOf("importFromArchive") < provSrc.indexOf("await createOpsChannel(clientId"));
+  const archiveSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "archive.ts"), "utf8");
+  ok("nothing is deleted without an archive of exactly that client", /archive\.source_client_id !== args\.clientId/.test(archiveSrc));
+}
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 //

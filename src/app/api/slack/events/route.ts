@@ -2241,7 +2241,7 @@ async function captureOnboardingUploads(args: {
   // file into the step's own thread is the same explicit act the `research:` prefix is, scoped to
   // the step it belongs to. No model reads the PDF: research-intake.ts says why.
   if (args.client.stepKey === "avatar_harvest") {
-    const { ingestResearchPdf, formatIntakeReply } = await import("@/lib/clients/research-intake");
+    const { ingestResearchFile, formatIntakeReply } = await import("@/lib/clients/research-intake");
 
     // ‼️ THE FRAMEWORK'S ANSWERS ARRIVE AS FILES TOO, AND A LONG ONE CAN ONLY ARRIVE AS A FILE. Slack turns a
     // paste over its message limit into a text snippet, and this branch used to read PDFs only, so a
@@ -2262,13 +2262,14 @@ async function captureOnboardingUploads(args: {
       if (!slackOk(said)) console.error("[slack/events] framework file reply failed");
     }
 
-    const pdfs = args.files.filter(
-      (f) => !handled.has(f.id) && (/pdf/i.test(f.mimetype ?? "") || /\.pdf$/i.test(f.name ?? ""))
-    );
-    if (pdfs.length === 0) return;
+    // ‼️ EVERY OTHER FILE IS READ AS THE RESEARCH, AND EVERY FILE GETS A REPLY. This filtered to PDFs and
+    // returned without a word for anything else, so SRT's research, dropped as a .txt on 2026-09-15, was
+    // filed and never answered. A type that cannot be read still gets a reply saying which types can.
+    const rest = args.files.filter((f) => !handled.has(f.id));
+    if (rest.length === 0) return;
 
-    for (const file of pdfs) {
-      const result = await ingestResearchPdf({ clientId: args.client.id, slackFileId: file.id });
+    for (const file of rest) {
+      const result = await ingestResearchFile({ clientId: args.client.id, slackFileId: file.id });
       // No sample of the phrases here: the text was never held in this scope and re-reading the
       // PDF to print six lines is a second extraction for decoration. The counts are the answer.
       const top: never[] = [];

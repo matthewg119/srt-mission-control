@@ -99,6 +99,17 @@ export interface StartPilotInput {
   language?: "en" | "es" | "both";
   /** 'pilot' today. The paid caller passes 'active'. */
   billingStatus?: "pilot" | "active";
+  /**
+   * A reactivation: the client_archives row to restore into this new client, chosen on the Start pilot form
+   * after its duplicate warning. Imported inside the provisioning claim, before the board exists.
+   */
+  importArchiveId?: string | null;
+  /**
+   * The person starting this already saw the duplicate warning and chose. Without it, a match posts the
+   * warning card (with Import data from duplicate) to the onboarding channel, which is the only way a door
+   * with nobody to ask (the public /start page, a signed agreement) can still show it.
+   */
+  duplicateAcknowledged?: boolean;
 }
 
 export type StartPilotResult =
@@ -110,6 +121,8 @@ export type StartPilotResult =
       onboardingUrl: string | null;
       alreadyProvisioned: boolean;
       warnings: string[];
+      /** What a reactivation restored, one line per kind. Empty when nothing was imported. */
+      imported?: string[];
     }
   | { ok: false; error: string };
 
@@ -332,6 +345,24 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     );
   if (seedError) warn(`stage seeding failed: ${seedError.message}`);
 
+  // ── A reactivation, or a duplicate nobody has been asked about ──
+  //
+  // ‼️ BEFORE THE CHANNEL AND THE BOARD, so every step that later verifies against the record reads the
+  // restored intake, audience and offer instead of an empty client. See src/lib/clients/archive.ts.
+  let imported: string[] = [];
+  if (input.importArchiveId) {
+    const { importFromArchive } = await import("@/lib/clients/archive");
+    const res = await importFromArchive({ archiveId: input.importArchiveId, clientId, by: "Start pilot" }).catch(
+      (e) => ({ ok: false as const, error: (e as Error).message })
+    );
+    if (res.ok) imported = res.lines;
+    else warn(`import from the archive failed: ${res.error}`);
+  } else if (!input.duplicateAcknowledged) {
+    await warnDuplicate(clientId, { legalName, dbaName: input.dbaName, website, domain, email, phone: input.phone }).catch((e) =>
+      warn(`duplicate check failed: ${(e as Error).message}`)
+    );
+  }
+
   // ── Market check. Flags, never blocks. ──
   await checkMarket(clientId, input).catch((e) =>
     warn(`market check failed: ${(e as Error).message}`)
@@ -431,7 +462,27 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     ).catch(() => {});
   }
 
-  return { ok: true, clientId, slug, onboardingUrl, alreadyProvisioned: false, warnings };
+  return { ok: true, clientId, slug, onboardingUrl, alreadyProvisioned: false, warnings, imported };
+}
+
+/**
+ * The duplicate warning, for a door that could not ask first. One card in the onboarding channel naming
+ * every match, with Import data from duplicate on each archived one.
+ */
+async function warnDuplicate(clientId: string, identity: import("@/lib/clients/archive").Identity): Promise<void> {
+  const { findDuplicates } = await import("@/lib/clients/archive");
+  const matches = await findDuplicates({ ...identity, excludeClientId: clientId });
+  if (!matches.length) return;
+  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  if (!channel) return;
+  const { duplicateCardBlocks } = await import("@/lib/clients/duplicate-card");
+  const { text, blocks } = duplicateCardBlocks({
+    clientId,
+    name: identity.dbaName || identity.legalName || identity.email || "this client",
+    board: `${appUrl()}/dashboard/clients/${clientId}`,
+    matches,
+  });
+  await slack.postMessage(channel, text, blocks);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
