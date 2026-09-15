@@ -134,6 +134,8 @@ export interface EvidenceKeyword {
   /** ‼️ TRI-STATE: from this client's audit, and null when that question was never run. */
   currentlyNamed: boolean | null;
   sourceUrl: string | null;
+  /** Every question_bank row this phrase was read from, so a keyword can be traced to its evidence. */
+  bankIds: string[];
 }
 
 export interface EvidenceRead {
@@ -182,7 +184,7 @@ export async function evidenceRows(clientId: string): Promise<EvidenceRead | { e
   // harvest predates their avatar, which is most of them.
   let bankQuery = supabaseAdmin
     .from("question_bank")
-    .select("phrase, normalized, source, source_url, frequency_score, commercial_intent_score, objection_phrase, avatar")
+    .select("id, phrase, normalized, source, source_url, frequency_score, commercial_intent_score, objection_phrase, avatar")
     .eq("vertical", vertical)
     .order("commercial_intent_score", { ascending: false })
     .order("frequency_score", { ascending: false })
@@ -225,6 +227,7 @@ export async function evidenceRows(clientId: string): Promise<EvidenceRead | { e
       objection: r.objection_phrase === true,
       currentlyNamed: named.get(normalized) ?? null,
       sourceUrl: (r.source_url as string | null) ?? null,
+      bankIds: r.id ? [String(r.id)] : [],
     };
 
     const existing = byNormal.get(normalized);
@@ -240,6 +243,7 @@ export async function evidenceRows(clientId: string): Promise<EvidenceRead | { e
       intent: Math.max(existing.intent, row.intent),
       objection: existing.objection || row.objection,
       sourceUrl: existing.sourceUrl ?? row.sourceUrl,
+      bankIds: [...existing.bankIds, ...row.bankIds],
     });
   }
 

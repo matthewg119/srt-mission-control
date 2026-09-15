@@ -25,6 +25,7 @@ export const CLIENT_TABLES = [
   "attribution_bookings", "attribution_monthly", "attribution_sessions", "audience_documents", "client_audiences",
   "client_avatar_runs", "client_datasets", "client_delivery_steps", "client_dns_records", "client_docs",
   "client_events", "client_headlines", "client_hosts", "client_keywords", "client_messages", "client_offers",
+  "keyword_runs", "keyword_decisions",
   "client_onboarding_steps", "client_pages", "client_query_state", "client_question_sets", "client_replica_pages",
   "client_url_inventory", "client_weekly_reports", "client_workflow_runs", "colonies", "competitor_candidates",
   "concierge_configs", "concierge_scan_ledger", "concierge_sessions", "harvest_runs", "hub_hits", "lead_magnets",
@@ -552,6 +553,34 @@ export async function importFromArchive(args: {
     else sources += 1;
   }
   if (sources) lines.push(`${sources} piece${sources === 1 ? "" : "s"} of evidence`);
+
+  // ‼️ THE KEYWORDS COME BACK AS KNOWLEDGE, NOT AS DECISIONS (2026-09-16). Every phrase, its evidence
+  // and its measurement return; approvals, drops and step 21 picks do not, the same line the offer
+  // import draws. The next keyword run re-merges against the offer as it is locked now. The runs and
+  // decisions stay in the archive as the record of the first engagement.
+  let keywords = 0;
+  const kwRows = (snap.tables.client_keywords ?? []).map((k) => ({
+    ...copyRow(k, args.clientId),
+    approved: false,
+    approved_at: null,
+    approved_by: null,
+    dropped_at: null,
+    role: null,
+    picked_at: null,
+    picked_by: null,
+  }));
+  for (let i = 0; i < kwRows.length; i += 250) {
+    const { data, error } = await supabaseAdmin
+      .from("client_keywords")
+      .upsert(kwRows.slice(i, i + 250), { onConflict: "client_id,normalized,use", ignoreDuplicates: true })
+      .select("id");
+    if (error) {
+      problems.push(`keywords: ${error.message}`);
+      break;
+    }
+    keywords += (data ?? []).length;
+  }
+  if (keywords) lines.push(`${keywords} keyword${keywords === 1 ? "" : "s"}, unapproved`);
 
   // The audits, fanout runs and signings the delete left behind with client_id nulled.
   let relinked = 0;

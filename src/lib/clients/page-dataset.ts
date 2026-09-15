@@ -88,6 +88,7 @@ export async function capturePage(input: CaptureInput): Promise<void> {
       headline_candidates: headlineCandidates,
 
       primary_keyword: plan?.targetKeyword ?? null,
+      primary_keyword_id: plan?.targetKeywordId ?? null,
       secondary_keywords: plan?.secondaryKeywords ?? null,
       section_keywords: sectionKeywords,
       outline,
@@ -140,6 +141,7 @@ async function readOne(
 interface PlanAim {
   headline: string | null;
   targetKeyword: string | null;
+  targetKeywordId: string | null;
   secondaryKeywords: string[] | null;
   role: "pillar" | "support" | null;
 }
@@ -147,7 +149,7 @@ interface PlanAim {
 async function readPlan(clientId: string, planRowId: string): Promise<PlanAim | null> {
   const { data, error } = await supabaseAdmin
     .from("page_plan")
-    .select("headline, target_keyword, secondary_keywords, role")
+    .select("headline, target_keyword, target_keyword_id, secondary_keywords, role")
     .eq("id", planRowId)
     .eq("client_id", clientId)
     .maybeSingle();
@@ -161,6 +163,7 @@ async function readPlan(clientId: string, planRowId: string): Promise<PlanAim | 
   return {
     headline: (data.headline as string | null) ?? null,
     targetKeyword: (data.target_keyword as string | null) ?? null,
+    targetKeywordId: (data.target_keyword_id as string | null) ?? null,
     secondaryKeywords: Array.isArray(data.secondary_keywords) ? (data.secondary_keywords as string[]) : null,
     role: (data.role as "pillar" | "support" | null) ?? null,
   };

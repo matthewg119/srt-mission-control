@@ -48,6 +48,7 @@ import {
   type KeywordUse,
   type StoredKeyword,
 } from "./keyword-expansion";
+import { KeywordRunRecorder, recordKeywordDecisions, recordKeywordRun } from "./keyword-dataset";
 
 const MODEL = "claude-sonnet-4-6" as const;
 
@@ -216,7 +217,7 @@ export function vocabFor(
 // page-plan.ts's tolerant selects: a missing column fails loadKeywords LOUDLY with TABLE_HINT, which
 // names the migration. docs/2026-09-15-awareness-stages.sql runs before the deploy that reads it.
 const KW_COLUMNS =
-  "id, phrase, normalized, category, use, origin, offer_fingerprint, score, rank, currently_named, source_url, approved, dropped_at, awareness_stage";
+  "id, phrase, normalized, category, use, origin, offer_fingerprint, score, rank, currently_named, source_url, approved, dropped_at, awareness_stage, evidence_ids, role";
 
 /**
  * The awareness stage of the person typing a phrase, by the deterministic rule. See awareness.ts.
@@ -253,6 +254,8 @@ function toStored(r: Record<string, unknown>): StoredKeyword {
     approved: r.approved === true,
     dropped: r.dropped_at != null,
     awarenessStage: isAwarenessStage(r.awareness_stage) ? r.awareness_stage : null,
+    evidenceIds: Array.isArray(r.evidence_ids) ? (r.evidence_ids as unknown[]).map(String) : [],
+    role: r.role === "pillar" || r.role === "support" ? r.role : null,
   };
 }
 
@@ -293,7 +296,22 @@ const TABLE_HINT =
  * old set is not an approval of a new one. Evidence rows are deleted too because they are cheap to
  * re-read and their categories and relevance were computed against the old vocabulary.
  */
-async function resetForNewOffer(clientId: string): Promise<string | null> {
+async function resetForNewOffer(
+  clientId: string,
+  before: { rows: readonly StoredKeyword[]; fingerprints: Set<string> },
+  newFingerprint: string
+): Promise<string | null> {
+  // ‼️ THE OLD SET IS KEPT WHOLE BEFORE IT IS DELETED (2026-09-16). What was proposed for the last
+  // offer, and what a person approved and dropped from it, is exactly the history a training set
+  // needs; the delete below used to be the end of it.
+  await recordKeywordRun({
+    clientId,
+    reason: "reset",
+    offerFingerprint: [...before.fingerprints][0] ?? null,
+    rows: before.rows,
+    context: { replacedBy: newFingerprint, fingerprints: [...before.fingerprints] },
+  });
+
   const { error: delError } = await supabaseAdmin
     .from("client_keywords")
     .delete()
@@ -344,7 +362,8 @@ async function writeMerged(
       win.origin !== cur.origin ||
       win.category !== cur.category ||
       win.sourceUrl !== cur.sourceUrl ||
-      win.currentlyNamed !== cur.currentlyNamed;
+      win.currentlyNamed !== cur.currentlyNamed ||
+      (win.evidenceIds ?? []).length !== (cur.evidenceIds ?? []).length;
     if (!changed) continue;
     const { error } = await supabaseAdmin
       .from("client_keywords")
@@ -354,6 +373,7 @@ async function writeMerged(
         source_url: win.sourceUrl,
         currently_named: win.currentlyNamed,
         score: win.origin === cur.origin ? cur.score : win.score,
+        evidence_ids: win.evidenceIds ?? [],
         updated_at: now,
       })
       .eq("id", cur.id);
@@ -388,6 +408,7 @@ async function writeMerged(
       source_url: r.sourceUrl,
       approved: false,
       awareness_stage: stageOf(r.phrase),
+      evidence_ids: r.evidenceIds ?? [],
       updated_at: now,
     });
   }
@@ -431,6 +452,7 @@ export async function evidenceCandidates(
       currentlyNamed: e.currentlyNamed,
       sourceUrl: e.sourceUrl,
       score: 0,
+      evidenceIds: e.bankIds,
     };
     return { ...base, score: scoreKeyword(base, spec?.intent ?? 0) };
   });
@@ -447,15 +469,18 @@ async function askModel(
   ctx: KeywordContext,
   asks: ReadonlyArray<{ category: CategorySpec; count: number }>,
   exclude: readonly string[],
-  deadline: number
+  deadline: number,
+  recorder?: KeywordRunRecorder
 ): Promise<{ rows: RawRow[]; error: string | null }> {
   const left = deadline - Date.now();
   if (left < 20_000) return { rows: [], error: "the time budget ran out before this call" };
+  const user = expansionUser(ctx, asks, exclude);
+  const started = Date.now();
   try {
     const res = await callClaudeJSON<{ rows: RawRow[] }>({
       model: MODEL,
       system: EXPANSION_SYSTEM,
-      user: expansionUser(ctx, asks, exclude),
+      user,
       maxTokens: 12000,
       temperature: 0.7,
       schemaHint: EXPANSION_SCHEMA,
@@ -466,23 +491,44 @@ async function askModel(
       describeInvalid: () => 'Return { "rows": [ { "phrase": ..., "category": ..., "use": ... } ] }, one object per phrase.',
       timeoutMs: left,
     });
+    recorder?.call({ system: EXPANSION_SYSTEM, user, rows: res.data.rows, error: null, ms: Date.now() - started });
     return { rows: res.data.rows, error: null };
   } catch (e) {
+    recorder?.call({ system: EXPANSION_SYSTEM, user, rows: [], error: (e as Error).message, ms: Date.now() - started });
     return { rows: [], error: (e as Error).message };
   }
 }
 
-function acceptRows(raw: readonly RawRow[], ctx: KeywordContext, seen: Set<string>): KeywordCandidate[] {
+function acceptRows(
+  raw: readonly RawRow[],
+  ctx: KeywordContext,
+  seen: Set<string>,
+  recorder?: KeywordRunRecorder
+): KeywordCandidate[] {
   const out: KeywordCandidate[] = [];
   for (const r of raw) {
-    const cat = ctx.categories.find((c) => c.key === String(r.category ?? "").trim());
-    if (!cat) continue;
-    const phrase = cleanPhrase(String(r.phrase ?? ""));
+    // ‼️ EVERY REFUSAL IS WRITTEN DOWN WITH ITS REASON. What the model proposed and the rules threw
+    // out is half of what a person would teach a model of our own, and it used to vanish here.
+    const rawPhrase = String(r.phrase ?? "");
+    const rawCategory = String(r.category ?? "").trim();
+    const cat = ctx.categories.find((c) => c.key === rawCategory);
+    if (!cat) {
+      recorder?.reject({ phrase: rawPhrase, category: rawCategory, reason: "unknown_category" });
+      continue;
+    }
+    const phrase = cleanPhrase(rawPhrase);
     const use = classifyUse(typeof r.use === "string" ? r.use : null, phrase);
-    if (keywordFault(phrase, use)) continue;
+    const fault = keywordFault(phrase, use);
+    if (fault) {
+      recorder?.reject({ phrase: rawPhrase, category: cat.key, reason: String(fault) });
+      continue;
+    }
     const normalized = normalizePhrase(phrase);
     const key = `${use}|${normalized}`;
-    if (!normalized || seen.has(key)) continue;
+    if (!normalized || seen.has(key)) {
+      recorder?.reject({ phrase: rawPhrase, category: cat.key, reason: normalized ? "duplicate" : "empty" });
+      continue;
+    }
     seen.add(key);
     const base: KeywordCandidate = {
       phrase,
@@ -510,7 +556,8 @@ function acceptRows(raw: readonly RawRow[], ctx: KeywordContext, seen: Set<strin
 export async function expandKeywords(
   ctx: KeywordContext,
   existing: ReadonlyArray<Pick<KeywordCandidate, "normalized" | "use" | "category" | "phrase">>,
-  only?: CategorySpec
+  only?: CategorySpec,
+  recorder?: KeywordRunRecorder
 ): Promise<{ rows: KeywordCandidate[]; notes: string[] }> {
   const deadline = Date.now() + EXPANSION_BUDGET_MS;
   const seen = new Set(existing.map((r) => `${r.use}|${r.normalized}`));
@@ -562,12 +609,13 @@ export async function expandKeywords(
           ctx,
           half,
           only ? existing.filter((r) => r.category === only.key).map((r) => r.phrase) : [],
-          deadline
+          deadline,
+          recorder
         )
       )
   );
   for (const f of first) if (f.error) notes.push(`:warning: One expansion call failed: ${f.error}`);
-  const accepted = acceptRows(first.flatMap((f) => f.rows), ctx, seen);
+  const accepted = acceptRows(first.flatMap((f) => f.rows), ctx, seen, recorder);
 
   // A category that came back short is re-asked for that category alone, not the whole batch.
   if (!only) {
@@ -583,12 +631,13 @@ export async function expandKeywords(
             ctx,
             [{ category: c, count: c.target - count(c.key) + 3 }],
             [...existing, ...accepted].filter((r) => r.category === c.key).map((r) => r.phrase),
-            deadline
+            deadline,
+            recorder
           )
         )
       );
       for (const a of again) if (a.error) notes.push(`:warning: A re-ask failed: ${a.error}`);
-      accepted.push(...acceptRows(again.flatMap((a) => a.rows), ctx, seen));
+      accepted.push(...acceptRows(again.flatMap((a) => a.rows), ctx, seen, recorder));
     }
     const stillShort = asks
       .map((a) => [a.category, count(a.category.key)] as const)
@@ -606,30 +655,43 @@ export async function expandKeywords(
 // The runner
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function uploadKeywordCsv(ctx: KeywordContext, rows: readonly StoredKeyword[]): Promise<boolean> {
+async function uploadKeywordCsv(
+  ctx: KeywordContext,
+  rows: readonly StoredKeyword[]
+): Promise<{ uploaded: boolean; docId: string | null }> {
+  const name = ctx.clientName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "client";
+  const file = `keywords-${name}-${new Date().toISOString().slice(0, 10)}.csv`;
+  const buffer = Buffer.from(keywordCsv(rows, ctx.categories), "utf8");
+
+  // ‼️ FILED BEFORE IT IS POSTED (2026-09-16). The CSV used to exist in Slack only, so a run's list as
+  // it stood that day could not be read back from anywhere we own. Same order deliver.ts keeps: store,
+  // then post. A failed store is logged and the post still happens.
+  const { storeGeneratedDoc } = await import("./onboarding-docs");
+  const stored = await storeGeneratedDoc({
+    clientId: ctx.clientId,
+    stepKey: "keyword_set",
+    filename: file,
+    buffer,
+    contentType: "text/csv",
+  }).catch((e) => ({ ok: false, docId: undefined as string | undefined, error: (e as Error).message }));
+  if (!stored.ok) console.error("[client-keywords] CSV not filed:", stored.error);
+  const docId = stored.docId ?? null;
+
   const { channelFor, anchorTsFor, notifyStep } = await import("./step-board");
   const channel = await channelFor(ctx.clientId);
-  if (!channel) return false;
+  if (!channel) return { uploaded: false, docId };
   const thread = await anchorTsFor(ctx.clientId, "keyword_set");
-  if (!thread) return false;
+  if (!thread) return { uploaded: false, docId };
 
   // ‼️ uploadFile RETURNS {ok:false} AND NEVER THROWS, and the share no-ops when the bot is not a
   // member. The scraper lane recorded both; same join first, same failure named in the thread.
   await slack.joinChannel(channel).catch(() => {});
-  const name = ctx.clientName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "client";
-  const file = `keywords-${name}-${new Date().toISOString().slice(0, 10)}.csv`;
-  const res = (await slack.uploadFile(
-    channel,
-    file,
-    Buffer.from(keywordCsv(rows, ctx.categories), "utf8"),
-    "text/csv",
-    thread
-  )) as { ok?: boolean; error?: string };
+  const res = (await slack.uploadFile(channel, file, buffer, "text/csv", thread)) as { ok?: boolean; error?: string };
   if (res?.ok !== true) {
     await notifyStep(ctx.clientId, "keyword_set", `:warning: The CSV could not be uploaded: ${res?.error ?? "no reason given"}.`).catch(() => {});
-    return false;
+    return { uploaded: false, docId };
   }
-  return true;
+  return { uploaded: true, docId };
 }
 
 export async function runKeywordStep(clientId: string): Promise<AutoResult> {
@@ -649,7 +711,7 @@ export async function runKeywordStep(clientId: string): Promise<AutoResult> {
 
   const notes: string[] = [];
   if ([...loaded.fingerprints].some((f) => f !== ctx.fingerprint)) {
-    const resetError = await resetForNewOffer(clientId);
+    const resetError = await resetForNewOffer(clientId, loaded, ctx.fingerprint);
     if (resetError) return { ok: false, error: `Resetting the old keyword set failed: ${resetError}` };
     notes.push(
       "_The offer or its terms changed since the last set was written, so the old proposals were cleared and nothing is approved. Phrases you added yourself were kept._"
@@ -668,8 +730,9 @@ export async function runKeywordStep(clientId: string): Promise<AutoResult> {
   // A re-run of an existing set (Retry, a new research paste) re-merges the evidence and spends
   // nothing. Only a set with no proposals, or one under the floor, goes back to the model.
   let expansion: KeywordCandidate[] = [];
+  const recorder = new KeywordRunRecorder();
   if (!hasProposals || liveQueries < KEYWORD_FLOOR) {
-    const ex = await expandKeywords(ctx, [...loaded.rows, ...ev.rows]);
+    const ex = await expandKeywords(ctx, [...loaded.rows, ...ev.rows], undefined, recorder);
     expansion = ex.rows;
     notes.push(...ex.notes);
   }
@@ -679,8 +742,22 @@ export async function runKeywordStep(clientId: string): Promise<AutoResult> {
 
   const after = await loadKeywords(clientId);
   const rows = "error" in after ? [] : after.rows;
-  const uploaded = await uploadKeywordCsv(ctx, rows);
+  const { uploaded, docId } = await uploadKeywordCsv(ctx, rows);
   const tally = tallyKeywords(rows, vocabFor(ctx, rows));
+  await recordKeywordRun({
+    clientId,
+    reason: recorder.calls.length ? "expansion" : "rerun",
+    offerFingerprint: ctx.fingerprint,
+    ...(await offerAndAudienceIds(clientId)),
+    model: recorder.calls.length ? MODEL : null,
+    recorder,
+    evidenceCount: ev.rows.length,
+    expansionCount: expansion.length,
+    rows,
+    csvDocId: docId,
+    notes,
+    context: { treatment: ctx.treatment, terms: ctx.terms, audience: ctx.audience, vertical: ctx.vertical },
+  });
   const hooks = rows.filter((r) => !r.dropped && r.use === "hook").length;
 
   return {
@@ -869,7 +946,7 @@ export async function handleKeywordThreadReply(input: {
     case "approve":
       return approveCommand(input.clientId, input.by);
     case "drop":
-      return dropCommand(input.clientId, cmd.ranks);
+      return dropCommand(input.clientId, cmd.ranks, input.by);
     case "add":
       return cmd.phrases.length === 1
         ? addCommand(input.clientId, cmd.phrases[0], input.by)
@@ -890,10 +967,25 @@ async function approveCommand(clientId: string, by: string): Promise<KeywordRepl
     .eq("client_id", clientId)
     .eq("use", "query")
     .is("dropped_at", null)
-    .select("id");
+    .select("id, phrase, category, rank, score, origin, use");
   if (error) return { message: `:warning: Not approved: ${error.message}` };
 
   const n = (data ?? []).length;
+  await recordKeywordDecisions({
+    clientId,
+    action: "approve",
+    actor: by,
+    rows: ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+      id: String(r.id),
+      phrase: String(r.phrase ?? ""),
+      category: String(r.category ?? ""),
+      rank: typeof r.rank === "number" ? r.rank : null,
+      score: Number(r.score ?? 0),
+      origin: r.origin as KeywordOrigin,
+      use: (r.use === "hook" ? "hook" : "query") as KeywordUse,
+    })),
+    context: { fingerprint: c.ctx.fingerprint },
+  });
   return {
     message:
       `:white_check_mark: *Approved ${n} queries* as shown. Hooks are kept for ads and emails and are ` +
@@ -910,7 +1002,7 @@ async function approveCommand(clientId: string, by: string): Promise<KeywordRepl
   };
 }
 
-async function dropCommand(clientId: string, ranks: number[]): Promise<KeywordReply> {
+async function dropCommand(clientId: string, ranks: number[], by: string): Promise<KeywordReply> {
   const loaded = await loadKeywords(clientId);
   if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
 
@@ -929,6 +1021,7 @@ async function dropCommand(clientId: string, ranks: number[]): Promise<KeywordRe
     .update({ dropped_at: now, approved: false, approved_at: null, approved_by: null, updated_at: now })
     .in("id", hit.map((r) => r.id));
   if (error) return { message: `:warning: Not dropped: ${error.message}` };
+  await recordKeywordDecisions({ clientId, action: "drop", actor: by, rows: hit });
 
   return {
     message: [
@@ -1020,6 +1113,14 @@ async function addCommand(clientId: string, phrase: string, by: string): Promise
     if (error) return { message: `:warning: Not added: ${error.message}` };
   }
 
+  await recordKeywordDecisions({
+    clientId,
+    action: existing ? "restore" : "add",
+    actor: by,
+    rows: [{ id: existing?.id ?? "", phrase, category, rank, score, origin: "manual", use }],
+    context: { approved: setApproved },
+  });
+
   return {
     message:
       `:white_check_mark: ${existing ? "Brought back" : "Added"} as *${rank}. ${phrase}* ` +
@@ -1082,7 +1183,8 @@ async function moreCommand(clientId: string, category: CategorySpec): Promise<Ke
       const loaded = await loadKeywords(clientId);
       if ("error" in loaded) return say(clientId, `:warning: ${loaded.error}. ${TABLE_HINT}`);
 
-      const ex = await expandKeywords(c.ctx, loaded.rows, category);
+      const recorder = new KeywordRunRecorder();
+      const ex = await expandKeywords(c.ctx, loaded.rows, category, recorder);
       const written = await writeMerged(c.ctx, loaded.rows, ex.rows);
       if (written.error) return say(clientId, `:warning: Not written: ${written.error}`);
 
@@ -1101,7 +1203,20 @@ async function moreCommand(clientId: string, category: CategorySpec): Promise<Ke
           ...ex.notes,
         ].join("\n")
       );
-      await uploadKeywordCsv(c.ctx, rows);
+      const csv = await uploadKeywordCsv(c.ctx, rows);
+      await recordKeywordRun({
+        clientId,
+        reason: "more",
+        offerFingerprint: c.ctx.fingerprint,
+        ...(await offerAndAudienceIds(clientId)),
+        model: MODEL,
+        recorder,
+        expansionCount: ex.rows.length,
+        rows,
+        csvDocId: csv.docId,
+        notes: ex.notes,
+        context: { category: category.key },
+      });
       await refreshKeywordCard(clientId);
     },
   };
@@ -1217,6 +1332,24 @@ export async function applyMeasurement(clientId: string, reportId: string): Prom
     if (!error) out.updated += 1;
   }
 
+  if (out.updated > 0) {
+    const after = await loadKeywords(clientId);
+    await recordKeywordRun({
+      clientId,
+      reason: "measurement",
+      offerFingerprint: c.ok ? c.ctx.fingerprint : null,
+      rows: "error" in after ? [] : after.rows,
+      context: { reportId, ...out },
+    });
+  }
+
   await refreshKeywordCard(clientId);
   return { ok: true, ...out };
+}
+
+/** The offer and audience a run was written for, as ids. Null when the offer predates client_offers. */
+async function offerAndAudienceIds(clientId: string): Promise<{ offerId: string | null; audienceId: string | null }> {
+  const { loadOffer } = await import("./offers");
+  const offer = await loadOffer(clientId).catch(() => null);
+  return { offerId: offer?.id ?? null, audienceId: offer?.audienceId ?? null };
 }

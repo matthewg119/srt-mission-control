@@ -117,7 +117,14 @@ async function frameContext(
 
 /** The approved, relevant queries as a pool, plus everything the framing call needs. */
 async function offerPool(clientId: string): Promise<
-  | { pool: OfferPoolItem[]; keywords: string[]; city: string | null; namingKey: string | null; labels: (key: string) => string }
+  | {
+      pool: OfferPoolItem[];
+      keywords: string[];
+      city: string | null;
+      namingKey: string | null;
+      labels: (key: string) => string;
+      idByPhrase: Map<string, string>;
+    }
   | { error: string }
 > {
   const { planKeywords } = await import("./client-keywords");
@@ -134,9 +141,13 @@ async function offerPool(clientId: string): Promise<
     tier: tierOf(r.origin),
     naming: r.category === naming,
     focus: pk.ctx.categories.find((c) => c.key === r.category)?.focus === true,
-    relevant: isRelevantKeyword(r, pk.vocab),
+    // A picked keyword is relevant by decision: a person chose it for this offer.
+    relevant: r.role ? true : isRelevantKeyword(r, pk.vocab),
+    keywordId: r.id,
+    role: r.role ?? null,
   }));
-  return { pool, keywords: pk.rows.map((r) => r.phrase), city: pk.ctx.city, namingKey: naming, labels };
+  const idByPhrase = new Map(pk.rows.map((r) => [normalizePhrase(r.phrase), r.id]));
+  return { pool, keywords: pk.rows.map((r) => r.phrase), city: pk.ctx.city, namingKey: naming, labels, idByPhrase };
 }
 
 /** Questions a new plan row may not repeat: every plan row, and every page that is not archived. */
@@ -195,9 +206,9 @@ async function proposePreCallPlan(
   const supports = sel.supports.slice(0, Math.max(0, PRE_CALL_SUPPORTS - keptSupports));
   const items: PoolItem[] = [
     ...(needPillar && sel.pillar
-      ? [{ question: sel.pillar.item.question, score: sel.pillar.item.score, theme: sel.pillar.item.categoryLabel, origin: "keyword" as const, role: "pillar" as const, category: sel.pillar.item.category }]
+      ? [{ question: sel.pillar.item.question, score: sel.pillar.item.score, theme: sel.pillar.item.categoryLabel, origin: "keyword" as const, role: "pillar" as const, category: sel.pillar.item.category, keywordId: sel.pillar.item.keywordId ?? null }]
       : []),
-    ...supports.map((s) => ({ question: s.question, score: s.score, theme: s.categoryLabel, origin: "keyword" as const, role: "support" as const, category: s.category })),
+    ...supports.map((s) => ({ question: s.question, score: s.score, theme: s.categoryLabel, origin: "keyword" as const, role: "support" as const, category: s.category, keywordId: s.keywordId ?? null })),
   ];
 
   if (items.length === 0) {
@@ -238,6 +249,11 @@ async function proposePreCallPlan(
     role: item.role,
     pillar_id: pillarId,
     keyword_category: item.category ?? null,
+    // ‼️ THE KEYWORD BY ID, NOT ONLY BY ITS WORDS (2026-09-16). target_keyword is a copied string, so a
+    // page could never be traced back to the keyword row, its evidence, or its measurement. The
+    // framing call may choose a different approved phrase than the item's own; the id follows the
+    // phrase actually written, and falls back to the item's keyword when the phrase is not in the set.
+    target_keyword_id: pool.idByPhrase.get(normalizePhrase(framed[i].targetKeyword)) ?? item.keywordId ?? null,
     ...awarenessForPage(item.question, framed[i].targetKeyword),
     updated_at: now,
   });

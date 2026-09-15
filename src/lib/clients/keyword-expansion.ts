@@ -572,6 +572,8 @@ export interface KeywordCandidate {
   currentlyNamed: boolean | null;
   sourceUrl: string | null;
   score: number;
+  /** The question_bank rows this phrase was read from. Empty on a proposal or a typed phrase. */
+  evidenceIds?: string[];
 }
 
 /** 0 for what the market or a person said, 1 for what a model proposed. Sorted first. */
@@ -660,6 +662,8 @@ export function mergeKeywords(rows: readonly KeywordCandidate[]): KeywordCandida
       category: win.category === OTHER_CATEGORY ? lose.category : win.category,
       currentlyNamed: win.currentlyNamed ?? lose.currentlyNamed,
       sourceUrl: win.sourceUrl ?? lose.sourceUrl,
+      // Both readings' evidence is kept: the phrase was seen in each of those rows.
+      evidenceIds: [...new Set([...(win.evidenceIds ?? []), ...(lose.evidenceIds ?? [])])],
     });
   }
   return [...by.values()];
@@ -907,6 +911,8 @@ export interface StoredKeyword extends KeywordCandidate {
   dropped: boolean;
   /** 5 (unaware) to 1 (most aware), by rule, on insert. Null on a row from before 2026-09-15. */
   awarenessStage?: 1 | 2 | 3 | 4 | 5 | null;
+  /** Picked at step 21 as the pillar's keyword or a support's, before any page is drafted. */
+  role?: "pillar" | "support" | null;
 }
 
 function csvCell(v: string | number | boolean | null): string {

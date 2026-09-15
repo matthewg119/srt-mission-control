@@ -87,6 +87,8 @@ export interface PoolItem {
   role?: PlanRole;
   /** The keyword step's category, when the item came from the approved set. */
   category?: string;
+  /** client_keywords.id, when the item came from the approved set. */
+  keywordId?: string | null;
 }
 
 export interface PlanRow {
@@ -257,6 +259,10 @@ export interface OfferPoolItem {
   focus: boolean;
   /** isAboutOffer, computed by the caller with the offer's vocabulary. */
   relevant: boolean;
+  /** client_keywords.id, so a plan row points at its keyword rather than a copy of its words. */
+  keywordId?: string | null;
+  /** Picked by a person at step 21 before any page is planned. A pick outranks every score. */
+  role?: "pillar" | "support" | null;
 }
 
 export interface OfferPlan {
@@ -297,7 +303,12 @@ export function selectOfferPlan(
     unique.push(p);
   }
 
-  const pillarItem = unique.find((p) => p.naming) ?? null;
+  // ‼️ A PERSON'S PICK FIRST (2026-09-16). Matthew: "get the keywords, and select the keywords before
+  // starting to do the drafts ... so we can build the whole skeleton around the specific keyword."
+  // A picked pillar is the pillar even when a higher-scored naming variant exists; picked supports
+  // fill the supports before the automatic passes below top them up.
+  const pickedPillar = unique.find((p) => p.role === "pillar") ?? null;
+  const pillarItem = pickedPillar ?? unique.find((p) => p.naming) ?? null;
   let pillar: OfferPlan["pillar"] = null;
   if (pillarItem) {
     const city = opts.city?.trim() || null;
@@ -317,6 +328,12 @@ export function selectOfferPlan(
   // vendor pages and two naming pages before most categories got one).
   const perCategory = new Map<string, number>();
   const supports: OfferPoolItem[] = [];
+  for (const p of unique) {
+    if (supports.length >= PRE_CALL_SUPPORTS) break;
+    if (p.role !== "support" || p === pillarItem) continue;
+    perCategory.set(p.category, (perCategory.get(p.category) ?? 0) + 1);
+    supports.push(p);
+  }
   const passes: Array<{ focus: boolean; cap: number }> = [
     { focus: true, cap: 1 },
     { focus: true, cap: MAX_PER_CATEGORY },
@@ -326,7 +343,7 @@ export function selectOfferPlan(
   for (const pass of passes) {
     for (const p of unique) {
       if (supports.length >= PRE_CALL_SUPPORTS) break;
-      if (p.naming || p.focus !== pass.focus || supports.includes(p)) continue;
+      if (p.naming || p === pillarItem || p.focus !== pass.focus || supports.includes(p)) continue;
       const n = perCategory.get(p.category) ?? 0;
       if (n >= pass.cap) continue;
       perCategory.set(p.category, n + 1);
