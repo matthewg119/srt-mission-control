@@ -3547,6 +3547,68 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("the old column is read only when client_offers is missing", /case "table_missing":\s*return legacyOffer/.test(offersSrc2));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C3 ---- the sales letter at step 10 (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { readLetterCommand: letter, pageToLetterText, slackUrl, letterFaults } =
+    require("../src/lib/clients/sales-letter") as typeof import("../src/lib/clients/sales-letter");
+  const { offerFingerprint, kindBelongsToOffer } =
+    require("../src/lib/clients/audience-documents") as typeof import("../src/lib/clients/audience-documents");
+
+  eq("letter use", letter("letter use"), { kind: "use", url: null });
+  eq("letter use <url> takes the URL, never Slack's label",
+    letter("letter use <https://acme.com/lip-filler|acme.com/lip-filler>"), { kind: "use", url: "https://acme.com/lip-filler" });
+  eq("letter draft", letter("letter draft"), { kind: "draft" });
+  eq("letter text", letter("  Letter text"), { kind: "text" });
+  eq("letter approve with a short id", letter("letter approve 1a2b3c4d"), { kind: "approve", id: "1a2b3c4d" });
+  eq("a sentence starting with the word is conversation, not a malformed command", letter("letter looks good to me").kind, "none");
+  eq("`letter replace` without its colon is refused, so the letter is not silently lost", letter("letter replace\n" + "x".repeat(300)).kind, "refused");
+  eq("and a message not starting with letter is not a command", letter("we should draft a letter").kind, "none");
+  ok("a one-line command with more under it is refused", letter("letter draft\noffer: yes").kind === "refused");
+
+  // ‼️ `letter replace:` CARRIES A DOCUMENT, and a letter is full of lines a command parser would grab.
+  const pasted = "letter replace:\n## Stop Losing Patients To Guesswork\n" + "Real body text for the letter. ".repeat(10) + "\nPrice: $399\nTerms: financing\nOffer: 3 sessions";
+  const read = letter(pasted);
+  ok("a pasted letter with Price:, Terms: and Offer: lines is stored whole", read.kind === "replace" && read.body.includes("Offer: 3 sessions") && read.body.startsWith("## Stop"));
+  ok("a fence around the whole letter is Slack formatting, not the letter",
+    (() => { const r = letter("letter replace:\n```\n" + "x".repeat(250) + "\n```"); return r.kind === "replace" && !r.body.includes("```"); })());
+  ok("a replace with no letter is refused", letter("letter replace: fix").kind === "refused");
+
+  eq("Slack's <url|label> resolves to the URL", slackUrl("<https://x.com/a?b=1&amp;c=2|x.com>"), "https://x.com/a?b=1&c=2");
+
+  const page = pageToLetterText(
+    "<html><nav>Home About</nav><h1>Lip Filler &amp; You</h1><p>First paragraph — here.</p><ul><li>One</li><li>Two</li></ul><script>x()</script><footer>(c) 2026</footer></html>"
+  );
+  ok("headings survive as ##", page.includes("## Lip Filler & You"));
+  ok("list items stay on their own lines", /\n- One\n- Two/.test(page));
+  ok("navigation, scripts and footers are removed", !/Home About|x\(\)|\(c\) 2026/.test(page));
+  ok("and a stored page carries no em dash", !page.includes("—"));
+
+  const evidence = { numberHaystack: "we have 12 years and 4.9 stars", quotes: ["Best filler I have ever had, so natural looking"] };
+  const clean = await letterFaults('## Headline\nOver 12 years. "Best filler I have ever had, so natural looking" [PROOF] costs $1,999.', { ...evidence, numberHaystack: evidence.numberHaystack + " 1999" });
+  eq("a letter that only states backed figures and real quotes has no faults", clean, []);
+  const dirty = await letterFaults('## Results guaranteed\nWe helped 347 patients. "This changed my life completely and forever" -- truly.', evidence);
+  const rules = dirty.map((f) => f.rule);
+  ok("a guarantee is a fault", rules.includes("guarantee"));
+  ok("an unbacked figure is a fault", rules.includes("unbacked_number"));
+  ok("an invented quotation is a fault", rules.includes("invented_quote"));
+  ok("a double hyphen is a fault", rules.includes("dash"));
+
+  // ‼️ AN APPROVAL IS PINNED TO THE TREATMENT AND THE OUTCOME, NOT TO POSITIONING OR TERMS.
+  const base = offerFingerprint({ treatment: "Lip filler", outcomePromise: "more appointments" });
+  eq("the same offer spelled differently is the same fingerprint", offerFingerprint({ treatment: "lip filler.", outcomePromise: "More appointments" }), base);
+  ok("a new treatment makes an approval stale", offerFingerprint({ treatment: "Botox", outcomePromise: "more appointments" }) !== base);
+  ok("a new outcome makes an approval stale", offerFingerprint({ treatment: "Lip filler", outcomePromise: "more bookings" }) !== base);
+  ok("the letter, short offer and beliefs belong to an offer", kindBelongsToOffer("sales_letter") && kindBelongsToOffer("short_offer") && kindBelongsToOffer("necessary_beliefs"));
+  ok("the research and the avatar sheet belong to the audience", !kindBelongsToOffer("deep_research") && !kindBelongsToOffer("avatar_sheet"));
+
+  const letterSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "sales-letter.ts"), "utf8");
+  ok("a drafted letter's faults block approval", /doc\.source === "drafted" && doc\.faults\.length/.test(letterSrc));
+  ok("the letter is filed without touching output_ref", /storeGeneratedDoc/.test(letterSrc) && !/deliverArtifact/.test(letterSrc));
+  ok("the drafting prompt itself forbids em dashes", /No em dashes, no en dashes, no double hyphens/.test(letterSrc));
+}
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 //

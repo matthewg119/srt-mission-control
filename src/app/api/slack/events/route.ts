@@ -1045,6 +1045,32 @@ export async function POST(request: NextRequest) {
         //
         // The prefix is EXACT and the handler returns null on a miss, so a sentence that
         // mentions an offer falls straight through.
+        // 1a-quinquies. `letter ...` in the same prep call thread: the sales letter the framework's
+        // step 11 script opens with. Above the offer handler so a pasted letter (`letter replace:`) is
+        // never read as anything else; the offer handler already returns null for it either way.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleLetterThreadReply } = await import("@/lib/clients/sales-letter");
+          const lettered = await handleLetterThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (lettered) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, lettered.message);
+            if (!slackOk(posted)) console.error("[slack/events] letter reply failed");
+            // The draft's model call runs after the reply and after the ack, the shape `run` uses.
+            if (lettered.after) {
+              waitUntil(
+                lettered.after().catch((e) =>
+                  console.error("[slack/events] letter work failed:", (e as Error).message)
+                )
+              );
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { handleOfferThreadReply } = await import("@/lib/clients/offers");
           const locked = await handleOfferThreadReply({
