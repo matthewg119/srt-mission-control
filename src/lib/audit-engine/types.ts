@@ -45,6 +45,31 @@ export interface CrawlBlock {
   engines_cited_site: boolean | null;
 }
 
+/** A best-customer avatar as it was offered, plus where and when it was picked. */
+export interface LoomPickedAvatar {
+  label: string;
+  ticket: string;
+  whyHighRoi: string;
+  aiQuestion: string;
+  /** 1-based position on the menu it was picked from. Context only; the fields above are the record. */
+  index: number | null;
+  /** The niche_briefs key the menu came from, or null for the derived stand-in. */
+  nicheKey: string | null;
+  pickedAt: string;
+}
+
+/** The customer menu for one prospect, frozen at the moment a customer was picked from it. */
+export interface LoomBuyerMap {
+  best: Array<{ label: string; ticket: string; whyHighRoi: string; aiQuestion: string }>;
+  worst: Array<{ label: string; whyItHurts: string; economics: string; ownersSay: string }>;
+  /** 1-based index of the model's recommendation, which is not necessarily the one picked. */
+  recommended: number;
+  recommendedWhy: string;
+  isReposition: boolean;
+  nicheKey: string | null;
+  capturedAt: string;
+}
+
 export interface AuditReportRow {
   id: string;
   slug: string;
@@ -178,8 +203,37 @@ export interface AuditReportRow {
   loom_state: {
     /** "done" keeps avatarIndex around for `script` while releasing the digits back to email. */
     stage: "avatar" | "image" | "done";
-    /** 1-based index into NicheAvatars.best. Set once the avatar is picked. */
+    /**
+     * 1-based index into NicheAvatars.best. Set once the avatar is picked.
+     *
+     * ‼️ AN INDEX IS NOT A RECORD OF WHO WAS PICKED. `niche_briefs` is regenerated IN PLACE every
+     * NICHE_BRIEF_TTL_DAYS (30), so after a refresh "2" names whoever the model put second this
+     * time. Measured 2026-09-15: 3 picks on record, 2 of them in niches that no longer have a brief
+     * at all, and none recoverable. Kept for rows written before `pickedAvatar`; never the source
+     * of truth once that exists.
+     */
     avatarIndex?: number;
+    /**
+     * The customer this recording is aimed at, copied at the moment it was picked.
+     *
+     * Matthew, 2026-09-15: "if I do an AI visibility audit and I select the type of avatar I want
+     * to mention in the loom I want to be able to save that data and have it connected to that
+     * customer so we know that's the preferred avatar or at least one of the options". A snapshot
+     * because the menu it came from is regenerated; see avatarIndex.
+     */
+    pickedAvatar?: LoomPickedAvatar;
+    /**
+     * Every customer picked on this audit, oldest first, INCLUDING ones abandoned by a `loom`
+     * restart. A restart replaces the rest of this object, so this is carried across it on
+     * purpose: a customer he considered and moved off is still "one of the options".
+     */
+    picks?: LoomPickedAvatar[];
+    /**
+     * The whole menu the pick was made from: three best customers, three worst, and the one the
+     * model recommended. The "map of buyers" for this prospect, frozen with the pick for the same
+     * reason the pick is.
+     */
+    buyerMap?: LoomBuyerMap;
     /**
      * The audit-derived stand-in, used when the niche set could not be built.
      *

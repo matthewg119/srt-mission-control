@@ -61,7 +61,7 @@ import { buildLoomScript } from "./loom-script";
 import { buildImageIdeas, formatIdeasCard } from "./image-ideas";
 import { buildCallScript, buildFollowupScript, formatCallScript, formatFollowupScript, type CallMode } from "./call-script";
 import { buildDreamLeadPrompt, PRESET_ALIASES, type Preset } from "./dream-lead";
-import { getNicheAvatars, formatAvatarsCard, type BestAvatar, type NicheAvatars } from "./niche-avatars";
+import { getNicheAvatars, formatAvatarsCard, nicheKeyFor, type BestAvatar, type NicheAvatars } from "./niche-avatars";
 import { getIntelBrief, formatBriefMarkdown, sourceDomains } from "./intel-brief";
 import { draftDeliveryEmail, looksLikeTranscript } from "./delivery-email";
 import { draftNotesEmail } from "./notes-email";
@@ -80,7 +80,7 @@ import {
 } from "./draft-linter";
 import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, selectBelief } from "./seed-ledger";
 import { runThreadAgent } from "./thread-agent";
-import type { AuditReportRow, AuditRunRow } from "./types";
+import type { AuditReportRow, AuditRunRow, LoomBuyerMap, LoomPickedAvatar } from "./types";
 import { STAGE_LOOM_SENT } from "@/config/stage-display";
 import { enrolLoomFollowup } from "@/lib/followup-operator/loom-enrol";
 
@@ -666,6 +666,26 @@ async function resolveLoomAvatar(
 ): Promise<{ avatar: BestAvatar; index: number | null; avatars: NicheAvatars | null } | null> {
   const state = report.loom_state;
   if (state?.derivedAvatar) return { avatar: state.derivedAvatar, index: null, avatars: null };
+
+  // ‼️ THE SNAPSHOT WINS OVER THE INDEX (2026-09-15). The menu is regenerated in place every 30
+  // days, so re-reading `best[avatarIndex - 1]` on a later `script` rebuild can name a different
+  // customer from the one the recording was aimed at. The frozen menu is used for the worst/best
+  // lines too, so the script never pairs the picked customer with a newer menu's "avoid" list.
+  if (state?.pickedAvatar) {
+    const { label, ticket, whyHighRoi, aiQuestion } = state.pickedAvatar;
+    const avatars: NicheAvatars | null = state.buyerMap
+      ? {
+          best: state.buyerMap.best,
+          worst: state.buyerMap.worst,
+          pick: state.buyerMap.recommended,
+          pickWhy: state.buyerMap.recommendedWhy,
+          isReposition: state.buyerMap.isReposition,
+        }
+      : await nicheSet(report, view);
+    return { avatar: { label, ticket, whyHighRoi, aiQuestion }, index: state.pickedAvatar.index, avatars };
+  }
+
+  // Rows written before the snapshot existed. Can drift; see avatarIndex in types.ts.
   if (!state?.avatarIndex) return null;
   const set = await nicheSet(report, view);
   return set ? { avatar: set.best[state.avatarIndex - 1], index: state.avatarIndex, avatars: set } : null;
@@ -720,6 +740,9 @@ async function startLoomWizard(
     price: overrides.price ?? undefined,
     window: overrides.window ?? undefined,
     greetName: overrides.name ?? undefined,
+    // Carried across the restart, which otherwise replaces this whole object. A customer he picked
+    // and then moved off is still one of the options for this prospect.
+    picks: report.loom_state?.picks ?? undefined,
   };
   await slack.postThreadReply(channel, threadTs, renderPreflight(view, facts, overrides.price));
 
@@ -810,6 +833,26 @@ async function advanceLoomWizard(
     }
     const avatar = set.best[n - 1];
     const ideas = await buildImageIdeas(report, avatar);
+    const nicheKey = nicheKeyFor(report);
+    const pickedAt = new Date().toISOString();
+    const pickedAvatar: LoomPickedAvatar = {
+      label: avatar.label,
+      ticket: avatar.ticket,
+      whyHighRoi: avatar.whyHighRoi,
+      aiQuestion: avatar.aiQuestion,
+      index: n,
+      nicheKey,
+      pickedAt,
+    };
+    const buyerMap: LoomBuyerMap = {
+      best: set.best.map(({ label, ticket, whyHighRoi, aiQuestion }) => ({ label, ticket, whyHighRoi, aiQuestion })),
+      worst: set.worst.map(({ label, whyItHurts, economics, ownersSay }) => ({ label, whyItHurts, economics, ownersSay })),
+      recommended: set.pick,
+      recommendedWhy: set.pickWhy,
+      isReposition: set.isReposition,
+      nicheKey,
+      capturedAt: pickedAt,
+    };
     await supabaseAdmin
       .from("audit_reports")
       .update({
@@ -817,6 +860,9 @@ async function advanceLoomWizard(
           ...state,
           stage: "image",
           avatarIndex: n,
+          pickedAvatar,
+          picks: [...(state.picks ?? []), pickedAvatar],
+          buyerMap,
           ideas: ideas.map((i) => ({ preset: i.preset, label: i.label, line: i.line })),
         },
       })
