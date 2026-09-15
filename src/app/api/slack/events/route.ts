@@ -912,11 +912,14 @@ export async function POST(request: NextRequest) {
             const top = result.ok
               ? mergePhrases(extractPhrases(userText, "deep_research")).slice(0, 6)
               : [];
+            // The whole answer onto the avatar, and what the avatar is still missing.
+            const { afterResearchPaste } = await import("@/lib/clients/research-intake");
+            const extra = result.ok ? await afterResearchPaste(client.id, userText) : [];
 
             const posted = await slack.postThreadReply(
               channel,
               parentThreadTs,
-              formatIntakeReply(result, top)
+              [formatIntakeReply(result, top), ...(extra.length ? ["", ...extra] : [])].join("\n")
             );
             if (!slackOk(posted)) {
               console.error("[slack/events] research reply failed in", parentThreadTs);
@@ -2174,7 +2177,11 @@ async function captureOnboardingUploads(args: {
       const said = await slack.postThreadReply(
         args.channel,
         args.threadTs,
-        `*${result.filename ?? file.name ?? "That file"}*\n${formatIntakeReply(result, top)}`
+        [
+          `*${result.filename ?? file.name ?? "That file"}*`,
+          formatIntakeReply(result, top),
+          ...(result.extraLines?.length ? ["", ...result.extraLines] : []),
+        ].join("\n")
       );
       if (!slackOk(said)) console.error("[slack/events] research PDF reply failed");
     }

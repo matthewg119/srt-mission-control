@@ -61,6 +61,25 @@ export function unwrapSlackMarkup(text: string): string {
     .replace(/&amp;/g, "&");
 }
 
+/**
+ * The research answer as it should be KEPT, rather than as phrases are extracted from it.
+ *
+ * ‼️ NOT unwrapSlackMarkup, WHICH IS RIGHT FOR A PHRASE AND WRONG FOR A DOCUMENT. It deletes every
+ * `*`, `_`, `~` and backtick, because a phrase should be the market's words and not their
+ * formatting. Applied to the whole answer it breaks every source URL with an underscore in it and
+ * turns a bold `**1. Who buys**` heading into a plain line, which parses as no section at all, so an
+ * answer formatted that way would never be saved on the avatar. Slack link syntax and HTML entities
+ * are still unwrapped: those are Slack's encoding, not the author's.
+ */
+export function cleanResearchForStorage(text: string): string {
+  return stripPrefix(text)
+    .replace(/<([^|>]+)\|([^>]+)>/g, "$2")
+    .replace(/<((?:https?|mailto):[^>]+)>/g, "$1")
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
 export interface ResearchIntakeResult {
   ok: boolean;
   error?: string;
@@ -326,6 +345,95 @@ export async function ingestResearch(args: {
   };
 }
 
+/**
+ * After a person pastes research: keep the WHOLE answer on the avatar, then say what the avatar is
+ * still missing.
+ *
+ * ‼️ A PASTE USED TO KEEP ONLY ITS PHRASES. ingestResearch files question_bank rows and nothing else;
+ * the only writer of avatar_briefs.research_text was the automatic Haiku run. So a claude.com deep
+ * research answer, the one Matthew actually runs (D1: research stays a manual paste-back), lost its
+ * demographics, beliefs, blame and quotes the moment it was filed, and the avatar kept whatever the
+ * cheaper automatic run had said. Matthew, 2026-09-15: "THE DEEP RESEARCH MUST PROVIDE" the avatar's
+ * context, so the research that provides it has to be the research that is kept.
+ *
+ * ‼️ ONLY A FULL ANSWER REPLACES THE STORED ONE. The intake reply tells a person whose paste had no
+ * KEYWORDS block to "paste just this block", and a keywords-only paste must never overwrite forty
+ * thousand characters of research with fifty lines of pipes. A paste counts as full when at least
+ * FULL_RESEARCH_MIN_SECTIONS numbered sections are answered; anything shorter keeps its phrases and
+ * leaves the avatar alone, and the reply says which happened.
+ *
+ * ‼️ THE SAVE IS READ BACK. storeAvatarResearch logs a failed write and returns nothing, so this
+ * re-reads the row and only says "saved" when the stored text is the text that was pasted.
+ *
+ * Never throws: the phrases have already landed by the time this runs.
+ */
+export async function afterResearchPaste(clientId: string, rawText: string): Promise<string[]> {
+  try {
+    const body = cleanResearchForStorage(rawText);
+    const [{ audienceFor }, { avatarBriefFor, storeAvatarResearch }, profile] = await Promise.all([
+      import("./audiences"),
+      import("./avatars"),
+      import("./avatar-profile"),
+    ]);
+
+    const aud = await audienceFor(clientId);
+    if (!aud.ok) return [`:warning: Not saved on an avatar: ${aud.error}`];
+    const audience = aud.audience;
+    if (!audience.researchAvatarSlug) {
+      return [`:warning: Not saved on an avatar: the audience *${audience.label}* has no avatar key to file research under.`];
+    }
+
+    const lines: string[] = [];
+    const answered = profile.parseResearchSections(body).filter(profile.sectionAnswered).length;
+
+    if (answered < profile.FULL_RESEARCH_MIN_SECTIONS) {
+      lines.push(
+        `:paperclip: Not saved as *${audience.label}*'s research: this paste answers ${answered} numbered ` +
+          `section${answered === 1 ? "" : "s"}, and a full answer answers at least ${profile.FULL_RESEARCH_MIN_SECTIONS}. ` +
+          "What was already stored is untouched. That is expected for a KEYWORDS block pasted on its own."
+      );
+    } else {
+      const before = await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug);
+      await storeAvatarResearch({
+        vertical: audience.researchVertical,
+        avatarSlug: audience.researchAvatarSlug,
+        avatarLabel: audience.label,
+        researchText: body,
+        clientId,
+      });
+      const after = await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug);
+      if (after?.researchText !== body) {
+        lines.push(
+          `:x: *The research was NOT saved on ${audience.label}.* The phrases landed, but the avatar still ` +
+            "holds what it held before. Paste it again; if this repeats, avatar_briefs is refusing the write."
+        );
+      } else {
+        const prior = before?.researchText?.length ?? 0;
+        lines.push(
+          `:floppy_disk: Saved as *${audience.label}*'s research, ${answered} sections answered. ` +
+            (prior
+              ? `It replaces the ${prior.toLocaleString("en-US")} characters stored before. `
+              : "") +
+            "Every client targeting this avatar reads it."
+        );
+      }
+    }
+
+    const { completenessFor } = await import("./dataset-completeness");
+    const { formatDatasetReport } = await import("./dataset-spec");
+    const primary = (await completenessFor(clientId)).find((c) => c.audience?.isPrimary);
+    if (primary?.audience) {
+      lines.push(
+        "",
+        ...formatDatasetReport(primary.audience.label, true, primary.reports, primary.snapshot.offer.applies)
+      );
+    }
+    return lines;
+  } catch (e) {
+    return [`:warning: The phrases landed, but saving the research on the avatar failed: ${(e as Error).message}`];
+  }
+}
+
 /** The thread reply. Says what landed and what it did NOT do. */
 export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: HarvestedPhrase[]): string {
   if (!r.ok) return `:warning: Nothing was filed: ${r.error}`;
@@ -423,7 +531,7 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
 export async function ingestResearchPdf(args: {
   clientId: string;
   slackFileId: string;
-}): Promise<ResearchIntakeResult & { filename?: string }> {
+}): Promise<ResearchIntakeResult & { filename?: string; extraLines?: string[] }> {
   const { data: doc } = await supabaseAdmin
     .from("client_docs")
     .select("id, filename, content_type, storage_ref")
@@ -472,5 +580,6 @@ export async function ingestResearchPdf(args: {
       .eq("step_key", "avatar_harvest");
   }
 
-  return { ...result, filename };
+  const extraLines = result.ok ? await afterResearchPaste(args.clientId, `research: ${text}`) : [];
+  return { ...result, filename, extraLines };
 }
