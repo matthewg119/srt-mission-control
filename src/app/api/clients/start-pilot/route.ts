@@ -6,13 +6,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { waitUntil } from "@vercel/functions";
 import { startPilot } from "@/lib/clients/provision";
+import { announceClientStart, openClientBoard } from "@/lib/clients/open-board";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-// Provisioning does DNS, Slack, Graph and Zoho work in sequence. The default 10s would
-// cut it off partway, leaving a client with a channel and no welcome email.
-export const maxDuration = 120;
+// Provisioning does DNS, Slack, Graph and Zoho work in sequence, then the board opens in waitUntil.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const session = await auth().catch(() => null);
@@ -69,10 +70,35 @@ export async function POST(req: NextRequest) {
     marketRadiusMi: num(body.marketRadiusMi),
     importArchiveId,
     duplicateAcknowledged: Boolean(decision),
+    door: "dashboard",
   });
 
   if (!result.ok) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 400 });
+  }
+
+  // ‼️ THE SAME BOARD A BOOKING OPENS (2026-09-15). This button used to hand back an /onboarding?t=
+  // link and wait for the client to finish a six-step form, which then fired a scan that pitched the
+  // client in #hot-leads. Now it opens the board at once, attaches any audit on file, scans nothing,
+  // and announces the channel. In waitUntil because opening a board outlasts this route.
+  if (!result.alreadyProvisioned) {
+    const name = str(body.dbaName) || str(body.legalName) || str(body.email);
+    waitUntil(
+      (async () => {
+        const board = await openClientBoard(result.clientId, {
+          name,
+          headline: `:seedling: *${name}* started from the dashboard.`,
+        }).catch((e) => ({ claimed: false, adoptedReportId: null, warnings: [(e as Error).message] }));
+        await announceClientStart({
+          clientId: result.clientId,
+          name,
+          website: str(body.website) || null,
+          opsChannelId: result.opsChannelId ?? null,
+          board,
+          warnings: result.warnings,
+        }).catch((e) => console.error("[start-pilot] announcement failed:", (e as Error).message));
+      })()
+    );
   }
 
   return NextResponse.json({

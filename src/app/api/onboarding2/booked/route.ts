@@ -34,22 +34,27 @@
 // it is recorded.
 
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
 import { clean } from "@/lib/medspa/validate";
 import { loadByToken, patchDelivery } from "@/lib/onboarding2/session";
 import { findLeadByEmail, leadEmailFor, upsertLead } from "@/lib/onboarding2/lead";
 import { bookedCard } from "@/lib/onboarding2/card";
-import { verifyScheduledEvent } from "@/lib/calendly";
+import { verifyScheduledEvent, type ScheduledEventCheck } from "@/lib/calendly";
 import { hasBooked } from "@/lib/onboarding2/booking";
-import { provisionFromSigning } from "@/lib/onboarding2/provision";
-import { openOpsThread } from "@/lib/onboarding2/delivery";
+import { provisionFromSigning, type ProvisionResult } from "@/lib/onboarding2/provision";
+import { intakePatchFrom } from "@/lib/onboarding2/delivery";
 import { onboardingChannel } from "@/lib/onboarding2/constants";
+import { openClientBoard, type OpenBoardResult } from "@/lib/clients/open-board";
+import { sendBookingConfirmation } from "@/lib/clients/booking-confirmation-email";
+import { splitName } from "@/lib/medspa/validate";
 import type { Onboarding2SigningRow } from "@/lib/onboarding2/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-export const maxDuration = 60;
+// finishBooking runs in waitUntil and opens the whole board; see the note at the call.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -107,8 +112,14 @@ export async function POST(req: NextRequest) {
   // ‼️ EVERYTHING BELOW IS BEST-EFFORT AND NONE OF IT MAY COST THE BOOKING. The row is already
   // durable at this point. A provisioning failure is loud in Slack and leaves a real calendar
   // appointment intact, which is the right trade in that order and not the other one.
-  await finishBooking(row, verified.verified).catch((e) =>
-    console.error("[onboarding2/booked] finishBooking:", (e as Error).message)
+  //
+  // ‼️ IN waitUntil, NOT AWAITED (2026-09-15). finishBooking now opens the whole board: 41 anchors,
+  // the ready auto steps, the confirmation email. That is well past the minute this route had, and the
+  // visitor's browser is waiting on this response to move the chat on to its first question.
+  waitUntil(
+    finishBooking(row, verified, stored?.booked_slot_at ?? null).catch((e) =>
+      console.error("[onboarding2/booked] finishBooking:", (e as Error).message)
+    )
   );
 
   return NextResponse.json({
@@ -121,22 +132,27 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * Provision, announce, open the ops thread. Lifted from finishSigning() in the sign route.
+ * Provision, open the board, confirm the appointment, announce. THE BOOKING IS THE DOOR (2026-09-15).
  *
- * ‼️ THE ORDER IS LOAD-BEARING AND IT IS NOT THE OBVIOUS ONE. The card is posted BEFORE the ops
- * thread, and its `ts` is NOT clients.ops_thread_ts: postDeliveryChecklist edits the ops thread
- * message in place to become the board header, so pointing ops_thread_ts at this card would erase
- * it the moment the board opened.
+ * ‼️ THE BOARD OPENS HERE NOW, WHICH REVERSES WHAT THIS COMMENT USED TO SAY. It waited for the last
+ * of eight chat answers, because intake_received's verifier needs clients.intake_completed_at. So a
+ * prospect who booked and closed the tab had a client row, a channel and no board, and Matthew had
+ * nothing to work. Matthew: "once they book we automatically start onboarding them". openClientBoard
+ * writes intake_completed_at on its claim, so step 1 is true the moment they book. The answers that
+ * arrive afterwards fill columns in place (applyQualifyingAnswers in lib/onboarding2/delivery.ts).
  *
- * ‼️ THE DELIVERY BOARD DOES NOT OPEN HERE, AND THAT IS DELIBERATE. startPilot and the ops thread
- * happen on booking so an abandoned chat is still visible in Slack; seedDeliverySteps and
- * intake_received wait for the LAST qualifying answer, because intake_received's verifier needs
- * clients.intake_completed_at and four steps are blocked behind it. Opening a board on a
- * half-finished intake produces one stalled on step 1. Same reasoning as at signature, one
- * trigger earlier.
+ * ‼️ NO SCAN. The audit they booked from (row.report_slug) is attached as step 2. See open-board.ts.
+ *
+ * ‼️ THE CARD IS POSTED LAST AND IT IS THE ONE ANNOUNCEMENT. It carries the channel link, the call
+ * time, the board, the report, and what did not happen. Its ts is never clients.ops_thread_ts: that
+ * header lives in the client's own channel and refreshHeader rewrites it in place.
  */
-async function finishBooking(row: Onboarding2SigningRow, verified: boolean): Promise<void> {
-  const provision = await provisionFromSigning(row).catch((e) => ({
+async function finishBooking(
+  row: Onboarding2SigningRow,
+  verified: ScheduledEventCheck,
+  storedStartsAt: string | null
+): Promise<void> {
+  const provision: ProvisionResult = await provisionFromSigning(row).catch((e) => ({
     ok: false,
     clientId: null,
     slug: null,
@@ -154,69 +170,120 @@ async function finishBooking(row: Onboarding2SigningRow, verified: boolean): Pro
     });
   }
 
+  const businessName = row.business_legal_name || provision.report?.businessName || null;
+
   const lead = await upsertLead({
     email: leadEmailFor(row),
-    business_name: row.business_legal_name,
+    business_name: businessName,
     contact_name: row.contact_name,
     signer_title: row.signer_title,
     phone: row.contact_phone,
-    website: row.website,
+    website: row.website || provision.report?.website || null,
     client_id: provision.clientId,
     contact_id: provision.contactId,
   }).catch(() => null);
 
+  // ── The card, FIRST, and edited in place when the rest lands ──
+  // Opening a board takes minutes and this all runs in waitUntil. Posted last, a background
+  // function cut off at its limit would leave a real booking with no notification at all, which is
+  // the one outcome worse than a card that says "opening". So it goes up now, with the channel link
+  // already on it, and chat.update fills in the board and the email when they finish.
   const channel = onboardingChannel();
-  const card = bookedCard({ row, lead, provision });
-
-  if (!verified) {
-    card.blocks.push({
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text:
-            ":warning: This booking was NOT verified against Calendly, because CALENDLY_API_TOKEN " +
-            "is unset. Confirm the appointment exists before you prepare for it.",
-        },
-      ],
-    });
-  }
-
-  if (!channel) {
-    console.error(
-      "[onboarding2/booked] SLACK_CLIENT_ONBOARDING_CHANNEL unset. Card:\n" + card.text
-    );
-    return;
-  }
-
-  const posted = await slack.postMessage(channel, card.text, card.blocks).catch((e) => {
-    console.error("[onboarding2/booked] slack post failed:", (e as Error).message);
-    return null;
-  });
-
-  // slackFetch never throws, so ok has to be checked rather than assumed.
-  const ts = posted && posted.ok ? (posted.ts as string) : null;
-  if (ts) await patchDelivery(row.id, { slack_channel: channel, slack_thread_ts: ts });
-
-  // postDeliveryChecklist REFUSES outright when ops_thread_ts is null, so if this post fails the
-  // board can never open later. That is why the failure is a warning in the thread and not a log.
-  if (provision.clientId) {
-    const ops = await openOpsThread({
-      clientId: provision.clientId,
-      name: row.business_legal_name || row.contact_name || "New client",
-    }).catch((e) => ({ ts: null, warning: (e as Error).message }));
-
-    if (ops.warning && ts) {
-      await slack
-        .postThreadReply(
-          channel,
-          ts,
-          [
-            `:warning: The ops thread did not open: ${ops.warning}`,
-            "The delivery board cannot post until it does.",
-          ].join("\n")
-        )
-        .catch(() => null);
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
+  const earlyStartsAt = verified.startTime ?? storedStartsAt;
+  const render = (extra: Partial<Parameters<typeof bookedCard>[0]>) => {
+    const card = bookedCard({ row, lead, provision, startsAt: earlyStartsAt, appUrl, ...extra });
+    if (!verified.verified) {
+      card.blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text:
+              ":warning: This booking was NOT verified against Calendly, because CALENDLY_API_TOKEN " +
+              "is unset. Confirm the appointment exists before you prepare for it.",
+          },
+        ],
+      });
     }
+    return card;
+  };
+
+  let cardTs: string | null = null;
+  if (channel) {
+    const early = render({});
+    if (provision.clientId && !row.is_demo) {
+      early.blocks.push({
+        type: "context",
+        elements: [{ type: "mrkdwn", text: ":hourglass_flowing_sand: Opening the board and sending the confirmation..." }],
+      });
+    }
+    const posted = await slack.postMessage(channel, early.text, early.blocks).catch((e) => {
+      console.error("[onboarding2/booked] slack post failed:", (e as Error).message);
+      return null;
+    });
+    // slackFetch never throws, so ok has to be checked rather than assumed.
+    cardTs = posted && posted.ok ? (posted.ts as string) : null;
+    if (cardTs) await patchDelivery(row.id, { slack_channel: channel, slack_thread_ts: cardTs });
+  } else {
+    console.error("[onboarding2/booked] SLACK_CLIENT_ONBOARDING_CHANNEL unset, no booked card.");
+  }
+
+  // ── The board ──
+  let board: OpenBoardResult | null = null;
+  if (provision.clientId && !row.is_demo) {
+    const { patch } = intakePatchFrom(row, lead);
+    // intakePatchFrom names the business off the chat's business_name answer, which comes AFTER
+    // booking, and falls back to the person's name for dba_name. The report knows the business.
+    if (businessName) {
+      patch.legal_name = patch.legal_name ?? businessName;
+      patch.dba_name = businessName;
+    }
+    board = await openClientBoard(provision.clientId, {
+      name: businessName || row.contact_name || "New client",
+      reportSlug: row.report_slug,
+      intakePatch: patch,
+    }).catch((e) => ({ claimed: false, adoptedReportId: null, warnings: [(e as Error).message] }));
+  }
+
+  // ── The confirmation email ──
+  // Once per booking: the route already returned early on hasBooked(), so a re-fired
+  // event_scheduled never reaches here. Not tied to the board claim, because a returning client
+  // whose board is already open still booked a call and still needs the invite.
+  let confirmation: { sent: boolean; error?: string | null } | null = null;
+  const startsAt = verified.startTime ?? storedStartsAt;
+  const to = leadEmailFor(row);
+  if (!row.is_demo && startsAt && to) {
+    const { firstName } = splitName(row.contact_name || row.print_name || "");
+    confirmation = await sendBookingConfirmation({
+      to,
+      firstName: firstName || null,
+      businessName,
+      startsAt,
+      endsAt: verified.endTime,
+      timeZone: lead?.call_timezone ?? null,
+      joinUrl: verified.joinUrl,
+      eventUuid: verified.eventUuid,
+    })
+      .then(() => ({ sent: true }))
+      .catch((e) => ({ sent: false, error: (e as Error).message }));
+  } else if (!row.is_demo && !startsAt) {
+    confirmation = { sent: false, error: "no appointment time came back from Calendly or the chat" };
+  }
+
+  if (!channel || !cardTs) return;
+  const final = render({ board, confirmation });
+  const updated = (await slack.updateMessage(channel, cardTs, final.text, final.blocks).catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+  } | null;
+  if (!updated?.ok) {
+    // The card is up; say what the edit would have said rather than lose it.
+    const lines = [
+      board?.claimed ? ":white_check_mark: Board opened." : ":information_source: Board was not opened by this booking.",
+      confirmation ? (confirmation.sent ? ":white_check_mark: Confirmation email sent." : `:x: Confirmation email failed: ${confirmation.error}`) : null,
+      ...(board?.warnings ?? []).map((w) => `- ${w}`),
+    ].filter(Boolean);
+    await slack.postThreadReply(channel, cardTs, lines.join("\n")).catch(() => null);
   }
 }

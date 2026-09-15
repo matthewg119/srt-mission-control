@@ -45,7 +45,8 @@ import { hashIp, clientIpFrom } from "@/lib/scan/session";
 import { clean } from "@/lib/medspa/validate";
 import { loadByToken, overChatIpLimit, patchOpenSigning } from "@/lib/onboarding2/session";
 import { isDemoRequest } from "@/lib/onboarding2/demo";
-import { startDelivery } from "@/lib/onboarding2/delivery";
+import { applyQualifyingAnswers } from "@/lib/onboarding2/delivery";
+import { waitUntil } from "@vercel/functions";
 import {
   appendTurn,
   bumpTurnCount,
@@ -87,7 +88,8 @@ import type { Onboarding2LeadRow, Onboarding2SigningRow } from "@/lib/onboarding
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-export const maxDuration = 60;
+// 300, not 60: applyQualifyingAnswers runs in waitUntil and can open a whole board when booking did not.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -293,25 +295,32 @@ export async function POST(req: NextRequest) {
         );
     }
 
-    // The intake write, the domain, the subdomain, the board and the baseline scan.
-    const delivery = await startDelivery(row, ctx.lead).catch((e) => ({
-      started: false,
-      claimed: false,
-      warnings: [(e as Error).message],
-    }));
+    // The answers onto the client row. The board opened at booking (open-board.ts); this only opens
+    // one if that never happened, which takes far longer than this route's minute, so it runs in
+    // waitUntil and the visitor gets the closing messages straight away. No scan on either path.
+    const lead = ctx.lead;
+    waitUntil(
+      (async () => {
+        const delivery = await applyQualifyingAnswers(row, lead).catch((e) => ({
+          started: false,
+          claimed: false,
+          warnings: [(e as Error).message],
+        }));
 
-    if (delivery.warnings.length && row.slack_thread_ts && row.slack_channel) {
-      await slack
-        .postThreadReply(
-          row.slack_channel,
-          row.slack_thread_ts,
-          [
-            ":warning: The delivery board did not open cleanly:",
-            ...delivery.warnings.map((w) => `- ${w}`),
-          ].join("\n")
-        )
-        .catch(() => null);
-    }
+        if (delivery.warnings.length && row.slack_thread_ts && row.slack_channel) {
+          await slack
+            .postThreadReply(
+              row.slack_channel,
+              row.slack_thread_ts,
+              [
+                ":warning: The qualifying answers did not land cleanly:",
+                ...delivery.warnings.map((w) => `- ${w}`),
+              ].join("\n")
+            )
+            .catch(() => null);
+        }
+      })()
+    );
   }
 
   // The chips under the next question, from the same function that decided what to ask, so what

@@ -82,19 +82,32 @@ export function isCalendlyConfigured(kind: EventKind): boolean {
  * as success would have no way to tell a checked booking from an unchecked one. The caller
  * records which it got.
  */
-export async function verifyScheduledEvent(uri: string | null | undefined): Promise<{
+export interface ScheduledEventCheck {
   status: "verified" | "unverified" | "not_found";
   verified: boolean;
   startTime: string | null;
-}> {
+  /**
+   * The rest of the event, read off the same GET, for the confirmation email (2026-09-15). All null
+   * unless verified: an unverified booking has nothing but the instant the chat computed.
+   */
+  endTime: string | null;
+  eventName: string | null;
+  /** The video link (Zoom, Meet, Teams) or the typed location. Null when the event type has none. */
+  joinUrl: string | null;
+  /** The scheduled event's uuid, the last path segment of the URI. The .ics UID is built from it. */
+  eventUuid: string | null;
+}
+
+export async function verifyScheduledEvent(uri: string | null | undefined): Promise<ScheduledEventCheck> {
+  const empty = { startTime: null, endTime: null, eventName: null, joinUrl: null, eventUuid: null };
   const key = token();
   // No token, or nothing to check: not a failure, and explicitly not a pass either.
-  if (!key || !uri) return { status: "unverified", verified: false, startTime: null };
+  if (!key || !uri) return { status: "unverified", verified: false, ...empty };
 
   // Only ever call Calendly's own host with something shaped like its own URI. A `uri` off a
   // request body is attacker-controlled, and handing it to fetch() unchecked is an SSRF.
   if (!/^https:\/\/api\.calendly\.com\/scheduled_events\/[A-Za-z0-9_-]+$/.test(uri)) {
-    return { status: "not_found", verified: false, startTime: null };
+    return { status: "not_found", verified: false, ...empty };
   }
 
   try {
@@ -103,26 +116,43 @@ export async function verifyScheduledEvent(uri: string | null | undefined): Prom
       signal: AbortSignal.timeout(6_000),
       cache: "no-store",
     });
-    if (res.status === 404) return { status: "not_found", verified: false, startTime: null };
+    if (res.status === 404) return { status: "not_found", verified: false, ...empty };
     if (!res.ok) {
       const body = await res.text();
       console.error(`[calendly] verify ${res.status}: ${body.slice(0, 200)}`);
       // ‼️ A 500 OR A TIMEOUT IS `unverified`, NOT `not_found`. Calendly having a bad afternoon
       // must not read as "this person forged a booking", which would refuse a real appointment.
-      return { status: "unverified", verified: false, startTime: null };
+      return { status: "unverified", verified: false, ...empty };
     }
     const json = (await res.json()) as {
-      resource?: { status?: string; start_time?: string };
+      resource?: {
+        status?: string;
+        start_time?: string;
+        end_time?: string;
+        name?: string;
+        location?: { join_url?: string | null; location?: string | null } | null;
+      };
     };
     const resource = json.resource;
     // A cancelled event is not a booking. Calendly keeps the row and flips `status`.
     if (!resource || resource.status !== "active") {
-      return { status: "not_found", verified: false, startTime: null };
+      return { status: "not_found", verified: false, ...empty };
     }
-    return { status: "verified", verified: true, startTime: resource.start_time ?? null };
+    // Only a link is a join URL. A typed location ("phone call", an address) is not something to
+    // put behind a Join button.
+    const where = resource.location?.join_url || resource.location?.location || null;
+    return {
+      status: "verified",
+      verified: true,
+      startTime: resource.start_time ?? null,
+      endTime: resource.end_time ?? null,
+      eventName: resource.name ?? null,
+      joinUrl: where && /^https:\/\//i.test(where) ? where : null,
+      eventUuid: uri.split("/").pop() ?? null,
+    };
   } catch (e) {
     console.error("[calendly] verify failed:", (e as Error).message);
-    return { status: "unverified", verified: false, startTime: null };
+    return { status: "unverified", verified: false, ...empty };
   }
 }
 

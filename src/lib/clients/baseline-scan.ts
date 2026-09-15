@@ -177,7 +177,9 @@ export async function startBaselineScan(clientId: string): Promise<void> {
   const result = await runAuditPipeline({
     website: client.website as string,
     city,
-    requesterEmail: (client.email as string) ?? undefined,
+    // ‼️ NO requesterEmail. finishReport drafts a pitch and pings #hot-leads for any report carrying
+    // one, and on 2026-09-15 that pitched SRT Agency LLC its own baseline. isClientRun in
+    // finish-report.ts is the real guard; leaving the email off is the second one.
     requesterName: ((client.dba_name || client.legal_name) as string) ?? undefined,
     contactId: (client.contact_id as string) ?? undefined,
     clientId,

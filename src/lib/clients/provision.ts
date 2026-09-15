@@ -110,6 +110,17 @@ export interface StartPilotInput {
    * with nobody to ask (the public /start page, a signed agreement) can still show it.
    */
   duplicateAcknowledged?: boolean;
+  /**
+   * Which door this came through, and so who announces it and whether the intake-link email goes.
+   *
+   * ‼️ `booking` IS THE DOOR (2026-09-15). Audit report, Get Started, the /onboarding2 chat, a Calendly
+   * booking: the booking opens the board and sends the appointment confirmation, and its booked card is
+   * the one announcement. `dashboard` is the manual fallback and opens the board the same way. Neither
+   * sends the /onboarding?t= welcome email nor posts the Pilot started card, because both callers post
+   * their own card with the channel link, and two cards per client is the wall this channel had before.
+   * `self_serve` is the legacy /start behaviour, unchanged.
+   */
+  door?: "booking" | "dashboard" | "self_serve";
 }
 
 export type StartPilotResult =
@@ -120,6 +131,8 @@ export type StartPilotResult =
       /** Null when the secret is unset. The caller must show it, not swallow it. */
       onboardingUrl: string | null;
       alreadyProvisioned: boolean;
+      /** The client's private board channel, or null when it could not be created (board falls back). */
+      opsChannelId?: string | null;
       warnings: string[];
       /** What a reactivation restored, one line per kind. Empty when nothing was imported. */
       imported?: string[];
@@ -315,15 +328,23 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     // stored, so the link genuinely cannot be re-derived. Re-issuing one is a
     // deliberate, separate action, which is the correct cost for handing out a new
     // bearer credential.
+    const { data: prior } = await supabaseAdmin
+      .from("clients")
+      .select("ops_channel_id")
+      .eq("id", clientId)
+      .maybeSingle();
     return {
       ok: true,
       clientId,
       slug,
       onboardingUrl: null,
       alreadyProvisioned: true,
+      opsChannelId: (prior?.ops_channel_id as string | null) ?? null,
       warnings: [],
     };
   }
+
+  const door = input.door ?? "self_serve";
 
   const warnings: string[] = [];
   const warn = (msg: string) => {
@@ -402,9 +423,23 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   // A failure is a warning, never fatal: channelFor() falls back to the shared onboarding
   // channel, so a client whose channel could not be created works exactly as every client
   // provisioned before today does.
-  await createOpsChannel(clientId, slug).catch((e) =>
-    warn(`ops channel not created: ${(e as Error).message}`)
+  //
+  // ‼️ WITH MATTHEW INVITED. A private channel is invisible to anybody not in it, and until
+  // 2026-09-15 this call passed no invite, so SRT Agency LLC's board sat in #srt-srt-agency-llc with
+  // only the bot in it and "no channel was created" was the only reasonable reading.
+  const owner = process.env.MATTHEW_SLACK_USER_ID || null;
+  if (!owner) warn("MATTHEW_SLACK_USER_ID is not set, so nobody was invited into the private board channel.");
+  const made = await createOpsChannel(clientId, slug, { name: opsChannelNameFor(slug), invite: owner }).catch(
+    (e) => {
+      warn(`ops channel not created: ${(e as Error).message}`);
+      return null;
+    }
   );
+  if (made?.inviteError) warn(`could not invite ${owner} into #${made.name}: ${made.inviteError}`);
+  const opsChannelId: string | null =
+    made?.channelId ??
+    (((await supabaseAdmin.from("clients").select("ops_channel_id").eq("id", clientId).maybeSingle()).data
+      ?.ops_channel_id as string | null) ?? null);
 
   // ── Onboarding token ──
   let onboardingUrl: string | null = null;
@@ -425,7 +460,11 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   }
 
   // ── Welcome email ──
-  if (onboardingUrl) {
+  // Only for the legacy self-serve door. A booking gets the appointment confirmation from its own
+  // route (booking-confirmation-email.ts), and a dashboard start has nobody waiting on a form.
+  if (door !== "self_serve") {
+    // Nothing to send here.
+  } else if (onboardingUrl) {
     await sendPilotWelcome({
       to: email,
       firstName: input.contactFirstName?.trim() || null,
@@ -447,22 +486,27 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   }).catch((e) => warn(`CRM link failed: ${(e as Error).message}`));
 
   // ── Post to #onboarding-srt-aeo ──
-  await postOnboardingCard({
-    legalName: legalName || email,
-    slug,
-    email,
-    website,
-    onboardingUrl,
-    clientId,
-  }).catch((e) => warn(`onboarding card failed: ${(e as Error).message}`));
+  // The booking and dashboard doors announce for themselves, once the board is open, with the
+  // channel link and the call time. See StartPilotInput.door.
+  if (door === "self_serve") {
+    await postOnboardingCard({
+      legalName: legalName || email,
+      slug,
+      email,
+      website,
+      onboardingUrl,
+      clientId,
+      opsChannelId,
+    }).catch((e) => warn(`onboarding card failed: ${(e as Error).message}`));
+  }
 
   if (warnings.length) {
     await postInfraAlert(
-      [`:warning: Provisioning for *${legalName}* finished with problems:`, ...warnings.map((w) => `- ${w}`)].join("\n")
+      [`:warning: Provisioning for *${legalName || email}* finished with problems:`, ...warnings.map((w) => `- ${w}`)].join("\n")
     ).catch(() => {});
   }
 
-  return { ok: true, clientId, slug, onboardingUrl, alreadyProvisioned: false, warnings, imported };
+  return { ok: true, clientId, slug, onboardingUrl, alreadyProvisioned: false, opsChannelId, warnings, imported };
 }
 
 /**
@@ -700,7 +744,7 @@ export async function createOpsChannel(
    * channels and false of these.
    */
   opts: { name?: string; invite?: string | null } = {}
-): Promise<{ channelId: string; name: string } | null> {
+): Promise<{ channelId: string; name: string; inviteError?: string } | null> {
   const { data: existing } = await supabaseAdmin
     .from("clients")
     .select("ops_channel_id")
@@ -749,6 +793,7 @@ export async function createOpsChannel(
   if (error) throw new Error(`could not record the channel: ${error.message}`);
 
   // Into the channel it just made, so the person who owns this board can see it at all.
+  let inviteError: string | undefined;
   if (opts.invite) {
     const invited = (await slack.inviteToChannel(channelId, opts.invite)) as {
       ok?: boolean;
@@ -756,7 +801,8 @@ export async function createOpsChannel(
     };
     // already_in_channel is the normal answer on a re-run and is not a failure.
     if (!invited?.ok && invited?.error !== "already_in_channel") {
-      console.error(`[clients/provision] could not invite ${opts.invite}:`, invited?.error ?? "unknown");
+      inviteError = invited?.error ?? "unknown";
+      console.error(`[clients/provision] could not invite ${opts.invite}:`, inviteError);
     }
   }
 
@@ -766,7 +812,21 @@ export async function createOpsChannel(
   const { forgetChannel } = await import("./step-board");
   forgetChannel(clientId);
 
-  return { channelId, name: channelName ?? name };
+  return { channelId, name: channelName ?? name, inviteError };
+}
+
+/**
+ * srt-<slug>, except for a slug that already starts with srt-, which would read srt-srt-agency-llc.
+ */
+export function opsChannelNameFor(slug: string): string {
+  return /^srt-/.test(slug) ? slug : `srt-${slug}`;
+}
+
+/** A Slack channel mention, or a plain "not created" line, for every card that announces a client. */
+export function channelLine(opsChannelId: string | null | undefined): string {
+  return opsChannelId
+    ? `*Channel:* <#${opsChannelId}>`
+    : `*Channel:* not created, the board is in this channel instead`;
 }
 
 /**
@@ -786,6 +846,7 @@ async function postOnboardingCard(args: {
   website: string | null;
   onboardingUrl: string | null;
   clientId: string;
+  opsChannelId: string | null;
 }): Promise<void> {
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!channel) {
@@ -798,6 +859,7 @@ async function postOnboardingCard(args: {
   const text = [
     `:seedling: *Pilot started: ${args.legalName}*`,
     ``,
+    channelLine(args.opsChannelId),
     args.website ? `*Website:* ${args.website}` : `*Website:* not given yet`,
     `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
     args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,

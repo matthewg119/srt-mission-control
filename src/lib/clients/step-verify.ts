@@ -31,7 +31,7 @@
 // absent answer is reported as absent and never guessed.
 
 import { supabaseAdmin } from "@/lib/db";
-import { BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
+import { ADOPTED_PROSPECT_AUDIT, BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
 import { slack } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
@@ -285,32 +285,44 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   //    is the baseline the day 30, 60 and 90 numbers are measured against, so "a run fired FOR
   //    this client" is the only acceptable link. presence-pdf.ts resolves it the same way.
   baseline_scan: async (ctx) => {
-    const { data: report, error } = await supabaseAdmin
-      .from("audit_reports")
-      .select("id, status, score")
-      .eq("client_id", ctx.clientId)
-      // ‼️ 4. AND THE SUPPLIED RUNS ARE EXCLUDED, WHICH IS THE FOURTH DELIBERATE THING HERE.
-      // Photograph II is fired FOR this client and carries its client_id, so without this filter
-      // the first Day 0 run would become "the newest report" and step 2 would start reporting the
-      // Day 0 score as the baseline it is supposed to be measured against. See run-labels.ts.
-      //
-      // ‼️ 5. AND THE ADOPTED PROSPECT AUDITS ARE EXCLUDED TOO. Point 3 above says client_id ONLY,
-      // with no contact_id or domain fallback, BECAUSE either can match a prospect_audit. On
-      // 2026-09-14 a backfill performed exactly that domain match in SQL, so client_id stopped
-      // carrying the meaning point 3 depends on and BASELINE_ONLY cannot tell the difference:
-      // it filters by exclusion and prospect_audit is not excluded. This is the half that does.
-      .or(BASELINE_ONLY)
-      .eq("client_link_source", FIRED_FOR_CLIENT)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) return dbUnreachable("audit_reports");
+    const newestLinked = (source: string) =>
+      supabaseAdmin
+        .from("audit_reports")
+        .select("id, status, score, created_at")
+        .eq("client_id", ctx.clientId)
+        // ‼️ 4. AND THE SUPPLIED RUNS ARE EXCLUDED, WHICH IS THE FOURTH DELIBERATE THING HERE.
+        // Photograph II is fired FOR this client and carries its client_id, so without this filter
+        // the first Day 0 run would become "the newest report" and step 2 would start reporting the
+        // Day 0 score as the baseline it is supposed to be measured against. See run-labels.ts.
+        .or(BASELINE_ONLY)
+        .eq("client_link_source", source)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    // ‼️ 5. A RUN FIRED FOR THE CLIENT FIRST, THEN THE PROSPECT AUDIT THEY BOOKED FROM (2026-09-15).
+    // This step used to refuse adopted audits outright, because client_id stopped meaning "fired for
+    // this client" after the 2026-09-14 backfill. The doctrine changed with the booking door: every
+    // client arrives through the audit Matthew ran before the Loom, onboarding no longer fires a scan
+    // of its own, and the measured baseline is the Day 0 run at day_zero_archive. So step 2 is now
+    // "the pre-call audit is attached". A run fired for the client still wins when one exists, and
+    // the evidence line says which kind was found so nobody reads an adopted audit as a photograph.
+    const fired = await newestLinked(FIRED_FOR_CLIENT);
+    if (fired.error) return dbUnreachable("audit_reports");
+    let report = fired.data;
+    let kind = "fired for this client";
+    if (!report) {
+      const adopted = await newestLinked(ADOPTED_PROSPECT_AUDIT);
+      if (adopted.error) return dbUnreachable("audit_reports");
+      report = adopted.data;
+      kind = `pre-call audit from ${String(report?.created_at ?? "").slice(0, 10)}, adopted when they booked`;
+    }
 
     if (!report) {
       return notYet(
         "audit_reports rows carrying this client's id",
-        "no baseline run has been recorded against this client",
-        "Photograph I has not started. Un-tick this step to re-run the baseline scan."
+        "no audit is attached to this client",
+        "Nothing was scanned at onboarding on purpose. Hit Re-run baseline scan on the client board to run one."
       );
     }
 
@@ -347,7 +359,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     return verified(
       `${count} audit_runs rows, ${answered ?? 0} with a real answer`,
-      `report status done, score ${report.score ?? "unscored"}`
+      `report status done, score ${report.score ?? "unscored"}, ${kind}`
     );
   },
 

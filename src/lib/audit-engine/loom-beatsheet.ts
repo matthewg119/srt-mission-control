@@ -22,7 +22,6 @@
 
 import { callClaudeJSON } from "@/lib/claude-calls";
 import {
-  BOOKING_LINK,
   FOUNDING_SPOTS,
   FREE_UNTIL_LINE,
   GUARANTEE_RESTATE,
@@ -378,9 +377,10 @@ export function renderPreflight(view: ReportView, f: BeatSheetFacts, price?: str
     //
     // It was PAYMENT_LINK until 2026-08-25. Nothing is charged up front under the new offer, so a
     // checkout page open in a tab would contradict the free period the video just promised.
-    BOOKING_LINK
-      ? `[ ] Booking page open in a tab: ${BOOKING_LINK}`
-      : `[ ] NO BOOKING LINK SET (SRT_ONBOARDING_CALL_URL). Do not say "the link to book the onboarding call"`,
+    //
+    // 2026-09-15: the booking link is the report's own Get Started button (/onboarding2 with r=<slug>).
+    // A booking there provisions the client and opens the board; a bare Calendly page did neither.
+    `[ ] Report open in a tab, scrolled to Get Started: that button is the booking link`,
     f.robotsVerdict === "soft"
       ? `[ ] robots.txt blocks ${f.robotsBot}, TRAINING only. Do NOT say "your site blocks ${f.robotsEngine}"`
       : null,

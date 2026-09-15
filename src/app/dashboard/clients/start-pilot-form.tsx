@@ -103,21 +103,12 @@ export function StartPilotForm() {
             </ul>
           </div>
         )}
-        {result.url ? (
-          <>
-            <p className="mt-2 text-xs text-[rgba(255,255,255,0.5)]">
-              The welcome email is on its way. This is the link it contains, shown once,
-              because only its hash is stored:
-            </p>
-            <p className="mt-2 break-all rounded-lg bg-black/30 p-3 font-mono text-xs text-[#00C9A7]">
-              {result.url}
-            </p>
-          </>
-        ) : (
-          <p className="mt-2 text-xs text-[#F5A623]">
-            No onboarding link was generated. Set CLIENT_LINK_SECRET, then re-issue.
-          </p>
-        )}
+        {/* No intake link any more (2026-09-15): the board opens straight away in the client's own
+            Slack channel, and #onboarding-srt-aeo gets one card with the channel link. */}
+        <p className="mt-2 text-xs text-[rgba(255,255,255,0.5)]">
+          The board is opening in the client&apos;s own Slack channel. The channel link is posted in
+          #onboarding-srt-aeo within a minute. Nothing is emailed to the client and nothing is scanned.
+        </p>
         {result.warnings.length > 0 && (
           <ul className="mt-3 space-y-1 text-xs text-[#F5A623]">
             {result.warnings.map((w) => (

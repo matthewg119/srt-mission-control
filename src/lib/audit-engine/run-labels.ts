@@ -119,6 +119,25 @@ export function baselineReportsOnly<T extends { or(filter: string): T }>(query: 
 /** The client_link_source value meaning "this run was fired FOR this client". */
 export const FIRED_FOR_CLIENT = "fired_for_client";
 
+/** The client_link_source value meaning "a prospect audit, attached to the client who later booked". */
+export const ADOPTED_PROSPECT_AUDIT = "backfilled_by_domain";
+
+/** The lead_source every client scan carries (baseline-scan.ts). */
+export const CLIENT_ONBOARDING_SOURCE = "aeo_client_onboarding";
+
+/**
+ * TRUE when a report was fired for somebody who is already a client, so it must never be pitched.
+ *
+ * ‼️ THE #hot-leads CARD AND THE OUTLOOK PITCH DRAFT ARE PROSPECT MACHINERY. On 2026-09-15 SRT Agency
+ * LLC finished the intake form, Photograph I ran with the client's own email as requester_email, and
+ * finishReport drafted "SRT Agency scored 13/100 on AI visibility" to the client and pinged #hot-leads
+ * as though a new lead had come in. Either marker alone is enough: client_link_source is written at
+ * insert for a run fired for a client, and lead_source is what baseline-scan.ts passes.
+ */
+export function isClientRun(row: { client_link_source?: string | null; lead_source?: string | null }): boolean {
+  return row.client_link_source === FIRED_FOR_CLIENT || row.lead_source === CLIENT_ONBOARDING_SOURCE;
+}
+
 /**
  * Restrict a query to the client's own baseline PHOTOGRAPH, not merely to a report it is linked to.
  *
@@ -145,6 +164,12 @@ export const FIRED_FOR_CLIENT = "fired_for_client";
  *   - question-sets.ts's universalSetFor, whose own comment calls its filter the most load-bearing
  *     in the set: the tracked set is DERIVED from that report and then FROZEN forever, and every
  *     later client in the vertical inherits it.
+ *
+ * ‼️ SUPERSEDED FOR BOTH OF THOSE ON 2026-09-15, BY THE BOOKING DOOR. Onboarding no longer fires a
+ * scan: the audit Matthew ran before the Loom is adopted at booking, by the exact report slug the
+ * client clicked Get Started on, and the measured baseline is the Day 0 run at day_zero_archive. Both
+ * readers now take a fired_for_client run first and fall back to ADOPTED_PROSPECT_AUDIT, and the step 2
+ * evidence line names which one it found. See src/lib/clients/open-board.ts.
  *
  * ‼️ DELIBERATELY NOT APPLIED TO adoptAuditClassification, and that one is worth the sentence.
  * It reads vertical_slug and business_type and writes them only over NULL. An adopted prospect

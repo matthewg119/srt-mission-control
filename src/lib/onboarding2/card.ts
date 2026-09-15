@@ -16,6 +16,8 @@ import type { SlackBlock } from "@/lib/slack-bot";
 import type { ProvisionResult } from "./provision";
 import type { Onboarding2LeadRow, Onboarding2SigningRow } from "./types";
 import { QUALIFYING_QUESTIONS } from "@/config/onboarding2";
+import { channelLine } from "@/lib/clients/provision";
+import { formatCallTime } from "@/lib/clients/booking-confirmation-email";
 
 function section(text: string): SlackBlock {
   return { type: "section", text: { type: "mrkdwn", text } };
@@ -135,33 +137,62 @@ export function bookedCard(args: {
   row: Onboarding2SigningRow;
   lead: Onboarding2LeadRow | null;
   provision: ProvisionResult;
+  /** The board opened at booking (2026-09-15). Null when there was no client to open it for. */
+  board?: { claimed: boolean; adoptedReportId: string | null; warnings: string[] } | null;
+  /** Our confirmation email. Null when it was not attempted. */
+  confirmation?: { sent: boolean; error?: string | null } | null;
+  /** The verified appointment instant, and the zone they picked in the chat. */
+  startsAt?: string | null;
+  appUrl?: string;
 }): { text: string; blocks: SlackBlock[] } {
   const { row, provision, lead } = args;
-  const business = row.business_legal_name || row.contact_email || "A new lead";
+  const report = provision.report ?? null;
+  const business = row.business_legal_name || report?.businessName || row.contact_email || "A new lead";
   const text = `Call booked: ${business}`;
+  const app = args.appUrl ?? "https://mission.srtagency.com";
 
-  const blocks: SlackBlock[] = [
-    header(`Call booked: ${business}`),
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: `*Contact*\n${orDash(row.contact_name)}` },
-        { type: "mrkdwn", text: `*Title*\n${orDash(row.signer_title)}` },
-        { type: "mrkdwn", text: `*Email*\n${orDash(row.contact_email)}` },
-        { type: "mrkdwn", text: `*Phone*\n${telLink(row.contact_phone)}` },
-        { type: "mrkdwn", text: `*Website*\n${orDash(row.website)}` },
-        { type: "mrkdwn", text: `*When*\n${orDash(lead?.call_choice_label)}` },
-      ],
-    },
-  ];
+  let when = lead?.call_choice_label ?? null;
+  if (args.startsAt) {
+    try {
+      when = formatCallTime(args.startsAt, lead?.call_timezone);
+    } catch {
+      // Keep the chat's label.
+    }
+  }
 
-  // ‼️ THE CONFIRMATION EMAIL IS CALENDLY'S AND WE DID NOT SEND IT. Said out loud because the
-  // funnel tells the client "we just sent an email", and whoever reads this card when they say
-  // they never got one needs to know which system to go and look in.
-  const ledger: string[] = [
-    ":white_check_mark: Calendly sent the confirmation and the invite",
-    ":black_square_button: Nothing signed yet, the agreement is signed on the call",
-  ];
+  const blocks: SlackBlock[] = [header(`Call booked: ${business}`)];
+
+  // ‼️ THE CHANNEL LINK FIRST, BECAUSE IT IS THE NEXT CLICK. Matthew, 2026-09-15: "we should receive a
+  // notification in onboarding channel with the link of the new channel created". This card is that
+  // notification, and the private channel is where the board is.
+  if (provision.clientId) {
+    const links = [
+      channelLine(provision.opsChannelId),
+      `*Board:* <${app}/dashboard/clients/${provision.clientId}|open the client board>`,
+      report ? `*Audit they booked from:* <${app}/r/${report.slug}|${report.businessName ?? report.slug}>` : null,
+    ].filter(Boolean);
+    blocks.push(section(links.join("\n")));
+  }
+
+  blocks.push({
+    type: "section",
+    fields: [
+      { type: "mrkdwn", text: `*Contact*\n${orDash(row.contact_name)}` },
+      { type: "mrkdwn", text: `*When*\n${orDash(when)}` },
+      { type: "mrkdwn", text: `*Email*\n${orDash(row.contact_email)}` },
+      { type: "mrkdwn", text: `*Phone*\n${telLink(row.contact_phone)}` },
+      { type: "mrkdwn", text: `*Website*\n${orDash(row.website || report?.website)}` },
+    ],
+  });
+
+  const ledger: string[] = [];
+  if (args.confirmation) {
+    ledger.push(
+      args.confirmation.sent
+        ? ":white_check_mark: Confirmation email and calendar invite sent"
+        : `:x: Confirmation email FAILED: ${args.confirmation.error ?? "unknown"}. Calendly's own confirmation still went out.`
+    );
+  }
 
   if (provision.error) {
     ledger.push(":rotating_light: *BOOKED BUT NOT PROVISIONED*");
@@ -175,28 +206,30 @@ export function bookedCard(args: {
   } else {
     ledger.push(
       provision.alreadyProvisioned
-        ? ":information_source: Client already existed, reused rather than taking a second seat"
+        ? ":information_source: Client already existed, reused rather than creating a second one"
         : ":white_check_mark: Client provisioned"
     );
-    ledger.push(
-      provision.onboardingUrl
-        ? ":white_check_mark: Intake link minted"
-        : ":warning: No intake link. CLIENT_LINK_SECRET is not set, so none could be minted"
-    );
-    blocks.push(section(ledger.join("\n")));
-
-    if (provision.onboardingUrl) {
-      blocks.push(section(`*Pre-call intake*  <${provision.onboardingUrl}|open the intake form>`));
-    }
-    if (provision.clientId) {
-      blocks.push(
-        context(`Client \`${provision.clientId}\`  |  slug \`${provision.slug ?? "none"}\``)
+    if (args.board) {
+      ledger.push(
+        args.board.claimed
+          ? ":white_check_mark: Board opened, steps are running"
+          : ":information_source: Board was already open"
       );
+      if (args.board.claimed) {
+        ledger.push(
+          args.board.adoptedReportId
+            ? ":white_check_mark: Pre-call audit attached, no new scan run"
+            : ":grey_question: No audit on file, step 2 waits and nothing was scanned"
+        );
+      }
     }
+    ledger.push(":black_square_button: Nothing signed yet, the agreement is signed on the call");
+    blocks.push(section(ledger.join("\n")));
   }
 
-  if (provision.warnings.length) {
-    blocks.push(context(provision.warnings.map((w) => `- ${w}`).join("\n")));
+  const warnings = [...provision.warnings, ...(args.board?.warnings ?? [])];
+  if (warnings.length) {
+    blocks.push(context(warnings.map((w) => `- ${w}`).join("\n")));
   }
 
   blocks.push(

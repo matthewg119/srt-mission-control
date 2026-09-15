@@ -54,7 +54,15 @@ function domainOf(website: string | null | undefined): string | null {
  * inside an ilike pattern is a parsing hazard and a domain can legitimately contain one. Three
  * small selects are cheaper than one clever one that breaks on a comma in a hostname.
  */
-export async function adoptPriorAudit(clientId: string): Promise<AdoptAuditResult> {
+export async function adoptPriorAudit(
+  clientId: string,
+  /**
+   * `reportSlug` is the report they clicked Get Started on (onboarding2_signings.report_slug). It is the
+   * one match that needs no guessing, so it is tried before contact, email and domain. Until 2026-09-15
+   * the slug was stored on every booking and read by nothing.
+   */
+  opts: { reportSlug?: string | null } = {}
+): Promise<AdoptAuditResult> {
   const nothing = (detail: string): AdoptAuditResult => ({ reportId: null, promoted: false, detail });
 
   const { data: client, error: clientErr } = await supabaseAdmin
@@ -69,9 +77,10 @@ export async function adoptPriorAudit(clientId: string): Promise<AdoptAuditResul
   const email = String(client.email ?? "").trim().toLowerCase();
   const domain = domainOf((client.website as string | null) ?? (client.domain as string | null));
   const contactId = (client.contact_id as string | null) ?? null;
+  const reportSlug = opts.reportSlug?.trim() || null;
 
-  if (!email && !domain && !contactId) {
-    return nothing("nothing to match on: no contact, no email and no website");
+  if (!email && !domain && !contactId && !reportSlug) {
+    return nothing("nothing to match on: no report, no contact, no email and no website");
   }
 
   // ‼️ UNLINKED ROWS ONLY. `client_id is null` is what stops this ever taking an audit that already
@@ -102,15 +111,23 @@ export async function adoptPriorAudit(clientId: string): Promise<AdoptAuditResul
     }
   };
 
+  // The exact report first. Kept apart from `found` so the newest-first sort below cannot demote it
+  // behind an older-or-newer audit that merely shares a host.
+  let exact: (typeof found)[number] | null = null;
+  if (reportSlug) {
+    await collect((q) => q.eq("slug", reportSlug));
+    exact = found.shift() ?? null;
+  }
+
   if (contactId) await collect((q) => q.eq("contact_id", contactId));
   if (email) await collect((q) => q.ilike("requester_email", email));
   // `website` holds the submitted URL, so match on the host appearing anywhere in it.
   if (domain) await collect((q) => q.ilike("website", `%${domain}%`));
 
-  if (!found.length) return nothing("no unlinked finished audit matches this client");
+  if (!exact && !found.length) return nothing("no unlinked finished audit matches this client");
 
   found.sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const report = found[0];
+  const report = exact ?? found[0];
 
   // ‼️ backfilled_by_domain, NOT fired_for_client, AND THE DISTINCTION IS THE WHOLE POINT.
   // This run was fired at a prospect before the client existed. It is a real audit and worth

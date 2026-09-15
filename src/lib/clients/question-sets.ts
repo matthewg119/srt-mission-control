@@ -25,7 +25,7 @@
 // `freezeUniversalV1()` below are untouched by it.
 
 import { supabaseAdmin } from "@/lib/db";
-import { BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
+import { ADOPTED_PROSPECT_AUDIT, BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
 import { loadOffer, usableTreatment } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
@@ -713,25 +713,30 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
   }
 
   // Nothing frozen for this vertical yet. Derive it from THIS client's own audit.
-  const { data: report } = await supabaseAdmin
-    .from("audit_reports")
-    .select("id, prompts")
-    .eq("client_id", clientId)
-    // ‼️ THE BASELINE, AND THIS FILTER IS THE MOST LOAD-BEARING ONE IN THE SET. The tracked
-    // universal set for a new vertical is DERIVED from this report and then FROZEN forever. A
-    // Photograph II asks universal_v1 plus custom_v1, so without this the first Day 0 run would
-    // become the source of the very set it was measuring, and every later client in the vertical
-    // would inherit it. See run-labels.ts.
-    //
-    // ‼️ AND NOT AN ADOPTED PROSPECT AUDIT EITHER, WHICH MATTERS MORE HERE THAN ANYWHERE. The
-    // 2026-09-14 host-match backfill put prospect audits behind client_id, and they pass
-    // BASELINE_ONLY because it filters by exclusion. Freezing a vertical's universal set from a
-    // prospecting run would hand that set to every later client in the vertical, permanently.
-    .or(BASELINE_ONLY)
-    .eq("client_link_source", FIRED_FOR_CLIENT)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const linkedReport = (source: string) =>
+    supabaseAdmin
+      .from("audit_reports")
+      .select("id, prompts")
+      .eq("client_id", clientId)
+      // ‼️ THE BASELINE, AND THIS FILTER IS THE MOST LOAD-BEARING ONE IN THE SET. The tracked
+      // universal set for a new vertical is DERIVED from this report and then FROZEN forever. A
+      // Photograph II asks universal_v1 plus custom_v1, so without this the first Day 0 run would
+      // become the source of the very set it was measuring, and every later client in the vertical
+      // would inherit it. See run-labels.ts.
+      .or(BASELINE_ONLY)
+      .eq("client_link_source", source)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+  // ‼️ A RUN FIRED FOR THE CLIENT FIRST, THEN THE AUDIT THEY BOOKED FROM (2026-09-15). This used to
+  // refuse adopted audits, when the 2026-09-14 host-match backfill was the only thing that adopted
+  // them and a match by host could be somebody else's business. Adoption now keys on the exact report
+  // the client clicked Get Started on, and onboarding fires no scan of its own, so for a new vertical
+  // that audit is the only one there is. It is the same pipeline and the same twenty prompts a
+  // Photograph I would have asked. Refusing it would stall every non-med-spa client at the question set.
+  const fired = await linkedReport(FIRED_FOR_CLIENT);
+  const { data: report } = fired.data ? fired : await linkedReport(ADOPTED_PROSPECT_AUDIT);
 
   if (!report) {
     return {

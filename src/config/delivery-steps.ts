@@ -120,7 +120,7 @@ export const PHASE_AFTER = "After the call";
 const STEP_LIST = [
   // ── BEFORE THE CALL: measure ──────────────────────────────────────────────
   { key: "intake_received", phase: PHASE_BEFORE, label: "Intake received, canonical NAP locked, audit attached if one exists", auto: true, mode: "auto" },
-  { key: "baseline_scan", phase: PHASE_BEFORE, label: "Photograph I: universal_v1 across the keyed engines", auto: true, mode: "auto", blockedBy: ["intake_received"] },
+  { key: "baseline_scan", phase: PHASE_BEFORE, label: "Pre-call audit attached (the one that got them to book)", auto: true, mode: "auto", blockedBy: ["intake_received"] },
   { key: "site_dns_intel", phase: PHASE_BEFORE, label: "Site, hosting and DNS intelligence", auto: true, mode: "auto", blockedBy: ["intake_received"] },
   // Key kept from the 14-step list, where it was "NAP sweep across the directory list".
   // Renaming the KEY would orphan every row already carrying it.

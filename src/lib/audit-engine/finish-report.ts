@@ -26,7 +26,7 @@ import { generateScorecardPDF } from "@/lib/audit-engine/pdf-scorecard";
 import { draftInitialEmail } from "@/lib/audit-engine/email-assistant";
 import { buildIntakeQuestions, postIntakeCard } from "@/lib/audit-engine/outreach-intake";
 import { writeAuditToLead } from "@/lib/audit-engine/lead-writeback";
-import { isSuppliedRun } from "@/lib/audit-engine/run-labels";
+import { isClientRun, isSuppliedRun } from "@/lib/audit-engine/run-labels";
 import { companiesConflict } from "@/lib/company-identity";
 import { microsoft } from "@/lib/microsoft";
 import { waitUntil } from "@vercel/functions";
@@ -292,7 +292,10 @@ async function postScorecardAndOutreach(report: AuditReportRow, view: ReportView
   // a lapsed Microsoft token used to throw before the ping was sent, so a
   // finished audit produced no notification at all instead of a notification
   // without a draft link.
-  if (report.requester_email) {
+  //
+  // ‼️ NEVER FOR A CLIENT'S OWN SCAN. The scorecard above still lands in the step thread; the pitch
+  // draft, the auto-send and the #hot-leads card below are for prospects only. See isClientRun.
+  if (report.requester_email && !isClientRun(report as AuditReportRow & { client_link_source?: string | null })) {
     const name = displayName(report);
     const reportUrl = `${appUrl()}/r/${report.slug}`;
     let draftLink: string | null = null;

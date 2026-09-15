@@ -1,8 +1,7 @@
 // Turning a signature into a client.
 //
 // ‼️ THIS FILE DELEGATES. startPilot() in src/lib/clients/provision.ts already inserts the
-// clients row, mints signOnboardingToken(clientId) and stores only its hash, sends the welcome
-// email, calls linkToCrm (which routes through ingestLead into contacts, the CRM, #hot-leads and
+// clients row, creates the private board channel with Matthew in it, calls linkToCrm (which routes through ingestLead into contacts, the CRM, #hot-leads and
 // Speed-to-Lead), and posts the internal card into #onboarding-srt-aeo. Re-implementing any of
 // that here would give the funnel a second, subtly different way to create a client.
 //
@@ -14,8 +13,7 @@
 // loud in Slack, and returned. It is never thrown.
 
 import { supabaseAdmin } from "@/lib/db";
-import { startPilot, onboardingUrlFor, MAX_CONCURRENT_CLIENTS } from "@/lib/clients/provision";
-import { signOnboardingToken, hashToken, isClientLinkSecretConfigured } from "@/lib/clients/token";
+import { startPilot, MAX_CONCURRENT_CLIENTS } from "@/lib/clients/provision";
 import { splitName } from "@/lib/medspa/validate";
 import { BILLING_STATUS } from "./constants";
 import type { Onboarding2SigningRow } from "./types";
@@ -31,29 +29,43 @@ export interface ProvisionResult {
   /** Set when no client row exists. The signature is still valid; this is what Slack shouts. */
   error: string | null;
   warnings: string[];
+  /** The client's private board channel. Null when it could not be created. */
+  opsChannelId?: string | null;
+  /** The audit they booked from, when the session carried its slug and the report exists. */
+  report?: BookedFromReport | null;
+}
+
+export interface BookedFromReport {
+  id: string;
+  slug: string;
+  businessName: string | null;
+  website: string | null;
+  city: string | null;
 }
 
 /**
- * Mint a fresh intake link for a client who already exists.
+ * The audit report behind a booking, read by the `r=` slug the report's Get Started button carries.
  *
- * Only the token HASH is stored, so an earlier link genuinely cannot be recovered. Re-issuing is
- * the only correct answer to "I need that link again", and it is the same code path either way.
- * Lifted from api/clients/start/route.ts, which does exactly this for a returning starter.
+ * ‼️ THE SLUG WAS STORED ON EVERY SESSION AND READ BY NOTHING UNTIL 2026-09-15. Without it a booking
+ * provisioned a client named after the person's email address with "Website: not given yet", even
+ * though the report they had just clicked on held the business name, the website and the city.
  */
-async function reissueLink(clientId: string): Promise<string | null> {
-  if (!isClientLinkSecretConfigured()) return null;
-  const { token, expiresAt } = signOnboardingToken(clientId);
-  const url = onboardingUrlFor(token);
-  const { error } = await supabaseAdmin
-    .from("clients")
-    .update({
-      onboarding_token_hash: hashToken(token),
-      onboarding_token_expires_at: expiresAt.toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", clientId);
-  if (error) console.error("[onboarding2/provision] token store failed:", error.message);
-  return url;
+export async function reportForSlug(slug: string | null | undefined): Promise<BookedFromReport | null> {
+  const s = slug?.trim();
+  if (!s) return null;
+  const { data } = await supabaseAdmin
+    .from("audit_reports")
+    .select("id, slug, client_name, website, city")
+    .eq("slug", s)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    id: data.id as string,
+    slug: data.slug as string,
+    businessName: ((data.client_name as string | null) ?? "").trim() || null,
+    website: ((data.website as string | null) ?? "").trim() || null,
+    city: ((data.city as string | null) ?? "").trim() || null,
+  };
 }
 
 /** The contact ingestLead created or matched, looked up by the address we just signed. */
@@ -84,6 +96,9 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
 
   if (!email) return { ...empty, error: "The signing carried no email address." };
 
+  const report = await reportForSlug(row.report_slug).catch(() => null);
+  empty.report = report;
+
   // An existing client comes back to their own record rather than consuming a second seat.
   // Checked FIRST, before startPilot, exactly as api/clients/start does: somebody signing a
   // second agreement must not spend one of six seats on a row that already exists.
@@ -97,32 +112,43 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
 
   if (existing?.id) {
     const clientId = existing.id as string;
-    const url = await reissueLink(clientId);
-    if (!url) warnings.push("CLIENT_LINK_SECRET is not set, so no intake link could be minted.");
+    const { data: channel } = await supabaseAdmin
+      .from("clients")
+      .select("ops_channel_id")
+      .eq("id", clientId)
+      .maybeSingle();
     return {
       ok: true,
       clientId,
       slug: (existing.slug as string) ?? null,
-      onboardingUrl: url,
+      // No intake link for a booking any more: nothing is asked of the client before the call.
+      onboardingUrl: null,
       contactId: await contactIdFor(email),
       alreadyProvisioned: true,
       error: null,
       warnings,
+      opsChannelId: (channel?.ops_channel_id as string | null) ?? null,
+      report,
     };
   }
 
-  const { firstName, lastName } = splitName(row.print_name ?? "");
+  const { firstName, lastName } = splitName(row.print_name || row.contact_name || "");
 
   const result = await startPilot({
-    legalName: row.business_legal_name,
+    // The report's business name before the signing's, because the signature block that typed
+    // business_legal_name no longer exists and the name falls back to the email address without one.
+    legalName: row.business_legal_name || report?.businessName || null,
+    // The website they typed on screen one, else the one the audit was run on.
+    website: row.website || report?.website || null,
     email,
+    door: "booking",
     phone: row.contact_phone,
     contactFirstName: firstName || null,
     contactLastName: lastName || null,
     // Four structured boxes, because checkMarket() geocodes an address rather than parsing a
     // line, and a client with no market centre holds no exclusivity at all.
     addressLine1: row.address_line1,
-    city: row.address_city,
+    city: row.address_city || report?.city?.split(",")[0]?.trim() || null,
     state: row.address_state,
     postalCode: row.address_postal,
     // ‼️ 'pilot'. The signature starts the free period the agreement promises. 'active' would
@@ -155,26 +181,19 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
 
   warnings.push(...result.warnings);
 
-  // alreadyProvisioned returns onboardingUrl: null BY DESIGN, because only the token hash was
-  // ever stored and the original link cannot be re-derived. Re-issue rather than report nothing.
-  let onboardingUrl = result.onboardingUrl;
-  if (!onboardingUrl) {
-    onboardingUrl = await reissueLink(result.clientId);
-    if (!onboardingUrl) {
-      warnings.push(
-        "CLIENT_LINK_SECRET is not set, so no intake link was generated and no welcome email went out."
-      );
-    }
-  }
-
+  // ‼️ NO INTAKE LINK IS RE-ISSUED FOR A BOOKING (2026-09-15). The client is asked for nothing
+  // before the call; the confirmation email is the only thing they get. startPilot still mints a
+  // token (the /onboarding form stays deployed for the legacy door), and nothing sends it.
   return {
     ok: true,
     clientId: result.clientId,
     slug: result.slug,
-    onboardingUrl,
+    onboardingUrl: null,
     contactId: await contactIdFor(email),
     alreadyProvisioned: result.alreadyProvisioned,
     error: null,
     warnings,
+    opsChannelId: result.opsChannelId ?? null,
+    report,
   };
 }

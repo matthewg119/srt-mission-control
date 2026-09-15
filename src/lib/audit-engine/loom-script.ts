@@ -90,9 +90,9 @@
 //     decision someone makes on purpose rather than a sentence a model wrote.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
+import { bookingUrlForReport } from "@/lib/onboarding2-link";
 import {
   ADS_ACCELERATOR,
-  BOOKING_LINK,
   DEFAULT_ANSWER_LINE,
   FAST_WINDOW,
   FOUNDING_BONUS,
@@ -716,11 +716,6 @@ export async function buildLoomScript(
   if (!name) {
     say(`NAME: not known. Say their name in the first line, or reply "loom <name>" and rebuild.`);
   }
-  if (!BOOKING_LINK) {
-    say(
-      `NO BOOKING LINK SET. The close below sends them to the onboarding call. Set SRT_ONBOARDING_CALL_URL and rebuild this script, or that sentence points at a page that does not exist.`
-    );
-  }
   if (!QUALIFIED_INQUIRY_DEF) {
     say(
       `NO DEFINITION OF "QUALIFIED AI-SOURCED INQUIRY" IS SET. That phrase is what starts the billing, so you and the client will read it differently on day 31. Set QUALIFIED_INQUIRY_DEF in config/pitch.ts, or be ready to define it on the onboarding call.`
@@ -981,13 +976,18 @@ export async function buildLoomScript(
   // 13. The CTA. The close is the onboarding call, not a payment page: nothing is charged up front
   // under this offer, so a checkout link here would contradict the free period two beats earlier.
   say(...rule("THE CLOSE"));
-  if (BOOKING_LINK) {
+  // ‼️ THE REPORT'S OWN GET STARTED BUTTON, NOT SRT_ONBOARDING_CALL_URL (2026-09-15). A booking made
+  // through it provisions the client and opens the board tied to this report; a bare Calendly page
+  // reached nothing. It always exists, so the "no link" branch below is unreachable and kept only so
+  // the shape of the close stays readable.
+  const bookingUrl = bookingUrlForReport(report);
+  if (bookingUrl) {
     say(
       `So here is what happens next.`,
       "",
-      `The link to book the onboarding call is right here.`,
+      `The link to book the onboarding call is the Get Started button at the bottom of your report.`,
       "",
-      screen(`the booking page, ${BOOKING_LINK}`),
+      screen(`the report's Get Started button, ${bookingUrl}`),
       "",
       `We write the first few pages after the onboarding call, but we will have a few examples ready for you before then.`,
       "",

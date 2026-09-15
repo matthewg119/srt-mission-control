@@ -21,7 +21,6 @@
 import { buildLoomScript } from "../src/lib/audit-engine/loom-script";
 import { spokenPromises } from "../src/lib/audit-engine/delivery-guards";
 import {
-  BOOKING_LINK,
   FREE_UNTIL_LINE,
   GUARANTEE_LINE,
   GUARANTEE_RESTATE,
@@ -245,13 +244,12 @@ async function main() {
   check("fallback 3 warns in the header", noRivalFull.includes("NO COMPETITOR FOUND"));
 
   console.log(`\n=== The close, and the link that has to exist ===`);
-  if (BOOKING_LINK) {
-    check("the close sends them to the booking link", generic.includes("book the onboarding call"));
-    check("no payment/checkout language survives", !/pay by credit card|payment page|after the payment/i.test(generic));
-  } else {
-    check("with no booking link the header corrects it", genericFull.includes("NO BOOKING LINK SET"));
-    check("with no booking link the close does not promise one", !generic.includes("The link to book the onboarding call is right here"));
-  }
+  // 2026-09-15: the close is the report's own Get Started button (/onboarding2 with r=<slug>), which
+  // always exists, so there is no "no booking link" branch any more.
+  check("the close sends them to book the onboarding call", generic.includes("book the onboarding call"));
+  check("the booking link is the report's own /onboarding2 URL with its slug", genericFull.includes("/onboarding2?") && genericFull.includes("r=probe-northlight"));
+  check("no bare SRT_ONBOARDING_CALL_URL correction survives", !genericFull.includes("NO BOOKING LINK SET"));
+  check("no payment/checkout language survives", !/pay by credit card|payment page|after the payment/i.test(generic));
 
   console.log(`\n=== A hand-quoted price drops the standard commitments ===`);
   const handFull = await render(report, view, facts, "$299 / month");
