@@ -1713,6 +1713,27 @@ eq(
   ok("a sentence about the offer is not one", !isOfferReply("the offer they liked was the filler"));
   ok("and neither is a bare word", !isOfferReply("offer"));
 
+  // ‼️ THE MESSAGE THAT CORRUPTED SRT'S LOCK, 2026-09-14. Sent as one message it locked
+  // "yes\nterms: ai visibility, ..." as the treatment with terms: []. It is now REFUSED whole:
+  // one command per message, decided 2026-09-15, never merged.
+  const { readOfferCommand } =
+    require("../src/lib/clients/offers") as typeof import("../src/lib/clients/offers");
+  eq("the corrupting message is refused, not merged",
+    readOfferCommand("offer: yes\nterms: ai visibility, chatgpt answers, answer engine optimization"),
+    { kind: "combined", commands: ["offer", "terms"] });
+  eq("in either order", readOfferCommand("terms: a, b\r\noffer: lip filler").kind, "combined");
+  eq("and so is a command given twice", readOfferCommand("offer: a\noffer: b").kind, "combined");
+  eq("one command alone is read as before", readOfferCommand("  Offer :  lip filler"), { kind: "offer", value: "lip filler", extra: [] });
+  eq("terms alone", readOfferCommand("terms: lip flip, lip filler"), { kind: "terms", value: "lip flip, lip filler", extra: [] });
+  // A continuation line is reported, never folded into the value: folding it would lock a sentence.
+  eq("a continuation line is not part of the treatment",
+    readOfferCommand("offer: lip filler\nthey want it natural"), { kind: "offer", value: "lip filler", extra: ["they want it natural"] });
+  // ‼️ THE REASON FOR FIRST-LINE-ONLY. This thread is about to take pasted sales letters, and a letter
+  // can carry a line that starts "Offer:". Only a message that BEGINS with a command is one.
+  eq("a pasted document with an Offer: line inside is not a command",
+    readOfferCommand("letter replace:\nHeadline here\nOffer: 3 free sessions this month").kind, "none");
+  eq("a sentence that mentions an offer is still conversation", readOfferCommand("the offer: it was fine").kind, "none");
+
   // ‼️ THE CHAIN. primary_treatment was absent from treatmentPrimary entirely, which is the whole
   // bug this pair of steps exists to close, and the locked offer has to sit in front of it.
   const chainSrc = fs.readFileSync(

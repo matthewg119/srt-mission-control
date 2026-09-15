@@ -624,7 +624,69 @@ async function reaim(clientId: string, change: { treatmentChanged: boolean; term
   await reaimDownstream(clientId, change);
 }
 
-async function termsReply(clientId: string, raw: string): Promise<OfferReply> {
+type ReaimChange = { treatmentChanged: boolean; termsChanged: boolean };
+
+/** One command's answer: what to say, and the re-aim it asks for. */
+interface DirectivePart {
+  message: string;
+  reaim?: ReaimChange;
+}
+
+/** What one Slack message in the offer thread is, read by its FIRST line. */
+export type OfferCommand =
+  /** The first line is not `offer:` or `terms:`, so the message is conversation. */
+  | { kind: "none" }
+  | {
+      kind: "offer" | "terms";
+      /** The command's own line, prefix removed. Never the lines after it. */
+      value: string;
+      /** Lines after the first, reported back as not saved, never folded into the value. */
+      extra: string[];
+    }
+  /** A second `offer:` or `terms:` line in the same message. Refused, never merged. */
+  | { kind: "combined"; commands: Array<"offer" | "terms"> };
+
+function commandOf(line: string): "offer" | "terms" | null {
+  if (OFFER_PREFIX.test(line)) return "offer";
+  if (TERMS_PREFIX.test(line)) return "terms";
+  return null;
+}
+
+/**
+ * Read one message as ONE command, decided by its first line.
+ *
+ * ‼️ THIS IS THE FIX FOR A LOCK THAT CORRUPTED ITSELF, 2026-09-14. Both prefixes are anchored at `^`
+ * with no `m` flag, and the terms branch tested the WHOLE message. So `offer: yes` and `terms: a, b`
+ * sent as one two-line message failed the terms test (the message starts with "offer:"), fell into
+ * the offer branch, and `yes\nterms: ...` failed the full-string accept test and was locked as the
+ * treatment. srt-agency-llc's treatment became that blob with terms: [].
+ *
+ * ‼️ A COMBINED MESSAGE IS REFUSED, NEVER MERGED. Decided 2026-09-15 (the avatar and offer framework
+ * build): one command per message, for every prefix in this thread. Merging looks friendlier and is
+ * the wrong call here, because this thread is about to take PASTED DOCUMENTS (`letter replace:`), and
+ * a sales letter can carry a line that starts "Offer: 3 free sessions". A parser that went looking
+ * for commands on every line would lock that as the treatment. Reading only the first line cannot.
+ *
+ * ‼️ A CONTINUATION LINE IS NOT PART OF THE VALUE. Folding "they want it natural" onto the line above
+ * would lock a sentence as the treatment, the same failure in a smaller size.
+ */
+export function readOfferCommand(text: string): OfferCommand {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const kind = lines.length ? commandOf(lines[0]) : null;
+  if (!kind) return { kind: "none" };
+
+  const rest = lines.slice(1);
+  const others = rest.map(commandOf).filter((c): c is "offer" | "terms" => c !== null);
+  if (others.length) return { kind: "combined", commands: [kind, ...others] };
+
+  const prefix = kind === "offer" ? OFFER_PREFIX : TERMS_PREFIX;
+  return { kind, value: lines[0].replace(prefix, "").trim(), extra: rest };
+}
+
+async function termsReply(clientId: string, raw: string): Promise<DirectivePart> {
   const parsed = parseTerms(raw);
   if (!parsed.ok) return { message: `:warning: Not saved: ${parsed.error}` };
 
@@ -646,10 +708,7 @@ async function termsReply(clientId: string, raw: string): Promise<OfferReply> {
           ? "This step is already done, so the keyword set is re-run against the new terms now. It says so in its own thread."
           : "*Next:* press [Done] on this step.",
     ].join("\n"),
-    after:
-      res.changed && done
-        ? () => reaim(clientId, { treatmentChanged: false, termsChanged: true })
-        : undefined,
+    reaim: res.changed && done ? { treatmentChanged: false, termsChanged: true } : undefined,
   };
 }
 
@@ -660,12 +719,45 @@ export async function handleOfferThreadReply(input: {
   by: string;
 }): Promise<OfferReply | null> {
   if (!input.stepKey || !OFFER_STEPS.has(input.stepKey)) return null;
-  if (TERMS_PREFIX.test(input.text)) {
-    return termsReply(input.clientId, input.text.replace(TERMS_PREFIX, ""));
-  }
-  if (!isOfferReply(input.text)) return null;
 
-  const body = input.text.replace(OFFER_PREFIX, "").trim();
+  const cmd = readOfferCommand(input.text);
+  // ‼️ STILL null ON A MISS. Only a FIRST line starting `offer:` or `terms:` is a command; anything
+  // else, including a pasted document with such a line further down, falls through untouched.
+  if (cmd.kind === "none") return null;
+
+  if (cmd.kind === "combined") {
+    const named = [...new Set(cmd.commands)].map((c) => `\`${c}:\``).join(" and ");
+    return {
+      message:
+        `:warning: Nothing saved. That message has ${named} in it, and this thread takes one command ` +
+        "per message, so neither was applied. Send `offer: ...` on its own, then `terms: ...` on its own.",
+    };
+  }
+
+  const part =
+    cmd.kind === "terms"
+      ? await termsReply(input.clientId, cmd.value)
+      : await offerLockReply(input.clientId, cmd.value, input.by);
+
+  const extra = cmd.extra.length
+    ? [
+        "",
+        `_Not saved, because only the \`${cmd.kind}:\` line itself is read: ${cmd.extra
+          .map((l) => `"${l.length > 80 ? `${l.slice(0, 80)}...` : l}"`)
+          .join(", ")}._`,
+      ]
+    : [];
+
+  const change = part.reaim;
+  return {
+    message: [part.message, ...extra].join("\n"),
+    after: change ? () => reaim(input.clientId, change) : undefined,
+  };
+}
+
+/** The `offer:` line: take the proposal, or lock what they said. */
+async function offerLockReply(clientId: string, body: string, by: string): Promise<DirectivePart> {
+  const input = { clientId, by };
   const current = await loadOffer(input.clientId);
 
   // ‼️ `offer: yes` TAKES THE PROPOSAL, AND IT IS STILL A LOCK. The value written is the
@@ -744,9 +836,6 @@ export async function handleOfferThreadReply(input: {
       "*Next:*",
       ...next,
     ].join("\n"),
-    after:
-      done && res.treatmentChanged
-        ? () => reaim(input.clientId, { treatmentChanged: true, termsChanged: false })
-        : undefined,
+    reaim: done && res.treatmentChanged ? { treatmentChanged: true, termsChanged: false } : undefined,
   };
 }
