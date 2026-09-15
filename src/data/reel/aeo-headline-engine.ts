@@ -124,7 +124,24 @@ HARD RULES:
 - Never use em dashes or en dashes. Use commas, periods, colons, or hyphens.
 `.trim();
 
-/** The AEO headline engine, as a module constant (cache-friendly, offline). */
-export function loadAeoHeadlineEngine(): string {
-  return AEO_HEADLINE_ENGINE;
+/** The buyer every example in the engine above is written for. */
+const EXAMPLE_BUYER = /med\s*spa\s*owner|clinic\s*owner|owner.*med\s*spa/i;
+
+/**
+ * The AEO headline engine, as a module constant (cache-friendly, offline).
+ *
+ * ‼️ ITS EXAMPLES ARE A MED SPA OWNER'S, AND A HEADLINE IS WRITTEN FOR THE EXACT AVATAR (F3). For any other
+ * buyer, a patient or a diner, the pairs would pull every headline toward "my med spa is invisible in
+ * ChatGPT". So for another buyer the engine says the examples show the shape only, and whose words to use.
+ */
+export function loadAeoHeadlineEngine(opts?: { avatarLabel?: string | null }): string {
+  const label = opts?.avatarLabel?.trim();
+  if (!label || EXAMPLE_BUYER.test(label)) return AEO_HEADLINE_ENGINE;
+  return [
+    AEO_HEADLINE_ENGINE,
+    "",
+    `THE EXAMPLES ABOVE ARE WRITTEN FOR A MED SPA OWNER. YOUR BUYER IS: ${label}. They show the SHAPE of a`,
+    "good headline and nothing else. Do not borrow their subject, their business words or their pains:",
+    "every headline you write is asked in this buyer's own words, about this buyer's own problem.",
+  ].join("\n");
 }

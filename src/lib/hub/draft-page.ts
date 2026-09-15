@@ -28,6 +28,16 @@ import {
 import { magnetByKey, type LeadMagnet } from "@/lib/concierge/magnets";
 import { audienceForClient } from "@/lib/concierge/for-client";
 import type { PageOutline, OutlineGap, OutlineSection } from "@/lib/hub/pages";
+import {
+  DRAFT_STORY_RULES,
+  OUTLINE_STORY_RULE,
+  draftStoryLines,
+  outlineStoryLines,
+  resolveStories,
+  storyFaults,
+  EMPTY_STORY_CONTEXT,
+  type StoryContext,
+} from "@/lib/hub/page-stories";
 
 /**
  * One assertion the page makes, and what it rests on.
@@ -84,6 +94,11 @@ interface Grounding {
    * already agreed to instead of inventing one.
    */
   outline: PageOutline | null;
+  /**
+   * The buyer and the necessary beliefs the outline's stories install. Loaded only when the outline
+   * carries placed stories, so a page drafted without one costs no extra reads.
+   */
+  stories: StoryContext | null;
 }
 
 /**
@@ -487,6 +502,10 @@ async function gather(
   // stored ref point at a different source than the one it was written against.
   const evidence = await loadNumberedEvidence(clientId, pageId);
 
+  const stories = outline?.stories?.some((s) => s.heading)
+    ? await (await import("@/lib/clients/story-context")).storyContextFor(clientId)
+    : null;
+
   return {
     clientName: name,
     question,
@@ -494,6 +513,7 @@ async function gather(
     evidence,
     magnet: await magnetFor(clientId, magnetKey),
     outline,
+    stories,
     city: (client.city as string | null) ?? (report?.city as string | null) ?? null,
     state: (client.state as string | null) ?? null,
     phone: (client.phone as string | null) ?? null,
@@ -650,6 +670,13 @@ function userPrompt(g: Grounding): string {
     lines.push("    outline is what was planned; the evidence decides what survives. Returning six");
     lines.push("    complete sections out of eleven planned is a correct answer.");
     lines.push("  - The bullets are notes, not facts. Assert nothing from them that no source carries.");
+    // ‼️ STORIES ARE TOLD WHERE THE SKELETON PLACED THEM, and only there (F2). The unplaced ideas stay on
+    // the outline for posts and are not printed, so the drafter cannot pile a second story into a page.
+    const placed = (g.outline.stories ?? []).filter((s) => s.heading);
+    const sourceRefs = new Map(
+      g.evidence.filter((e) => e.sourceId).map((e) => [e.sourceId as string, e.ref] as const)
+    );
+    if (placed.length) for (const rule of DRAFT_STORY_RULES) lines.push(rule);
     lines.push("");
     for (const section of g.outline.sections) {
       lines.push(`## ${section.heading}`);
@@ -659,6 +686,8 @@ function userPrompt(g: Grounding): string {
       // heading's nearest paraphrase.
       if (section.keyword) lines.push(`     (what the reader typed to get here: ${section.keyword})`);
       for (const bullet of section.bullets) lines.push(`  - ${bullet}`);
+      const story = placed.find((s) => s.heading === section.heading);
+      if (story) lines.push(...draftStoryLines(story, g.stories ?? EMPTY_STORY_CONTEXT, sourceRefs));
     }
     lines.push("");
   }
@@ -773,6 +802,11 @@ export interface OutlineContext {
   workingTitle: string | null;
   targetKeyword: string | null;
   angle: string | null;
+  /**
+   * The page's picked direct-response headline, which every story starts from (F2). Optional: a page
+   * outlined before its headline was picked still gets stories, built from the question.
+   */
+  headline?: string | null;
 }
 
 /**
@@ -895,11 +929,13 @@ THE RULES:
 5. A GAP THE EVIDENCE ALREADY ANSWERS IS NOT A GAP. If a source already gives their price, pricing
    is covered; write the bullet and cite nothing, do not ask again.
 6. No competitor named. No outcome promises. No links. No markdown inside headings or bullets.
-7. NO EM DASHES, EN DASHES OR DOUBLE HYPHENS, anywhere. This is checked in code.`;
+7. NO EM DASHES, EN DASHES OR DOUBLE HYPHENS, anywhere. This is checked in code.
+${OUTLINE_STORY_RULE}`;
 
 interface DraftedOutline {
   sections: OutlineSection[];
   gaps: OutlineGap[];
+  stories: unknown[];
 }
 
 /** Numbers of two or more digits that no source contains. Same rule as the magnet drafter. */
@@ -1057,6 +1093,8 @@ export async function draftOutline(
   if ("error" in g) return { ok: false, error: g.error };
 
   const ctx = opts.context ?? null;
+  const { storyContextFor } = await import("@/lib/clients/story-context");
+  const story = await storyContextFor(clientId);
 
   const numberHaystack = [
     ...g.evidence.map((e) => e.content),
@@ -1092,6 +1130,12 @@ export async function draftOutline(
   } else {
     lines.push("NO EVIDENCE IS ON FILE FOR THIS BUSINESS YET. Every fact the page needs is a gap.");
   }
+  lines.push(...outlineStoryLines(story, ctx?.headline ?? null));
+
+  const refs = new Map(g.evidence.map((e) => [e.ref, e.sourceId] as const));
+  const beliefIds = story.beliefs.map((b) => b.id);
+  const storyArgs = { refs, beliefIds, numberHaystack };
+  const faultsOf = (v: unknown) => [...outlineFaults(v, numberHaystack), ...storyFaults(v, storyArgs)];
 
   try {
     const res = await callClaudeJSON<DraftedOutline>({
@@ -1100,14 +1144,15 @@ export async function draftOutline(
       user: lines.join("\n"),
       // 14 sections with a keyword each is roughly triple the old ceiling of 5, so the old 2000
       // would truncate the JSON on a long outline and fail validation for a reason the correction
-      // retry cannot fix by rewriting.
-      maxTokens: 6000,
+      // retry cannot fix by rewriting. Three stories of four beats add roughly a thousand more.
+      maxTokens: 8000,
       temperature: 0.3,
       schemaHint:
-        '{ "sections": [{ "heading": string, "keyword": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }] }',
-      validate: (v): v is DraftedOutline => outlineFaults(v, numberHaystack).length === 0,
+        '{ "sections": [{ "heading": string, "keyword": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }], ' +
+        '"stories": [{ "id": "T1", "title": string, "beats": [string, string, string, string], "installs": string[], "heading": string | null, "source": { "kind": "evidence", "ref": "S1" } | { "kind": "gap", "gapId": "G1" } | { "kind": "illustrative" } }] }',
+      validate: (v): v is DraftedOutline => faultsOf(v).length === 0,
       describeInvalid: (v) =>
-        `Fix these and return the whole skeleton again:\n${outlineFaults(v, numberHaystack)
+        `Fix these and return the whole skeleton again:\n${faultsOf(v)
           .map((f) => `  - ${f}`)
           .join("\n")}`,
     });
@@ -1125,6 +1170,7 @@ export async function draftOutline(
           prompt: gap.prompt.trim(),
           scope: gap.scope === "client" ? "client" : "page",
         })),
+        stories: resolveStories(res.data, refs, beliefIds),
         writtenAt: new Date().toISOString(),
       },
     };

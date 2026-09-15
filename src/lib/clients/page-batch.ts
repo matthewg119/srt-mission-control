@@ -19,6 +19,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { loadPlan, type PlanRow } from "./page-plan";
 import { readPageOutline, type PageOutline } from "@/lib/hub/pages";
+import { storyCardLines } from "@/lib/hub/page-stories";
 
 /**
  * `batch`, `batch new`, `batch under 3`, `batch approve`.
@@ -259,6 +260,7 @@ export function skeletonCardLines(
       outline.sections.forEach((s) => lines.push(`  ${s.heading}${s.keyword ? `  _${s.keyword}_` : ""}`));
       gaps += outline.gaps.length;
       lines.push(`  _${outline.sections.length} sections, ${outline.gaps.length} questions for the business_`);
+      lines.push(...storyCardLines(outline));
     }
     lines.push("");
   });
@@ -314,7 +316,7 @@ export async function writeHeadlinesFor(
   const got = await generateKeywordHeadlines({ clientId, keyword: row.targetKeyword });
   if (!got.ok) return got;
 
-  const stored = await storeHeadlines({ clientId, headlines: got.headlines, origin: "keyword" });
+  const stored = await storeHeadlines({ clientId, headlines: got.headlines, origin: "keyword", audienceId: got.audienceId });
   if (!stored.ok) return stored;
 
   // ‼️ CLAIMED FOR THIS PLAN ROW IMMEDIATELY, which is what makes the card's per-page numbering
@@ -418,7 +420,12 @@ export async function writeSkeletonsFor(
   let written = 0;
   const failures: string[] = [];
 
-  for (const row of rows) {
+  // ‼️ THREE AT A TIME, AND THE FIRST ONE ALONE. A skeleton with three stories is one long Sonnet call,
+  // often plus a correction retry (102 s for one page on the first live run, 2026-09-15), and step 21's
+  // `skeletons` runs the whole batch inside ONE 300 s invocation. Sequential, a seven-page batch dies
+  // part way with no card. The first page runs alone because draftOutline's crawl files the website
+  // snapshot by select-then-insert (recordWebsiteSnapshot), and parallel first crawls would file it twice.
+  const one = async (row: PlanRow): Promise<void> => {
     let pageId = row.pageId;
 
     if (!pageId) {
@@ -429,7 +436,7 @@ export async function writeSkeletonsFor(
       });
       if (!started.ok) {
         failures.push(`page ${row.rank}: ${started.error}`);
-        continue;
+        return;
       }
       pageId = started.id;
       // Linked and claimed now, so the page stays tied to its plan row even if the outline call
@@ -447,19 +454,25 @@ export async function writeSkeletonsFor(
         workingTitle: row.workingTitle,
         targetKeyword: row.targetKeyword,
         angle: row.angle,
+        headline: row.headline,
       },
     });
     if (!outline.ok) {
       failures.push(`page ${row.rank}: ${outline.error}`);
-      continue;
+      return;
     }
 
     const saved = await setPageOutline(clientId, pageId, outline.outline);
     if (!saved.ok) {
       failures.push(`page ${row.rank}: ${saved.error}`);
-      continue;
+      return;
     }
     written += 1;
+  };
+
+  if (rows[0]) await one(rows[0]);
+  for (let i = 1; i < rows.length; i += 3) {
+    await Promise.all(rows.slice(i, i + 3).map(one));
   }
 
   return { written, failures };

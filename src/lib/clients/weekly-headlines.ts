@@ -129,6 +129,7 @@ export async function runWeeklyHeadlines(opts?: {
         headlines: generated.headlines,
         origin: "weekly",
         isoWeek: stamp,
+        audienceId: generated.audienceId,
       });
 
       if (!stored.ok) {

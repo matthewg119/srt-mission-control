@@ -3732,6 +3732,108 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("the script is not recorded as the avatar's prompt", !/recordAvatarPrompt/.test(threadSrc));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C5 ---- three stories in every skeleton, one or more in every page (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const st = require("../src/lib/hub/page-stories") as typeof import("../src/lib/hub/page-stories");
+  const { readOutline } = require("../src/lib/hub/pages") as typeof import("../src/lib/hub/pages");
+  const { loadAeoHeadlineEngine, AEO_HEADLINE_ENGINE } =
+    require("../src/data/reel/aeo-headline-engine") as typeof import("../src/data/reel/aeo-headline-engine");
+
+  const sections = [
+    { heading: "What does Morpheus8 actually do to loose skin?" },
+    { heading: "Why did the creams never tighten anything?" },
+    { heading: "How do you know it is working?" },
+  ];
+  const gaps = [{ id: "G1" }, { id: "G2" }];
+  const refs = new Map<string, string | null>([["S1", "src-review-1"], ["S2", null]]);
+  const args = { refs, beliefIds: ["B1", "B2"], numberHaystack: "12 sessions" };
+  const beats4 = (first = "She sees her jawline in a video call") => [first, "Two years of serums did nothing", "Her injector explains collagen", "She understands why surface creams could never reach it"];
+  const good = [
+    { id: "T1", title: "The video call", beats: beats4(), installs: ["B1"], heading: sections[1].heading, source: { kind: "evidence", ref: "S1" } },
+    { id: "T2", title: "The first week", beats: beats4("Picture a patient checking the mirror"), installs: ["B1", "B2"], heading: null, source: { kind: "illustrative" } },
+    { id: "T3", title: "The owner's own case", beats: beats4(), installs: ["B2"], heading: sections[2].heading.toUpperCase(), source: { kind: "gap", gapId: "G2" } },
+  ];
+  const skel = (stories: unknown) => ({ sections, gaps, stories });
+  const faults = (stories: unknown, a = args) => st.storyFaults(skel(stories), a);
+  const has = (list: string[], re: RegExp) => list.some((f) => re.test(f));
+
+  eq("three sourced, placed, belief-tagged stories have no faults", faults(good), []);
+  ok("a skeleton with no stories is told to write three", has(st.storyFaults({ sections, gaps }, args), /"stories" is missing/));
+  ok("two stories is a fault", has(faults(good.slice(0, 2)), /Write exactly 3/));
+  ok("three beats is a fault", has(faults([{ ...good[0], beats: beats4().slice(0, 3) }, good[1], good[2]]), /3 beats/));
+  ok("a heading that is not a section is a fault", has(faults([{ ...good[0], heading: "Some other heading" }, good[1], good[2]]), /not one of your section headings/));
+  ok("two stories under one heading is a fault", has(faults([good[0], { ...good[1], heading: sections[1].heading }, good[2]]), /both sit under/));
+  ok("no story placed is a fault", has(faults(good.map((s) => ({ ...s, heading: null }))), /At least one has to be told/));
+  ok("a belief id that does not exist is a fault", has(faults([{ ...good[0], installs: ["B7"] }, good[1], good[2]]), /B7, which is not one/));
+  ok("a story installing nothing, when beliefs exist, is a fault", has(faults([{ ...good[0], installs: [] }, good[1], good[2]]), /installs no belief/));
+  eq("with no beliefs on file, installs is not checked", faults([{ ...good[0], installs: [] }, { ...good[1], installs: ["B9"] }, good[2]], { ...args, beliefIds: [] }), []);
+  ok("an unknown evidence ref is a fault", has(faults([{ ...good[0], source: { kind: "evidence", ref: "S9" } }, good[1], good[2]]), /"S9", which is not one/));
+  ok("the audit's summary row is not a real case", has(faults([{ ...good[0], source: { kind: "evidence", ref: "S2" } }, good[1], good[2]]), /summary of the audit/));
+  ok("an unknown gap is a fault", has(faults([good[0], good[1], { ...good[2], source: { kind: "gap", gapId: "G5" } }]), /gap "G5"/));
+  ok("a story with no source is a fault", has(faults([{ ...good[0], source: {} }, good[1], good[2]]), /has no source/));
+  // ‼️ F9: AN INVENTED CASE IS FRAMED AS ONE.
+  ok("an illustrative story that does not open \"Picture a\" is a fault", has(faults([good[0], { ...good[1], beats: beats4() }, good[2]]), /starts "Picture a"/));
+  ok("an illustrative story with a figure is a fault", has(faults([good[0], { ...good[1], beats: beats4("Picture a patient after 3 sessions") }, good[2]]), /contains a digit/));
+  ok("a sourced story may state a figure its source carries", !has(faults([{ ...good[0], beats: beats4("After 12 sessions she stopped") }, good[1], good[2]]), /states/));
+  ok("but not one no source carries", has(faults([{ ...good[0], beats: beats4("After 40 sessions she stopped") }, good[1], good[2]]), /states 40/));
+  ok("a dash in a story is a fault", has(faults([{ ...good[0], title: "The call -- and after" }, good[1], good[2]]), /contains a dash/));
+
+  const resolved = st.resolveStories(skel(good), refs, ["B1", "B2"]);
+  eq("an evidence story stores the source id, never the S# ref", resolved[0].source, { kind: "evidence", sourceId: "src-review-1" });
+  eq("a heading is stored as the section spells it", resolved[2].heading, sections[2].heading);
+  eq("with no beliefs on file, nothing is stored as installed", st.resolveStories(skel(good), refs, [])[1].installs, []);
+
+  // ‼️ AN OUTLINE WITH A BAD STORIES FIELD IS STILL AN OUTLINE.
+  const base = { sections: [{ heading: "What is it?", bullets: ["one"] }], gaps: [], writtenAt: "2026-09-15" };
+  eq("an outline with stories reads them back", readOutline({ ...base, stories: resolved })?.stories?.length, 3);
+  const broken = readOutline({ ...base, stories: [{ id: "T1", title: "x" }] });
+  ok("an invalid stories field drops the stories, not the outline", broken !== null && broken.stories === undefined);
+  ok("an outline written before stories has no stories key", readOutline(base) !== null && !("stories" in (readOutline(base) ?? {})));
+
+  const outline = { sections: sections.map((s) => ({ heading: s.heading, bullets: ["x"] })), gaps: [], stories: resolved, writtenAt: "" };
+  eq("a page outlined without stories skips the placement check", st.storyPlacement({ ...outline, stories: undefined }, []).status, "skip");
+  eq("a body that lost every placed heading fails it", st.storyPlacement(outline, [{ heading: sections[0].heading, body: "x" }]).status, "fail");
+  eq("a body that kept one passes, whatever the heading's case", st.storyPlacement(outline, [{ heading: "why did the creams never tighten anything", body: "She saw it." }]).status, "pass");
+  const illus = { ...outline, stories: [{ ...resolved[1], heading: sections[0].heading }] };
+  eq("an illustrative story told as if real fails it", st.storyPlacement(illus, [{ heading: sections[0].heading, body: "Maria came in last spring." }]).status, "fail");
+  eq("and told as illustrative passes", st.storyPlacement(illus, [{ heading: sections[0].heading, body: "Picture a patient who has tried everything." }]).status, "pass");
+
+  const ctx = { audienceLabel: "women 35 to 55", buyer: "patient", offer: "Morpheus8", beliefs: [{ id: "B1", text: "I believe that creams cannot reach collagen" }], avatarNotes: [] };
+  const lines = st.draftStoryLines(resolved[0], ctx, new Map([["src-review-1", "S4"]])).join("\n");
+  ok("a sourced story cites the ref its source carries in THIS draft", lines.includes("[S4]"));
+  ok("and carries the belief's words, not its id", lines.includes("creams cannot reach collagen"));
+  ok("a source no longer on file says to drop the story", /drop the story/.test(st.draftStoryLines(resolved[0], ctx, new Map()).join("\n")));
+  ok("an illustrative story is told to open with the buyer's noun", st.draftStoryLines(resolved[1], ctx, new Map()).join("\n").includes('"Picture a patient"'));
+
+  const card = st.storyCardLines({ ...outline }).join("\n");
+  ok("the skeleton card lists every idea with its beliefs and where it sits", /T1 The video call \(B1\), told under/.test(card) && /T2 .*kept for later, illustrative/.test(card));
+  ok("and which beliefs the page installs", /installs B1, B2/.test(card));
+  eq("an outline without stories adds nothing to the card", st.storyCardLines(base), []);
+
+  const notes = st.avatarNotesFrom({
+    sections: { fears: "Looking fake\n[Fear 2]" },
+    subs: { "challenges.pain_point_1": "not found in the research", "challenges.pain_point_2": "- sagging jawline" },
+  });
+  eq("the avatar notes keep real lines and drop placeholders", notes, ["Pain point 2: sagging jawline", "Fears: Looking fake"]);
+
+  ok("no em dash in the story rule handed to the model", !/[—–]|--/.test(st.OUTLINE_STORY_RULE + st.DRAFT_STORY_RULES.join("\n")));
+  ok("no em dash anywhere in page-stories.ts", !/[—–]/.test(fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "page-stories.ts"), "utf8")));
+
+  // F3: a headline is written for the exact avatar.
+  eq("a med spa owner gets the engine as it is", loadAeoHeadlineEngine({ avatarLabel: "med spa owner" }), AEO_HEADLINE_ENGINE);
+  ok("any other buyer is told the examples are shape only", /YOUR BUYER IS: women 35 to 55/.test(loadAeoHeadlineEngine({ avatarLabel: "women 35 to 55" })));
+
+  const draftSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "draft-page.ts"), "utf8");
+  ok("the skeleton is validated against both outline and story faults", /outlineFaults\(v, numberHaystack\), \.\.\.storyFaults\(v, storyArgs\)/.test(draftSrc));
+  ok("the skeleton is handed the page's headline", /outlineStoryLines\(story, ctx\?\.headline/.test(draftSrc));
+  const gateSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "page-gate.ts"), "utf8");
+  ok("story placement is a gate warning, never a block", /key: "story_placed", tier: "warn"/.test(gateSrc));
+  const headSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-headlines.ts"), "utf8");
+  ok("headlines still file on a database without audience_id", /\/audience_id\/\.test\(error\.message\)/.test(headSrc));
+}
+
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.
 //

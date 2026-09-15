@@ -635,10 +635,92 @@ export interface OutlineGap {
   scope: "page" | "client";
 }
 
+/**
+ * Where a story's truth comes from (F9). A story is sourced or it is framed as illustrative, never
+ * presented as a real customer it is not.
+ *
+ * ‼️ A sourceId, NEVER AN S#. Evidence refs are positional per load (page-evidence.ts numberEvidence)
+ * and move as soon as a gap answer is filed, so an "S3" stored today points at a different source
+ * next week. The id is what stays put.
+ */
+export type OutlineStorySource =
+  | { kind: "evidence"; sourceId: string }
+  | { kind: "gap"; gapId: string }
+  | { kind: "illustrative" };
+
+/**
+ * One hero's journey story idea for a page (F2, F10). Every skeleton proposes three; the draft places
+ * one or more; the unused ones stay stored for posts.
+ */
+export interface OutlineStory {
+  /** "T1", "T2", "T3". */
+  id: string;
+  title: string;
+  /** Four short notes in journey order: where she is, what she tried, the turn, what she now understands. */
+  beats: string[];
+  /** This offer's necessary belief ids ("B1"...). Empty when the offer has none on file yet. */
+  installs: string[];
+  /**
+   * The section heading it is told under, or null for an idea kept for later.
+   *
+   * ‼️ A HEADING, NOT A SECTION INDEX. The draft drops sections it cannot fill, so an index would
+   * point at a different section once one is gone. A heading either survived or did not.
+   */
+  heading: string | null;
+  source: OutlineStorySource;
+}
+
 export interface PageOutline {
   sections: OutlineSection[];
   gaps: OutlineGap[];
+  /**
+   * ‼️ OPTIONAL, FOR THE SAME REASON OutlineSection.keyword IS. Every outline written before 2026-09-15
+   * is stored without it, and one written after may carry a stories field an older reader cannot
+   * parse. Either way the outline itself stays valid.
+   */
+  stories?: OutlineStory[];
   writtenAt: string;
+}
+
+function readStorySource(raw: unknown): OutlineStorySource | null {
+  const s = raw as Record<string, unknown> | null;
+  if (!s || typeof s !== "object") return null;
+  if (s.kind === "evidence" && typeof s.sourceId === "string" && s.sourceId.trim()) return { kind: "evidence", sourceId: s.sourceId.trim() };
+  if (s.kind === "gap" && typeof s.gapId === "string" && s.gapId.trim()) return { kind: "gap", gapId: s.gapId.trim() };
+  if (s.kind === "illustrative") return { kind: "illustrative" };
+  return null;
+}
+
+/** The stored stories, or undefined. One invalid story drops the field, never the outline. */
+function readStories(raw: unknown): OutlineStory[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const stories: OutlineStory[] = [];
+  for (const item of raw) {
+    const s = item as Record<string, unknown> | null;
+    const source = readStorySource(s?.source);
+    if (
+      !s ||
+      typeof s.id !== "string" ||
+      typeof s.title !== "string" ||
+      !Array.isArray(s.beats) ||
+      !s.beats.every((b) => typeof b === "string") ||
+      !Array.isArray(s.installs) ||
+      !s.installs.every((b) => typeof b === "string") ||
+      !(s.heading === null || typeof s.heading === "string") ||
+      !source
+    ) {
+      return undefined;
+    }
+    stories.push({
+      id: s.id.trim(),
+      title: s.title.trim(),
+      beats: (s.beats as string[]).map((b) => b.trim()),
+      installs: (s.installs as string[]).map((b) => b.trim()),
+      heading: typeof s.heading === "string" && s.heading.trim() ? s.heading.trim() : null,
+      source,
+    });
+  }
+  return stories.length ? stories : undefined;
 }
 
 /** The stored outline, validated. Drop, never repair: a half-valid outline is no outline. */
@@ -670,7 +752,13 @@ export function readOutline(raw: unknown): PageOutline | null {
     .filter((g) => g.id !== "" && g.prompt !== "");
 
   if (sections.length === 0) return null;
-  return { sections, gaps, writtenAt: typeof bag.writtenAt === "string" ? bag.writtenAt : "" };
+  const stories = readStories(bag.stories);
+  return {
+    sections,
+    gaps,
+    ...(stories ? { stories } : {}),
+    writtenAt: typeof bag.writtenAt === "string" ? bag.writtenAt : "",
+  };
 }
 
 export async function readPageOutline(clientId: string, pageId: string): Promise<PageOutline | null> {

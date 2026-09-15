@@ -252,6 +252,16 @@ interface HeadlineContext {
   framework: string | null;
   approvedNumbers: string[];
   quotes: VocQuote[];
+  /**
+   * The framework's view of this exact buyer (F3): what she is called, what her avatar sheet says she lives
+   * with, and the necessary beliefs the page's stories will install. Optional and empty until step 11's
+   * paste-backs land, so every headline lane keeps working before them.
+   */
+  buyer?: string | null;
+  avatarNotes?: readonly string[];
+  beliefs?: readonly string[];
+  /** The audience the headlines are written for, filed on each row. */
+  audienceId?: string | null;
 }
 
 /**
@@ -312,6 +322,8 @@ async function headlineContext(
     const bank = await sharedBankFor(audience.audience);
     approvedNumbers = bank.approvedNumbers.map((n) => n.value);
   }
+  const { storyContextFor } = await import("./story-context");
+  const story = await storyContextFor(clientId);
 
   return {
     ok: true,
@@ -325,6 +337,10 @@ async function headlineContext(
       framework: ((row.headline_framework as string | null) ?? "").trim() || null,
       approvedNumbers,
       quotes,
+      buyer: story.buyer,
+      avatarNotes: story.avatarNotes,
+      beliefs: story.beliefs.map((b) => b.text),
+      audienceId: audience.ok ? audience.audience.id : null,
     },
   };
 }
@@ -354,6 +370,7 @@ export function headlinePrompt(ctx: HeadlineContext, count: number): string {
     "",
     quotes || "NO CUSTOMER QUOTES ARE ON FILE. Write from the buyer and the offer alone, and keep every headline in her plain spoken words rather than the industry's.",
     "",
+    ...avatarBlock(ctx),
     approvedNumbersBlock({ approved_numbers: ctx.approvedNumbers }),
     "",
     ctx.framework
@@ -366,10 +383,35 @@ export function headlinePrompt(ctx: HeadlineContext, count: number): string {
           "",
         ].join("\n")
       : "",
-    loadAeoHeadlineEngine(),
+    loadAeoHeadlineEngine({ avatarLabel: ctx.avatarLabel }),
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * The avatar sheet and the necessary beliefs, when step 11 has brought them back (F3).
+ *
+ * ‼️ A BELIEF IS WHERE THE STORY UNDER THE HEADLINE TAKES HER, NOT A CLAIM FOR THE HEADLINE TO MAKE.
+ * Stated as a headline, "I believe that pages bring patients" is an outcome promise the gate blocks.
+ * The headline opens the doubt the belief answers.
+ */
+function avatarBlock(ctx: HeadlineContext): string[] {
+  const notes = ctx.avatarNotes ?? [];
+  const beliefs = ctx.beliefs ?? [];
+  if (!notes.length && !beliefs.length) return [];
+  const out: string[] = [];
+  if (notes.length) {
+    out.push(`WHAT HER AVATAR SHEET SAYS SHE LIVES WITH${ctx.buyer ? ` (she is a ${ctx.buyer})` : ""}. Write to THIS person, in these words:`);
+    for (const n of notes) out.push(`- ${n}`);
+    out.push("");
+  }
+  if (beliefs.length) {
+    out.push("WHAT THE PAGE UNDER THE HEADLINE WILL LEAD HER TO BELIEVE. Do not state these; open the doubt each one answers:");
+    for (const b of beliefs) out.push(`- ${b}`);
+    out.push("");
+  }
+  return out;
 }
 
 interface HeadlinesResult {
@@ -393,7 +435,7 @@ function isHeadlines(v: unknown, count: number, numberHaystack: string): v is He
 export async function generateClientHeadlines(args: {
   clientId: string;
   count?: number;
-}): Promise<{ ok: true; headlines: string[]; usedFramework: boolean; quoteCount: number } | { ok: false; error: string }> {
+}): Promise<{ ok: true; headlines: string[]; usedFramework: boolean; quoteCount: number; audienceId: string | null } | { ok: false; error: string }> {
   const count = args.count ?? WEEKLY_HEADLINES;
   const got = await headlineContext(args.clientId);
   if (!got.ok) return got;
@@ -436,7 +478,7 @@ export async function generateClientHeadlines(args: {
       .filter((h) => h && !seen.has(h.toLowerCase()) && seen.add(h.toLowerCase()))
       .slice(0, count);
 
-    return { ok: true, headlines, usedFramework: Boolean(ctx.framework), quoteCount: ctx.quotes.length };
+    return { ok: true, headlines, usedFramework: Boolean(ctx.framework), quoteCount: ctx.quotes.length, audienceId: ctx.audienceId ?? null };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
@@ -471,7 +513,7 @@ export async function generateKeywordHeadlines(args: {
   clientId: string;
   keyword: string;
   count?: number;
-}): Promise<{ ok: true; headlines: string[] } | { ok: false; error: string }> {
+}): Promise<{ ok: true; headlines: string[]; audienceId: string | null } | { ok: false; error: string }> {
   const count = args.count ?? 3;
   const keyword = args.keyword.trim();
   if (!keyword) return { ok: false, error: "No keyword was given, so there is nothing to aim the headlines at." };
@@ -535,7 +577,7 @@ export async function generateKeywordHeadlines(args: {
       .filter((h) => h && !seen.has(h.toLowerCase()) && seen.add(h.toLowerCase()))
       .slice(0, count);
 
-    return { ok: true, headlines };
+    return { ok: true, headlines, audienceId: ctx.audienceId ?? null };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
@@ -617,10 +659,23 @@ export async function storeHeadlines(args: {
 
   if (!rows.length) return { ok: true, stored: [], duplicates: 0 };
 
-  const { data, error } = await supabaseAdmin
-    .from("client_headlines")
-    .upsert(rows, { onConflict: "client_id,normalized", ignoreDuplicates: true })
-    .select("id, headline, origin, iso_week, approved, used_page_id");
+  const upsert = (batch: Array<Record<string, unknown>>) =>
+    supabaseAdmin
+      .from("client_headlines")
+      .upsert(batch, { onConflict: "client_id,normalized", ignoreDuplicates: true })
+      .select("id, headline, origin, iso_week, approved, used_page_id");
+  let { data, error } = await upsert(rows);
+
+  // ‼️ A DATABASE WITHOUT audience_id STILL FILES THE HEADLINES. The column arrives with
+  // docs/2026-09-15-offers-and-framework.sql; losing twenty headlines over the tag they carry would be
+  // the wrong trade, so the rows go in untagged and the log says why.
+  if (error && args.audienceId && /audience_id/.test(error.message)) {
+    console.error(`[client-headlines] audience_id unavailable (${error.message}); filing untagged.`);
+    ({ data, error } = await upsert(rows.map((r) => {
+      const { audience_id: _untagged, ...rest } = r as Record<string, unknown>;
+      return rest;
+    })));
+  }
 
   if (error) {
     return {

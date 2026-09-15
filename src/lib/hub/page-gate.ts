@@ -39,6 +39,8 @@ import {
 } from "@/lib/clients/page-evidence";
 import { bodySections, type EvidenceClaim } from "@/lib/hub/draft-page";
 import { checkPlacement } from "@/lib/hub/keyword-placement";
+import { readPageOutline } from "@/lib/hub/pages";
+import { storyPlacement } from "@/lib/hub/page-stories";
 import { schemaForPage } from "@/lib/hub/jsonld";
 import { offerForPage } from "@/lib/concierge/for-client";
 
@@ -491,6 +493,19 @@ function checkKeywordPlacement(args: {
   return { key: "keyword_placement", tier: "warn", status: "fail", detail: `${res.detail}${published}` };
 }
 
+/**
+ * Did at least one of the skeleton's placed stories survive into the body (F2), and does an illustrative
+ * one read as illustrative (F9)?
+ *
+ * ‼️ WARN, NEVER BLOCK. A page with no story still answers its question honestly, and evidence is the only
+ * thing that blocks here. What this catches is the belief that was planned and silently not installed.
+ * An outline read failure is a skip: a missing outline column must cost this check, not the verdict.
+ */
+function checkStoryPlaced(outline: import("@/lib/hub/pages").PageOutline | null, body: string): GateCheck {
+  const res = storyPlacement(outline, bodySections(body));
+  return { key: "story_placed", tier: "warn", status: res.status, detail: res.detail };
+}
+
 function checkFirstPartyRatio(
   evidenceMap: EvidenceClaim[] | null,
   evidence: EvidenceRef[]
@@ -839,6 +854,7 @@ export async function runGate(
       schema,
     }),
     checkFirstPartyRatio(evidenceMap, evidence),
+    checkStoryPlaced(await readPageOutline(clientId, pageId).catch(() => null), body),
     checkHouseStyle({
       title: page.title ?? "",
       answerMd: body,

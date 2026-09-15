@@ -58,6 +58,7 @@ import {
 } from "./page-evidence";
 import type { PlanRow, FrameContext } from "./page-plan";
 import { BATCH_COMMAND, HEADLINE_COMMAND, SKELETON_COMMAND } from "./page-batch";
+import { storyCardLines } from "@/lib/hub/page-stories";
 
 /**
  * The channel this lane owns.
@@ -855,6 +856,8 @@ function formatOutline(outline: PageOutline): string {
     lines.push(`*${section.heading}*`);
     for (const bullet of section.bullets) lines.push(`  • ${bullet}`);
   }
+  const stories = storyCardLines(outline, "");
+  if (stories.length) lines.push("", ...stories);
   lines.push(
     "",
     "_Nothing here goes on the page. `draft` writes the page from this and your answers. " +
@@ -960,7 +963,7 @@ async function outlineCommand(session: Session, fresh: boolean): Promise<void> {
     const res = await draftOutline(session.clientId, (page?.question as string) ?? "", {
       pageId: session.pageId,
       context: row
-        ? { workingTitle: row.workingTitle, targetKeyword: row.targetKeyword, angle: row.angle }
+        ? { workingTitle: row.workingTitle, targetKeyword: row.targetKeyword, angle: row.angle, headline: row.headline }
         : null,
     });
 
