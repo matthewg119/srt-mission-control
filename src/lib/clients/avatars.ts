@@ -207,6 +207,8 @@ export interface ConfirmResult {
   /** True when this replaced a different avatar rather than being the first one. */
   changed?: boolean;
   previous?: { slot: string; label: string } | null;
+  /** What the confirmation did to the client's audiences. Printed on every confirm surface. */
+  audience?: { ok: boolean; note: string };
 }
 
 /**
@@ -290,11 +292,22 @@ export async function confirmAvatar(args: {
     console.error("[clients/avatars] avatar run history not written:", runError.message);
   }
 
+  // Confirming an avatar is choosing this client's audience. Dynamic import: audiences.ts reaches
+  // harvest.ts, and neither needs to load for the callers that only read an avatar.
+  const { ensurePrimaryAudienceForAvatar } = await import("./audiences");
+  const audience = await ensurePrimaryAudienceForAvatar({
+    clientId: args.clientId,
+    avatarSlug: slug,
+    avatarLabel: label,
+    by: args.by,
+  });
+
   return {
     ok: true,
     avatar: { slot, label, slug, confirmedAt: stamp, confirmedBy: args.by },
     changed: Boolean(previous && previous.slug !== slug),
     previous: previous ? { slot: previous.slot, label: previous.label } : null,
+    audience: { ok: audience.ok, note: audience.note },
   };
 }
 
@@ -625,6 +638,7 @@ export async function handleAvatarThreadReply(args: {
     result.changed && result.previous
       ? `It replaces *${result.previous.label}*, which is kept in this client's avatar history.`
       : "",
+    result.audience?.note ?? "",
   ].filter(Boolean);
 
   // ‼️ A CHANGE ON THE CALL REGENERATES THE QUESTION SET AS A NEW VERSION. The set is scored

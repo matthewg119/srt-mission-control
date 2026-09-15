@@ -2648,6 +2648,7 @@ async function avatarCommand(session: Session, arg: string): Promise<void> {
 
   await say(session.threadTs, [
     `:white_check_mark: Avatar is *${body}*.`,
+    ...(res.audience?.note ? [res.audience.note] : []),
     "",
     "*Next:* `keywords` for what this avatar asks, or pick a number to claim a page.",
   ].join("\n"));

@@ -2178,6 +2178,7 @@ async function avatarPickAction(args: {
         result.changed && result.previous
           ? `It replaces *${result.previous.label}*, which is kept in this client's avatar history.`
           : "",
+        result.audience?.note ?? "",
         "The phrase harvest researches this buyer, and the custom question set and the page",
         "candidates are both scored against them. Press [Done] on this step when you are happy.",
       ].filter(Boolean);

@@ -314,6 +314,160 @@ export async function seedClientAudience(args: {
   return { ok: true, audienceId: data.id as string };
 }
 
+/** What confirming an avatar did to the client's audiences, said in words for the card. */
+export type AudienceLink =
+  | { ok: true; audienceId: string; created: boolean; note: string }
+  | { ok: false; note: string };
+
+/**
+ * Confirming an avatar on a client IS choosing that client's audience. Make it the primary one.
+ *
+ * Matthew, 2026-09-15: an audience is "the avatars in which THAT specific customer is looking to
+ * target", and a client can have several (SRT: med spa owners AND plumbers; a med spa: women in
+ * their 30s for rejuvenation AND women over 60 for a lift). One is worked at a time, the rest stay
+ * on file as options.
+ *
+ * ‼️ THIS IS THE FIRST CODE PATH THAT EVER CREATES A client_audiences ROW. Measured 2026-09-15:
+ * seedClientAudience had no caller. SRT's one row came from the migration's one-time backfill, so
+ * the next client onboarded would have had none, and concierge-setup refuses without one ("Seed
+ * the audience first"), which strands pre_call_pages behind concierge_preview. Headlines degrade
+ * too: no audience means no shared quotes and no approved numbers, so every figure is unbacked.
+ *
+ * ‼️ A CHANGE DEMOTES, IT NEVER DELETES. The previous primary stays as a non-primary row, which is
+ * exactly "one of the options". Research sharing is unaffected: the row carries
+ * (research_vertical, research_avatar_slug), the key avatar_briefs and question_bank already use.
+ *
+ * ‼️ ORDER: INSERT AS NON-PRIMARY, DEMOTE THE OLD ONE, PROMOTE THE NEW ONE. client_audiences_one_primary
+ * is a partial unique index, so promoting before demoting fails. A failure between the last two
+ * writes leaves the client with no primary, which audienceFor reports out loud and a re-confirm
+ * repairs (the row already exists, so it takes the promote branch). The reverse order would be the
+ * same failure with a row missing.
+ *
+ * Never throws. A confirmation must not fail because the audience could not be written; the card
+ * says what happened instead.
+ */
+export async function ensurePrimaryAudienceForAvatar(args: {
+  clientId: string;
+  avatarSlug: string;
+  avatarLabel: string;
+  by: string;
+}): Promise<AudienceLink> {
+  try {
+    const { data: existing, error: readErr } = await supabaseAdmin
+      .from("client_audiences")
+      .select("id, is_primary")
+      .eq("client_id", args.clientId)
+      .eq("slug", args.avatarSlug)
+      .maybeSingle();
+
+    if (readErr) {
+      return {
+        ok: false,
+        note: `The audience could not be recorded: client_audiences is unreadable (${readErr.message}).`,
+      };
+    }
+
+    if (existing) {
+      if (existing.is_primary) {
+        return {
+          ok: true,
+          audienceId: existing.id as string,
+          created: false,
+          note: `*${args.avatarLabel}* was already this client's primary audience.`,
+        };
+      }
+      const promoted = await promote(args.clientId, existing.id as string);
+      return promoted
+        ? {
+            ok: false,
+            note: `*${args.avatarLabel}* is on file as an audience but could not be made primary: ${promoted}`,
+          }
+        : {
+            ok: true,
+            audienceId: existing.id as string,
+            created: false,
+            note: `*${args.avatarLabel}* is now the primary audience. The previous one stays on file as an option.`,
+          };
+    }
+
+    const { data: client } = await supabaseAdmin
+      .from("clients")
+      .select("vertical_slug, business_type")
+      .eq("id", args.clientId)
+      .maybeSingle();
+
+    const { verticalFor } = await import("./harvest");
+    const resolved = await verticalFor(args.clientId);
+    if (!resolved.ok) {
+      return { ok: false, note: `No audience was created: ${resolved.error}` };
+    }
+
+    const proposal = proposePreset(
+      (client?.vertical_slug as string | null) ?? null,
+      (client?.business_type as string | null) ?? null
+    );
+    if (!proposal.preset) {
+      return {
+        ok: false,
+        note:
+          `:warning: No audience was created, so the concierge and the headline bank have nothing ` +
+          `to work from. ${proposal.reason}`,
+      };
+    }
+
+    const seeded = await seedClientAudience({
+      clientId: args.clientId,
+      presetKey: proposal.presetKey,
+      slug: args.avatarSlug,
+      label: args.avatarLabel,
+      researchVertical: resolved.vertical,
+      researchAvatarSlug: args.avatarSlug,
+      isPrimary: false,
+      by: args.by,
+    });
+    if (!seeded.ok || !seeded.audienceId) {
+      return { ok: false, note: `:warning: The audience could not be created: ${seeded.error ?? "no id returned"}` };
+    }
+
+    const promoted = await promote(args.clientId, seeded.audienceId);
+    if (promoted) {
+      return {
+        ok: false,
+        note: `:warning: The audience was created but could not be made primary: ${promoted} Confirm the avatar again to retry.`,
+      };
+    }
+
+    return {
+      ok: true,
+      audienceId: seeded.audienceId,
+      created: true,
+      note:
+        `Audience created: *${args.avatarLabel}*, spoken to as a ${proposal.preset.buyer[0]}, from the ` +
+        `\`${proposal.presetKey}\` preset.` +
+        (proposal.unambiguous ? "" : ` :warning: ${proposal.reason}`),
+    };
+  } catch (e) {
+    return { ok: false, note: `:warning: The audience could not be recorded: ${(e as Error).message}` };
+  }
+}
+
+/** Demote whatever is primary, then promote this one. Returns an error sentence, or null. */
+async function promote(clientId: string, audienceId: string): Promise<string | null> {
+  const { error: demoteErr } = await supabaseAdmin
+    .from("client_audiences")
+    .update({ is_primary: false, updated_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .eq("is_primary", true)
+    .neq("id", audienceId);
+  if (demoteErr) return demoteErr.message;
+
+  const { error: promoteErr } = await supabaseAdmin
+    .from("client_audiences")
+    .update({ is_primary: true, updated_at: new Date().toISOString() })
+    .eq("id", audienceId);
+  return promoteErr ? promoteErr.message : null;
+}
+
 /**
  * A person has looked at the words and says they are right.
  *
