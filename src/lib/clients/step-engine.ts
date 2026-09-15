@@ -1353,13 +1353,20 @@ async function instructionsFor(
 
       // ‼️ RE-MINTED WHEN THE CARD IS DRAWN, NOT READ FROM output_ref. The token lives 14 days, and
       // rows written before 2026-09-11 hold the tokenless concierge-host URL, which 404s.
-      const { conciergePreviewUrlFor } = await import("./concierge-setup");
-      const url = cfg ? await conciergePreviewUrlFor(c.id) : null;
+      const { conciergeDemoUrlFor, addonStatusFor } = await import("./concierge-addon");
+      const url = cfg ? await conciergeDemoUrlFor(c.id) : null;
+      const addon = cfg ? await addonStatusFor(c.id) : null;
 
       return [
         `*${lane}.*`,
+        // ‼️ AN ADD-ON, DECIDED ON THE CALL (2026-09-16). Matthew charges for it separately and may skip it.
+        addon === "included"
+          ? ":white_check_mark: *Add-on: included.* It goes live on their pages at concierge_live."
+          : addon === "declined"
+            ? ":no_entry_sign: *Add-on: not included.* Nothing shows on their pages. `concierge install` in any thread adds it later."
+            : ":grey_question: *Add-on: not decided.* It is charged separately. Demo it, then press [Include concierge] or [Not now]. Both tick this step; neither touches their pages or plan.",
         url
-          ? `*Demo link:* ${url}\nMinted when this card was drawn, on our own host, so it needs no DNS and works for 14 days.`
+          ? `*Demo link:* ${url}\nTheir hub with sample text and the assistant in the corner, as a visitor meets it. Minted when this card was drawn, on our own host, works for 14 days.`
           : cfg
             ? "*No demo link could be minted.* CLIENT_LINK_SECRET is not set on this environment, or this client has no slug."
             : "*The preview link is not on the row yet.* Hit Retry on the board.",
@@ -1793,7 +1800,7 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
   if (step.key === "concierge_preview") {
     const { data } = await supabaseAdmin
       .from("concierge_configs")
-      .select("audience, audience_confirmed_at")
+      .select("audience, audience_confirmed_at, addon_status")
       .eq("client_id", c.id)
       .maybeSingle();
 
@@ -1814,6 +1821,16 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
       {
         label: `Owner lane${mark("owner") ? ` (${mark("owner")})` : ""}`,
         actionId: "concierge_audience_owner",
+        value: c.id,
+      },
+      {
+        label: data.addon_status === "included" ? "Concierge included" : "Include concierge (add-on)",
+        actionId: "concierge_addon_include",
+        value: c.id,
+      },
+      {
+        label: data.addon_status === "declined" ? "Not included" : "Not now, install later",
+        actionId: "concierge_addon_decline",
         value: c.id,
       },
     ];

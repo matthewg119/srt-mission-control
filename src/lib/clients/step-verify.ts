@@ -1072,7 +1072,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     const { data, error } = await supabaseAdmin
       .from("concierge_configs")
       .select(
-        "enabled, booking_mode, booking_url, booking_phone, allowed_origins, audience, audience_confirmed_at, audience_confirmed_by"
+        "enabled, booking_mode, booking_url, booking_phone, allowed_origins, audience, audience_confirmed_at, audience_confirmed_by, addon_status"
       )
       .eq("client_id", ctx.clientId)
       .maybeSingle();
@@ -1104,6 +1104,18 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     //
     // Refusing FIRST means a person cannot satisfy this step by flipping `enabled` and having the
     // audience question never come up.
+    // ‼️ A WIDGET THEY DID NOT BUY DOES NOT GO LIVE (2026-09-16). The concierge is an add-on; this step is the
+    // one that puts it on their pages, so it refuses until somebody recorded that it was included.
+    if (data.addon_status !== "included") {
+      return notYet(
+        "concierge_configs.addon_status for this client",
+        data.addon_status === "declined" ? "the add-on was not included" : "nobody has recorded whether the add-on was bought",
+        data.addon_status === "declined"
+          ? "They did not take the concierge. Skip this step, or `concierge install` in any thread if they add it."
+          : "Press [Include concierge (add-on)] on step 18's card, or `concierge install` in any thread."
+      );
+    }
+
     if (!data.audience_confirmed_at) {
       return notYet(
         "concierge_configs.audience_confirmed_at for this client",

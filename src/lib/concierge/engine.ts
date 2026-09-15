@@ -451,7 +451,7 @@ export function makeExecutor(ctx: ExecutorContext) {
  * over, both still excluding everything already delivered. Re-applying the key after delivery
  * would offer the same thing twice, which `exclude` exists to prevent.
  */
-async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
+export async function allowedMagnet(ctx: Pick<ExecutorContext, "config" | "session">): Promise<LeadMagnet | null> {
   const delivered = ctx.session.magnetsDelivered;
 
   if (delivered.length === 0) {

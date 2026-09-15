@@ -292,6 +292,33 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         clientId: action.value ?? "",
       });
+    // ── The concierge add-on: bought on the call, or installed later ──
+    case "concierge_addon_include":
+    case "concierge_addon_decline":
+      waitUntil(
+        (async () => {
+          const clientId = (action.value ?? "").trim();
+          const actor = payload.user?.username ? `@${payload.user.username}` : userId;
+          const { setConciergeAddon } = await import("@/lib/clients/concierge-addon");
+          const res = await setConciergeAddon({
+            clientId,
+            status: action.action_id === "concierge_addon_include" ? "included" : "declined",
+            by: actor,
+          });
+          await slack.postThreadReply(channel, slackTs, res.ok ? res.lines.join("\n") : `:warning: ${res.error}`);
+          if (res.ok) {
+            const { setDeliveryStep } = await import("@/lib/clients/delivery-checklist");
+            const done = await setDeliveryStep({ clientId, stepKey: "concierge_preview", transition: "complete", actor });
+            if (!done.ok) {
+              const todo = done.verdict && !done.verdict.ok && done.verdict.kind === "not_yet" ? ` ${done.verdict.todo}` : "";
+              await slack.postThreadReply(channel, slackTs, `:hourglass: Decision saved, step not ticked yet: ${done.error ?? "the check refused"}.${todo}`);
+            }
+          }
+          const { postStep } = await import("@/lib/clients/step-engine");
+          await postStep(clientId, "concierge_preview");
+        })().catch((e) => console.error("[slack/actions] concierge addon failed:", e))
+      );
+      return NextResponse.json({ ok: true });
     // ── Step 21: the awareness ladder's rung, then the pillar keyword ──
     case "ladder_write":
     case "ladder_pick":

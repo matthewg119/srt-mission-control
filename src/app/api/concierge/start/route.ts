@@ -9,11 +9,16 @@
 // the tenant exists. There is nothing to gain from telling a scanner which slugs are real.
 
 import { NextRequest, NextResponse } from "next/server";
-import { loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { openingFor } from "@/lib/concierge/engine";
 import { conciergeAmmo } from "@/lib/concierge/ammo";
-import { magnetByKey, resolveMagnet } from "@/lib/concierge/magnets";
+import { magnetByKey, pillLabel, resolveMagnet } from "@/lib/concierge/magnets";
+import { loadConciergeConfig, quickActionsFor } from "@/lib/concierge/config";
+
+/** The audit button already offers the visibility scan, so a magnet that IS the scan is not offered twice. */
+function isAuditMagnet(key: string | null): boolean {
+  return key === "visibility_scan";
+}
 import { appendMessage, startConciergeSession } from "@/lib/concierge/session";
 import { clientIpFrom, hashIp } from "@/lib/scan/session";
 import { supabaseAdmin } from "@/lib/db";
@@ -154,6 +159,19 @@ export async function POST(req: NextRequest) {
       // The header CTA reads these, so a magnet edited in the database changes the page.
       magnet: magnet ? { key: magnet.magnetKey, title: magnet.title, promise: magnet.promise } : null,
       measured: Boolean(evidence),
+      // ‼️ THE GREETING AND THE BUTTONS ARE FIXED, AND THE MEASURED OPENER WAITS FOR "Type for help" (2026-09-16).
+      // Matthew asked for "How can we help you today?" and three choices. The opener above is still built and
+      // still written to the transcript, so the conversation a visitor types into starts where it always did.
+      greeting: "How can we help you today?",
+      actions: quickActionsFor(config)
+        .map((a) =>
+          a.kind === "magnet"
+            ? magnet && !isAuditMagnet(magnet.magnetKey)
+              ? { kind: "magnet", label: a.label || pillLabel(magnet) }
+              : null
+            : a
+        )
+        .filter(Boolean),
     },
     { headers: { "cache-control": "no-store" } }
   );

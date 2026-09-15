@@ -279,12 +279,23 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
         `\`${demoWhere}\` ${demo && !demo.ok ? demo.detail : "was not requested"}. The config ` +
         `row above is saved either way; fix that and re-run this step for a working link.`;
 
+  // ‼️ THE LINK HANDED OVER IS THE WIDGET ON A PAGE (2026-09-16). demoUrl above is the bare frame and it stays the
+  // thing that is probed; what a person opens on the call is their hub with sample text and the assistant in
+  // the corner, which is what the product actually is. Matthew: "it's supposed to be an extension for the
+  // website not a whole chatbot itself."
+  const { conciergeDemoUrlFor } = await import("./concierge-addon");
+  const pageDemo = demoAnswered ? await conciergeDemoUrlFor(clientId) : null;
+
   await notifyStep(
     clientId,
     "concierge_preview",
     [
       `*${lane}, ${name}*`,
-      demoLine,
+      pageDemo ? `*Demo on a page:* ${pageDemo}
+The assistant sits in the corner, as a visitor meets it.` : demoLine,
+      "",
+      ":moneybag: *It is an add-on.* Demo it, then press [Include concierge (add-on)] or [Not now, install later]. " +
+        "Both tick this step; neither touches their pages, magnets or plan. `concierge install` in any thread adds it later.",
       "",
       ":lock: Not live on their site. `enabled` is false until the `concierge_live` step, so " +
         "this link is for the call and nothing is running on their domain yet.",

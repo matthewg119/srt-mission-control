@@ -13,8 +13,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
-import { ingestLead } from "@/lib/lead-intake";
-import { getSession, updateSession } from "@/lib/scan/session";
+import { getSession } from "@/lib/scan/session";
+import { claimScan, reportUrlFor } from "@/lib/scan/start-claim";
 import type { AuditReportRow } from "@/lib/audit-engine/types";
 
 export const runtime = "nodejs";
@@ -32,20 +32,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function clean(v: unknown, max = 200): string {
   if (v === undefined || v === null) return "";
   return String(v).replace(/\s+/g, " ").trim().slice(0, max);
-}
-
-function isEmail(v: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
-}
-
-function appUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
-}
-
-/** The report URL, or null while the run is still going. */
-function reportUrlFor(report: AuditReportRow | null): string | null {
-  if (!report || report.status !== "done" || !report.slug) return null;
-  return `${appUrl()}/r/${report.slug}`;
 }
 
 /**
@@ -91,83 +77,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ ok: false, error: "bad_json" }, { status: 400 });
   }
 
-  const email = clean(body.email, 120).toLowerCase();
-  const name = clean(body.name, 80);
-  // No phone is read, deliberately. ingestLead fires Speed-to-Lead whenever it gets one, and
-  // this route is public and unauthenticated: accepting a number here would be an open
-  // outbound dialer pointed at anything a stranger typed. The page also promises we do not
-  // collect one. Keep those two facts in agreement.
-
-  if (!isEmail(email)) {
+  // No phone is read, deliberately. ingestLead fires Speed-to-Lead whenever it gets one, and this route is
+  // public and unauthenticated: accepting a number here would be an open outbound dialer pointed at anything
+  // a stranger typed. The page also promises we do not collect one. Keep those two facts in agreement.
+  const res = await claimScan({ sessionId: params.id, email: clean(body.email, 120), name: clean(body.name, 80) });
+  if (!res.ok) {
     return NextResponse.json(
-      { ok: false, error: "invalid_email", message: "Enter a valid email address." },
-      { status: 400 }
+      { ok: false, error: res.error, ...(res.message ? { message: res.message } : {}) },
+      { status: res.status }
     );
   }
-
-  const session = await getSession(params.id);
-  if (!session) {
-    return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-  }
-
-  let report: AuditReportRow | null = null;
-  if (session.report_id) {
-    const { data } = await supabaseAdmin
-      .from("audit_reports")
-      .select("*")
-      .eq("id", session.report_id)
-      .maybeSingle();
-    report = (data as AuditReportRow) ?? null;
-  }
-
-  // Idempotent. A session is shared by everyone who scans that domain inside the cache window,
-  // and the button can be double-clicked. Without this, each POST creates another contact,
-  // another Zoho lead and another top-level #hot-leads post.
-  if (session.contact_id) {
-    return NextResponse.json({ ok: true, alreadyClaimed: true, reportUrl: reportUrlFor(report) });
-  }
-
-  const nameParts = name.split(" ").filter(Boolean);
-  const stillRunning = !report || report.status !== "done";
-
-  const { contactId } = await ingestLead({
-    firstName: nameParts[0] || "",
-    lastName: nameParts.slice(1).join(" ") || "",
-    email,
-    website: session.website,
-    businessName: report?.client_name ?? undefined,
-    city: report?.city ?? undefined,
-    source: "scan",
-    // No phone was collected, so there is nothing to dial and nothing to promise.
-    speedToLead: false,
-    noteTitle: "Self-serve AI visibility scan",
-    headline: `:satellite: *Ran their own scan* on ${session.domain} at srtagency.com/scan and asked for the report.`,
-    detailLines: [
-      `Website: ${session.website}`,
-      report?.business_type ? `Business type: ${report.business_type}` : "",
-      report?.city ? `City: ${report.city}` : "",
-      stillRunning
-        ? "Scan still running. The report and the draft pitch land in #ai-visibility-audits when it finishes."
-        : `AI visibility score: ${report?.score ?? "not scored"}/100`,
-      "SMS consent: not collected (scan funnel asks for email only)",
-      "Funnel: /scan",
-    ],
-  });
-
-  await updateSession(session.id, { contact_id: contactId ?? null });
-
-  // Attach the person to the report so finishReport addresses them and drafts the pitch.
-  // Only fills blanks: a report that already belongs to a lead is never reassigned.
-  if (report && !report.requester_email) {
-    await supabaseAdmin
-      .from("audit_reports")
-      .update({
-        requester_email: email,
-        requester_name: name || null,
-        contact_id: contactId ?? null,
-      })
-      .eq("id", report.id);
-  }
-
-  return NextResponse.json({ ok: true, pending: stillRunning, reportUrl: reportUrlFor(report) });
+  return NextResponse.json(
+    res.alreadyClaimed
+      ? { ok: true, alreadyClaimed: true, reportUrl: res.reportUrl }
+      : { ok: true, pending: res.pending, reportUrl: res.reportUrl }
+  );
 }

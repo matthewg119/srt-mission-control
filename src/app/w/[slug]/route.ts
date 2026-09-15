@@ -10,6 +10,12 @@
 // stranger's phone. It is a few kB of hand-written markup that renders instantly, and it shares no
 // JavaScript with the dashboard, so nothing in the app can accidentally end up on a client's site.
 //
+// ‼️ IT OPENS ON A GREETING AND THREE BUTTONS, NOT ON A TEXT BOX (2026-09-16). Matthew: "It should start
+// with 'how can we help you today?' and as buttons ... Get Free AI Visibility audit (3 min) ... the lead
+// magnet ... and a third option where they can type for help, always ask for email in case we lose
+// connection." Every button asks for a name and an email first, the buttons run through
+// /api/concierge/action, and "Type for help" opens the same model conversation this frame always held.
+//
 // ‼️ THE FRAME IS SANDBOXED FROM ITS PARENT BY THE BROWSER, and that is a feature rather than a
 // limitation: a patient's answers, and later a patient's photo, never enter the client's own
 // analytics or session recording surface. That was one of the two reasons this lane chose an iframe.
@@ -105,58 +111,167 @@ input::placeholder{color:var(--mut)}
 button{padding:11px 18px;border:0;border-radius:999px;background:var(--acc);color:var(--accFg);font-weight:700;font-size:15px;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
 .dots{color:var(--mut);font-size:13px;padding-left:4px}
+header{display:flex;align-items:center;justify-content:space-between}
+form[hidden]{display:none}
+header .x{padding:2px 8px;background:none;color:var(--mut);font-size:22px;line-height:1;font-weight:400}
+.acts{display:flex;flex-direction:column;gap:8px;align-self:stretch;margin-top:2px}
+.act{text-align:left;padding:12px 14px;border:1px solid var(--acc);border-radius:12px;background:transparent;color:var(--fg);font-weight:600;font-size:14px}
+.act:hover{background:rgba(0,201,167,.12)}
+.card{align-self:stretch;background:var(--card);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px}
+.card p{margin:0 0 2px;font-size:13px;color:var(--mut)}
+.card input{border-radius:10px}
+.card .err{color:#ff9b8f;font-size:13px;min-height:1em}
+.bar{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:8%;background:var(--acc);transition:width .6s}
 </style></head><body>
-<header>${esc(title)}</header>
+<header><span>${esc(title)}</span><button class="x" id="x" type="button" aria-label="Close">&times;</button></header>
 <div id="log" role="log" aria-live="polite"></div>
-<form id="f" autocomplete="off"><input id="i" placeholder="Type here" aria-label="Your message" maxlength="1200" disabled><button id="s" disabled>Send</button></form>
+<form id="f" autocomplete="off" hidden><input id="i" placeholder="Type here" aria-label="Your message" maxlength="1200" disabled><button id="s" disabled>Send</button></form>
 <script>
 (function(){
  var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},magnet:${JSON.stringify(magnet)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
  var PASS=${JSON.stringify(pass)};
  function api(p){return PASS?p+(p.indexOf("?")<0?"?":"&")+PASS:p}
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
- var token=null,busy=false;
+ var token=null,busy=false,opening='',contact=false,firstName='',pending=null,mode='';
  // ‼️ THE VISITOR'S ZONE, READ IN THE VISITOR'S BROWSER. The calendar has to offer THEIR today.
- // Resolving it here is the only place it is knowable; a server-side guess is wrong for anybody
- // outside one time zone, and wrong in a way that shows tomorrow's slots under a "today" label.
  var tz="";
  try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||""}catch(e){}
 
- function el(cls,text){var d=document.createElement('div');d.className=cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
+ document.getElementById('x').addEventListener('click',function(){try{parent.postMessage({srtConcierge:'close'},'*')}catch(e){}});
+
+ function el(cls,text){var d=document.createElement('div');d.className=cls;if(text)d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
  function bubble(who,text){return el('b '+who,text)}
  function height(){try{parent.postMessage({srtConcierge:'height',value:document.body.scrollHeight},'*')}catch(e){}}
+ function post(path,body){return fetch(api(path),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(d){d.__status=r.status;return d})})}
+ function link(host,url,label){var a=document.createElement('a');a.className='att';a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=label;host.appendChild(document.createElement('br'));host.appendChild(a)}
 
  function attach(host,list){
   var items=(list||[]).filter(function(a){return a.url});
   if(!items.length)return;
   var slots=items.filter(function(a){return a.kind==='slot'});
   var rest=items.filter(function(a){return a.kind!=='slot'});
-
   if(slots.length){
    var row=document.createElement('div');row.className='slots';
-   slots.forEach(function(a){
-    var b=document.createElement('a');
-    b.className='slot';b.href=a.url;b.target='_blank';b.rel='noopener noreferrer';
-    b.textContent=a.title;
-    row.appendChild(b);
-   });
+   slots.forEach(function(a){var b=document.createElement('a');b.className='slot';b.href=a.url;b.target='_blank';b.rel='noopener noreferrer';b.textContent=a.title;row.appendChild(b)});
    host.appendChild(row);
   }
-
-  rest.forEach(function(a){
-   var link=document.createElement('a');
-   link.className='att';link.href=a.url;link.target='_blank';link.rel='noopener noreferrer';
-   link.textContent=a.title;
-   host.appendChild(document.createElement('br'));host.appendChild(link);
-  });
+  rest.forEach(function(a){link(host,a.url,a.title)});
  }
 
  function lock(on){busy=on;input.disabled=on;send.disabled=on;if(!on){input.focus()}}
 
+ // ── the three doors ──────────────────────────────────────────────────────
+ function actions(list){
+  var box=el('acts');
+  list.forEach(function(a){
+   var b=document.createElement('button');b.type='button';b.className='act';b.textContent=a.label;
+   b.addEventListener('click',function(){box.remove();bubble('u',a.label);choose(a.kind)});
+   box.appendChild(b);
+  });
+  height();
+ }
+
+ function choose(kind){
+  mode=kind;
+  // ‼️ NAME AND EMAIL FIRST, ON EVERY DOOR. Matthew: "always ask for email in case we lose connection".
+  if(!contact){pending=kind;askContact(kind);return}
+  if(kind==='audit')askWebsite();
+  else if(kind==='magnet')giveMagnet();
+  else startTyping();
+ }
+
+ function askContact(kind){
+  bubble('a','Happy to help. Who am I talking to? That way I can send it to you if we get disconnected.');
+  var c=el('card');
+  var n=document.createElement('input');n.placeholder='Your name';n.autocomplete='given-name';n.maxLength=60;
+  var m=document.createElement('input');m.placeholder='Email';m.type='email';m.autocomplete='email';m.maxLength=120;
+  var err=document.createElement('div');err.className='err';
+  var go=document.createElement('button');go.type='button';go.textContent='Continue';
+  c.appendChild(n);c.appendChild(m);c.appendChild(err);c.appendChild(go);
+  n.focus();
+  function submit(){
+   go.disabled=true;err.textContent='';
+   post('/api/concierge/action',{token:token,action:'contact',name:n.value,email:m.value,picked:kind,host:CFG.host,path:CFG.path})
+   .then(function(d){
+    go.disabled=false;
+    if(!d.ok){err.textContent=d.message||'Check those and try again.';return}
+    contact=true;firstName=d.firstName||'';c.remove();
+    bubble('u',n.value+' · '+m.value);
+    var k=pending;pending=null;choose(k);
+   }).catch(function(){go.disabled=false;err.textContent='That did not go through. Try once more.'});
+  }
+  go.addEventListener('click',submit);
+  m.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();submit()}});
+  height();
+ }
+
+ function askWebsite(){
+  bubble('a',(firstName?'Thanks '+firstName+'. ':'')+'What is your website? I will check whether ChatGPT and the other AI assistants recommend you. It takes about three minutes.');
+  var c=el('card');
+  var w=document.createElement('input');w.placeholder='yourbusiness.com';w.inputMode='url';w.maxLength=300;
+  var err=document.createElement('div');err.className='err';
+  var go=document.createElement('button');go.type='button';go.textContent='Run my free audit';
+  c.appendChild(w);c.appendChild(err);c.appendChild(go);w.focus();
+  function submit(){
+   go.disabled=true;err.textContent='';
+   post('/api/concierge/action',{token:token,action:'audit_start',website:w.value})
+   .then(function(d){
+    go.disabled=false;
+    if(!d.ok){err.textContent=d.message||'That site could not be scanned.';return}
+    c.remove();bubble('u',d.domain);watchAudit(d.scanId,d.domain);
+   }).catch(function(){go.disabled=false;err.textContent='That did not go through. Try once more.'});
+  }
+  go.addEventListener('click',submit);
+  w.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();submit()}});
+  height();
+ }
+
+ function watchAudit(scanId,domain){
+  var b=bubble('a','Running the audit on '+domain+'. I am asking the AI assistants the questions your customers ask. You can keep browsing; the report will also land in your inbox.');
+  var bar=document.createElement('div');bar.className='bar';var fill=document.createElement('i');bar.appendChild(fill);b.appendChild(bar);
+  var started=Date.now(),done=false;
+  function tick(){
+   if(done)return;
+   post('/api/concierge/action',{token:token,action:'audit_status',scanId:scanId}).then(function(d){
+    var pct=d.engine&&d.engine.total?Math.round(100*d.engine.done/d.engine.total):Math.min(90,Math.round((Date.now()-started)/2000));
+    fill.style.width=Math.max(8,Math.min(100,pct))+'%';
+    if(d.reportUrl){done=true;fill.style.width='100%';var r=bubble('a','Your AI visibility report is ready.');link(r,d.reportUrl,'Open my report');afterAudit();height();return}
+    if(d.status==='failed'){done=true;bubble('a',(d.error||'That audit could not finish.')+' Type below and I will help directly.');startTyping();return}
+    setTimeout(tick,6000);
+   }).catch(function(){setTimeout(tick,9000)});
+  }
+  setTimeout(tick,4000);
+  startTyping(true);
+ }
+
+ function afterAudit(){bubble('a','Want me to walk you through what it found? Ask me anything below.')}
+
+ function giveMagnet(){
+  var wait=el('dots','...');
+  post('/api/concierge/action',{token:token,action:'magnet'}).then(function(d){
+   wait.remove();
+   if(d.magnet){var b=bubble('a',d.magnet.title+'. '+(d.magnet.promise||''));link(b,d.magnet.url,d.magnet.cta||'Open it')}
+   else bubble('a',d.message||'Ask me anything below.');
+   startTyping(true);height();
+  }).catch(function(){wait.remove();bubble('a','That did not go through. Type your question below.');startTyping()});
+ }
+
+ function startTyping(quiet){
+  if(form.hidden){form.hidden=false;lock(false)}
+  if(!quiet&&opening)bubble('a',opening);
+  height();
+ }
+
  fetch(api('/api/concierge/start'),{method:'POST',headers:{'content-type':'application/json'},
   body:JSON.stringify({slug:CFG.slug,category:CFG.category,magnet:CFG.magnet,city:CFG.city,path:CFG.path,host:CFG.host})})
  .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
- .then(function(d){token=d.token;bubble('a',d.opening);lock(false);height()})
+ .then(function(d){
+  token=d.token;opening=d.opening||'';
+  if(d.greeting&&d.actions&&d.actions.length){bubble('a',d.greeting);actions(d.actions)}
+  else{bubble('a',opening);startTyping(true)}
+  height();
+ })
  .catch(function(){bubble('a','This is not available right now.')});
 
  form.addEventListener('submit',function(e){

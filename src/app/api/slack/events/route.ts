@@ -1143,6 +1143,13 @@ export async function POST(request: NextRequest) {
             (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText })) ??
             (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            // `concierge install` works in ANY of this client's threads: it is the "come back later" door.
+            (await (await import("@/lib/clients/concierge-addon")).handleConciergeAddonThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             (await (await import("@/lib/clients/objection-mining")).handleObjectionThreadReply({
               clientId: client.id,
               stepKey: client.stepKey,

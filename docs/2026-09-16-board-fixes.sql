@@ -165,3 +165,51 @@ alter table public.audience_documents add constraint audience_documents_kind_che
 alter table public.audience_documents drop constraint if exists audience_documents_offer_kind;
 alter table public.audience_documents add constraint audience_documents_offer_kind
   check ((kind in ('sales_letter', 'short_offer', 'necessary_beliefs', 'awareness_ladder')) = (offer_id is not null));
+
+
+-- =====================================================================
+-- D. THE CONCIERGE AS AN ADD-ON, WITH THE CAT
+-- =====================================================================
+--
+-- Matthew: "we will charge for this additionally so it can be optional in the onboarding but if I skip it I
+-- still may be able to come back and install it." The row stays (pages, magnets and the replica read the
+-- catalogue through it); addon_status says whether the widget may appear on their pages.
+--
+-- ‼️ loadConciergeConfig SELECTS addon_status, quick_actions AND mascot BY NAME, on the busiest route in the
+-- lane. This section must be run before the deploy, or every widget stops loading.
+
+alter table public.concierge_configs add column if not exists addon_status text not null default 'undecided';
+alter table public.concierge_configs add column if not exists addon_decided_at timestamptz;
+alter table public.concierge_configs add column if not exists addon_decided_by text;
+-- [{kind: 'audit'|'magnet'|'type'|'booking', label}] under "How can we help you today?". Null is the audience default.
+alter table public.concierge_configs add column if not exists quick_actions jsonb;
+-- The corner mascot key (src/lib/concierge/mascot). Null shows the plain pill.
+alter table public.concierge_configs add column if not exists mascot text default 'wizard-cat';
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'concierge_configs_addon_status_check') then
+    alter table public.concierge_configs add constraint concierge_configs_addon_status_check
+      check (addon_status in ('undecided', 'included', 'declined'));
+  end if;
+end $$;
+
+-- SRT's own widget is SRT's product on SRT's site: always included.
+update public.concierge_configs cc
+   set addon_status = 'included', addon_decided_at = now(), addon_decided_by = 'migration 2026-09-16'
+  from public.clients c
+ where c.id = cc.client_id
+   and c.slug = 'srt-agency-llc'
+   and cc.addon_status = 'undecided';
+
+-- SRT is not a Spanish-reading clinic. The intake answer said Spanish, which put Spanish notices on its
+-- review page and card (step 20).
+update public.clients set language = 'en' where slug = 'srt-agency-llc' and language = 'es';
+
+
+-- ── Verify ──────────────────────────────────────────────────────────────────
+select 'keyword_runs' as t, count(*) from public.keyword_runs
+union all select 'keyword_decisions', count(*) from public.keyword_decisions
+union all select 'question_bank.kind', count(*) from public.question_bank where kind is not null
+union all select 'client_offers.guarantee col', count(*) from information_schema.columns where table_name = 'client_offers' and column_name = 'guarantee'
+union all select 'concierge addon col', count(*) from information_schema.columns where table_name = 'concierge_configs' and column_name = 'addon_status';
