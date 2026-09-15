@@ -1,0 +1,68 @@
+name: Checks
+
+# The typecheck and the probes that need nothing but the source.
+#
+# There was no CI before this. Every check below was run by hand before a push, and a check that
+# depends on somebody remembering to run it is a check that eventually does not run.
+#
+# NO SECRETS, ON PURPOSE. Every script here reads source files or pure functions and was proven to
+# pass on a clean checkout with no .env file present (2026-09-15). src/lib/db.ts falls back to a
+# placeholder client instead of throwing, so an import that reaches it is harmless. A probe that
+# needs the database or a model call does NOT belong in this file: it would either fail on every run
+# or, worse, pass vacuously against a placeholder URL. Those stay manual (see the build doc's
+# verification list).
+#
+# NOT `bun run build`. Vercel builds every push already, and a Next build here would need the
+# production env to mean anything.
+#
+# Not wired into Code Guardian yet. Its own header warns that a workflow failing on every run turns
+# the guardian into a spam source, so add "Checks" to its workflow_run list once this has been green
+# for a while.
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # package.json packageManager. Keep the two in step.
+          bun-version: "1.3.10"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: ./node_modules/.bin/tsc --noEmit
+
+      # --no-env-file so a stray .env can never make a check pass here that would fail for real.
+      # Each script exits 1 on any failed check.
+      - name: Onboarding artifacts
+        run: bun --no-env-file run scripts/test-onboarding-artifacts.ts
+
+      - name: Vocabulary probe (the audience cutover)
+        run: bun --no-env-file run scripts/_probe-vocabulary.ts
+
+      - name: Presence URL probe
+        run: bun --no-env-file run scripts/_probe-presence-url.ts
+
+      - name: Step verify probe
+        run: bun --no-env-file run scripts/_probe-step-verify.ts
+
+      - name: Headline probes
+        run: |
+          bun --no-env-file run scripts/_probe-aeo-headlines.ts
+          bun --no-env-file run scripts/_probe-dr-headlines.ts
+          bun --no-env-file run scripts/_probe-headline-page.ts

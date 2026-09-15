@@ -72,7 +72,25 @@ function whyInvalid(v: unknown): string {
   return "a post was missing its text, its keyword or its sources array";
 }
 
+/** "a restaurant", "an agency". The nouns come from a row a person owns, so the article cannot be typed in. */
+function withArticle(noun: string): string {
+  return `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
+}
+
 export async function runGbpSocialPosts(ctx: WorkflowContext): Promise<WorkflowResult> {
+  // ‼️ THE REGISTRY REFUSES BEFORE THIS FOR A MISSING AUDIENCE. Checked again here because this is
+  // the function that would otherwise write "for a local business" onto a real Google profile.
+  const audience = ctx.audience;
+  if (!audience) {
+    return {
+      ok: false,
+      error:
+        "no audience is confirmed for this client, so there is nobody to write the posts to. " +
+        "Confirming the avatar creates it.",
+    };
+  }
+  const v = audience.vocabulary;
+
   const reads = await import("../client-reads");
 
   const profile = await reads.clientProfile(ctx.clientId);
@@ -115,7 +133,8 @@ export async function runGbpSocialPosts(ctx: WorkflowContext): Promise<WorkflowR
     `The offer, locked on the prep call: ${profile.offer.treatment}.`,
     profile.offer.positioning ? `How they want to be known for it: ${profile.offer.positioning}.` : "",
     profile.offer.terms.length ? `What their customers call it: ${profile.offer.terms.join(", ")}.` : "",
-    profile.avatar ? `The customer this is aimed at: ${profile.avatar.label}.` : "",
+    `Who the posts speak to: ${audience.label}. Call them ${v.buyerPlural} (one ${v.buyerSingular}). ` +
+      `What the business sells are ${v.offerPlural}, it is ${withArticle(v.business)}, and booking is ${withArticle(v.visit)}.`,
     "",
     "APPROVED KEYWORDS (a person chose these; use them verbatim as the target phrase):",
     ...approved.slice(0, 40).map((k) => `  - ${k.phrase}  [${k.category}]`),
@@ -137,8 +156,14 @@ export async function runGbpSocialPosts(ctx: WorkflowContext): Promise<WorkflowR
     .join("\n");
 
   const system = [
-    "You write Google Business Profile posts and social captions for a local business.",
+    `You write Google Business Profile posts and social captions for ${withArticle(v.business)}, speaking to its ${v.buyerPlural}.`,
+    `Use the words ${v.buyerPlural}, ${v.offerPlural} and ${v.visit} for them. Never borrow another trade's words for a customer or what they buy.`,
     "",
+    // The audience's own guards: a clinic's "never quote a price for a treatment", a restaurant's
+    // "never promise a dish is allergen free". Empty for an agency, which is correct and says nothing.
+    ...(audience.hardLines.length
+      ? ["LINES THIS BUSINESS NEVER CROSSES, in any post:", ...audience.hardLines.map((l) => `- ${l}`), ""]
+      : []),
     "You are given the business's locked offer, the keywords a person approved, and the evidence on",
     "file. Write TWO posts for each of the four buying questions: price, fears, comparisons, how it",
     "works. Each post gets a Google Business post (under 1500 characters) and a shorter social",

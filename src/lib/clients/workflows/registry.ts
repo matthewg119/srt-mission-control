@@ -25,6 +25,7 @@
 // client-messages.ts's rule stands: client-facing messages are drafts and nothing can send them.
 
 import { supabaseAdmin } from "@/lib/db";
+import type { AudienceResult, ResolvedAudience } from "../audiences";
 
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
@@ -34,6 +35,17 @@ export interface WorkflowContext {
   clientId: string;
   clientName: string;
   requestedBy: string;
+  /**
+   * Who the output is written FOR: the client's audience row, recorded on the run as audience_id.
+   *
+   * ‼️ NEVER NULL FOR A WORKFLOW WITH needsAudience, and continueWorkflowRun refuses before run()
+   * rather than handing one a null. Null reaches only a workflow addressed to the client itself,
+   * where there is no buyer to speak to.
+   *
+   * ‼️ THE ROW, NEVER A PRESET. audiences.ts: a request-time reader that falls back to a preset turns
+   * the whole design back into mergeRowOverSeed() with a different table name.
+   */
+  audience: ResolvedAudience | null;
 }
 
 export type WorkflowResult =
@@ -48,6 +60,12 @@ export interface ClientWorkflow {
   description: string;
   /** What must be true before it can run, in words, for the refusal and the card. */
   needs: string;
+  /**
+   * Whether the output speaks to the client's BUYERS. If so it cannot run without an audience: a
+   * post for a taco shop written with no audience is a post for "a local business", and the nouns
+   * and the hard lines (never promise a dish is allergen free) are what the audience row carries.
+   */
+  needsAudience: boolean;
   run(ctx: WorkflowContext): Promise<WorkflowResult>;
 }
 
@@ -57,7 +75,8 @@ export const CLIENT_WORKFLOWS: Record<string, ClientWorkflow> = {
     label: "Google Business and social posts",
     description:
       "Draft Google Business Profile posts and social captions for a client, built on the four buying questions (price, fears, comparisons, how it works) from their approved plan and keywords.",
-    needs: "a locked offer, and either an approved page plan or approved keywords",
+    needs: "a confirmed audience, a locked offer, and either an approved page plan or approved keywords",
+    needsAudience: true,
     run: async (ctx) => {
       const { runGbpSocialPosts } = await import("./gbp-social-posts");
       return runGbpSocialPosts(ctx);
@@ -69,6 +88,8 @@ export const CLIENT_WORKFLOWS: Record<string, ClientWorkflow> = {
     description:
       "Draft the follow-up email after a call with a client, written from the call notes on file: what was promised, what was asked, and what happens next.",
     needs: "call notes on the client's audit report",
+    // Addressed to the client, not to their buyers.
+    needsAudience: false,
     run: async (ctx) => {
       const { runPostCallEmail } = await import("./post-call-email");
       return runPostCallEmail(ctx);
@@ -144,6 +165,15 @@ export async function startClientWorkflow(args: {
     };
   }
 
+  // ‼️ RESOLVED AT START AND RECORDED ON THE ROW, so a run says which buyer it was written for even
+  // after the client's primary audience moves on. A workflow that needs one refuses here, before a
+  // row exists, with the sentence audienceFor already composes (it names the repair).
+  const { audienceFor } = await import("../audiences");
+  const aud = await audienceFor(args.clientId);
+  if (workflow.needsAudience && !aud.ok) {
+    return { ok: false, error: `${workflow.label} writes to this client's buyers, and ${lowerFirst(aud.error)}` };
+  }
+
   const { data, error } = await supabaseAdmin
     .from("client_workflow_runs")
     .insert({
@@ -152,6 +182,7 @@ export async function startClientWorkflow(args: {
       status: "running",
       requested_by: args.requestedBy,
       inputs: {},
+      audience_id: aud.ok ? aud.audience.id : null,
     })
     .select("id")
     .single();
@@ -214,7 +245,7 @@ async function finishRun(
 export async function continueWorkflowRun(runId: string): Promise<void> {
   const { data: run } = await supabaseAdmin
     .from("client_workflow_runs")
-    .select("id, client_id, workflow_key, status")
+    .select("id, client_id, workflow_key, status, audience_id")
     .eq("id", runId)
     .maybeSingle();
 
@@ -237,11 +268,25 @@ export async function continueWorkflowRun(runId: string): Promise<void> {
 
   const clientName = ((client?.dba_name || client?.legal_name) as string | undefined) ?? "this client";
 
+  const audience = await audienceForRun(clientId, (run.audience_id as string | null) ?? null);
+
   let outcome: WorkflowResult;
-  try {
-    outcome = await workflow.run({ clientId, clientName, requestedBy: "the assistant" });
-  } catch (e) {
-    outcome = { ok: false, error: (e as Error).message };
+  if (workflow.needsAudience && !audience.ok) {
+    // ‼️ A REFUSAL, NEVER A THROW AND NEVER A NULL HANDED TO run(). It goes through finishRun and
+    // notifyThread below like any other outcome, so it lands in the ops thread instead of leaving a
+    // row that claims `running` forever.
+    outcome = { ok: false, error: lowerFirst(audience.error) };
+  } else {
+    try {
+      outcome = await workflow.run({
+        clientId,
+        clientName,
+        requestedBy: "the assistant",
+        audience: audience.ok ? audience.audience : null,
+      });
+    } catch (e) {
+      outcome = { ok: false, error: (e as Error).message };
+    }
   }
 
   await finishRun(
@@ -257,4 +302,21 @@ export async function continueWorkflowRun(runId: string): Promise<void> {
   await notifyThread(clientId, outcome.ok ? `${header}\n\n${outcome.summary}` : header).catch((e) =>
     console.error("[workflows] outcome not posted:", (e as Error).message)
   );
+}
+
+/**
+ * The audience a run was started for, or the client's primary one when the row recorded none.
+ *
+ * The recorded id wins: the primary audience can move between the start and this request, and a
+ * run's output belongs to the buyer it was asked for. A null id is a run started before this
+ * column was written, or for a workflow that did not need an audience at start.
+ */
+async function audienceForRun(clientId: string, audienceId: string | null): Promise<AudienceResult> {
+  const { audienceById, audienceFor } = await import("../audiences");
+  return audienceId ? audienceById(audienceId) : audienceFor(clientId);
+}
+
+/** Refusal sentences are written to stand alone; this lets one follow a colon or a clause. */
+function lowerFirst(s: string): string {
+  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
 }
