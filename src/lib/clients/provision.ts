@@ -427,8 +427,7 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   // ‼️ WITH MATTHEW INVITED. A private channel is invisible to anybody not in it, and until
   // 2026-09-15 this call passed no invite, so SRT Agency LLC's board sat in #srt-srt-agency-llc with
   // only the bot in it and "no channel was created" was the only reasonable reading.
-  const owner = process.env.MATTHEW_SLACK_USER_ID || null;
-  if (!owner) warn("MATTHEW_SLACK_USER_ID is not set, so nobody was invited into the private board channel.");
+  const owner = onboardingOwnerId();
   const made = await createOpsChannel(clientId, slug, { name: opsChannelNameFor(slug), invite: owner }).catch(
     (e) => {
       warn(`ops channel not created: ${(e as Error).message}`);
@@ -822,11 +821,26 @@ export function opsChannelNameFor(slug: string): string {
   return /^srt-/.test(slug) ? slug : `srt-${slug}`;
 }
 
-/** A Slack channel mention, or a plain "not created" line, for every card that announces a client. */
-export function channelLine(opsChannelId: string | null | undefined): string {
+/**
+ * The line every card that announces a client leads with (Matthew, 2026-09-15): "get started onboarding
+ * here, for X client", linking the client's own channel.
+ */
+export function channelLine(opsChannelId: string | null | undefined, clientName?: string | null): string {
+  const who = clientName?.trim() ? ` for ${clientName.trim()}` : "";
   return opsChannelId
-    ? `*Channel:* <#${opsChannelId}>`
-    : `*Channel:* not created, the board is in this channel instead`;
+    ? `:point_right: *Get started onboarding here${who}:* <#${opsChannelId}>`
+    : `:warning: *No channel was created${who}*, so the board is in this channel instead`;
+}
+
+/**
+ * Who is added to every client's private channel. Matthew, unless MATTHEW_SLACK_USER_ID says otherwise.
+ *
+ * ‼️ A FALLBACK, NOT `|| null`. A private channel with nobody in it is invisible, which is exactly the
+ * "no channel was created" SRT Agency LLC hit on 2026-09-15. An unset env var must not reproduce it.
+ */
+export const DEFAULT_ONBOARDING_OWNER = "U074ZQ1K0UE";
+export function onboardingOwnerId(): string {
+  return process.env.MATTHEW_SLACK_USER_ID || DEFAULT_ONBOARDING_OWNER;
 }
 
 /**
@@ -859,7 +873,7 @@ async function postOnboardingCard(args: {
   const text = [
     `:seedling: *Pilot started: ${args.legalName}*`,
     ``,
-    channelLine(args.opsChannelId),
+    channelLine(args.opsChannelId, args.legalName),
     args.website ? `*Website:* ${args.website}` : `*Website:* not given yet`,
     `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
     args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,

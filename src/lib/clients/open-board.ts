@@ -165,7 +165,7 @@ export async function announceClientStart(args: {
   const text = [
     `:seedling: *Client started: ${args.name}*`,
     ``,
-    channelLine(args.opsChannelId),
+    channelLine(args.opsChannelId, args.name),
     `*Board:* ${app}/dashboard/clients/${args.clientId}`,
     args.website ? `*Website:* ${args.website}` : `*Website:* not given`,
     args.board.claimed

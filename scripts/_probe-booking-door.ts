@@ -16,7 +16,7 @@ import {
   formatCallTime,
 } from "../src/lib/clients/booking-confirmation-email";
 import { bookingUrlForReport } from "../src/lib/onboarding2-link";
-import { channelLine, opsChannelNameFor } from "../src/lib/clients/provision";
+import { channelLine, DEFAULT_ONBOARDING_OWNER, onboardingOwnerId, opsChannelNameFor } from "../src/lib/clients/provision";
 
 export {};
 
@@ -79,12 +79,27 @@ check("startPilot invites MATTHEW_SLACK_USER_ID into the channel", /createOpsCha
 check("the booking and dashboard doors send no intake-link welcome email", /if \(door !== "self_serve"\)/.test(prov));
 check("srt-agency-llc is not doubled to srt-srt-agency-llc", opsChannelNameFor("srt-agency-llc") === "srt-agency-llc");
 check("an ordinary slug gets the srt- prefix", opsChannelNameFor("glow-med-spa") === "srt-glow-med-spa");
-check("the channel line is a Slack mention", channelLine("C0C1WTPH0AZ") === "*Channel:* <#C0C1WTPH0AZ>");
+check(
+  "the card says get started onboarding here, for the client, with the channel link",
+  channelLine("C0C1WTPH0AZ", "Glow Med Spa") === ":point_right: *Get started onboarding here for Glow Med Spa:* <#C0C1WTPH0AZ>",
+  channelLine("C0C1WTPH0AZ", "Glow Med Spa")
+);
+check("a missing channel is said out loud", channelLine(null, "Glow Med Spa").includes("No channel was created for Glow Med Spa"));
+const savedOwner = process.env.MATTHEW_SLACK_USER_ID;
+delete process.env.MATTHEW_SLACK_USER_ID;
+check("an unset MATTHEW_SLACK_USER_ID still invites Matthew", onboardingOwnerId() === DEFAULT_ONBOARDING_OWNER && DEFAULT_ONBOARDING_OWNER === "U074ZQ1K0UE");
+if (savedOwner !== undefined) process.env.MATTHEW_SLACK_USER_ID = savedOwner;
+for (const [rel, re] of [
+  ["src/lib/onboarding2/card.ts", /channelLine\(provision\.opsChannelId, business\)/],
+  ["src/lib/clients/open-board.ts", /channelLine\(args\.opsChannelId, args\.name\)/],
+  ["src/lib/clients/provision.ts", /channelLine\(args\.opsChannelId, args\.legalName\)/],
+] as const) {
+  check(`${rel} names the client on the channel line`, re.test(code(rel)));
+}
 check(
   "openOpsThread posts the header in channelFor, not the shared channel",
   /channelFor\(args\.clientId\)\) \?\? onboardingChannel\(\)/.test(code("src/lib/onboarding2/delivery.ts"))
 );
-check("the booked card leads with the channel link", /channelLine\(provision\.opsChannelId\)/.test(code("src/lib/onboarding2/card.ts")));
 
 console.log("\n=== One booking link ===");
 check("the report no longer renders the bare BOOKING_LINK button", !/BOOKING_LINK/.test(code("src/components/audit-report/PricingCta.tsx")));

@@ -167,7 +167,7 @@ export function bookedCard(args: {
   // notification, and the private channel is where the board is.
   if (provision.clientId) {
     const links = [
-      channelLine(provision.opsChannelId),
+      channelLine(provision.opsChannelId, business),
       `*Board:* <${app}/dashboard/clients/${provision.clientId}|open the client board>`,
       report ? `*Audit they booked from:* <${app}/r/${report.slug}|${report.businessName ?? report.slug}>` : null,
     ].filter(Boolean);

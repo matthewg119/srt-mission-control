@@ -321,7 +321,7 @@ async function onIntakeComplete(args: {
   }
   if (sharedChannel && boardChannel && boardChannel !== sharedChannel) {
     await slack
-      .postMessage(sharedChannel, [lines[0], channelLine(boardChannel), lines[1]].join("\n"))
+      .postMessage(sharedChannel, [lines[0], channelLine(boardChannel, args.name), lines[1]].join("\n"))
       .catch(() => null);
   }
 
