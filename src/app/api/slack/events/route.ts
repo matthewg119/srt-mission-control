@@ -1025,6 +1025,35 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // 1a-bis-3. `rerun`, `rerun step 13`, `rerun 18-21` in a step's thread. Above every other handler so a
+        // re-run is never eaten by a step's own grammar, and before the assistant for the usual reason.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { parseRerun, rerunAck, rerunStep, startRerunRange } = await import("@/lib/clients/step-rerun");
+          const target = parseRerun(userText);
+          if (target) {
+            const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+            const { isStepKey } = await import("@/config/delivery-steps");
+            const ack = rerunAck(target, client.stepKey);
+            await slack.postThreadReply(channel, parentThreadTs, ack);
+            if ("here" in target) {
+              if (client.stepKey && isStepKey(client.stepKey)) {
+                const key = client.stepKey;
+                waitUntil(
+                  rerunStep({ clientId: client.id, stepKey: key, fresh: false, by })
+                    .then((r) => slack.postThreadReply(channel, parentThreadTs, r.line))
+                    .catch((e) => console.error("[slack/events] rerun failed:", (e as Error).message))
+                );
+              }
+            } else {
+              const started = await startRerunRange({ clientId: client.id, from: target.from, to: target.to, by });
+              if (!started.ok) {
+                await slack.postThreadReply(channel, parentThreadTs, `:warning: Not started: ${started.error}`);
+              }
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         // 1a-ter. `template clinic` / `skin` / `skin reset` in step 15's or 16's thread.
         //
         // ‼️ ABOVE THE ASSISTANT BRANCH FOR THE SAME REASON THE AVATAR BRANCH BELOW IS.
@@ -1415,6 +1444,28 @@ export async function POST(request: NextRequest) {
             await notifyThread(client.id, toSlackMrkdwn(reply));
           }
           return NextResponse.json({ ok: true });
+        }
+
+        // 3b. A re-run typed at the TOP LEVEL of a client's own channel. The one top-level command there is,
+        // because "resend steps 18 to 21" is about the channel itself rather than about any one thread.
+        if (!client && userText.trim().length > 0 && (!parentThreadTs || parentThreadTs === event.ts)) {
+          const { parseRerun, rerunAck, clientForOpsChannel, startRerunRange } = await import("@/lib/clients/step-rerun");
+          const target = parseRerun(userText);
+          if (target && !("here" in target)) {
+            const owner = await clientForOpsChannel(channel);
+            if (owner) {
+              const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+              const started = await startRerunRange({ clientId: owner, from: target.from, to: target.to, by });
+              if (event.user) {
+                await slack.postEphemeral(
+                  channel,
+                  event.user as string,
+                  started.ok ? rerunAck(target, null) : `:warning: Not started: ${started.error}`
+                );
+              }
+              return NextResponse.json({ ok: true });
+            }
+          }
         }
 
         // 4. Top level, or a thread that belongs to no client. There is nothing to answer INTO:
