@@ -292,6 +292,14 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         clientId: action.value ?? "",
       });
+    // ── Where the review page's Post button sends a customer ──
+    case "review_link_open":
+      return reviewLinkOpenAction({
+        channel,
+        slackTs,
+        triggerId: payload.trigger_id ?? "",
+        clientId: action.value ?? "",
+      });
     // ── The offer this client's assistant hands over, approved before the call ──
     case "client_magnet_approve":
       return clientMagnetApproveAction({
@@ -666,6 +674,9 @@ async function openEditModal(args: { slackTs: string; channel: string; userId: s
 async function handleViewSubmission(payload: SlackInteractivePayload): Promise<NextResponse> {
   if (payload.view?.callback_id === "imsg_remix_submit") {
     return handleRemixSubmit(payload);
+  }
+  if (payload.view?.callback_id === "review_link_submit") {
+    return reviewLinkSubmit(payload);
   }
   if (payload.view?.callback_id !== "ai_edit_submit") {
     return NextResponse.json({ ok: true });
@@ -2081,6 +2092,122 @@ async function stepRingOutAction(args: {
   );
 
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * [Paste review link] on the review steps' cards: a modal with the six platforms and a URL box.
+ *
+ * The same writer as `review link: <url>` in the thread (lib/clients/review-link.ts), so a Yelp
+ * link picked as Trustpilot is refused here exactly as it is there.
+ */
+async function reviewLinkOpenAction(args: {
+  channel: string;
+  slackTs: string;
+  triggerId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  const token = process.env.SLACK_BOT_TOKEN || "";
+  const clientId = args.clientId.trim();
+  if (!clientId || !args.triggerId) return NextResponse.json({ ok: true });
+
+  const { REVIEW_PLATFORMS } = await import("@/lib/hub/review-destinations");
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("review_destination_primary")
+    .eq("id", clientId)
+    .maybeSingle();
+  const primary = REVIEW_PLATFORMS.find((p) => p.key === (client?.review_destination_primary as string | null));
+  const option = (p: (typeof REVIEW_PLATFORMS)[number]) => ({
+    text: { type: "plain_text", text: p.name },
+    value: p.key,
+  });
+
+  const view = {
+    type: "modal",
+    callback_id: "review_link_submit",
+    private_metadata: JSON.stringify({ clientId, channel: args.channel, slackTs: args.slackTs }),
+    title: { type: "plain_text", text: "Review link" },
+    submit: { type: "plain_text", text: "Save" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "The page a customer lands on to write the review. The review tool's Post button opens it.",
+        },
+      },
+      {
+        type: "input",
+        block_id: "platform_block",
+        label: { type: "plain_text", text: "Platform" },
+        element: {
+          type: "static_select",
+          action_id: "platform_input",
+          options: REVIEW_PLATFORMS.map(option),
+          ...(primary ? { initial_option: option(primary) } : {}),
+        },
+      },
+      {
+        type: "input",
+        block_id: "url_block",
+        label: { type: "plain_text", text: "Review page URL" },
+        element: {
+          type: "plain_text_input",
+          action_id: "url_input",
+          placeholder: { type: "plain_text", text: primary?.placeholder ?? "https://g.page/r/..." },
+        },
+      },
+    ],
+  };
+
+  const res = await fetch(`${SLACK_API}/views.open`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ trigger_id: args.triggerId, view }),
+  });
+  const json = (await res.json()) as { ok: boolean; error?: string };
+  if (!json.ok) {
+    await slack.postThreadReply(args.channel, args.slackTs, `:warning: Could not open the review link box: ${json.error}`);
+  }
+  return NextResponse.json({ ok: true });
+}
+
+async function reviewLinkSubmit(payload: SlackInteractivePayload): Promise<NextResponse> {
+  const meta = JSON.parse(payload.view?.private_metadata ?? "{}") as { clientId?: string; channel?: string; slackTs?: string };
+  const values = payload.view?.state.values ?? {};
+  const platformKey = values.platform_block?.platform_input?.selected_option?.value ?? null;
+  const url = values.url_block?.url_input?.value ?? "";
+  if (!meta.clientId) return NextResponse.json({ ok: true });
+
+  const actor = payload.user.username ? `@${payload.user.username}` : payload.user.id;
+  const { setReviewLink } = await import("@/lib/clients/review-link");
+  const res = await setReviewLink({ clientId: meta.clientId, url, platformKey, actor, source: "slack" });
+
+  // A refusal stays in the modal, under the box that caused it, instead of a thread message nobody sees.
+  if (!res.ok) {
+    return NextResponse.json({ response_action: "errors", errors: { url_block: res.error.slice(0, 150) } });
+  }
+
+  const clientId = meta.clientId;
+  waitUntil(
+    (async () => {
+      if (meta.channel && meta.slackTs) {
+        await slack.postThreadReply(
+          meta.channel,
+          meta.slackTs,
+          `:white_check_mark: *${res.platform.name}* link saved by ${actor}. The review page now ends with "${res.platform.label}".\n${res.line}`
+        );
+      }
+      const { setDeliveryStep } = await import("@/lib/clients/delivery-checklist");
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await setDeliveryStep({ clientId, stepKey: "review_card_pdf", transition: "complete", actor }).catch(() => null);
+      await postStep(clientId, "review_card_pdf").catch(() => {});
+      await postStep(clientId, "review_tool_preview").catch(() => {});
+    })().catch((e) => console.error("[slack/actions] review link follow-up failed:", e))
+  );
+
+  return NextResponse.json({ response_action: "clear" });
 }
 
 /**

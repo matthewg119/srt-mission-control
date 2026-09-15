@@ -97,6 +97,63 @@ export const REVIEW_PLATFORMS: readonly ReviewPlatform[] = [
   },
 ] as const;
 
+/**
+ * The hosts each platform's real review pages live on, for telling a pasted link's platform apart.
+ *
+ * ‼️ THIS RECOGNISES A LINK A HUMAN PASTED. IT DOES NOT MAKE ONE. A host match is how a bare
+ * `review link: https://g.page/r/...` in a Slack thread knows it is the Google box, and how a link
+ * pasted into the Trustpilot box that is actually a Yelp page gets refused instead of stored.
+ * A host not listed here is refused rather than guessed at.
+ */
+const PLATFORM_HOSTS: Record<string, readonly string[]> = {
+  google: ["g.page", "google.com", "maps.app.goo.gl", "goo.gl"],
+  yelp: ["yelp.com"],
+  trustpilot: ["trustpilot.com"],
+  bbb: ["bbb.org"],
+  facebook: ["facebook.com", "fb.com", "fb.me"],
+  realself: ["realself.com"],
+};
+
+function hostMatches(host: string, root: string): boolean {
+  return host === root || host.endsWith(`.${root}`);
+}
+
+/** The platform a pasted review URL belongs to, by its host, or null when it is none of the six. */
+export function platformFromUrl(raw: string): ReviewPlatform | null {
+  let host: string;
+  try {
+    host = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const key = Object.keys(PLATFORM_HOSTS).find((k) => PLATFORM_HOSTS[k].some((root) => hostMatches(host, root)));
+  return key ? platformByKey(key) : null;
+}
+
+/**
+ * A review destination URL, or the reason it was refused.
+ *
+ * `https` only. A review link is opened by a customer on her own phone from a page on the
+ * client's domain, and an `http://` one would be a mixed-content warning at the exact moment we
+ * are asking her to trust the thing. `javascript:` and `data:` are the reason this parses rather
+ * than pattern-matching. Moved here from the review-workflow route so the Slack thread, the Slack
+ * modal and the preview page refuse exactly the same links.
+ */
+export function parseReviewUrl(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+  // Slack wraps links it recognised as <https://...> or <https://...|label>.
+  const s = raw.trim().replace(/^<([^|>]+)(\|[^>]*)?>$/, "$1");
+  let parsed: URL;
+  try {
+    parsed = new URL(s);
+  } catch {
+    return { ok: false, error: `"${s}" is not a URL. Paste the whole link, including https://.` };
+  }
+  if (parsed.protocol !== "https:") {
+    return { ok: false, error: `"${s}" is not https. A review link opens on a customer's phone from the client's own domain.` };
+  }
+  return { ok: true, value: parsed.toString() };
+}
+
 /** Every URL key, for a route that validates what it was sent. */
 export const REVIEW_URL_KEYS: readonly string[] = REVIEW_PLATFORMS.map((p) => p.field);
 

@@ -1130,10 +1130,13 @@ export async function POST(request: NextRequest) {
           // count and the cost before spending anything, and the run itself happens in waitUntil
           // like every other model-shaped reply here.
           const { handlePhotographThreadReply } = await import("@/lib/clients/photograph");
+          // `review link: <url>` in the review steps' threads: where the Post button sends a customer.
+          const { handleReviewLinkThreadReply } = await import("@/lib/clients/review-link");
           const said =
             (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
-            (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText }));
+            (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText })) ??
+            (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by }));
           if (said) {
             const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
             await markEventKind({

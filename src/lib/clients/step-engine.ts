@@ -378,6 +378,18 @@ async function instructionsFor(
         host?.host
           ? `The client-facing surface is \`${host.host}\`${host.vercel_attached_at ? ", attached" : ", NOT attached to Vercel yet"}.`
           : "The client-facing surface is the `reviews.` host, and no `client_hosts` row exists for it yet.",
+        "",
+        ...(await reviewLinkLines(c.id)),
+      ];
+    }
+
+    // ‼️ SAYS WHERE THE PRINTED QR ENDS UP, BECAUSE ON SRT IT ENDED NOWHERE (2026-09-15). The card
+    // was generated and ticked while the review page had no Post button at all.
+    case "review_card_pdf": {
+      return [
+        "The QR opens the review page: four questions, then a button to post on their platform.",
+        "",
+        ...(await reviewLinkLines(c.id)),
       ];
     }
 
@@ -1561,6 +1573,19 @@ async function instructionsFor(
   }
 }
 
+/** Where this client's reviews go, and how to paste the link, for the review steps' cards. */
+async function reviewLinkLines(clientId: string): Promise<string[]> {
+  const { reviewDestinationLine, hasReviewLink } = await import("./review-link");
+  const [line, has] = await Promise.all([reviewDestinationLine(clientId), hasReviewLink(clientId)]);
+  return [
+    `${has ? ":white_check_mark:" : ":warning:"} *Where reviews go:* ${line}`,
+    has
+      ? "Another platform: `review link: <url>` in this thread, or [Paste review link]."
+      : "*Paste their review page:* `review link: <url>` in this thread, [Paste review link] below, or the box on the review preview page. " +
+        `Step ${stepNumber("review_card_pdf")} will not tick until one is set.`,
+  ];
+}
+
 /**
  * The refusal for the manual sweep, or null when it may go through.
  *
@@ -1787,6 +1812,10 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
         value: c.id,
       },
     ];
+  }
+
+  if (step.key === "review_tool_preview" || step.key === "review_card_pdf") {
+    return [{ label: "Paste review link", actionId: "review_link_open", value: c.id }];
   }
 
   // [Call now] on the prep call. Only with a phone on the record: a button that can only refuse

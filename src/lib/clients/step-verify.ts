@@ -1357,7 +1357,23 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       : notYet("the pre-call plan and its drafts", v.found, v.todo);
   },
 
-  review_card_pdf: async (ctx) => artifactOnRecord(ctx, "the review card PDF"),
+  // ‼️ A CARD WHOSE QR ENDS ON A PAGE WITH NO POST BUTTON IS NOT DONE (2026-09-16). SRT's card was
+  // generated and ticked while its chosen platform, Trustpilot, had no link, so every scan finished
+  // four questions and was told to go and find the review page herself. The PDF on record is still
+  // the first half; a pasted review link is the second.
+  review_card_pdf: async (ctx) => {
+    const onRecord = await artifactOnRecord(ctx, "the review card PDF");
+    if (!onRecord.ok) return onRecord;
+    const { hasReviewLink, reviewDestinationLine } = await import("./review-link");
+    if (!(await hasReviewLink(ctx.clientId))) {
+      return notYet(
+        "a review link the page's Post button can open",
+        await reviewDestinationLine(ctx.clientId),
+        "Paste their review page with `review link: <url>` in this thread or [Paste review link] on this card."
+      );
+    }
+    return onRecord;
+  },
 
   // ‼️ FOUR DOCUMENTS, AND artifactOnRecord CANNOT TELL THEM APART. It proves exactly one thing:
   // that some client_docs row carries this step key. That was true the moment the call sheet

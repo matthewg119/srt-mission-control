@@ -48,6 +48,8 @@ import {
   withReferenceBrand,
   type SkinCandidateSet,
 } from "@/lib/hub/skin-variants";
+import { REVIEW_PLATFORMS, destinationLine, destinationState } from "@/lib/hub/review-destinations";
+import { ReviewLinkBox } from "./review-link-box";
 import "@/app/hub/[host]/hub.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
@@ -156,6 +158,10 @@ export default async function HubPreview({ params, searchParams }: Props) {
         look={look}
         candidateSet={candidateSet}
         candidateSlot={candidate?.slot ?? null}
+        reviewDestinations={destinationState(
+          (client.reviewWorkflow ?? null) as Record<string, unknown> | null,
+          client.reviewDestinationPrimary ?? null
+        )}
       />
       <div className="hub-wrap">
         {kind === "reviews" ? (
@@ -245,6 +251,7 @@ function PreviewBanner({
   look,
   candidateSet,
   candidateSlot,
+  reviewDestinations,
 }: {
   clientId: string;
   kind: "hub" | "reviews";
@@ -253,6 +260,7 @@ function PreviewBanner({
   look: ChatLook;
   candidateSet: SkinCandidateSet | null;
   candidateSlot: number | null;
+  reviewDestinations: ReturnType<typeof destinationState>;
 }) {
   const other = kind === "reviews" ? "hub" : "reviews";
 
@@ -346,6 +354,15 @@ function PreviewBanner({
             </a>
           ))}
         </span>
+      )}
+      {kind === "reviews" && (
+        <ReviewLinkBox
+          clientId={clientId}
+          line={destinationLine(reviewDestinations)}
+          hasLink={reviewDestinations.configured.length > 0}
+          primary={reviewDestinations.primary?.key ?? null}
+          platforms={REVIEW_PLATFORMS.map((p) => ({ key: p.key, name: p.name, placeholder: p.placeholder }))}
+        />
       )}
       <span style={{ marginLeft: "auto", display: "flex", gap: "12px" }}>
         <a
