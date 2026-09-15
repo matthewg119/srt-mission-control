@@ -26,7 +26,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
-import { readOffer, usableTreatment } from "./offers";
+import { loadOffer, usableTreatment } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
   "What's the best med spa near me for [Botox / filler / laser]?",
@@ -241,10 +241,10 @@ export async function substitutionsWithProvenance(
 ): Promise<SubstitutionsResolved | null> {
   const { data: client, error } = await supabaseAdmin
     .from("clients")
-    // ‼️ `offer` IS IN THE SELECT, AND A NAME THAT DOES NOT EXIST BREAKS THE WHOLE QUERY.
-    // PostgREST fails the entire select on one unknown column, so docs/2026-09-08-client-offer.sql
-    // is a prerequisite for this file, not an enhancement to it.
-    .select("city, state, services, ideal_patient, dba_name, legal_name, offer")
+    // ‼️ `offer` LEFT THIS SELECT ON 2026-09-15. The offer lives in client_offers under the primary
+    // audience and is read through loadOffer below; clients.offer is a deprecated mirror nothing
+    // outside offers.ts may read.
+    .select("city, state, services, ideal_patient, dba_name, legal_name")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -267,7 +267,7 @@ export async function substitutionsWithProvenance(
 
   const services = (client.services ?? {}) as Record<string, unknown>;
   const ideal = (client.ideal_patient ?? {}) as Record<string, string>;
-  const offer = readOffer((client as { offer?: unknown }).offer);
+  const offer = await loadOffer(clientId);
 
   const city = ((client.city as string | null) ?? "").trim();
   const state = ((client.state as string | null) ?? "").trim();

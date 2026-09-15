@@ -685,12 +685,18 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
    * fault worth stopping on rather than a client who happens to sell nothing.
    */
   offer_proposed: async (ctx) => {
-    const { readOffer, offerLine } = await import("./offers");
-    const offer = readOffer((ctx.client as { offer?: unknown }).offer);
+    // ‼️ loadOfferStrict, NOT ctx.client.offer. The offer moved to client_offers (2026-09-15) and
+    // `offer` left CLIENT_COLUMNS in the same commit: reading the old field would see an empty offer
+    // for every client and refuse this step board-wide. A read failure is a fault, never "nothing
+    // was proposed", which would send somebody to check an intake form that is fine.
+    const { loadOfferStrict, offerLine } = await import("./offers");
+    const loaded = await loadOfferStrict(ctx.clientId);
+    if (!loaded.ok) return dbUnreachable("client_offers");
+    const offer = loaded.offer;
 
     if (!offer.proposedTreatment) {
       return notYet(
-        "clients.offer.proposedTreatment",
+        "client_offers.proposed_treatment for the primary audience",
         "nothing was proposed, so no intake answer named a service",
         "This reads services.primary_treatment, then ideal_patient.highest_margin, then the " +
           "first line of services_list. All three are empty for this client, which usually " +
@@ -715,12 +721,14 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
    * after it inherits whichever one it was.
    */
   offer_locked: async (ctx) => {
-    const { readOffer, isLocked } = await import("./offers");
-    const offer = readOffer((ctx.client as { offer?: unknown }).offer);
+    const { loadOfferStrict, isLocked } = await import("./offers");
+    const loaded = await loadOfferStrict(ctx.clientId);
+    if (!loaded.ok) return dbUnreachable("client_offers");
+    const offer = loaded.offer;
 
     if (!isLocked(offer)) {
       return notYet(
-        "clients.offer.treatment",
+        "client_offers.treatment for the primary audience",
         offer.proposedTreatment
           ? `only a proposal is on file ("${offer.proposedTreatment}"), and nobody has confirmed it`
           : "nothing is proposed and nothing is locked",
@@ -1987,10 +1995,9 @@ const CLIENT_COLUMNS =
   // docs/2026-09-03-attribution.sql; that migration is a prerequisite for the board, not just
   // for the pixel.
   //
-  // ‼️ `offer` IS THE SAME KIND OF PREREQUISITE. docs/2026-09-08-client-offer.sql creates it, and
-  // until that has run this select fails and EVERY verifier on the board refuses at once. Run the
-  // migration before the deploy, the same order of operations hub_skin needed.
-  "pixel_key, offer";
+  // ‼️ `offer` LEFT THIS LIST ON 2026-09-15. The offer lives in client_offers now and both offer
+  // verifiers read it through loadOfferStrict. Putting it back would re-read the deprecated mirror.
+  "pixel_key";
 
 /**
  * Confirm one step, or say precisely why it cannot be confirmed.

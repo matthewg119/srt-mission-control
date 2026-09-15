@@ -126,7 +126,7 @@ const snap: DatasetSnapshot = {
     researchText: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `## ${n}. S\n${filler("finding")}`).join("\n"),
     vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0,
   },
-  offer: { applies: false, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null },
+  offer: { applies: false, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
   audit: { linked: false, pickedAvatar: false, buyerMap: false },
   reviews: 0,
 };
@@ -139,7 +139,19 @@ check("search phrases is missing for want of KEYWORDS rows", /KEYWORDS/.test(ava
 check("an option audience is not charged the primary's offer", offer.total === 0);
 const lines = formatDatasetReport("women over 60 wanting a lift", false, reports, false);
 check("the card says it is an option", /\(option\)/.test(lines[0]));
-check("the card says offers are not per audience yet", lines.some((l) => /not per audience yet/.test(l)));
+// Offers ARE per audience since 2026-09-15 (client_offers); an option audience simply has none yet.
+check("the card says nothing has been offered to this audience yet", lines.some((l) => /nothing has been offered to this audience yet/.test(l)));
+
+// The outcome and price are captured at the prep call now, so a primary offer that has them counts them.
+const primarySnap: DatasetSnapshot = {
+  ...snap,
+  audience: { ...snap.audience!, isPrimary: true },
+  offer: { applies: true, treatment: "lip filler", terms: 2, positioning: null, magnetKey: null, lockedAt: "2026-09-15", outcomePromise: "more appointments", price: "$399 per session" },
+};
+const primaryOffer = evaluateDatasets(primarySnap, RESEARCH_SECTION_KEYS).find((r) => r.dataset === "offer")!;
+check("an outcome on file counts as present", !primaryOffer.gaps.some((g) => g.field.key === "outcome_promise"));
+check("a price on file counts as present", !primaryOffer.gaps.some((g) => g.field.key === "price"));
+check("the primary audience is charged its offer fields", primaryOffer.total > 0);
 check("the card has no em dash", !lines.some((l) => /[—–]/.test(l)));
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

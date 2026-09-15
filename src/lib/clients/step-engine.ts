@@ -1055,6 +1055,8 @@ async function instructionsFor(
         "",
         `*${offerLine(offer)}*`,
         ...(offer.terms.length ? [`Their words for it: ${offer.terms.join(", ")}.`] : []),
+        ...(offer.outcomePromise ? [`Outcome promised: ${offer.outcomePromise}.`] : []),
+        ...(offer.price ? [`Price: ${offer.price}.`] : []),
         "",
         ...(menu
           ? ["*What they told us they offer, in their own words:*", "```", menu.slice(0, 700), "```", ""]
@@ -1065,6 +1067,9 @@ async function instructionsFor(
         "  • `offer: <what they sell> | <how they want to be known for it>` captures both at once.",
         "  • `terms: <what their customers call it>, <another>, <another>` is the vocabulary every",
         `    keyword at step ${stepNumber("keyword_set")} is tested against.`,
+        "  • `outcome: <what they get, e.g. more appointments>` is the promise headlines and CTAs make.",
+        "  • `price: <as they state it, e.g. $399 per session>`.",
+        "Each is its own message. A message with two of them is refused, never merged.",
         "",
         "*Why before the call:* the keywords, the page plan and the pages drafted for the call are all",
         "aimed at whatever is locked here, so they can only be ready to walk if the offer is known first.",

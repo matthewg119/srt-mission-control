@@ -7,7 +7,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { audiencesFor, sharedBankFor, type ResolvedAudience } from "./audiences";
 import { avatarBriefFor } from "./avatars";
-import { loadOffer } from "./offers";
+import { EMPTY_OFFER, loadOffer, loadOfferForAudience } from "./offers";
 import { RESEARCH_SECTION_KEYS } from "./artifacts/deep-research-run";
 import {
   evaluateDatasets,
@@ -82,7 +82,7 @@ async function avatarState(audience: ResolvedAudience | null): Promise<DatasetSn
 
 /** Every audience this client has, each with its completeness. A client with none gets one empty report. */
 export async function completenessFor(clientId: string): Promise<AudienceCompleteness[]> {
-  const [audiences, offer, audit, reviews] = await Promise.all([
+  const [audiences, primaryOffer, audit, reviews] = await Promise.all([
     audiencesFor(clientId),
     loadOffer(clientId),
     auditState(clientId),
@@ -98,10 +98,13 @@ export async function completenessFor(clientId: string): Promise<AudienceComplet
   const targets: Array<ResolvedAudience | null> = audiences.length ? audiences : [null];
   const out: AudienceCompleteness[] = [];
   for (const audience of targets) {
-    // ‼️ THE ONE OFFER BELONGS TO THE PRIMARY AUDIENCE ONLY. clients.offer is a single row per client
-    // until offers move under audiences, so showing it under a second audience would claim that
-    // audience has an offer it does not.
-    const offerApplies = audience === null || audience.isPrimary;
+    // ‼️ OFFERS LIVE UNDER AUDIENCES SINCE 2026-09-15 (client_offers). Each audience reads its OWN
+    // primary offer. The offer section applies to the primary audience always (it is the one being
+    // worked, so a missing offer there is a real gap) and to an option audience only once it has an
+    // offer of its own: an option nobody has sold to yet is not "missing six offer fields".
+    const own = audience ? await loadOfferForAudience(audience.id) : null;
+    const offer = audience && !audience.isPrimary ? (own ?? EMPTY_OFFER) : (own ?? primaryOffer);
+    const offerApplies = audience === null || audience.isPrimary || own !== null;
     const snapshot: DatasetSnapshot = {
       audience: audience
         ? {
@@ -122,6 +125,8 @@ export async function completenessFor(clientId: string): Promise<AudienceComplet
         positioning: offer.positioning,
         magnetKey: offer.magnetKey,
         lockedAt: offer.lockedAt,
+        outcomePromise: offer.outcomePromise,
+        price: offer.price,
       },
       audit,
       reviews,

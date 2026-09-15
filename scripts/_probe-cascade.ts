@@ -407,6 +407,24 @@ async function main() {
     });
     ok("the avatar is writable at all", picked.ok, picked.error);
 
+    // ‼️ 2026-09-15: THIS PROBE'S VERTICAL MAPS TO NO PRESET, SO NO AUDIENCE WAS CREATED, AND THE STEP
+    // NOW SAYS SO INSTEAD OF PASSING. That is the case the hand repair exists for, and the probe
+    // exercises it rather than working around it: refused with the repair named, then `audience:` by
+    // hand, then confirmed. The offer lives under the audience, so the lock below needs it too.
+    const refused = await setDeliveryStep({
+      clientId,
+      stepKey: "avatar_confirmed",
+      transition: "complete",
+      actor: "cascade probe",
+    });
+    ok("avatar_confirmed refuses while there is no audience", !refused.ok);
+    ok("and the refusal names the hand repair", /audience:/.test(refused.error ?? ""), refused.error ?? "");
+    {
+      const { seedAudienceByHand } = await import("@/lib/clients/audiences");
+      const seeded = await seedAudienceByHand({ clientId, presetKey: "med_spa_patient", by: "cascade probe" });
+      ok("`audience:` creates the primary audience by hand", seeded.ok, seeded.message);
+    }
+
     const eightDone = await setDeliveryStep({
       clientId,
       stepKey: "avatar_confirmed",

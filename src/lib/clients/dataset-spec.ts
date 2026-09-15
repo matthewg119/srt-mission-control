@@ -15,8 +15,8 @@
 //             PROVIDE"). Keyed on the avatar, so a second client aiming at the same buyer reads it.
 //   AUDIENCE  a client targeting an avatar. A client can have several; one is primary.
 //   OFFER     what is sold to that audience, with the outcome promised ("more appointments" for med
-//             spas, "more jobs" for plumbers). Today there is ONE offer per client (clients.offer);
-//             moving it under the audience is owed, and the entries below say so rather than pretend.
+//             spas, "more jobs" for plumbers). Lives under the audience in client_offers since
+//             2026-09-15; each audience has its own, one primary.
 //
 // ‼️ WARN, AND BLOCK ONLY WHERE A STEP CANNOT RUN (Matthew, 2026-09-15). `blocks` names the steps
 // that genuinely cannot run without the field, and every one of those is ALREADY enforced by that
@@ -58,13 +58,18 @@ export interface DatasetSnapshot {
     keywordRowsWithUrl: number;
   };
   offer: {
-    /** False for a non-primary audience: offers are not per audience yet. */
+    /**
+     * Whether the offer fields are judged for this audience: always for the primary one, and for an
+     * option audience only once something has been offered to it (client_offers, since 2026-09-15).
+     */
     applies: boolean;
     treatment: string | null;
     terms: number;
     positioning: string | null;
     magnetKey: string | null;
     lockedAt: string | null;
+    outcomePromise: string | null;
+    price: string | null;
   };
   audit: {
     linked: boolean;
@@ -189,8 +194,8 @@ export const DATASET_FIELDS: readonly FieldSpec[] = [
     present: (ctx) => ctx.snap.offer.terms > 0 },
   { dataset: "offer", key: "outcome_promise", label: "the outcome promised (\"more appointments\", \"more jobs\")",
     usedFor: "every headline and CTA for this audience",
-    filledBy: { kind: "step", step: "offer_locked", how: "not captured anywhere yet", built: false },
-    present: NOT_ASKED },
+    filledBy: { kind: "step", step: "offer_locked", how: "`outcome: more appointments` (its own message)", built: true },
+    present: (ctx) => Boolean(ctx.snap.offer.outcomePromise) },
   { dataset: "offer", key: "positioning", label: "how they want it positioned",
     usedFor: "the pillar page's angle",
     filledBy: { kind: "step", step: "offer_locked", how: "`offer: <name> | <positioning>`", built: true },
@@ -201,8 +206,8 @@ export const DATASET_FIELDS: readonly FieldSpec[] = [
     present: (ctx) => Boolean(ctx.snap.offer.magnetKey) },
   { dataset: "offer", key: "price", label: "the price or ticket",
     usedFor: "price pages, and whether a buyer is worth chasing",
-    filledBy: { kind: "step", step: "offer_locked", how: "not captured anywhere yet", built: false },
-    present: NOT_ASKED },
+    filledBy: { kind: "step", step: "offer_locked", how: "`price: $399 per session` (its own message)", built: true },
+    present: (ctx) => Boolean(ctx.snap.offer.price) },
 ];
 
 export interface FieldGap {
@@ -263,7 +268,7 @@ export function formatDatasetReport(label: string, isPrimary: boolean, reports: 
   const lines = [`*${label}*${isPrimary ? " (primary)" : " (option)"}`];
   for (const r of reports) {
     if (r.dataset === "offer" && !offerApplies) {
-      lines.push(`  • *Offer:* offers are not per audience yet, so this audience has none of its own.`);
+      lines.push(`  • *Offer:* nothing has been offered to this audience yet. Its offer is set when it becomes the primary one.`);
       continue;
     }
     if (!r.gaps.length) {

@@ -1750,8 +1750,10 @@ eq(
     "and it outranks highest_margin, which answers a different question",
     chain.indexOf("primary_treatment") < chain.indexOf("highest_margin")
   );
-  // PostgREST fails the whole select on one unknown column, so the read has to name it.
-  ok("the client select carries the offer column", /\.select\("[^"]*offer/.test(chainSrc));
+  // ‼️ INVERTED 2026-09-15. The offer moved to client_offers under the primary audience; this file
+  // reads it through loadOffer, and selecting the deprecated clients.offer mirror would read a copy.
+  ok("the treatment chain reads the offer through loadOffer", /await loadOffer\(clientId\)/.test(chainSrc));
+  ok("and never selects the deprecated clients.offer column", !/\.select\("[^"]*\boffer\b/.test(chainSrc));
 }
 
 // -- Phrase quality: two thirds of the corpus is not a phrase ----------------
@@ -3497,6 +3499,52 @@ import * as visionT from "../src/lib/hub/skin-vision";
   const vocFn = headlineSrc.slice(headlineSrc.indexOf("export async function clientVocQuotes"), headlineSrc.indexOf("interface HeadlineContext"));
   // ‼️ page_sources has source_content and topic. `content, label` failed silently for weeks.
   ok("a client's own reviews are read from the columns that exist", /select\("source_content, topic"\)/.test(vocFn) && !/select\("content/.test(vocFn));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C2 ---- offers live under audiences (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { readOfferCommand: cmd, EMPTY_OFFER: empty } =
+    require("../src/lib/clients/offers") as typeof import("../src/lib/clients/offers");
+
+  eq("`outcome:` is a command", cmd("outcome: more appointments"), { kind: "outcome", value: "more appointments", extra: [] });
+  eq("`price:` is a command", cmd("  Price :  $399 per session"), { kind: "price", value: "$399 per session", extra: [] });
+  eq("an offer and a price in one message are refused", cmd("offer: yes\nprice: $399").kind, "combined");
+  eq("an outcome and terms in one message are refused", cmd("outcome: more jobs\nterms: a, b").kind, "combined");
+  // ‼️ B1 of the design review. A pasted letter is not a command, so its "Price:" and "Terms:" lines
+  // can never make it "combined": only the FIRST line decides what a message is.
+  eq("a pasted letter with Price: and Terms: lines is still not a command",
+    cmd("letter replace:\nThe headline\nPrice: $399\nTerms: financing available").kind, "none");
+  ok("an empty offer carries the new fields as null", empty.outcomePromise === null && empty.price === null && empty.id === null && empty.audienceId === null);
+
+  // ‼️ clients.offer IS A DEPRECATED MIRROR. Anything that selects it reads a copy of the offer, and a
+  // copy is how two answers to "what does this client sell" appear. Only offers.ts may touch it.
+  const srcRoot = path.join(__dirname, "..", "src");
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(e.name) ? [p] : [];
+    });
+  const offenders = walk(srcRoot).filter((file) => {
+    if (file.endsWith(path.join("clients", "offers.ts"))) return false;
+    const src = fs.readFileSync(file, "utf8");
+    return /\.from\("clients"\)[\s\S]{0,400}?\.select\(\s*["'`][^"'`]*\boffer\b(?!_)/.test(src);
+  });
+  ok(`nothing outside offers.ts selects clients.offer${offenders.length ? ` (${offenders.map((f) => path.relative(srcRoot, f)).join(", ")})` : ""}`, offenders.length === 0);
+
+  const verifySrc2 = fs.readFileSync(path.join(srcRoot, "lib", "clients", "step-verify.ts"), "utf8");
+  const columns = verifySrc2.slice(verifySrc2.indexOf("const CLIENT_COLUMNS"), verifySrc2.indexOf(";", verifySrc2.indexOf("const CLIENT_COLUMNS")));
+  ok("CLIENT_COLUMNS no longer names the offer column", !/\boffer\b/.test(columns.replace(/\/\/.*$/gm, "")));
+  const offerVerifiers = verifySrc2.slice(verifySrc2.indexOf("offer_proposed: async"), verifySrc2.indexOf("keyword_set: async"));
+  eq("both offer verifiers read through loadOfferStrict", (offerVerifiers.match(/loadOfferStrict\(ctx\.clientId\)/g) ?? []).length, 2);
+  ok("and a failed read is a fault, not an empty offer", /dbUnreachable\("client_offers"\)/.test(offerVerifiers));
+
+  const offersSrc2 = fs.readFileSync(path.join(srcRoot, "lib", "clients", "offers.ts"), "utf8");
+  // Every writer goes through writeOffer, which refuses a client with no audience and mirrors the rest.
+  ok("no writer updates clients.offer except the mirror", (offersSrc2.match(/\.update\(\{ offer:/g) ?? []).length === 1);
+  ok("a client with no audience is refused with the hand repair", /AUDIENCE_REPAIR/.test(offersSrc2));
+  ok("the old column is read only when client_offers is missing", /case "table_missing":\s*return legacyOffer/.test(offersSrc2));
 }
 
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts

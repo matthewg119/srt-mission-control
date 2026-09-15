@@ -576,8 +576,46 @@ export async function handleAudienceThreadReply(args: {
   return seedAudienceByHand({ clientId: args.clientId, presetKey: key, by: args.by });
 }
 
-/** Demote whatever is primary, then promote this one. Returns an error sentence, or null. */
+/**
+ * Demote whatever is primary, then promote this one. Returns an error sentence, or null.
+ *
+ * ‼️ THE OFFER FOLLOWS, AS A PROPOSAL. The offer lives under the primary audience (client_offers), so a
+ * new primary audience with no offer would leave every [treatment] reading nothing. The previous
+ * primary's treatment is carried across as a PROPOSAL, never a lock, because the lock was agreed for a
+ * different buyer, and the prep call's thread is told so. Never fails the promotion.
+ */
 async function promote(clientId: string, audienceId: string): Promise<string | null> {
+  const { data: previous } = await supabaseAdmin
+    .from("client_audiences")
+    .select("id")
+    .eq("client_id", clientId)
+    .eq("is_primary", true)
+    .maybeSingle();
+  const previousId = (previous?.id as string | undefined) ?? null;
+
+  const failed = await swapPrimary(clientId, audienceId);
+  if (failed || !previousId || previousId === audienceId) return failed;
+
+  try {
+    const { carryOfferToAudience } = await import("./offers");
+    const carried = await carryOfferToAudience({ clientId, fromAudienceId: previousId, toAudienceId: audienceId });
+    if (carried) {
+      const { notifyStep } = await import("./step-board");
+      await notifyStep(
+        clientId,
+        "offer_locked",
+        `:arrows_counterclockwise: The avatar changed, so the offer is proposed for the new audience as *${carried}*, ` +
+          "not locked: the lock was agreed for a different buyer. `offer: yes` locks it for this one, and " +
+          "that re-aims everything downstream the usual way."
+      ).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[audiences] offer not carried to the new primary audience:", (e as Error).message);
+  }
+  return null;
+}
+
+async function swapPrimary(clientId: string, audienceId: string): Promise<string | null> {
   const { error: demoteErr } = await supabaseAdmin
     .from("client_audiences")
     .update({ is_primary: false, updated_at: new Date().toISOString() })

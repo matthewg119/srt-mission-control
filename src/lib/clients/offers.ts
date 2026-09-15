@@ -90,6 +90,24 @@ export interface StoredOffer {
    */
   terms: string[];
   termsAt: string | null;
+
+  /**
+   * The outcome promised ("more appointments", "more jobs"), `outcome:` on the prep call.
+   *
+   * ‼️ ON THE OFFER, NOT THE AUDIENCE (Matthew, 2026-09-15): one audience can be sold two offers with
+   * two outcomes. Declared missing in dataset-spec.ts from the day it was written.
+   */
+  outcomePromise: string | null;
+  outcomeSetAt: string | null;
+  /** The price as the client states it ("$399 per session"), `price:` on the prep call. */
+  price: string | null;
+  priceSetAt: string | null;
+
+  // ── Where it lives. Null on an offer read from the deprecated clients.offer mirror. ──
+  /** client_offers.id. */
+  id: string | null;
+  /** The audience this offer is sold to. loadOffer returns the PRIMARY audience's primary offer. */
+  audienceId: string | null;
 }
 
 /** More than this is a list of everything they do, which is the menu the lock exists to avoid. */
@@ -106,6 +124,12 @@ export const EMPTY_OFFER: StoredOffer = {
   lockedBy: null,
   terms: [],
   termsAt: null,
+  outcomePromise: null,
+  outcomeSetAt: null,
+  price: null,
+  priceSetAt: null,
+  id: null,
+  audienceId: null,
 };
 
 const SOURCES: readonly OfferSource[] = [
@@ -201,7 +225,63 @@ export function readOffer(raw: unknown): StoredOffer {
     lockedBy: text(bag.lockedBy),
     terms: readTerms(bag.terms),
     termsAt: text(bag.termsAt),
+    outcomePromise: text(bag.outcomePromise),
+    outcomeSetAt: text(bag.outcomeSetAt),
+    price: text(bag.price),
+    priceSetAt: text(bag.priceSetAt),
+    id: null,
+    audienceId: null,
   };
+}
+
+/** A client_offers row as a StoredOffer. Same drop-never-repair discipline as readOffer. */
+function offerFromRow(row: Record<string, unknown>): StoredOffer {
+  const source = text(row.proposed_source);
+  return {
+    proposedTreatment: text(row.proposed_treatment),
+    proposedSource: source && SOURCES.includes(source as OfferSource) ? (source as OfferSource) : null,
+    proposedAt: text(row.proposed_at),
+    treatment: text(row.treatment),
+    magnetKey: text(row.magnet_key),
+    positioning: text(row.positioning),
+    lockedAt: text(row.locked_at),
+    lockedBy: text(row.locked_by),
+    terms: readTerms(row.terms),
+    termsAt: text(row.terms_at),
+    outcomePromise: text(row.outcome_promise),
+    outcomeSetAt: text(row.outcome_set_at),
+    price: text(row.price),
+    priceSetAt: text(row.price_set_at),
+    id: text(row.id),
+    audienceId: text(row.audience_id),
+  };
+}
+
+/** The columns a StoredOffer writes. id and audience_id are never rewritten by an update. */
+function rowFromOffer(offer: StoredOffer): Record<string, unknown> {
+  return {
+    proposed_treatment: offer.proposedTreatment,
+    proposed_source: offer.proposedSource,
+    proposed_at: offer.proposedAt,
+    treatment: offer.treatment,
+    magnet_key: offer.magnetKey,
+    positioning: offer.positioning,
+    locked_at: offer.lockedAt,
+    locked_by: offer.lockedBy,
+    terms: offer.terms,
+    terms_at: offer.termsAt,
+    outcome_promise: offer.outcomePromise,
+    outcome_set_at: offer.outcomeSetAt,
+    price: offer.price,
+    price_set_at: offer.priceSetAt,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/** The jsonb shape of the deprecated clients.offer mirror. Where it lives is not part of it. */
+function bagFromOffer(offer: StoredOffer): Record<string, unknown> {
+  const { id: _id, audienceId: _audienceId, ...bag } = offer;
+  return bag;
 }
 
 /** Stored terms, validated. An offer written before terms existed reads as an empty list. */
@@ -314,13 +394,207 @@ function firstLine(raw: unknown): string | null {
   return text(value.split(/[\n;]/)[0]);
 }
 
-export async function loadOffer(clientId: string): Promise<StoredOffer> {
+// ─────────────────────────────────────────────────────────────────────────────
+// Where the offer lives
+//
+// ‼️ client_offers, UNDER THE CLIENT'S PRIMARY AUDIENCE, SINCE 2026-09-15. docs/2026-09-15-offers-and-
+// framework.sql answers the three reasons docs/2026-09-08-client-offer.sql gave for one jsonb column.
+// The one that still binds everything here: loadOffer returns ONE offer, so [treatment] stays singular
+// for every reader.
+//
+// ‼️ clients.offer IS A ONE-RELEASE MIRROR. Every write copies into it so a rollback reads a current
+// offer, and loadOffer falls back to it only when client_offers itself is missing. Nothing outside this
+// file may read that column; test-onboarding-artifacts.ts asserts it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** PostgREST's "that table does not exist", in both the Postgres and the schema-cache spelling. */
+function isMissingTable(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === "42P01" || error.code === "PGRST205" || /does not exist|schema cache/i.test(error.message ?? "");
+}
+
+type PrimaryOffer =
+  | { kind: "found"; audienceId: string; row: Record<string, unknown> | null }
+  | { kind: "no_audience" }
+  | { kind: "table_missing" }
+  | { kind: "unreadable"; error: string };
+
+/** The primary audience, and its primary offer row if it has one. */
+async function primaryOffer(clientId: string): Promise<PrimaryOffer> {
+  const { data: aud, error: audErr } = await supabaseAdmin
+    .from("client_audiences")
+    .select("id")
+    .eq("client_id", clientId)
+    .eq("is_primary", true)
+    .maybeSingle();
+  if (audErr) return { kind: "unreadable", error: `client_audiences is unreadable (${audErr.message})` };
+  if (!aud) return { kind: "no_audience" };
+
+  const audienceId = aud.id as string;
+  const { data: row, error } = await supabaseAdmin
+    .from("client_offers")
+    .select("*")
+    .eq("audience_id", audienceId)
+    .eq("is_primary", true)
+    .maybeSingle();
+  if (isMissingTable(error)) return { kind: "table_missing" };
+  if (error) return { kind: "unreadable", error: `client_offers is unreadable (${error.message})` };
+  return { kind: "found", audienceId, row: (row as Record<string, unknown> | null) ?? null };
+}
+
+/** The deprecated mirror, read ONLY when client_offers does not exist yet. */
+async function legacyOffer(clientId: string): Promise<StoredOffer> {
   const { data } = await supabaseAdmin
     .from("clients")
     .select("offer")
     .eq("id", clientId)
     .maybeSingle();
   return readOffer((data as { offer?: unknown } | null)?.offer);
+}
+
+/**
+ * The offer everything is aimed at: the primary audience's primary offer.
+ *
+ * An empty offer (never null) when nothing is on file, the same contract it always had. A client with no
+ * audience reads as having no offer; the writers below say how to fix that.
+ */
+export async function loadOffer(clientId: string): Promise<StoredOffer> {
+  const found = await primaryOffer(clientId);
+  switch (found.kind) {
+    case "found":
+      return found.row ? offerFromRow(found.row) : { ...EMPTY_OFFER, audienceId: found.audienceId };
+    case "table_missing":
+      return legacyOffer(clientId);
+    case "no_audience":
+      return { ...EMPTY_OFFER };
+    case "unreadable":
+      console.error("[clients/offers] offer unreadable:", found.error);
+      return { ...EMPTY_OFFER };
+  }
+}
+
+/**
+ * Like loadOffer, but a read failure is RETURNED rather than turned into an empty offer.
+ *
+ * For verifiers: "the query failed" must never render as "nothing was proposed", which would send
+ * somebody to check an intake form that is fine.
+ */
+export async function loadOfferStrict(clientId: string): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
+  const found = await primaryOffer(clientId);
+  if (found.kind === "unreadable") return { ok: false, error: found.error };
+  return { ok: true, offer: await loadOffer(clientId) };
+}
+
+/** An audience's own primary offer. For the completeness card, which reads every audience. */
+export async function loadOfferForAudience(audienceId: string): Promise<StoredOffer | null> {
+  const { data, error } = await supabaseAdmin
+    .from("client_offers")
+    .select("*")
+    .eq("audience_id", audienceId)
+    .eq("is_primary", true)
+    .maybeSingle();
+  if (error || !data) return null;
+  return offerFromRow(data as Record<string, unknown>);
+}
+
+/**
+ * Write the offer back where it lives, and mirror it into clients.offer.
+ *
+ * ‼️ A CLIENT WITH NO AUDIENCE IS REFUSED, NOT GIVEN AN OFFER THAT BELONGS TO NOBODY. The sentence names
+ * `audience: <preset>`, the hand repair, so the refusal is somewhere to go.
+ */
+async function writeOffer(
+  clientId: string,
+  next: StoredOffer
+): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
+  const found = await primaryOffer(clientId);
+
+  if (found.kind === "unreadable") return { ok: false, error: found.error };
+  if (found.kind === "no_audience") {
+    const { AUDIENCE_REPAIR } = await import("./audiences");
+    return {
+      ok: false,
+      error: `this client has no audience yet, and an offer is sold to an audience. ${AUDIENCE_REPAIR}`,
+    };
+  }
+
+  let saved: StoredOffer = next;
+  if (found.kind === "found") {
+    if (found.row) {
+      const { data, error } = await supabaseAdmin
+        .from("client_offers")
+        .update(rowFromOffer(next))
+        .eq("id", found.row.id as string)
+        .select("*")
+        .single();
+      if (error) return { ok: false, error: error.message };
+      saved = offerFromRow(data as Record<string, unknown>);
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from("client_offers")
+        .insert({ ...rowFromOffer(next), client_id: clientId, audience_id: found.audienceId, is_primary: true })
+        .select("*")
+        .single();
+      // 23505 on the one-primary index is two writes racing to create the first offer. The other one won.
+      if (error) {
+        return {
+          ok: false,
+          error: error.code === "23505" ? "another change to this offer landed at the same moment. Send it again." : error.message,
+        };
+      }
+      saved = offerFromRow(data as Record<string, unknown>);
+    }
+  }
+
+  // The mirror. A failure here is logged, never returned: the offer IS saved, and a stale mirror only
+  // matters to a rollback, which the table-missing fallback above does not reach.
+  const { error: mirrorErr } = await supabaseAdmin
+    .from("clients")
+    .update({ offer: bagFromOffer(saved) })
+    .eq("id", clientId);
+  if (mirrorErr) {
+    if (found.kind === "table_missing") return { ok: false, error: mirrorErr.message };
+    console.error("[clients/offers] clients.offer mirror not written:", mirrorErr.message);
+  }
+
+  return { ok: true, offer: saved };
+}
+
+/**
+ * The avatar changed, so a new audience became primary with no offer under it.
+ *
+ * ‼️ THE OLD TREATMENT COMES ACROSS AS A PROPOSAL, NEVER A LOCK. The lock was agreed for a different
+ * buyer. As a proposal it is what the prep call's card opens with, and `offer: yes` re-locks it for the
+ * new audience, which fires the re-aim through the normal path. Without this, changing the avatar left
+ * the new audience with no offer at all and every [treatment] fell back to the intake answers, silently.
+ */
+export async function carryOfferToAudience(args: {
+  clientId: string;
+  fromAudienceId: string;
+  toAudienceId: string;
+}): Promise<string | null> {
+  if (args.fromAudienceId === args.toAudienceId) return null;
+  const [from, to] = await Promise.all([
+    loadOfferForAudience(args.fromAudienceId),
+    loadOfferForAudience(args.toAudienceId),
+  ]);
+  if (to || !from) return null;
+  const treatment = from.treatment ?? from.proposedTreatment;
+  if (!treatment) return null;
+
+  const { error } = await supabaseAdmin.from("client_offers").insert({
+    ...rowFromOffer({
+      ...EMPTY_OFFER,
+      proposedTreatment: treatment,
+      proposedSource: from.treatment ? "call" : from.proposedSource,
+      proposedAt: new Date().toISOString(),
+    }),
+    client_id: args.clientId,
+    audience_id: args.toAudienceId,
+    is_primary: true,
+  });
+  if (error) return null;
+  return treatment;
 }
 
 /**
@@ -343,7 +617,7 @@ export async function proposeOffer(
 ): Promise<{ ok: true; offer: StoredOffer; changed: boolean } | { ok: false; error: string }> {
   const { data, error } = await supabaseAdmin
     .from("clients")
-    .select("services, ideal_patient, offer")
+    .select("services, ideal_patient")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -352,7 +626,7 @@ export async function proposeOffer(
 
   const services = (data.services ?? {}) as Record<string, unknown>;
   const ideal = (data.ideal_patient ?? {}) as Record<string, unknown>;
-  const current = readOffer((data as { offer?: unknown }).offer);
+  const current = await loadOffer(clientId);
 
   // ‼️ usableTreatment, NOT text. A required field does not make an answer: SRT's own
   // highest_margin is the string "any", and proposing that would aim the whole build at a word
@@ -377,13 +651,9 @@ export async function proposeOffer(
     current.proposedTreatment !== next.proposedTreatment ||
     current.proposedSource !== next.proposedSource;
 
-  const { error: writeError } = await supabaseAdmin
-    .from("clients")
-    .update({ offer: next })
-    .eq("id", clientId);
-
-  if (writeError) return { ok: false, error: writeError.message };
-  return { ok: true, offer: next, changed };
+  const saved = await writeOffer(clientId, next);
+  if (!saved.ok) return saved;
+  return { ok: true, offer: saved.offer, changed };
 }
 
 /**
@@ -455,13 +725,9 @@ export async function lockOffer(args: {
     lockedBy: args.by,
   };
 
-  const { error } = await supabaseAdmin
-    .from("clients")
-    .update({ offer: next })
-    .eq("id", args.clientId);
-
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, offer: next, treatmentChanged, wasLocked };
+  const saved = await writeOffer(args.clientId, next);
+  if (!saved.ok) return saved;
+  return { ok: true, offer: saved.offer, treatmentChanged, wasLocked };
 }
 
 /**
@@ -493,11 +759,13 @@ export async function unlockOffer(clientId: string): Promise<{ ok: true; offer: 
     lockedBy: null,
     terms: [],
     termsAt: null,
+    outcomePromise: null,
+    outcomeSetAt: null,
+    price: null,
+    priceSetAt: null,
   };
 
-  const { error } = await supabaseAdmin.from("clients").update({ offer: next }).eq("id", clientId);
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, offer: next };
+  return writeOffer(clientId, next);
 }
 
 /**
@@ -523,13 +791,56 @@ export async function setOfferTerms(args: {
   const changed = before.size !== after.size || [...after].some((t) => !before.has(t));
 
   const next: StoredOffer = { ...current, terms: args.terms, termsAt: new Date().toISOString() };
-  const { error } = await supabaseAdmin
-    .from("clients")
-    .update({ offer: next })
-    .eq("id", args.clientId);
+  const saved = await writeOffer(args.clientId, next);
+  if (!saved.ok) return saved;
+  return { ok: true, offer: saved.offer, changed };
+}
 
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, offer: next, changed };
+/**
+ * The outcome the offer promises, or its price, in the client's words. `outcome:` and `price:` on the
+ * prep call, each its own message.
+ *
+ * Refuses on an unlocked offer, the same rule terms follow: an outcome for an offer nobody agreed to is
+ * an outcome for a proposal. Returns whether the value changed, because a new outcome makes an approved
+ * sales letter stale (its approval fingerprint includes it).
+ */
+export async function setOfferDetail(args: {
+  clientId: string;
+  field: "outcome" | "price";
+  value: string;
+}): Promise<{ ok: true; offer: StoredOffer; changed: boolean } | { ok: false; error: string }> {
+  const value = text(args.value);
+  if (!value || value.length < 2) {
+    return {
+      ok: false,
+      error:
+        args.field === "outcome"
+          ? "that is not an outcome. In plain words, what they get: `outcome: more appointments`."
+          : "that is not a price. As they state it: `price: $399 per session`.",
+    };
+  }
+  if (hasBannedDash(value)) {
+    return { ok: false, error: "it contains an em dash, an en dash or a double hyphen, which no copy may carry." };
+  }
+
+  const current = await loadOffer(args.clientId);
+  if (!isLocked(current)) {
+    return {
+      ok: false,
+      error: `the offer is not locked yet. \`offer: <what they sell>\` first, then \`${args.field}:\`.`,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const before = args.field === "outcome" ? current.outcomePromise : current.price;
+  const next: StoredOffer =
+    args.field === "outcome"
+      ? { ...current, outcomePromise: value, outcomeSetAt: now }
+      : { ...current, price: value, priceSetAt: now };
+
+  const saved = await writeOffer(args.clientId, next);
+  if (!saved.ok) return saved;
+  return { ok: true, offer: saved.offer, changed: normalizePhrase(before ?? "") !== normalizePhrase(value) };
 }
 
 /**
@@ -563,13 +874,7 @@ export async function setAnchorMagnet(args: {
   }
 
   const next: StoredOffer = { ...current, magnetKey: key };
-  const { error } = await supabaseAdmin
-    .from("clients")
-    .update({ offer: next })
-    .eq("id", args.clientId);
-
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, offer: next };
+  return writeOffer(args.clientId, next);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -633,23 +938,41 @@ interface DirectivePart {
 }
 
 /** What one Slack message in the offer thread is, read by its FIRST line. */
+/** `outcome: more appointments` and `price: $399 per session`, since the client_offers cutover. */
+const OUTCOME_PREFIX = /^\s*outcome\s*:/i;
+const PRICE_PREFIX = /^\s*price\s*:/i;
+
+/** The one-line commands of the offer thread. Each is one message. */
+export type OfferCommandKind = "offer" | "terms" | "outcome" | "price";
+
+const COMMAND_PREFIXES: ReadonlyArray<readonly [OfferCommandKind, RegExp]> = [
+  ["offer", OFFER_PREFIX],
+  ["terms", TERMS_PREFIX],
+  ["outcome", OUTCOME_PREFIX],
+  ["price", PRICE_PREFIX],
+];
+
+/** What one Slack message in the offer thread is, read by its FIRST line. */
 export type OfferCommand =
-  /** The first line is not `offer:` or `terms:`, so the message is conversation. */
+  /** The first line is not one of the commands, so the message is conversation. */
   | { kind: "none" }
   | {
-      kind: "offer" | "terms";
+      kind: OfferCommandKind;
       /** The command's own line, prefix removed. Never the lines after it. */
       value: string;
       /** Lines after the first, reported back as not saved, never folded into the value. */
       extra: string[];
     }
-  /** A second `offer:` or `terms:` line in the same message. Refused, never merged. */
-  | { kind: "combined"; commands: Array<"offer" | "terms"> };
+  /** A second command line in the same message. Refused, never merged. */
+  | { kind: "combined"; commands: OfferCommandKind[] };
 
-function commandOf(line: string): "offer" | "terms" | null {
-  if (OFFER_PREFIX.test(line)) return "offer";
-  if (TERMS_PREFIX.test(line)) return "terms";
+function commandOf(line: string): OfferCommandKind | null {
+  for (const [kind, prefix] of COMMAND_PREFIXES) if (prefix.test(line)) return kind;
   return null;
+}
+
+function prefixOf(kind: OfferCommandKind): RegExp {
+  return COMMAND_PREFIXES.find(([k]) => k === kind)![1];
 }
 
 /**
@@ -679,11 +1002,28 @@ export function readOfferCommand(text: string): OfferCommand {
   if (!kind) return { kind: "none" };
 
   const rest = lines.slice(1);
-  const others = rest.map(commandOf).filter((c): c is "offer" | "terms" => c !== null);
+  const others = rest.map(commandOf).filter((c): c is OfferCommandKind => c !== null);
   if (others.length) return { kind: "combined", commands: [kind, ...others] };
 
-  const prefix = kind === "offer" ? OFFER_PREFIX : TERMS_PREFIX;
-  return { kind, value: lines[0].replace(prefix, "").trim(), extra: rest };
+  return { kind, value: lines[0].replace(prefixOf(kind), "").trim(), extra: rest };
+}
+
+/** `outcome:` or `price:`, answered in the same shape as `terms:`. */
+async function detailReply(clientId: string, field: "outcome" | "price", raw: string): Promise<DirectivePart> {
+  const res = await setOfferDetail({ clientId, field, value: raw });
+  if (!res.ok) return { message: `:warning: Not saved: ${res.error}` };
+  const value = field === "outcome" ? res.offer.outcomePromise : res.offer.price;
+  return {
+    message: [
+      `:white_check_mark: *${field === "outcome" ? "Outcome" : "Price"} saved:* ${value}.`,
+      field === "outcome"
+        ? "Headlines and CTAs for this audience promise this, and the sales letter is written toward it."
+        : "Price pages and the sales letter read this as the client states it.",
+      !res.changed ? "_The same as before, so nothing downstream changes._" : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
 }
 
 async function termsReply(clientId: string, raw: string): Promise<DirectivePart> {
@@ -730,14 +1070,16 @@ export async function handleOfferThreadReply(input: {
     return {
       message:
         `:warning: Nothing saved. That message has ${named} in it, and this thread takes one command ` +
-        "per message, so neither was applied. Send `offer: ...` on its own, then `terms: ...` on its own.",
+        "per message, so none of them was applied. Send each one as its own message.",
     };
   }
 
   const part =
     cmd.kind === "terms"
       ? await termsReply(input.clientId, cmd.value)
-      : await offerLockReply(input.clientId, cmd.value, input.by);
+      : cmd.kind === "outcome" || cmd.kind === "price"
+        ? await detailReply(input.clientId, cmd.kind, cmd.value)
+        : await offerLockReply(input.clientId, cmd.value, input.by);
 
   const extra = cmd.extra.length
     ? [
