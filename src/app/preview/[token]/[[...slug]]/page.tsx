@@ -50,7 +50,10 @@ import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
 import { GHOST_BELOW, GHOST_NOTICE, GHOST_PAGES, ghostAnswerPage } from "@/lib/hub/ghost-content";
+import { universeFontClass } from "@/components/hub/universe-fonts";
+import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
 import "@/app/hub/[host]/hub.css";
+import "@/app/hub/[host]/universes.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
 export const dynamic = "force-dynamic";
@@ -120,11 +123,12 @@ export default async function TokenPreview({ params, searchParams }: Props) {
     const ghost = slug ? ghostAnswerPage(slug) : null;
     return (
       <div
-        className={hubRootClass(client.skin)}
+        className={`${hubRootClass(client.skin)} ${universeFontClass(client.skin?.universe)}`.trim()}
         lang={client.language}
         style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
       >
         <DemoRibbon ghost={useGhost} />
+        <UniverseTop universe={client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
         <div className="hub-wrap">
           {ghost ? (
             <HubAnswerBody client={client} host={host} page={ghost} linkBase={base} homeHref={`/preview/${params.token}?kind=concierge`} />
@@ -132,6 +136,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
             <HubIndexBody client={client} host={host} pages={useGhost ? GHOST_PAGES : real} linkBase={base} />
           )}
         </div>
+        <UniverseBand universe={client.skin?.universe} name={client.displayName} where={null} pages={-1} />
         <ConciergeEmbed clientId={verified.clientId} magnetKey={null} preview={params.token} />
       </div>
     );
@@ -166,7 +171,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
 
     return (
       <div
-        className={hubRootClass(client.skin)}
+        className={`${hubRootClass(client.skin)} ${universeFontClass(client.skin?.universe)}`.trim()}
         lang={client.language}
         style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
       >
@@ -196,12 +201,13 @@ export default async function TokenPreview({ params, searchParams }: Props) {
 
   return (
     <div
-      className={hubRootClass(client.skin)}
+      className={`${hubRootClass(client.skin)} ${universeFontClass(client.skin?.universe)}`.trim()}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
       <PreviewRibbon host={host} slug={slug} />
+      <UniverseTop universe={kind === "reviews" ? null : client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
       <div className="hub-wrap">
         {kind === "reviews" ? (
           <ReviewTool client={client} />

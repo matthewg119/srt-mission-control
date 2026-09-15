@@ -1,0 +1,284 @@
+/*
+ * THE UNIVERSES. Six complete looks for the same page (src/lib/hub/universes.ts).
+ *
+ * ‼️ SEMANTICS FIXED, LOOK FREE. Every rule here styles the markup hub-bodies.tsx already renders, plus the
+ * aria-hidden chrome (.u-top, .u-band). Nothing here may hide a semantic element or reorder it for a reader:
+ * no display:none or visibility:hidden on the masthead, a heading, the answers, the NAP or the body.
+ * `content:` is allowed only on ::before/::after, for counters and ornaments. _probe-hub-universes.ts reads
+ * this file and holds both lines.
+ *
+ * ‼️ EVERY SELECTOR STARTS .hub-root.hub-u-<key>. Two classes, so a universe beats the template and trait rules
+ * in hub.css without !important, and nothing here can touch a page that is not in that universe.
+ *
+ * The accent is the client's (--hub-accent from theme.ts). Each universe declares a fallback for it that only
+ * applies when the client has none, by setting --u-accent and reading var(--hub-accent, --u-accent) where the
+ * universe needs a colour of its own.
+ */
+
+/* ── Shared scaffolding for every universe ─────────────────────────────────── */
+.hub-root.hub-u { position: relative; overflow-x: hidden; }
+.hub-root.hub-u .hub-wrap { position: relative; z-index: 1; font-family: var(--u-text, inherit); }
+.hub-root.hub-u .hub-root h1,
+.hub-root.hub-u h1 { font-family: var(--u-display, inherit); }
+.hub-root.hub-u h2,
+.hub-root.hub-u h3 { font-family: var(--u-display, inherit); }
+.hub-root.hub-u .hub-eyebrow,
+.hub-root.hub-u .hub-nap dt,
+.hub-root.hub-u .hub-foot { font-family: var(--u-mono, inherit); }
+.u-top, .u-band { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem; }
+.u-top { padding: 0.6rem 1.25rem; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; }
+.u-top-count { margin-left: auto; }
+.u-band { justify-content: space-between; padding: 2.5rem 1.25rem; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BLUEPRINT: grid paper, a title block, condensed display type, a spec sheet.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hub-root.hub-u-blueprint {
+  --hub-bg: #f6f2e8; --hub-fg: #2e3f49; --hub-muted: #5a6b74; --hub-faint: #7d8b92; --hub-rule: #2e3f49;
+  --hub-accent: var(--u-theme-accent, #c4552b);
+  background-color: #f6f2e8;
+  background-image:
+    linear-gradient(rgba(46, 63, 73, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(46, 63, 73, 0.07) 1px, transparent 1px),
+    linear-gradient(rgba(46, 63, 73, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(46, 63, 73, 0.035) 1px, transparent 1px);
+  background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px;
+  color: #2e3f49;
+}
+.hub-root.hub-u-blueprint .u-top { background: #2e3f49; color: #f6f2e8; font-family: var(--u-mono); }
+.hub-root.hub-u-blueprint .u-top-name { font-weight: 600; }
+.hub-root.hub-u-blueprint .hub-wrap { max-width: 68rem; padding-top: 3.5rem; }
+.hub-root.hub-u-blueprint .hub-head {
+  display: grid; grid-template-columns: 1fr minmax(12rem, 18rem); gap: 0 2rem; align-items: end;
+  border: 2px solid #2e3f49; background: #fbf9f3; padding: 2rem 2rem 1.5rem; box-shadow: 8px 8px 0 #2e3f49;
+  margin-bottom: 3rem;
+}
+.hub-root.hub-u-blueprint .hub-head > * { grid-column: 1; }
+.hub-root.hub-u-blueprint .hub-eyebrow {
+  grid-column: 2; grid-row: 1; justify-self: stretch; border: 1.5px solid #2e3f49; padding: 0.4rem 0.6rem;
+  font-size: 0.72rem; color: #2e3f49; letter-spacing: 0.14em; margin: 0 0 0.75rem;
+}
+.hub-root.hub-u-blueprint .hub-eyebrow::before { content: "LOCATION / "; color: var(--hub-accent); }
+.hub-root.hub-u-blueprint h1 {
+  font-size: clamp(3rem, 8vw, 5.75rem); line-height: 0.92; text-transform: uppercase; letter-spacing: -0.01em;
+  font-weight: 800; margin: 0 0 1rem;
+}
+.hub-root.hub-u-blueprint .hub-lede { font-size: 1.15rem; color: #44565f; max-width: 42ch; }
+.hub-root.hub-u-blueprint h2 {
+  font-size: 0.8rem; font-family: var(--u-mono); text-transform: uppercase; letter-spacing: 0.16em; color: var(--hub-accent);
+  border-bottom: 2px solid #2e3f49; padding-bottom: 0.5rem;
+}
+.hub-root.hub-u-blueprint .hub-list { counter-reset: q; border: 2px solid #2e3f49; background: #fbf9f3; }
+.hub-root.hub-u-blueprint .hub-list li { counter-increment: q; border-top: 1px solid rgba(46, 63, 73, 0.35); }
+.hub-root.hub-u-blueprint .hub-list li:first-child { border-top: 0; }
+.hub-root.hub-u-blueprint .hub-list a {
+  display: grid; grid-template-columns: 5.5rem 1fr; gap: 0.25rem 1rem; padding: 1.1rem 1.25rem;
+  font-family: var(--u-display); font-size: 1.45rem; font-weight: 600; line-height: 1.15; text-transform: uppercase;
+}
+.hub-root.hub-u-blueprint .hub-list a::before {
+  content: "Q-" counter(q, decimal-leading-zero); grid-row: span 2; font-family: var(--u-mono); font-size: 0.8rem;
+  color: var(--hub-accent); letter-spacing: 0.1em; padding-top: 0.35rem;
+}
+.hub-root.hub-u-blueprint .hub-list a:hover { background: #2e3f49; color: #f6f2e8; }
+.hub-root.hub-u-blueprint .hub-list .hub-q { grid-column: 2; font-family: var(--u-text); text-transform: none; font-size: 0.9rem; font-weight: 400; color: inherit; opacity: 0.75; }
+.hub-root.hub-u-blueprint .hub-nap {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0 2rem;
+  background: #2e3f49; color: #e9e4d6; border: 0; padding: 1.75rem 2rem 2rem; margin-top: 3rem; box-shadow: 8px 8px 0 var(--hub-accent);
+}
+.hub-root.hub-u-blueprint .hub-nap dt { color: #b9c3c8; grid-row: 1; }
+.hub-root.hub-u-blueprint .hub-nap dd { grid-row: 2; font-size: 1.05rem; }
+.hub-root.hub-u-blueprint .hub-nap a { color: #f6f2e8; }
+.hub-root.hub-u-blueprint .hub-answer {
+  background: #fbf9f3; border: 2px solid #2e3f49; padding: 2rem 2.25rem; font-size: 1.05rem;
+}
+.hub-root.hub-u-blueprint .hub-answer h2 { font-family: var(--u-display); font-size: 2rem; text-transform: uppercase; letter-spacing: 0; color: #2e3f49; border-bottom: 2px solid #2e3f49; }
+.hub-root.hub-u-blueprint .hub-answer blockquote { margin: 1.5rem 0; padding: 1rem 1.25rem; border-left: 6px solid var(--hub-accent); background: #efe9da; font-style: italic; }
+.hub-root.hub-u-blueprint .u-band { background: var(--hub-accent); color: #fff; font-family: var(--u-display); font-size: clamp(1.5rem, 4vw, 2.5rem); text-transform: uppercase; font-weight: 800; }
+.hub-root.hub-u-blueprint .u-band-name { font-family: var(--u-mono); font-size: 0.8rem; letter-spacing: 0.14em; font-weight: 400; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ATELIER: cream and brass, light italic display serif, silence.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hub-root.hub-u-atelier {
+  --hub-bg: #faf6ef; --hub-fg: #2b2620; --hub-muted: #7a6f62; --hub-faint: #a89a86; --hub-rule: #e2d6c3;
+  background: radial-gradient(120% 60% at 50% 0%, #fffdf8 0%, #faf6ef 55%, #f3ecdf 100%);
+  color: #2b2620;
+}
+.hub-root.hub-u-atelier .u-top { justify-content: center; color: #9a7b4f; border-bottom: 1px solid #e2d6c3; letter-spacing: 0.3em; font-size: 0.66rem; }
+.hub-root.hub-u-atelier .u-top-count { margin-left: 0; }
+.hub-root.hub-u-atelier .hub-wrap { max-width: 46rem; padding-top: 6rem; text-align: center; }
+.hub-root.hub-u-atelier .hub-logo { margin: 0 auto 2rem; }
+.hub-root.hub-u-atelier .hub-eyebrow { color: #9a7b4f; letter-spacing: 0.35em; font-size: 0.7rem; }
+/* Hairlines either side of the eyebrow. Drawn as borders, not dash characters: no copy carries a dash. */
+.hub-root.hub-u-atelier .hub-eyebrow::before,
+.hub-root.hub-u-atelier .hub-eyebrow::after { content: ""; display: inline-block; width: 2.5rem; border-top: 1px solid #c9b08a; vertical-align: middle; margin: 0 0.9rem; }
+.hub-root.hub-u-atelier h1 {
+  font-size: clamp(3.25rem, 9vw, 6.5rem); font-weight: 300; font-style: italic; line-height: 0.98; letter-spacing: -0.02em; margin: 1.25rem 0 1.75rem;
+}
+.hub-root.hub-u-atelier .hub-lede { margin: 0 auto; font-size: 1.1rem; line-height: 1.8; color: #6d6356; max-width: 34ch; }
+.hub-root.hub-u-atelier h2 { font-weight: 500; font-style: italic; font-size: 2rem; margin: 5rem 0 1.5rem; color: #2b2620; }
+.hub-root.hub-u-atelier .hub-list { counter-reset: q; text-align: left; border-top: 1px solid #c9b08a; }
+.hub-root.hub-u-atelier .hub-list li { counter-increment: q; border-top: 0; border-bottom: 1px solid #e2d6c3; }
+.hub-root.hub-u-atelier .hub-list a { display: grid; grid-template-columns: 3.5rem 1fr; padding: 1.6rem 0.25rem; font-family: var(--u-display); font-size: 1.6rem; line-height: 1.2; font-weight: 500; }
+.hub-root.hub-u-atelier .hub-list a::before { content: counter(q, lower-roman) "."; grid-row: span 2; font-style: italic; color: #9a7b4f; font-size: 1.1rem; padding-top: 0.3rem; }
+.hub-root.hub-u-atelier .hub-list a:hover { color: #9a7b4f; }
+.hub-root.hub-u-atelier .hub-list .hub-q { grid-column: 2; font-family: var(--u-text); font-size: 0.85rem; letter-spacing: 0.02em; color: #8b7f70; }
+.hub-root.hub-u-atelier .hub-nap { border-top: 1px solid #c9b08a; margin-top: 5rem; padding-top: 2.5rem; text-align: center; color: #6d6356; }
+.hub-root.hub-u-atelier .hub-nap dt { color: #9a7b4f; letter-spacing: 0.3em; margin-top: 1.25rem; }
+.hub-root.hub-u-atelier .hub-answer { text-align: left; font-size: 1.1rem; line-height: 1.85; }
+.hub-root.hub-u-atelier .hub-answer h2 { text-align: center; }
+.hub-root.hub-u-atelier .hub-answer blockquote { margin: 2.5rem 0; font-family: var(--u-display); font-style: italic; font-size: 1.7rem; line-height: 1.3; text-align: center; color: #9a7b4f; border: 0; }
+.hub-root.hub-u-atelier .u-band { justify-content: center; flex-direction: column; gap: 0.75rem; background: #2b2620; color: #f3ecdf; padding: 4rem 1.25rem; }
+.hub-root.hub-u-atelier .u-band-line { font-family: var(--u-display); font-style: italic; font-size: 2.25rem; font-weight: 300; }
+.hub-root.hub-u-atelier .u-band-name { letter-spacing: 0.3em; font-size: 0.7rem; text-transform: uppercase; color: #c9b08a; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAGAZINE: masthead rules, a huge headline, a contents page in two columns.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hub-root.hub-u-magazine {
+  --hub-bg: #ffffff; --hub-fg: #111111; --hub-muted: #555555; --hub-faint: #888888; --hub-rule: #111111;
+  background: #fff; color: #111;
+}
+.hub-root.hub-u-magazine .u-top { border-bottom: 4px double #111; font-family: var(--u-mono); color: #111; padding: 0.9rem 1.25rem; }
+.hub-root.hub-u-magazine .u-top-name { font-family: var(--u-display); font-size: 1.6rem; letter-spacing: -0.01em; text-transform: none; font-weight: 900; }
+.hub-root.hub-u-magazine .hub-wrap { max-width: 74rem; padding-top: 2.5rem; }
+.hub-root.hub-u-magazine .hub-head { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 0 3rem; border-bottom: 1px solid #111; padding-bottom: 2rem; }
+.hub-root.hub-u-magazine .hub-head > * { grid-column: 1; }
+.hub-root.hub-u-magazine .hub-eyebrow { color: var(--hub-accent); font-weight: 600; letter-spacing: 0.18em; }
+.hub-root.hub-u-magazine h1 { font-size: clamp(3.5rem, 10vw, 8.5rem); line-height: 0.88; font-weight: 900; letter-spacing: -0.035em; margin: 0.25rem 0 1.5rem; }
+.hub-root.hub-u-magazine .hub-lede {
+  grid-column: 2; grid-row: 1 / span 3; align-self: end; font-family: var(--u-display); font-style: italic; font-size: 1.45rem;
+  line-height: 1.3; color: #111; border-top: 6px solid var(--hub-accent); padding-top: 1rem;
+}
+.hub-root.hub-u-magazine .hub-lede::before { content: "\201C"; font-size: 4rem; line-height: 0; vertical-align: -1.6rem; color: var(--hub-accent); margin-right: 0.1rem; }
+.hub-root.hub-u-magazine h2 { font-family: var(--u-mono); text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.2em; border-bottom: 1px solid #111; padding-bottom: 0.4rem; }
+.hub-root.hub-u-magazine .hub-list { counter-reset: q; columns: 2 22rem; column-gap: 3rem; column-rule: 1px solid #ddd; }
+.hub-root.hub-u-magazine .hub-list li { counter-increment: q; break-inside: avoid; border-top: 0; border-bottom: 1px solid #e5e5e5; }
+.hub-root.hub-u-magazine .hub-list a { display: grid; grid-template-columns: 3.25rem 1fr; padding: 1.25rem 0; font-family: var(--u-display); font-weight: 700; font-size: 1.35rem; line-height: 1.2; }
+.hub-root.hub-u-magazine .hub-list a::before { content: counter(q); grid-row: span 2; font-family: var(--u-display); font-weight: 900; font-size: 2.2rem; line-height: 1; color: var(--hub-accent); }
+.hub-root.hub-u-magazine .hub-list .hub-q { grid-column: 2; font-family: var(--u-text); font-weight: 400; font-size: 0.9rem; color: #555; }
+.hub-root.hub-u-magazine .hub-list a:hover { color: var(--hub-accent); }
+.hub-root.hub-u-magazine .hub-nap { display: flex; flex-wrap: wrap; gap: 0.25rem 2.5rem; border-top: 4px double #111; }
+.hub-root.hub-u-magazine .hub-nap dt { width: 100%; margin-top: 0; }
+.hub-root.hub-u-magazine .hub-answer { columns: 2 24rem; column-gap: 3rem; font-size: 1.05rem; }
+.hub-root.hub-u-magazine .hub-answer > p:first-child::first-letter { float: left; font-family: var(--u-display); font-size: 4.6rem; line-height: 0.8; padding: 0.3rem 0.5rem 0 0; font-weight: 900; color: var(--hub-accent); }
+.hub-root.hub-u-magazine .hub-answer blockquote { column-span: all; margin: 2rem 0; font-family: var(--u-display); font-style: italic; font-size: 2rem; line-height: 1.2; border-top: 6px solid var(--hub-accent); border-bottom: 1px solid #111; padding: 1rem 0; }
+.hub-root.hub-u-magazine .u-band { background: #111; color: #fff; font-family: var(--u-display); font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 900; font-style: italic; }
+.hub-root.hub-u-magazine .u-band-name { font-family: var(--u-mono); font-style: normal; font-weight: 400; font-size: 0.8rem; letter-spacing: 0.2em; text-transform: uppercase; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BRUTALIST: heavy borders, uppercase slab, blocks that invert.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hub-root.hub-u-brutalist {
+  --hub-bg: #efeee9; --hub-fg: #000000; --hub-muted: #222222; --hub-faint: #444444; --hub-rule: #000000;
+  background: #efeee9; color: #000;
+}
+.hub-root.hub-u-brutalist .u-top { background: var(--hub-accent); color: var(--hub-on-accent, #fff); font-family: var(--u-mono); font-weight: 700; border-bottom: 4px solid #000; }
+.hub-root.hub-u-brutalist .hub-wrap { max-width: 76rem; padding-top: 2rem; }
+.hub-root.hub-u-brutalist .hub-head { border: 4px solid #000; background: #fff; padding: 1.5rem; margin-bottom: 2rem; }
+.hub-root.hub-u-brutalist .hub-eyebrow { display: inline-block; background: #000; color: #efeee9; padding: 0.3rem 0.6rem; letter-spacing: 0.1em; font-weight: 700; }
+.hub-root.hub-u-brutalist h1 { font-size: clamp(3.5rem, 12vw, 10rem); line-height: 0.85; text-transform: uppercase; letter-spacing: -0.04em; margin: 1rem 0; word-break: break-word; }
+.hub-root.hub-u-brutalist .hub-lede { font-size: 1.35rem; color: #000; font-weight: 600; max-width: 30ch; border-left: 10px solid var(--hub-accent); padding-left: 1rem; }
+.hub-root.hub-u-brutalist h2 { font-size: clamp(2rem, 6vw, 4rem); text-transform: uppercase; letter-spacing: -0.03em; margin: 3rem 0 1rem; }
+.hub-root.hub-u-brutalist .hub-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; counter-reset: q; }
+.hub-root.hub-u-brutalist .hub-list li { border: 4px solid #000; background: #fff; counter-increment: q; }
+.hub-root.hub-u-brutalist .hub-list a { height: 100%; padding: 1.25rem; font-family: var(--u-display); font-size: 1.5rem; line-height: 1.05; text-transform: uppercase; color: #000; box-sizing: border-box; }
+.hub-root.hub-u-brutalist .hub-list a::before { content: counter(q, decimal-leading-zero); display: block; font-family: var(--u-mono); font-size: 0.9rem; margin-bottom: 1.25rem; }
+.hub-root.hub-u-brutalist .hub-list a:hover { background: #000; color: #efeee9; }
+.hub-root.hub-u-brutalist .hub-list .hub-q { font-family: var(--u-text); text-transform: none; font-size: 0.95rem; color: inherit; margin-top: 0.75rem; }
+.hub-root.hub-u-brutalist .hub-nap { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); border: 4px solid #000; background: var(--hub-accent); color: var(--hub-on-accent, #fff); padding: 1.5rem; }
+.hub-root.hub-u-brutalist .hub-nap dt { color: inherit; opacity: 0.8; grid-row: 1; }
+.hub-root.hub-u-brutalist .hub-nap dd { grid-row: 2; font-weight: 700; font-size: 1.15rem; }
+.hub-root.hub-u-brutalist .hub-nap a { color: inherit; }
+.hub-root.hub-u-brutalist .hub-answer { border: 4px solid #000; background: #fff; padding: 2rem; font-size: 1.1rem; }
+.hub-root.hub-u-brutalist .hub-answer h2 { font-size: 2.4rem; }
+.hub-root.hub-u-brutalist .hub-answer blockquote { margin: 1.5rem 0; background: #000; color: #efeee9; padding: 1.25rem; font-weight: 700; font-size: 1.3rem; }
+.hub-root.hub-u-brutalist .u-band { border-top: 4px solid #000; font-family: var(--u-display); font-size: clamp(2.5rem, 9vw, 7rem); text-transform: uppercase; line-height: 0.9; letter-spacing: -0.04em; }
+.hub-root.hub-u-brutalist .u-band-name { font-family: var(--u-mono); font-size: 0.9rem; letter-spacing: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NOIR: near black, a glow, glass cards, telemetry.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hub-root.hub-u-noir {
+  --hub-bg: #07090c; --hub-fg: #e8edf2; --hub-muted: #9aa7b3; --hub-faint: #6b7784; --hub-rule: #1c232b;
+  background:
+    radial-gradient(60% 45% at 75% 0%, color-mix(in srgb, var(--hub-accent) 28%, transparent) 0%, transparent 70%),
+    radial-gradient(40% 35% at 0% 30%, rgba(80, 110, 255, 0.12) 0%, transparent 70%),
+    #07090c;
+  color: #e8edf2;
+}
+body:has(.hub-u-noir) { background: #07090c; }
+.hub-root.hub-u-noir .u-top { font-family: var(--u-mono); color: #9aa7b3; border-bottom: 1px solid #1c232b; }
+.hub-root.hub-u-noir .u-top-name::before { content: "\25CF\00a0"; color: var(--hub-accent); }
+.hub-root.hub-u-noir .hub-wrap { max-width: 72rem; padding-top: 5rem; }
+.hub-root.hub-u-noir .hub-head { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 3rem; align-items: end; margin-bottom: 4rem; }
+.hub-root.hub-u-noir .hub-head > * { grid-column: 1; }
+.hub-root.hub-u-noir .hub-eyebrow { color: var(--hub-accent); letter-spacing: 0.2em; }
+.hub-root.hub-u-noir h1 {
+  font-size: clamp(3rem, 8vw, 6.5rem); font-weight: 700; line-height: 0.95; letter-spacing: -0.045em;
+  background: linear-gradient(180deg, #ffffff 0%, #9aa7b3 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hub-root.hub-u-noir .hub-lede {
+  grid-column: 2; grid-row: 1 / span 3; align-self: end; color: #b6c1cc; font-size: 1.05rem;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid #1c232b; border-radius: 16px; padding: 1.25rem 1.4rem; backdrop-filter: blur(8px);
+}
+.hub-root.hub-u-noir h2 { font-family: var(--u-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.22em; color: #6b7784; font-weight: 400; }
+.hub-root.hub-u-noir .hub-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: 1rem; counter-reset: q; }
+.hub-root.hub-u-noir .hub-list li { counter-increment: q; border: 1px solid #1c232b; border-radius: 18px; background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015)); transition: border-color .2s, transform .2s; }
+.hub-root.hub-u-noir .hub-list li:hover { border-color: var(--hub-accent); transform: translateY(-2px); box-shadow: 0 0 40px color-mix(in srgb, var(--hub-accent) 25%, transparent); }
+.hub-root.hub-u-noir .hub-list a { padding: 1.4rem 1.5rem; color: #e8edf2; font-family: var(--u-display); font-weight: 600; font-size: 1.2rem; line-height: 1.3; }
+.hub-root.hub-u-noir .hub-list a::before { content: "ANS/" counter(q, decimal-leading-zero); display: block; font-family: var(--u-mono); font-weight: 400; font-size: 0.72rem; letter-spacing: 0.15em; color: var(--hub-accent); margin-bottom: 0.9rem; }
+.hub-root.hub-u-noir .hub-list .hub-q { font-family: var(--u-text); font-weight: 400; color: #8a97a3; font-size: 0.88rem; margin-top: 0.5rem; }
+.hub-root.hub-u-noir .hub-nap { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 2rem; border: 1px solid #1c232b; border-radius: 18px; background: rgba(255,255,255,0.03); padding: 1.5rem; color: #b6c1cc; }
+.hub-root.hub-u-noir .hub-nap dt { grid-row: 1; color: #6b7784; }
+.hub-root.hub-u-noir .hub-nap dd { grid-row: 2; }
+.hub-root.hub-u-noir .hub-answer { font-size: 1.05rem; color: #c9d2db; }
+.hub-root.hub-u-noir .hub-answer h2 { color: #fff; font-family: var(--u-display); letter-spacing: -0.02em; text-transform: none; font-size: 1.8rem; }
+.hub-root.hub-u-noir .hub-answer blockquote { margin: 2rem 0; padding: 1.25rem 1.5rem; border-radius: 16px; border: 1px solid var(--hub-accent); background: color-mix(in srgb, var(--hub-accent) 10%, transparent); color: #fff; }
+.hub-root.hub-u-noir .u-band { border-top: 1px solid #1c232b; font-family: var(--u-display); font-size: clamp(1.75rem, 5vw, 3rem); font-weight: 300; color: #fff; }
+.hub-root.hub-u-noir .u-band-name { font-family: var(--u-mono); font-size: 0.75rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--hub-accent); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BOTANICA: sage and linen, soft rounded cards, a friendly serif, air.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hub-root.hub-u-botanica {
+  --hub-bg: #f4f1ea; --hub-fg: #243128; --hub-muted: #5f6e63; --hub-faint: #8a978c; --hub-rule: #dfe3d6;
+  background:
+    radial-gradient(50% 40% at 100% 0%, #dfe8d5 0%, transparent 70%),
+    radial-gradient(40% 30% at 0% 100%, #efe3d3 0%, transparent 70%),
+    #f4f1ea;
+  color: #243128;
+}
+.hub-root.hub-u-botanica .u-top { justify-content: center; color: #5f6e63; font-size: 0.7rem; }
+.hub-root.hub-u-botanica .u-top-count { margin-left: 0; }
+.hub-root.hub-u-botanica .u-top > span + span::before { content: "\2740\00a0\00a0"; color: #9bb08f; }
+.hub-root.hub-u-botanica .hub-wrap { max-width: 60rem; padding-top: 4rem; }
+.hub-root.hub-u-botanica .hub-head { background: #fffdf9; border-radius: 32px; padding: 3rem; box-shadow: 0 20px 60px rgba(36, 49, 40, 0.08); margin-bottom: 3rem; }
+.hub-root.hub-u-botanica .hub-eyebrow { display: inline-block; background: #e5ecdd; color: #3f5b45; border-radius: 999px; padding: 0.35rem 0.9rem; letter-spacing: 0.08em; font-family: var(--u-text); font-weight: 600; }
+.hub-root.hub-u-botanica h1 { font-size: clamp(2.75rem, 7vw, 5rem); line-height: 1.02; font-weight: 400; letter-spacing: -0.02em; margin: 1rem 0; }
+.hub-root.hub-u-botanica .hub-lede { font-size: 1.15rem; color: #5f6e63; }
+.hub-root.hub-u-botanica h2 { font-weight: 600; font-size: 1.6rem; }
+.hub-root.hub-u-botanica .hub-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 1rem; }
+.hub-root.hub-u-botanica .hub-list li { border: 0; background: #fffdf9; border-radius: 24px; box-shadow: 0 8px 24px rgba(36, 49, 40, 0.06); }
+.hub-root.hub-u-botanica .hub-list a { padding: 1.5rem 1.6rem; font-family: var(--u-display); font-size: 1.25rem; line-height: 1.25; color: #243128; }
+.hub-root.hub-u-botanica .hub-list a::before { content: "\2740"; display: block; color: #9bb08f; font-size: 1.1rem; margin-bottom: 0.6rem; }
+.hub-root.hub-u-botanica .hub-list a:hover { color: #3f5b45; }
+.hub-root.hub-u-botanica .hub-list .hub-q { font-family: var(--u-text); font-size: 0.9rem; color: #6b7a6f; }
+.hub-root.hub-u-botanica .hub-nap { background: #3f5b45; color: #eef2ea; border: 0; border-radius: 28px; padding: 2rem 2.25rem; }
+.hub-root.hub-u-botanica .hub-nap dt { color: #bcd0b3; }
+.hub-root.hub-u-botanica .hub-nap a { color: #fff; }
+.hub-root.hub-u-botanica .hub-answer { background: #fffdf9; border-radius: 28px; padding: 2.5rem; font-size: 1.08rem; box-shadow: 0 12px 40px rgba(36, 49, 40, 0.06); }
+.hub-root.hub-u-botanica .hub-answer blockquote { margin: 1.75rem 0; background: #e5ecdd; border-radius: 20px; padding: 1.25rem 1.5rem; font-family: var(--u-display); font-size: 1.35rem; color: #3f5b45; }
+.hub-root.hub-u-botanica .u-band { justify-content: center; flex-direction: column; gap: 0.5rem; background: #3f5b45; color: #f4f1ea; border-radius: 40px 40px 0 0; margin-top: 2rem; }
+.hub-root.hub-u-botanica .u-band-line { font-family: var(--u-display); font-size: 2rem; }
+.hub-root.hub-u-botanica .u-band-name { font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; color: #bcd0b3; }
+
+/* ── Small screens: every multi-column masthead collapses to one column in DOM order ── */
+@media (max-width: 720px) {
+  .hub-root.hub-u .hub-head { grid-template-columns: 1fr; }
+  .hub-root.hub-u-blueprint .hub-eyebrow,
+  .hub-root.hub-u-magazine .hub-lede,
+  .hub-root.hub-u-noir .hub-lede { grid-column: 1; grid-row: auto; }
+  .hub-root.hub-u-blueprint .hub-head { padding: 1.25rem; box-shadow: 5px 5px 0 #2e3f49; }
+  .hub-root.hub-u-botanica .hub-head { padding: 1.75rem; }
+}

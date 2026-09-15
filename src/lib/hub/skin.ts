@@ -23,13 +23,13 @@
 // faces.ts, and skinStyle() looks the stack up. `headingFamily` is the older free-text field,
 // still honoured for rows that have one, and no longer written by the screenshot lane.
 //
-// ‼️ THE MARKUP IS NOT THEMABLE AND MUST NEVER BECOME THEMABLE.
-// Every field below lands in a CSS custom property or a class name. Nothing here is markup,
-// nothing here is copy, and there is nowhere to put either. That is not squeamishness: the
-// hub's whole product is being crawled and quoted, and the JSON-LD, the heading order and the
-// canonical NAP block in hub-bodies.tsx are what make that true. A skin that could carry its
-// own HTML would be a skin that could silently delete the thing we sell, on a client's own
-// domain, with nothing on the board able to notice.
+// ‼️ THE SEMANTICS ARE NOT THEMABLE. THE LOOK IS (Matthew, 2026-09-15, see universes.ts).
+// This used to read "the markup is not themable and must never become themable", and it made three design
+// candidates three tints of one page. What must never move is what the hub sells: the JSON-LD, the one h1,
+// the heading order, the answers in order and the canonical NAP block in hub-bodies.tsx. Those components are
+// shared by every universe and untouched by it. Every field below still lands in a CSS custom property or a
+// class name, and a skin still cannot carry HTML or copy: a universe is a class, a stylesheet and a fixed,
+// aria-hidden chrome component in code, never something a model or a screenshot writes.
 //
 // ‼️ SAME VALIDATION POSTURE AS theme.ts: DROP, NEVER REPAIR.
 // Values reach this file from a model reading a screenshot. Every one of them is interpolated
@@ -38,6 +38,7 @@
 
 import { safeFontFamily } from "./theme";
 import { safeFace, faceStack, type HubFace } from "./faces";
+import { isUniverse, universeInfo, type HubUniverse } from "./universes";
 
 /** The templates that exist. Adding one is a code change, on purpose. */
 export const HUB_TEMPLATES = ["document", "clinic", "editorial", "bold"] as const;
@@ -161,6 +162,8 @@ export function oneOf<T extends string>(values: readonly T[], v: unknown): T | n
  */
 export interface HubSkin {
   template: HubTemplate;
+  /** The design universe (universes.ts). Null is the classic template look. */
+  universe: HubUniverse | null;
   bg: string | null;
   fg: string | null;
   muted: string | null;
@@ -211,6 +214,7 @@ export interface StoredSkin extends HubSkin {
 
 export const EMPTY_SKIN: StoredSkin = {
   template: DEFAULT_TEMPLATE,
+  universe: null,
   bg: null,
   fg: null,
   muted: null,
@@ -280,6 +284,8 @@ export function readSkin(raw: unknown): StoredSkin {
     // ‼️ An unknown template becomes the default, never a class name we do not ship.
     // `hub-tpl-${x}` with an unvalidated x is a class attribute somebody else gets to choose.
     template: isTemplate(s.template) ? s.template : DEFAULT_TEMPLATE,
+    // Same gate as the template: it becomes `hub-u-${x}`, a class attribute nobody else may choose.
+    universe: isUniverse(s.universe) ? s.universe : null,
     bg: safeSkinColor(s.bg),
     fg: safeSkinColor(s.fg),
     muted: safeSkinColor(s.muted),
@@ -355,7 +361,8 @@ export function skinTraits(skin: StoredSkin | null): string {
  * themselves; a trait added to four of them would render on a call and not on the client's domain.
  */
 export function hubRootClass(skin: StoredSkin | null): string {
-  return ["hub-root", skinClass(skin), skinTraits(skin)].filter(Boolean).join(" ");
+  const universe = skin && isUniverse(skin.universe) ? `hub-u hub-u-${skin.universe}` : "";
+  return ["hub-root", skinClass(skin), skinTraits(skin), universe].filter(Boolean).join(" ");
 }
 
 const TRAIT_WORDS: Record<SkinTraitField, Record<string, string>> = {
@@ -454,6 +461,10 @@ export function skinOverrides(skin: StoredSkin): string[] {
 
 /** The one sentence every card uses to describe a skin, so the wording cannot drift. */
 export function skinLine(skin: StoredSkin): string {
+  if (skin.universe) {
+    const u = universeInfo(skin.universe);
+    return `*Universe:* ${u.name}. ${u.blurb}.`;
+  }
   const info = templateInfo(skin.template);
   const over = skinOverrides(skin);
   const tail =

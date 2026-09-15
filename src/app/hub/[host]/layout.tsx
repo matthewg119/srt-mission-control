@@ -16,7 +16,10 @@ import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, hubRootClass } from "@/lib/hub/skin";
+import { universeFontClass } from "@/components/hub/universe-fonts";
+import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
 import "./hub.css";
+import "./universes.css";
 
 // Not force-dynamic. Every dashboard page and API route in this repo sets
 // `dynamic = "force-dynamic"` out of habit, and it is exactly wrong here: it would make
@@ -75,11 +78,19 @@ export default async function HubLayout({ children, params }: Props) {
     // skinClass() always returns a class, including for the default template, so the live page
     // and both previews carry the same attribute.
     <div
-      className={hubRootClass(resolved.client.skin)}
+      className={`${hubRootClass(resolved.client.skin)} ${universeFontClass(resolved.client.skin?.universe)}`.trim()}
       lang={resolved.client.language}
       style={{ ...skinStyle(resolved.client.skin), ...themeStyle(resolved.client.theme) }}
     >
+      {/* A universe's decoration, aria-hidden and outside .hub-wrap. Nothing when the skin has no universe. */}
+      <UniverseTop
+        universe={resolved.client.skin?.universe}
+        name={resolved.client.displayName}
+        where={[resolved.client.city, resolved.client.state].filter(Boolean).join(", ") || null}
+        pages={-1}
+      />
       <div className="hub-wrap">{children}</div>
+      <UniverseBand universe={resolved.client.skin?.universe} name={resolved.client.displayName} where={null} pages={-1} />
       {/*
         ‼️ THE CONCIERGE USED TO BE MOUNTED HERE AND IT MOVED, ON PURPOSE. Do not put it back.
 

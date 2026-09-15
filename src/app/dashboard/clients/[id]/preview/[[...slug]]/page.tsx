@@ -38,7 +38,7 @@ import { orderIndexPages, planLinksFor } from "@/lib/hub/plan-links";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
-import { skinStyle, hubRootClass } from "@/lib/hub/skin";
+import { EMPTY_SKIN, skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { ReviewTool, readLook } from "@/app/hub/[host]/reviews/review-tool";
 import type { ChatLook } from "@/app/hub/[host]/reviews/review-client";
 import { loadCandidates } from "@/lib/clients/hub-skin";
@@ -50,7 +50,13 @@ import {
 } from "@/lib/hub/skin-variants";
 import { REVIEW_PLATFORMS, destinationLine, destinationState } from "@/lib/hub/review-destinations";
 import { ReviewLinkBox } from "./review-link-box";
+import { GHOST_BELOW, GHOST_NOTICE, GHOST_PAGES, ghostAnswerPage } from "@/lib/hub/ghost-content";
+import { UNIVERSES, isUniverse } from "@/lib/hub/universes";
+import { universeSkin } from "@/lib/hub/skin-variants";
+import { universeFontClass } from "@/components/hub/universe-fonts";
+import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
 import "@/app/hub/[host]/hub.css";
+import "@/app/hub/[host]/universes.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
 export const dynamic = "force-dynamic";
@@ -65,7 +71,7 @@ export const metadata: Metadata = {
 
 interface Props {
   params: { id: string; slug?: string[] };
-  searchParams: { kind?: string; look?: string; candidate?: string };
+  searchParams: { kind?: string; look?: string; candidate?: string; universe?: string };
 }
 
 export default async function HubPreview({ params, searchParams }: Props) {
@@ -121,7 +127,10 @@ export default async function HubPreview({ params, searchParams }: Props) {
   // The tokens actually painted. A slot nobody offered falls back to the stored skin rather
   // than to nothing: an unknown number is not a design, and rendering unstyled would read as a
   // broken page rather than as a bad link.
-  const skin = candidate ?? client.skin;
+  // ‼️ `?universe=` SHOWS ONE OF THE SIX ON THIS CLIENT WITHOUT STORING IT (2026-09-16), so the universes can be
+  // compared before any screenshot. `universe <name>` in the step thread is what keeps one.
+  const universeParam = isUniverse(searchParams.universe) ? searchParams.universe : null;
+  const skin = universeParam ? universeSkin(universeParam, client.skin ?? EMPTY_SKIN, "preview") : (candidate ?? client.skin);
 
   // ‼️ AND THE CANDIDATE'S ACCENT AND BODY FONT, LAID OVER THE THEME, THROUGH THE SAME FUNCTION
   // THE PICK STORES THEM WITH. A pick writes the reference's accent into the theme; a preview that
@@ -145,7 +154,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
 
   return (
     <div
-      className={hubRootClass(skin)}
+      className={`${hubRootClass(skin)} ${universeFontClass(skin?.universe)}`.trim()}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(skin), ...themeStyle(theme) }}
@@ -158,10 +167,17 @@ export default async function HubPreview({ params, searchParams }: Props) {
         look={look}
         candidateSet={candidateSet}
         candidateSlot={candidate?.slot ?? null}
+        universe={universeParam}
         reviewDestinations={destinationState(
           (client.reviewWorkflow ?? null) as Record<string, unknown> | null,
           client.reviewDestinationPrimary ?? null
         )}
+      />
+      <UniverseTop
+        universe={kind === "reviews" ? null : skin?.universe}
+        name={client.displayName}
+        where={[client.city, client.state].filter(Boolean).join(", ") || null}
+        pages={-1}
       />
       <div className="hub-wrap">
         {kind === "reviews" ? (
@@ -172,6 +188,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
           <PreviewIndex clientId={params.id} host={host} client={client} />
         )}
       </div>
+      <UniverseBand universe={kind === "reviews" ? null : skin?.universe} name={client.displayName} where={null} pages={-1} />
     </div>
   );
 }
@@ -192,7 +209,10 @@ async function PreviewIndex({
     await planLinkRows(clientId)
   );
 
-  return <HubIndexBody client={client} host={host} pages={pages} linkBase={previewBase(clientId)} />;
+  // ‼️ SAMPLE PAGES UNDER THE REAL ONES WHEN THERE ARE FEW (2026-09-16). An almost empty page cannot show a
+  // design; the banner says the Latin is a sample, and nothing here is ever on a client's domain.
+  const shown = pages.length < GHOST_BELOW ? [...pages, ...GHOST_PAGES] : pages;
+  return <HubIndexBody client={client} host={host} pages={shown} linkBase={previewBase(clientId)} />;
 }
 
 /** Page links inside the preview stay inside the preview. */
@@ -212,6 +232,10 @@ async function PreviewAnswer({
   client: Awaited<ReturnType<typeof loadClientForPreview>> & object;
 }) {
   const all = await listAllForBoard(clientId);
+  const ghost = ghostAnswerPage(slug);
+  if (ghost && !all.some((p) => p.slug === slug)) {
+    return <HubAnswerBody client={client} host={host} page={ghost} linkBase={previewBase(clientId)} homeHref={`/dashboard/clients/${clientId}/preview`} />;
+  }
   const page = all.find((p) => p.slug === slug);
   if (!page) notFound();
 
@@ -252,6 +276,7 @@ function PreviewBanner({
   candidateSet,
   candidateSlot,
   reviewDestinations,
+  universe,
 }: {
   clientId: string;
   kind: "hub" | "reviews";
@@ -261,6 +286,7 @@ function PreviewBanner({
   candidateSet: SkinCandidateSet | null;
   candidateSlot: number | null;
   reviewDestinations: ReturnType<typeof destinationState>;
+  universe: string | null;
 }) {
   const other = kind === "reviews" ? "hub" : "reviews";
 
@@ -330,7 +356,31 @@ function PreviewBanner({
         </span>
       )}
       {kind === "hub" && (
-        <span style={{ color: "rgba(255,255,255,0.5)" }}>Drafts are shown; the live hub omits them.</span>
+        <span style={{ color: "rgba(255,255,255,0.5)" }}>Drafts are shown; the live hub omits them. {GHOST_NOTICE}</span>
+      )}
+      {kind === "hub" && (
+        <span style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "baseline", width: "100%" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>universes:</span>
+          {UNIVERSES.map((u) => (
+            <a
+              key={u.key}
+              href={`/dashboard/clients/${clientId}/preview?universe=${u.key}`}
+              title={u.blurb}
+              style={{
+                color: universe === u.key ? "#fff" : "#F5A623",
+                fontWeight: universe === u.key ? 700 : 400,
+                textDecoration: universe === u.key ? "none" : "underline",
+              }}
+            >
+              {u.name}
+            </a>
+          ))}
+          {universe && (
+            <span style={{ color: "rgba(255,255,255,0.5)" }}>
+              not stored. Type <code style={{ color: "#fff" }}>universe {universe}</code> in the step thread to keep it.
+            </span>
+          )}
+        </span>
       )}
       {kind === "reviews" && (
         <span style={{ color: "rgba(255,255,255,0.5)" }}>

@@ -23,11 +23,21 @@ const TITLES = [
   "Nemo enim ipsam voluptatem quia voluptas sit aspernatur?",
 ];
 
+// The line under each title, different from it, so a design's two text sizes can both be judged.
+const QUESTIONS = [
+  "Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse?",
+  "At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis?",
+  "Nam libero tempore, cum soluta nobis est eligendi optio cumque nihil?",
+  "Temporibus autem quibusdam et aut officiis debitis aut rerum necessitatibus?",
+  "Itaque earum rerum hic tenetur a sapiente delectus, ut aut reiciendis?",
+  "Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet?",
+];
+
 export const GHOST_PAGES: HubBodyPage[] = TITLES.map((t, i) => ({
   id: `ghost-${i + 1}`,
   slug: `lorem-ipsum-${i + 1}`,
   title: t,
-  question: t,
+  question: QUESTIONS[i],
 }));
 
 const BODY = `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus, posuere velit aliquet. Nullam quis risus eget urna mollis ornare vel eu leo.

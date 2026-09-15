@@ -1,9 +1,16 @@
-// Three token sets from one reading of a screenshot.
+// Three design universes from one reading of a screenshot.
 //
 // Matthew: upload an image of the ideal page, get three variations back, pick one, and that pick
 // becomes the design every later page for that client is drafted against.
 //
-// ‼️ THREE TOKEN SETS. NEVER THREE LAYOUTS, AND skin-vision.ts's HEADER IS THE REASON.
+// ‼️ THREE UNIVERSES SINCE 2026-09-16, NOT THREE TOKEN SETS. Matthew: "all the adjuster does is change the font
+// and change the colors ... I want to see years of difference with each preview option." The read now decides
+// which universe is CLOSEST to the reference and the other two are the furthest from it and from each other
+// (universes.ts threeUniverses). The reference's accent and body face still go to the theme on a pick, so all
+// three wear the client's colour. What follows below is the history of the token-set version, kept because
+// its reasoning about the read (one call, taken literally, gated by readSkin) still holds.
+//
+// (was) THREE TOKEN SETS. NEVER THREE LAYOUTS, AND skin-vision.ts's HEADER IS THE REASON.
 //
 //   "IT RETURNS TOKENS. IT CANNOT RETURN MARKUP, COPY OR A LAYOUT, AND THE SCHEMA IS WHY.
 //    SkinRead has no field for HTML, no field for a headline, no field for a section order and
@@ -41,6 +48,7 @@ import {
   type StoredSkin,
 } from "./skin";
 import type { SkinRead } from "./skin-vision";
+import { axesOfRead, threeUniverses, universeInfo, type HubUniverse } from "./universes";
 import { faceStack, safeFace, type HubFace } from "./faces";
 import {
   mixHex,
@@ -131,6 +139,7 @@ function contrastTemplate(primary: HubTemplate, sibling: HubTemplate): HubTempla
 function baseSkinFrom(read: SkinRead): HubSkin {
   return {
     template: read.template,
+    universe: null,
     bg: read.bg,
     fg: read.fg,
     muted: read.muted,
@@ -175,6 +184,59 @@ function baseSkinFrom(read: SkinRead): HubSkin {
  * different answer to this one. The three differ in shape, never in what was read.
  */
 export function skinVariants(read: SkinRead, by: string): SkinCandidate[] {
+  const now = new Date().toISOString();
+
+  // ‼️ A UNIVERSE OWNS ITS GROUND, ITS TYPE AND ITS SHAPE, so a universe candidate carries none of the read's
+  // colours, faces or traits: laid over a universe they would flatten it back into the reference, which is
+  // the "same page, different tint" Matthew rejected. The template is kept as the fallback look.
+  const universes = threeUniverses(axesOfRead(read));
+  return universes.map((universe, i) => {
+    const info = universeInfo(universe);
+    const validated = readSkin({
+      ...EMPTY_UNIVERSE_SKIN,
+      template: read.template,
+      universe,
+      source: "screenshot",
+      sourceNote: read.reading,
+      updatedAt: now,
+      updatedBy: by,
+    });
+    const why = i === 0 ? "closest to the reference" : i === 1 ? "the furthest from it" : "a third world again";
+    return { ...validated, slot: i + 1, blurb: `${info.name}, ${why}: ${info.blurb}` };
+  });
+}
+
+/** Every candidate for one named universe, for `universe <name>` and the preview's universe links. */
+export function universeSkin(universe: HubUniverse, base: StoredSkin, by: string): StoredSkin {
+  return readSkin({ ...EMPTY_UNIVERSE_SKIN, template: base.template, universe, source: "template", updatedAt: new Date().toISOString(), updatedBy: by });
+}
+
+const EMPTY_UNIVERSE_SKIN = {
+  bg: null,
+  fg: null,
+  muted: null,
+  faint: null,
+  rule: null,
+  card: null,
+  band: null,
+  bandFg: null,
+  headingFamily: null,
+  headingFace: null,
+  subheadingFace: null,
+  labelFace: null,
+  nav: null,
+  hero: null,
+  surface: null,
+  headingScale: null,
+  headingWeight: null,
+  headingTracking: null,
+  radius: null,
+  measure: null,
+  baseSize: null,
+};
+
+/** The token-set variants this file used to offer, kept for `template` flows and the old probes. */
+export function tokenVariants(read: SkinRead, by: string): SkinCandidate[] {
   const base = baseSkinFrom(read);
   const now = new Date().toISOString();
 

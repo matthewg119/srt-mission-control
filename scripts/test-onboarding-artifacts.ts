@@ -89,6 +89,7 @@ import {
   candidateAt,
   readCandidateSet,
   skinVariants,
+  tokenVariants,
 } from "../src/lib/hub/skin-variants";
 import fs from "node:fs";
 import path from "node:path";
@@ -1578,7 +1579,9 @@ eq(
     accentSuggestion: "#0a7c6a",
   };
 
-  const variants = skinVariants(read, "test");
+  // ‼️ THE TOKEN-SET VARIANTS ARE tokenVariants SINCE 2026-09-16. skinVariants offers three UNIVERSES now (checked
+  // right after this block); the contract below about reading a reference literally still holds for these.
+  const variants = tokenVariants(read, "test");
   eq("three candidates", variants.length, 3);
   eq("numbered from one", variants.map((v) => v.slot), [1, 2, 3]);
   ok("each one says what it is", variants.every((v) => v.blurb.length > 8));
@@ -1615,7 +1618,7 @@ eq(
 
   // A read with nothing but a template still produces three usable designs rather than three
   // copies of the default: the variation is the template plus the shape, not just the colours.
-  const bare = skinVariants(
+  const bare = tokenVariants(
     { ...read, bg: null, fg: null, muted: null, faint: null, rule: null, card: null, headingFamily: null, radius: null, measure: null, baseSize: null },
     "test"
   );
@@ -1628,6 +1631,18 @@ eq(
   // not "no corners". Deriving from 0 would make the SOFTER variant squarer than the one it
   // varies, which looks like a design opinion and is a bug.
   ok("softer is rounder than the rendered default", (bare[1]?.radius ?? 0) > 8);
+
+  // ── Three universes, not three tints (Matthew, 2026-09-15) ─────────────────
+  const worlds = skinVariants(read, "test");
+  eq("three universes are offered", worlds.length, 3);
+  ok("each candidate is a universe", worlds.every((w) => typeof w.universe === "string"));
+  eq("and no two are the same universe", new Set(worlds.map((w) => w.universe)).size, 3);
+  ok("a universe candidate carries no read ground, which would flatten it back into the reference", worlds.every((w) => w.bg === null && w.fg === null));
+  ok("each blurb names its universe", worlds.every((w) => /Blueprint|Atelier|Magazine|Brutalist|Noir|Botanica/.test(w.blurb)));
+  ok("no banned dash in a universe blurb", !worlds.some((w) => hasBannedDash(w.blurb)));
+  eq("the same reference always offers the same three", skinVariants(read, "again").map((w) => w.universe), worlds.map((w) => w.universe));
+  const dark = skinVariants({ ...read, bg: "#07090c", fg: "#e8e8e8" }, "test");
+  eq("a dark reference is closest to Noir", dark[0]?.universe, "noir");
 
   // The round trip through storage. Anything malformed is nothing, because a half-read set sends
   // you back to the screenshot, which is where you would have to go anyway.
@@ -3302,7 +3317,7 @@ import * as visionT from "../src/lib/hub/skin-vision";
     radius: 10, measure: 48, baseSize: 16, accentSuggestion: "#2dd4bf",
     headingFace: "system" as const, subheadingFace: "system" as const, labelFace: "mono" as const, bodyFace: "system" as const,
   };
-  for (const v of variantsT.skinVariants(facedRead, "test")) {
+  for (const v of variantsT.tokenVariants(facedRead, "test")) {
     eq(`candidate ${v.slot} keeps the heading face that was read`, v.headingFace, "system");
     eq(`candidate ${v.slot} keeps the label face that was read`, v.labelFace, "mono");
   }
@@ -3370,7 +3385,7 @@ import * as visionT from "../src/lib/hub/skin-vision";
   eq("and 'none' is null", shapedCoerce.surface, null);
   eq("an absent trait is null, not undefined", shapedCoerce.headingScale, null);
 
-  for (const v of variantsT.skinVariants({ ...facedRead, hero: "centered", nav: "pill", surface: "glow" }, "test")) {
+  for (const v of variantsT.tokenVariants({ ...facedRead, hero: "centered", nav: "pill", surface: "glow" }, "test")) {
     eq(`candidate ${v.slot} keeps the masthead that was read`, v.hero, "centered");
     eq(`candidate ${v.slot} keeps the navigation that was read`, v.nav, "pill");
     eq(`candidate ${v.slot} keeps the surface that was read`, v.surface, "glow");

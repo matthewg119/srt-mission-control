@@ -54,6 +54,8 @@ import {
   type SkinCandidate,
   type SkinCandidateSet,
 } from "@/lib/hub/skin-variants";
+import { UNIVERSES, isUniverse, universeInfo, type HubUniverse } from "@/lib/hub/universes";
+import { universeSkin } from "@/lib/hub/skin-variants";
 import type { ClaudeImageInput } from "@/lib/claude-calls";
 import { faceName, type HubFace } from "@/lib/hub/faces";
 import type { ReferenceProvenance } from "@/lib/hub/theme";
@@ -330,6 +332,17 @@ function previewLines(clientId: string): string[] {
   ];
 }
 
+/** One universe's preview link, shown before anything is stored. */
+export function universePreviewUrl(clientId: string, universe: HubUniverse): string {
+  const base = designPreviewUrl(clientId);
+  return `${base}${base.includes("?") ? "&" : "?"}universe=${universe}`;
+}
+
+/** All six universes, one line each with a link, so they can be compared without a screenshot. */
+export function universeMenu(clientId: string): string[] {
+  return UNIVERSES.map((u) => `  • *${u.name}* (\`universe ${u.key}\`): ${u.blurb}. ${universePreviewUrl(clientId, u.key)}`);
+}
+
 /** One candidate's preview link. `candidate` is validated on the way in, never interpolated raw. */
 export function candidatePreviewUrl(clientId: string, slot: number, kind: "hub" | "reviews" = "hub"): string {
   const base = designPreviewUrl(clientId, kind);
@@ -375,7 +388,9 @@ function candidateLines(clientId: string, set: SkinCandidateSet): string[] {
   lines.push("");
 
   for (const candidate of set.candidates) {
-    lines.push(`*${candidate.slot}. ${templateInfo(candidate.template).name}:* ${candidate.blurb}`);
+    lines.push(
+      `*${candidate.slot}. ${candidate.universe ? universeInfo(candidate.universe).name : templateInfo(candidate.template).name}:* ${candidate.blurb}`
+    );
     lines.push(`    ${skinLine(candidate)}`);
     lines.push(`    Hub: ${candidatePreviewUrl(clientId, candidate.slot)}`);
     lines.push(`    Reviews: ${candidatePreviewUrl(clientId, candidate.slot, "reviews")}`);
@@ -399,8 +414,8 @@ function candidateLines(clientId: string, set: SkinCandidateSet): string[] {
       "the theme, which is what [Done] is waiting on. Every page drafted for this client after " +
       `that is rendered in it.${brandNote}`,
     "",
-    "Or paste another reference to replace these three, or name one of the four by hand:",
-    templateMenu(),
+    "Or paste another reference to replace these three, or pick any universe by hand (each link shows it on this client):",
+    ...universeMenu(clientId),
   );
 
   return lines;
@@ -472,7 +487,9 @@ export async function designSection(clientId: string): Promise<string[]> {
   const skin = await loadSkin(clientId);
   return [
     skinLine(skin),
-    "*Do not like how it looks?* Reply in this thread:",
+    "*Six design universes, each a different world, shown on this client with sample text:*",
+    ...universeMenu(clientId),
+    "`universe <name>` in this thread keeps one. The plain templates still work too:",
     templateMenu(),
     "Or paste a screenshot of a page whose look you want. I will read the colours, the accent, " +
       "the fonts, the masthead, the navigation style, the background treatment, the corners, " +
@@ -576,6 +593,26 @@ export async function handleSkinThreadReply(input: {
         ? candidateLines(input.clientId, set).join("\n")
         : ":warning: There is nothing on offer to pick from yet. Paste a screenshot of the page " +
           "you want it to look like, or name one of the four templates:\n" + templateMenu(),
+    };
+  }
+
+  // `universe blueprint`: a whole design world, stored as the skin (un-confirmed, like every skin write).
+  const universeCmd = text.match(/^universe\s+([a-z]+)$/i);
+  if (universeCmd || /^universes?$/i.test(text)) {
+    const wanted = (universeCmd?.[1] ?? "").toLowerCase();
+    if (!isUniverse(wanted)) {
+      return { message: ["*The six universes*, each linked on this client:", ...universeMenu(input.clientId)].join("\n") };
+    }
+    const current = await loadSkin(input.clientId);
+    const res = await writeSkin(input.clientId, universeSkin(wanted, current, input.by), input.by);
+    if (!res.ok) return { message: `:warning: Could not set the universe: ${res.error}` };
+    const info = universeInfo(wanted);
+    return {
+      message: [
+        `:globe_with_meridians: *${info.name}* is this client's design now: ${info.blurb}.`,
+        "The theme is un-confirmed again, the same as any design change. Confirm it on the board when it looks right.",
+        ...previewLines(input.clientId),
+      ].join("\n"),
     };
   }
 
