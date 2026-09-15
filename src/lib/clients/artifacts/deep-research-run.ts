@@ -351,6 +351,15 @@ const SECTIONS: SectionSpec[] = [
   },
 ];
 
+/**
+ * The section keys in the order the prompt numbers them, so section N is RESEARCH_SECTION_KEYS[N - 1].
+ *
+ * Exported for dataset-spec.ts, which declares which avatar field each numbered section fills and
+ * checks that against this list. Order matters: a section appended here is the next number, which is
+ * why SECTIONS are only ever appended, never inserted (test-onboarding-artifacts.ts asserts it too).
+ */
+export const RESEARCH_SECTION_KEYS: readonly string[] = SECTIONS.map((s) => s.key);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Prompts
 // ─────────────────────────────────────────────────────────────────────────────
