@@ -98,7 +98,7 @@ async function frameContext(
   // ‼️ THE CONCIERGE ROW IS A PREREQUISITE, NOT A NICETY. Minting a page's magnet refuses without
   // it and the drafter cannot resolve the magnet, which is why this step sits after the concierge.
   if (!tenant) missing.push(`the concierge, provisioned at step ${stepNumber("concierge_preview")}`);
-  else if (!anchor) missing.push("an anchor offer: `anchor` in this thread lists the catalogue, `anchor: <key>` sets it");
+  else if (!anchor) missing.push("an anchor offer, picked from the awareness ladder: `ladder` writes it, [Anchor at N] picks the rung");
   if (missing.length || !offer.treatment || !avatar || !anchor?.magnetKey) return { ok: false, missing };
 
   const name = ((client.data?.dba_name as string | null) || (client.data?.legal_name as string | null)) ?? "this business";
@@ -191,6 +191,15 @@ async function proposePreCallPlan(
 
   const pool = await offerPool(clientId);
   if ("error" in pool) return { ok: false, error: pool.error };
+
+  // ‼️ A PERSON PICKS THE PILLAR BEFORE ANY PAGE IS PLANNED (2026-09-16). selectOfferPlan used to choose
+  // it from the scores alone. Supports may still be topped up automatically; the pillar may not.
+  if (!pool.pool.some((p) => p.role === "pillar")) {
+    return {
+      ok: false,
+      error: "no pillar keyword is picked yet. Press a [Pillar] button on the card, or `pillar: <number>` (`pillar: auto` takes the top one).",
+    };
+  }
 
   const kept = plan.rows.filter((r) => r.role && r.status !== "proposed");
   const keptPillar = kept.find((r) => r.role === "pillar") ?? null;
@@ -315,6 +324,17 @@ export async function runPreCallPlan(clientId: string): Promise<AutoResult> {
   // proposes the plan the moment it is set.
   const fc = await frameContext(clientId);
   if (!fc.ok) {
+    // The ladder is the one missing piece this runner can write itself. It is written once, and a person
+    // still picks the rung: the anchor is never set by a runner.
+    const { ladderState, writeLadder } = await import("./anchor-ladder");
+    const st = await ladderState(clientId);
+    if (st.inputs && !st.ladder) {
+      const res = await writeLadder(clientId, "Mission Control");
+      return {
+        ok: true,
+        note: res.ok ? res.lines.join("\n") : `:hourglass: No plan yet. The ladder could not be written: ${res.error}`,
+      };
+    }
     return { ok: true, note: `:hourglass: No plan yet. Waiting on: ${fc.missing.join("; ")}.` };
   }
 
@@ -712,11 +732,14 @@ export async function preCallPagesCardLines(clientId: string): Promise<string[]>
   const anchorTitle = fc.ok ? fc.ctx.anchor.title : null;
 
   if (rows.length === 0) {
+    // ‼️ THE CARD WALKS THE THREE DECISIONS IN ORDER (2026-09-16). It used to say "`anchor` lists the
+    // catalogue", and Matthew asked whether he was supposed to come up with the anchor himself.
+    const { step21SetupLines } = await import("./anchor-ladder");
+    void stepNumber;
     return [
-      "*No plan yet.* It is proposed here by itself once these exist:",
-      ...(fc.ok ? [`  • the keyword set approved at step ${stepNumber("keyword_set")}`] : fc.missing.map((m) => `  • ${m}`)),
+      "*No plan yet.* Three decisions come first, in this order, and the seven pages are planned around them.",
       "",
-      "`anchor` lists the catalogue, `anchor: <key>` sets the anchor and proposes the plan.",
+      ...(await step21SetupLines(clientId)),
     ];
   }
 

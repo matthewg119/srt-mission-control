@@ -15,7 +15,14 @@ import { supabaseAdmin } from "@/lib/db";
 import { normalizePhrase } from "./phrase-quality";
 import type { StoredOffer } from "./offers";
 
-export type DocumentKind = "sales_letter" | "deep_research" | "avatar_sheet" | "short_offer" | "necessary_beliefs";
+export type DocumentKind =
+  | "sales_letter"
+  | "deep_research"
+  | "avatar_sheet"
+  | "short_offer"
+  | "necessary_beliefs"
+  /** Step 21: one claim, risk reversal and anchor per awareness stage, for one offer. offer-ladder.ts. */
+  | "awareness_ladder";
 export type DocumentSource = "client_site" | "drafted" | "pasted";
 
 export interface DocumentFault {
@@ -44,7 +51,7 @@ export interface AudienceDocument {
 
 /** The rule the table's check constraint enforces, in code. */
 export function kindBelongsToOffer(kind: DocumentKind): boolean {
-  return kind === "sales_letter" || kind === "short_offer" || kind === "necessary_beliefs";
+  return kind === "sales_letter" || kind === "short_offer" || kind === "necessary_beliefs" || kind === "awareness_ladder";
 }
 
 /** A short id a person can type back, the first eight characters of the uuid. */

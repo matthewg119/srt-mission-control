@@ -131,3 +131,37 @@ alter table public.question_bank add constraint question_bank_source_check
   check (source in ('harvest', 'deep_research', 'intake', 'keywords', 'seed', 'sales_call'));
 
 create index if not exists question_bank_vertical_kind on public.question_bank (vertical, kind) where excluded_at is null;
+
+
+-- =====================================================================
+-- C. THE AWARENESS LADDER AT STEP 21
+-- =====================================================================
+--
+-- Matthew asked whether he was supposed to come up with the anchor offer himself. Step 21 now writes a
+-- ladder for the locked offer (one claim, risk reversal and anchor per stage of awareness), a person picks
+-- the rung, and the pillar and supports are picked from the approved keywords before a page is planned.
+
+alter table public.client_offers add column if not exists guarantee text;
+alter table public.client_offers add column if not exists guarantee_set_at timestamptz;
+alter table public.client_offers add column if not exists anchor_stage smallint;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'client_offers_anchor_stage_check') then
+    alter table public.client_offers add constraint client_offers_anchor_stage_check
+      check (anchor_stage is null or anchor_stage between 1 and 5);
+  end if;
+end $$;
+
+comment on column public.client_offers.guarantee is
+  'The risk reversal as the client will honour it, `guarantee:` in the prep call or step 21 thread. The '
+  'awareness ladder may restate this and nothing else; with it empty, no rung guarantees anything.';
+comment on column public.client_offers.anchor_stage is
+  'The awareness stage (5 unaware to 1 most aware) whose ladder rung the anchor was picked from at step 21.';
+
+-- The ladder is an offer document. Both checks are replaced by strictly wider ones.
+alter table public.audience_documents drop constraint if exists audience_documents_kind_check;
+alter table public.audience_documents add constraint audience_documents_kind_check
+  check (kind in ('sales_letter', 'deep_research', 'avatar_sheet', 'short_offer', 'necessary_beliefs', 'awareness_ladder'));
+alter table public.audience_documents drop constraint if exists audience_documents_offer_kind;
+alter table public.audience_documents add constraint audience_documents_offer_kind
+  check ((kind in ('sales_letter', 'short_offer', 'necessary_beliefs', 'awareness_ladder')) = (offer_id is not null));

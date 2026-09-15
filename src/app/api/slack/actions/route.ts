@@ -292,6 +292,19 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         clientId: action.value ?? "",
       });
+    // ── Step 21: the awareness ladder's rung, then the pillar keyword ──
+    case "ladder_write":
+    case "ladder_pick":
+    case "kw_pillar":
+    case "kw_supports_auto":
+      return step21Action({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        value: action.value ?? "",
+      });
     // ── Where the review page's Post button sends a customer ──
     case "review_link_open":
       return reviewLinkOpenAction({
@@ -2091,6 +2104,50 @@ async function stepRingOutAction(args: {
     })().catch((e) => console.error("[slack/actions] step_ringout failed:", e))
   );
 
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Step 21's buttons. Every one is the same function as its thread command, so the card and the thread
+ * cannot disagree about what picking a rung does.
+ */
+async function step21Action(args: {
+  actionId: string;
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId, arg] = args.value.split(":");
+  if (!clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const ladder = await import("@/lib/clients/anchor-ladder");
+      let text: string;
+      if (args.actionId === "ladder_write") {
+        await slack.postThreadReply(args.channel, args.slackTs, ":hourglass_flowing_sand: Writing the awareness ladder. About a minute.");
+        const res = await ladder.writeLadder(clientId, actor);
+        text = res.ok ? res.lines.join("\n") : `:warning: No ladder: ${res.error}`;
+      } else if (args.actionId === "ladder_pick") {
+        const res = await ladder.pickRung(clientId, Number(arg), actor);
+        text = res.ok ? res.message : `:warning: ${res.error}`;
+      } else if (args.actionId === "kw_pillar") {
+        text = (await ladder.pickPillar(clientId, arg ?? "", actor)).message;
+      } else {
+        text = (await ladder.pickSupports(clientId, "auto", actor)).message;
+      }
+      await slack.postThreadReply(args.channel, args.slackTs, text);
+      if (args.actionId === "kw_pillar" || args.actionId === "kw_supports_auto") {
+        const note = await ladder.proposeWhenPicked(clientId);
+        if (note) await slack.postThreadReply(args.channel, args.slackTs, note);
+      }
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await postStep(clientId, "pre_call_pages");
+    })().catch((e) => console.error("[slack/actions] step 21 action failed:", e))
+  );
   return NextResponse.json({ ok: true });
 }
 

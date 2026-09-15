@@ -103,6 +103,18 @@ export interface StoredOffer {
   price: string | null;
   priceSetAt: string | null;
 
+  /**
+   * The risk reversal as the client will actually honour it, `guarantee:` on the prep call or at step 21.
+   *
+   * ‼️ THE LADDER MAY ONLY PROMISE WHAT THIS SAYS (2026-09-16). offer-ladder.ts refuses a rung whose claim
+   * or risk reversal guarantees anything while this is empty: a guarantee a model invented is a promise
+   * the client never made, printed on pages under their name.
+   */
+  guarantee: string | null;
+  guaranteeSetAt: string | null;
+  /** The awareness stage (5 unaware to 1 most aware) whose rung was picked as the anchor at step 21. */
+  anchorStage: 1 | 2 | 3 | 4 | 5 | null;
+
   // ── Where it lives. Null on an offer read from the deprecated clients.offer mirror. ──
   /** client_offers.id. */
   id: string | null;
@@ -128,6 +140,9 @@ export const EMPTY_OFFER: StoredOffer = {
   outcomeSetAt: null,
   price: null,
   priceSetAt: null,
+  guarantee: null,
+  guaranteeSetAt: null,
+  anchorStage: null,
   id: null,
   audienceId: null,
 };
@@ -229,9 +244,17 @@ export function readOffer(raw: unknown): StoredOffer {
     outcomeSetAt: text(bag.outcomeSetAt),
     price: text(bag.price),
     priceSetAt: text(bag.priceSetAt),
+    guarantee: text(bag.guarantee),
+    guaranteeSetAt: text(bag.guaranteeSetAt),
+    anchorStage: stageOrNull(bag.anchorStage),
     id: null,
     audienceId: null,
   };
+}
+
+function stageOrNull(v: unknown): 1 | 2 | 3 | 4 | 5 | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 5 ? (n as 1 | 2 | 3 | 4 | 5) : null;
 }
 
 /** A client_offers row as a StoredOffer. Same drop-never-repair discipline as readOffer. */
@@ -252,6 +275,9 @@ function offerFromRow(row: Record<string, unknown>): StoredOffer {
     outcomeSetAt: text(row.outcome_set_at),
     price: text(row.price),
     priceSetAt: text(row.price_set_at),
+    guarantee: text(row.guarantee),
+    guaranteeSetAt: text(row.guarantee_set_at),
+    anchorStage: stageOrNull(row.anchor_stage),
     id: text(row.id),
     audienceId: text(row.audience_id),
   };
@@ -274,6 +300,9 @@ function rowFromOffer(offer: StoredOffer): Record<string, unknown> {
     outcome_set_at: offer.outcomeSetAt,
     price: offer.price,
     price_set_at: offer.priceSetAt,
+    guarantee: offer.guarantee,
+    guarantee_set_at: offer.guaranteeSetAt,
+    anchor_stage: offer.anchorStage,
     updated_at: new Date().toISOString(),
   };
 }
@@ -763,6 +792,9 @@ export async function unlockOffer(clientId: string): Promise<{ ok: true; offer: 
     outcomeSetAt: null,
     price: null,
     priceSetAt: null,
+    guarantee: null,
+    guaranteeSetAt: null,
+    anchorStage: null,
   };
 
   return writeOffer(clientId, next);
@@ -806,7 +838,7 @@ export async function setOfferTerms(args: {
  */
 export async function setOfferDetail(args: {
   clientId: string;
-  field: "outcome" | "price";
+  field: "outcome" | "price" | "guarantee";
   value: string;
 }): Promise<{ ok: true; offer: StoredOffer; changed: boolean } | { ok: false; error: string }> {
   const value = text(args.value);
@@ -816,7 +848,9 @@ export async function setOfferDetail(args: {
       error:
         args.field === "outcome"
           ? "that is not an outcome. In plain words, what they get: `outcome: more appointments`."
-          : "that is not a price. As they state it: `price: $399 per session`.",
+          : args.field === "price"
+            ? "that is not a price. As they state it: `price: $399 per session`."
+            : "that is not a guarantee. As the client will honour it: `guarantee: free until 5 AI inquiries, then $499/month`.",
     };
   }
   if (hasBannedDash(value)) {
@@ -832,11 +866,14 @@ export async function setOfferDetail(args: {
   }
 
   const now = new Date().toISOString();
-  const before = args.field === "outcome" ? current.outcomePromise : current.price;
+  const before =
+    args.field === "outcome" ? current.outcomePromise : args.field === "price" ? current.price : current.guarantee;
   const next: StoredOffer =
     args.field === "outcome"
       ? { ...current, outcomePromise: value, outcomeSetAt: now }
-      : { ...current, price: value, priceSetAt: now };
+      : args.field === "price"
+        ? { ...current, price: value, priceSetAt: now }
+        : { ...current, guarantee: value, guaranteeSetAt: now };
 
   const saved = await writeOffer(args.clientId, next);
   if (!saved.ok) return saved;
@@ -877,6 +914,18 @@ export async function setAnchorMagnet(args: {
   return writeOffer(args.clientId, next);
 }
 
+/** Record which awareness rung the anchor was picked from. Null clears it. */
+export async function setAnchorStage(args: {
+  clientId: string;
+  stage: 1 | 2 | 3 | 4 | 5 | null;
+}): Promise<{ ok: true; offer: StoredOffer } | { ok: false; error: string }> {
+  const current = await loadOffer(args.clientId);
+  if (args.stage !== null && !isLocked(current)) {
+    return { ok: false, error: "the offer is not locked yet. `offer: <what they sell>` first." };
+  }
+  return writeOffer(args.clientId, { ...current, anchorStage: args.stage });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The thread reply
 //
@@ -889,7 +938,15 @@ export async function setAnchorMagnet(args: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Only in this step's thread. Anywhere else the words are conversation. */
-const OFFER_STEPS = new Set(["offer_locked"]);
+const OFFER_STEPS = new Set(["offer_locked", "pre_call_pages"]);
+
+/**
+ * The commands step 21's thread also takes (2026-09-16). The awareness ladder is written from the outcome,
+ * the price and the guarantee, and asking somebody to scroll back to the prep call's thread to type them
+ * is how they end up typed into the wrong one. `offer:` and `terms:` stay on the prep call: changing
+ * either re-aims the keyword set, which is not something to do from the page plan.
+ */
+const DETAIL_ONLY_STEPS = new Set(["pre_call_pages"]);
 
 const OFFER_PREFIX = /^\s*offer\s*:/i;
 
@@ -941,15 +998,17 @@ interface DirectivePart {
 /** `outcome: more appointments` and `price: $399 per session`, since the client_offers cutover. */
 const OUTCOME_PREFIX = /^\s*outcome\s*:/i;
 const PRICE_PREFIX = /^\s*price\s*:/i;
+const GUARANTEE_PREFIX = /^\s*guarantee\s*:/i;
 
 /** The one-line commands of the offer thread. Each is one message. */
-export type OfferCommandKind = "offer" | "terms" | "outcome" | "price";
+export type OfferCommandKind = "offer" | "terms" | "outcome" | "price" | "guarantee";
 
 const COMMAND_PREFIXES: ReadonlyArray<readonly [OfferCommandKind, RegExp]> = [
   ["offer", OFFER_PREFIX],
   ["terms", TERMS_PREFIX],
   ["outcome", OUTCOME_PREFIX],
   ["price", PRICE_PREFIX],
+  ["guarantee", GUARANTEE_PREFIX],
 ];
 
 /** What one Slack message in the offer thread is, read by its FIRST line. */
@@ -1009,16 +1068,18 @@ export function readOfferCommand(text: string): OfferCommand {
 }
 
 /** `outcome:` or `price:`, answered in the same shape as `terms:`. */
-async function detailReply(clientId: string, field: "outcome" | "price", raw: string): Promise<DirectivePart> {
+async function detailReply(clientId: string, field: "outcome" | "price" | "guarantee", raw: string): Promise<DirectivePart> {
   const res = await setOfferDetail({ clientId, field, value: raw });
   if (!res.ok) return { message: `:warning: Not saved: ${res.error}` };
-  const value = field === "outcome" ? res.offer.outcomePromise : res.offer.price;
+  const value = field === "outcome" ? res.offer.outcomePromise : field === "price" ? res.offer.price : res.offer.guarantee;
   return {
     message: [
-      `:white_check_mark: *${field === "outcome" ? "Outcome" : "Price"} saved:* ${value}.`,
+      `:white_check_mark: *${field === "outcome" ? "Outcome" : field === "price" ? "Price" : "Guarantee"} saved:* ${value}.`,
       field === "outcome"
         ? "Headlines and CTAs for this audience promise this, and the sales letter is written toward it."
-        : "Price pages and the sales letter read this as the client states it.",
+        : field === "price"
+          ? "Price pages and the sales letter read this as the client states it."
+          : "The awareness ladder may promise exactly this and nothing more. `ladder` at step 21 rewrites it with the guarantee in.",
       !res.changed ? "_The same as before, so nothing downstream changes._" : "",
     ]
       .filter(Boolean)
@@ -1064,6 +1125,7 @@ export async function handleOfferThreadReply(input: {
   // ‼️ STILL null ON A MISS. Only a FIRST line starting `offer:` or `terms:` is a command; anything
   // else, including a pasted document with such a line further down, falls through untouched.
   if (cmd.kind === "none") return null;
+  if (DETAIL_ONLY_STEPS.has(input.stepKey) && (cmd.kind === "offer" || cmd.kind === "terms")) return null;
 
   if (cmd.kind === "combined") {
     const named = [...new Set(cmd.commands)].map((c) => `\`${c}:\``).join(" and ");
@@ -1077,7 +1139,7 @@ export async function handleOfferThreadReply(input: {
   const part =
     cmd.kind === "terms"
       ? await termsReply(input.clientId, cmd.value)
-      : cmd.kind === "outcome" || cmd.kind === "price"
+      : cmd.kind === "outcome" || cmd.kind === "price" || cmd.kind === "guarantee"
         ? await detailReply(input.clientId, cmd.kind, cmd.value)
         : await offerLockReply(input.clientId, cmd.value, input.by);
 

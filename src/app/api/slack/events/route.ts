@@ -1134,6 +1134,12 @@ export async function POST(request: NextRequest) {
           const { handleReviewLinkThreadReply } = await import("@/lib/clients/review-link");
           const said =
             (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            (await (await import("@/lib/clients/anchor-ladder")).handleLadderThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText })) ??
             (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??

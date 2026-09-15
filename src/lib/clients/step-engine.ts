@@ -1819,6 +1819,12 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
     ];
   }
 
+  // Step 21's decisions as buttons: a rung to anchor at, then a pillar keyword. See anchor-ladder.ts.
+  if (step.key === "pre_call_pages") {
+    const { step21Actions } = await import("./anchor-ladder");
+    return step21Actions(c.id).catch(() => []);
+  }
+
   if (step.key === "review_tool_preview" || step.key === "review_card_pdf") {
     return [{ label: "Paste review link", actionId: "review_link_open", value: c.id }];
   }
