@@ -364,9 +364,17 @@ const row: PlanRow = {
   keywordCategory: null,
   headline: null,
   secondaryKeywords: null,
+  awarenessEntry: 4,
+  awarenessTarget: 3,
 };
 const card = formatPlan([row, { ...row, id: "y", rank: 2, status: "approved" }], "The AI Visibility Scan");
 check("no dash in the rendered card", !hasBannedDash(card), card);
+// W4: the stages are shown by NAME as well as number, because 5-to-1 reads backwards to anybody
+// who has not been told Matthew's numbering.
+check("the card says where the reader starts and where the page leaves them",
+  card.includes("Reader: problem aware (4), leaves solution aware (3)"), card);
+check("a row with no stages prints no stage line",
+  !formatPlan([{ ...row, awarenessEntry: null, awarenessTarget: null }], null).includes("Reader:"));
 check("the card names the anchor", card.includes("The AI Visibility Scan"));
 const rolesCard = formatPlan([{ ...row, role: "pillar" }, { ...row, id: "z", rank: 2, role: "support" }], null);
 check("a pre-call card labels the pillar and the supports", rolesCard.includes("[Pillar]") && rolesCard.includes("[Support]"));

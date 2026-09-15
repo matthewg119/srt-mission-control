@@ -905,6 +905,8 @@ export interface StoredKeyword extends KeywordCandidate {
   rank: number | null;
   approved: boolean;
   dropped: boolean;
+  /** 5 (unaware) to 1 (most aware), by rule, on insert. Null on a row from before 2026-09-15. */
+  awarenessStage?: 1 | 2 | 3 | 4 | 5 | null;
 }
 
 function csvCell(v: string | number | boolean | null): string {

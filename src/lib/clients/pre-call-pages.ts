@@ -27,6 +27,7 @@ import {
   PLAN_COMMAND,
   PRE_CALL_SUPPORTS,
   approvePlan,
+  awarenessForPage,
   dropPlanRow,
   editPlanTitle,
   formatPlan,
@@ -237,6 +238,7 @@ async function proposePreCallPlan(
     role: item.role,
     pillar_id: pillarId,
     keyword_category: item.category ?? null,
+    ...awarenessForPage(item.question, framed[i].targetKeyword),
     updated_at: now,
   });
 

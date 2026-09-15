@@ -3413,6 +3413,33 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("the supplied path labels by rule and says so", /awarenessOf\(p\.prompt, block\)/.test(suppliedSrc) && /"rule"/.test(suppliedSrc));
   const photoSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "photograph.ts"), "utf8");
   ok("a retest carries the archived label", /awareness: p\.awareness/.test(photoSrc));
+
+  // ── The three artifacts: every column has a writer ─────────────────────────
+  const { awarenessForPage } =
+    require("../src/lib/clients/page-plan") as typeof import("../src/lib/clients/page-plan");
+  eq("a how-it-works page starts solution aware and leaves product aware",
+    awarenessForPage("How much does lip filler cost?", "lip filler cost"), { awareness_entry: 3, awareness_target: 2 });
+  eq("a page for somebody describing their own situation starts problem aware",
+    awarenessForPage("why do i have dark spots on my face", "dark spots"), { awareness_entry: 4, awareness_target: 3 });
+  // ‼️ The QUESTION decides, not the keyword: a pillar's keyword is the offer plus the city, which
+  // reads as a category search whatever the page is for.
+  eq("the question outranks the keyword",
+    awarenessForPage("botox vs dysport which lasts longer", "botox greensboro nc").awareness_entry, 2);
+  eq("a row with no question falls back to its keyword",
+    awarenessForPage("", "botox vs dysport").awareness_entry, 2);
+
+  const kwSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-keywords.ts"), "utf8");
+  eq("both keyword inserts write a stage", (kwSrc.match(/awareness_stage: stageOf\(/g) ?? []).length, 2);
+  ok("the keyword read carries it", /KW_COLUMNS =[\s\S]{0,200}awareness_stage/.test(kwSrc));
+  const planSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "page-plan.ts"), "utf8");
+  ok("the plan insert writes both numbers", /\.\.\.awarenessForPage\(c\.question/.test(planSrc));
+  // ‼️ NOT in PLAN_COLUMNS: one unknown column blanks the whole plan before the migration runs.
+  ok("the plan reads them in their own tolerant select", /select\("id, awareness_entry, awareness_target"\)/.test(planSrc) &&
+    !/const PLAN_COLUMNS =[^;]*awareness/.test(planSrc));
+  const preCallSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "pre-call-pages.ts"), "utf8");
+  ok("the pre-call plan insert writes both numbers", /\.\.\.awarenessForPage\(item\.question/.test(preCallSrc));
+  const headSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-headlines.ts"), "utf8");
+  ok("an approved headline copies its page's numbers", /awareness_entry: stages\.awareness_entry/.test(headSrc));
 }
 
 

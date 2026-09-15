@@ -672,6 +672,25 @@ export async function approveHeadlineForPage(args: {
 
   if (error) return { ok: false, error: error.message };
 
+  // ‼️ A HEADLINE HEADS A READER ONLY ONCE IT HEADS A PAGE, so its awareness numbers are the page's,
+  // copied at this moment. Its own select and its own update, never folded into the two above: one
+  // unknown column fails a whole statement, and an approval must not fail on a database where
+  // docs/2026-09-15-awareness-stages.sql has not run. Missing columns leave the headline unstaged.
+  const { data: stages } = await supabaseAdmin
+    .from("page_plan")
+    .select("awareness_entry, awareness_target")
+    .eq("id", args.planRowId)
+    .eq("client_id", args.clientId)
+    .maybeSingle();
+  if (stages && (stages.awareness_entry != null || stages.awareness_target != null)) {
+    const { error: stageError } = await supabaseAdmin
+      .from("client_headlines")
+      .update({ awareness_entry: stages.awareness_entry, awareness_target: stages.awareness_target })
+      .eq("id", args.headlineId)
+      .eq("client_id", args.clientId);
+    if (stageError) console.error("[client-headlines] awareness not copied:", stageError.message);
+  }
+
   // ‼️ THE PLAN ROW IS WHERE THE PAGE READS IT FROM. page_plan.headline is what becomes the H1
   // and what articleJsonLd puts in `headline`; working_title stays as it was, because it carries
   // the KEYWORD and is the anchor text the pillar links this page with. Two artifacts, two rules,

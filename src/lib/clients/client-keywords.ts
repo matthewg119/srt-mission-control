@@ -11,6 +11,8 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
+import { awarenessOf, isAwarenessStage, type AwarenessStage } from "@/lib/audit-engine/awareness";
+import { blockFor } from "@/lib/audit-engine/supplied-run";
 import { slack } from "@/lib/slack-bot";
 import type { Audience } from "@/lib/concierge/magnets";
 import type { AudienceVocabulary } from "./audiences";
@@ -210,8 +212,21 @@ export function vocabFor(
 // The rows
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ‼️ awareness_stage IS IN THE FLAT LIST ON PURPOSE, matching this file's convention rather than
+// page-plan.ts's tolerant selects: a missing column fails loadKeywords LOUDLY with TABLE_HINT, which
+// names the migration. docs/2026-09-15-awareness-stages.sql runs before the deploy that reads it.
 const KW_COLUMNS =
-  "id, phrase, normalized, category, use, origin, offer_fingerprint, score, rank, currently_named, source_url, approved, dropped_at";
+  "id, phrase, normalized, category, use, origin, offer_fingerprint, score, rank, currently_named, source_url, approved, dropped_at, awareness_stage";
+
+/**
+ * The awareness stage of the person typing a phrase, by the deterministic rule. See awareness.ts.
+ *
+ * No client name is passed to blockFor: a keyword that names the client is a brand query, and the
+ * keyword set is built from what buyers type about the OFFER, so the name check has nothing to find.
+ */
+function stageOf(phrase: string): AwarenessStage {
+  return awarenessOf(phrase, blockFor(phrase, null));
+}
 
 interface LoadedKeywords {
   rows: StoredKeyword[];
@@ -237,6 +252,7 @@ function toStored(r: Record<string, unknown>): StoredKeyword {
     rank: typeof r.rank === "number" ? r.rank : r.rank == null ? null : Number(r.rank),
     approved: r.approved === true,
     dropped: r.dropped_at != null,
+    awarenessStage: isAwarenessStage(r.awareness_stage) ? r.awareness_stage : null,
   };
 }
 
@@ -371,6 +387,7 @@ async function writeMerged(
       currently_named: r.currentlyNamed,
       source_url: r.sourceUrl,
       approved: false,
+      awareness_stage: stageOf(r.phrase),
       updated_at: now,
     });
   }
@@ -997,6 +1014,7 @@ async function addCommand(clientId: string, phrase: string, by: string): Promise
       approved: setApproved,
       approved_at: setApproved ? now : null,
       approved_by: setApproved ? by : null,
+      awareness_stage: stageOf(phrase),
       updated_at: now,
     });
     if (error) return { message: `:warning: Not added: ${error.message}` };

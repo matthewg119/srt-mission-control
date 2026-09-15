@@ -27,6 +27,14 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON } from "@/lib/claude-calls";
+import {
+  AWARENESS_STAGES,
+  awarenessOf,
+  awarenessTarget,
+  isAwarenessStage,
+  type AwarenessStage,
+} from "@/lib/audit-engine/awareness";
+import { blockFor } from "@/lib/audit-engine/supplied-run";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { CTA_MAX, readFrame, type PlannedFrame } from "@/lib/concierge/magnet-drafts";
 import { normalizePhrase, phraseFaults, type PhraseFault } from "./phrase-quality";
@@ -112,6 +120,28 @@ export interface PlanRow {
   headline: string | null;
   /** 3 to 5 approved variations of targetKeyword, each verbatim from client_keywords. */
   secondaryKeywords: string[] | null;
+  /**
+   * Where the reader is when they arrive, 5 (unaware) to 1 (most aware), and where the page leaves
+   * them. LOWER IS CLOSER TO BUYING. Null on a row from before docs/2026-09-15-awareness-stages.sql.
+   */
+  awarenessEntry: AwarenessStage | null;
+  awarenessTarget: AwarenessStage | null;
+}
+
+/**
+ * The two awareness numbers for a page, from the question it answers.
+ *
+ * ‼️ THE QUESTION, NOT THE KEYWORD. The reader arrives carrying the question; the target keyword is
+ * how an engine files the page, and a pillar's is the offer plus the city, which reads as a category
+ * search whatever the page is actually for. The keyword is the fallback for a row with no question.
+ */
+export function awarenessForPage(question: string, targetKeyword: string): {
+  awareness_entry: AwarenessStage;
+  awareness_target: AwarenessStage;
+} {
+  const text = question.trim() || targetKeyword.trim();
+  const entry = awarenessOf(text, blockFor(text, null));
+  return { awareness_entry: entry, awareness_target: awarenessTarget(entry) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -550,6 +580,9 @@ function toPlanRow(r: Record<string, unknown>): PlanRow {
     // Merged on afterwards by withHeadlines, for the blast-radius reason it documents.
     headline: null,
     secondaryKeywords: null,
+    // Merged on afterwards by withAwareness.
+    awarenessEntry: null,
+    awarenessTarget: null,
   };
 }
 
@@ -609,6 +642,29 @@ async function withHeadlines(rows: PlanRow[]): Promise<PlanRow[]> {
 }
 
 /**
+ * The awareness columns, merged a FOURTH tolerant way, for the reason withHeadlines gives for being
+ * third: docs/2026-09-15-awareness-stages.sql lands after the other three, and folding these into
+ * an earlier select would blank that select's columns on a database that has them but not these.
+ * Missing columns read as a plan with no stages yet, which is what it is.
+ */
+async function withAwareness(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, awareness_entry, awareness_target")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.awarenessEntry = isAwarenessStage(extra.awareness_entry) ? extra.awareness_entry : null;
+    row.awarenessTarget = isAwarenessStage(extra.awareness_target) ? extra.awareness_target : null;
+  }
+  return rows;
+}
+
+/**
  * The plan, in rank order, with each page's live status read through page_id.
  *
  * ‼️ A READ FAILURE IS RETURNED, NOT SWALLOWED INTO AN EMPTY PLAN. "No plan" and "the table is not
@@ -630,8 +686,8 @@ export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | 
     };
   }
 
-  const rows = await withHeadlines(
-    await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow))
+  const rows = await withAwareness(
+    await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
   );
   const pageIds = rows.map((r) => r.pageId).filter((id): id is string => Boolean(id));
 
@@ -771,6 +827,7 @@ export async function proposePlan(
         origin: c.origin,
         magnet_frame: framed[i].frame,
         status: "proposed",
+        ...awarenessForPage(c.question, framed[i].targetKeyword),
         updated_at: now,
       }))
     );
@@ -970,6 +1027,14 @@ function statusMark(row: PlanRow): string {
 }
 
 /** The plan as Slack reads it. Pure, so the probe can check it carries no dash. */
+/** "Reader: problem aware (4), leaves solution aware (3)". Names, not just numbers: 5-to-1 reads backwards. */
+function awarenessLine(entry: AwarenessStage, target: AwarenessStage): string {
+  const name = (s: AwarenessStage) => AWARENESS_STAGES.find((x) => x.stage === s)?.name ?? String(s);
+  return entry === target
+    ? `Reader: ${name(entry)} (${entry}), already as close to buying as a page can take them`
+    : `Reader: ${name(entry)} (${entry}), leaves ${name(target)} (${target})`;
+}
+
 export function formatPlan(rows: readonly PlanRow[], anchorTitle: string | null): string {
   if (rows.length === 0) return "No page plan yet. `plan` proposes one.";
 
@@ -986,6 +1051,7 @@ export function formatPlan(rows: readonly PlanRow[], anchorTitle: string | null)
     const role = r.role === "pillar" ? "[Pillar] " : r.role === "support" ? "[Support] " : "";
     lines.push(`*${r.rank}.* ${role}${r.workingTitle}${statusMark(r)}  _(${r.theme})_`);
     lines.push(`      Keyword: \`${r.targetKeyword}\``);
+    if (r.awarenessEntry && r.awarenessTarget) lines.push(`      ${awarenessLine(r.awarenessEntry, r.awarenessTarget)}`);
     lines.push(`      ${r.angle}`);
     if (r.frame) lines.push(`      Pill: "${r.frame.ctaLabel}", ${r.frame.title}`);
   }
