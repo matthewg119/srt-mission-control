@@ -71,7 +71,11 @@ const PENDING: ReadonlyArray<{ path: string; step: string }> = [
   // than a third function" while the type made a third table impossible. categoriesFor() keys on
   // the PRESET now, and derives a set from the audience's own nouns when no preset names one.
   { path: "src/lib/clients/keyword-expansion.ts", step: "6 (DONE: what remains is preset data)" },
-  { path: "src/config/presence-platforms.ts", step: "8 (the presence sweep)" },
+  // ‼️ STEP 8 IS DONE AND THIS FILE STILL SAYS "clinic" ONCE, WHICH IS CORRECT. It is the note on
+  // the NPI Registry row ("Skip cleanly if the clinic has no NPI"): a fact about that platform, and
+  // the platform is now only listed for an audience that names it. The list is platform DATA. What
+  // step 8 removed was every client being swept against it.
+  { path: "src/config/presence-platforms.ts", step: "8 (DONE: what remains is platform data)" },
 ];
 
 /**
@@ -221,6 +225,30 @@ function presets(): void {
   check(
     "nor is the agency",
     !AUDIENCE_PRESETS.aeo_agency_owner.presence.includes("realself")
+  );
+
+  // ‼️ STEP 8. The presence lists are only worth anything if the sweep can resolve them. A key that
+  // matches no platform used to be impossible, because there was one hardcoded list; now it is a
+  // typo on a row a person owns, and platformsFor() reports it rather than sweeping one fewer.
+  const { platformsFor, sweepGateFor, SWEEP_GATE_COUNT } =
+    require("../src/config/presence-platforms") as typeof import("../src/config/presence-platforms");
+  for (const [key, preset] of Object.entries(AUDIENCE_PRESETS)) {
+    if (!preset.stance) continue;
+    const { platforms, unknown } = platformsFor(preset.presence);
+    check(
+      `${key}'s presence list resolves to real platforms`,
+      unknown.length === 0 && platforms.length === preset.presence.length,
+      unknown.length ? `not a platform: ${unknown.join(", ")}` : ""
+    );
+  }
+  const clinical = ["realself", "healthgrades", "npi"];
+  check(
+    "no clinical platform is on the restaurant's sweep",
+    !platformsFor(AUDIENCE_PRESETS.restaurant_diner.presence).platforms.some((p) => clinical.includes(p.key))
+  );
+  check(
+    "the gate never asks for more platforms than an audience is swept on",
+    sweepGateFor(3) === 3 && sweepGateFor(4) === 4 && sweepGateFor(19) === SWEEP_GATE_COUNT
   );
 
   // ‼️ THE MARKET IS NOT THE CLIENT. This is the axis a second avatar accumulates its own

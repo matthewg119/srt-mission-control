@@ -22,6 +22,7 @@ import {
   PLATFORM_COUNT,
   SWEEP_GATE_COUNT,
   platformByKey,
+  sweepGateFor,
 } from "@/config/presence-platforms";
 import { DAY_ZERO_STEP_KEY, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { nextStepLines } from "./next-steps";
@@ -180,12 +181,13 @@ async function instructionsFor(
       // note from @/config/presence-platforms — the one list. Falls back to the label alone if
       // the canonical record is incomplete, because a card with a half-built search string in
       // it is worse than a card that says nothing.
-      const { canonicalFor, formatSweepCard } = await import("./presence-sweep");
-      const canonical = await canonicalFor(c.id);
+      const { canonicalFor, formatSweepCard, sweepScopeFor } = await import("./presence-sweep");
+      const [canonical, scope] = await Promise.all([canonicalFor(c.id), sweepScopeFor(c.id)]);
       if (!canonical) return null;
       return formatSweepCard(
         { name: c.name, city: c.city ?? "", state: c.state ?? "" },
-        canonical
+        canonical,
+        scope
       ).split("\n");
     }
 
@@ -1568,10 +1570,10 @@ async function presenceRefusal(clientId: string, stepKey: string): Promise<strin
   if (cover.short === 0) return null;
 
   const lines = [
-    `Not yet — ${cover.distinct} of the ${cover.needed} distinct platforms this step needs have a screenshot filed against it.`,
+    `Not yet: ${cover.distinct} of the ${cover.needed} distinct platforms this step needs have a screenshot filed against it.`,
     cover.distinct > 0
       ? `Filed so far: ${describeCoverage(cover)}.`
-      : `Nothing is attributed yet. Any ${cover.needed} of the ${PLATFORM_COUNT} platforms close this step, and they are your choice.`,
+      : `Nothing is attributed yet. Any ${cover.needed} of the ${cover.listed} platforms on the card close this step, and they are your choice.`,
     cover.distinct > 0
       ? `${cover.short} more, any platform on the list, and this closes.`
       : "",
@@ -1991,8 +1993,18 @@ export interface PresenceCoverage {
   covered: string[];
   /** covered.length. What the gate compares, and it is PLATFORMS, never files. */
   distinct: number;
-  /** SWEEP_GATE_COUNT, carried here so a caller never restates the number. */
+  /**
+   * The gate, carried here so a caller never restates the number: SWEEP_GATE_COUNT, or fewer when
+   * the client's audience is swept on fewer platforms than that (sweepGateFor).
+   */
   needed: number;
+  /**
+   * How many platforms the card lists: the audience's, or all of them when none is confirmed.
+   *
+   * ‼️ NOT A LIMIT ON WHAT COUNTS. A screenshot of a platform outside the audience still counts
+   * toward `needed`, because the card has always promised "which four is your choice".
+   */
+  listed: number;
   /** How many more distinct platforms would close the step. Zero once the gate is met. */
   short: number;
   /**
@@ -2037,11 +2049,17 @@ export async function presenceCoverageFor(
   clientId: string,
   stepKey: string
 ): Promise<PresenceCoverage | null> {
+  const { sweepScopeFor } = await import("./presence-sweep");
+  const scope = await sweepScopeFor(clientId);
+  const listed = scope.keys ? scope.keys.length : PLATFORM_COUNT;
+  const needed = scope.keys ? sweepGateFor(listed) : SWEEP_GATE_COUNT;
+
   const empty: PresenceCoverage = {
     covered: [],
     distinct: 0,
-    needed: SWEEP_GATE_COUNT,
-    short: SWEEP_GATE_COUNT,
+    needed,
+    listed,
+    short: needed,
     byTier: { core: [], extended: [] },
     bySource: { named: [], read: [] },
     unattributed: 0,
@@ -2101,8 +2119,9 @@ export async function presenceCoverageFor(
   return {
     covered,
     distinct,
-    needed: SWEEP_GATE_COUNT,
-    short: Math.max(0, SWEEP_GATE_COUNT - distinct),
+    needed,
+    listed,
+    short: Math.max(0, needed - distinct),
     byTier: {
       core: covered.filter((k) => platformByKey(k)?.tier === "core_six"),
       extended: covered.filter((k) => platformByKey(k)?.tier === "extended"),

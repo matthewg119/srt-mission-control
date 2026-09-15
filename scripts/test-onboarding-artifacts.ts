@@ -2819,6 +2819,57 @@ import { pageSlug } from "../src/lib/hub/pages";
   ok("the sweep card still says an empty search result is the evidence", /empty search result/i.test(card));
   ok("the sweep card leads with the recommended four", card.indexOf("START WITH THESE FOUR") < card.indexOf("THE REST OF THE CORE SIX"));
   ok("every platform is still on the card", ALL.every((p) => card.includes(p.label)));
+  ok("the sweep card carries no em dash", !card.includes("—"));
+
+  // ── Step 8 (2026-09-15): the audience decides which platforms are ASKED for ─
+  //
+  // ‼️ A RESTAURANT WAS BEING ASKED FOR A REALSELF PROFILE. Every client got all nineteen. The
+  // audience row now names the subset and the card lists only that, while the gate still counts a
+  // screenshot of any platform, because "which four is your choice" was a promise.
+  const acme = {
+    name: "La Casita Tacos",
+    addressLine1: "1 Elm St",
+    addressLine2: null,
+    city: "Greensboro",
+    state: "NC",
+    postalCode: "27401",
+    phone: "+13365550100",
+  };
+  const diner = formatSweepCard(
+    { name: "La Casita Tacos", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: ["google", "apple", "bing", "yelp", "facebook", "foursquare"], note: null }
+  );
+  ok("a restaurant's card asks for no clinical platform",
+    !/RealSelf|Healthgrades|NPI Registry/.test(diner));
+  // Matched as a numbered card line: the provider sentence at the top names Foursquare and Yelp for
+  // every client, so a bare includes() would pass on a card that lists neither.
+  ok("but does ask for what a diner uses", /\d+\. Foursquare:/.test(diner) && /\d+\. Yelp:/.test(diner));
+  ok("and counts the audience's platforms, not nineteen", /0 of 6 done automatically/.test(diner));
+  ok("and still says a platform off the list counts", /not listed still counts/i.test(diner));
+  ok("the restaurant gate is still four", /any 4 DISTINCT platforms/.test(diner));
+
+  const agency = formatSweepCard(
+    { name: "SRT Agency", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: ["google", "facebook", "bbb", "trustpilot"], note: null }
+  );
+  ok("the agency card lists exactly its four", ["Google Business Profile", "Facebook Page", "BBB", "Trustpilot"].every((l) => agency.includes(l)) && !agency.includes("Apple Maps"));
+  ok("the start group only names recommended platforms the audience is on", agency.includes("*START WITH THESE*") && !/\d+\. Yelp:/.test(agency));
+
+  const three = formatSweepCard(
+    { name: "X", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: ["google", "yelp", "bbb"], note: null }
+  );
+  ok("a gate never asks for more platforms than are listed", /any 3 DISTINCT platforms/.test(three));
+
+  const unscoped = formatSweepCard(
+    { name: "X", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: null, note: "No audience is confirmed for this client yet, so every platform is listed." }
+  );
+  ok("no audience lists all nineteen and says why", ALL.every((p) => unscoped.includes(p.label)) && /No audience is confirmed/.test(unscoped));
 }
 
 

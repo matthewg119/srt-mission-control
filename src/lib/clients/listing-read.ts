@@ -136,7 +136,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { stepNumber } from "@/config/delivery-steps";
 import { platformByKey } from "@/config/presence-platforms";
 import { compareListing, type ComparisonResult } from "./nap-compare";
-import { canonicalFor, loadSweep, effectiveStatus, type SweepRow } from "./presence-sweep";
+import { canonicalFor, loadSweep, loadAllSweepRows, effectiveStatus, type SweepRow } from "./presence-sweep";
 
 /** Same headroom the other readers use, for the same reason. */
 const MAX_VISION_BYTES = 6 * 1024 * 1024;
@@ -202,7 +202,9 @@ export async function proposeListingStatuses(clientId: string): Promise<Proposal
 
   if (error) return { ...empty, ok: false, error: error.message };
 
-  const rows: SweepRow[] = await loadSweep(clientId);
+  // ‼️ EVERY ROW, NOT THE AUDIENCE'S VIEW. A screenshot of a platform the audience is not swept on
+  // is still somebody's evidence, and through the view it would find no row and be skipped.
+  const rows: SweepRow[] = await loadAllSweepRows(clientId);
   const byPlatform = new Map(rows.map((r) => [r.platform, r]));
 
   const out: ProposalPass = { ok: true, proposed: [], unreadable: [], alreadyConfirmed: [] };

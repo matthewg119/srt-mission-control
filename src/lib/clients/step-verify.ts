@@ -805,11 +805,12 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     const total = await countRows("nap_discrepancies", ctx.clientId);
     if (total === null) return dbUnreachable("nap_discrepancies");
 
-    const { loadSweep, countByStatus } = await import("./presence-sweep");
-    const rows = await loadSweep(ctx.clientId);
+    const { loadSweepView, countByStatus } = await import("./presence-sweep");
+    const { rows, hidden } = await loadSweepView(ctx.clientId);
     // loadSweep swallows a query error into an empty array, so a disagreement between the two
-    // reads means say nothing rather than a number.
-    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
+    // reads means say nothing rather than a number. ‼️ PLUS `hidden`: rows the audience is not
+    // swept on are left out of the view on purpose, and that is not the query failing.
+    if (rows.length + hidden !== total) return dbUnreachable("nap_discrepancies");
 
     const counts = countByStatus(rows);
     const checked = rows.length - counts.not_checked;
@@ -1385,9 +1386,10 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     const total = await countRows("nap_discrepancies", ctx.clientId);
     if (total === null) return dbUnreachable("nap_discrepancies");
 
-    const { loadSweep, countByStatus } = await import("./presence-sweep");
-    const rows = await loadSweep(ctx.clientId);
-    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
+    const { loadSweepView, countByStatus } = await import("./presence-sweep");
+    const { rows, hidden } = await loadSweepView(ctx.clientId);
+    // Hidden rows are the audience narrowing the sweep, not the query failing. See citation_cleanup_list.
+    if (rows.length + hidden !== total) return dbUnreachable("nap_discrepancies");
 
     const counts = countByStatus(rows);
     const checked = rows.length - counts.not_checked;
