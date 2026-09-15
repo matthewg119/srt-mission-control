@@ -30,6 +30,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
+import { classifyPhrase, type PhraseKind, type PhraseSpeaker } from "./phrase-kind";
 
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_PAGES = 40;
@@ -50,32 +51,8 @@ const MAX_PHRASE_WORDS = 22;
 const QUESTION_STARTERS =
   /^(how|what|why|when|where|which|who|is|are|does|do|did|can|could|should|would|will|has|have|am|was|were|any(one|body)|has anyone)\b/i;
 
-const OBJECTION_MARKERS = [
-  /\bafraid\b/i,
-  /\bscared\b/i,
-  /\bnervous\b/i,
-  /\bworried\b/i,
-  /\bworry\b/i,
-  /\brisk(y|s)?\b/i,
-  /\bdanger(ous)?\b/i,
-  /\bside effects?\b/i,
-  /\bwent wrong\b/i,
-  /\bbad experience\b/i,
-  /\bruined\b/i,
-  /\bregret\b/i,
-  /\bwaste of money\b/i,
-  /\brip(-|\s)?off\b/i,
-  /\bscam\b/i,
-  /\bdoes ?n'?t work\b/i,
-  /\bpainful\b/i,
-  /\bhurts?\b/i,
-  /\bbruis(e|ing)\b/i,
-  /\bfrozen\b/i,
-  /\bfake\b/i,
-  /\bover ?done\b/i,
-  /\bunnatural\b/i,
-  /\btoo expensive\b/i,
-];
+// OBJECTION_MARKERS lived here until 2026-09-16. Their words are part of HESITATION in phrase-kind.ts,
+// where they only count inside a buyer's own question or sentence.
 
 /** 0 to 3. Higher means closer to actually booking. */
 const INTENT_LADDER: Array<[RegExp, number]> = [
@@ -93,6 +70,9 @@ export interface HarvestedPhrase {
   commercialIntentScore: number;
   objectionPhrase: boolean;
   sourceUrl: string;
+  /** What the phrase is and who said it (phrase-kind.ts), stored on question_bank.kind / speaker. */
+  kind: PhraseKind;
+  speaker: PhraseSpeaker;
 }
 
 export function normalizePhrase(input: string): string {
@@ -186,8 +166,17 @@ export function commercialIntent(phrase: string): number {
   return score;
 }
 
-export function isObjection(phrase: string): boolean {
-  return OBJECTION_MARKERS.some((p) => p.test(phrase));
+/**
+ * Is this a buyer's objection?
+ *
+ * ‼️ NOT A WORD MATCH ANY MORE (2026-09-16). OBJECTION_MARKERS matched "risk" or "scam" anywhere, so a
+ * competitor's button ("Request the Governance Risk Audit"), a research heading ("### Compliance and
+ * Regulatory Risks") and an article about talent-agency scams all filled SRT's Objection bucket. The
+ * shape and the speaker decide now, in phrase-kind.ts. The markers stay as the patient lane's
+ * vocabulary and are one input to that rule, never the whole of it.
+ */
+export function isObjection(phrase: string, source?: string | null): boolean {
+  return classifyPhrase(phrase, source).kind === "objection";
 }
 
 /** Strip tags, scripts and styles. No parser dependency; this is a coarse text extraction. */
@@ -221,8 +210,12 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
     if (words < MIN_PHRASE_WORDS || words > MAX_PHRASE_WORDS) continue;
 
     const questionShaped = phrase.includes("?") || QUESTION_STARTERS.test(phrase);
-    const objection = isObjection(phrase);
+    const reading = classifyPhrase(phrase, sourceUrl === "deep_research" ? "deep_research" : "harvest");
+    const objection = reading.kind === "objection";
     if (!questionShaped && !objection) continue;
+    // A vendor's question to the reader ("Ready to grow your practice?") and a heading are question-shaped
+    // and are nothing a buyer asked.
+    if (reading.kind === "vendor_copy" || reading.kind === "heading") continue;
 
     // Boilerplate filter. Cookie banners and nav text are question-shaped often enough to
     // pollute a bank that a human then has to read.
@@ -241,6 +234,8 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
       commercialIntentScore: commercialIntent(phrase),
       objectionPhrase: objection,
       sourceUrl,
+      kind: reading.kind,
+      speaker: reading.speaker,
     });
   }
 
@@ -520,6 +515,8 @@ export async function runHarvest(
       // brief that offered it.
       avatar: avatar.slug,
       objection_phrase: p.objectionPhrase,
+      kind: p.kind,
+      speaker: p.speaker,
     }));
 
     // ‼️ THE TARGET HAS TO MATCH THE INDEX EXACTLY OR IT IS 42P10 AT PLAN TIME, ON EVERY RUN.
@@ -709,6 +706,8 @@ export function extractKeywords(text: string): HarvestedPhrase[] {
       commercialIntentScore: intentScore,
       objectionPhrase: false,
       sourceUrl: /^https?:\/\//i.test(sourceUrl) ? sourceUrl : "",
+      kind: "question",
+      speaker: "buyer",
     });
   }
 

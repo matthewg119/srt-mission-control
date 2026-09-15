@@ -295,6 +295,8 @@ export async function ingestResearch(args: {
       // slot, because this table is shared across every client in the vertical.
       avatar: avatar.slug,
       objection_phrase: p.objectionPhrase,
+      kind: p.kind,
+      speaker: p.speaker,
     })),
     // Must match question_bank_phrase_avatar_key exactly. A target that matches no index is
     // 42P10 at PLAN time, so it fails on every run rather than on a collision.
@@ -324,6 +326,8 @@ export async function ingestResearch(args: {
         commercial_intent_score: k.commercialIntentScore,
         avatar: avatar.slug,
         objection_phrase: false,
+        kind: "question",
+        speaker: "buyer",
       })),
       { onConflict: "vertical,avatar,normalized", ignoreDuplicates: false }
     );

@@ -28,6 +28,11 @@ const OWNERS: ReadonlyArray<{ test: RegExp; step: StepKey; what: string }> = [
     what: "Keyword commands",
   },
   {
+    test: /^\s*[`*_]*objection\s*:/i,
+    step: "custom_question_set",
+    what: "Objections heard on a sales call",
+  },
+  {
     test: /^\s*[`*_]*review\s+link\s*:/i,
     step: "review_card_pdf",
     what: "Review links",

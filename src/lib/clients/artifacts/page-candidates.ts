@@ -31,6 +31,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { stepNumber } from "@/config/delivery-steps";
 import { commercialIntent, isObjection, verticalFor } from "../harvest";
+import { isAskable, kindOfRow } from "../phrase-kind";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import { confirmedAvatarFor } from "../avatars";
 import {
@@ -438,8 +439,9 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
 
   const { data: bank } = await supabaseAdmin
     .from("question_bank")
-    .select("id, phrase, frequency_score, commercial_intent_score, objection_phrase")
+    .select("id, phrase, source, kind, frequency_score, commercial_intent_score, objection_phrase")
     .eq("vertical", vertical)
+    .is("excluded_at", null)
     .order("commercial_intent_score", { ascending: false })
     .order("frequency_score", { ascending: false })
     .limit(500);
@@ -472,6 +474,8 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   for (const row of bankFiltered.kept) {
     const phrase = ((row.phrase as string) ?? "").trim();
     if (!phrase) continue;
+    // A heading, a vendor's copy or a report's prose is not a page anybody is looking for.
+    if (!isAskable(kindOfRow(row))) continue;
 
     // Substituted per tenant, through the SAME chain the tracked twenty use, so a candidate
     // and a tracked question never disagree about what city this client is in.

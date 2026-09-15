@@ -58,9 +58,14 @@ export interface StoryContext {
   beliefs: StoryBelief[];
   /** Short lines from the avatar sheet: pains, fears, goals, the emotional journey. */
   avatarNotes: string[];
+  /**
+   * The objections this buyer really raises (our sales calls, the owner's intake, the seed list), each with
+   * the belief that has to be installed for it to fall away. Optional so older callers compile unchanged.
+   */
+  objections?: Array<{ text: string; belief: string | null }>;
 }
 
-export const EMPTY_STORY_CONTEXT: StoryContext = { audienceLabel: null, buyer: null, offer: null, beliefs: [], avatarNotes: [] };
+export const EMPTY_STORY_CONTEXT: StoryContext = { audienceLabel: null, buyer: null, offer: null, beliefs: [], avatarNotes: [], objections: [] };
 
 /**
  * The avatar sheet lines a story is tuned with, from a parsed sheet (avatar-framework.ts), in the order a
@@ -131,6 +136,13 @@ export function outlineStoryLines(ctx: StoryContext, headline: string | null): s
   if (ctx.avatarNotes.length) {
     lines.push("What her avatar sheet says she lives with. Tune the beats to this, in her words:");
     for (const note of ctx.avatarNotes) lines.push(`  - ${note}`);
+  }
+  // ‼️ THE OBJECTIONS ARE WHERE THE STORIES AIM (2026-09-16). Matthew: "if we are making posts about this we
+  // must find a way to create the stories ... to install the belief." A story's turn is the moment one of
+  // these stops being true for her; the belief it installs is the one named beside it.
+  if (ctx.objections?.length) {
+    lines.push("WHAT STOPS HER BUYING, in her words. A story's turn is where one of these falls away:");
+    for (const o of ctx.objections) lines.push(`  - "${o.text}"${o.belief ? ` (needs: ${o.belief})` : ""}`);
   }
   if (ctx.beliefs.length) {
     lines.push("THE NECESSARY BELIEFS. Every story installs at least one, by id:");

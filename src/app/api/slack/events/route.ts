@@ -1136,7 +1136,13 @@ export async function POST(request: NextRequest) {
             (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText })) ??
-            (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by }));
+            (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            (await (await import("@/lib/clients/objection-mining")).handleObjectionThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            }));
           if (said) {
             const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
             await markEventKind({

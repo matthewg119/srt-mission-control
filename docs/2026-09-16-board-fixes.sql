@@ -92,3 +92,42 @@ comment on table public.keyword_runs is
   'src/lib/clients/keyword-dataset.ts.';
 comment on table public.keyword_decisions is
   'Every approve, drop, add, restore and step 21 pick on a client keyword, with the phrase as it was. Append-only.';
+
+
+-- =====================================================================
+-- B. question_bank KNOWS WHAT A PHRASE IS
+-- =====================================================================
+--
+-- SRT's step 13 "Objection" bucket held a competitor's button ("Request the Governance Risk Audit"), an
+-- article about talent-agency scams and two research headings, because "risk" appeared in them. A phrase
+-- now carries what it IS and who said it (src/lib/clients/phrase-kind.ts). Nothing is deleted: this table
+-- is shared by every client in a vertical and is training data. Headings get excluded_at; the rest are
+-- labelled and simply stop counting as objections.
+
+alter table public.question_bank add column if not exists kind text;
+alter table public.question_bank add column if not exists speaker text;
+alter table public.question_bank add column if not exists excluded_at timestamptz;
+alter table public.question_bank add column if not exists excluded_reason text;
+alter table public.question_bank add column if not exists belief_key text;
+-- Where a mined objection was heard: "sms_messages:<id>,lead_activities:<id>", or a Slack author.
+alter table public.question_bank add column if not exists source_ref text;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'question_bank_kind_check') then
+    alter table public.question_bank add constraint question_bank_kind_check
+      check (kind is null or kind in ('question', 'objection', 'claim', 'heading', 'vendor_copy', 'research_prose'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'question_bank_speaker_check') then
+    alter table public.question_bank add constraint question_bank_speaker_check
+      check (speaker is null or speaker in ('buyer', 'vendor', 'researcher', 'unknown'));
+  end if;
+end $$;
+
+-- Wider than before, so no existing row can fail it: 'seed' (config/objections) and 'sales_call' (mined
+-- from our own prospect conversations, or typed as `objection:` in step 13's thread).
+alter table public.question_bank drop constraint if exists question_bank_source_check;
+alter table public.question_bank add constraint question_bank_source_check
+  check (source in ('harvest', 'deep_research', 'intake', 'keywords', 'seed', 'sales_call'));
+
+create index if not exists question_bank_vertical_kind on public.question_bank (vertical, kind) where excluded_at is null;

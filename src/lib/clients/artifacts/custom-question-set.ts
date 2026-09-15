@@ -31,7 +31,9 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { stepNumber } from "@/config/delivery-steps";
-import { commercialIntent, isObjection, verticalFor } from "../harvest";
+import { commercialIntent, verticalFor } from "../harvest";
+import { classifyPhrase, isAskable, kindOfRow, type PhraseKind } from "../phrase-kind";
+import { BELIEF_THEMES, type BeliefTheme } from "@/config/objections/aeo-agency-owner";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import {
   startDoc,
@@ -86,13 +88,32 @@ const BUCKET_LABEL: Record<Bucket, string> = {
  * objection that happens to name a neighbourhood, and filing it under neighbourhood would put
  * the single most valuable question shape in the wrong pile.
  */
-export function bucketOf(phrase: string): Bucket {
-  if (isObjection(phrase)) return "objection";
+export function bucketOf(phrase: string, kind?: PhraseKind, source?: string | null): Bucket {
+  // ‼️ AN OBJECTION IS A BUYER HESITATING, NOT A SENTENCE CONTAINING "risk" (2026-09-16). See phrase-kind.ts
+  // for the five rows that filled SRT's Objection bucket without a single buyer having said them.
+  if ((kind ?? classifyPhrase(phrase, source).kind) === "objection") return "objection";
   const p = phrase.toLowerCase();
   if (/\b(vs|versus|compare|better than|difference between)\b/.test(p)) return "comparison";
-  if (/\b(near me|nearest|in |around|local|closest)\b/.test(p)) return "neighbourhood";
+  // ‼️ `in ` USED TO BE ONE OF THESE, and it matched almost any sentence ("is it worth it in 2026").
+  // A neighbourhood question names a place or asks for one nearby.
+  if (/\b(near me|nearest|nearby|around here|local|closest|in (my|our|this) (area|city|town|neighbou?rhood))\b|\[(city|neighbou?rhood)\]/.test(p)) {
+    return "neighbourhood";
+  }
   return "commercial";
 }
+
+/**
+ * Where an objection came from, best first. What prospects said to us on a call outranks a hand-written
+ * seed, and both outrank a sentence lifted off somebody else's page.
+ */
+const OBJECTION_SOURCE_RANK: Record<string, number> = {
+  owner_intake: 0,
+  sales_call: 1,
+  seed: 2,
+  keywords: 3,
+  harvest: 4,
+  deep_research: 5,
+};
 
 export interface CustomQuestion {
   question: string;
@@ -101,6 +122,8 @@ export interface CustomQuestion {
   source: string;
   frequency: number;
   intent: number;
+  /** The belief theme an objection has to install before it falls away. Set on seeds and mined rows. */
+  belief: BeliefTheme | null;
 }
 
 export interface SetProvenance {
@@ -191,7 +214,7 @@ async function approvedKeywordQuestions(
 export async function generateCustomQuestionSet(clientId: string): Promise<AutoResult> {
   const { data: client } = await supabaseAdmin
     .from("clients")
-    .select("id, legal_name, dba_name, vertical_slug, business_type, tier_scope, ideal_patient")
+    .select("id, legal_name, dba_name, vertical_slug, business_type, tier_scope, ideal_patient, primary_avatar_slug")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -235,13 +258,21 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
   const subs = await substitutionsFor(clientId);
   if (!subs) return { ok: false, error: "Client not found while reading substitutions." };
 
-  const { data: bank } = await supabaseAdmin
+  // ‼️ NO 500 CAP ANY MORE, AND EXCLUDED ROWS STAY OUT. SRT's vertical holds 546 rows and 46 of them were
+  // never read. `excluded_at` is set on headings by the phrase-kind backfill; nothing is deleted.
+  // The confirmed buyer's rows plus the untagged ones, the same scope keyword-set.ts reads: a phrase
+  // harvested for a different buyer in the same vertical is somebody else's objection.
+  const avatarSlug = (client.primary_avatar_slug as string | null) ?? null;
+  let bankQuery = supabaseAdmin
     .from("question_bank")
-    .select("phrase, source, frequency_score, commercial_intent_score, objection_phrase")
+    .select("phrase, source, frequency_score, commercial_intent_score, objection_phrase, kind, belief_key")
     .eq("vertical", vertical)
+    .is("excluded_at", null)
     .order("commercial_intent_score", { ascending: false })
     .order("frequency_score", { ascending: false })
-    .limit(500);
+    .limit(3000);
+  if (avatarSlug) bankQuery = bankQuery.or(`avatar.eq.${avatarSlug},avatar.is.null`);
+  const { data: bank } = await bankQuery;
 
   // ‼️ TWO THIRDS OF THIS CORPUS IS EXTRACTION DEBRIS, AND FILLING SIXTY SLOTS OUT OF IT IS WHY
   // THE PDF READS AS PADDING. Measured on SRT's own vertical, 2026-09-08: 169 usable rows of
@@ -258,12 +289,19 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
   const pool: CustomQuestion[] = [];
   const seen = new Set<string>();
 
-  const push = (phrase: string, source: string, frequency: number, intent: number) => {
+  const push = (
+    phrase: string,
+    source: string,
+    frequency: number,
+    intent: number,
+    kind?: PhraseKind,
+    belief: BeliefTheme | null = null
+  ) => {
     const question = applySubstitutions(phrase, subs);
     const key = question.toLowerCase().replace(/\s+/g, " ").trim();
     if (!key || seen.has(key)) return;
     seen.add(key);
-    pool.push({ question, bucket: bucketOf(phrase), source, frequency, intent });
+    pool.push({ question, bucket: bucketOf(phrase, kind, source), source, frequency, intent, belief });
     if (source === "deep_research") provenance.deepResearch += 1;
     else if (source === "owner_intake") provenance.ownerIntake += 1;
     else if (source === "keywords") provenance.keywords += 1;
@@ -297,14 +335,25 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     push(seed.phrase, "keywords", seed.score, seed.intent);
   }
 
+  let notAskable = 0;
   for (const row of bankFiltered.kept) {
     const phrase = ((row.phrase as string) ?? "").trim();
     if (!phrase) continue;
+    // ‼️ ONLY WHAT SOMEBODY ASKS. A heading, a vendor's slogan, a report's prose and a bare claim are
+    // kept in the corpus and never become a tracked question: nobody types them into an assistant.
+    const kind = kindOfRow(row);
+    if (!isAskable(kind)) {
+      notAskable += 1;
+      continue;
+    }
+    const belief = typeof row.belief_key === "string" && row.belief_key in BELIEF_THEMES ? (row.belief_key as BeliefTheme) : null;
     push(
       phrase,
       (row.source as string) ?? "harvest",
       (row.frequency_score as number) ?? 1,
-      (row.commercial_intent_score as number) ?? commercialIntent(phrase)
+      (row.commercial_intent_score as number) ?? commercialIntent(phrase),
+      kind,
+      belief
     );
   }
 
@@ -325,8 +374,14 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     list.push(q);
     byBucket.set(q.bucket, list);
   }
-  for (const list of byBucket.values()) {
-    list.sort((a, b) => b.intent - a.intent || b.frequency - a.frequency);
+  for (const [bucket, list] of byBucket.entries()) {
+    list.sort((a, b) =>
+      bucket === "objection"
+        ? (OBJECTION_SOURCE_RANK[a.source] ?? 9) - (OBJECTION_SOURCE_RANK[b.source] ?? 9) ||
+          b.frequency - a.frequency ||
+          b.intent - a.intent
+        : b.intent - a.intent || b.frequency - a.frequency
+    );
   }
 
   const chosen: CustomQuestion[] = [];
@@ -363,7 +418,19 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
         acc[q.bucket] = (acc[q.bucket] ?? 0) + 1;
         return acc;
       }, {}),
-      sources: provenance,
+      // The belief each objection installs rides in `sources`, which is already jsonb, rather than a new
+      // column: questions stays a plain string list because the audit reads it as one.
+      sources: {
+        ...provenance,
+        notAskable,
+        beliefs: questions
+          .filter((q) => q.belief)
+          .map((q) => ({ question: q.question, belief: q.belief, label: BELIEF_THEMES[q.belief as BeliefTheme].label })),
+        bySource: questions.reduce<Record<string, number>>((acc, q) => {
+          acc[q.source] = (acc[q.source] ?? 0) + 1;
+          return acc;
+        }, {}),
+      },
     },
     { onConflict: "client_id,version" }
   );
@@ -417,6 +484,10 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
       {
         label: "Skipped",
         value: `${bankFiltered.dropped} stored rows were extraction debris, not phrases`,
+      },
+      {
+        label: "Not questions",
+        value: `${notAskable} were headings, vendor copy or research prose: kept, never asked`,
       },
     ] as TableRow[],
     { labelWidth: 45 }
@@ -473,7 +544,18 @@ export async function generateCustomQuestionSet(clientId: string): Promise<AutoR
     sectionHeading(state, `${BUCKET_LABEL[bucket]} — ${list.length}`);
     bulletList(
       state,
-      list.map((q) => q.question + (q.source === "owner_intake" ? "  [their words, from intake]" : "")),
+      list.map(
+        (q) =>
+          q.question +
+          (q.source === "owner_intake"
+            ? "  [their words, from intake]"
+            : q.source === "sales_call"
+              ? "  [said on our sales calls]"
+              : q.source === "seed"
+                ? "  [common owner objection]"
+                : "") +
+          (q.belief ? `  → installs: ${BELIEF_THEMES[q.belief].label}` : "")
+      ),
       { size: 9 }
     );
   }

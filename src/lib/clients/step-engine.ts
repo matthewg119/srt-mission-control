@@ -245,12 +245,17 @@ async function instructionsFor(
       const cached =
         avatar && resolved.ok ? await avatarBriefFor(resolved.vertical, avatar.slug) : null;
 
-      const { data: bank } = await supabaseAdmin
-        .from("question_bank")
-        .select("phrase")
-        .eq("source", "harvest")
-        .order("commercial_intent_score", { ascending: false })
-        .limit(3);
+      // ‼️ SCOPED TO THIS CLIENT'S VERTICAL (2026-09-16). It read the top three harvest phrases of EVERY
+      // vertical, so a med spa agency's card could quote a taqueria's corpus.
+      const { data: bank } = resolved.ok
+        ? await supabaseAdmin
+            .from("question_bank")
+            .select("phrase")
+            .eq("source", "harvest")
+            .eq("vertical", resolved.vertical)
+            .order("commercial_intent_score", { ascending: false })
+            .limit(3)
+        : { data: [] as Array<{ phrase: string }> };
 
       const report = docLink(c.id, row.outputRef, "the research PDF");
 

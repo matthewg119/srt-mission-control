@@ -51,6 +51,7 @@ import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { SCORE_TERMS, scoreCandidate, themeOf, offerBonus } from "./artifacts/page-candidates";
 import { loadOffer, effectiveTreatment } from "./offers";
 import { filterPhrases, tidyPhrase, normalizePhrase } from "./phrase-quality";
+import { isAskable, kindOfRow } from "./phrase-kind";
 
 // Re-exported so existing importers keep one name for it. The definition moved to
 // phrase-quality.ts, which imports nothing, so page-candidates.ts can share it without a cycle.
@@ -184,8 +185,9 @@ export async function evidenceRows(clientId: string): Promise<EvidenceRead | { e
   // harvest predates their avatar, which is most of them.
   let bankQuery = supabaseAdmin
     .from("question_bank")
-    .select("id, phrase, normalized, source, source_url, frequency_score, commercial_intent_score, objection_phrase, avatar")
+    .select("id, phrase, normalized, source, source_url, frequency_score, commercial_intent_score, objection_phrase, avatar, kind")
     .eq("vertical", vertical)
+    .is("excluded_at", null)
     .order("commercial_intent_score", { ascending: false })
     .order("frequency_score", { ascending: false })
     .limit(600);
@@ -212,6 +214,9 @@ export async function evidenceRows(clientId: string): Promise<EvidenceRead | { e
   for (const r of bankFiltered.kept) {
     const phrase = tidyPhrase(String(r.phrase ?? ""));
     if (!phrase) continue;
+    // ‼️ A KEYWORD IS SOMETHING SOMEBODY SEARCHES OR ASKS (2026-09-16). Research prose and a vendor's
+    // copy reached SRT's set as "Other, from the market" rows; they stay in the corpus and out of here.
+    if (!isAskable(kindOfRow(r))) continue;
     // ‼️ RECOMPUTED, NOT READ OFF THE COLUMN. question_bank.normalized was written by more than
     // one code path over time, so two rows holding the SAME question can carry different
     // normalised forms and both survive the dedupe. Observed live: "How much does this cost?"

@@ -205,6 +205,8 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
         commercialIntentScore: 0,
         objectionPhrase: d.objection_phrase ?? false,
         sourceUrl: "",
+        kind: d.objection_phrase ? "objection" : "question",
+        speaker: "unknown",
       })),
     });
 
